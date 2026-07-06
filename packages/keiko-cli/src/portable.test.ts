@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { spawn, type SpawnOptions } from "node:child_process";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPortableCli } from "./portable.js";
 
@@ -10,7 +19,9 @@ const roots: string[] = [];
 const NOW = new Date("2026-07-06T00:00:00.000Z");
 
 function tempRoot(): string {
-  const root = mkdtempSync(join(process.cwd(), ".portable-cli-test-"));
+  const base = join(homedir(), ".keiko-test-roots");
+  mkdirSync(base, { recursive: true });
+  const root = mkdtempSync(join(base, "portable-cli-"));
   roots.push(root);
   return root;
 }
@@ -249,6 +260,37 @@ describe("runPortableCli", () => {
     });
   });
 
+  it("does not mark a same-path managed root update-eligible before setup attestation", async () => {
+    const root = tempRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const c = capture();
+    writeWindowsFixture(managedRoot);
+
+    const code = await runPortableCli(
+      [
+        "status",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        join(root, "state"),
+      ],
+      c.io,
+      {},
+      { now: () => NOW },
+    );
+
+    expect(code).toBe(0);
+    expect(JSON.parse(c.out())).toMatchObject({
+      status: "unmanaged",
+      updateEligible: false,
+      platformTarget: "windows-x64",
+    });
+  });
+
   it("launches by promoting the bootstrap payload, writing content-free state, and handing off to the managed launcher", async () => {
     const root = tempRoot();
     const source = join(root, "bootstrap");
@@ -298,5 +340,142 @@ describe("runPortableCli", () => {
       platformTarget: "windows-x64",
     });
     expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).not.toContain(root);
+  });
+
+  it("launches the existing managed install when the bootstrap launcher is clicked after setup", async () => {
+    const root = tempRoot();
+    const source = join(root, "bootstrap");
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, "state");
+    const spawns: string[] = [];
+    const lifecycleStarts: string[] = [];
+    writeWindowsFixture(source);
+
+    const first = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      capture().io,
+      {},
+      {
+        now: () => NOW,
+        spawnFn: (command) => {
+          spawns.push(command);
+          return spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+        },
+      },
+    );
+    const secondCapture = capture();
+
+    const second = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      secondCapture.io,
+      {},
+      {
+        now: () => NOW,
+        lifecycleFn: (_command, _args, _io, _env, deps) => {
+          lifecycleStarts.push(deps.cwd);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(first).toBe(0);
+    expect(second).toBe(0);
+    expect(spawns).toEqual([join(managedRoot, "Keiko.exe")]);
+    expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
+    expect(secondCapture.err()).not.toContain("already exists");
+  });
+
+  it("rejects managed roots that pass through a symlinked ancestor before copying", async () => {
+    const root = tempRoot();
+    const source = join(root, "bootstrap");
+    const stateDir = join(root, "state");
+    const symlinkTarget = join(root, "state", ".keiko", "managed-parent");
+    const symlinkParent = join(root, "managed-link");
+    writeWindowsFixture(source);
+    mkdirSync(symlinkTarget, { recursive: true });
+    symlinkSync(symlinkTarget, symlinkParent, "dir");
+    const c = capture();
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        join(symlinkParent, "Keiko"),
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      {},
+      { now: () => NOW },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("managed install root must not use symlinked ancestors");
+    expect(registration(stateDir)).toMatchObject({
+      status: "setup-failed",
+      updateEligible: false,
+      failureReason: "managed-root-symlink",
+    });
+    expect(existsSync(join(symlinkTarget, "Keiko"))).toBe(false);
+  });
+
+  it("rejects managed roots inside repository directories before copying", async () => {
+    const root = tempRoot();
+    const source = join(root, "bootstrap");
+    const stateDir = join(root, "state");
+    const repoRoot = join(root, "customer-repo");
+    writeWindowsFixture(source);
+    mkdirSync(join(repoRoot, ".git"), { recursive: true });
+    const c = capture();
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        join(repoRoot, "Keiko"),
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      {},
+      { now: () => NOW },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("managed install root must be outside customer repositories");
+    expect(registration(stateDir)).toMatchObject({
+      status: "setup-failed",
+      updateEligible: false,
+      failureReason: "setup-failed",
+    });
+    expect(existsSync(join(repoRoot, "Keiko"))).toBe(false);
   });
 });

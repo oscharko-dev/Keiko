@@ -721,13 +721,23 @@ function stageSupportLauncher(target, stageRoot) {
   const supportRoot = payloadSupportRoot(stageRoot);
   mkdirSync(supportRoot, { recursive: true });
   if (target.nodePlatform === "win32") {
-    writeFileSync(join(supportRoot, "keiko-support.cmd"), "@echo off\r\nKeiko.exe %*\r\n");
+    writeFileSync(
+      join(supportRoot, "keiko-support.cmd"),
+      '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n',
+    );
     return;
   }
+  const scriptPath = join(supportRoot, "keiko-support.sh");
   writeFileSync(
-    join(supportRoot, "keiko-support.sh"),
-    '#!/bin/sh\nexec ../Keiko.app/Contents/MacOS/Keiko "$@"\n',
+    scriptPath,
+    [
+      "#!/bin/sh",
+      'SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)',
+      'exec "$SCRIPT_DIR/../Keiko.app/Contents/MacOS/Keiko" "$@"',
+      "",
+    ].join("\n"),
   );
+  chmodLauncher(scriptPath);
 }
 
 function stageSetupManifest(target, resourceRoot) {

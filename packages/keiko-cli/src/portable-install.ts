@@ -1,6 +1,4 @@
-import { createHash } from "node:crypto";
 import {
-  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -12,16 +10,20 @@ import {
   renameSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import {
+  readManagedRegistration,
+  registrationMatches,
+  writeFailedRegistration,
+  writeManagedRegistration,
+} from "./portable-registration.js";
+import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 import {
   layoutFor,
   PACKAGE_NAME,
   primaryLauncherName,
-  REGISTRATION_FILE,
   targetRuntime,
   type PortableLayout,
   type PortableTarget,
@@ -30,41 +32,6 @@ import {
   type SetupStatus,
   type SpawnFn,
 } from "./portable-shared.js";
-
-interface SetupRegistration {
-  readonly schemaVersion: 1;
-  readonly status: SetupStatus;
-  readonly updateEligible: boolean;
-  readonly platformTarget: PortableTarget;
-  readonly packageVersion: string;
-  readonly stable: boolean;
-  readonly setupManifestSha256?: string | undefined;
-  readonly installRootIdentitySha256?: string | undefined;
-  readonly launcherIdentitySha256?: string | undefined;
-  readonly failureReason?: string | undefined;
-  readonly updatedAt: string;
-}
-
-const SETUP_FAILURE_REASON_PATTERNS = [
-  [".keiko runtime state", "managed-root-state-conflict"],
-  ["temporary directory", "managed-root-temporary"],
-  ["symlink", "managed-root-symlink"],
-  ["already exists", "managed-root-exists"],
-  ["setup manifest", "setup-manifest-invalid"],
-  ["package", "app-package-invalid"],
-  ["runtime", "runtime-invalid"],
-  ["launcher", "launcher-invalid"],
-  ["unsafe links", "portable-payload-links"],
-  ["unsupported filesystem", "portable-payload-entry"],
-] as const;
-
-function sha256Text(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function sha256File(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -172,86 +139,12 @@ function validateAppPackage(path: string, expectedVersion: string): void {
   }
 }
 
-function assertManagedRootAllowed(path: string): void {
-  const normalized = path.replaceAll("\\", "/").toLowerCase();
-  if (normalized.includes("/.keiko/") || normalized.endsWith("/.keiko")) {
-    throw new Error("managed install root must be separate from .keiko runtime state");
-  }
-  const tmp = resolve(tmpdir()).replaceAll("\\", "/").toLowerCase();
-  if (normalized === tmp || normalized.startsWith(`${tmp}/`)) {
-    throw new Error("managed install root must not be inside a temporary directory");
-  }
-  try {
-    if (lstatSync(path).isSymbolicLink())
-      throw new Error("managed install root must not be a symlink");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-}
-
 export function sameRealPath(left: string, right: string): boolean {
   try {
     return realpathSync(left) === realpathSync(right);
   } catch {
     return resolve(left) === resolve(right);
   }
-}
-
-function writeRegistration(stateDir: string, registration: SetupRegistration): void {
-  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  const path = join(stateDir, REGISTRATION_FILE);
-  writeFileSync(path, `${JSON.stringify(registration, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Best-effort on non-POSIX filesystems.
-  }
-}
-
-function managedRegistration(input: {
-  readonly layout: PortableLayout;
-  readonly manifest: SetupManifest;
-  readonly now: Date;
-}): SetupRegistration {
-  const realInstallRoot = realpathSync(input.layout.installRoot);
-  return {
-    schemaVersion: 1,
-    status: "managed",
-    updateEligible: true,
-    platformTarget: input.manifest.platformTarget,
-    packageVersion: input.manifest.packageVersion,
-    stable: input.manifest.stable,
-    setupManifestSha256: sha256File(input.layout.setupManifestPath),
-    installRootIdentitySha256: sha256Text(realInstallRoot),
-    launcherIdentitySha256: sha256File(input.layout.primaryLauncherPath),
-    updatedAt: input.now.toISOString(),
-  };
-}
-
-function setupFailureReasonCode(message: string): string {
-  const match = SETUP_FAILURE_REASON_PATTERNS.find(([fragment]) => message.includes(fragment));
-  return match?.[1] ?? "setup-failed";
-}
-
-function failedRegistration(
-  target: PortableTarget,
-  stateDir: string,
-  now: Date,
-  failureReason: string,
-): void {
-  writeRegistration(stateDir, {
-    schemaVersion: 1,
-    status: "setup-failed",
-    updateEligible: false,
-    platformTarget: target,
-    packageVersion: "unknown",
-    stable: false,
-    failureReason: setupFailureReasonCode(failureReason),
-    updatedAt: now.toISOString(),
-  });
 }
 
 function readdirSafe(path: string): readonly string[] {
@@ -277,9 +170,10 @@ function promoteToManaged(
   target: PortableTarget,
   source: PortableLayout,
   managedRoot: string,
+  stateDir: string,
   dryRun: boolean,
 ): PortableLayout {
-  assertManagedRootAllowed(managedRoot);
+  assertManagedRootAllowed(managedRoot, stateDir);
   if (sameRealPath(source.installRoot, managedRoot)) return source;
   if (existsSync(managedRoot)) throw new Error("managed install root already exists");
   if (dryRun) return layoutFor(target, managedRoot);
@@ -308,6 +202,21 @@ export function validatePortableRoot(
   return { layout, manifest };
 }
 
+export function attestedManagedRoot(
+  target: PortableTarget,
+  managedRoot: string,
+  stateDir: string,
+): PortableLayout | undefined {
+  try {
+    const { layout, manifest } = validatePortableRoot(target, managedRoot);
+    const registration = readManagedRegistration(stateDir);
+    if (registration === undefined) return undefined;
+    return registrationMatches(registration, layout, manifest) ? layout : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function setupPortable(
   options: {
     readonly target: PortableTarget;
@@ -325,14 +234,17 @@ export function setupPortable(
       options.target,
       source.layout,
       options.managedRoot,
+      options.stateDir,
       options.dryRun,
     );
     if (!options.dryRun) validatePortableRoot(options.target, managedLayout.installRoot);
     if (!options.dryRun) {
-      writeRegistration(
-        options.stateDir,
-        managedRegistration({ layout: managedLayout, manifest: source.manifest, now }),
-      );
+      writeManagedRegistration({
+        stateDir: options.stateDir,
+        layout: managedLayout,
+        manifest: source.manifest,
+        now,
+      });
     }
     io.out(
       `Keiko portable setup ready at ${options.dryRun ? "planned managed root" : "managed root"}.\n`,
@@ -340,7 +252,7 @@ export function setupPortable(
     return { code: 0, layout: managedLayout };
   } catch (error) {
     const message = error instanceof Error ? error.message : "portable setup failed";
-    if (!options.dryRun) failedRegistration(options.target, options.stateDir, now, message);
+    if (!options.dryRun) writeFailedRegistration(options.target, options.stateDir, now, message);
     io.err(`keiko portable setup: ${message}\n`);
     return { code: 1, layout: undefined };
   }
@@ -356,14 +268,21 @@ export function statusPortable(
     readonly target: PortableTarget;
     readonly portableRoot: string;
     readonly managedRoot: string;
+    readonly stateDir: string;
   },
   io: CliIo,
 ): number {
   try {
     const { layout, manifest } = validatePortableRoot(options.target, options.portableRoot);
-    const status: SetupStatus = sameRealPath(layout.installRoot, options.managedRoot)
-      ? "managed"
-      : "unmanaged";
+    const managedLayout = attestedManagedRoot(
+      options.target,
+      options.managedRoot,
+      options.stateDir,
+    );
+    const status: SetupStatus =
+      managedLayout !== undefined && sameRealPath(layout.installRoot, managedLayout.installRoot)
+        ? "managed"
+        : "unmanaged";
     io.out(
       JSON.stringify(
         {

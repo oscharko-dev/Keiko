@@ -4,6 +4,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { runLifecycleCli } from "./lifecycle.js";
 import {
+  attestedManagedRoot,
   sameRealPath,
   setupPortable,
   spawnManagedLauncher,
@@ -22,6 +23,14 @@ import {
 } from "./portable-shared.js";
 import type { CliIo } from "./runner.js";
 
+type LifecycleFn = (
+  command: "start",
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: { readonly cwd: string },
+) => Promise<number>;
+
 interface PortableCliOptions {
   readonly command: PortableCommand;
   readonly target: PortableTarget;
@@ -39,6 +48,7 @@ export interface PortableSetupDeps {
   readonly arch?: (() => string) | undefined;
   readonly now?: (() => Date) | undefined;
   readonly spawnFn?: SpawnFn | undefined;
+  readonly lifecycleFn?: LifecycleFn | undefined;
 }
 
 interface PortableArgDeps {
@@ -51,6 +61,7 @@ interface PortableArgDeps {
 interface PortableRuntimeDeps extends PortableArgDeps {
   readonly now: () => Date;
   readonly spawnFn: SpawnFn;
+  readonly lifecycleFn: LifecycleFn;
 }
 
 interface PortableFlag {
@@ -182,8 +193,9 @@ async function launchManaged(
   io: CliIo,
   env: EnvSource,
   stateDir: string,
+  lifecycleFn: LifecycleFn,
 ): Promise<number> {
-  return runLifecycleCli("start", ["--open", "--state-dir", stateDir], io, env, {
+  return lifecycleFn("start", ["--open", "--state-dir", stateDir], io, env, {
     cwd: layout.appRoot,
   });
 }
@@ -192,12 +204,22 @@ async function launchPortable(
   options: PortableCliOptions,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<PortableRuntimeDeps, "now" | "spawnFn">,
+  deps: Pick<PortableRuntimeDeps, "now" | "spawnFn" | "lifecycleFn">,
 ): Promise<number> {
   try {
     const source = validatePortableRoot(options.target, options.portableRoot);
+    const attestedManaged = attestedManagedRoot(
+      options.target,
+      options.managedRoot,
+      options.stateDir,
+    );
+    if (attestedManaged !== undefined) {
+      return await launchManaged(attestedManaged, io, env, options.stateDir, deps.lifecycleFn);
+    }
     if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
-      return await launchManaged(source.layout, io, env, options.stateDir);
+      const setup = setupPortable(options, io, deps.now());
+      if (setup.code !== 0 || setup.layout === undefined) return setup.code;
+      return await launchManaged(setup.layout, io, env, options.stateDir, deps.lifecycleFn);
     }
     const setup = setupPortable(options, io, deps.now());
     if (setup.code !== 0 || setup.layout === undefined || options.noRelaunch) return setup.code;
@@ -217,6 +239,7 @@ function resolvedDeps(deps: PortableSetupDeps): PortableRuntimeDeps {
     arch: deps.arch ?? hostArch,
     now: deps.now ?? ((): Date => new Date()),
     spawnFn: deps.spawnFn ?? spawn,
+    lifecycleFn: deps.lifecycleFn ?? runLifecycleCli,
   };
 }
 
