@@ -19,8 +19,14 @@ import { assertValidRunId } from "@oscharko-dev/keiko-security";
 export const DEFAULT_STATE_DIR_NAME = ".keiko";
 
 // Runtime files Keiko writes under the state dir. `ui.pid`/`ui.log` come from
-// `lifecycle.ts`; `launcher-state.json` from `launcher-state.ts`.
-export const KEIKO_STATE_FILES = ["ui.pid", "ui.log", "launcher-state.json"] as const;
+// `lifecycle.ts`; `launcher-state.json` from `launcher-state.ts`; portable
+// install attestation from `portable.ts`.
+export const KEIKO_STATE_FILES = [
+  "ui.pid",
+  "ui.log",
+  "launcher-state.json",
+  "portable-install-state.json",
+] as const;
 
 // `launcher-state.ts` writes ephemeral mkdtemp dirs with this prefix during atomic
 // state saves; a crash can leave one behind, so uninstall/repair sweep them by prefix.
@@ -89,6 +95,7 @@ export function classifyPid(
 //   <stateDir>/
 //     ui.pid, ui.log                        lifecycle.ts
 //     launcher-state.json                   launcher-state.ts
+//     portable-install-state.json           portable.ts
 //     .launcher-state-*/                    launcher-state.ts atomic-save temp dirs
 //     keiko-ui.db[-wal|-shm|.corrupt.*]     keiko-server  store/paths.ts (UI_DB_FILENAME)
 //     keiko.config.json                     keiko-server  deps.ts (model-gateway config)
@@ -426,7 +433,9 @@ const updateSubtree: OwnedSubtree = {
 
 function topLevelFileCategory(name: string): RuntimeStateCategory | undefined {
   if (name === "ui.pid" || name === "ui.log") return "lifecycle";
-  if (name === "launcher-state.json") return "launcher";
+  if (name === "launcher-state.json" || name === "portable-install-state.json") {
+    return "launcher";
+  }
   if (name === GATEWAY_CONFIG_FILENAME) return "gateway-config";
   if (isSqliteFamily(UI_DB_FILENAME, name)) return "ui-database";
   return undefined;

@@ -12,6 +12,7 @@ import { runInitCli } from "./init.js";
 import { runLifecycleCli } from "./lifecycle.js";
 import { runUiCli } from "./ui.js";
 import { runLauncherCli } from "./launcher.js";
+import { runPortableCli } from "./portable.js";
 import { runUninstallCli } from "./uninstall.js";
 import { runRepairCli } from "./repair.js";
 import { runUpdateCli } from "./update.js";
@@ -37,6 +38,8 @@ Usage:
   keiko repair [OPTIONS]   Repair a broken local install (offline remediation pass).
   keiko uninstall [OPTIONS] Remove Keiko's runtime artifacts (state, shortcuts, scripts).
   keiko update <status|check|apply> Inspect or run governed updates (UI remains primary).
+  keiko portable <setup|launch|status>
+                           Manage archive-first portable setup and launch.
   keiko start|stop|status|restart Manage the local Keiko UI process.
   keiko models list        List registered model capabilities.
   keiko models validate    Validate gateway configuration.
@@ -87,6 +90,7 @@ const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
   restart: (rest, io, env) => runLifecycleCli("restart", rest, io, env),
   ui: runUiCli,
   launcher: runLauncherCli,
+  portable: runPortableCli,
 };
 
 // Dispatches named subcommands; returns undefined when the name is not recognised.
