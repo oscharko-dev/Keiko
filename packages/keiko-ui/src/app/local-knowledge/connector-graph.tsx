@@ -458,7 +458,11 @@ function setCountsLine(set: CapsuleSetListEntry): string {
     ...base,
     `${setReadiness.readyCount.toString()} ready`,
     `${setReadiness.degradedCount.toString()} degraded`,
+    `${setReadiness.unavailableCount.toString()} unavailable`,
     `${setReadiness.deniedCount.toString()} policy denied`,
+    `${setReadiness.indexingCount.toString()} indexing`,
+    `${setReadiness.staleCount.toString()} stale`,
+    `${setReadiness.errorCount.toString()} error`,
     `${setReadiness.missingCount.toString()} missing`,
     ...(reasonLabels.length > 0 ? [`reasons: ${reasonLabels.join(", ")}`] : []),
   ].join(" / ");
