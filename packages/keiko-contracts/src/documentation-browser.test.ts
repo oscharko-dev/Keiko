@@ -244,21 +244,30 @@ describe("buildDocumentationNavigationResult", () => {
     expect(result.capability).toEqual({
       previewAvailable: true,
       backendAvailable: true,
-      indexingProposalAvailable: false,
+      indexingProposalAvailable: true,
     });
     expect(result.severity).toBe("ready");
   });
 
-  it("never reports a preview for a limitation reason", () => {
-    const result = buildDocumentationNavigationResult({
+  it("offers the indexing-proposal affordance only for eligible target classes", () => {
+    const intranet = buildDocumentationNavigationResult({
       targetClass: "intranet-http",
       originSummary: "https://intranet",
       pathSummary: "/…",
       reason: "rendering-deferred",
       backendAvailable: true,
     });
-    expect(result.capability.previewAvailable).toBe(false);
-    expect(result.capability.indexingProposalAvailable).toBe(false);
+    expect(intranet.capability.previewAvailable).toBe(false);
+    expect(intranet.capability.indexingProposalAvailable).toBe(true);
+
+    const external = buildDocumentationNavigationResult({
+      targetClass: "external-http",
+      originSummary: "https://example.com",
+      pathSummary: "/…",
+      reason: "unsupported-external-target",
+      backendAvailable: true,
+    });
+    expect(external.capability.indexingProposalAvailable).toBe(false);
   });
 
   it("redacts a path-shaped origin summary and strips format-spoofing code points", () => {

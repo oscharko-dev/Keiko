@@ -473,4 +473,22 @@ describe("validateKnowledgePodSummary", () => {
       ]),
     );
   });
+
+  it("accepts an optional evidence-safe manual source fingerprint (Epic #1852)", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      manualSourceFingerprint: "a".repeat(64),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a manual source fingerprint that leaks a raw path", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      manualSourceFingerprint: "/Users/alice/manuals/index.html",
+    });
+    expect(invalidErrors(result)).toContain(
+      "summary.manualSourceFingerprint must be an evidence-safe string when set",
+    );
+  });
 });
