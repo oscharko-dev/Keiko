@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 255
+    "fileCount": 254
   },
   "b1": {
     "firstLoadScriptCount": 13,
