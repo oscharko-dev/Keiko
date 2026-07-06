@@ -64,12 +64,13 @@ function expectPruneBeforePackageSurface(jobBlock: string): void {
 // into the bundled artifact. Security release hardening adds `check:workspace-supply-chain` before
 // package-surface checks so SBOM/license drift blocks packaging. Release hardening for 0.2.0 adds
 // `check:publish-manifests` so workspace packages cannot reach npm with private runtime packages or
-// wildcard internal dependency specs. Issue #1690 adds `check:release-impact` so packed packages
-// carry reviewed update-impact metadata, and makes `prepublishOnly` use the stricter publish-mode
-// approval variant. The pin stays "exact" against the live `package.json`; it does not lock the
-// chain to a particular historical length. The security remediation audit adds generated build
-// artifact pruning, shell-spawn guardrails, and the 42-finding regression matrix before package
-// surface checks.
+// wildcard internal dependency specs. Portable delivery #1948 adds `check:portable-manifest` after
+// publish-manifest validation so release-impact checks cannot bind an invalid portable artifact
+// contract. Issue #1690 adds `check:release-impact` so packed packages carry reviewed update-impact
+// metadata, and makes `prepublishOnly` use the stricter publish-mode approval variant. The pin stays
+// "exact" against the live `package.json`; it does not lock the chain to a particular historical
+// length. The security remediation audit adds generated build artifact pruning, shell-spawn
+// guardrails, and the 42-finding regression matrix before package surface checks.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
@@ -86,6 +87,7 @@ const PACKAGE_SURFACE_CHAIN = [
   "npm run check:package-surface",
   "npm run check:version-consistency",
   "npm run check:publish-manifests",
+  "npm run check:portable-manifest",
   "npm run check:release-impact",
   "npm run check:qi-supply-chain",
 ].join(" && ");
