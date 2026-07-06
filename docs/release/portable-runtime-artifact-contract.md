@@ -174,8 +174,9 @@ portable-update eligible. Staging roots must be siblings of the active managed r
 filesystem volume so later update promotion can use crash-safe atomic replacement.
 
 Runtime state remains governed by the local runtime state contract. `.keiko` may store content-free
-install/update registration, recovery, remediation, and audit status, but it must not store portable
-package payloads, full archives, or customer-content backups.
+install/update registration, a bounded managed-root locator needed for reversible portable
+repair/uninstall, recovery, remediation, and audit status, but it must not store portable package
+payloads, full archives, or customer-content backups.
 
 ## State And Payload Exclusions
 

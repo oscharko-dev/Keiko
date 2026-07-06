@@ -252,6 +252,42 @@ describe("runPortableCli", () => {
     });
   });
 
+  it("ignores hostile managed-root locators when reading portable install state", () => {
+    const root = tempRoot();
+    const stateDir = join(root, "state");
+    mkdirSync(stateDir, { recursive: true });
+
+    for (const managedRootLocator of [
+      { kind: "home-relative", path: "../escape" },
+      { kind: "home-relative", path: "/tmp/Keiko" },
+      { kind: "absolute-local", path: "PortableApps/Keiko" },
+    ]) {
+      writeFileSync(
+        join(stateDir, "portable-install-state.json"),
+        `${JSON.stringify(
+          {
+            schemaVersion: 1,
+            status: "managed",
+            updateEligible: true,
+            platformTarget: "windows-x64",
+            packageVersion: "0.2.11",
+            stable: true,
+            managedRootLocator,
+            updatedAt: NOW.toISOString(),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const registration = readPortableInstallRegistration(stateDir);
+      expect(registration?.status).toBe("managed");
+      expect(registration?.status === "managed" ? registration.managedRootLocator : undefined).toBe(
+        undefined,
+      );
+    }
+  });
+
   it("creates the macOS user-local app only during explicit setup", async () => {
     const root = tempRoot();
     const home = join(root, "home");

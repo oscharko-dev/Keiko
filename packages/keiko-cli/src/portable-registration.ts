@@ -51,6 +51,8 @@ export type ManagedRootLocator =
   | { readonly kind: "home-relative"; readonly path: string }
   | { readonly kind: "absolute-local"; readonly path: string };
 
+const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+
 const SETUP_FAILURE_REASON_PATTERNS = [
   [".keiko runtime state", "managed-root-state-conflict"],
   ["temporary directory", "managed-root-temporary"],
@@ -240,15 +242,32 @@ function parseManagedRootLocator(value: unknown): ManagedRootLocator | undefined
   if (value === undefined) return undefined;
   if (!isRecord(value) || typeof value.kind !== "string") return undefined;
   if (value.kind === "default") return { kind: "default" };
-  if (
-    (value.kind === "home-relative" || value.kind === "absolute-local") &&
-    typeof value.path === "string" &&
-    value.path.length > 0 &&
-    value.path.length <= 1024
-  ) {
-    return { kind: value.kind, path: value.path };
+  const path = parseManagedRootLocatorPath(value.path);
+  if (path === undefined) return undefined;
+  if (value.kind === "home-relative" && isSafeHomeRelativeLocatorPath(path)) {
+    return { kind: "home-relative", path };
+  }
+  if (value.kind === "absolute-local" && isSafeAbsoluteLocalLocatorPath(path)) {
+    return { kind: "absolute-local", path };
   }
   return undefined;
+}
+
+function parseManagedRootLocatorPath(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (value.length === 0 || value.length > 1024) return undefined;
+  return value;
+}
+
+function isSafeHomeRelativeLocatorPath(value: string): boolean {
+  if (isSafeAbsoluteLocalLocatorPath(value)) return false;
+  return value
+    .split(/[\\/]+/)
+    .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+function isSafeAbsoluteLocalLocatorPath(value: string): boolean {
+  return isAbsolute(value) || WINDOWS_DRIVE_ABSOLUTE_PATH.test(value);
 }
 
 function isFailedRegistrationRecord(value: unknown): value is Record<string, unknown> {
