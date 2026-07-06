@@ -32,6 +32,7 @@ const DIGEST_D = "d".repeat(64);
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567";
 const NODE_VERSION = "24.14.0";
 const STAGE_COMMAND_TIMEOUT_MS = 300_000;
+const VERIFY_SIGNING_SCRIPT = "scripts/verify-portable-runtime-signing.mjs";
 let packageSurfacePreparedForTest = false;
 
 const BASE_MANIFEST = {
@@ -97,10 +98,17 @@ const BASE_MANIFEST = {
     excludesRepositories: true,
   },
   security: {
+    verificationPolicy: "production",
+    verificationStatus: "verified-production",
+    verificationReasonCodes: [],
     signatureKind: "authenticode",
     signatureVerified: true,
     notarizationRequired: false,
     notarizationVerified: false,
+    verificationChecks: {
+      publisherChainVerified: true,
+      timestampVerified: true,
+    },
     verificationSummaryPath: "evidence/signing-verification.json",
   },
   evidence: {
@@ -127,10 +135,18 @@ const BASE_MANIFEST = {
       sbomPath: "evidence/sbom.cdx.json",
       licenseNoticePath: "evidence/third-party-notices.txt",
       checksumsPath: "evidence/SHA256SUMS.txt",
+      verificationPolicy: "production",
+      verificationStatus: "verified-production",
+      verificationReasonCodes: [],
+      platformSignatureLocallyVerified: true,
       signatureKind: "authenticode",
       signatureVerified: true,
       notarizationRequired: false,
       notarizationVerified: false,
+      verificationChecks: {
+        publisherChainVerified: true,
+        timestampVerified: true,
+      },
     },
   },
   updateEligibility: {
@@ -235,6 +251,132 @@ function runStage(args) {
     encoding: "utf8",
     timeout: STAGE_COMMAND_TIMEOUT_MS,
   });
+}
+
+function runSigningVerify(args) {
+  return spawnSync(process.execPath, [VERIFY_SIGNING_SCRIPT, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: STAGE_COMMAND_TIMEOUT_MS,
+  });
+}
+
+function windowsVerificationChecks(overrides = {}) {
+  return {
+    publisherChainVerified: true,
+    timestampVerified: true,
+    ...overrides,
+  };
+}
+
+function macVerificationChecks(overrides = {}) {
+  return {
+    developerIdVerified: true,
+    notarizationVerified: true,
+    stapleVerified: true,
+    assessmentVerified: true,
+    ...overrides,
+  };
+}
+
+function defaultVerificationChecks(target) {
+  return target.nodePlatform === "win32" ? windowsVerificationChecks() : macVerificationChecks();
+}
+
+function platformSignatureLocallyVerified(candidate) {
+  const target = portableTarget(candidate.artifact.platformTarget);
+  const checks = candidate.security.verificationChecks;
+  if (target.nodePlatform === "win32") {
+    return (
+      candidate.security.signatureVerified === true &&
+      checks.publisherChainVerified === true &&
+      checks.timestampVerified === true
+    );
+  }
+  return (
+    candidate.security.signatureVerified === true &&
+    candidate.security.notarizationVerified === true &&
+    checks.developerIdVerified === true &&
+    checks.notarizationVerified === true &&
+    checks.stapleVerified === true &&
+    checks.assessmentVerified === true
+  );
+}
+
+function syncReviewedBinding(candidate) {
+  candidate.releaseImpact.reviewedBinding = {
+    ...candidate.releaseImpact.reviewedBinding,
+    assetId: candidate.artifact.assetId,
+    assetName: candidate.artifact.assetName,
+    assetSizeBytes: candidate.artifact.sizeBytes,
+    platformTarget: candidate.artifact.platformTarget,
+    archiveSha256: candidate.artifact.sha256,
+    packageVersion: candidate.product.packageVersion,
+    nodeRuntimeIdentity: `node-v${candidate.runtime.nodeVersion}-${portableTarget(candidate.artifact.platformTarget).runtimeTarget}`,
+    provenanceStatementSha256: candidate.provenance.provenanceStatementSha256,
+    checksumsPath: candidate.evidence.checksumsPath,
+    licenseNoticePath: candidate.evidence.licenseNoticePath,
+    sbomPath: candidate.evidence.sbomPath,
+    verificationPolicy: candidate.security.verificationPolicy,
+    verificationStatus: candidate.security.verificationStatus,
+    verificationReasonCodes: [...candidate.security.verificationReasonCodes],
+    platformSignatureLocallyVerified: platformSignatureLocallyVerified(candidate),
+    signatureKind: candidate.security.signatureKind,
+    signatureVerified: candidate.security.signatureVerified,
+    notarizationRequired: candidate.security.notarizationRequired,
+    notarizationVerified: candidate.security.notarizationVerified,
+    verificationChecks: { ...candidate.security.verificationChecks },
+  };
+  candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified =
+    platformSignatureLocallyVerified(candidate);
+}
+
+function setManifestTarget(candidate, platformTarget) {
+  const target = portableTarget(platformTarget);
+  candidate.artifact.platformTarget = target.platformTarget;
+  candidate.artifact.assetName = target.assetName;
+  candidate.runtime.nodePlatform = target.nodePlatform;
+  candidate.runtime.nodeArchitecture = target.nodeArchitecture;
+  candidate.entrypoints.primaryLauncher = target.primaryLauncher;
+  candidate.entrypoints.supportLaunchers =
+    target.nodePlatform === "win32" ? ["support/keiko-support.cmd"] : ["support/keiko-support.sh"];
+  candidate.security.signatureKind = target.signatureKind;
+  candidate.security.notarizationRequired = target.nodePlatform === "darwin";
+  candidate.security.notarizationVerified = target.nodePlatform !== "darwin";
+  candidate.security.verificationChecks = defaultVerificationChecks(target);
+  syncReviewedBinding(candidate);
+}
+
+function setVerificationState(candidate, options = {}) {
+  const target = portableTarget(candidate.artifact.platformTarget);
+  const checks = options.verificationChecks ?? defaultVerificationChecks(target);
+  candidate.security.verificationPolicy = options.verificationPolicy ?? "production";
+  candidate.security.verificationStatus = options.verificationStatus ?? "verified-production";
+  candidate.security.verificationReasonCodes = options.verificationReasonCodes ?? [];
+  candidate.security.verificationChecks = checks;
+  candidate.security.signatureVerified =
+    target.nodePlatform === "win32"
+      ? checks.publisherChainVerified === true && checks.timestampVerified === true
+      : checks.developerIdVerified === true;
+  candidate.security.notarizationRequired = target.nodePlatform === "darwin";
+  candidate.security.notarizationVerified =
+    target.nodePlatform === "darwin" ? checks.notarizationVerified === true : false;
+  syncReviewedBinding(candidate);
+}
+
+function writeManifestFixture(candidate, dir) {
+  const stageRoot = join(dir, "portable-runtime");
+  const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
+  mkdirSync(join(stageRoot, "manifest"), { recursive: true });
+  mkdirSync(join(stageRoot, "evidence"), { recursive: true });
+  writeFileSync(manifestPath, JSON.stringify(candidate, null, 2) + "\n");
+  return { manifestPath, stageRoot };
+}
+
+function writeVerificationInput(dir, input) {
+  const path = join(dir, "verification-input.json");
+  writeFileSync(path, JSON.stringify(input, null, 2) + "\n");
+  return path;
 }
 
 function preparePackageSurfaceForTest() {
@@ -352,8 +494,11 @@ describe("validatePortableManifest", () => {
   it("rejects rollback eligibility and unverified platform signatures", () => {
     const candidate = manifest();
     candidate.updateEligibility.rollbackSupported = true;
-    candidate.security.signatureVerified = false;
-    candidate.releaseImpact.reviewedBinding.signatureVerified = false;
+    setVerificationState(candidate, {
+      verificationChecks: windowsVerificationChecks({ publisherChainVerified: false }),
+      verificationReasonCodes: ["windows-publisher-chain-unverified"],
+      verificationStatus: "verification-failed",
+    });
 
     const failures = validatePortableManifest(candidate).join("\n");
     expect(failures).toContain("updateEligibility.rollbackSupported: must be false");
@@ -363,9 +508,15 @@ describe("validatePortableManifest", () => {
 
   it("accepts unsigned manifests only in explicit unverified staging mode", () => {
     const candidate = manifest();
-    candidate.security.signatureVerified = false;
-    candidate.releaseImpact.reviewedBinding.signatureVerified = false;
-    candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = false;
+    setVerificationState(candidate, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
 
     expect(validatePortableManifest(candidate).join("\n")).toContain(
       "security.signatureVerified: must be true",
@@ -376,13 +527,45 @@ describe("validatePortableManifest", () => {
   it("reserves missing release asset ids for explicit unverified staging mode", () => {
     const candidate = manifest();
     candidate.artifact.assetId = 0;
-    candidate.releaseImpact.reviewedBinding.assetId = 0;
-    candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = false;
+    setVerificationState(candidate, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
 
     expect(validatePortableManifest(candidate).join("\n")).toContain(
       "artifact.assetId: must be greater than 0",
     );
     expect(validatePortableManifest(candidate, { allowUnverified: true })).toEqual([]);
+  });
+
+  it("requires explicit verification policy metadata for production manifests", () => {
+    const candidate = manifest();
+    delete candidate.security.verificationPolicy;
+
+    const failures = validatePortableManifest(candidate).join("\n");
+    expect(failures).toContain("security.verificationPolicy: is required");
+  });
+
+  it("requires equal macOS verification checks for both macOS targets", () => {
+    for (const platformTarget of ["macos-arm64", "macos-x64"]) {
+      const candidate = manifest();
+      setManifestTarget(candidate, platformTarget);
+      setVerificationState(candidate, {
+        verificationChecks: macVerificationChecks({ stapleVerified: false }),
+        verificationReasonCodes: ["macos-staple-unverified"],
+        verificationStatus: "verification-failed",
+      });
+
+      const failures = validatePortableManifest(candidate).join("\n");
+      expect(failures).toContain(
+        "updateEligibility.requiredPredicates.platformSignatureLocallyVerified",
+      );
+    }
   });
 
   it("rejects reviewed binding drift from the manifest", () => {
@@ -404,6 +587,7 @@ describe("portable runtime package scripts", () => {
 
     expect(scripts["check:portable-manifest"]).toContain("check-portable-runtime-manifest.mjs");
     expect(scripts["portable:stage"]).toContain("stage-portable-runtime.mjs");
+    expect(scripts["portable:verify-signing"]).toContain("verify-portable-runtime-signing.mjs");
     for (const scriptName of ["prepack", "prepublishOnly"]) {
       const script = scripts[scriptName];
       expect(script.indexOf("npm run check:publish-manifests")).toBeLessThan(
@@ -439,6 +623,129 @@ describe("portable runtime package scripts", () => {
   });
 });
 
+describe("verify-portable-runtime-signing", () => {
+  it("fails closed for production artifacts when Windows publisher-chain verification fails", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    const { manifestPath } = writeManifestFixture(candidate, dir);
+    const verificationInput = writeVerificationInput(dir, {
+      reasonCodes: ["credential-unavailable"],
+      verificationChecks: {
+        publisherChainVerified: false,
+        timestampVerified: true,
+      },
+    });
+
+    const result = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      verificationInput,
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("portable-signing verify failed");
+    expect(result.stderr).toContain("windows-publisher-chain-unverified");
+    const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifestAfter.security.verificationStatus).toBe("verification-failed");
+    expect(manifestAfter.security.verificationReasonCodes).toContain(
+      "windows-publisher-chain-unverified",
+    );
+    expect(
+      manifestAfter.updateEligibility.requiredPredicates.platformSignatureLocallyVerified,
+    ).toBe(false);
+  });
+
+  it("allows unsigned pull-request artifacts but marks them as non-production", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    const { manifestPath, stageRoot } = writeManifestFixture(candidate, dir);
+
+    const result = runSigningVerify(["--manifest", manifestPath, "--policy", "pull-request"]);
+
+    expect(result.status).toBe(0);
+    const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const summary = JSON.parse(
+      readFileSync(join(stageRoot, "evidence", "signing-verification.json"), "utf8"),
+    );
+    expect(manifestAfter.security.verificationPolicy).toBe("pull-request");
+    expect(manifestAfter.security.verificationStatus).toBe("unsigned-non-production");
+    expect(manifestAfter.security.verificationReasonCodes).toEqual([
+      "non-production-artifact",
+      "non-production-unsigned-allowed",
+      "windows-publisher-chain-unverified",
+      "windows-timestamp-unverified",
+    ]);
+    expect(summary.status).toBe("unsigned-non-production");
+    expect(summary.policy).toBe("pull-request");
+    expect(summary.platformSignatureLocallyVerified).toBe(false);
+  });
+
+  it("rejects verification input that tries to persist certificate internals or raw logs", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    const { manifestPath } = writeManifestFixture(candidate, dir);
+    const verificationInput = writeVerificationInput(dir, {
+      rawLog: "codesign output",
+      verificationChecks: {
+        publisherChainVerified: true,
+        timestampVerified: true,
+      },
+    });
+
+    const result = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      verificationInput,
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unsupported verification input key: rawLog");
+  });
+
+  it("applies the same production notarization checks to both macOS architectures", () => {
+    for (const platformTarget of ["macos-arm64", "macos-x64"]) {
+      const dir = tempDir();
+      const candidate = manifest();
+      setManifestTarget(candidate, platformTarget);
+      const { manifestPath } = writeManifestFixture(candidate, dir);
+      const verificationInput = writeVerificationInput(dir, {
+        verificationChecks: {
+          developerIdVerified: true,
+          notarizationVerified: true,
+          stapleVerified: false,
+          assessmentVerified: true,
+        },
+      });
+
+      const result = runSigningVerify([
+        "--manifest",
+        manifestPath,
+        "--policy",
+        "production",
+        "--verification-input",
+        verificationInput,
+      ]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("macos-staple-unverified");
+      const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
+      expect(manifestAfter.security.verificationStatus).toBe("verification-failed");
+      expect(manifestAfter.security.verificationChecks).toEqual({
+        assessmentVerified: true,
+        developerIdVerified: true,
+        notarizationVerified: true,
+        stapleVerified: false,
+      });
+    }
+  });
+});
+
 describe("stage-portable-runtime", () => {
   it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
     const dir = tempDir();
@@ -459,6 +766,15 @@ describe("stage-portable-runtime", () => {
     );
     expect(manifest.security.signatureVerified).toBe(false);
     expect(manifest.security.notarizationVerified).toBe(false);
+    expect(manifest.security.verificationPolicy).toBe("staging");
+    expect(manifest.security.verificationStatus).toBe("unverified-staging");
+    expect(manifest.security.verificationReasonCodes).toEqual(["staging-unverified"]);
+    expect(manifest.security.verificationChecks).toEqual({
+      assessmentVerified: false,
+      developerIdVerified: false,
+      notarizationVerified: false,
+      stapleVerified: false,
+    });
     expect(manifest.artifact.assetId).toBe(0);
     expect(manifest.releaseImpact.reviewedBinding.assetId).toBe(0);
     expect(manifest.releaseImpact.entryId).toBe(
@@ -473,6 +789,9 @@ describe("stage-portable-runtime", () => {
     expect(
       JSON.parse(readFileSync(join(root, "evidence", "signing-verification.json"), "utf8")).status,
     ).toBe("unverified-staging");
+    expect(
+      JSON.parse(readFileSync(join(root, "evidence", "signing-verification.json"), "utf8")).policy,
+    ).toBe("staging");
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "app")),
     ).toBe(true);
@@ -627,6 +946,12 @@ describe("stage-portable-runtime", () => {
     );
     expect(supportScript).toContain('set "SCRIPT_DIR=%~dp0"');
     expect(supportScript).toContain('"%SCRIPT_DIR%..\\Keiko.exe" %*');
+    const manifestPath = join(outDir, "windows-x64", "manifest", "portable-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifest.security.verificationChecks).toEqual({
+      publisherChainVerified: false,
+      timestampVerified: false,
+    });
   }, 360_000);
 
   it("fails closed when a local Node archive name does not match the target runtime", () => {
