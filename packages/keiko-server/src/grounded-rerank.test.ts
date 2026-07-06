@@ -350,6 +350,13 @@ describe("applyModelRerankResults", () => {
 
     expect(applyModelRerankResults(preliminary, [{ index: 99 }], 1)).toBeUndefined();
     expect(applyModelRerankResults(preliminary, [], 1)).toBeUndefined();
+    // A duplicate provider index must also reject to undefined so the caller falls back to fused
+    // order instead of double-counting a candidate (#1925 deterministic degradation).
+    const twoCandidates = rerankAndSelect(
+      [connector("a", 0.9), connector("b", 0.8)],
+      GENEROUS_BUDGET,
+    );
+    expect(applyModelRerankResults(twoCandidates, [{ index: 0 }, { index: 0 }], 2)).toBeUndefined();
   });
 });
 

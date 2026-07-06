@@ -888,7 +888,7 @@ describe("searchVectorsForScope — embedding dim mismatch", () => {
 });
 
 describe("searchVectorsForScope — hardened embedding identity", () => {
-  it("falls back to lexical-degraded retrieval on embedding-space fingerprint drift", async () => {
+  it("keeps dense retrieval available on embedding-space fingerprint drift", async () => {
     const { store } = getFixture();
     const identity: EmbeddingModelIdentity = {
       ...DEFAULT_EMBEDDING,
@@ -922,14 +922,14 @@ describe("searchVectorsForScope — hardened embedding identity", () => {
     );
 
     expect(outcome.references).toHaveLength(1);
-    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.embeddingDegraded).toBeUndefined();
     expect(outcome.noEvidenceReason).toBeUndefined();
-    expect(outcome.diagnostics.mode).toBe("lexical-degraded");
+    expect(outcome.diagnostics.mode).not.toBe("lexical-degraded");
     expect(outcome.diagnostics.embeddingLanes).toEqual([
       expect.objectContaining({
         capsuleIds: ["cap-fingerprint"],
-        status: "identity-incompatible",
-        denseCandidateCount: 0,
+        status: "searched",
+        denseCandidateCount: 1,
       }),
     ]);
     expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
@@ -990,7 +990,7 @@ describe("searchVectorsForScope — hardened embedding identity", () => {
     ]);
   });
 
-  it("keeps a compatible same-model lane when another fingerprint drifts", async () => {
+  it("keeps same-model lanes searchable when their fingerprints differ", async () => {
     const { store } = getFixture();
     const compatibleIdentity = DEFAULT_EMBEDDING;
     const driftedIdentity: EmbeddingModelIdentity = {
@@ -1037,12 +1037,12 @@ describe("searchVectorsForScope — hardened embedding identity", () => {
 
     expect(outcome.references.length).toBeGreaterThan(0);
     expect(new Set(outcome.references.map((ref) => String(ref.capsuleId)))).toEqual(
-      new Set(["cap-compatible-same-model"]),
+      new Set(["cap-compatible-same-model", "cap-drifted-same-model"]),
     );
-    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.embeddingDegraded).toBeUndefined();
     expect(outcome.noEvidenceReason).toBeUndefined();
     expect(outcome.diagnostics.embeddingLanes?.map((lane) => lane.status).sort()).toEqual([
-      "identity-incompatible",
+      "searched",
       "searched",
     ]);
   });
