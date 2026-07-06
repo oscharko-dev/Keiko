@@ -10,6 +10,7 @@ Governing decisions:
 - [ADR-0021: Publish Strategy - Bundled Monorepo Product](../adr/ADR-0021-publish-strategy-bundled-monorepo-product.md)
 - [ADR-0099: Governed in-app updates and release-impact contract](../adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)
 - [Local runtime state contract](../local-runtime-state-contract.md)
+- [Portable Launch And Setup Guide](portable-launch-setup-guide.md)
 - [Release / Publish Workflow](release-publish-workflow.md)
 
 ## Product Contract

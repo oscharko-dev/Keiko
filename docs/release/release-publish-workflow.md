@@ -30,6 +30,8 @@ without parsing prose.
 
 Portable archive layout, launcher, and manifest rules are documented in
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
+The user/operator launch and first-run setup journey is documented in
+[Portable Launch And Setup Guide](portable-launch-setup-guide.md).
 Portable artifact signing verification is owned by `scripts/verify-portable-runtime-signing.mjs`
 and the `npm run portable:verify-signing` wrapper. It updates only redacted sidecar
 manifest/evidence fields and fails closed for `--policy production`; `--policy development` and
@@ -174,6 +176,8 @@ The script:
 - publishes stable `latest` portable ZIPs and evidence before npm publication, so the primary
   user journey is download once, click the bundled launcher, and keep npm as a developer and
   compatibility path,
+- keeps `npm run smoke:portable-launch-setup` green for deterministic launch/setup evidence and
+  validates staged target directories when `--stage-root` is supplied,
 - generates GitHub Release notes from reviewed release-impact metadata,
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,
