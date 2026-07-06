@@ -615,6 +615,10 @@ export const REGRESSION_PROBE_FIXTURE_IDS = [
   "exact-technical",
   "semantic-paraphrase",
   "multilingual-retrieval",
+  // #1818 embedding-space governance: prove the multi-space (two-lane) scorecard is not
+  // tautological either. The fixture's corpus is exactly its expected chunks, so the probe
+  // repoints expectations at the ABSENT_CHUNK_SENTINEL and asserts recall drops below floors.
+  "multi-space",
 ];
 
 const ABSENT_CHUNK_SENTINEL = "__keiko_regression_absent_chunk__";
