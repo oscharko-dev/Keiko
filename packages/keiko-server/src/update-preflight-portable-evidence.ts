@@ -3,6 +3,7 @@ import { gatewayFetch, readBytesCapped } from "@oscharko-dev/keiko-model-gateway
 import {
   type UpdatePreflightBlocker,
   type UpdatePreflightPortableInstallability,
+  type UpdatePortableSidecarSummary,
   type UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
@@ -14,6 +15,10 @@ import {
   requiredAssetName,
 } from "./update-preflight-portable-shared.js";
 import { isRecord } from "./update-preflight-registry.js";
+import {
+  PortableSidecarVerificationError,
+  verifyPortableManifestSidecars,
+} from "./update-portable-sidecar-verification.js";
 
 const MAX_PORTABLE_MANIFEST_BYTES = 256_000;
 const MAX_CHECKSUM_BYTES = 32_000;
@@ -35,6 +40,11 @@ interface PortableAssetResolution {
   readonly installability: UpdatePreflightPortableInstallability;
   readonly blockers: readonly UpdatePreflightBlocker[];
   readonly warnings: readonly string[];
+}
+
+interface ValidatedPortableManifest {
+  readonly archiveSha256: string;
+  readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }
 
 function manifestAssetName(target: UpdatePortableTarget): string {
@@ -203,13 +213,16 @@ function validateManifest(
   release: PortableRelease,
   archive: GitHubAsset,
   target: UpdatePortableTarget,
-): string | undefined {
+): ValidatedPortableManifest | undefined {
   const sha256 = artifactSha256(manifest);
   if (sha256 === undefined) return undefined;
   if (!validManifestIdentity(manifest, release, archive, target)) return undefined;
   if (!validManifestBooleans(manifest)) return undefined;
   if (!reviewedBindingValid(manifest, release, archive, target)) return undefined;
-  return sha256;
+  return {
+    archiveSha256: sha256,
+    sidecarRuntimes: verifyPortableManifestSidecars(manifest, target).summaries,
+  };
 }
 
 function checksumIncludesArchive(checksums: string, sha256: string, assetName: string): boolean {
@@ -305,13 +318,18 @@ async function resolvePortableEvidence(
 ): Promise<PortableAssetResolution> {
   const manifestText = await readAssetSafely(deps, manifestAsset, MAX_PORTABLE_MANIFEST_BYTES);
   const manifest = manifestText === undefined ? undefined : manifestRecord(manifestText.text);
-  const sha256 =
-    manifest === undefined ? undefined : validateManifest(manifest, release, archive, target);
-  if (manifestText === undefined || manifest === undefined || sha256 === undefined) {
+  const validated = validateManifestSafely(manifest, release, archive, target);
+  if (validated instanceof PortableSidecarVerificationError) {
+    return sidecarResolution(target);
+  }
+  if (manifestText === undefined || manifest === undefined || validated === undefined) {
     return malformedResolution(target, "The matching portable manifest is malformed.");
   }
   const checksum = await readAssetSafely(deps, checksumAsset, MAX_CHECKSUM_BYTES);
-  if (checksum === undefined || !checksumIncludesArchive(checksum.text, sha256, archive.name)) {
+  if (
+    checksum === undefined ||
+    !checksumIncludesArchive(checksum.text, validated.archiveSha256, archive.name)
+  ) {
     return checksumResolution(target, checksum === undefined ? "missing" : "mismatch");
   }
   return eligibleResolution(
@@ -321,8 +339,24 @@ async function resolvePortableEvidence(
     manifestAsset,
     checksumAsset,
     manifestText.sha256,
-    sha256,
+    validated.archiveSha256,
+    validated.sidecarRuntimes,
   );
+}
+
+function validateManifestSafely(
+  manifest: Record<string, unknown> | undefined,
+  release: PortableRelease,
+  archive: GitHubAsset,
+  target: UpdatePortableTarget,
+): ValidatedPortableManifest | PortableSidecarVerificationError | undefined {
+  if (manifest === undefined) return undefined;
+  try {
+    return validateManifest(manifest, release, archive, target);
+  } catch (error) {
+    if (error instanceof PortableSidecarVerificationError) return error;
+    throw error;
+  }
 }
 
 function malformedResolution(
@@ -364,6 +398,24 @@ function checksumResolution(
   };
 }
 
+function sidecarResolution(target: UpdatePortableTarget): PortableAssetResolution {
+  return {
+    installability: {
+      source: "github-release-asset",
+      target,
+      requiredAssetName: requiredAssetName(target),
+      status: "malformed",
+    },
+    blockers: [
+      portableBlocker(
+        "portable-sidecar-verification-failed",
+        "The matching portable sidecar payload metadata could not be verified.",
+      ),
+    ],
+    warnings: [],
+  };
+}
+
 function eligibleResolution(
   release: PortableRelease,
   target: UpdatePortableTarget,
@@ -372,6 +424,7 @@ function eligibleResolution(
   checksumAsset: GitHubAsset,
   manifestSha256: string,
   archiveSha256: string,
+  sidecarRuntimes: readonly UpdatePortableSidecarSummary[],
 ): PortableAssetResolution {
   return {
     installability: {
@@ -390,6 +443,7 @@ function eligibleResolution(
         manifestSha256,
         checksumAssetName: checksumAsset.name,
         checksumVerified: true,
+        ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
       },
     },
     blockers: [],

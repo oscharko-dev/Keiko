@@ -7,6 +7,10 @@ import {
   UPDATE_PORTABLE_TARGET_ASSET_NAMES,
   type UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  type PortableSidecarRuntimeVerification,
+  verifyPortableManifestSidecars,
+} from "./update-portable-sidecar-verification.js";
 import { isStableVersion } from "./update-preflight-registry.js";
 import {
   COMMIT_SHA,
@@ -35,6 +39,7 @@ export interface PortableStageAssets {
   readonly release: PortableRelease;
   readonly archive: GitHubAsset;
   readonly manifest: TextAsset;
+  readonly sidecars: readonly PortableSidecarRuntimeVerification[];
 }
 
 function safePositiveInteger(value: unknown): number | undefined {
@@ -392,5 +397,10 @@ export async function resolvePortableStageAssets(
       "portable manifest is not verified",
     );
   }
-  return { release, archive, manifest };
+  return {
+    release,
+    archive,
+    manifest,
+    sidecars: verifyPortableManifestSidecars(manifestRecord, target).sidecars,
+  };
 }

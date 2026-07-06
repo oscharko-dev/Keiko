@@ -1,5 +1,5 @@
 import type { ReleaseImpactRemediation, ReleaseImpactStateImpact } from "./release-impact.js";
-import type { UpdatePortableTarget } from "./update-session.js";
+import type { UpdatePortableSidecarSummary, UpdatePortableTarget } from "./update-session.js";
 
 export const UPDATE_PREFLIGHT_SCHEMA_VERSION = 1 as const;
 
@@ -71,6 +71,7 @@ export const UPDATE_PREFLIGHT_BLOCKER_CODES = [
   "portable-manifest-malformed",
   "portable-checksum-missing",
   "portable-checksum-mismatch",
+  "portable-sidecar-verification-failed",
 ] as const;
 
 export type UpdatePreflightBlockerCode = (typeof UPDATE_PREFLIGHT_BLOCKER_CODES)[number];
@@ -104,6 +105,7 @@ export interface UpdatePreflightPortableAssetSummary {
   readonly manifestSha256: string;
   readonly checksumAssetName: string;
   readonly checksumVerified: boolean;
+  readonly sidecarRuntimes?: readonly UpdatePortableSidecarSummary[] | undefined;
 }
 
 export interface UpdatePreflightPortableInstallability {
