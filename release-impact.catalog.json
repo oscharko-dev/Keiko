@@ -162,6 +162,53 @@
       }
     },
     {
+      "id": "2026-07-06-keiko-0.2.14-portable-runtime-staging-contract",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.14",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.14",
+      "releaseNoteCategory": "internal-only",
+      "releaseNotePriority": "internal",
+      "userVisibleChange": "none",
+      "userVisibleSummary": "Portable runtime staging metadata binds the packed Keiko package, bundled Node runtime, target artifacts, and reviewed manifest contract before public release upload.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Portable runtime staging metadata now binds reviewed package and runtime artifact evidence before release upload."
+      ],
+      "internalOnly": true,
+      "observableImpact": false,
+      "defaultPatchNotes": false,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-06",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.14 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
+      }
+    },
+    {
       "id": "2026-07-02-keiko-0.2.12-repository-understanding-tracing",
       "packageName": "@oscharko-dev/keiko",
       "packageVersion": "0.2.12",
@@ -493,53 +540,6 @@
         "humanApproved": true,
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
         "rationale": "Issue #1996 records the user-visible regression and the local release-owner decision to ship an immediate 0.2.14 patch after reproducing the failure and verifying the fix against a copied affected Local Knowledge store; release-owner authority is recorded in PR review #4618551973 and 0.2.14 publication was explicitly authorized locally in this Codex session."
-      }
-    },
-    {
-      "id": "2026-07-05-keiko-0.2.11-portable-runtime-staging-contract",
-      "packageName": "@oscharko-dev/keiko",
-      "packageVersion": "0.2.11",
-      "distTag": "latest",
-      "registry": "https://registry.npmjs.org/",
-      "releaseTag": "v0.2.11",
-      "releaseNoteCategory": "internal-only",
-      "releaseNotePriority": "internal",
-      "userVisibleChange": "none",
-      "userVisibleSummary": "Portable runtime staging metadata binds the packed Keiko package, bundled Node runtime, target artifacts, and reviewed manifest contract before public release upload.",
-      "affectedStateStores": [],
-      "stateImpact": [],
-      "userActionRequired": false,
-      "remediation": "no-action-required",
-      "supportedFrom": ["0.2.0"],
-      "releaseNoteBullets": [
-        "Portable runtime staging metadata now binds reviewed package and runtime artifact evidence before release upload."
-      ],
-      "internalOnly": true,
-      "observableImpact": false,
-      "defaultPatchNotes": false,
-      "oneClickEligible": false,
-      "publishGates": [
-        "version-consistency",
-        "publish-manifests",
-        "release-impact",
-        "workspace-supply-chain",
-        "package-surface",
-        "qi-supply-chain"
-      ],
-      "portableRuntimeArtifactContract": {
-        "programEpic": 1944,
-        "parentEpic": 1942,
-        "issue": 1948,
-        "stagingOnly": true,
-        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
-      },
-      "review": {
-        "status": "reviewed",
-        "reviewer": "release-owner",
-        "reviewedAt": "2026-07-05",
-        "humanApproved": true,
-        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
-        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.11 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
       }
     }
   ]
