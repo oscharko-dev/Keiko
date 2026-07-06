@@ -179,13 +179,20 @@ Epic #1852 set for its consent boundary. No constraint above is weakened.
 - **One pure scope guard precedes every read/fetch, and fails closed.** `evaluateManualCrawlLink` is the
   single decision every candidate link is routed through before it is fetched or read. It layers an
   approved origin / path-prefix / local-root allowlist on top of the base scope and refuses every
-  scope-expansion vector with a stable, body-free reason code: cross-origin links, parent-directory and
-  symlink escapes, unsupported schemes (`mailto:`, `javascript:`, `data:`, …), credentialed URLs,
-  login/logout/action links, non-HTML assets, and hidden/credential files (`.env`, `.git`, `.htpasswd`,
-  `id_rsa`, …). Because every accepted http link is proven same-origin as the approved — and never
-  metadata — origin, a cloud-metadata or link-local link is always refused as `cross-origin` before any
-  address is contacted. Query strings and fragments are stripped during canonicalisation so query-token
-  proliferation cannot expand the crawl.
+  scope-expansion vector with a stable, body-free reason code: cross-origin links, parent-directory
+  escapes in the raw link text, unsupported schemes (`mailto:`, `javascript:`, `data:`, …), credentialed
+  URLs, login/logout/action links, non-HTML assets, and hidden/credential files (`.env`, `.git`,
+  `.htpasswd`, `id_rsa`, …). Because every accepted http link is proven same-origin as the approved — and
+  never metadata — origin, a cloud-metadata or link-local link is always refused as `cross-origin` before
+  any address is contacted. Query strings and fragments are stripped during canonicalisation so
+  query-token proliferation cannot expand the crawl. This guard is purely string/URL-based — it has no
+  filesystem access, so it cannot and does not defend against a symlink escape.
+- **Symlink escapes are refused by the WorkspaceFs-backed local fetcher, not by the scope guard.** For a
+  local manual, the injected fetcher (`crawl/fetchers.ts`'s `createWorkspaceFsManualFetcher`) resolves
+  every candidate path with `WorkspaceFs.realPath` and confirms the resolved path is still contained
+  under the approved manual root before reading it — the same trailing-separator-safe containment check
+  `discovery/walk.ts` already uses, reused here rather than re-implemented, so a symlink whose target
+  merely shares a string prefix with the root (e.g. a sibling directory) is correctly refused.
 - **The DNS-rebinding defence is reused, not reinvented.** The (follow-up) intranet http fetcher
   reuses the shared outbound egress engine (`gatewayFetch` / `egress-policy.ts`, ADR-0038), whose
   `enforceOutboundTargetPolicy` re-checks the DNS-resolved address on the direct path — so a hostname

@@ -12,6 +12,7 @@
 // for real intranet manuals (ADR-0038 egress, DNS-rebinding-safe).
 
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { isContained } from "../discovery/walk.js";
 import type {
   ManualCrawlFetcher,
   ManualFetchOptions,
@@ -38,11 +39,13 @@ async function readLocalPage(
   if (readFileBytes === undefined) return { ok: false, reason: "fetch-failed" };
   const absolutePath = `${deps.rootAbsolutePath}/${relativePath}`.replace(/\/+/gu, "/");
   try {
-    if (!deps.fs.realPath(absolutePath).startsWith(deps.rootAbsolutePath)) {
+    const realPath = deps.fs.realPath(absolutePath);
+    if (!isContained(deps.rootAbsolutePath, realPath)) {
       return { ok: false, reason: "path-traversal" };
     }
+    const truncated = deps.fs.stat(realPath).size > options.maxBytes;
     const bytes = await readFileBytes(absolutePath, options.maxBytes);
-    return { ok: true, bytes, contentType: "text/html" };
+    return { ok: true, bytes, contentType: "text/html", truncated };
   } catch {
     return { ok: false, reason: "fetch-failed" };
   }
@@ -80,8 +83,9 @@ function pageToResult(page: InMemoryManualPage, maxBytes: number): ManualFetchRe
     };
   }
   const raw = page.bytes ?? new TextEncoder().encode(page.html ?? "");
-  const bytes = raw.length > maxBytes ? raw.subarray(0, maxBytes) : raw;
-  return { ok: true, bytes, contentType: page.contentType ?? "text/html" };
+  const truncated = raw.length > maxBytes;
+  const bytes = truncated ? raw.subarray(0, maxBytes) : raw;
+  return { ok: true, bytes, contentType: page.contentType ?? "text/html", truncated };
 }
 
 // Deterministic in-memory fetcher keyed by canonical target identity (http url or local relative
