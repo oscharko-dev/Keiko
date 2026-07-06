@@ -31,7 +31,7 @@ or compatibility playbook.
 | Consumer package scripts  | `keiko:start`, `keiko:stop` in the consumer `package.json`                                                                                                             | `@oscharko-dev/keiko-cli`                                      | Written by `keiko init`.                                                                                                                                    |
 | Lifecycle files           | `KEIKO_STATE_DIR/ui.pid` and `KEIKO_STATE_DIR/ui.log` or default `.keiko/`                                                                                             | `@oscharko-dev/keiko-cli`                                      | Runtime-only process state.                                                                                                                                 |
 | Update recovery state     | `KEIKO_STATE_DIR/updates/` or default `.keiko/updates/`                                                                                                                | `@oscharko-dev/keiko-server`                                   | Content-free update runtime state, remediation action status, audit events, and previous-version recovery manifests for failed or partial governed updates. |
-| Portable install state    | `KEIKO_STATE_DIR/portable-install-state.json` or default `.keiko/portable-install-state.json`                                                                          | `@oscharko-dev/keiko-cli`                                      | Content-free managed install attestation and failed-setup status with hashed install/launcher identities and bounded failure codes only.                    |
+| Portable install state    | `KEIKO_STATE_DIR/portable-install-state.json` or default `.keiko/portable-install-state.json`                                                                          | `@oscharko-dev/keiko-cli`                                      | Content-free portable managed-install and registration attestation, bounded local managed-root locator metadata for reversible repair/uninstall, and failed-setup status with hashed install/launcher identities and bounded failure codes only. It never stores portable payloads, archives, customer content, secrets, logs, prompts, model output, or customer repository files. |
 | Local `.env` discovery    | Current working directory `.env` for the closed allowlist `FIGMA_ACCESS_TOKEN` only                                                                                    | `@oscharko-dev/keiko-cli`                                      | Read-only connector convenience surface; `KEIKO_*` runtime configuration must come from explicit flags or the process environment.                          |
 | Memory vault              | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/keiko-memory.db` → `~/.keiko/memory/keiko-memory.db`                                                        | `@oscharko-dev/keiko-memory-vault` and related memory packages | Local SQLite STRICT/WAL store; workspace-local paths are rejected.                                                                                          |
 
@@ -44,6 +44,22 @@ or compatibility playbook.
 | Evidence dir    | `--evidence-dir` → `KEIKO_EVIDENCE_DIR` → `./.keiko/evidence/`                    |
 | Lifecycle state | `--state-dir` → `KEIKO_STATE_DIR` → `.keiko/`                                     |
 | Memory vault    | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/` → `~/.keiko/memory/` |
+
+## Portable install state record
+
+`portable-install-state.json` persists a content-free discriminated union with shared fields
+`schemaVersion: 1`, `platformTarget`, `status`, `updateEligible`, `packageVersion`, `stable`, and
+`updatedAt`.
+
+| Persisted record | Required shape | Status-specific fields |
+| ---------------- | -------------- | ---------------------- |
+| Managed portable install | `status: "managed"` and `updateEligible: true` | Optional `managedRootLocator` with `kind: "default"`, `kind: "home-relative"` plus a bounded relative `path`, or `kind: "absolute-local"` plus a bounded absolute local `path`; managed-only attestation hashes `setupManifestSha256`, `installRootIdentitySha256`, and `launcherIdentitySha256`. |
+| Failed setup | `status: "setup-failed"` and `updateEligible: false` | Optional bounded `failureReason` code only. Managed-root locator and attestation hashes are absent. |
+
+The persisted union does not store portable payload bytes, ZIP archives, customer repositories,
+customer document content, prompts, model output, logs, secrets, or credential material. Reader-side
+attestation refuses a symlinked state file, ignores policy-invalid managed-root candidates, and
+re-attests managed installs plus registration artifacts before repair or uninstall acts on them.
 
 ## Confidentiality classes and controls
 
@@ -86,7 +102,7 @@ real `.keiko` tree.
 | QI manifests (`<runId>.qi.json`)                                                                                   | yes              | yes                | deferred                         | yes            | yes (SHA-256)                              | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
 | QI candidates (`<runId>.candidates.json`)                                                                          | yes              | yes                | deferred                         | yes            | n/a                                        | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
 | Figma snapshots (JSON / PNG side-files)                                                                            | yes              | yes                | deferred                         | yes (cap 500)  | PNG side-file SHA-256                      | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| Lifecycle / launcher / portable install (`ui.pid`, `ui.log`, `launcher-state.json`, `portable-install-state.json`) | yes              | n/a                | n/a (content-free)               | n/a            | yes (launcher and install identity hashes) | this contract                                                                                           |
+| Lifecycle / launcher / portable install (`ui.pid`, `ui.log`, `launcher-state.json`, `portable-install-state.json`) | yes              | n/a                | n/a (content-free local runtime metadata) | n/a            | yes (launcher and install identity hashes; symlink-refusing portable attestation) | this contract                                                                                           |
 | Update recovery manifests (`updates/*`)                                                                            | yes              | n/a                | n/a (content-free)               | yes (one prev) | manifest validation                        | [ADR-0099](adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)                         |
 
 `deferred` is a documented, bounded decision — not an oversight. Customer-reconstructive evidence
@@ -106,12 +122,17 @@ Quality-Intelligence records, update recovery manifests/audit logs, the gateway 
 
 - **Repair** normalizes POSIX permissions to `0o700` for Keiko-owned directories and `0o600`
   for Keiko-owned files, reports lingering plaintext credentials, and is content-free
-  (paths and categories only). It never deletes a store and never chmods an unrecognized
-  customer file. On Windows it reports that NTFS ACLs govern access instead of applying modes.
+  (paths and categories only). For managed portable installs it also attests the portable
+  install record plus any user-local registration artifact before mutation, and refuses
+  symlinked state/registration files or unknown/tampered managed-install entries. It never
+  deletes a store and never chmods an unrecognized customer file. On Windows it reports that
+  NTFS ACLs govern access instead of applying modes.
 - **Uninstall `--state`** removes the manifest artifacts and then the state directory, but
   only once no unrecognized customer file or symlink remains beneath it. It never follows a
   symlink out of `.keiko` and never recursively deletes an arbitrary directory. Filesystem
-  unlinking does not guarantee secure erasure of SSD-backed data.
+  unlinking does not guarantee secure erasure of SSD-backed data. Portable managed uninstall
+  likewise proves the managed-install tree and user-local registration artifacts are safe
+  first, refusing symlinks and unknown managed-install entries before any removal.
 
 ## Evidence artifact confidentiality
 

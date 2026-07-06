@@ -13,14 +13,25 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
+  type ManagedRootLocator,
+  type ManagedSetupRegistration,
   readManagedRegistration,
   registrationMatches,
   writeFailedRegistration,
   writeManagedRegistration,
+  readPortableInstallRegistration,
+  type PortableInstallRegistration,
 } from "./portable-registration.js";
+import {
+  installUserLocalRegistration,
+  parseWindowsStartMenuRegistration,
+  removePortableManagedInstall,
+  windowsStartMenuRegistrationPath,
+} from "./portable-maintenance.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 import {
+  defaultManagedRoot,
   layoutFor,
   PACKAGE_NAME,
   primaryLauncherName,
@@ -32,6 +43,7 @@ import {
   type SetupStatus,
   type SpawnFn,
 } from "./portable-shared.js";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -207,55 +219,192 @@ export function attestedManagedRoot(
   managedRoot: string,
   stateDir: string,
 ): PortableLayout | undefined {
+  const registration = readManagedRegistration(stateDir);
+  if (registration === undefined) return undefined;
+  return attestedManagedLayout(registration, managedRoot, stateDir)?.layout;
+}
+
+interface SetupPortableOptions {
+  readonly target: PortableTarget;
+  readonly portableRoot: string;
+  readonly managedRoot: string;
+  readonly stateDir: string;
+  readonly dryRun: boolean;
+  readonly env: EnvSource;
+  readonly home: string;
+}
+
+const SILENT_IO: CliIo = {
+  out: (_text: string): void => undefined,
+  err: (_text: string): void => undefined,
+};
+
+function finalizeManagedSetup(
+  options: SetupPortableOptions,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+  now: Date,
+): void {
+  validatePortableRoot(options.target, layout.installRoot);
+  installUserLocalRegistration(
+    layout,
+    options.target,
+    options.managedRoot,
+    options.env,
+    options.home,
+  );
+  writeManagedRegistration({
+    stateDir: options.stateDir,
+    layout,
+    manifest,
+    env: options.env,
+    home: options.home,
+    now,
+  });
+}
+
+function rollbackManagedSetup(layout: PortableLayout): void {
   try {
-    const { layout, manifest } = validatePortableRoot(target, managedRoot);
-    const registration = readManagedRegistration(stateDir);
-    if (registration === undefined) return undefined;
-    return registrationMatches(registration, layout, manifest) ? layout : undefined;
+    removePortableManagedInstall(layout, SILENT_IO, false);
   } catch {
-    return undefined;
+    // Best-effort rollback: setup still records a fail-closed state.
+  }
+}
+
+function recordFailedSetup(options: SetupPortableOptions, now: Date, message: string): void {
+  try {
+    writeFailedRegistration(options.target, options.stateDir, now, message);
+  } catch {
+    // Refusing a symlinked state file must not turn setup failure into unsafe overwrite logic.
   }
 }
 
 export function setupPortable(
-  options: {
-    readonly target: PortableTarget;
-    readonly portableRoot: string;
-    readonly managedRoot: string;
-    readonly stateDir: string;
-    readonly dryRun: boolean;
-  },
+  options: SetupPortableOptions,
   io: CliIo,
   now: Date,
 ): { readonly code: number; readonly layout: PortableLayout | undefined } {
+  let managedLayout: PortableLayout | undefined;
+  let createdManagedInstall = false;
   try {
     const source = validatePortableRoot(options.target, options.portableRoot);
-    const managedLayout = promoteToManaged(
+    managedLayout = promoteToManaged(
       options.target,
       source.layout,
       options.managedRoot,
       options.stateDir,
       options.dryRun,
     );
-    if (!options.dryRun) validatePortableRoot(options.target, managedLayout.installRoot);
-    if (!options.dryRun) {
-      writeManagedRegistration({
-        stateDir: options.stateDir,
-        layout: managedLayout,
-        manifest: source.manifest,
-        now,
-      });
-    }
+    createdManagedInstall =
+      !options.dryRun && !sameRealPath(source.layout.installRoot, managedLayout.installRoot);
+    if (!options.dryRun) finalizeManagedSetup(options, managedLayout, source.manifest, now);
     io.out(
       `Keiko portable setup ready at ${options.dryRun ? "planned managed root" : "managed root"}.\n`,
     );
     return { code: 0, layout: managedLayout };
   } catch (error) {
     const message = error instanceof Error ? error.message : "portable setup failed";
-    if (!options.dryRun) writeFailedRegistration(options.target, options.stateDir, now, message);
+    if (createdManagedInstall && managedLayout !== undefined) rollbackManagedSetup(managedLayout);
+    if (!options.dryRun) recordFailedSetup(options, now, message);
     io.err(`keiko portable setup: ${message}\n`);
     return { code: 1, layout: undefined };
   }
+}
+
+function candidateManagedRoots(
+  registration: PortableInstallRegistration,
+  env: EnvSource,
+  home: string,
+): readonly string[] {
+  const target = registration.platformTarget;
+  const roots = new Set<string>([defaultManagedRoot(target, env, home)]);
+  const hintedRoot = resolveManagedRootLocator(registration, home);
+  if (hintedRoot !== undefined) roots.add(hintedRoot);
+  if (target !== "windows-x64") return [...roots];
+  const registeredExe = parseWindowsStartMenuRegistration(
+    windowsStartMenuRegistrationPath(env, home),
+  );
+  if (registeredExe !== undefined) {
+    roots.add(dirname(registeredExe));
+  }
+  return [...roots];
+}
+
+function resolveManagedRootLocator(
+  registration: PortableInstallRegistration,
+  home: string,
+): string | undefined {
+  if (registration.status !== "managed") return undefined;
+  return resolveManagedRootPath(registration.managedRootLocator, home);
+}
+
+function resolveManagedRootPath(
+  locator: ManagedRootLocator | undefined,
+  home: string,
+): string | undefined {
+  if (locator === undefined || locator.kind === "default") return undefined;
+  return locator.kind === "home-relative" ? resolve(home, locator.path) : resolve(locator.path);
+}
+
+function attestedManagedLayout(
+  registration: ManagedSetupRegistration,
+  managedRoot: string,
+  stateDir: string,
+):
+  | { readonly layout: PortableLayout; readonly manifest: SetupManifest }
+  | undefined {
+  try {
+    assertManagedRootAllowed(managedRoot, stateDir);
+    const { layout, manifest } = validatePortableRoot(registration.platformTarget, managedRoot);
+    return registrationMatches(registration, layout, manifest) ? { layout, manifest } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function attestedPortableInstallRecord(
+  stateDir: string,
+  env: EnvSource,
+  home: string,
+):
+  | {
+      readonly registration: PortableInstallRegistration;
+      readonly target: PortableTarget;
+      readonly managedRoot: string | undefined;
+      readonly layout: PortableLayout | undefined;
+      readonly manifest: SetupManifest | undefined;
+    }
+  | undefined {
+  const registration = readPortableInstallRegistration(stateDir);
+  if (registration === undefined) return undefined;
+  if (registration.status !== "managed") {
+    return {
+      registration,
+      target: registration.platformTarget,
+      managedRoot: undefined,
+      layout: undefined,
+      manifest: undefined,
+    };
+  }
+  for (const managedRoot of candidateManagedRoots(registration, env, home)) {
+    const attested = attestedManagedLayout(registration, managedRoot, stateDir);
+    if (attested !== undefined) {
+      return {
+        registration,
+        target: registration.platformTarget,
+        managedRoot,
+        layout: attested.layout,
+        manifest: attested.manifest,
+      };
+    }
+  }
+  return {
+    registration,
+    target: registration.platformTarget,
+    managedRoot: undefined,
+    layout: undefined,
+    manifest: undefined,
+  };
 }
 
 export function spawnManagedLauncher(layout: PortableLayout, spawnFn: SpawnFn): void {
