@@ -82,6 +82,17 @@ function displayPath(root: string, relativePath: string | null): string {
   return `${root.replace(/[/\\]+$/u, "")}${separator}${relativePath.replace(/\//gu, separator)}`;
 }
 
+function treePathFromGitPath(visibleDirectoryPath: string | null, path: string): string {
+  return visibleDirectoryPath === null ? path : joinRelative(visibleDirectoryPath, path);
+}
+
+function gitPathFromTreePath(visibleDirectoryPath: string | null, path: string): string {
+  if (visibleDirectoryPath === null || visibleDirectoryPath.length === 0) return path;
+  if (path === visibleDirectoryPath) return "";
+  const prefix = `${visibleDirectoryPath}/`;
+  return path.startsWith(prefix) ? path.slice(prefix.length) : path;
+}
+
 interface DirectoryState {
   readonly entries: readonly FilesTreeEntry[];
   readonly truncated: boolean;
@@ -601,31 +612,42 @@ export function FilesWidget({
     void loadDirectory("");
   }, [apiRoot, loadDirectory]);
 
+  const visibleBaseRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : "");
+  const visibleRootPath = displayPath(visibleBaseRoot, currentDirectoryPath);
+  const gitStatusTargetRoot = visibleRootPath.length > 0 ? visibleRootPath : null;
+
   useEffect(() => {
-    const targetRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
-    if (targetRoot === null) {
+    if (gitStatusTargetRoot === null) {
       gitStatusRootRef.current = null;
       gitStatusSettledRootRef.current = null;
       setGitStatusState({ loading: false, status: null, error: null });
       return;
     }
-    if (gitStatusRootRef.current === targetRoot && gitStatusSettledRootRef.current === targetRoot) {
+    if (
+      gitStatusRootRef.current === gitStatusTargetRoot &&
+      gitStatusSettledRootRef.current === gitStatusTargetRoot
+    ) {
       return;
     }
-    gitStatusRootRef.current = targetRoot;
+    const previousRoot = gitStatusRootRef.current;
+    gitStatusRootRef.current = gitStatusTargetRoot;
     gitStatusSettledRootRef.current = null;
     let cancelled = false;
-    setGitStatusState((current) => ({ ...current, loading: true, error: null }));
-    void readSharedGitStatus(targetRoot)
+    setGitStatusState((current) => ({
+      loading: true,
+      status: previousRoot === gitStatusTargetRoot ? current.status : null,
+      error: null,
+    }));
+    void readSharedGitStatus(gitStatusTargetRoot)
       .then((status) => {
         if (!cancelled) {
-          gitStatusSettledRootRef.current = targetRoot;
+          gitStatusSettledRootRef.current = gitStatusTargetRoot;
           setGitStatusState({ loading: false, status, error: null });
         }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          gitStatusSettledRootRef.current = targetRoot;
+          gitStatusSettledRootRef.current = gitStatusTargetRoot;
           setGitStatusState({
             loading: false,
             status: null,
@@ -636,12 +658,7 @@ export function FilesWidget({
     return () => {
       cancelled = true;
     };
-  }, [apiRoot, resolvedRoot]);
-
-  const visibleRootPath = displayPath(
-    resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : ""),
-    currentDirectoryPath,
-  );
+  }, [gitStatusTargetRoot]);
 
   // Keep the root-bar input showing where we actually are (resolved root + current folder).
   useEffect(() => {
@@ -961,11 +978,11 @@ export function FilesWidget({
 
   const openDiff = useCallback(
     (path: string): void => {
-      const targetRoot = resolvedRoot ?? apiRoot;
-      if (targetRoot.length === 0) return;
+      if (gitStatusTargetRoot === null) return;
+      const gitPath = gitPathFromTreePath(currentDirectoryPath, path);
       setSelectedPath(null);
       setGitDiffState({ path, loading: true, response: null, error: null });
-      void fetchGitDiff({ root: targetRoot, path })
+      void fetchGitDiff({ root: gitStatusTargetRoot, path: gitPath })
         .then((response) => {
           setGitDiffState({ path, loading: false, response, error: null });
         })
@@ -973,7 +990,7 @@ export function FilesWidget({
           setGitDiffState({ path, loading: false, response: null, error: errorMessage(error) });
         });
     },
-    [apiRoot, resolvedRoot],
+    [currentDirectoryPath, gitStatusTargetRoot],
   );
 
   // Locate a loaded tree entry by its root-relative path, across every fetched directory level.
@@ -1036,9 +1053,12 @@ export function FilesWidget({
   const gitChangeByPath = useMemo(
     () =>
       new Map<string, GitChangedFile>(
-        gitChanges.map((change): [string, GitChangedFile] => [change.path, change]),
+        gitChanges.map((change): [string, GitChangedFile] => [
+          treePathFromGitPath(currentDirectoryPath, change.path),
+          change,
+        ]),
       ),
-    [gitChanges],
+    [currentDirectoryPath, gitChanges],
   );
   const gitSummary = gitStatusSummary(gitStatusState);
   const gitDeliveryRoot =
