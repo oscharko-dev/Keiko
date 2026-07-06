@@ -173,7 +173,8 @@ describe("grounded folder path redacts gateway error messages (#154)", () => {
         new ProviderError(`POST ${PROVIDER_BASE_URL}/chat/completions returned 500`, 502),
       ),
     );
-    expect(result.status).toBe(502);
+    // A retryable provider 5xx now maps to 503 (transient) instead of 502.
+    expect(result.status).toBe(503);
     const envelope = errorEnvelope(result);
     expect(envelope.code).toBe("GATEWAY_PROVIDER_ERROR");
     assertScrubbed(envelope.message);
@@ -233,7 +234,8 @@ describe("grounded multi-source path redacts gateway error messages (#154)", () 
       undefined,
       seam,
     );
-    expect(result.status).toBe(502);
+    // A retryable provider 5xx now maps to 503 (transient) instead of 502.
+    expect(result.status).toBe(503);
     assertScrubbed(errorEnvelope(result).message);
   });
 });
@@ -285,7 +287,8 @@ describe("grounded hybrid path redacts gateway error messages (#154)", () => {
       undefined,
       hybrid,
     );
-    expect(result.status).toBe(502);
+    // A retryable provider 5xx now maps to 503 (transient) instead of 502.
+    expect(result.status).toBe(503);
     assertScrubbed(errorEnvelope(result).message);
   });
 

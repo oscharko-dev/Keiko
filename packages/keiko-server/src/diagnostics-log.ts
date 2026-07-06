@@ -20,6 +20,11 @@ export interface ServerDiagnosticRecord {
   readonly message: string;
   // A stable machine-readable code when the error carries one (coded errors, GatewayError.code).
   readonly code?: string | undefined;
+  // Usage a streaming gateway call had accumulated before failing mid-stream
+  // (GatewayError.partialUsage). Counts only — never content — so interrupted
+  // turns stay visible to cost accounting instead of vanishing with the error.
+  readonly partialUsage?:
+    { readonly promptTokens: number; readonly completionTokens: number } | undefined;
   // The upstream model-gateway request id when the failure originated from a gateway call — this is
   // what links a UI/server correlation id to the gateway's own record (GEN-OBS-CORRELATION-503).
   readonly gatewayRequestId?: string | undefined;
@@ -50,17 +55,43 @@ export function describeError(
   readonly message: string;
   readonly code?: string | undefined;
   readonly gatewayRequestId?: string | undefined;
+  readonly partialUsage?:
+    { readonly promptTokens: number; readonly completionTokens: number } | undefined;
 } {
   if (error instanceof Error) {
-    const withExtras = error as Error & { code?: unknown; requestId?: unknown };
+    const withExtras = error as Error & {
+      code?: unknown;
+      requestId?: unknown;
+      partialUsage?: unknown;
+    };
     return {
       errorClass: error.name || error.constructor.name || "Error",
       message: redact(error.message),
       code: typeof withExtras.code === "string" ? withExtras.code : undefined,
       gatewayRequestId: typeof withExtras.requestId === "string" ? withExtras.requestId : undefined,
+      partialUsage: partialUsageCounts(withExtras.partialUsage),
     };
   }
   return { errorClass: typeof error, message: redact(String(error)) };
+}
+
+// Accepts only the numeric counts (GatewayError.partialUsage shape) — anything
+// else is dropped so a hostile/foreign `partialUsage` value can never smuggle
+// content into a diagnostic record.
+function partialUsageCounts(
+  value: unknown,
+): { readonly promptTokens: number; readonly completionTokens: number } | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const record = value as { promptTokens?: unknown; completionTokens?: unknown };
+  if (
+    typeof record.promptTokens !== "number" ||
+    !Number.isFinite(record.promptTokens) ||
+    typeof record.completionTokens !== "number" ||
+    !Number.isFinite(record.completionTokens)
+  ) {
+    return undefined;
+  }
+  return { promptTokens: record.promptTokens, completionTokens: record.completionTokens };
 }
 
 // Emits a diagnostic record through the provided sink (falling back to the default stderr sink).
@@ -99,5 +130,6 @@ export function serverDiagnosticFromError(input: {
     ...(described.gatewayRequestId === undefined
       ? {}
       : { gatewayRequestId: described.gatewayRequestId }),
+    ...(described.partialUsage === undefined ? {} : { partialUsage: described.partialUsage }),
   };
 }
