@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-security",
-  "version": "0.2.11",
+  "version": "0.2.13",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko security primitives (redaction, safe error shaping, secret collection, content hashing, trust-boundary helpers). Not published independently.",
@@ -85,7 +85,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.11"
+    "@oscharko-dev/keiko-contracts": "0.2.13"
   },
   "private": true
 }
