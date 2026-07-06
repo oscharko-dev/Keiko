@@ -39,6 +39,7 @@ interface PortableCliOptions {
   readonly stateDir: string;
   readonly dryRun: boolean;
   readonly noRelaunch: boolean;
+  readonly home: string;
 }
 
 export interface PortableSetupDeps {
@@ -185,6 +186,7 @@ function finalizePortableOptions(
     stateDir: resolveInputPath(deps.cwd, raw.stateDir),
     dryRun: raw.dryRun,
     noRelaunch: raw.noRelaunch,
+    home: deps.homedir(),
   };
 }
 
@@ -217,11 +219,11 @@ async function launchPortable(
       return await launchManaged(attestedManaged, io, env, options.stateDir, deps.lifecycleFn);
     }
     if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
-      const setup = setupPortable(options, io, deps.now());
+      const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
       if (setup.code !== 0 || setup.layout === undefined) return setup.code;
       return await launchManaged(setup.layout, io, env, options.stateDir, deps.lifecycleFn);
     }
-    const setup = setupPortable(options, io, deps.now());
+    const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
     if (setup.code !== 0 || setup.layout === undefined || options.noRelaunch) return setup.code;
     spawnManagedLauncher(setup.layout, deps.spawnFn);
     return 0;
@@ -260,6 +262,6 @@ export async function runPortableCli(
     return 2;
   }
   if (options.command === "status") return statusPortable(options, io);
-  if (options.command === "setup") return setupPortable(options, io, r.now()).code;
+  if (options.command === "setup") return setupPortable({ ...options, env }, io, r.now()).code;
   return launchPortable(options, io, env, r);
 }

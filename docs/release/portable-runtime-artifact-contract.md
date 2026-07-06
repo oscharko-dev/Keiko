@@ -174,8 +174,15 @@ portable-update eligible. Staging roots must be siblings of the active managed r
 filesystem volume so later update promotion can use crash-safe atomic replacement.
 
 Runtime state remains governed by the local runtime state contract. `.keiko` may store content-free
-install/update registration, recovery, remediation, and audit status, but it must not store portable
-package payloads, full archives, or customer-content backups.
+install/update registration, a bounded managed-root locator needed for reversible portable
+repair/uninstall, recovery, remediation, and audit status, but it must not store portable package
+payloads, full archives, or customer-content backups. The exact persisted
+`portable-install-state.json` record shape is defined in
+[Local runtime state contract](../local-runtime-state-contract.md): shared fields
+`schemaVersion`, `platformTarget`, `status`, `updateEligible`, `packageVersion`, `stable`, and
+`updatedAt`; a managed record may additionally carry an optional `managedRootLocator`
+(`default`, `home-relative`, or `absolute-local`) plus managed-only attestation hashes; a
+`setup-failed` record carries only a bounded `failureReason` code beyond the shared fields.
 
 ## State And Payload Exclusions
 
