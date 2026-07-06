@@ -33,6 +33,12 @@ describe("extractManualLinks", () => {
     expect(extractManualLinks(bytes(html), 64)).toEqual(["p.html?a=1&b=2"]);
   });
 
+  it("does not double-unescape a nested entity (js/double-escaping)", () => {
+    // `&amp;#x2f;` must decode to the LITERAL text `&#x2f;`, never to `/` via a second pass.
+    const html = `<a href="a&amp;#x2f;b">x</a>`;
+    expect(extractManualLinks(bytes(html), 64)).toEqual(["a&#x2f;b"]);
+  });
+
   it("bounds the sample to maxLinks", () => {
     const html = Array.from({ length: 10 }, (_, i) => `<a href="p${String(i)}.html">x</a>`).join(
       "",
@@ -55,5 +61,15 @@ describe("extractManualTitle", () => {
   it("bounds a very long title", () => {
     const long = "x".repeat(500);
     expect(extractManualTitle(bytes(`<title>${long}</title>`))?.length).toBe(200);
+  });
+
+  it("extracts a title with attributes and decodes numeric entities", () => {
+    expect(extractManualTitle(bytes(`<title lang="en" dir="ltr">A&#38;B</title>`))).toBe("A&B");
+  });
+
+  it("returns null when the title tag is unterminated (no backtracking)", () => {
+    expect(extractManualTitle(bytes("<title>never closed"))).toBeNull();
+    // A pathological repetition must not hang (js/polynomial-redos): completes well under the timeout.
+    expect(extractManualTitle(bytes("<title".repeat(20000)))).toBeNull();
   });
 });

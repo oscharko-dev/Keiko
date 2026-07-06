@@ -11,22 +11,48 @@
 // URL parsing itself is delegated to the WHATWG URL parser in the guard.
 const HREF_SRC_ATTR_RE = /\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>`]+))/giu;
 
-const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/iu;
+// Linear-time tag-start probe for `<title` (no backtracking); the tag body and content are then
+// located with `indexOf`, so no polynomial regex ever runs on document input (js/polynomial-redos).
+const TITLE_OPEN_RE = /<title[\s>]/iu;
 
 const MAX_TITLE_CHARS = 200;
+
+const NAMED_ENTITIES: Readonly<Record<string, string>> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+};
+
+// One entity token: a hex numeric reference, a decimal numeric reference, or a named reference.
+const ENTITY_RE = /&(#x[0-9a-f]+|#\d+|[a-z]+);/giu;
 
 function decodeBytes(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 }
 
-// Decode the small set of HTML entities that legitimately appear inside a URL attribute value.
+function decodeEntityBody(body: string): string | undefined {
+  const lower = body.toLowerCase();
+  if (lower.startsWith("#")) {
+    const isHex = lower.startsWith("#x");
+    const code = Number.parseInt(lower.slice(isHex ? 2 : 1), isHex ? 16 : 10);
+    if (!Number.isInteger(code) || code < 1 || code > 0x10ffff) return undefined;
+    try {
+      return String.fromCodePoint(code);
+    } catch {
+      return undefined;
+    }
+  }
+  return NAMED_ENTITIES[lower];
+}
+
+// Decode HTML entities in a SINGLE pass. `String.prototype.replace` scans the ORIGINAL string once
+// and never re-scans replacement output, so an encoded sequence like `&amp;#x2f;` decodes to the
+// literal text `&#x2f;`, never double-unescaped to `/` (js/double-escaping). Unknown entities are
+// left verbatim.
 function decodeAttributeEntities(value: string): string {
-  return value
-    .replace(/&amp;/giu, "&")
-    .replace(/&#x2f;/giu, "/")
-    .replace(/&#47;/gu, "/")
-    .replace(/&lt;/giu, "<")
-    .replace(/&gt;/giu, ">");
+  return value.replace(ENTITY_RE, (match: string, body: string) => decodeEntityBody(body) ?? match);
 }
 
 // Extract up to `maxLinks` raw navigational link values from an HTML document. Empty values,
@@ -49,12 +75,23 @@ export function extractManualLinks(bytes: Uint8Array, maxLinks: number): readonl
   return links;
 }
 
+// Locate the `<title>…</title>` content with linear scans only (no backtracking regex).
+function extractRawTitle(html: string): string | null {
+  const open = html.search(TITLE_OPEN_RE);
+  if (open === -1) return null;
+  const contentStart = html.indexOf(">", open);
+  if (contentStart === -1) return null;
+  const close = html.toLowerCase().indexOf("</title>", contentStart + 1);
+  if (close === -1) return null;
+  return html.slice(contentStart + 1, close);
+}
+
 // Extract a page's `<title>` text as a bounded, whitespace-collapsed string, or null when absent.
 // The raw title stays internal; the browser-facing pod summary re-applies redaction downstream.
 export function extractManualTitle(bytes: Uint8Array): string | null {
-  const match = TITLE_RE.exec(decodeBytes(bytes));
-  if (match?.[1] === undefined) return null;
-  const title = decodeAttributeEntities(match[1]).replace(/\s+/gu, " ").trim();
+  const raw = extractRawTitle(decodeBytes(bytes));
+  if (raw === null) return null;
+  const title = decodeAttributeEntities(raw).replace(/\s+/gu, " ").trim();
   if (title.length === 0) return null;
   return title.length > MAX_TITLE_CHARS ? title.slice(0, MAX_TITLE_CHARS) : title;
 }
