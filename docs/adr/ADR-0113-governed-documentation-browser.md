@@ -120,9 +120,49 @@ deliberate rendering deferral**, not an inline content renderer and not an unres
 - Any move to actually render or capture a manual requires a new ADR, explicit user-approved scope,
   and security-reviewer sign-off, and must not widen the application CSP silently.
 
+## Extension: consent boundary for indexable HTML manuals (Epic #1852)
+
+Accepted as an extension of this ADR (Epic #1852, Issues #1865–#1870, 2026-07-06). Epic #1852 turns the
+browser from a passive viewer into a governed Knowledge Pod source _candidate_ without weakening any
+constraint above. It adds detection, a bounded scope preview, explicit consent, and a redacted handoff —
+and no crawler, indexer, model call, or new egress.
+
+- **No new egress; detection is pure over the target URL.** There is no safe pre-consent probe that
+  reads a page's title, links, or headings (`checkStatus` is reachability-only). So manual detection
+  (`detectIndexableManual`, `keiko-contracts`) is a pure, deterministic heuristic over the WHATWG-URL
+  _shape_ only — scheme, host class, path pattern (index entry, `.html` extension, documentation path
+  tokens, directory style, action-page tokens). It fetches nothing and executes no page JavaScript.
+- **The scope preview is a declaration, not a sample.** `POST /api/docs-browser/propose` classifies +
+  detects + builds a bounded scope preview (explicit page/depth/byte/link/timeout caps, `followRedirects:
+  false`, denied link classes, a redacted proposed pod name, and `estimatedPageCount: null` because
+  sampling is deferred to post-consent). The only local touch is a **read-only** Knowledge Pod summary
+  lookup for already-indexed detection; it opens no indexing job and writes nothing.
+- **Consent is explicit and never pre-granted.** Every proposal is typed `approvalRequired: true` /
+  `approved: false` (compile-time literals). `POST /api/docs-browser/approve` re-derives the proposal
+  server-side, refuses anything non-approvable or already-indexed, and returns a minimal, redaction-safe
+  `DocumentationIndexingApproval` handoff (source kind, an opaque `sourceFingerprint` hash of the
+  normalized root, redacted summaries, and the governed limits) for the future crawler epic (#1853).
+  Producing a proposal or an approval starts no crawl or index.
+- **Capability widening.** `DocumentationBrowserCapability.indexingProposalAvailable` widens from a hard
+  `false` to a boolean that is true only for proposal-eligible classes (local file, loopback, intranet).
+  It gates whether the UI may _offer_ to check a target — never whether a manual was indexed.
+- **Duplicate prevention.** `KnowledgePodSummary` gains an optional, content-free `manualSourceFingerprint`
+  so an existing HTML-manual pod can be matched by normalized-root hash (never a raw path). The match is
+  a pure contract function; the fingerprint is computed downstream in `keiko-server` (the leaf contracts
+  layer cannot hash). A future manual pod (#1853) sets it; until then detection safely reports "not
+  indexed".
+- **Redaction is unchanged and re-proved.** No proposal, preview, approval, diagnostic, or UI state
+  carries a raw HTML body, query, fragment, credential, cookie, private path, or provider endpoint.
+  Issue #1870 is the hard gate: a regression suite runs the propose/approve routes against a hostile
+  target battery on a real store and fails if any capsule, indexing job, model-port request, or leaked
+  secret/path appears.
+
+Actual rendering or capture of a manual, and the crawler/indexer that consumes the approval handoff,
+remain out of scope and still require the separately security-reviewed, CSP-scoped path noted above.
+
 ## References
 
 - ADR-0017 (browser tool over CDP), ADR-0019 (package boundaries), ADR-0029 (workspace descriptor
   metadata).
 - MDN `Content-Security-Policy: frame-ancestors`, MDN `X-Frame-Options`, OWASP SSRF Prevention Cheat
-  Sheet.
+  Sheet, OWASP Top 10 A10 (SSRF), RFC 9309 (Robots Exclusion Protocol).

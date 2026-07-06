@@ -554,12 +554,17 @@ registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");
   return url !== undefined && url !== "" ? <BrowserWidget url={url} /> : <BrowserWidget />;
 });
-registerWindowRender("docbrowser", (cfg) => {
+registerWindowRender("docbrowser", (cfg, ctx) => {
   const target = str(cfg, "target");
+  // Epic #1852 — an already-indexed manual points the user at the Local Knowledge (Knowledge Pods)
+  // surface so they can open the existing pod instead of creating a duplicate.
+  const onOpenKnowledgePods = (): void => {
+    ctx.openWindow("localKnowledge");
+  };
   return target !== undefined && target !== "" ? (
-    <DocumentationBrowserWidget target={target} />
+    <DocumentationBrowserWidget target={target} onOpenKnowledgePods={onOpenKnowledgePods} />
   ) : (
-    <DocumentationBrowserWidget />
+    <DocumentationBrowserWidget onOpenKnowledgePods={onOpenKnowledgePods} />
   );
 });
 registerWindowRender("terminal", (cfg, ctx) => {
