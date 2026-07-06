@@ -350,9 +350,7 @@ function attestedManagedLayout(
   registration: ManagedSetupRegistration,
   managedRoot: string,
   stateDir: string,
-):
-  | { readonly layout: PortableLayout; readonly manifest: SetupManifest }
-  | undefined {
+): { readonly layout: PortableLayout; readonly manifest: SetupManifest } | undefined {
   try {
     assertManagedRootAllowed(managedRoot, stateDir);
     const { layout, manifest } = validatePortableRoot(registration.platformTarget, managedRoot);

@@ -503,11 +503,7 @@ describe("runRepairCli — portable managed install", () => {
     const { home, managedRoot, shortcut, env } = await installPortableWindows(root, {
       managedRoot: customRoot,
     });
-    const invalidRoot = tamperPortableRecordToRepoRoot(
-      managedRoot,
-      shortcut,
-      join(root, ".keiko"),
-    );
+    const invalidRoot = tamperPortableRecordToRepoRoot(managedRoot, shortcut, join(root, ".keiko"));
     const c = makeIo();
 
     expect(runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(1);

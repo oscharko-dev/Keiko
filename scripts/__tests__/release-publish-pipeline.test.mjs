@@ -32,12 +32,24 @@
 //      Red-on-defect: if the dist-tag comparison were dropped, the release would
 //      falsely report PASS.
 
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+
+import { PORTABLE_TARGETS } from "../portable-runtime.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -52,6 +64,262 @@ const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
 // A deterministic sha the stub `git` returns for both `rev-parse HEAD` and
 // `rev-parse v<version>^{}`, so ensureReleaseTag() sees HEAD === tag and proceeds.
 const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
+const DIGEST_B = "b".repeat(64);
+const DIGEST_C = "c".repeat(64);
+const NODE_VERSION = "24.0.0";
+
+function digestFor(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function targetVerificationChecks(target) {
+  if (target.nodePlatform === "win32") {
+    return { publisherChainVerified: true, timestampVerified: true };
+  }
+  return {
+    developerIdVerified: true,
+    notarizationVerified: true,
+    stapleVerified: true,
+    assessmentVerified: true,
+  };
+}
+
+function targetSupportLaunchers(target) {
+  return target.nodePlatform === "win32"
+    ? ["support/keiko-support.cmd"]
+    : ["support/keiko-support.sh"];
+}
+
+function portableManifest(target, archivePath, assetId) {
+  const archiveBytes = readFileSync(archivePath);
+  const archiveSha256 = digestFor(archiveBytes);
+  const archiveSize = statSync(archivePath).size;
+  const provenanceText = `${target.platformTarget} provenance\n`;
+  const provenanceSha256 = digestFor(provenanceText);
+  const notarizationRequired = target.nodePlatform === "darwin";
+  const verificationChecks = targetVerificationChecks(target);
+  return {
+    manifest: portableManifestObject(
+      target,
+      assetId,
+      archiveSize,
+      archiveSha256,
+      provenanceSha256,
+      notarizationRequired,
+      verificationChecks,
+    ),
+    provenanceText,
+  };
+}
+
+function portableManifestObject(
+  target,
+  assetId,
+  archiveSize,
+  archiveSha256,
+  provenanceSha256,
+  notarizationRequired,
+  verificationChecks,
+) {
+  const releaseTag = `v${RELEASE_VERSION}`;
+  const security = portableSecurity(target, notarizationRequired, verificationChecks);
+  return {
+    schemaVersion: 1,
+    product: portableProduct(),
+    release: { releaseId: 123456789, releaseTag, stable: true, commitSha: HEAD_SHA },
+    artifact: portableArtifact(target, assetId, archiveSize, archiveSha256),
+    provenance: portableProvenance(provenanceSha256),
+    runtime: portableRuntime(target),
+    packageSurface: portablePackageSurface(),
+    entrypoints: {
+      primaryLauncher: target.primaryLauncher,
+      supportLaunchers: targetSupportLaunchers(target),
+    },
+    installLayout: portableInstallLayout(),
+    stateExclusion: portableStateExclusion(),
+    security,
+    evidence: portableEvidence(),
+    releaseImpact: portableReleaseImpact(
+      target,
+      assetId,
+      archiveSize,
+      archiveSha256,
+      provenanceSha256,
+      security,
+    ),
+    updateEligibility: portableUpdateEligibility(),
+  };
+}
+
+function portableProduct() {
+  return { name: "Keiko", packageName: RELEASE_NAME, packageVersion: RELEASE_VERSION };
+}
+
+function portableArtifact(target, assetId, archiveSize, archiveSha256) {
+  return {
+    platformTarget: target.platformTarget,
+    assetId,
+    assetName: target.assetName,
+    archiveFormat: "zip",
+    sizeBytes: archiveSize,
+    sha256: archiveSha256,
+  };
+}
+
+function portableProvenance(provenanceSha256) {
+  return {
+    sourceCommitSha: HEAD_SHA,
+    rootPackageVersion: RELEASE_VERSION,
+    rootPackageTarballSha256: DIGEST_B,
+    packagedAppTreeSha256: DIGEST_C,
+    buildWorkflowRunId: 123456789,
+    buildWorkflowAttempt: 1,
+    provenanceStatementPath: "evidence/provenance.intoto.jsonl",
+    provenanceStatementSha256: provenanceSha256,
+  };
+}
+
+function portableRuntime(target) {
+  return {
+    nodeVersion: NODE_VERSION,
+    nodePlatform: target.nodePlatform,
+    nodeArchitecture: target.nodeArchitecture,
+    nodeDistribution: "official-nodejs-dist",
+    nodeArchiveSha256: DIGEST_B,
+  };
+}
+
+function portablePackageSurface() {
+  return {
+    source: "root-npm-package-surface",
+    packageSurfaceGate: "npm run check:package-surface",
+    publishManifestGate: "npm run check:publish-manifests",
+    workspaceSupplyChainGate: "npm run check:workspace-supply-chain",
+  };
+}
+
+function portableInstallLayout() {
+  return {
+    installMode: "portable-managed",
+    bootstrapUpdateEligible: false,
+    managedRootKind: "user-local-keiko-owned",
+    sameVolumeStagingRequired: true,
+    stateRootPolicy: "separate-local-runtime-state",
+  };
+}
+
+function portableStateExclusion() {
+  return {
+    excludesDotKeiko: true,
+    excludesCustomerData: true,
+    excludesSecrets: true,
+    excludesRawLogs: true,
+    excludesRepositories: true,
+  };
+}
+
+function portableSecurity(target, notarizationRequired, verificationChecks) {
+  return {
+    verificationPolicy: "production",
+    verificationStatus: "verified-production",
+    verificationReasonCodes: [],
+    signatureKind: target.signatureKind,
+    signatureVerified: true,
+    notarizationRequired,
+    notarizationVerified: notarizationRequired,
+    verificationChecks,
+    verificationSummaryPath: "evidence/signing-verification.json",
+  };
+}
+
+function portableEvidence() {
+  return {
+    checksumsPath: "evidence/SHA256SUMS.txt",
+    sbomPath: "evidence/sbom.cdx.json",
+    licenseNoticePath: "evidence/third-party-notices.txt",
+  };
+}
+
+function portableReleaseImpact(
+  target,
+  assetId,
+  archiveSize,
+  archiveSha256,
+  provenanceSha256,
+  security,
+) {
+  return {
+    catalogPath: "app/release-impact.catalog.json",
+    entryId: "portable-product-delivery-v2",
+    entryPackageVersion: RELEASE_VERSION,
+    entryReleaseTag: `v${RELEASE_VERSION}`,
+    reviewedBinding: portableReviewedBinding(
+      target,
+      assetId,
+      archiveSize,
+      archiveSha256,
+      provenanceSha256,
+      security,
+    ),
+  };
+}
+
+function portableReviewedBinding(
+  target,
+  assetId,
+  archiveSize,
+  archiveSha256,
+  provenanceSha256,
+  security,
+) {
+  return {
+    releaseId: 123456789,
+    releaseTag: `v${RELEASE_VERSION}`,
+    assetId,
+    assetName: target.assetName,
+    assetSizeBytes: archiveSize,
+    platformTarget: target.platformTarget,
+    packageVersion: RELEASE_VERSION,
+    nodeRuntimeIdentity: `node-v${NODE_VERSION}-${target.runtimeTarget}`,
+    archiveSha256,
+    provenanceStatementSha256: provenanceSha256,
+    sbomPath: "evidence/sbom.cdx.json",
+    licenseNoticePath: "evidence/third-party-notices.txt",
+    checksumsPath: "evidence/SHA256SUMS.txt",
+    verificationPolicy: security.verificationPolicy,
+    verificationStatus: security.verificationStatus,
+    verificationReasonCodes: security.verificationReasonCodes,
+    platformSignatureLocallyVerified: true,
+    signatureKind: security.signatureKind,
+    signatureVerified: security.signatureVerified,
+    notarizationRequired: security.notarizationRequired,
+    notarizationVerified: security.notarizationVerified,
+    verificationChecks: security.verificationChecks,
+  };
+}
+
+function portableUpdateEligibility() {
+  return {
+    stableOnly: true,
+    rollbackSupported: false,
+    eligibleAfterSetupOnly: true,
+    requiredPredicates: {
+      managedRootAttested: true,
+      artifactShaVerified: true,
+      platformSignatureLocallyVerified: true,
+      manifestReleaseImpactBound: true,
+      sameVolumeCrashSafePromotionAvailable: true,
+      relaunchVersionVerificationAvailable: true,
+    },
+    manualOnlyWhen: [
+      "managed-root-cannot-be-attested",
+      "signature-or-notarization-cannot-be-verified",
+      "crash-safe-promotion-unavailable",
+      "admin-or-organization-managed-root",
+      "prerelease-beta-downgrade-or-rollback",
+    ],
+  };
+}
 
 // Shared prologue injected into each stub: append-only call log + tiny JSON state file
 // so a stub can flip "published"/"tagged" as the orchestrator drives it.
@@ -77,10 +345,49 @@ function ghStubBody() {
     'log("gh");',
     "const sub = argv[0];",
     'if (sub === "api") {',
+    '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
+    "    process.stdout.write(JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
+    "    process.exit(0);",
+    "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
     "  process.exit(0);",
     "}",
     'if (sub === "release" && argv[1] === "view") { process.exit(1); }',
+    'if (sub === "release" && argv[1] === "upload") {',
+    "  const current = state();",
+    "  if (current.failGhUpload) { process.stderr.write('portable upload failed\\n'); process.exit(42); }",
+    "  const tag = argv[2];",
+    '  const repoIndex = argv.indexOf("--repo");',
+    "  const repo = repoIndex >= 0 ? argv[repoIndex + 1] : 'oscharko-dev/Keiko';",
+    "  const files = argv.slice(3).filter((entry, index, entries) => {",
+    '    if (entry === "--repo" || entry === "--clobber") return false;',
+    '    if (index > 0 && entries[index - 1] === "--repo") return false;',
+    "    return !entry.startsWith('--');",
+    "  });",
+    "  const byName = new Map((current.uploadedAssets || []).map((asset) => [asset.name, asset]));",
+    "  function nextId() { return 100000 + byName.size; }",
+    "  for (const path of files) {",
+    "    const name = path.split(/[\\\\/]/u).at(-1);",
+    "    const previous = byName.get(name);",
+    "    const id = previous?.id || nextId();",
+    "    if (name.endsWith('-portable-manifest.json')) {",
+    "      const manifest = JSON.parse(readFileSync(path, 'utf8'));",
+    "      const archive = byName.get(manifest.artifact.assetName);",
+    "      if (!archive || manifest.release.releaseId !== 987654321 || manifest.artifact.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.releaseId !== 987654321) {",
+    "        process.stderr.write('portable manifest was not rebound to the remote GitHub ids\\n');",
+    "        process.exit(44);",
+    "      }",
+    "    }",
+    "    byName.set(name, {",
+    "      id,",
+    "      name,",
+    "      size: readFileSync(path).byteLength,",
+    "      browser_download_url: `https://github.com/${repo}/releases/download/${tag}/${name}`",
+    "    });",
+    "  }",
+    "  setState({ uploadedAssets: [...byName.values()] });",
+    "  process.exit(0);",
+    "}",
     "process.exit(0);",
   ].join("\n");
 }
@@ -106,11 +413,58 @@ function makeStub(binDir, name, body, logFile, stateFile) {
   chmodSync(path, 0o755);
 }
 
+function curlStubBody() {
+  return ['log("curl");', "process.exit(0);"].join("\n");
+}
+
+function writePortableAssetsFixture(root, options = {}) {
+  const outsideEvidence = join(root, "..", "outside-portable-evidence.txt");
+  writeFileSync(outsideEvidence, "outside evidence must not be uploaded\n");
+  const artifacts = PORTABLE_TARGETS.map((target, index) => {
+    const targetRoot = join(root, target.platformTarget);
+    const archivePath = join(targetRoot, target.assetName);
+    const manifestPath = join(targetRoot, "manifest", "portable-manifest.json");
+    mkdirSync(join(targetRoot, "evidence"), { recursive: true });
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
+    const { manifest, provenanceText } = portableManifest(target, archivePath, 1000 + index);
+    writePortableEvidence(targetRoot, manifest, provenanceText);
+    if (options.symlinkEvidenceOutsideRoot === true && index === 0) {
+      const sbomPath = join(targetRoot, "evidence", "sbom.cdx.json");
+      rmSync(sbomPath, { force: true });
+      symlinkSync(outsideEvidence, sbomPath);
+    }
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    return { archivePath, manifestPath, platformTarget: target.platformTarget };
+  });
+  const manifestPath = join(root, "portable-assets.json");
+  writeFileSync(manifestPath, JSON.stringify({ schemaVersion: 1, artifacts }, null, 2) + "\n");
+  return manifestPath;
+}
+
+function writePortableEvidence(targetRoot, manifest, provenanceText) {
+  writeFileSync(
+    join(targetRoot, "evidence", "SHA256SUMS.txt"),
+    `${manifest.artifact.sha256}  ${manifest.artifact.assetName}\n`,
+  );
+  writeFileSync(join(targetRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
+  writeFileSync(
+    join(targetRoot, "evidence", "third-party-notices.txt"),
+    "Portable fixture notices.\n",
+  );
+  writeFileSync(
+    join(targetRoot, "evidence", "signing-verification.json"),
+    JSON.stringify({ status: "verified-production" }) + "\n",
+  );
+  writeFileSync(join(targetRoot, "evidence", "provenance.intoto.jsonl"), provenanceText);
+}
+
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.
 // `npmBody` is the stub-`npm` behaviour under test; `initState` seeds the publish state.
 // Returns the exit status, stdout/stderr, and the ordered list of intercepted calls.
-function runPublish({ npmBody, initState }) {
+function runPublish({ npmBody, initState, portableAssets = true, portableFixtureOptions = {} }) {
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
+  const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
   const logFile = join(binDir, "calls.log");
   const stateFile = join(binDir, "state.json");
   writeFileSync(logFile, "", "utf8");
@@ -119,6 +473,7 @@ function runPublish({ npmBody, initState }) {
   makeStub(binDir, "npm", npmBody, logFile, stateFile);
   makeStub(binDir, "gh", ghStubBody(), logFile, stateFile);
   makeStub(binDir, "git", gitStubBody(), logFile, stateFile);
+  makeStub(binDir, "curl", curlStubBody(), logFile, stateFile);
 
   const env = {
     ...process.env,
@@ -133,6 +488,12 @@ function runPublish({ npmBody, initState }) {
   };
   // GH_TOKEN would be forwarded to the stub gh; drop it so nothing real is carried.
   Reflect.deleteProperty(env, "GH_TOKEN");
+  if (portableAssets) {
+    env.KEIKO_PORTABLE_ASSETS_MANIFEST = writePortableAssetsFixture(
+      portableDir,
+      portableFixtureOptions,
+    );
+  }
 
   const result = spawnSync(process.execPath, ["scripts/release-publish.mjs", "--tag", "latest"], {
     cwd: REPO_ROOT,
@@ -144,6 +505,7 @@ function runPublish({ npmBody, initState }) {
     .split("\n")
     .filter((line) => line.length > 0);
   rmSync(binDir, { recursive: true, force: true });
+  rmSync(portableDir, { recursive: true, force: true });
 
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls };
 }
@@ -185,6 +547,24 @@ describe("release-publish pipeline (real orchestrator, stubbed npm/gh/git)", () 
     lastRun = undefined;
   });
 
+  it("fails stable latest publishing before npm publish when portable assets are missing", () => {
+    const viewBody = [
+      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    ].join("\n");
+
+    lastRun = runPublish({
+      npmBody: npmStub(viewBody, { failOnPublish: true }),
+      initState: { published: true, tagged: true },
+      portableAssets: false,
+    });
+
+    expect(lastRun.status).toBe(1);
+    expect(lastRun.stderr).toContain("stable latest publishes require --portable-assets-manifest");
+    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+  });
+
   it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {
     // `npm view <spec> version` fails with E404 until a publish has happened; the
     // dist-tag view reports the wrong version until `npm dist-tag add` runs.
@@ -209,6 +589,7 @@ describe("release-publish pipeline (real orchestrator, stubbed npm/gh/git)", () 
 
     expect(lastRun.status).toBe(0);
     expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
+    expect(lastRun.stdout).toContain("portable assets uploaded and verified");
     expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
     // It must NOT have short-circuited as already-present.
     expect(lastRun.stdout).not.toContain(`SKIP ${RELEASE_SPEC} already exists`);
@@ -235,6 +616,56 @@ describe("release-publish pipeline (real orchestrator, stubbed npm/gh/git)", () 
     const distTagViews = lastRun.calls.filter(isDistTagView).length;
     expect(versionViews).toBeGreaterThanOrEqual(2);
     expect(distTagViews).toBeGreaterThanOrEqual(2);
+
+    const uploadLine = lastRun.calls.find(
+      (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),
+    );
+    expect(uploadLine).toContain("keiko-windows-x64.zip");
+    expect(uploadLine).toContain("keiko-macos-arm64.zip");
+    expect(uploadLine).toContain("keiko-macos-x64.zip");
+    expect(indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"'))).toBeLessThan(
+      publishCall,
+    );
+    expect(lastRun.calls.filter((l) => l.startsWith("curl [")).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("fails before npm publish when portable upload verification fails", () => {
+    const viewBody = [
+      "  const s = state();",
+      '  if (argv.includes("version")) {',
+      '    if (!s.published) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
+      '    process.stdout.write(VERSION + "\\n");',
+      "    process.exit(0);",
+      "  }",
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    ].join("\n");
+
+    lastRun = runPublish({
+      npmBody: npmStub(viewBody),
+      initState: { failGhUpload: true, published: false },
+    });
+
+    expect(lastRun.status).toBe(1);
+    expect(lastRun.stderr).toContain("portable upload failed");
+    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+  });
+
+  it("rejects symlinked portable evidence before upload or npm publish", () => {
+    const viewBody = [
+      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    ].join("\n");
+
+    lastRun = runPublish({
+      npmBody: npmStub(viewBody, { failOnPublish: true }),
+      initState: { published: true, tagged: true },
+      portableFixtureOptions: { symlinkEvidenceOutsideRoot: true },
+    });
+
+    expect(lastRun.status).toBe(1);
+    expect(lastRun.stderr).toContain("must not be a symbolic link");
+    expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
   });
 
   it("skips publishing when `npm view … version` already reports the target version, yet still verifies the dist-tag", () => {
