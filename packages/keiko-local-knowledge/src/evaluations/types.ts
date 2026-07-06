@@ -175,10 +175,19 @@ export interface ModelJudgedRetrievalEvalJudge {
   readonly judge: (input: ModelJudgedRetrievalEvalInput) => Promise<ModelJudgedRetrievalEvalScores>;
 }
 
+export interface RetrievalEvalOutcomeSummary {
+  readonly queryCount: number;
+  readonly referenceCount: number;
+  readonly noEvidenceCount: number;
+  readonly expectedNoEvidenceCount: number;
+  readonly noEvidenceReasonCounts: Readonly<Partial<Record<RetrievalNoEvidenceReason, number>>>;
+}
+
 export interface RetrievalEvalScorecard {
   readonly fixtureId: string;
   readonly runId: string;
   readonly dimensions: RetrievalEvalDimensionScores;
+  readonly outcomes: RetrievalEvalOutcomeSummary;
   readonly passed: boolean;
   readonly modelJudged?: ModelJudgedRetrievalEvalScores;
 }

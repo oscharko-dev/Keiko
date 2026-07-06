@@ -16,6 +16,7 @@ import { describe, expect, it } from "vitest";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 
 import { sealedPodFixture } from "./fixtures.js";
+import { renderRetrievalEvalQualityGateReport } from "./report.js";
 import { runRetrievalEval } from "./runner.js";
 import type { RetrievalEvalFixture } from "./types.js";
 
@@ -50,5 +51,14 @@ describe("runRetrievalEval — sealed-pod governance fixture (#2011)", () => {
     const scorecard = await runRetrievalEval(unsealed);
     expect(scorecard.dimensions.noEvidenceAccuracy).toBe(0);
     expect(scorecard.passed).toBe(false);
+  });
+
+  it("keeps sealed-pod scorecard evidence body-free", async () => {
+    const scorecard = await runRetrievalEval(sealedPodFixture);
+    const report = renderRetrievalEvalQualityGateReport([scorecard]);
+    expect(report).toContain("sealed-pod");
+    expect(report).toContain("policy-denied:1");
+    expect(report).not.toContain("Restricted compliance dossier");
+    expect(report).not.toContain("embargoed filings");
   });
 });

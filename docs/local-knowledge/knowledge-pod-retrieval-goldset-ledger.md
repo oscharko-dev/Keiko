@@ -19,7 +19,7 @@ new sealed-pod scorecard fixture, and the release evidence recorded here.
 | Multi-space fusion | `multi-space` fixture, rank-only cross-space RRF, embedding profile status handling (Epic #1818)                                                 | Confirmed and mapped in the taxonomy; no new cross-space code                                                 |
 | Sealed-pod policy  | `sealedLocalPodModelUsePolicy`, deny-wins scope aggregation, fail-closed `policy-denied` retrieval (Epic #1819)                                  | Made scorecard-visible via the new `sealed-pod` fixture; policy layer unchanged                               |
 | Reranking gate     | `check:grounded-retrieval-quality` baseline, `reranker-off` control, `reranker-reversed`/`embedding-flat` regressions                            | Referenced as the owning reranking gate; not duplicated                                                       |
-| Redacted reporting | `renderRetrievalEvalQualityGateReport`, body-free scorecard rows                                                                                 | `renderRetrievalModeComparisonReport` follows the same redaction shape                                        |
+| Redacted reporting | `renderRetrievalEvalQualityGateReport`, body-free scorecard rows                                                                                 | Body-free outcome counts/statuses and `renderRetrievalModeComparisonReport`                                   |
 
 ## Goldset taxonomy (#2008)
 
@@ -33,6 +33,7 @@ inside an aggregate relevance score.
 | Exact technical lookup    | Wrong file for exact ADR ids, API names, error codes           | `exact-technical` (`check:retrieval-quality`)                             | relevance              |
 | Semantic paraphrase       | Misses evidence when wording differs from the corpus           | `semantic-paraphrase` (`check:retrieval-quality`)                         | relevance              |
 | Multilingual retrieval    | Misses cross-language evidence                                 | `multilingual-retrieval` (`check:retrieval-quality`)                      | relevance              |
+| Local capsule baseline    | The shipped local-only capsule and capsule-set path drifts     | `single-topic`, `multi-capsule` (`check:retrieval-quality`)               | relevance              |
 | Hybrid fusion coverage    | One retrieval leg silently masks another                       | `mixed-strategy`, `broad-query-diversity`, mode comparison (#2010)        | relevance              |
 | Cross-space rank fusion   | Invalid raw-score comparison across embedding spaces           | `multi-space` (Epic #1818)                                                | relevance              |
 | Reranking regression      | Reranker suppresses the expected grounded result               | `reranker-off` / `reranker-reversed` (`check:grounded-retrieval-quality`) | relevance              |
@@ -75,20 +76,25 @@ The workspace-level `check:retrieval-quality` path over synthetic repositories k
 `check-retrieval-quality.budget.json` floors (top-1, recall@5, MRR, nDCG@5, line-hit at 1.0 and
 zero generated-artifact leakage); those are unchanged.
 
-Residual "policy / degradation-outcome scoring" gap: closed by reuse, not new code. The
-`noEvidenceAccuracy` dimension already scores the no-evidence reason, so `policy-denied` (policy)
-and `incompatible-embedding-identity` (degradation) are already first-class scorecard outcomes.
-The new `sealed-pod` fixture (#2011) exercises the `policy-denied` branch at the scorecard level;
-`stale-index` already exercises the degradation branch. No new metric helper was required.
+Residual "policy / degradation-outcome scoring" gap: closed by reuse plus a body-free outcome
+summary, not by duplicating metrics. The `noEvidenceAccuracy` dimension already scores the
+no-evidence reason, so `policy-denied` (policy) and `incompatible-embedding-identity`
+(degradation) are first-class scorecard outcomes. Scorecards now also report query/reference counts
+and no-evidence reason counts such as `policy-denied:1`, so reviewers can distinguish governance
+status from relevance movement without raw bodies. The new `sealed-pod` fixture (#2011) exercises
+the `policy-denied` branch at the scorecard level; `stale-index` already exercises the degradation
+branch. No new ranking metric helper was required.
 
 ## Retrieval-mode comparison (#2010)
 
 `computeRetrievalModeComparison` / `renderRetrievalModeComparisonReport`
 (`packages/keiko-local-knowledge/src/evaluations/comparison.ts`) aggregate the existing
-per-fixture scorecards into one per-leg view. It adds no retrieval path and no fixtures: it groups
-the mode-representative fixtures Epics #1817/#1818 already ship and reports each leg's aggregate
-ranking metrics plus its headroom above the gate floor. Reranking is intentionally out of scope
-here — its regression control is owned by `check:grounded-retrieval-quality` and must not be
+per-fixture scorecards into one per-leg view. `scripts/check-retrieval-quality.mjs` now emits that
+comparison report next to the existing Local Knowledge scorecard table, so the required gate shows
+lexical, vector, and fused movement in one place. It adds no retrieval path and no fixtures: it
+groups the mode-representative fixtures Epics #1817/#1818 already ship and reports each leg's
+aggregate ranking metrics plus its headroom above the gate floor. Reranking is intentionally out of
+scope here — its regression control is owned by `check:grounded-retrieval-quality` and must not be
 duplicated.
 
 | Mode    | Fixtures                                           | Recall | Precision |   MRR |  nDCG | Floor headroom | Pass |
@@ -128,33 +134,39 @@ scorecard layer the way `multi-space` is — is closed by the new `sealed-pod` g
 - `sealed-pod.test.ts` adds a mutation witness: flipping the pod to `standardPodModelUsePolicy()`
   retrieves the chunk, drops `noEvidenceAccuracy` to 0, and fails the card — proving the fixture is
   non-tautological.
+- The quality-gate report renders only fixture ids, numeric metrics, pass state, and body-free
+  outcome counts/statuses (`policy-denied:1` for the sealed fixture). The sealed-pod report test
+  asserts the body and query text are absent.
 
 ## Remote-pod degradation — deferred (#2012)
 
 Remote Knowledge Pod degradation fixtures are explicitly deferred. As of 2026-07-06, Epic #1822
-and all six of its child issues (#1933-#1938) are open with no shipped implementation, and there
-is no remote or federated Knowledge Pod code anywhere in the repository. Building fixtures against
-an assumed remote-pod contract would violate this epic's "detached benchmark" non-goal and risk
-throwaway rework. Per the epic's Definition of Done and #2013's acceptance criteria, #2012 carries
-a "deferred pending Epic #1822" disposition and does not block epic closure. It must be resumed
-once Epic #1822's contract issue (#1933, "Define remote/federated Knowledge Pod capability and
-policy contracts") ships real capability and policy contracts to evaluate against.
+and all six of its child issues (#1933-#1938) are open with no shipped implementation. The current
+repository contains only placeholder compatibility tokens for future remote/federated pod members,
+not an active remote retrieval transport or #1933 capability/policy contract. Building fixtures
+against an assumed remote-pod contract would violate this epic's "detached benchmark" non-goal and
+risk throwaway rework. Per the epic's Definition of Done and #2013's acceptance criteria, #2012
+carries a "deferred pending Epic #1822" disposition and does not block epic closure. It must be
+resumed once Epic #1822's contract issue (#1933, "Define remote/federated Knowledge Pod capability
+and policy contracts") ships real capability and policy contracts to evaluate against.
 
 ## Gate matrix (#2013 release evidence)
 
-| Gate                          | Status                     | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ----------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Focused eval tests            | passed                     | `npm test -- --run packages/keiko-local-knowledge/src/evaluations` — 8 files, 96 tests, including `sealed-pod.test.ts` and `comparison.test.ts`                                                                                                                                                                                                                                                                                                      |
-| TypeScript                    | passed                     | `npm run typecheck` — `build:packages`, `check:package-graph` PASS, `tsc -p tsconfig.json --noEmit`                                                                                                                                                                                                                                                                                                                                                  |
-| Lint                          | passed                     | `npm run lint` — `eslint . --max-warnings=0` and the keiko-ui workspace lint                                                                                                                                                                                                                                                                                                                                                                         |
-| Format                        | passed                     | `npm run format:check` — all matched files use Prettier code style                                                                                                                                                                                                                                                                                                                                                                                   |
-| Architecture                  | passed                     | `npm run arch:check` — no dependency violations (2596 modules), import-policy PASS, contract boundary check PASS                                                                                                                                                                                                                                                                                                                                     |
-| Architecture (negative)       | not runnable in worktree   | `npm run arch:check:negative` resolves a hardcoded `node_modules/dependency-cruiser` path a git worktree does not populate; it runs on a single-checkout CI build. `arch:check` (positive) covers the one added dependency edge                                                                                                                                                                                                                      |
-| Retrieval quality (scorecard) | passed (worktree-adjusted) | The `check:retrieval-quality` scorecard functions run against the fresh worktree build report 17/17 fixtures pass including `sealed-pod`, with 4 non-tautology regression probes holding. The packaged script resolves `@oscharko-dev/*` to the main checkout dist in a git worktree, so its packaged run reflects `sealed-pod` on a single-checkout CI build                                                                                        |
-| Grounded retrieval quality    | passed                     | `npm run check:grounded-retrieval-quality` — baseline and `reranker-off` clear floors; `reranker-reversed` and `embedding-flat` regressions fail closed                                                                                                                                                                                                                                                                                              |
-| Grounded faithfulness         | passed                     | `npm run check:grounded-faithfulness` — 8 fixtures; unsupported-detection, citation-precision, and abstention at 100%                                                                                                                                                                                                                                                                                                                                |
-| Full test suite               | passed (1 pre-existing)    | `npm test` — 16569 passed, 2 skipped, 1 failed. The single failure `tests/scripts/dev-runner-readiness.test.ts` is a pre-existing worktree-environment failure (the dev runner cannot warm up Next.js on the loopback port in a sandboxed worktree); it fails identically on clean `origin/dev` with this change stashed, so it is not a regression from this epic                                                                                   |
-| Coverage ratchet              | passed (worktree-adjusted) | keiko-local-knowledge coverage from `test:coverage:packages` is lines 90.52% (baseline 90.01), branches 78.80% (baseline 78.07), statements 88.41%, functions 93.26% — all at or above baseline. `comparison.ts` is 100% lines, `fixtures.ts`/`types.ts` 100%. The full `test:coverage:quality` chain also surfaced one coverage-only timing flake (`local-knowledge-preview-session-handlers.test.ts`) that passes without coverage instrumentation |
+| Gate                          | Status | Evidence                                                                                                                                                                                                                                 |
+| ----------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Focused eval and gate tests   | passed | `npm test -- --run packages/keiko-local-knowledge/src/evaluations scripts/__tests__/check-retrieval-quality.test.mjs` — 9 files, 110 tests, including `sealed-pod.test.ts`, `comparison.test.ts`, and retrieval-gate wiring              |
+| TypeScript                    | passed | `npm run typecheck` — `build:packages`, `check:package-graph` PASS, `tsc -p tsconfig.json --noEmit`                                                                                                                                      |
+| Lint                          | passed | `npm run lint` — `eslint . --max-warnings=0` and the keiko-ui workspace lint                                                                                                                                                             |
+| Format                        | passed | `npm run format:check` — all matched files use Prettier code style                                                                                                                                                                       |
+| Package surface               | passed | `npm run clean && npm run build && npm run build:ui && npm run prepare:bin && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:package-surface` — 4,187 files, `dist/ui/static` present  |
+| Architecture                  | passed | `npm run arch:check` — no dependency violations (2,596 modules), import-policy PASS, contract boundary check PASS                                                                                                                        |
+| Architecture (negative)       | passed | `npm run arch:check:negative` — gate fired on 47 negative fixture(s) as expected                                                                                                                                                         |
+| Retrieval quality (scorecard) | passed | `npm run check:retrieval-quality` — workspace scorecard cases=15, local scorecard fixtures=17/17, threshold metadata emitted, `sealed-pod` reported `policy-denied:1`, lexical/vector/fused comparison emitted, 4 regression probes held |
+| Grounded retrieval quality    | passed | `npm run check:grounded-retrieval-quality` — baseline and `reranker-off` clear floors; `reranker-reversed` and `embedding-flat` regressions fail closed                                                                                  |
+| Grounded faithfulness         | passed | `npm run check:grounded-faithfulness` — 8 fixtures; unsupported-detection, citation-precision, and abstention at 100%                                                                                                                    |
+| Release impact                | passed | `npm run check:release-impact` — current package version has reviewed update-impact metadata                                                                                                                                             |
+| Full test suite               | passed | `npm test` — 979 files, 16,573 tests passed, 1 skipped                                                                                                                                                                                   |
+| Coverage ratchet              | passed | `npm run test:coverage:quality` — package coverage, UI coverage, file floors, release targets, and branch ratchets passed; keiko-local-knowledge lines 90.55%, branches 78.84%, statements 88.44%, functions 93.24%                      |
 
 ## Release evidence summary (#2013)
 
@@ -176,8 +188,8 @@ policy contracts") ships real capability and policy contracts to evaluate agains
 
 Before claiming a Knowledge Pod retrieval change improved or regressed answer quality, run:
 
-- `npm run check:retrieval-quality` — the fixture scorecard and workspace-search budget, with the
-  non-tautology regression probes.
+- `npm run check:retrieval-quality` — the fixture scorecard, lexical/vector/fused comparison,
+  workspace-search budget, and non-tautology regression probes.
 - `npm run check:grounded-retrieval-quality` — the semantic + RRF + reranker path and its
   reranker/embedding regression controls.
 - `npm run check:grounded-faithfulness` — abstention on empty evidence and fabricated-citation
@@ -198,7 +210,7 @@ find its owning fixture in the taxonomy above and extend it rather than adding a
   invokes `runLocalKnowledgeRetrieval` unchanged, so the scorecard measures the architecture Keiko
   ships rather than a detached benchmark.
 - Evidence is redacted: scorecards and the comparison report emit fixture ids, metrics, counts,
-  and pass states only.
+  enum-like reason statuses, and pass states only.
 
 ## Epic closure (#2013)
 
@@ -216,6 +228,4 @@ find its owning fixture in the taxonomy above and extend it rather than adding a
 - The mode comparison groups fixtures by the leg they are designed to exercise; it does not force
   a single retrieval leg on a shared corpus. Per-leg forcing would require a production retrieval
   seam and is out of scope for this epic's reuse-first residual work.
-- `arch:check:negative` and the packaged `check:retrieval-quality` fixture count are authoritative
-  on a single-checkout CI build; a git worktree resolves workspace packages to the main checkout.
 - Linux CI remains authoritative for any platform-specific release evidence.
