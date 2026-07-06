@@ -19,9 +19,14 @@ import {
   PACKAGE_NAME,
   UPDATE_COMMAND_RULES,
   buildUpdateCommand,
+  productionUpdateFacts,
   resolveUpdateMutationPolicy,
   type UpdateRuntimeFacts,
 } from "./update-install-mode.js";
+import {
+  PortableUpdateStagingError,
+  type PortableUpdateStager,
+} from "./update-portable-staging.js";
 import {
   createRestartVerificationSession,
   defaultDetectorFor,
@@ -104,6 +109,7 @@ export interface UpdateSessionManagerOptions {
   readonly policy?: SandboxPolicy | undefined;
   readonly timeoutMs?: number | undefined;
   readonly lock?: UpdateSessionLock | undefined;
+  readonly portableStager?: PortableUpdateStager | undefined;
 }
 
 class UpdateSessionManagerImpl implements UpdateSessionManager {
@@ -119,6 +125,8 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private readonly timeoutMs: number;
   private readonly beforeExecute: (() => Promise<void>) | undefined;
   private readonly lock: UpdateSessionLock | undefined;
+  private readonly facts: () => UpdateRuntimeFacts;
+  private readonly portableStager: PortableUpdateStager | undefined;
   private active: UpdateSession | undefined;
   private last: UpdateSession | undefined;
   private activeAbort:
@@ -138,6 +146,8 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.timeoutMs = runtime.timeoutMs;
     this.beforeExecute = runtime.beforeExecute;
     this.lock = options.lock;
+    this.facts = options.facts ?? ((): UpdateRuntimeFacts => productionUpdateFacts(this.env));
+    this.portableStager = options.portableStager;
   }
 
   public readonly getStatus = (): UpdateSessionStatus => ({
@@ -199,7 +209,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       return this.replace(session, {
         cancelable: false,
         retryable: false,
-        message: "Cancellation requested. Waiting for the package manager to stop.",
+        message: "Cancellation requested. Waiting for the update operation to stop.",
       });
     }
     if (session.phase !== "preparing") {
@@ -250,6 +260,23 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
 
   private createSession(targetVersion: string, mode: UpdateInstallMode): UpdateSession {
     const timestamp = nowIso(this.now);
+    if (mode.installKind === "portable-managed") {
+      return {
+        schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
+        sessionId: this.idFactory(),
+        packageName: PACKAGE_NAME,
+        targetVersion,
+        phase: "preparing",
+        failureReason: "none",
+        ...(mode.installRoot === undefined ? {} : { installRoot: mode.installRoot }),
+        startedAt: timestamp,
+        updatedAt: timestamp,
+        cancelable: true,
+        retryable: false,
+        restartRequired: false,
+        message: "Preparing portable update staging.",
+      };
+    }
     const packageManager = this.packageManagerFor(mode);
     const restartPreview = restartCommandPreview(this.env);
     return {
@@ -365,9 +392,56 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const running = this.replace(prepared, {
       phase: "running",
       cancelable: true,
-      message: "Package-manager update is running.",
+      message:
+        mode.installKind === "portable-managed"
+          ? "Portable update asset is downloading and staging."
+          : "Package-manager update is running.",
     });
+    if (mode.installKind === "portable-managed") {
+      await this.invokePortableStager(running, mode);
+      return;
+    }
     await this.invokeCommand(running, mode);
+  }
+
+  private async invokePortableStager(
+    session: UpdateSession,
+    mode: UpdateInstallMode,
+  ): Promise<void> {
+    if (this.portableStager === undefined) {
+      this.settleFailure(session, "portable-preflight-ineligible");
+      return;
+    }
+    const controller = new AbortController();
+    this.activeAbort = { sessionId: session.sessionId, controller };
+    try {
+      const portableStage = await this.portableStager.stage({
+        sessionId: session.sessionId,
+        targetVersion: session.targetVersion,
+        installMode: mode,
+        runtimeFacts: this.facts(),
+        signal: controller.signal,
+      });
+      this.finish(
+        this.replace(session, {
+          phase: "succeeded",
+          failureReason: "none",
+          cancelable: false,
+          retryable: false,
+          restartRequired: false,
+          portableStage,
+          message: `Portable update ${session.targetVersion} is verified and staged for activation.`,
+        }),
+      );
+    } catch (error) {
+      const reason =
+        error instanceof PortableUpdateStagingError ? error.reason : "portable-staging-failed";
+      this.settleFailure(session, reason);
+    } finally {
+      if (this.activeAbort.sessionId === session.sessionId) {
+        this.activeAbort = undefined;
+      }
+    }
   }
 
   private async invokeCommand(session: UpdateSession, mode: UpdateInstallMode): Promise<void> {
