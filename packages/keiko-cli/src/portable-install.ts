@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import {
+  type ManagedRootLocator,
   readManagedRegistration,
   registrationMatches,
   writeFailedRegistration,
@@ -260,6 +261,8 @@ function finalizeManagedSetup(
     stateDir: options.stateDir,
     layout,
     manifest,
+    env: options.env,
+    home: options.home,
     now,
   });
 }
@@ -269,6 +272,14 @@ function rollbackManagedSetup(layout: PortableLayout): void {
     removePortableManagedInstall(layout, SILENT_IO, false);
   } catch {
     // Best-effort rollback: setup still records a fail-closed state.
+  }
+}
+
+function recordFailedSetup(options: SetupPortableOptions, now: Date, message: string): void {
+  try {
+    writeFailedRegistration(options.target, options.stateDir, now, message);
+  } catch {
+    // Refusing a symlinked state file must not turn setup failure into unsafe overwrite logic.
   }
 }
 
@@ -298,19 +309,22 @@ export function setupPortable(
   } catch (error) {
     const message = error instanceof Error ? error.message : "portable setup failed";
     if (createdManagedInstall && managedLayout !== undefined) rollbackManagedSetup(managedLayout);
-    if (!options.dryRun) writeFailedRegistration(options.target, options.stateDir, now, message);
+    if (!options.dryRun) recordFailedSetup(options, now, message);
     io.err(`keiko portable setup: ${message}\n`);
     return { code: 1, layout: undefined };
   }
 }
 
 function candidateManagedRoots(
-  target: PortableTarget,
+  registration: PortableInstallRegistration,
   env: EnvSource,
   home: string,
 ): readonly string[] {
-  if (target !== "windows-x64") return [defaultManagedRoot(target, env, home)];
+  const target = registration.platformTarget;
   const roots = new Set<string>([defaultManagedRoot(target, env, home)]);
+  const hintedRoot = resolveManagedRootLocator(registration, home);
+  if (hintedRoot !== undefined) roots.add(hintedRoot);
+  if (target !== "windows-x64") return [...roots];
   const registeredExe = parseWindowsStartMenuRegistration(
     windowsStartMenuRegistrationPath(env, home),
   );
@@ -318,6 +332,22 @@ function candidateManagedRoots(
     roots.add(dirname(registeredExe));
   }
   return [...roots];
+}
+
+function resolveManagedRootLocator(
+  registration: PortableInstallRegistration,
+  home: string,
+): string | undefined {
+  if (registration.status !== "managed") return undefined;
+  return resolveManagedRootPath(registration.managedRootLocator, home);
+}
+
+function resolveManagedRootPath(
+  locator: ManagedRootLocator | undefined,
+  home: string,
+): string | undefined {
+  if (locator === undefined || locator.kind === "default") return undefined;
+  return locator.kind === "home-relative" ? resolve(home, locator.path) : resolve(locator.path);
 }
 
 export function attestedPortableInstallRecord(
@@ -344,7 +374,7 @@ export function attestedPortableInstallRecord(
       manifest: undefined,
     };
   }
-  for (const managedRoot of candidateManagedRoots(registration.platformTarget, env, home)) {
+  for (const managedRoot of candidateManagedRoots(registration, env, home)) {
     try {
       const { layout, manifest } = validatePortableRoot(registration.platformTarget, managedRoot);
       if (registrationMatches(registration, layout, manifest)) {

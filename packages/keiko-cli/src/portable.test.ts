@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPortableCli } from "./portable.js";
+import { readPortableInstallRegistration } from "./portable-registration.js";
 
 type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
@@ -215,6 +216,42 @@ describe("runPortableCli", () => {
     expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).not.toContain(root);
   });
 
+  it("stores a home-relative managed-root locator for a custom Windows managed root", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "PortableApps", "Keiko");
+    const stateDir = join(root, "state");
+    writeWindowsFixture(source);
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      capture().io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(0);
+    expect(readPortableInstallRegistration(stateDir)).toMatchObject({
+      status: "managed",
+      managedRootLocator: {
+        kind: "home-relative",
+        path: "PortableApps/Keiko",
+      },
+    });
+  });
+
   it("creates the macOS user-local app only during explicit setup", async () => {
     const root = tempRoot();
     const home = join(root, "home");
@@ -319,6 +356,55 @@ describe("runPortableCli", () => {
       failureReason: "runtime-invalid",
     });
     expect(state).not.toContain(root);
+  });
+
+  it("refuses a symlinked portable install record during setup without overwriting the symlink target", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+    const stateDir = join(root, "state");
+    const outside = join(root, "outside-record.json");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(outside, "keep-me\n", "utf8");
+    symlinkSync(outside, join(stateDir, "portable-install-state.json"));
+    writeWindowsFixture(source);
+    const c = capture();
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("portable install record refuses symlinked state file");
+    expect(readFileSync(outside, "utf8")).toBe("keep-me\n");
+  });
+
+  it("refuses to read a symlinked portable install record", () => {
+    const root = tempRoot();
+    const stateDir = join(root, "state");
+    const outside = join(root, "outside-record.json");
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(outside, "{}\n", "utf8");
+    symlinkSync(outside, join(stateDir, "portable-install-state.json"));
+
+    expect(() => readPortableInstallRegistration(stateDir)).toThrow(
+      "portable install record refuses symlinked state file",
+    );
   });
 
   it("classifies an unpromoted macOS app bundle as unmanaged", async () => {
@@ -575,5 +661,45 @@ describe("runPortableCli", () => {
       failureReason: "setup-failed",
     });
     expect(existsSync(join(repoRoot, "Keiko"))).toBe(false);
+  });
+
+  it("refuses a symlinked Start Menu ancestor during setup without creating outside artifacts", async () => {
+    if (process.platform === "win32") return;
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+    const stateDir = join(root, "state");
+    const programsDir = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs");
+    const outsidePrograms = join(root, "outside-programs");
+    mkdirSync(outsidePrograms, { recursive: true });
+    mkdirSync(join(programsDir, ".."), { recursive: true });
+    rmSync(programsDir, { recursive: true, force: true });
+    symlinkSync(outsidePrograms, programsDir, "dir");
+    writeWindowsFixture(source);
+    const c = capture();
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(1);
+    expect(existsSync(join(outsidePrograms, "Keiko.bat"))).toBe(false);
+    expect(existsSync(managedRoot)).toBe(false);
+    expect(c.err()).toContain("portable registration refused symlinked ancestor");
   });
 });

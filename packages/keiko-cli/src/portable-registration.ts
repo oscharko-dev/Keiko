@@ -2,20 +2,23 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import {
   REGISTRATION_FILE,
+  defaultManagedRoot,
   isPortableTarget,
   type PortableLayout,
   type PortableTarget,
   type SetupManifest,
   type SetupStatus,
 } from "./portable-shared.js";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 interface SetupRegistrationBase {
   readonly schemaVersion: 1;
@@ -30,6 +33,7 @@ interface SetupRegistrationBase {
 export interface ManagedSetupRegistration extends SetupRegistrationBase {
   readonly status: "managed";
   readonly updateEligible: true;
+  readonly managedRootLocator?: ManagedRootLocator | undefined;
   readonly setupManifestSha256?: string | undefined;
   readonly installRootIdentitySha256?: string | undefined;
   readonly launcherIdentitySha256?: string | undefined;
@@ -42,6 +46,10 @@ export interface FailedSetupRegistration extends SetupRegistrationBase {
 }
 
 export type PortableInstallRegistration = ManagedSetupRegistration | FailedSetupRegistration;
+export type ManagedRootLocator =
+  | { readonly kind: "default" }
+  | { readonly kind: "home-relative"; readonly path: string }
+  | { readonly kind: "absolute-local"; readonly path: string };
 
 const SETUP_FAILURE_REASON_PATTERNS = [
   [".keiko runtime state", "managed-root-state-conflict"],
@@ -72,9 +80,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function assertRegistrationFileSafe(path: string): void {
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+    throw new Error("portable install record refuses symlinked state file");
+  }
+}
+
 function writeRegistration(stateDir: string, registration: PortableInstallRegistration): void {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const path = join(stateDir, REGISTRATION_FILE);
+  assertRegistrationFileSafe(path);
   writeFileSync(path, `${JSON.stringify(registration, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
@@ -89,6 +104,8 @@ function writeRegistration(stateDir: string, registration: PortableInstallRegist
 function managedRegistration(input: {
   readonly layout: PortableLayout;
   readonly manifest: SetupManifest;
+  readonly env: EnvSource;
+  readonly home: string;
   readonly now: Date;
 }): ManagedSetupRegistration {
   const realInstallRoot = realpathSync(input.layout.installRoot);
@@ -99,11 +116,36 @@ function managedRegistration(input: {
     platformTarget: input.manifest.platformTarget,
     packageVersion: input.manifest.packageVersion,
     stable: input.manifest.stable,
+    managedRootLocator: managedRootLocator(
+      input.manifest.platformTarget,
+      realInstallRoot,
+      input.env,
+      input.home,
+    ),
     setupManifestSha256: sha256File(input.layout.setupManifestPath),
     installRootIdentitySha256: sha256Text(realInstallRoot),
     launcherIdentitySha256: sha256File(input.layout.primaryLauncherPath),
     updatedAt: input.now.toISOString(),
   };
+}
+
+function managedRootLocator(
+  target: PortableTarget,
+  installRoot: string,
+  env: EnvSource,
+  home: string,
+): ManagedRootLocator {
+  const defaultRoot = resolve(defaultManagedRoot(target, env, home));
+  if (installRoot === defaultRoot) return { kind: "default" };
+  const relativeToHome = relative(resolve(home), installRoot);
+  if (
+    relativeToHome.length > 0 &&
+    !relativeToHome.startsWith("..") &&
+    !isAbsolute(relativeToHome)
+  ) {
+    return { kind: "home-relative", path: relativeToHome };
+  }
+  return { kind: "absolute-local", path: installRoot };
 }
 
 function setupFailureReasonCode(message: string): string {
@@ -115,6 +157,8 @@ export function writeManagedRegistration(input: {
   readonly stateDir: string;
   readonly layout: PortableLayout;
   readonly manifest: SetupManifest;
+  readonly env: EnvSource;
+  readonly home: string;
   readonly now: Date;
 }): void {
   writeRegistration(input.stateDir, managedRegistration(input));
@@ -143,6 +187,7 @@ export function readPortableInstallRegistration(
 ): PortableInstallRegistration | undefined {
   const path = join(stateDir, REGISTRATION_FILE);
   if (!existsSync(path)) return undefined;
+  assertRegistrationFileSafe(path);
   const raw = readJson(path);
   if (isManagedRegistrationRecord(raw)) return managedRegistrationFromRecord(raw);
   if (isFailedRegistrationRecord(raw)) return failedRegistrationFromRecord(raw);
@@ -180,6 +225,7 @@ function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSet
     platformTarget,
     packageVersion: String(raw.packageVersion),
     stable: raw.stable === true,
+    managedRootLocator: parseManagedRootLocator(raw.managedRootLocator),
     setupManifestSha256:
       typeof raw.setupManifestSha256 === "string" ? raw.setupManifestSha256 : undefined,
     installRootIdentitySha256:
@@ -188,6 +234,21 @@ function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSet
       typeof raw.launcherIdentitySha256 === "string" ? raw.launcherIdentitySha256 : undefined,
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
   };
+}
+
+function parseManagedRootLocator(value: unknown): ManagedRootLocator | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value.kind !== "string") return undefined;
+  if (value.kind === "default") return { kind: "default" };
+  if (
+    (value.kind === "home-relative" || value.kind === "absolute-local") &&
+    typeof value.path === "string" &&
+    value.path.length > 0 &&
+    value.path.length <= 1024
+  ) {
+    return { kind: value.kind, path: value.path };
+  }
+  return undefined;
 }
 
 function isFailedRegistrationRecord(value: unknown): value is Record<string, unknown> {

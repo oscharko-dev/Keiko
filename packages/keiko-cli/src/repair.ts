@@ -459,7 +459,11 @@ function checkPortableManagedInstall(
   env: EnvSource,
   homedir: string,
 ): CheckResult {
-  const record = attestedPortableInstallRecord(stateDir, env, homedir);
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  if (recordResult.kind === "error") {
+    return action("Portable managed install", recordResult.message);
+  }
+  const record = recordResult.record;
   if (record === undefined)
     return ok("Portable managed install", "no portable-managed install recorded");
   if (record.registration.status === "setup-failed") {
@@ -492,7 +496,11 @@ function checkPortableRegistration(
   homedir: string,
   dryRun: boolean,
 ): CheckResult {
-  const record = attestedPortableInstallRecord(stateDir, env, homedir);
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  if (recordResult.kind === "error") {
+    return action("Portable registration", recordResult.message);
+  }
+  const record = recordResult.record;
   if (record === undefined || record.registration.status === "setup-failed") {
     return ok("Portable registration", "no portable-managed registration recorded");
   }
@@ -547,6 +555,24 @@ function portableRegistrationStatus(
     );
   }
   return "repair";
+}
+
+function readPortableRecordForRepair(
+  stateDir: string,
+  env: EnvSource,
+  homedir: string,
+):
+  | { readonly kind: "ok"; readonly record: ReturnType<typeof attestedPortableInstallRecord> }
+  | { readonly kind: "error"; readonly message: string } {
+  try {
+    return { kind: "ok", record: attestedPortableInstallRecord(stateDir, env, homedir) };
+  } catch (error) {
+    return {
+      kind: "error",
+      message:
+        error instanceof Error ? error.message : "portable-managed install record is unreadable",
+    };
+  }
 }
 
 // Counts provider/reranker `apiKeySecretRef` values in the config that have no matching entry in the

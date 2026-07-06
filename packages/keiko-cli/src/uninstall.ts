@@ -360,7 +360,7 @@ function finalizeStateDir(
     return;
   }
   const topLevel = new Set(
-    scan.retained.map((entry) => entry.relPath.split("/")[0] ?? entry.relPath),
+    scan.retained.map((entry) => entry.relPath.split(/[\\/]/)[0] ?? entry.relPath),
   );
   const count = topLevel.size;
   io.out(
@@ -396,6 +396,14 @@ function removePortableManagedStep(
       "recorded portable-managed install could not be attested from user-local registration or default roots",
     );
   }
+  if (!opts.dryRun) {
+    inspectPortableManagedInstallForRemoval(record.layout);
+    assertPortableRegistrationRemovable(record, env, homedir);
+    removePortableManagedInstall(record.layout, io, false);
+  } else {
+    removePortableManagedInstall(record.layout, io, true);
+    assertPortableRegistrationRemovable(record, env, homedir);
+  }
   removePortableRegistrationArtifacts(
     record.layout,
     record.target,
@@ -405,7 +413,33 @@ function removePortableManagedStep(
     opts.dryRun,
     io,
   );
-  removePortableManagedInstall(record.layout, io, opts.dryRun);
+}
+
+function inspectPortableManagedInstallForRemoval(
+  layout: Parameters<typeof removePortableManagedInstall>[0],
+): void {
+  removePortableManagedInstall(
+    layout,
+    { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
+    true,
+  );
+}
+
+function assertPortableRegistrationRemovable(
+  record: Exclude<ReturnType<typeof attestedPortableInstallRecord>, undefined>,
+  env: EnvSource,
+  homedir: string,
+): void {
+  if (record.layout === undefined || record.managedRoot === undefined) return;
+  removePortableRegistrationArtifacts(
+    record.layout,
+    record.target,
+    record.managedRoot,
+    env,
+    homedir,
+    true,
+    { out: (_text: string): void => undefined, err: (_text: string): void => undefined },
+  );
 }
 
 function refuseUnsafeStateRoot(

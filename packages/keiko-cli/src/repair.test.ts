@@ -86,6 +86,10 @@ function healthyDeps(root: string): RepairCliDeps {
   };
 }
 
+function portableRepairDeps(root: string, home: string): RepairCliDeps {
+  return { ...healthyDeps(root), homedir: (): string => home };
+}
+
 // Mirrors the local-install layout doctor.test.ts builds, so `resolvePreferredInstallLayout`
 // resolves and the install-layout check reports `ok`.
 function seedInstalledLayout(root: string): void {
@@ -159,14 +163,19 @@ function writePortableWindowsFixture(root: string, version = "0.2.11"): void {
   );
 }
 
-async function installPortableWindows(root: string): Promise<{
+async function installPortableWindows(
+  root: string,
+  options: { readonly managedRoot?: string | undefined } = {},
+): Promise<{
+  readonly home: string;
   readonly managedRoot: string;
   readonly shortcut: string;
+  readonly env: { readonly APPDATA: string; readonly LOCALAPPDATA: string };
 }> {
   const home = join(root, "portable-home");
   const source = join(root, "portable-bootstrap");
   const env = windowsPortableEnv(home);
-  const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+  const managedRoot = options.managedRoot ?? join(env.LOCALAPPDATA, "Programs", "Keiko");
   const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
   writePortableWindowsFixture(source);
   const c = makeIo();
@@ -187,7 +196,67 @@ async function installPortableWindows(root: string): Promise<{
     { homedir: () => home, now: () => NOW },
   );
   expect(code).toBe(0);
-  return { managedRoot, shortcut };
+  return { home, managedRoot, shortcut, env };
+}
+
+function writePortableMacFixture(root: string, target: "macos-arm64" | "macos-x64"): void {
+  const app = join(root, "Keiko.app");
+  const resources = join(app, "Contents", "Resources");
+  mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
+  mkdirSync(join(resources, "runtime", "node", "bin"), { recursive: true });
+  mkdirSync(join(resources, ".portable"), { recursive: true });
+  writePortableApp(join(resources, "app"));
+  writeFileSync(join(resources, "runtime", "node", "bin", "node"), "fixture node\n");
+  writeFileSync(join(app, "Contents", "MacOS", "Keiko"), "fixture launcher\n");
+  writeFileSync(
+    join(resources, ".portable", "setup-manifest.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        platformTarget: target,
+        packageName: "@oscharko-dev/keiko",
+        packageVersion: "0.2.11",
+        stable: true,
+        primaryLauncher: "Keiko.app",
+        bootstrapUpdateEligible: false,
+        runtime: {
+          nodePlatform: "darwin",
+          nodeArchitecture: target === "macos-arm64" ? "arm64" : "x64",
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function installPortableMacCustom(root: string): Promise<{
+  readonly home: string;
+  readonly managedRoot: string;
+}> {
+  const home = join(root, "portable-home");
+  const source = join(root, "portable-bootstrap");
+  const managedRoot = join(home, "Portable Apps", "Keiko.app");
+  writePortableMacFixture(source, "macos-x64");
+  const c = makeIo();
+  const code = await runPortableCli(
+    [
+      "setup",
+      "--target",
+      "macos-x64",
+      "--portable-root",
+      source,
+      "--managed-root",
+      managedRoot,
+      "--state-dir",
+      join(root, ".keiko"),
+    ],
+    c.io,
+    {},
+    { homedir: () => home, now: () => NOW },
+  );
+  expect(code).toBe(0);
+  return { home, managedRoot };
 }
 
 describe("runRepairCli — usage", () => {
@@ -321,14 +390,28 @@ describe("runRepairCli — portable managed install", () => {
   it("recreates a missing Windows Start Menu registration for an attested portable install", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
-    const { shortcut } = await installPortableWindows(root);
+    const { home, shortcut, env } = await installPortableWindows(root);
     rmSync(shortcut, { force: true });
     const c = makeIo();
 
-    expect(
-      runRepairCli([], c.io, windowsPortableEnv(join(root, "portable-home")), healthyDeps(root)),
-    ).toBe(0);
+    expect(runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(0);
     expect(c.out()).toContain("Portable registration");
+    expect(c.out()).toContain("repaired 1 user-local registration artifact");
+    expect(existsSync(shortcut)).toBe(true);
+    expect(home).toContain("portable-home");
+  });
+
+  it("recreates a missing Windows Start Menu registration for a custom managed root using the local record hint", async () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const customRoot = join(root, "portable-home", "PortableApps", "Keiko");
+    const { shortcut, env } = await installPortableWindows(root, { managedRoot: customRoot });
+    rmSync(shortcut, { force: true });
+    const c = makeIo();
+
+    expect(runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home")))).toBe(
+      0,
+    );
     expect(c.out()).toContain("repaired 1 user-local registration artifact");
     expect(existsSync(shortcut)).toBe(true);
   });
@@ -336,15 +419,46 @@ describe("runRepairCli — portable managed install", () => {
   it("flags a modified Windows Start Menu registration as an action item", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
-    const { shortcut } = await installPortableWindows(root);
+    const { shortcut, env } = await installPortableWindows(root);
     writeFileSync(shortcut, "tampered content\r\n", "utf8");
     const c = makeIo();
 
-    expect(
-      runRepairCli([], c.io, windowsPortableEnv(join(root, "portable-home")), healthyDeps(root)),
-    ).toBe(1);
+    expect(runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home")))).toBe(
+      1,
+    );
     expect(c.out()).toContain("[action] Portable registration");
     expect(c.out()).toContain("modified");
+  });
+
+  it("flags a nested unknown portable app file as an action item", async () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const { managedRoot, shortcut, env } = await installPortableWindows(root);
+    writeFileSync(join(managedRoot, "app", "rogue.txt"), "rogue\n", "utf8");
+    const c = makeIo();
+
+    expect(runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home")))).toBe(
+      1,
+    );
+    expect(c.out()).toContain("[action] Portable managed install");
+    expect(c.out()).toContain("app/rogue.txt");
+    expect(existsSync(shortcut)).toBe(true);
+  });
+
+  it("attests a macOS custom managed root from the local record hint", async () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const { home } = await installPortableMacCustom(root);
+    const c = makeIo();
+
+    expect(runRepairCli([], c.io, {}, portableRepairDeps(root, home))).toBe(0);
+    expect(c.out()).toContain(
+      "Portable managed install: attested portable-managed install verified",
+    );
+    expect(c.out()).toContain(
+      "Portable registration: 0 user-local registration artifact(s) verified",
+    );
+    expect(home).toContain("portable-home");
   });
 });
 

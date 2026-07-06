@@ -9,7 +9,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { windowsLauncher } from "./launcher-platforms.js";
 import type { CliIo } from "./runner.js";
@@ -31,30 +31,48 @@ interface ManagedInstallScan {
   readonly issues: readonly string[];
 }
 
-type ScopeMode = "whole" | "portable-manifest" | "windows-root" | "macos-root" | "macos-contents";
-
-interface Scope {
-  readonly mode: ScopeMode;
-  readonly rootPath: string;
-}
-
 const WINDOWS_REGISTRATION_RE =
   /^@start "" ([A-Za-z0-9_@\-./\\:]+) start --open(?: --port \d+)?\r?\n$/;
-const WHOLE_SUBTREE_ALLOWLIST: Readonly<
-  Record<Exclude<ScopeMode, "whole" | "portable-manifest">, readonly string[]>
+const MANAGED_INSTALL_RULES: Readonly<
+  Record<
+    PortableLayout["rootKind"],
+    {
+      readonly exactFiles: readonly string[];
+      readonly recursivePrefixes: readonly string[];
+    }
+  >
 > = {
-  "windows-root": ["app", "runtime", "support"],
-  "macos-root": [],
-  "macos-contents": [
-    "MacOS",
-    "Resources",
-    "_CodeSignature",
-    "Frameworks",
-    "Helpers",
-    "Library",
-    "PlugIns",
-    "SharedSupport",
-  ],
+  "windows-root": {
+    exactFiles: [
+      "Keiko.exe",
+      ".portable/setup-manifest.json",
+      "app/package.json",
+      "app/release-impact.catalog.json",
+      "support/keiko-support.cmd",
+    ],
+    recursivePrefixes: ["app/dist/", "app/node_modules/", "runtime/node/"],
+  },
+  "macos-app": {
+    exactFiles: [
+      "Contents/Info.plist",
+      "Contents/PkgInfo",
+      "Contents/MacOS/Keiko",
+      "Contents/Resources/.portable/setup-manifest.json",
+      "Contents/Resources/app/package.json",
+      "Contents/Resources/app/release-impact.catalog.json",
+    ],
+    recursivePrefixes: [
+      "Contents/Resources/app/dist/",
+      "Contents/Resources/app/node_modules/",
+      "Contents/Resources/runtime/node/",
+      "Contents/_CodeSignature/",
+      "Contents/Frameworks/",
+      "Contents/Helpers/",
+      "Contents/Library/",
+      "Contents/PlugIns/",
+      "Contents/SharedSupport/",
+    ],
+  },
 };
 
 function appDataDir(env: EnvSource, home: string): string {
@@ -133,7 +151,20 @@ function isUnsafeHardlink(path: string): boolean {
   }
 }
 
+function assertNoSymlinkAncestor(path: string): void {
+  let cursor = dirname(resolve(path));
+  for (;;) {
+    if (existsSync(cursor) && lstatSync(cursor).isSymbolicLink()) {
+      throw new Error(`portable registration refused symlinked ancestor at ${cursor}`);
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) return;
+    cursor = parent;
+  }
+}
+
 function ensureFileArtifactSafe(plan: RegistrationPlan): "missing" | "managed" {
+  assertNoSymlinkAncestor(plan.path);
   if (!existsSync(plan.path)) return "missing";
   const stat = lstatSync(plan.path);
   if (stat.isSymbolicLink()) {
@@ -226,8 +257,8 @@ export function repairUserLocalRegistration(
 }
 
 function removeVerifiedFileArtifact(plan: RegistrationPlan, dryRun: boolean, io: CliIo): boolean {
-  if (!existsSync(plan.path)) return false;
-  ensureFileArtifactSafe(plan);
+  const status = ensureFileArtifactSafe(plan);
+  if (status === "missing") return false;
   if (dryRun) {
     io.out(`would-remove: ${plan.path}\n`);
     return true;
@@ -241,131 +272,78 @@ function topLevelUnknown(relPath: string): string {
   return `portable managed install contains unknown entry: ${relPath}`;
 }
 
-function allowedWholeSubtree(scope: Scope, name: string): boolean {
+function normalizedRelativePath(root: string, absPath: string): string {
+  return relative(root, absPath).replaceAll("\\", "/");
+}
+
+function pathMatchesRecursivePrefix(path: string, prefix: string): boolean {
+  return path.startsWith(prefix);
+}
+
+function allowlistedDirectory(relPath: string, layout: PortableLayout): boolean {
+  const rules = MANAGED_INSTALL_RULES[layout.rootKind];
   return (
-    scope.mode !== "whole" &&
-    scope.mode !== "portable-manifest" &&
-    WHOLE_SUBTREE_ALLOWLIST[scope.mode].includes(name)
+    rules.exactFiles.some((path) => path.startsWith(`${relPath}/`)) ||
+    rules.recursivePrefixes.some(
+      (prefix) =>
+        prefix === `${relPath}/` || prefix.startsWith(`${relPath}/`) || relPath.startsWith(prefix),
+    )
   );
 }
 
-function nextStructuredScope(scope: Scope, name: string, absPath: string): Scope | undefined {
-  if (scope.mode === "windows-root" && name === ".portable") {
-    return { mode: "portable-manifest", rootPath: absPath };
-  }
-  if (scope.mode === "macos-root" && name === "Contents") {
-    return { mode: "macos-contents", rootPath: absPath };
-  }
-  return undefined;
+function allowlistedFile(relPath: string, layout: PortableLayout): boolean {
+  const rules = MANAGED_INSTALL_RULES[layout.rootKind];
+  return (
+    rules.exactFiles.includes(relPath) ||
+    rules.recursivePrefixes.some((prefix) => pathMatchesRecursivePrefix(relPath, prefix))
+  );
 }
 
-function allowedFile(scope: Scope, name: string): boolean {
-  if (scope.mode === "windows-root") return name === "Keiko.exe";
-  if (scope.mode === "portable-manifest") return name === "setup-manifest.json";
-  if (scope.mode === "macos-contents") return name === "Info.plist" || name === "PkgInfo";
-  return false;
-}
-
-function scanWholeTree(
+function scanManagedTree(
   absPath: string,
+  layout: PortableLayout,
   files: string[],
   directories: string[],
   issues: string[],
-  root: string,
 ): void {
   directories.push(absPath);
   for (const name of readdirSync(absPath)) {
-    scanNode(join(absPath, name), files, directories, issues, {
-      mode: "whole",
-      rootPath: root,
-    });
+    const entryPath = join(absPath, name);
+    const stat = lstatSync(entryPath);
+    if (stat.isSymbolicLink()) {
+      issues.push(`portable managed install refused symlink at ${entryPath}`);
+      continue;
+    }
+    const relPath = normalizedRelativePath(layout.installRoot, entryPath);
+    if (stat.isDirectory()) {
+      if (!allowlistedDirectory(relPath, layout)) {
+        issues.push(topLevelUnknown(relPath));
+        continue;
+      }
+      scanManagedTree(entryPath, layout, files, directories, issues);
+      continue;
+    }
+    if (!stat.isFile()) {
+      issues.push(`portable managed install refused unsupported filesystem entry at ${entryPath}`);
+      continue;
+    }
+    if (isUnsafeHardlink(entryPath)) {
+      issues.push(`portable managed install refused hardlink at ${entryPath}`);
+      continue;
+    }
+    if (!allowlistedFile(relPath, layout)) {
+      issues.push(topLevelUnknown(relPath));
+      continue;
+    }
+    files.push(entryPath);
   }
-}
-
-function scanStructuredTree(
-  absPath: string,
-  files: string[],
-  directories: string[],
-  issues: string[],
-  scope: Scope,
-): void {
-  directories.push(absPath);
-  for (const name of readdirSync(absPath)) {
-    scanNode(join(absPath, name), files, directories, issues, scope);
-  }
-}
-
-function scanFileNode(
-  absPath: string,
-  files: string[],
-  issues: string[],
-  scope: Scope,
-  name: string,
-): void {
-  if (isUnsafeHardlink(absPath)) {
-    issues.push(`portable managed install refused hardlink at ${absPath}`);
-    return;
-  }
-  if (scope.mode !== "whole" && !allowedFile(scope, name)) {
-    issues.push(topLevelUnknown(absPath.slice(scope.rootPath.length + 1)));
-    return;
-  }
-  files.push(absPath);
-}
-
-function scanDirectoryNode(
-  absPath: string,
-  files: string[],
-  directories: string[],
-  issues: string[],
-  scope: Scope,
-  name: string,
-): void {
-  if (scope.mode === "whole" || allowedWholeSubtree(scope, name)) {
-    scanWholeTree(absPath, files, directories, issues, scope.rootPath);
-    return;
-  }
-  const next = nextStructuredScope(scope, name, absPath);
-  if (next === undefined) {
-    issues.push(topLevelUnknown(absPath.slice(scope.rootPath.length + 1)));
-    return;
-  }
-  scanStructuredTree(absPath, files, directories, issues, next);
-}
-
-function scanNode(
-  absPath: string,
-  files: string[],
-  directories: string[],
-  issues: string[],
-  scope: Scope,
-): void {
-  const stat = lstatSync(absPath);
-  if (stat.isSymbolicLink()) {
-    issues.push(`portable managed install refused symlink at ${absPath}`);
-    return;
-  }
-  const name = basename(absPath);
-  if (stat.isDirectory()) {
-    scanDirectoryNode(absPath, files, directories, issues, scope, name);
-    return;
-  }
-  if (!stat.isFile()) {
-    issues.push(`portable managed install refused unsupported filesystem entry at ${absPath}`);
-    return;
-  }
-  scanFileNode(absPath, files, issues, scope, name);
 }
 
 export function inspectPortableManagedInstall(layout: PortableLayout): ManagedInstallScan {
   const files: string[] = [];
   const directories: string[] = [];
   const issues: string[] = [];
-  const rootScope: Scope =
-    layout.rootKind === "windows-root"
-      ? { mode: "windows-root", rootPath: layout.installRoot }
-      : { mode: "macos-root", rootPath: layout.installRoot };
-  scanStructuredTree(layout.installRoot, files, directories, issues, rootScope);
+  scanManagedTree(layout.installRoot, layout, files, directories, issues);
   return { files, directories, issues };
 }
 
