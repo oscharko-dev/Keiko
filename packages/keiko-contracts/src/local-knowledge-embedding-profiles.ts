@@ -1,3 +1,11 @@
+// Embedding profile identity and compatibility contract for Knowledge Pod retrieval (Epic #1818,
+// Issue #1843). A profile is the narrow, redaction-safe identity of the embedding space a pod's
+// vectors live in. `compareEmbeddingProfiles` decides whether two spaces are the *same* space and
+// may therefore share a query embedding; it fails closed to `unknown`/`incompatible`/`unavailable`/
+// `opaque` for anything short of an exact hardened match. Raw vector scores are only comparable
+// inside one space — cross-space evidence is fused by rank, never by raw score (see
+// docs/adr/ADR-0036-hybrid-grounding-reciprocal-rank-fusion.md).
+
 import type {
   EmbeddingModelIdentity,
   EmbeddingVectorMetric,

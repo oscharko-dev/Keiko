@@ -257,8 +257,8 @@ function evalGatewayConfig(): GatewayConfig {
     providers: [
       {
         modelId: EMBEDDING_MODEL,
-        baseUrl: "https://eval.embedding.local/v1",
-        apiKey: "eval-embedding-key",
+        baseUrl: "https://redacted.invalid/v1",
+        apiKey: "redacted-eval-key",
         apiKeyHeaderName: "x-api-key",
         timeoutMs: 30_000,
         maxRetries: 0,
@@ -286,8 +286,8 @@ function evalGatewayConfig(): GatewayConfig {
     ],
     reranker: {
       modelId: RERANK_MODEL,
-      baseUrl: "https://eval.reranker.local/v1",
-      apiKey: "eval-reranker-key",
+      baseUrl: "https://redacted.invalid/v1",
+      apiKey: "redacted-eval-rerank-key",
       timeoutMs: 30_000,
     },
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },

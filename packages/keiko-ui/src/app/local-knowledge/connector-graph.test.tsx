@@ -203,6 +203,66 @@ describe("ConnectorGraph — with capsules", () => {
     expect(dragHandle).toHaveAccessibleDescription(description);
   });
 
+  it("renders the danger-tone embedding mismatch guidance for an incompatible Knowledge Pod", async () => {
+    const capsule = makeCapsule({
+      displayName: "Mismatched Vectors",
+      knowledgePod: {
+        readiness: "degraded",
+        embeddingCompatibilityStatus: "incompatible",
+        embeddingCompatibilityReason: "fingerprint-mismatch",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Embedding mismatch",
+          description: "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+          tone: "danger",
+        },
+      },
+    });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const badge = await screen.findByText("Embedding mismatch");
+    const description =
+      "Knowledge Pod guidance: Embedding mismatch. Semantic retrieval is disabled for this pod until it is reindexed locally.";
+    const row = screen.getByRole("article", { name: "Knowledge Pod: Mismatched Vectors" });
+    const dragHandle = screen.getByRole("button", {
+      name: "Drag Knowledge Pod Mismatched Vectors to the workspace",
+    });
+
+    expect(badge).not.toHaveAttribute("title");
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(description);
+    expect(dragHandle).toHaveAccessibleDescription(description);
+  });
+
+  it("renders the policy-denied guidance for a sealed Knowledge Pod", async () => {
+    const capsule = makeCapsule({
+      displayName: "Sealed Pod",
+      knowledgePod: {
+        readiness: "degraded",
+        sealed: true,
+        reindexRecommended: false,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Policy denied",
+          description:
+            "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+          tone: "danger",
+        },
+      },
+    });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const badge = await screen.findByText("Policy denied");
+    const description =
+      "Knowledge Pod guidance: Policy denied. This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.";
+    const row = screen.getByRole("article", { name: "Knowledge Pod: Sealed Pod" });
+
+    expect(badge).not.toHaveAttribute("title");
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(description);
+  });
+
   it("does NOT render the empty-state panel when capsules are present", async () => {
     const capsules = [makeCapsule()];
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);
@@ -933,6 +993,52 @@ describe("ConnectorGraph — a11y", () => {
     const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);
     await waitFor(() => {
       expect(screen.getByText("A Doc")).toBeInTheDocument();
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("jest-axe: incompatible and policy-denied guidance render without violations", async () => {
+    const capsules = [
+      makeCapsule({
+        id: makeCapsuleId("incompatible"),
+        displayName: "Incompatible Pod",
+        lifecycleState: "ready",
+        knowledgePod: {
+          readiness: "degraded",
+          embeddingCompatibilityStatus: "incompatible",
+          embeddingCompatibilityReason: "fingerprint-mismatch",
+          reindexRecommended: true,
+          queryEmbeddingAllowed: false,
+          guidance: {
+            label: "Embedding mismatch",
+            description:
+              "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+            tone: "danger",
+          },
+        },
+      }),
+      makeCapsule({
+        id: makeCapsuleId("denied"),
+        displayName: "Denied Pod",
+        lifecycleState: "ready",
+        knowledgePod: {
+          readiness: "degraded",
+          sealed: true,
+          reindexRecommended: false,
+          queryEmbeddingAllowed: false,
+          guidance: {
+            label: "Policy denied",
+            description:
+              "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+            tone: "danger",
+          },
+        },
+      }),
+    ];
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);
+    await waitFor(() => {
+      expect(screen.getByText("Incompatible Pod")).toBeInTheDocument();
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
