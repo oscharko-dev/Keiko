@@ -8,12 +8,92 @@ export type UpdateInstallPackageManager = "npm" | "yarn";
 export const UPDATE_INSTALL_PACKAGE_MANAGERS: readonly UpdateInstallPackageManager[] =
   Object.freeze(["npm", "yarn"] as const satisfies readonly UpdateInstallPackageManager[]);
 
+export type UpdatePortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
+
+export const UPDATE_PORTABLE_TARGETS: readonly UpdatePortableTarget[] = Object.freeze([
+  "windows-x64",
+  "macos-arm64",
+  "macos-x64",
+] as const satisfies readonly UpdatePortableTarget[]);
+
+export type UpdateInstallModeKind =
+  | "package-manager"
+  | "portable-managed"
+  | "portable-bootstrap"
+  | "portable-setup-failed"
+  | "portable-it-managed";
+
+export const UPDATE_INSTALL_MODE_KINDS: readonly UpdateInstallModeKind[] = Object.freeze([
+  "package-manager",
+  "portable-managed",
+  "portable-bootstrap",
+  "portable-setup-failed",
+  "portable-it-managed",
+] as const satisfies readonly UpdateInstallModeKind[]);
+
 export type UpdateInstallModeStatus = "supported" | "unsupported";
 
 export const UPDATE_INSTALL_MODE_STATUSES: readonly UpdateInstallModeStatus[] = Object.freeze([
   "supported",
   "unsupported",
 ] as const satisfies readonly UpdateInstallModeStatus[]);
+
+export type UpdateRecommendedAction =
+  | "package-manager-maintenance"
+  | "portable-managed-update"
+  | "portable-bootstrap-setup"
+  | "manual-download";
+
+export const UPDATE_RECOMMENDED_ACTIONS: readonly UpdateRecommendedAction[] = Object.freeze([
+  "package-manager-maintenance",
+  "portable-managed-update",
+  "portable-bootstrap-setup",
+  "manual-download",
+] as const satisfies readonly UpdateRecommendedAction[]);
+
+export type UpdatePortableInstallStatus = "managed" | "bootstrap" | "setup-failed" | "it-managed";
+
+export const UPDATE_PORTABLE_INSTALL_STATUSES: readonly UpdatePortableInstallStatus[] =
+  Object.freeze([
+    "managed",
+    "bootstrap",
+    "setup-failed",
+    "it-managed",
+  ] as const satisfies readonly UpdatePortableInstallStatus[]);
+
+export type UpdatePortableManagedRootKind =
+  "default" | "home-relative" | "absolute-local" | "unknown";
+
+export interface UpdatePortableInstallSummary {
+  readonly status: UpdatePortableInstallStatus;
+  readonly target: UpdatePortableTarget;
+  readonly updateEligible: boolean;
+  readonly packageVersion?: string | undefined;
+  readonly stable?: boolean | undefined;
+  readonly managedRootKind?: UpdatePortableManagedRootKind | undefined;
+  readonly setupManifestSha256?: string | undefined;
+  readonly installRootIdentitySha256?: string | undefined;
+  readonly launcherIdentitySha256?: string | undefined;
+  readonly failureReason?: string | undefined;
+}
+
+export type UpdatePortableAssetVerificationStatus = "pending" | "verified" | "failed";
+
+export const UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES: readonly UpdatePortableAssetVerificationStatus[] =
+  Object.freeze([
+    "pending",
+    "verified",
+    "failed",
+  ] as const satisfies readonly UpdatePortableAssetVerificationStatus[]);
+
+export interface UpdatePortableAssetSummary {
+  readonly target: UpdatePortableTarget;
+  readonly fileName: string;
+  readonly packageVersion: string;
+  readonly sha256?: string | undefined;
+  readonly sizeBytes?: number | undefined;
+  readonly verificationStatus?: UpdatePortableAssetVerificationStatus | undefined;
+}
 
 export type UpdateUnsupportedReason =
   | "unknown-path"
@@ -24,7 +104,12 @@ export type UpdateUnsupportedReason =
   | "launcher-drift"
   | "package-manager-ambiguous"
   | "package-manager-unsupported"
-  | "manifest-unavailable";
+  | "manifest-unavailable"
+  | "portable-bootstrap"
+  | "portable-setup-failed"
+  | "portable-it-managed"
+  | "portable-registration-invalid"
+  | "portable-non-stable";
 
 export const UPDATE_UNSUPPORTED_REASONS: readonly UpdateUnsupportedReason[] = Object.freeze([
   "unknown-path",
@@ -36,6 +121,11 @@ export const UPDATE_UNSUPPORTED_REASONS: readonly UpdateUnsupportedReason[] = Ob
   "package-manager-ambiguous",
   "package-manager-unsupported",
   "manifest-unavailable",
+  "portable-bootstrap",
+  "portable-setup-failed",
+  "portable-it-managed",
+  "portable-registration-invalid",
+  "portable-non-stable",
 ] as const satisfies readonly UpdateUnsupportedReason[]);
 
 export type UpdatePolicySource = "default" | "environment";
@@ -62,8 +152,12 @@ export interface UpdateInstallMode {
   readonly schemaVersion: typeof UPDATE_SESSION_SCHEMA_VERSION;
   readonly status: UpdateInstallModeStatus;
   readonly packageName: string;
+  readonly installKind?: UpdateInstallModeKind | undefined;
   readonly packageManager?: UpdateInstallPackageManager | undefined;
   readonly installRoot?: string | undefined;
+  readonly portable?: UpdatePortableInstallSummary | undefined;
+  readonly asset?: UpdatePortableAssetSummary | undefined;
+  readonly recommendedAction?: UpdateRecommendedAction | undefined;
   readonly reason?: UpdateUnsupportedReason | undefined;
   readonly manualInstructions?: string | undefined;
   readonly commandPreview?: UpdateCommandPreview | undefined;

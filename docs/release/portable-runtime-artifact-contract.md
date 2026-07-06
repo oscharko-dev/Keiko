@@ -6,7 +6,7 @@ It does not publish assets or change updater execution logic.
 
 Governing decisions:
 
-- [ADR-0113: Portable managed install and release-asset update authority](../adr/ADR-0113-portable-managed-install-and-release-asset-update-authority.md)
+- [ADR-0114: Portable managed install and release-asset update authority](../adr/ADR-0114-portable-managed-install-and-release-asset-update-authority.md)
 - [ADR-0021: Publish Strategy - Bundled Monorepo Product](../adr/ADR-0021-publish-strategy-bundled-monorepo-product.md)
 - [ADR-0099: Governed in-app updates and release-impact contract](../adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)
 - [Local runtime state contract](../local-runtime-state-contract.md)
