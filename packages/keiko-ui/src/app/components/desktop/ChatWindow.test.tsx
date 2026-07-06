@@ -1598,6 +1598,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
   });
 
   it("keeps the active capsule visible when it is no longer in the ready capsule list", async () => {
+    const staleCapsuleId = makeCapsuleId("/Users/alice/private/customer.pdf?client_secret=value");
     fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
     fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
     renderWindow(
@@ -1605,7 +1606,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         activeChat: makeChat({
           localKnowledgeScope: {
             kind: "capsule",
-            capsuleId: makeCapsuleId("cap-stale"),
+            capsuleId: staleCapsuleId,
             connectedAtMs: 1,
           },
         }),
@@ -1614,18 +1615,18 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
-        "Knowledge Pod: cap-stale (unavailable)",
+        "Knowledge Pod (unavailable)",
       );
     });
     // uiux-fix F041 (C173) — "(unavailable)" is the single degraded suffix
     // (previously "(not ready)" for capsules vs "(unavailable)" for sets).
     await openCombobox(userEvent.setup(), "Grounding mode");
-    expect(
-      screen.getByRole("option", { name: "Knowledge Pod: cap-stale (unavailable)" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Knowledge Pod (unavailable)" })).toBeInTheDocument();
+    expect(screen.queryByText("/Users/alice/private/customer.pdf?client_secret=value")).toBeNull();
   });
 
   it("keeps the active capsule set visible and reports the load error when capsule sets fail to load", async () => {
+    const staleCapsuleSetId = makeCapsuleSetId("https://example.invalid/pod-set?token=value");
     fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
     fetchCapsuleSetsMock.mockRejectedValueOnce(new Error("capsule sets offline"));
     renderWindow(
@@ -1633,7 +1634,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         activeChat: makeChat({
           localKnowledgeScope: {
             kind: "capsule-set",
-            capsuleSetId: makeCapsuleSetId("set-1"),
+            capsuleSetId: staleCapsuleSetId,
             connectedAtMs: 1,
           },
         }),
@@ -1642,13 +1643,14 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
-        "Knowledge Pod Set: set-1 (unavailable)",
+        "Knowledge Pod Set (unavailable)",
       );
     });
     await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
-      screen.getByRole("option", { name: "Knowledge Pod Set: set-1 (unavailable)" }),
+      screen.getByRole("option", { name: "Knowledge Pod Set (unavailable)" }),
     ).toBeInTheDocument();
+    expect(screen.queryByText("https://example.invalid/pod-set?token=value")).toBeNull();
     expect(screen.getByRole("alert")).toHaveTextContent("capsule sets offline");
   });
 });

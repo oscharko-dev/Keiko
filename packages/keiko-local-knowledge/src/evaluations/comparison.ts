@@ -8,9 +8,22 @@
 // Reranking is deliberately NOT modelled here. Its regression control (`reranker-off` /
 // `reranker-reversed`) lives in `check:grounded-retrieval-quality` (keiko-server) and must not
 // be duplicated; the ledger documents that ownership.
+//
+// Fusion-evidence gate (audit fix, #2010 defect): grouping fixtures under the "fused" label by
+// taxonomy intent alone does NOT prove fusion contributed. Every fixture — lexical, vector, or
+// fused-labelled — runs through the SAME unmodified `runLocalKnowledgeRetrieval` pipeline, so a
+// "fused" row could clear the recall/precision floor even if RRF silently degraded to a single
+// leg, as long as that one leg still finds the expected chunk. To close that gap without adding a
+// parallel retrieval path, this module reads the production `RetrievalDiagnostics.mode` that
+// `runLocalKnowledgeRetrieval` ALREADY reports per query (redacted enum tag, no bodies) and
+// requires the "fused" row to show at least one query where BOTH the lexical and dense lanes
+// produced candidates ("hybrid" mode). A regression that collapsed fusion to one leg would zero
+// out every "hybrid" observation and this gate would fail the row even though recall stayed 1.0.
 
 import type { RetrievalEvalScorecard } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
+
+const HYBRID_MODE = "hybrid";
 
 export type RetrievalComparisonMode = "lexical" | "vector" | "fused";
 
@@ -41,6 +54,11 @@ export interface RetrievalComparisonRow {
   // below the gate floor, so the comparison surfaces a mode-specific regression rather than
   // hiding it inside a single aggregate score.
   readonly floorHeadroom: number;
+  // Number of underlying queries whose production `RetrievalDiagnostics.mode` was "hybrid"
+  // (both the lexical and dense lanes produced candidates that were RRF-fused). Always 0 for
+  // the "lexical"/"vector" rows by construction of those fixtures; required to be > 0 for the
+  // "fused" row — see the fusion-evidence gate note at the top of this file.
+  readonly hybridQueryCount: number;
   readonly passed: boolean;
 }
 
@@ -55,11 +73,49 @@ function mean(values: readonly number[]): number {
   return sum / values.length;
 }
 
+function hybridQueryCountOf(cards: readonly RetrievalEvalScorecard[]): number {
+  let count = 0;
+  for (const card of cards) {
+    count += card.outcomes.retrievalModeCounts[HYBRID_MODE] ?? 0;
+  }
+  return count;
+}
+
+// The "fused" row's whole purpose is to demonstrate fusion happened, not merely that its
+// fixtures' recall/precision cleared the floor (a single surviving leg could do that too). So,
+// unlike "lexical"/"vector", it additionally requires direct evidence — at least one query
+// where both lanes contributed — on top of the shared floor check.
+function passesFusionEvidence(mode: RetrievalComparisonMode, hybridQueryCount: number): boolean {
+  if (mode !== "fused") return true;
+  return hybridQueryCount > 0;
+}
+
+// A row's `passed` must reflect only the dimensions the row itself displays and aggregates
+// (recall/precision/MRR/nDCG) plus the fusion-evidence gate above — never an orthogonal
+// per-card dimension the row does not surface (citationQuality, contextBudgetFit,
+// sourceIsolation, noEvidenceAccuracy). Those dimensions are already reported per-fixture by
+// `localKnowledgeFailuresFor` in the shipping gate; folding them into `card.passed` here would
+// fail a mode row for a reason the table cannot explain (audit fix, #2016 post-merge audit).
+function clearsAggregateFloor(
+  recall: number,
+  precision: number,
+  meanReciprocalRank: number,
+  ndcg: number,
+): boolean {
+  return (
+    recall >= PASS_THRESHOLDS.recall &&
+    precision >= PASS_THRESHOLDS.precision &&
+    meanReciprocalRank >= PASS_THRESHOLDS.meanReciprocalRank &&
+    ndcg >= PASS_THRESHOLDS.ndcg
+  );
+}
+
 function rowForMode(
   mode: RetrievalComparisonMode,
   cards: readonly RetrievalEvalScorecard[],
 ): RetrievalComparisonRow {
   const recall = mean(cards.map((card) => card.dimensions.recall));
+  const precision = mean(cards.map((card) => card.dimensions.precision));
   const meanReciprocalRank = mean(cards.map((card) => card.dimensions.meanReciprocalRank));
   const ndcg = mean(cards.map((card) => card.dimensions.ndcg));
   const floorHeadroom = Math.min(
@@ -67,15 +123,19 @@ function rowForMode(
     meanReciprocalRank - PASS_THRESHOLDS.meanReciprocalRank,
     ndcg - PASS_THRESHOLDS.ndcg,
   );
+  const hybridQueryCount = hybridQueryCountOf(cards);
   return {
     mode,
     fixtureIds: cards.map((card) => card.fixtureId),
     recall,
-    precision: mean(cards.map((card) => card.dimensions.precision)),
+    precision,
     meanReciprocalRank,
     ndcg,
     floorHeadroom,
-    passed: cards.every((card) => card.passed),
+    hybridQueryCount,
+    passed:
+      clearsAggregateFloor(recall, precision, meanReciprocalRank, ndcg) &&
+      passesFusionEvidence(mode, hybridQueryCount),
   };
 }
 
@@ -112,8 +172,8 @@ export function renderRetrievalModeComparisonReport(comparison: RetrievalModeCom
   const header = [
     "# Local Knowledge Retrieval Mode Comparison",
     "",
-    "| Mode | Fixtures | Recall | Precision | MRR | nDCG | Floor headroom | Pass |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    "| Mode | Fixtures | Recall | Precision | MRR | nDCG | Floor headroom | Hybrid queries | Pass |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
   ];
   const rows = comparison.rows.map((row) => {
     const cells = [
@@ -124,6 +184,7 @@ export function renderRetrievalModeComparisonReport(comparison: RetrievalModeCom
       format(row.meanReciprocalRank),
       format(row.ndcg),
       format(row.floorHeadroom),
+      String(row.hybridQueryCount),
       row.passed ? "PASS" : "FAIL",
     ];
     return `| ${cells.join(" | ")} |`;

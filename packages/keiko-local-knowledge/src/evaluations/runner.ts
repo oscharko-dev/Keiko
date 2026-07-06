@@ -53,7 +53,7 @@ import type {
   RetrievalEvalScorecard,
 } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
-import type { RetrievalNoEvidenceReason } from "../retrieval/types.js";
+import type { RetrievalDiagnostics, RetrievalNoEvidenceReason } from "../retrieval/types.js";
 
 // ─── Public dependency surface ───────────────────────────────────────────────
 
@@ -154,6 +154,10 @@ interface QueryEvaluation {
   readonly references: Awaited<ReturnType<typeof runLocalKnowledgeRetrieval>>["references"];
   readonly noEvidence: boolean;
   readonly reason?: RetrievalNoEvidenceReason;
+  // The production `RetrievalDiagnostics.mode` for this query, when the search ran far
+  // enough to report one. Threaded through unchanged from `runLocalKnowledgeRetrieval` —
+  // this file adds no retrieval logic of its own.
+  readonly retrievalMode?: RetrievalDiagnostics["mode"];
 }
 
 function scopeCapsuleIds(query: RetrievalEvalQuery): readonly KnowledgeCapsuleId[] {
@@ -208,6 +212,7 @@ async function runOneQuery(
     references: result.references,
     noEvidence: result.noEvidence,
     ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    ...(result.diagnostics !== undefined ? { retrievalMode: result.diagnostics.mode } : {}),
     scores: {
       recall: scoreRecall(result.references, expected),
       precision: scorePrecision(result.references, expected),
@@ -273,8 +278,17 @@ function recordNoEvidenceReason(
   counts[reason] = (counts[reason] ?? 0) + 1;
 }
 
+function recordRetrievalMode(
+  counts: Partial<Record<RetrievalDiagnostics["mode"], number>>,
+  mode: RetrievalDiagnostics["mode"] | undefined,
+): void {
+  if (mode === undefined) return;
+  counts[mode] = (counts[mode] ?? 0) + 1;
+}
+
 function buildOutcomeSummary(perQuery: readonly QueryEvaluation[]): RetrievalEvalOutcomeSummary {
   const noEvidenceReasonCounts: Partial<Record<RetrievalNoEvidenceReason, number>> = {};
+  const retrievalModeCounts: Partial<Record<RetrievalDiagnostics["mode"], number>> = {};
   let referenceCount = 0;
   let noEvidenceCount = 0;
   let expectedNoEvidenceCount = 0;
@@ -283,6 +297,7 @@ function buildOutcomeSummary(perQuery: readonly QueryEvaluation[]): RetrievalEva
     if (evaluation.noEvidence) noEvidenceCount += 1;
     if (evaluation.query.expectedNoEvidence === true) expectedNoEvidenceCount += 1;
     recordNoEvidenceReason(noEvidenceReasonCounts, evaluation.reason);
+    recordRetrievalMode(retrievalModeCounts, evaluation.retrievalMode);
   }
   return {
     queryCount: perQuery.length,
@@ -290,6 +305,7 @@ function buildOutcomeSummary(perQuery: readonly QueryEvaluation[]): RetrievalEva
     noEvidenceCount,
     expectedNoEvidenceCount,
     noEvidenceReasonCounts: Object.freeze({ ...noEvidenceReasonCounts }),
+    retrievalModeCounts: Object.freeze({ ...retrievalModeCounts }),
   };
 }
 

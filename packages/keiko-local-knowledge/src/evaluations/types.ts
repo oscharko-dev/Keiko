@@ -27,6 +27,7 @@ import type {
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  RetrievalDiagnostics,
   RetrievalNoEvidenceReason,
   RetrievalReference,
   RetrievalStrategy,
@@ -181,6 +182,12 @@ export interface RetrievalEvalOutcomeSummary {
   readonly noEvidenceCount: number;
   readonly expectedNoEvidenceCount: number;
   readonly noEvidenceReasonCounts: Readonly<Partial<Record<RetrievalNoEvidenceReason, number>>>;
+  // Counts of the production `RetrievalDiagnostics.mode` tag actually observed per query —
+  // "hybrid" | "dense-only" | "lexical-only" | "lexical-degraded". Redacted (an enum tag,
+  // never a body). This is the evidence the fused-mode comparison (#2010 fix) checks to
+  // prove a "fused" fixture's queries actually exercised BOTH retrieval legs at least once,
+  // rather than trusting the fixture's taxonomy label alone.
+  readonly retrievalModeCounts: Readonly<Partial<Record<RetrievalDiagnostics["mode"], number>>>;
 }
 
 export interface RetrievalEvalScorecard {

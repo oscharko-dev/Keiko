@@ -60,7 +60,8 @@ Post-merge audit note on 2026-07-06:
 - **#1926 — quality/leakage/release evidence gates.** SATISFIED. `check:grounded-retrieval-quality` gates a
   baseline path and a `reranker-off` control above floors, and proves non-tautology by forcing the
   `reranker-reversed` (deliberately bad reranker) and `embedding-flat` regressions below floors. Leakage is
-  proven by the transport and diagnostics redaction tests. This ledger is the closure-evidence artifact.
+  proven by the transport, diagnostics, and state-failure wire-payload redaction tests. This ledger is the
+  closure-evidence artifact.
 
 ## Post-merge audit findings and fixes
 
@@ -80,6 +81,13 @@ Post-merge audit note on 2026-07-06:
    `mode: "local-only"` under denial is a no-op (no local reranker runs), that a not-configured reranker is
    not a degradation, and the Knowledge-Pod vs hybrid budget split; added a code comment at
    `referenceRerankerForScope` that `localReranking` has no runtime consumer yet.
+4. **[fixed — security/redaction] State-failure context-pack label leakage.** A follow-up audit found that
+   not-ready/no-evidence state-failure answers already redacted `retrievalActivity` pod metadata but still
+   copied raw selected-scope and lifecycle labels into the wire `contextPack`. The fix applies the same
+   evidence-safe display fallback used by retrieval activity before setting `contextPack.scopeLabel`, and the
+   lifecycle summary now emits deterministic opaque IDs for unsafe legacy capsule identifiers. Regression
+   coverage now asserts the full grounded answer payload excludes email-shaped values, private paths, provider
+   endpoints, and token-shaped labels on this path.
 
 ## Verification log
 
@@ -124,6 +132,9 @@ schema, or Model Gateway behavior changed.
 - Pod policy is resolved and enforced before any provider document array is built; denied/empty/missing
   policy fails closed to `externalReranking: "deny"` (sealed-local default, deny-wins).
 - No sealed-pod candidate text can reach an external reranker on either the single-scope or hybrid path.
+- State-failure/no-evidence wire context packs use the retrieval-activity evidence-safe display fallback, and
+  lifecycle summaries hash unsafe legacy capsule identifiers, so unavailable pods cannot expose unsafe labels
+  or identifiers before retrieval.
 - The disjoint repository-file context-pack reranker operates on workspace `CandidateFile`s, never on
   policy-governed `KnowledgeCapsule` content, so it is correctly outside the pod-policy gate.
 

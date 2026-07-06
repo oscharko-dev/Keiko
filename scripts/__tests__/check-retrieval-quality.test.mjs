@@ -32,7 +32,7 @@ function budgetFile() {
   return { dir, path };
 }
 
-function scorecard(fixtureId, dimensions) {
+function scorecard(fixtureId, dimensions, retrievalModeCounts = {}) {
   return {
     fixtureId,
     runId: `eval-${fixtureId}`,
@@ -54,6 +54,7 @@ function scorecard(fixtureId, dimensions) {
       noEvidenceCount: 0,
       expectedNoEvidenceCount: 0,
       noEvidenceReasonCounts: {},
+      retrievalModeCounts,
     },
     passed: Object.values(dimensions).every((value) => value >= 1),
   };
@@ -129,10 +130,16 @@ describe("check-retrieval-quality helpers", () => {
       { id: "semantic-paraphrase" },
       { id: "mixed-strategy" },
     ];
+    // `mixed-strategy` maps to the "fused" row, which requires at least one query where both
+    // the lexical and dense lanes contributed ("hybrid" diagnostics mode) — see comparison.ts's
+    // fusion-evidence gate. Without it a perfect-recall scorecard alone would not be enough to
+    // prove fusion actually happened, matching what production reports for this fixture.
+    const retrievalModeCountsFor = (fixtureId) =>
+      fixtureId === "mixed-strategy" ? { hybrid: 1 } : {};
     const result = await runLocalKnowledgeQualityCheck(
       (line) => logs.push(line),
       fixtures,
-      (fixture) => Promise.resolve(scorecard(fixture.id, {})),
+      (fixture) => Promise.resolve(scorecard(fixture.id, {}, retrievalModeCountsFor(fixture.id))),
     );
 
     expect(result.ok).toBe(true);
@@ -142,6 +149,22 @@ describe("check-retrieval-quality helpers", () => {
     expect(logs.some((line) => line.includes("| lexical | exact-technical |"))).toBe(true);
     expect(logs.some((line) => line.includes("| vector | semantic-paraphrase |"))).toBe(true);
     expect(logs.some((line) => line.includes("| fused | mixed-strategy |"))).toBe(true);
+  });
+
+  it("fails the fused comparison row when no query shows genuine hybrid fusion", async () => {
+    const logs = [];
+    const fixtures = [{ id: "mixed-strategy" }];
+    const result = await runLocalKnowledgeQualityCheck(
+      (line) => logs.push(line),
+      fixtures,
+      (fixture) => Promise.resolve(scorecard(fixture.id, {}, { "dense-only": 1 })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(
+      logs.some((line) => line.includes("local-knowledge-retrieval-comparison failure: fused:")),
+    ).toBe(true);
+    expect(logs.some((line) => line.includes("hybrid-queries=0"))).toBe(true);
   });
 
   it("fails the aggregate gate when the Local Knowledge branch regresses", async () => {

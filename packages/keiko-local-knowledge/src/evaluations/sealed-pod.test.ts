@@ -61,4 +61,26 @@ describe("runRetrievalEval — sealed-pod governance fixture (#2011)", () => {
     expect(report).not.toContain("Restricted compliance dossier");
     expect(report).not.toContain("embargoed filings");
   });
+
+  // Regression for #2011 audit finding: the shipped fixture's query is deliberately
+  // lexically DISJOINT from the chunk body (see the fixture comment), so it can only ever
+  // prove the DENSE lane is gated. It cannot detect a policy gap in the lexical/BM25 lane.
+  // This variant swaps in a query that lexically matches the sealed chunk body verbatim —
+  // before the fix this returned `referenceCount: 1` (the sealed content leaking through
+  // the ungated lexical lane) instead of the required `policy-denied` no-evidence outcome.
+  it("also denies a lexically-matching query — the seal is not dense-lane-only", async () => {
+    const sealedChunk = sealedPodFixture.capsules[0]?.sources[0]?.documents[0]?.chunks[0];
+    if (sealedChunk === undefined) throw new Error("fixture is missing its sealed chunk");
+    const baseQuery = sealedPodFixture.queries[0];
+    if (baseQuery === undefined) throw new Error("fixture is missing its query");
+    const lexicallyMatching: RetrievalEvalFixture = {
+      ...sealedPodFixture,
+      id: "sealed-pod-lexical-match",
+      queries: [{ ...baseQuery, text: sealedChunk.text }],
+    };
+    const scorecard = await runRetrievalEval(lexicallyMatching);
+    expect(scorecard.outcomes.referenceCount).toBe(0);
+    expect(scorecard.dimensions.noEvidenceAccuracy).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
 });

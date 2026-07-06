@@ -581,7 +581,7 @@ function comparisonFailuresFor(comparison) {
 function formatComparisonFailure(row) {
   return `${row.mode}: fixtures=${row.fixtureIds.join(",")} floor-headroom=${row.floorHeadroom.toFixed(
     3,
-  )}`;
+  )} hybrid-queries=${String(row.hybridQueryCount)}`;
 }
 
 export async function runLocalKnowledgeQualityCheck(

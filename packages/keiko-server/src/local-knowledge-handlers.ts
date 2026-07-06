@@ -64,7 +64,7 @@ import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-  isSafeDisplaySummary,
+  isKnowledgePodEvidenceSafeText,
   isSafeQualityWarning,
   standardPodModelUsePolicy,
   validateCapsuleContextualRetrievalSettings,
@@ -1433,8 +1433,8 @@ function parseSourceId(ctx: RouteContext): KnowledgeSourceId {
 
 function requireSafeDisplayText(field: string, value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length === 0 || !isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest(`Field "${field}" must be a browser-safe non-empty string.`);
+  if (trimmed.length === 0 || !isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be an evidence-safe non-empty string.`);
   }
   return trimmed;
 }
@@ -1450,8 +1450,24 @@ function safeOptionalDisplayText(field: string, value: unknown): string | undefi
   if (trimmed.length === 0) {
     return undefined;
   }
-  if (!isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest(`Field "${field}" must be browser-safe when provided.`);
+  if (!isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be evidence-safe when provided.`);
+  }
+  return trimmed;
+}
+
+function requireEvidenceSafeDisplayText(field: string, value: string): string {
+  const trimmed = requireSafeDisplayText(field, value);
+  if (!isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be an evidence-safe non-empty string.`);
+  }
+  return trimmed;
+}
+
+function safeOptionalEvidenceDisplayText(field: string, value: unknown): string | undefined {
+  const trimmed = safeOptionalDisplayText(field, value);
+  if (trimmed !== undefined && !isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be evidence-safe when provided.`);
   }
   return trimmed;
 }
@@ -2056,6 +2072,18 @@ function redactCapsuleSetListForKnowledgePods(
   }));
 }
 
+function evidenceSafeCapsuleSetDisplayName(displayName: string): string {
+  return isKnowledgePodEvidenceSafeText(displayName) ? displayName : "Knowledge Pod Set";
+}
+
+function evidenceSafeCapsuleSetDescription(description: string | undefined): {
+  readonly description?: string;
+} {
+  return description !== undefined && isKnowledgePodEvidenceSafeText(description)
+    ? { description }
+    : {};
+}
+
 async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
   try {
     return await worker();
@@ -2117,7 +2145,7 @@ export async function handleListLocalKnowledgeCapsuleSets(
     try {
       const capsuleSets = listCapsuleSets(env.store).map((capsuleSet) => ({
         id: capsuleSet.id,
-        displayName: capsuleSet.displayName,
+        displayName: evidenceSafeCapsuleSetDisplayName(capsuleSet.displayName),
         capsuleCount: capsuleSet.capsuleIds.length,
         composedAt: capsuleSet.composedAt,
       }));
@@ -2170,9 +2198,9 @@ function parseCreateCapsuleSetInput(body: Record<string, unknown>): {
   if (typeof body.displayName !== "string") {
     throw new InvalidRequest('Field "displayName" must be a non-empty string.');
   }
-  const displayName = requireSafeDisplayText("displayName", body.displayName);
+  const displayName = requireEvidenceSafeDisplayText("displayName", body.displayName);
   const capsuleIds = parseSetCapsuleIds(body.capsuleIds);
-  const description = safeOptionalDisplayText("description", body.description);
+  const description = safeOptionalEvidenceDisplayText("description", body.description);
   return description === undefined
     ? { displayName, capsuleIds }
     : { displayName, description, capsuleIds };
@@ -2196,8 +2224,8 @@ export async function handleCreateLocalKnowledgeCapsuleSet(
         body: {
           capsuleSet: {
             id: set.id,
-            displayName: set.displayName,
-            ...(set.description !== undefined ? { description: set.description } : {}),
+            displayName: evidenceSafeCapsuleSetDisplayName(set.displayName),
+            ...evidenceSafeCapsuleSetDescription(set.description),
             capsuleIds: set.capsuleIds,
             capsuleCount: set.capsuleIds.length,
             composedAt: set.composedAt,
@@ -2249,8 +2277,8 @@ function parseDescriptionPatch(value: unknown): string | undefined {
     throw new InvalidRequest('Field "description" must be a string when provided.');
   }
   const trimmed = value.trim();
-  if (!isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest('Field "description" must be browser-safe when provided.');
+  if (!isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest('Field "description" must be evidence-safe when provided.');
   }
   return trimmed;
 }
@@ -2476,8 +2504,8 @@ function parseConnectSourceInput(body: Record<string, unknown>): {
     typeof displayNameRaw === "string" && displayNameRaw.trim().length > 0
       ? requireSafeDisplayText("displayName", displayNameRaw)
       : basename(connectScopeRootPath(scope));
-  if (!isSafeDisplaySummary(displayName)) {
-    throw new InvalidRequest('Field "displayName" must be browser-safe when provided.');
+  if (!isKnowledgePodEvidenceSafeText(displayName)) {
+    throw new InvalidRequest('Field "displayName" must be evidence-safe when provided.');
   }
   return { scope, displayName };
 }
