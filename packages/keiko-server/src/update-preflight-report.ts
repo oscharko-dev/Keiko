@@ -128,6 +128,7 @@ const MANUAL_BLOCKER_CODES = new Set<UpdatePreflightBlocker["code"]>([
   "portable-manifest-malformed",
   "portable-checksum-missing",
   "portable-checksum-mismatch",
+  "portable-sidecar-verification-failed",
 ]);
 
 function manualRequired(blockers: readonly UpdatePreflightBlocker[]): boolean {

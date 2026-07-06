@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
   type UpdateInstallMode,
+  type UpdatePortableSidecarSummary,
   type UpdatePortableStagingSummary,
   type UpdatePortableTarget,
   type UpdateSessionFailureReason,
@@ -150,6 +151,7 @@ export function portableStageSummary(input: {
   readonly target: UpdatePortableTarget;
   readonly sha256: string;
   readonly manifestSha256: string;
+  readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }): UpdatePortableStagingSummary {
   return {
     stageId: input.stageId,
@@ -162,5 +164,6 @@ export function portableStageSummary(input: {
     sizeBytes: input.archive.size,
     sha256: input.sha256,
     manifestSha256: input.manifestSha256,
+    ...(input.sidecarRuntimes.length > 0 ? { sidecarRuntimes: input.sidecarRuntimes } : {}),
   };
 }

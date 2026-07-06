@@ -32,6 +32,8 @@ import {
   type PortableUpdateStageInput,
   PortableUpdateStagingError,
 } from "./update-portable-staging-shared.js";
+import { type PortableSidecarRuntimeVerification } from "./update-portable-sidecar-verification.js";
+import { verifyStagedSidecarPayloads } from "./update-portable-sidecar-staging-verification.js";
 
 export function managedRootFromPackageRoot(
   target: UpdatePortableTarget,
@@ -306,6 +308,12 @@ function stagedLayout(
   };
 }
 
+function stagedResourceRoot(root: string, target: UpdatePortableTarget): string {
+  const payload = join(root, PORTABLE_PAYLOAD_ROOT);
+  if (target === "windows-x64") return payload;
+  return join(payload, "Keiko.app", "Contents", "Resources");
+}
+
 function validateStagedLayout(
   root: string,
   target: UpdatePortableTarget,
@@ -325,12 +333,17 @@ export async function stageArchiveBytes(input: {
   readonly target: UpdatePortableTarget;
   readonly targetVersion: string;
   readonly stageId: string;
+  readonly sidecars: readonly PortableSidecarRuntimeVerification[];
 }): Promise<void> {
   const finalRoot = stagingRoot(input.session, input.target, input.stageId);
   const workRoot = mkdtempSync(join(dirname(finalRoot), `${input.stageId}.tmp-`));
   try {
     await extractArchive(input.bytes, workRoot);
     validateStagedLayout(workRoot, input.target, input.targetVersion);
+    verifyStagedSidecarPayloads({
+      resourceRoot: stagedResourceRoot(workRoot, input.target),
+      sidecars: input.sidecars,
+    });
     rmSync(finalRoot, { recursive: true, force: true });
     renameSync(workRoot, finalRoot);
   } catch (error) {

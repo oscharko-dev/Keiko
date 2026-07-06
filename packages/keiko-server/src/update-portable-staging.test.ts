@@ -13,6 +13,7 @@ const RELEASE_ID = 987_654_321;
 const ASSET_ID = 42;
 const TARGET = "windows-x64";
 const ASSET_NAME = "keiko-windows-x64.zip";
+const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
 const tempRoots: string[] = [];
 
 const CRC32_TABLE: Uint32Array = ((): Uint32Array => {
@@ -133,6 +134,83 @@ function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
+function sidecarFiles(): readonly { readonly relativePath: string; readonly bytes: Uint8Array }[] {
+  return [
+    { relativePath: "LICENSE.txt", bytes: ENC.encode("sidecar license") },
+    { relativePath: "evidence/sbom.cdx.json", bytes: ENC.encode('{"bomFormat":"CycloneDX"}') },
+    { relativePath: "opencode.cmd", bytes: ENC.encode("@echo off\r\n") },
+  ];
+}
+
+function sidecarPayloadSha256(
+  files: readonly { readonly relativePath: string; readonly bytes: Uint8Array }[],
+): string {
+  const hash = createHash("sha256");
+  for (const file of [...files].sort((left, right) =>
+    left.relativePath < right.relativePath ? -1 : 1,
+  )) {
+    hash.update(`${file.relativePath}\0${sha256(file.bytes)}\0`);
+  }
+  return hash.digest("hex");
+}
+
+function sidecarArchiveEntries(
+  files: readonly { readonly relativePath: string; readonly bytes: Uint8Array }[],
+): readonly { readonly name: string; readonly bytes: Uint8Array }[] {
+  return files.map((file) => ({
+    name: `Keiko/${SIDECAR_ROOT}/${file.relativePath}`,
+    bytes: file.bytes,
+  }));
+}
+
+function sidecarFileSha256(
+  files: readonly { readonly relativePath: string; readonly bytes: Uint8Array }[],
+  relativePath: string,
+): string {
+  const file = files.find((candidate) => candidate.relativePath === relativePath);
+  if (file === undefined) throw new Error(`missing sidecar fixture file: ${relativePath}`);
+  return sha256(file.bytes);
+}
+
+function sidecarRuntime(
+  files: readonly { readonly relativePath: string; readonly bytes: Uint8Array }[],
+  payloadSha256 = sidecarPayloadSha256(files),
+): Record<string, unknown> {
+  return {
+    name: "opencode-compatible",
+    kind: "coding-runtime",
+    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    adapterCompatibility: {
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "1",
+      protocolVersion: "coding-sidecar-v1",
+    },
+    platformTarget: TARGET,
+    payloadRootPath: SIDECAR_ROOT,
+    executablePath: `${SIDECAR_ROOT}/opencode.cmd`,
+    payloadSha256,
+    sizeBytes: files.reduce((sum, file) => sum + file.bytes.length, 0),
+    licenseEvidence: {
+      path: `${SIDECAR_ROOT}/LICENSE.txt`,
+      sha256: sidecarFileSha256(files, "LICENSE.txt"),
+    },
+    sbomEvidence: {
+      path: `${SIDECAR_ROOT}/evidence/sbom.cdx.json`,
+      sha256: sidecarFileSha256(files, "evidence/sbom.cdx.json"),
+    },
+    signing: {
+      verificationPolicy: "production",
+      verificationStatus: "verified-production",
+      verificationReasonCodes: [],
+      signatureKind: "authenticode",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
+      verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+    },
+  };
+}
+
 function setupManifest(): string {
   return JSON.stringify({
     schemaVersion: 1,
@@ -215,7 +293,11 @@ function release(sizeBytes: number): Record<string, unknown> {
   };
 }
 
-function portableManifest(archiveBytes: Uint8Array, archiveSha = sha256(archiveBytes)): string {
+function portableManifest(
+  archiveBytes: Uint8Array,
+  archiveSha = sha256(archiveBytes),
+  sidecarRuntimes: readonly Record<string, unknown>[] = [],
+): string {
   return JSON.stringify({
     schemaVersion: 1,
     product: { name: "Keiko", packageName: "@oscharko-dev/keiko", packageVersion: TARGET_VERSION },
@@ -262,8 +344,10 @@ function portableManifest(archiveBytes: Uint8Array, archiveSha = sha256(archiveB
         packageVersion: TARGET_VERSION,
         archiveSha256: archiveSha,
         platformSignatureLocallyVerified: true,
+        ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
       },
     },
+    ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
     updateEligibility: {
       stableOnly: true,
       rollbackSupported: false,
@@ -354,6 +438,70 @@ describe("portable update staging", () => {
     expect(audit).toContain("portable-staging-result");
     expect(audit).not.toContain(install.root);
     expect(audit).not.toContain("https://github.com");
+  });
+
+  it("verifies bundled sidecar payloads and records content-free sidecar evidence", async () => {
+    const files = sidecarFiles();
+    const sidecar = sidecarRuntime(files);
+    const archive = portableArchive(sidecarArchiveEntries(files));
+    const install = makeManagedInstall();
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    const stager = createPortableUpdateStager({
+      env: {},
+      localState,
+      fetchImpl: responseFor(archive, portableManifest(archive, sha256(archive), [sidecar])),
+    });
+
+    const summary = await stager.stage({
+      sessionId: "session-sidecar",
+      targetVersion: TARGET_VERSION,
+      installMode: portableMode(),
+      runtimeFacts: { packageRoot: install.packageRoot },
+    });
+
+    expect(summary.sidecarRuntimes?.[0]).toMatchObject({
+      name: "opencode-compatible",
+      upstreamVersion: "1.0.0",
+      payloadSha256: sidecarPayloadSha256(files),
+      payloadSha256Prefix: sidecarPayloadSha256(files).slice(0, 12),
+      status: "verified",
+    });
+    const persisted = JSON.stringify(localState.readRuntimeState());
+    expect(persisted).not.toContain(SIDECAR_ROOT);
+    expect(persisted).not.toContain("opencode.cmd");
+    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
+    expect(audit).toContain("portable-sidecar-verification-result");
+    expect(audit).toContain("opencode-compatible");
+    expect(audit).toContain(sidecarPayloadSha256(files));
+    expect(audit).not.toContain(SIDECAR_ROOT);
+    expect(audit).not.toContain(install.root);
+  });
+
+  it("fails closed when staged sidecar payload digest does not match the manifest", async () => {
+    const files = sidecarFiles();
+    const sidecar = sidecarRuntime(files, "9".repeat(64));
+    const archive = portableArchive(sidecarArchiveEntries(files));
+    const install = makeManagedInstall();
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    const stager = createPortableUpdateStager({
+      env: {},
+      localState,
+      fetchImpl: responseFor(archive, portableManifest(archive, sha256(archive), [sidecar])),
+    });
+
+    await expect(
+      stager.stage({
+        sessionId: "session-sidecar-fail",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-sidecar-verification-failed" });
+    expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
+    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
+    expect(audit).toContain("sidecar-digest-mismatch");
+    expect(audit).not.toContain(SIDECAR_ROOT);
+    expect(audit).not.toContain(install.root);
   });
 
   it("fails closed when the archive hash no longer matches the verified manifest", async () => {

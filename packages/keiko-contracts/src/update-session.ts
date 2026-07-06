@@ -102,6 +102,43 @@ export interface UpdatePortableAssetSummary {
   readonly verificationStatus?: UpdatePortableAssetVerificationStatus | undefined;
 }
 
+export const UPDATE_PORTABLE_SIDECAR_VERIFICATION_STATUSES = ["verified", "failed"] as const;
+
+export type UpdatePortableSidecarVerificationStatus =
+  (typeof UPDATE_PORTABLE_SIDECAR_VERIFICATION_STATUSES)[number];
+
+export const UPDATE_PORTABLE_SIDECAR_FAILURE_CODES = [
+  "sidecar-metadata-malformed",
+  "sidecar-missing-required",
+  "sidecar-platform-mismatch",
+  "sidecar-payload-outside-root",
+  "sidecar-payload-missing",
+  "sidecar-digest-mismatch",
+  "sidecar-license-evidence-incomplete",
+  "sidecar-sbom-evidence-incomplete",
+  "sidecar-signing-unverified",
+  "sidecar-release-impact-binding-mismatch",
+] as const;
+
+export type UpdatePortableSidecarFailureCode =
+  (typeof UPDATE_PORTABLE_SIDECAR_FAILURE_CODES)[number];
+
+export interface UpdatePortableSidecarSummary {
+  readonly name: string;
+  readonly kind: string;
+  readonly upstreamName: string;
+  readonly upstreamVersion: string;
+  readonly adapterName: string;
+  readonly adapterVersion: string;
+  readonly protocolVersion: string;
+  readonly platformTarget: UpdatePortableTarget;
+  readonly payloadSha256: string;
+  readonly payloadSha256Prefix: string;
+  readonly sizeBytes: number;
+  readonly status: UpdatePortableSidecarVerificationStatus;
+  readonly failureCode?: UpdatePortableSidecarFailureCode | undefined;
+}
+
 export type UpdatePortableStagingStatus = "pending" | "staged" | "failed";
 
 export const UPDATE_PORTABLE_STAGING_STATUSES: readonly UpdatePortableStagingStatus[] =
@@ -122,6 +159,7 @@ export interface UpdatePortableStagingSummary {
   readonly sizeBytes: number;
   readonly sha256: string;
   readonly manifestSha256: string;
+  readonly sidecarRuntimes?: readonly UpdatePortableSidecarSummary[] | undefined;
 }
 
 export type UpdatePortableActivationStatus = "pending" | "activated" | "failed";
@@ -237,6 +275,7 @@ export type UpdateSessionFailureReason =
   | "portable-preflight-ineligible"
   | "portable-download-failed"
   | "portable-verification-failed"
+  | "portable-sidecar-verification-failed"
   | "portable-staging-failed"
   | "portable-activation-failed"
   | "portable-relaunch-failed"
@@ -255,6 +294,7 @@ export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason
   "portable-preflight-ineligible",
   "portable-download-failed",
   "portable-verification-failed",
+  "portable-sidecar-verification-failed",
   "portable-staging-failed",
   "portable-activation-failed",
   "portable-relaunch-failed",
