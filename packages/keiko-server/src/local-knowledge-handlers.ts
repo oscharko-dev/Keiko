@@ -79,6 +79,7 @@ import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
   Gateway,
+  assertCompatibleEmbeddingIdentity,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -304,6 +305,27 @@ interface ResolvedCapsuleEmbeddingProvider {
   readonly provider: ModelProviderConfig;
 }
 
+function usesLegacyProviderIdentity(identity: EmbeddingModelIdentity): boolean {
+  return !identity.provider.startsWith("openai-compatible:");
+}
+
+function embeddingIdentityChanged(
+  left: EmbeddingModelIdentity,
+  right: EmbeddingModelIdentity,
+): boolean {
+  return (
+    left.provider !== right.provider ||
+    left.modelId !== right.modelId ||
+    left.modelRevision !== right.modelRevision ||
+    left.vectorDimensions !== right.vectorDimensions ||
+    left.vectorMetric !== right.vectorMetric ||
+    left.normalization !== right.normalization ||
+    left.instructionVersion !== right.instructionVersion ||
+    left.embeddingSpaceFingerprint !== right.embeddingSpaceFingerprint ||
+    left.dimensionsParam !== right.dimensionsParam
+  );
+}
+
 function embeddingIdentityMatchesCapsuleAlias(
   stored: EmbeddingModelIdentity,
   current: EmbeddingModelIdentity,
@@ -363,7 +385,8 @@ async function resolveIndexingProviderForCapsule(
 ): Promise<ResolvedCapsuleEmbeddingProvider | undefined> {
   const exact = configuredProviderForCapsule(deps, capsule);
   if (exact !== undefined) {
-    return { capsule, provider: exact };
+    const verified = await updateCapsuleToCurrentEmbeddingIdentity(deps, store, capsule, exact);
+    return { capsule: verified, provider: exact };
   }
   const providers = configuredEmbeddingProviders(currentGatewayConfig(deps));
   for (const provider of providers) {
@@ -382,6 +405,22 @@ async function resolveIndexingProviderForCapsule(
     }
   }
   return undefined;
+}
+
+async function updateCapsuleToCurrentEmbeddingIdentity(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  provider: ModelProviderConfig,
+): Promise<KnowledgeCapsule> {
+  if (usesLegacyProviderIdentity(capsule.embeddingModelIdentity)) return capsule;
+  const identity = await probeConfiguredProviderForCapsule(deps, provider, capsule);
+  if (identity === undefined) return capsule;
+  const compatibility = assertCompatibleEmbeddingIdentity(capsule.embeddingModelIdentity, identity);
+  if (!compatibility.ok) return capsule;
+  return embeddingIdentityChanged(capsule.embeddingModelIdentity, compatibility.identity)
+    ? updateCapsuleEmbeddingModelIdentity(store, capsule.id, compatibility.identity)
+    : capsule;
 }
 
 function forceReembedProviderForCapsule(
