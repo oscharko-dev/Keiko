@@ -100,8 +100,8 @@ export const GIT_DELIVERY_PATHSPEC_CONTROL_CHAR = new RegExp("[\\u0000-\\u001f\\
 export const isContainedPathspec = (value: unknown): value is string => {
   if (typeof value !== "string" || value.length === 0) return false;
   if (GIT_DELIVERY_PATHSPEC_CONTROL_CHAR.test(value)) return false;
-  if (value.startsWith("-") || value.startsWith("/")) return false;
-  if (/^[A-Za-z]:[\\/]/.test(value)) return false; // Windows absolute
+  if (value.startsWith("-") || value.startsWith("/") || value.startsWith("\\")) return false;
+  if (/^[A-Za-z]:/u.test(value)) return false; // Windows drive-qualified
   const segments = value.split(/[\\/]+/);
   return !segments.includes("..");
 };
