@@ -1,6 +1,6 @@
 # Epic #1816 Retrieval Activity Acceptance Ledger
 
-Status: live coordination ledger for Epic
+Status: post-merge evidence ledger with preserved historical planning rows for Epic
 [#1816](https://github.com/oscharko-dev/Keiko/issues/1816) and child issues
 [#1832](https://github.com/oscharko-dev/Keiko/issues/1832),
 [#1833](https://github.com/oscharko-dev/Keiko/issues/1833),
@@ -28,6 +28,10 @@ Post-merge audit update on 2026-07-05:
 - The planning tables below are preserved as the initial coordination ledger. The current status is
   represented by this post-merge update, the implementation snapshot, the verification log, and the
   GitHub issue/PR evidence.
+- Historical table notice: rows below that say `planned`, `in progress`, `No implementation yet`,
+  or `Not run yet` are the pre-implementation planning record, not the current production state.
+  The post-merge update above is authoritative for the implemented and verified retrieval activity
+  surface.
 
 Fetched source-of-truth state on 2026-07-04:
 
