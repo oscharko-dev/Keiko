@@ -149,9 +149,10 @@ npm run arch:check:negative
 .keiko-scripts/audit-receipt.sh 1960 --findings 0 --user-facing false
 ```
 
-Final program QA in #1961 must re-run the integrated program evidence after the latest `dev` sync and
-must prove the complete first-run setup plus updater journey before any `dev` PR is marked ready for
-human review.
+Final program QA in #1961 is recorded in
+[Portable Product Delivery V2 Integrated QA](portable-product-delivery-v2-integrated-qa.md). It
+must re-run the integrated program evidence after the latest `dev` sync and prove the complete
+first-run setup plus updater journey before any `dev` PR is marked ready for human review.
 
 ## Known Limits And Follow-ups
 
