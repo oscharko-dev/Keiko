@@ -463,6 +463,8 @@ export const DE_MESSAGES = {
   "updates.notice.criticalTitle": "Kritisches Update verfuegbar",
   "updates.notice.body":
     "Version {version} kann geprueft werden. Keiko installiert sie nicht automatisch.",
+  "updates.notice.portableBody":
+    "Version {version} ist bereit. Oeffne Updates und klicke auf Update, wenn du bereit bist.",
   "updates.notice.review": "Update pruefen",
   "updates.notice.notNow": "Nicht jetzt",
   "updates.versionUnknown": "unbekannt",
@@ -485,6 +487,8 @@ export const DE_MESSAGES = {
   "updates.primary.title": "Empfohlene Aktion",
   "updates.primary.available":
     "Pruefe die Statusauswirkungen und installiere, wenn du bereit bist.",
+  "updates.primary.portableAvailable":
+    "Klicke auf Update. Keiko laedt herunter, prueft, wendet an, startet neu und prueft die neue Version.",
   "updates.primary.current": "Kein Update verfuegbar. Du kannst jederzeit erneut pruefen.",
   "updates.primary.unavailable":
     "Update-Verfuegbarkeit konnte nicht geprueft werden. Pruefe erneut, wenn die Registry erreichbar ist.",
@@ -500,6 +504,7 @@ export const DE_MESSAGES = {
   "updates.primary.restart": "Neustart und Pruefung schliessen das Update ab.",
   "updates.action.check": "Erneut pruefen",
   "updates.action.install": "Update installieren",
+  "updates.action.updatePortable": "Keiko aktualisieren",
   "updates.action.retry": "Update erneut versuchen",
   "updates.action.cancel": "Update abbrechen",
   "updates.action.verifyRestart": "Neustart pruefen",
@@ -583,11 +588,25 @@ export const DE_MESSAGES = {
   "updates.manual.finish":
     "Nachdem das manuelle Update abgeschlossen ist und Keiko neu gestartet wurde, hier verifizieren.",
   "updates.manual.releaseLink": "Versionshinweise oeffnen",
+  "updates.portableManual.title": "Portables Update braucht Aufmerksamkeit",
+  "updates.portableManual.body":
+    "Keiko kann dieses portable Update gerade nicht automatisch abschliessen. Die aktuelle Version bleibt nutzbar.",
+  "updates.portableManual.retry":
+    "Versuche es erneut, nachdem Netzwerk-, Release-Metadaten- oder lokale Installationsort-Probleme geloest sind.",
+  "updates.portableManual.current":
+    "Nutze die aktuelle Keiko-Version weiter; dieses Update hat sie nicht ersetzt.",
+  "updates.portableManual.details":
+    "Oeffne unten die technischen Details fuer den redigierten Grund, warum Keiko das Update blockiert.",
+  "updates.portableManual.download":
+    "Falls noetig, lade auf der Release-Seite das passende Plattform-Artefakt manuell herunter.",
+  "updates.portableManual.finish": "Pruefe nach dem Beheben des Problems von hier aus erneut.",
+  "updates.portableManual.releaseLink": "Manuellen Download oeffnen",
   "updates.patchNotes.summary": "Patch Notes",
   "updates.details.summary": "Technische Details und Logs",
   "updates.details.registry": "Registry",
   "updates.details.releaseMetadata": "Release-Metadaten",
   "updates.details.installMode": "Installationsmodus",
+  "updates.details.installModePortableManaged": "portable-managed",
   "updates.details.remediation": "Reparatur",
   "updates.details.installLog": "Installer-Ausgabe",
   "updates.actionStatus.notNeeded": "Nicht erforderlich",

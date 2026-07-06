@@ -17,7 +17,11 @@ import type {
 // GEN-PERF-CLI-001 — server/evidence graphs load at dispatch; module scope stays type-only.
 import { loadEvidence, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { renderApplyTerminal, renderUpdateStatus } from "./update-output.js";
+import {
+  isPortableManagedInstallMode,
+  renderApplyTerminal,
+  renderUpdateStatus,
+} from "./update-output.js";
 
 type ServerModule = typeof import("@oscharko-dev/keiko-server");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
@@ -187,8 +191,21 @@ function noUpdateApplyGuard(report: UpdatePreflightReport): string | undefined {
   return undefined;
 }
 
-function releaseEligibilityApplyGuard(report: UpdatePreflightReport): string | undefined {
+function portableApplyFallback(): string {
+  return [
+    "Use the Keiko update window to retry, review technical details,",
+    "keep using the current version, or download the latest Keiko release asset manually.",
+  ].join(" ");
+}
+
+function releaseEligibilityApplyGuard(
+  report: UpdatePreflightReport,
+  status: UpdateSessionStatus,
+): string | undefined {
   if (report.manualUpdateRequired || !report.oneClickEligible) {
+    if (isPortableManagedInstallMode(status.installMode)) {
+      return `This portable release asset is not eligible for automatic CLI apply. ${portableApplyFallback()}`;
+    }
     return "This release is not eligible for automatic CLI apply. Review the blockers and use the manual path.";
   }
   return undefined;
@@ -196,11 +213,27 @@ function releaseEligibilityApplyGuard(report: UpdatePreflightReport): string | u
 
 function policyApplyGuard(status: UpdateSessionStatus): string | undefined {
   if (status.policy.enabled) return undefined;
+  if (isPortableManagedInstallMode(status.installMode)) {
+    return `${status.policy.reason ?? "Portable self-update is disabled by policy."} ${portableApplyFallback()}`;
+  }
   return `${status.policy.reason ?? "Package mutation is disabled."} Use your package manager outside Keiko, then restart Keiko.`;
 }
 
 function installModeApplyGuard(status: UpdateSessionStatus): string | undefined {
   if (status.installMode.status === "supported") return undefined;
+  if (
+    isPortableManagedInstallMode(status.installMode) ||
+    status.installMode.installKind?.startsWith("portable-") === true
+  ) {
+    return (
+      status.installMode.manualInstructions ??
+      [
+        "Portable self-update is unavailable for this install.",
+        "Keep using the current version, choose a managed user-writable install location",
+        "when setup asks, or download the latest release asset manually.",
+      ].join(" ")
+    );
+  }
   return (
     status.installMode.manualInstructions ??
     "Automatic update is unavailable. Use your package manager outside Keiko, then restart Keiko."
@@ -226,7 +259,7 @@ function applyGuard(
     noUpdateApplyGuard(report) ??
     policyApplyGuard(status) ??
     installModeApplyGuard(status) ??
-    releaseEligibilityApplyGuard(report) ??
+    releaseEligibilityApplyGuard(report, status) ??
     remediationApplyGuard(remediation)
   );
 }
@@ -338,7 +371,7 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
     deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     deps.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
   );
-  writeLines(io, renderApplyTerminal(terminal));
+  writeLines(io, renderApplyTerminal(terminal, status));
   return successfulApply(terminal) ? 0 : 1;
 }
 
