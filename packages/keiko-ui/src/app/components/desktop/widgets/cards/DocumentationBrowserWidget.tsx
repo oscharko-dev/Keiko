@@ -4,17 +4,29 @@
 // inspecting local and intranet HTML manuals inside Keiko. It sends a target to the BFF
 // /api/docs-browser/navigate route, which classifies it and returns a redacted navigation outcome.
 //
-// This milestone is browser-only: the widget navigates and reports a precise governed state. It does
-// NOT crawl, index, capture, persist, or attach any manual to chat, and no copy implies otherwise.
-// Inline rendering of remote pages is intentionally deferred — Keiko's own CSP (frame-ancestors
-// 'none') blocks embedding and is not widened here.
+// Epic #1852 extends it into the consent boundary: for a proposal-eligible target the user can ask
+// Keiko to check whether it looks like an indexable HTML manual (POST /propose), review the bounded,
+// redacted scope preview, and give explicit consent to index it (POST /approve). It still does NOT
+// crawl, index, capture, persist, or attach any manual to chat; approving only records a redacted
+// consent handoff for a later governed indexing step. Inline rendering remains deferred — Keiko's own
+// CSP (frame-ancestors 'none') blocks embedding and is not widened here.
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import styles from "./DocumentationBrowserWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
-import { navigateDocumentation } from "../../../../../lib/docs-browser-api";
+import {
+  approveDocumentationIndexing,
+  navigateDocumentation,
+  proposeDocumentationIndexing,
+} from "../../../../../lib/docs-browser-api";
 import type {
+  DocumentationIndexingApproval,
+  DocumentationIndexingProposal,
+  DocumentationManualConfidence,
+  DocumentationManualDeniedLinkClass,
+  DocumentationManualProposalState,
+  DocumentationManualScopePreview,
   DocumentationNavigationReason,
   DocumentationNavigationResult,
   DocumentationReasonSeverity,
@@ -23,6 +35,11 @@ import type {
 interface DocumentationBrowserWidgetProps {
   /** Display hint for the location input default; not authoritative navigation state. */
   readonly target?: string;
+  /**
+   * Opens the Local Knowledge / Knowledge Pods surface. Supplied by the window host so an
+   * already-indexed manual can point the user at the existing pod instead of creating a duplicate.
+   */
+  readonly onOpenKnowledgePods?: (() => void) | undefined;
 }
 
 interface ErrorState {
@@ -119,6 +136,79 @@ const REASON_COPY: Readonly<Record<DocumentationNavigationReason, ReasonCopy>> =
   },
 };
 
+interface ProposalCopy {
+  readonly title: string;
+  readonly detail: string;
+}
+
+// UI copy for every proposal state (child issues #1868/#1869). Approvability is derived from the wire
+// shape (a scope preview is present only for approvable proposals), never re-computed here.
+const PROPOSAL_COPY: Readonly<Record<DocumentationManualProposalState, ProposalCopy>> = {
+  "not-evaluated": { title: "Not evaluated", detail: "Keiko has not checked this target yet." },
+  "likely-manual": {
+    title: "Looks like an indexable manual",
+    detail:
+      "Keiko recognized this as a static HTML manual. Review the scope below before approving.",
+  },
+  "probable-manual": {
+    title: "This may be an indexable manual",
+    detail: "Review the proposed scope carefully before approving — Keiko is not fully certain.",
+  },
+  "requires-local-file-approval": {
+    title: "Local manual — needs file access",
+    detail:
+      "This looks like a local HTML manual. Approving grants Keiko access to index it from your approved local file scope.",
+  },
+  unsupported: {
+    title: "Not offered for indexing",
+    detail:
+      "Keiko does not index this target class. Public sites and unsupported schemes are excluded.",
+  },
+  denied: {
+    title: "Cannot index this target",
+    detail: "The address was rejected. Keiko does not index credentialed targets.",
+  },
+  "authentication-required": {
+    title: "Sign-in required",
+    detail:
+      "This manual requires authentication Keiko will not collect. Open an accessible page instead.",
+  },
+  "already-indexed": {
+    title: "Already in a Knowledge Pod",
+    detail:
+      "A Knowledge Pod already covers this manual. Open the existing pod instead of creating a duplicate.",
+  },
+  degraded: {
+    title: "Not a static manual",
+    detail:
+      "This looks like a dynamic or action page. Try the manual's start page — for example its index.html.",
+  },
+};
+
+const CONFIDENCE_COPY: Readonly<Record<DocumentationManualConfidence, string>> = {
+  high: "High confidence",
+  medium: "Fair confidence",
+  low: "Low confidence — review carefully",
+  none: "",
+};
+
+const DENIED_LINK_CLASS_COPY: Readonly<Record<DocumentationManualDeniedLinkClass, string>> = {
+  "cross-origin": "other sites",
+  "outside-path-prefix": "pages outside this section",
+  "unsupported-scheme": "non-web links",
+  "credentialed-url": "links carrying credentials",
+  "path-traversal": "path-traversal links",
+};
+
+type IndexingPhase =
+  | { readonly kind: "idle" }
+  | { readonly kind: "proposing" }
+  | { readonly kind: "proposed"; readonly proposal: DocumentationIndexingProposal }
+  // "approving" renders only a busy spinner, so it carries no payload.
+  | { readonly kind: "approving" }
+  | { readonly kind: "approved"; readonly approval: DocumentationIndexingApproval }
+  | { readonly kind: "error"; readonly error: ErrorState };
+
 function errorFromUnknown(value: unknown): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
   if (value instanceof Error) return { code: "INTERNAL", message: value.message };
@@ -134,8 +224,131 @@ function targetLabel(result: DocumentationNavigationResult): string {
   return `${result.originSummary}${path === "/…" ? path : ""}`;
 }
 
-export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProps): ReactNode {
-  const [targetInput, setTargetInput] = useState<string>(props.target ?? "");
+function ScopePreviewView({
+  preview,
+}: {
+  readonly preview: DocumentationManualScopePreview;
+}): ReactNode {
+  const denied = preview.deniedLinkClasses.map((cls) => DENIED_LINK_CLASS_COPY[cls]).join(", ");
+  return (
+    <dl className="db-scope">
+      <div className="db-scope-row">
+        <dt>Knowledge Pod name</dt>
+        <dd className="mono">{preview.proposedPodName}</dd>
+      </div>
+      <div className="db-scope-row">
+        <dt>Scope</dt>
+        <dd className="mono">
+          {preview.originSummary}
+          {preview.pathPrefixSummary === null ? "" : preview.pathPrefixSummary}
+        </dd>
+      </div>
+      <div className="db-scope-row">
+        <dt>Limits</dt>
+        <dd>
+          up to {preview.limits.maxPages} pages, depth {preview.limits.maxDepth}, no redirects
+        </dd>
+      </div>
+      <div className="db-scope-row">
+        <dt>Pages</dt>
+        <dd>Not yet sampled — counted during indexing.</dd>
+      </div>
+      <div className="db-scope-row">
+        <dt>Excluded</dt>
+        <dd>{denied}</dd>
+      </div>
+      {preview.robotsPosture === "honor-robots-txt" ? (
+        <div className="db-scope-row">
+          <dt>Robots</dt>
+          <dd>Keiko will honor the site's robots.txt.</dd>
+        </div>
+      ) : null}
+    </dl>
+  );
+}
+
+function ProposalPanel(props: {
+  readonly proposal: DocumentationIndexingProposal;
+  readonly busy: boolean;
+  readonly onApprove: () => void;
+  readonly onCancel: () => void;
+  readonly onOpenKnowledgePods?: (() => void) | undefined;
+}): ReactNode {
+  const { proposal } = props;
+  const copy = PROPOSAL_COPY[proposal.state];
+  const confidence = CONFIDENCE_COPY[proposal.confidence];
+  const approvable = proposal.scopePreview !== null;
+  const showOpenPods =
+    proposal.alreadyIndexedPodId !== null && props.onOpenKnowledgePods !== undefined;
+  return (
+    <div className="db-proposal">
+      <h3 className="db-proposal-title">{copy.title}</h3>
+      <p className="db-proposal-detail">{copy.detail}</p>
+      {confidence.length > 0 ? <p className="db-proposal-confidence">{confidence}</p> : null}
+      {proposal.scopePreview !== null ? <ScopePreviewView preview={proposal.scopePreview} /> : null}
+      {proposal.alreadyIndexedPodId !== null ? (
+        <p className="db-proposal-detail">
+          Existing pod reference: <span className="mono">{proposal.alreadyIndexedPodId}</span>
+        </p>
+      ) : null}
+      <div className="db-consent-actions" role="group" aria-label="Indexing consent">
+        {approvable ? (
+          <button
+            type="button"
+            className="db-btn db-btn-primary"
+            onClick={props.onApprove}
+            aria-disabled={props.busy}
+            disabled={props.busy}
+          >
+            Create Knowledge Pod from this manual
+          </button>
+        ) : null}
+        {showOpenPods ? (
+          <button type="button" className="db-btn" onClick={props.onOpenKnowledgePods}>
+            View your Knowledge Pods
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="db-btn"
+          onClick={props.onCancel}
+          aria-disabled={props.busy}
+          disabled={props.busy}
+        >
+          {approvable ? "Cancel" : "Dismiss"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ApprovedPanel({
+  approval,
+}: {
+  readonly approval: DocumentationIndexingApproval;
+}): ReactNode {
+  return (
+    <div className="db-proposal db-state-ready">
+      <h3 className="db-proposal-title">Approved for indexing</h3>
+      <p className="db-proposal-detail">
+        Keiko will index <span className="mono">{approval.proposedPodName}</span> through the
+        governed local indexing pipeline. Nothing has been crawled yet; indexing runs as a separate
+        governed step and stays on this device.
+      </p>
+    </div>
+  );
+}
+
+function useDocumentationNavigation(initialTarget: string): {
+  readonly targetInput: string;
+  readonly setTargetInput: (value: string) => void;
+  readonly working: boolean;
+  readonly result: DocumentationNavigationResult | null;
+  readonly error: ErrorState | null;
+  readonly lastTarget: string | null;
+  readonly runNavigate: (raw: string) => Promise<void>;
+} {
+  const [targetInput, setTargetInput] = useState<string>(initialTarget);
   const [working, setWorking] = useState<boolean>(false);
   const [result, setResult] = useState<DocumentationNavigationResult | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
@@ -148,7 +361,6 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
       return;
     }
     setError(null);
-    // Clear the previous outcome up front so a failed navigation never leaves stale loaded state.
     setResult(null);
     setWorking(true);
     try {
@@ -162,26 +374,89 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
     }
   }, []);
 
+  return { targetInput, setTargetInput, working, result, error, lastTarget, runNavigate };
+}
+
+function announce(
+  working: boolean,
+  targetInput: string,
+  error: ErrorState | null,
+  copy: ReasonCopy | null,
+): string {
+  if (working && targetInput.trim().length > 0) return "Opening documentation…";
+  if (error !== null) return error.message;
+  return copy !== null ? `${copy.title}. ${copy.detail}` : "";
+}
+
+export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProps): ReactNode {
+  const nav = useDocumentationNavigation(props.target ?? "");
+  const [indexing, setIndexing] = useState<IndexingPhase>({ kind: "idle" });
+  // Synchronous re-entry guard: a rapid double-click can fire an indexing handler again before the
+  // "proposing"/"approving" state has flushed and disabled the button, which would send a second
+  // propose/approve request. The ref bails out immediately regardless of render timing.
+  const indexingBusyRef = useRef<boolean>(false);
+
+  const runNavigate = useCallback(
+    async (raw: string): Promise<void> => {
+      setIndexing({ kind: "idle" });
+      await nav.runNavigate(raw);
+    },
+    [nav],
+  );
+
   const handleOpen = useCallback((): void => {
-    if (working) return;
-    void runNavigate(targetInput);
-  }, [working, targetInput, runNavigate]);
+    if (nav.working) return;
+    void runNavigate(nav.targetInput);
+  }, [nav.working, nav.targetInput, runNavigate]);
 
   const handleReload = useCallback((): void => {
-    if (working || lastTarget === null) return;
-    void runNavigate(lastTarget);
-  }, [working, lastTarget, runNavigate]);
+    if (nav.working || nav.lastTarget === null) return;
+    void runNavigate(nav.lastTarget);
+  }, [nav.working, nav.lastTarget, runNavigate]);
 
-  const reloadDisabled = working || lastTarget === null;
-  const copy = result === null ? null : REASON_COPY[result.reason];
-  const announcement =
-    working && targetInput.trim().length > 0
-      ? "Opening documentation…"
-      : error !== null
-        ? error.message
-        : copy !== null
-          ? `${copy.title}. ${copy.detail}`
-          : "";
+  const runIndexingCall = useCallback(
+    async <T,>(
+      call: (target: string) => Promise<T>,
+      onOk: (value: T) => IndexingPhase,
+      pending: IndexingPhase,
+    ): Promise<void> => {
+      if (nav.lastTarget === null || indexingBusyRef.current) return;
+      indexingBusyRef.current = true;
+      setIndexing(pending);
+      try {
+        setIndexing(onOk(await call(nav.lastTarget)));
+      } catch (err) {
+        setIndexing({ kind: "error", error: errorFromUnknown(err) });
+      } finally {
+        indexingBusyRef.current = false;
+      }
+    },
+    [nav.lastTarget],
+  );
+
+  const handlePrepare = useCallback((): void => {
+    void runIndexingCall(
+      proposeDocumentationIndexing,
+      (proposal) => ({ kind: "proposed", proposal }),
+      { kind: "proposing" },
+    );
+  }, [runIndexingCall]);
+
+  const handleApprove = useCallback((): void => {
+    void runIndexingCall(
+      approveDocumentationIndexing,
+      (approval) => ({ kind: "approved", approval }),
+      { kind: "approving" },
+    );
+  }, [runIndexingCall]);
+
+  const handleCancel = useCallback((): void => setIndexing({ kind: "idle" }), []);
+
+  const reloadDisabled = nav.working || nav.lastTarget === null;
+  const copy = nav.result === null ? null : REASON_COPY[nav.result.reason];
+  const proposalEligible = nav.result?.capability.indexingProposalAvailable ?? false;
+  const indexingBusy = indexing.kind === "proposing" || indexing.kind === "approving";
+  const announcement = announce(nav.working, nav.targetInput, nav.error, copy);
 
   return (
     <div className={`docbrowser ${styles.lazyWidgetScope}`}>
@@ -190,11 +465,11 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
           className="db-dot"
           style={{
             background:
-              result === null
+              nav.result === null
                 ? "var(--line-strong)"
-                : result.severity === "ready"
+                : nav.result.severity === "ready"
                   ? "var(--ok)"
-                  : result.severity === "error"
+                  : nav.result.severity === "error"
                     ? "var(--danger)"
                     : "var(--line-strong)",
           }}
@@ -205,13 +480,13 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
           <input
             type="text"
             className="db-input"
-            value={targetInput}
+            value={nav.targetInput}
             placeholder="https://intranet/handbook or file:///…"
-            onChange={(e): void => setTargetInput(e.target.value)}
+            onChange={(e): void => nav.setTargetInput(e.target.value)}
             onKeyDown={(e): void => {
               if (e.key === "Enter") handleOpen();
             }}
-            disabled={working}
+            disabled={nav.working}
           />
         </label>
         <div className="db-actions" role="group" aria-label="Documentation navigation">
@@ -219,7 +494,7 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
             type="button"
             className="db-btn db-btn-primary"
             onClick={handleOpen}
-            aria-disabled={working}
+            aria-disabled={nav.working}
           >
             Open
           </button>
@@ -239,26 +514,26 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
         {announcement}
       </p>
 
-      {result !== null ? (
+      {nav.result !== null ? (
         <p className="db-target">
-          Current target: <span className="mono">{targetLabel(result)}</span>
+          Current target: <span className="mono">{targetLabel(nav.result)}</span>
         </p>
       ) : null}
 
-      {error !== null ? (
+      {nav.error !== null ? (
         <div className="db-error" role="alert">
-          {error.message} <span className="err-code mono">({error.code})</span>
+          {nav.error.message} <span className="err-code mono">({nav.error.code})</span>
         </div>
       ) : null}
 
       <div className="db-view">
-        {working ? (
+        {nav.working ? (
           <>
             <div className="ph-stripes" aria-hidden="true" />
             <div className="db-overlay mono">Opening documentation…</div>
           </>
-        ) : copy !== null && result !== null ? (
-          <div className={`db-state ${severityClass(result.severity)}`}>
+        ) : copy !== null && nav.result !== null ? (
+          <div className={`db-state ${severityClass(nav.result.severity)}`}>
             <h3 className="db-state-title">{copy.title}</h3>
             <p className="db-state-detail">{copy.detail}</p>
             {copy.action !== null ? <p className="db-state-action">{copy.action}</p> : null}
@@ -273,14 +548,56 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
         )}
       </div>
 
-      {/* Indexing is a later, separately governed milestone. The affordance is shown but disabled so
-          the surface never implies a manual has been crawled, indexed, or attached to chat. */}
+      {/* Indexing is explicit and consent-gated. The affordance is enabled only for a proposal-eligible
+          target; it never implies a manual has been crawled, indexed, or attached to chat. */}
       <div className="db-future">
-        <button type="button" className="db-btn db-btn-ghost" aria-disabled={true} disabled>
+        <button
+          type="button"
+          className="db-btn db-btn-ghost"
+          onClick={handlePrepare}
+          aria-disabled={!proposalEligible || indexingBusy}
+          disabled={!proposalEligible || indexingBusy}
+        >
           Prepare for indexing
         </button>
-        <span className="db-future-note">Indexing arrives in a later Keiko release.</span>
+        <span className="db-future-note">
+          {proposalEligible
+            ? "Check whether this looks like an indexable manual — you approve before anything is indexed."
+            : "Open a local or intranet manual to check whether it can be indexed."}
+        </span>
       </div>
+
+      {indexing.kind === "proposing" || indexing.kind === "approving" ? (
+        <div className="db-indexing" role="status" aria-live="polite">
+          <span className="mono">
+            {indexing.kind === "proposing" ? "Checking for a manual…" : "Recording your consent…"}
+          </span>
+        </div>
+      ) : null}
+
+      {indexing.kind === "proposed" ? (
+        <div className="db-indexing" role="region" aria-label="Indexing proposal">
+          <ProposalPanel
+            proposal={indexing.proposal}
+            busy={indexingBusy}
+            onApprove={handleApprove}
+            onCancel={handleCancel}
+            onOpenKnowledgePods={props.onOpenKnowledgePods}
+          />
+        </div>
+      ) : null}
+
+      {indexing.kind === "approved" ? (
+        <div className="db-indexing" role="region" aria-label="Indexing proposal">
+          <ApprovedPanel approval={indexing.approval} />
+        </div>
+      ) : null}
+
+      {indexing.kind === "error" ? (
+        <div className="db-indexing db-error" role="alert">
+          {indexing.error.message} <span className="err-code mono">({indexing.error.code})</span>
+        </div>
+      ) : null}
     </div>
   );
 }

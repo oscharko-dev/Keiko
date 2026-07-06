@@ -182,6 +182,11 @@ export interface KnowledgePodSummary {
   readonly compatibility: KnowledgePodCompatibilitySummary;
   readonly updatedAt: number;
   readonly degradationReasons: readonly string[];
+  // Optional, content-free fingerprint of the manual source root this pod was indexed from (Epic
+  // #1852). Present only for pods created from an approved HTML manual proposal; it lets the governed
+  // documentation browser detect an already-indexed manual without exposing any raw path/URL. It is a
+  // hash, never a path. Absent for every pod not backed by an HTML manual source.
+  readonly manualSourceFingerprint?: string;
 }
 
 export interface LocalKnowledgeCapsuleListEntry {
@@ -228,6 +233,7 @@ const SUMMARY_KEYS = [
   "compatibility",
   "updatedAt",
   "degradationReasons",
+  "manualSourceFingerprint",
 ] as const;
 
 const COUNT_KEYS = ["capsuleCount", "sourceCount", "documentCount", "chunkCount", "vectorCount"];
@@ -999,6 +1005,11 @@ function validateSummaryScalars(input: Record<string, unknown>, errors: string[]
   }
   validateLifecycleState(input.lifecycleState, errors);
   validateUpdatedAt(input.updatedAt, errors);
+  validateOptionalSafeText(
+    input.manualSourceFingerprint,
+    "summary.manualSourceFingerprint",
+    errors,
+  );
 }
 
 function validateUpdatedAt(value: unknown, errors: string[]): void {

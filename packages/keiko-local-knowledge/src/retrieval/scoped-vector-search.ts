@@ -866,6 +866,7 @@ async function embedQueryFor(
     modelId: identity.modelId,
     input: shapeEmbeddingQuery(identity, text),
     ...(identity.dimensionsParam !== undefined ? { dimensions: identity.dimensionsParam } : {}),
+    ...(adapter.egress !== undefined ? { egress: adapter.egress } : {}),
     ...(signal !== undefined ? { signal } : {}),
   });
   if (!outcome.ok) {
@@ -944,6 +945,7 @@ interface DenseCandidate {
   readonly chunkId: string;
   readonly capsuleId: KnowledgeCapsuleId;
   readonly laneId: string;
+  readonly laneKey: string;
   readonly score: number;
 }
 
@@ -1015,6 +1017,7 @@ function scoreCapsuleVectors(
   rows: readonly DecodedVectorRow[],
   capsule: KnowledgeCapsule,
   laneId: string,
+  laneKey: string,
   queryVector: Float32Array,
   candidateLimit: number,
   minScore: number | undefined,
@@ -1039,7 +1042,7 @@ function scoreCapsuleVectors(
     sawDimensionCompatible = true;
     const score = scoreFor(metric, queryVector, row.vector);
     if (minScore !== undefined && score < minScore) continue;
-    scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, laneId, score });
+    scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, laneId, laneKey, score });
   }
   scored.sort(scoreDesc);
   return {
@@ -1536,9 +1539,9 @@ function fuseCandidates(
 function denseCandidateLanes(candidates: readonly DenseCandidate[]): readonly DenseCandidate[][] {
   const byLane = new Map<string, DenseCandidate[]>();
   for (const candidate of dedupeDenseCandidates(candidates)) {
-    const bucket = byLane.get(candidate.laneId);
+    const bucket = byLane.get(candidate.laneKey);
     if (bucket === undefined) {
-      byLane.set(candidate.laneId, [candidate]);
+      byLane.set(candidate.laneKey, [candidate]);
     } else {
       bucket.push(candidate);
     }
@@ -1551,7 +1554,7 @@ function denseCandidateLanes(candidates: readonly DenseCandidate[]): readonly De
 function dedupeDenseCandidates(candidates: readonly DenseCandidate[]): readonly DenseCandidate[] {
   const byKey = new Map<string, DenseCandidate>();
   for (const candidate of candidates) {
-    const key = `${candidate.laneId}|${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    const key = `${candidate.laneKey}|${String(candidate.capsuleId)}|${candidate.chunkId}`;
     const existing = byKey.get(key);
     if (existing === undefined || candidate.score > existing.score) byKey.set(key, candidate);
   }
@@ -1701,6 +1704,7 @@ interface SearchState {
 
 interface EmbeddingLaneState {
   readonly laneId: string;
+  readonly laneKey: string;
   readonly capsuleIds: Set<string>;
   status: RetrievalEmbeddingLaneStatus;
   queryEmbeddingRequested: boolean;
@@ -1725,21 +1729,23 @@ function emptyState(): SearchState {
 }
 
 function laneStateFor(state: SearchState, capsule: KnowledgeCapsule): EmbeddingLaneState {
+  const laneKey = identityKey(capsule.embeddingModelIdentity);
   const laneId = embeddingLaneId(capsule.embeddingModelIdentity);
-  const existing = state.lanes.get(laneId);
+  const existing = state.lanes.get(laneKey);
   if (existing !== undefined) {
     existing.capsuleIds.add(String(capsule.id));
     return existing;
   }
   const created: EmbeddingLaneState = {
     laneId,
+    laneKey,
     capsuleIds: new Set([String(capsule.id)]),
     status: "no-vectors",
     queryEmbeddingRequested: false,
     vectorCount: 0,
     denseCandidateCount: 0,
   };
-  state.lanes.set(laneId, created);
+  state.lanes.set(laneKey, created);
   return created;
 }
 
@@ -1893,6 +1899,7 @@ function denseCandidatesFromVectorIndex(
   candidates: readonly VectorIndexCandidate[],
   capsule: KnowledgeCapsule,
   laneId: string,
+  laneKey: string,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): readonly DenseCandidate[] {
   const allowedSources =
@@ -1912,6 +1919,7 @@ function denseCandidatesFromVectorIndex(
       chunkId: candidate.chunkId,
       capsuleId: capsule.id,
       laneId,
+      laneKey,
       score: candidate.score,
     });
   }
@@ -1954,6 +1962,7 @@ function tryVectorIndexForCapsule(
     indexed.candidates,
     capsule,
     lane.laneId,
+    lane.laneKey,
     sourceFilter,
   );
   lane.denseCandidateCount += candidates.length;
@@ -2043,6 +2052,7 @@ async function processCapsule(
       annRows,
       capsule,
       lane.laneId,
+      lane.laneKey,
       queryEmbedding.embedded.vector,
       oversampleTopK(options.topK, profile),
       options.minScore,
@@ -2060,6 +2070,7 @@ async function processCapsule(
     rows,
     capsule,
     lane.laneId,
+    lane.laneKey,
     queryEmbedding.embedded.vector,
     oversampleTopK(options.topK, profile),
     options.minScore,

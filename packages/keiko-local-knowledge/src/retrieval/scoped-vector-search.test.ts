@@ -19,7 +19,11 @@ import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
-import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  OpenAIEmbeddingAdapter,
+  OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import {
@@ -397,6 +401,43 @@ describe("searchVectorsForScope — composed capsule set", () => {
     expect(outcome.noEvidenceReason).toBe("policy-denied");
   });
 
+  it("preserves configured gateway egress on the actual query embedding request", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-egress",
+      sourceId: "src-egress",
+      documentId: "doc-egress",
+      text: "alpha beta gamma delta",
+      modelUsePolicy: standardPodModelUsePolicy(),
+    });
+    const egress = { allowPrivateNetwork: true } as const;
+    const requests: OpenAIEmbeddingRequest[] = [];
+    const base = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, deterministicVector(req.input, 1536)),
+    });
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...base,
+      egress,
+      request: async (req): Promise<OpenAIEmbeddingOutcome> => {
+        requests.push(req);
+        return base.request(req);
+      },
+    };
+
+    await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-egress" as KnowledgeCapsuleId] },
+      "query requiring egress policy",
+      { topK: 1 },
+    );
+
+    const queryRequest = requests.find((req) => !isEmbeddingCapabilityProbe(req.input));
+    expect(queryRequest).toBeDefined();
+    expect(queryRequest?.egress).toBe(egress);
+  });
+
   it("uses lane-local dense ranks before fusing incompatible raw score spaces", async () => {
     const { store } = getFixture();
     const identityA: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-a" };
@@ -489,6 +530,100 @@ describe("searchVectorsForScope — composed capsule set", () => {
       "searched",
       "searched",
     ]);
+  });
+
+  it("keeps hash-colliding display lane ids separate by canonical identity", async () => {
+    const { store } = getFixture();
+    const identityA: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "collision-model-01wl8",
+    };
+    const identityB: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "collision-model-0yqd6",
+    };
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-collision-a",
+      sourceId: "src-collision-a",
+      documentId: "doc-collision-a",
+      identity: identityA,
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-collision-b",
+      sourceId: "src-collision-b",
+      documentId: "doc-collision-b",
+      identity: identityB,
+      text: "epsilon zeta eta theta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const aChunk = seededA.chunkIds[0];
+    const bFirst = seededB.chunkIds[0];
+    const bSecond = seededB.chunkIds[1];
+    if (aChunk === undefined || bFirst === undefined || bSecond === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id IN (:a, :b)")
+      .run({ a: String(seededA.capsuleId), b: String(seededB.capsuleId) });
+    const indexed: VectorIndexAdapter = {
+      searchCapsule: (request) => ({
+        ok: true,
+        candidates:
+          String(request.capsule.id) === "cap-collision-a"
+            ? [
+                {
+                  chunkId: String(aChunk),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededA.sourceId,
+                  score: 0.1,
+                },
+              ]
+            : [
+                {
+                  chunkId: String(bFirst),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededB.sourceId,
+                  score: 0.99,
+                },
+                {
+                  chunkId: String(bSecond),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededB.sourceId,
+                  score: 0.98,
+                },
+              ],
+        sawDimensionCompatible: true,
+        sawIdentityIncompatible: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "available",
+          indexName: "hash-collision-test-index",
+          vectorCount: 1,
+        },
+      }),
+    };
+    const embeddingAdapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      embeddingAdapter,
+      { capsuleIds: [seededA.capsuleId, seededB.capsuleId] },
+      "hash collision lane query",
+      { topK: 2, vectorIndex: { adapter: indexed } },
+    );
+
+    expect(outcome.diagnostics.embeddingLaneCount).toBe(2);
+    expect(new Set(outcome.diagnostics.embeddingLanes?.map((lane) => lane.laneId))).toEqual(
+      new Set(["embedding-lane-1245e5ed"]),
+    );
+    expect(new Set(outcome.references.map((ref) => String(ref.capsuleId)))).toEqual(
+      new Set(["cap-collision-a", "cap-collision-b"]),
+    );
   });
 
   it("breaks a full cross-lane RRF tie deterministically and stably by chunk id", async () => {

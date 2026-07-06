@@ -116,11 +116,16 @@ function classificationFailureReason(
   return reason === "unsupported-scheme" ? "unsupported-scheme" : "invalid-target";
 }
 
-type BodyOutcome =
+export type DocsBrowserBodyOutcome =
   | { readonly ok: true; readonly body: Record<string, unknown> }
   | { readonly ok: false; readonly error: RouteResult };
 
-async function readNavigationBody(ctx: RouteContext): Promise<BodyOutcome> {
+/**
+ * Read and JSON-parse a docs-browser request body at the BFF trust boundary, capping the size and
+ * mapping a too-large/invalid body to a redacted 413/400 outcome. Shared by the navigate route and the
+ * Epic #1852 proposal/approval routes so the body-safety boundary cannot drift.
+ */
+export async function readDocsBrowserJsonBody(ctx: RouteContext): Promise<DocsBrowserBodyOutcome> {
   try {
     return { ok: true, body: await readJsonObject(ctx.req) };
   } catch (error) {
@@ -160,7 +165,7 @@ export async function handleDocsBrowserNavigate(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const read = await readNavigationBody(ctx);
+  const read = await readDocsBrowserJsonBody(ctx);
   if (!read.ok) return read.error;
   const parsed = parseDocumentationNavigationRequest(read.body);
   if (!parsed.ok) {
