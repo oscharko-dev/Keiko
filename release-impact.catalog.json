@@ -491,8 +491,8 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-07-06",
         "humanApproved": true,
-        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#1996#4890562769",
-        "rationale": "Issue #1996 records the user-visible regression and the local release-owner decision to ship an immediate 0.2.14 patch after reproducing the failure and verifying the fix against a copied affected Local Knowledge store."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
+        "rationale": "Issue #1996 records the user-visible regression and the local release-owner decision to ship an immediate 0.2.14 patch after reproducing the failure and verifying the fix against a copied affected Local Knowledge store; release-owner authority is recorded in PR review #4618551973 and 0.2.14 publication was explicitly authorized locally in this Codex session."
       }
     }
   ]
