@@ -56,6 +56,37 @@ export function isManualUpdatePath(
   );
 }
 
+export function isPortableManagedInstall(session: UpdateSessionStatus): boolean {
+  const mode = session.installMode;
+  return (
+    mode.installKind === "portable-managed" ||
+    mode.recommendedAction === "portable-managed-update" ||
+    mode.portable?.status === "managed"
+  );
+}
+
+export function isPortableManagedOneClickPath(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+): boolean {
+  return (
+    report.updateAvailable &&
+    report.oneClickEligible &&
+    report.installabilitySource === "github-release-asset" &&
+    report.portableAsset?.status === "eligible" &&
+    session.policy.enabled &&
+    session.installMode.status === "supported" &&
+    isPortableManagedInstall(session)
+  );
+}
+
+export function isPortableManagedManualPath(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+): boolean {
+  return isManualUpdatePath(report, session) && isPortableManagedInstall(session);
+}
+
 export function isUpdateCheckUnavailable(report: UpdatePreflightReport): boolean {
   return report.status === "degraded" && !report.updateAvailable;
 }

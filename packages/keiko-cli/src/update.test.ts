@@ -100,6 +100,28 @@ function baseStatus(patch: Partial<UpdateSessionStatus> = {}): UpdateSessionStat
   };
 }
 
+function portableStatus(patch: Partial<UpdateSessionStatus> = {}): UpdateSessionStatus {
+  return baseStatus({
+    installMode: {
+      schemaVersion: "1",
+      status: "supported",
+      packageName: "@oscharko-dev/keiko",
+      installKind: "portable-managed",
+      installRoot: "/Users/private/Keiko",
+      recommendedAction: "portable-managed-update",
+      portable: {
+        status: "managed",
+        target: "windows-x64",
+        updateEligible: true,
+        packageVersion: "0.2.10",
+        stable: true,
+        managedRootKind: "home-relative",
+      },
+    },
+    ...patch,
+  });
+}
+
 function updateSession(patch: Partial<UpdateSession> = {}): UpdateSession {
   return {
     schemaVersion: "1",
@@ -273,6 +295,23 @@ describe("keiko update CLI", () => {
     expect(output(c)).not.toContain("raw package-manager");
   });
 
+  it("prints portable-managed status without package-manager fallback instructions", async () => {
+    const c = makeIo();
+    const preflight = fakePreflight(baseReport({ installabilitySource: "github-release-asset" }));
+    const session = fakeSessionManager(portableStatus());
+    const code = await runUpdate(["status"], c, {
+      preflight: preflight.preflight,
+      session: session.manager,
+      remediation: fakeRemediation(),
+    });
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Install mode: supported (portable-managed (windows-x64))");
+    expect(c.out()).toContain("Manual instructions: not required");
+    expect(output(c)).not.toContain("Use your package manager outside Keiko");
+    expect(output(c)).not.toContain("unknown package manager");
+  });
+
   it("uses a fresh manual check for update check", async () => {
     const c = makeIo();
     const preflight = fakePreflight(baseReport());
@@ -311,6 +350,32 @@ describe("keiko update CLI", () => {
     expect(output(c)).toContain("Use your package manager outside Keiko");
   });
 
+  it("blocks portable apply when mutation policy is disabled without npm guidance", async () => {
+    const c = makeIo();
+    const session = fakeSessionManager(
+      portableStatus({
+        policy: {
+          enabled: false,
+          source: "environment",
+          reason: "Portable self-update is disabled by policy.",
+        },
+      }),
+    );
+    const code = await runUpdate(["apply"], c, {
+      preflight: fakePreflight(baseReport({ installabilitySource: "github-release-asset" }))
+        .preflight,
+      session: session.manager,
+      remediation: fakeRemediation(),
+    });
+
+    expect(code).toBe(1);
+    expect(session.startedTargets()).toEqual([]);
+    expect(output(c)).toContain("Portable self-update is disabled by policy.");
+    expect(output(c)).toContain("download the latest Keiko release asset manually");
+    expect(output(c)).not.toContain("Use your package manager outside Keiko");
+    expect(output(c)).not.toContain("npm install");
+  });
+
   it("blocks unsupported install modes with manual instructions only", async () => {
     const c = makeIo();
     const session = fakeSessionManager(
@@ -338,6 +403,37 @@ describe("keiko update CLI", () => {
     expect(output(c)).not.toContain("npm install");
   });
 
+  it("blocks ineligible portable release assets without package-manager guidance", async () => {
+    const c = makeIo();
+    const session = fakeSessionManager(portableStatus());
+    const code = await runUpdate(["apply"], c, {
+      preflight: fakePreflight(
+        baseReport({
+          installabilitySource: "github-release-asset",
+          manualUpdateRequired: true,
+          oneClickEligible: false,
+          blockers: [
+            {
+              code: "portable-asset-missing",
+              severity: "high",
+              message: "The required release asset is missing.",
+              userActionRequired: true,
+            },
+          ],
+        }),
+      ).preflight,
+      session: session.manager,
+      remediation: fakeRemediation(),
+    });
+
+    expect(code).toBe(1);
+    expect(session.startedTargets()).toEqual([]);
+    expect(output(c)).toContain("This portable release asset is not eligible");
+    expect(output(c)).toContain("keep using the current version");
+    expect(output(c)).not.toContain("Use your package manager outside Keiko");
+    expect(output(c)).not.toContain("manual path");
+  });
+
   it("starts safe apply and reports restart-required without raw logs", async () => {
     const c = makeIo();
     const session = fakeSessionManager(baseStatus(), updateSession());
@@ -355,6 +451,45 @@ describe("keiko update CLI", () => {
     expect(c.out()).toContain("Update apply result: restart-required");
     expect(output(c)).not.toContain("SECRET_TOKEN");
     expect(output(c)).not.toContain("/Users/private");
+  });
+
+  it("reports portable apply success without restart or version-check instructions", async () => {
+    const c = makeIo();
+    const terminal = updateSession({
+      phase: "succeeded",
+      packageManager: undefined,
+      installRoot: undefined,
+      commandPreview: undefined,
+      restartRequired: false,
+      message: "Portable update applied and verified.",
+      portableActivation: {
+        activationId: "activation-1",
+        status: "activated",
+        stageId: "stage-1",
+        target: "windows-x64",
+        packageVersion: "0.2.11",
+        registrationRefreshed: true,
+        shortcutRefreshed: true,
+        relaunchRequested: true,
+        versionVerified: true,
+      },
+    });
+    const session = fakeSessionManager(portableStatus(), terminal);
+    const code = await runUpdate(["apply"], c, {
+      preflight: fakePreflight(baseReport({ installabilitySource: "github-release-asset" }))
+        .preflight,
+      session: session.manager,
+      remediation: fakeRemediation(),
+      sleep: () => Promise.resolve(),
+      pollIntervalMs: 1,
+      maxWaitMs: 1,
+    });
+
+    expect(code).toBe(0);
+    expect(session.startedTargets()).toEqual(["0.2.11"]);
+    expect(c.out()).toContain("Update apply result: succeeded");
+    expect(c.out()).toContain("Next step: none. Keiko relaunched and verified the new version.");
+    expect(c.out()).not.toContain("restart Keiko, then run `keiko update status`");
   });
 
   it("reports failed apply without exposing stdout or stderr previews", async () => {
