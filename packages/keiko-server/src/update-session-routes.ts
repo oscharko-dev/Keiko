@@ -37,6 +37,21 @@ function toRouteResult(error: UpdateSessionError): RouteResult {
   return { status: error.status, body: errorBody(error.code, error.message) };
 }
 
+function assertStartRemediationAllowed(deps: UiHandlerDeps, targetVersion: string): void {
+  const remediation = deps.updateRemediation?.getStatus({ targetVersion });
+  if (
+    remediation?.overallStatus !== "manual-review-required" &&
+    remediation?.overallStatus !== "failed"
+  ) {
+    return;
+  }
+  throw new UpdateSessionError(
+    "UPDATE_REMEDIATION_REQUIRED",
+    "Required remediation must be reviewed before update execution.",
+    409,
+  );
+}
+
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise<string>((resolveBody, reject) => {
     const chunks: Buffer[] = [];
@@ -109,6 +124,7 @@ export async function handleCreateUpdateSession(
     if (!parsed.ok) {
       throw new UpdateSessionError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
+    assertStartRemediationAllowed(deps, parsed.value.targetVersion);
     const outcome = guard.start(parsed.value);
     return { status: outcome.reused ? 200 : 202, body: outcome.session };
   });

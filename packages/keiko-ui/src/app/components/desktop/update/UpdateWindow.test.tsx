@@ -167,6 +167,122 @@ describe("UpdateWindow", () => {
     });
   });
 
+  it("blocks automatic install while preserving manual-review remediation copy", async () => {
+    const api = apiFor({
+      report: preflight({
+        userActionRequired: true,
+        impact: {
+          entries: [],
+          releaseNoteBullets: ["Local Knowledge needs review."],
+          affectedStateStores: ["local-knowledge"],
+          stateImpact: [
+            {
+              store: "local-knowledge",
+              description: "Local Knowledge vectors need reindexing after this update.",
+              remediation: "manual-review-required",
+              userActionRequired: true,
+            },
+          ],
+          userActionRequired: true,
+          remediations: ["manual-review-required"],
+        },
+      }),
+      remediation: remediation({
+        overallStatus: "manual-review-required",
+        updateCanComplete: false,
+        affectedFeatures: [
+          {
+            featureId: "local-knowledge",
+            label: "Local Knowledge Reindex",
+            state: "manual-review-required",
+            reason: "Manual review is required before this update can be installed.",
+            actionIds: [],
+          },
+        ],
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+    expect(screen.getByText("Check the local-state risk before installing.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Review the state impact, then install when you are ready."),
+    ).toBeNull();
+    expect(
+      screen.getByText("Manual review is required before this update can be installed."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Install update" })).toBeNull();
+    expect(screen.getByText("Local-state risk before install")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This update could affect local state. Continue only if you accept the risk below.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Local Knowledge Reindex")).toBeInTheDocument();
+    expect(screen.queryByText("Review required")).toBeNull();
+    expect(screen.queryByText("Follow-up action")).toBeNull();
+    expect(screen.queryByText("Run or defer this action before finishing.")).toBeNull();
+    expect(
+      screen.queryByText(
+        "Local Knowledge Reindex could stop working or require recovery after this update.",
+      ),
+    ).toBeNull();
+    expect(api.startSession).not.toHaveBeenCalled();
+  });
+
+  it("hides manual-review risk after the update is installed", async () => {
+    const api = apiFor({
+      report: preflight({
+        currentVersion: "0.2.10",
+        targetVersion: "0.2.10",
+        updateAvailable: false,
+        status: "current",
+        availabilityState: "current",
+        severity: "none",
+        userActionRequired: false,
+      }),
+      status: sessionStatus({
+        lastSession: session({
+          phase: "succeeded",
+          restartRequired: false,
+          cancelable: false,
+          retryable: false,
+          message: "Update verified. Keiko 0.2.10 is running.",
+        }),
+      }),
+      remediation: remediation({
+        overallStatus: "manual-review-required",
+        updateCanComplete: false,
+        affectedFeatures: [
+          {
+            featureId: "local-knowledge",
+            label: "Local Knowledge Reindex",
+            state: "manual-review-required",
+            reason: "Manual review is required before this update can be installed.",
+            actionIds: [],
+          },
+        ],
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update installed" })).toBeInTheDocument();
+    expect(screen.queryByText("Local-state risk before install")).toBeNull();
+    expect(
+      screen.queryByText(
+        "This update could affect local state. Continue only if you accept the risk below.",
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByText(
+        "Local Knowledge Reindex could stop working or require recovery after this update.",
+      ),
+    ).toBeNull();
+  });
+
   it("renders the no-update state as no-action messaging", async () => {
     const api = apiFor({
       report: preflight({
@@ -527,7 +643,10 @@ describe("UpdateWindow", () => {
       expect(writeText).toHaveBeenCalledWith(yarnTargetCommand);
     });
     expect(yarnCopyButton).toHaveAttribute("data-copied", "true");
-    expect(screen.queryByText("Copied")).toBeNull();
+    for (const copiedFeedback of screen.getAllByText("Copied")) {
+      expect(copiedFeedback).toHaveClass("sr-only");
+      expect(copiedFeedback).toHaveAttribute("role", "status");
+    }
 
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => {
@@ -627,7 +746,7 @@ describe("UpdateWindow", () => {
       expect(npmCopyButton).toHaveAttribute("data-pressed", "true");
       expect(npmCopyButton).toHaveAttribute("data-copied", "false");
       expect(npmCopyButton).toHaveAttribute("title", "Copy npm command");
-      expect(screen.queryByText("Copied")).toBeNull();
+      expect(screen.queryAllByText("Copied")).toHaveLength(0);
     } finally {
       restoreClipboard(clipboardDescriptor);
     }
@@ -837,6 +956,198 @@ describe("UpdateWindow", () => {
       screen.queryByText("Choose how to handle this before completing the update."),
     ).toBeNull();
     expect(screen.queryByText("Impact")).toBeNull();
+  });
+
+  it("hides persisted manual-review risk after relaunch when the update is current", async () => {
+    const { targetVersion: omittedTargetVersion, ...currentReport } = preflight({
+      currentVersion: "0.2.10",
+      updateAvailable: false,
+      status: "current",
+      availabilityState: "current",
+      severity: "none",
+      userActionRequired: false,
+    });
+    const api = apiFor({
+      report: currentReport,
+      remediation: remediation({
+        overallStatus: "manual-review-required",
+        updateCanComplete: false,
+        affectedFeatures: [
+          {
+            featureId: "local-knowledge",
+            label: "Local Knowledge",
+            state: "manual-review-required",
+            reason: "Local Knowledge requires manual review before the update can complete.",
+            actionIds: [],
+          },
+        ],
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Keiko is up to date" })).toBeInTheDocument();
+    expect(screen.queryByText("Local-state risk before install")).toBeNull();
+    expect(
+      screen.queryByText("Local Knowledge requires manual review before the update can complete."),
+    ).toBeNull();
+    expect(screen.queryByText("This update could affect local state.")).toBeNull();
+  });
+
+  it("shows failed remediation metadata as planned follow-up before install", async () => {
+    const api = apiFor({
+      report: preflight({
+        userActionRequired: true,
+        impact: {
+          entries: [],
+          releaseNoteBullets: ["Local Knowledge needs a follow-up."],
+          affectedStateStores: ["local-knowledge"],
+          stateImpact: [
+            {
+              store: "local-knowledge",
+              description: "Local Knowledge vectors must be rebuilt after the package update.",
+              remediation: "local-knowledge-reindex-required",
+              userActionRequired: true,
+            },
+          ],
+          userActionRequired: true,
+          remediations: ["local-knowledge-reindex-required"],
+        },
+      }),
+      remediation: remediation({
+        overallStatus: "failed",
+        updateCanComplete: false,
+        affectedFeatures: [
+          {
+            featureId: "local-knowledge",
+            label: "Local Knowledge",
+            state: "degraded",
+            reason: "Refresh Local Knowledge vectors before affected workflows are ready.",
+            actionIds: ["local-knowledge:reindex"],
+          },
+        ],
+        actions: [
+          {
+            actionId: "local-knowledge:reindex",
+            kind: "local-knowledge-reindex",
+            store: "local-knowledge",
+            remediation: "local-knowledge-reindex-required",
+            status: "failed",
+            required: true,
+            canRun: true,
+            canDefer: false,
+            userApprovalRequired: true,
+            featureIds: ["local-knowledge"],
+            scopeCounts: { stores: 1, artifacts: 0, retainedEntries: 0 },
+            message: "Refresh Local Knowledge vectors.",
+          },
+        ],
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    const heading = await screen.findByRole("heading", { name: "Update available" });
+    expect(heading.closest(".upd-summary")).toHaveAttribute("data-tone", "info");
+    expect(screen.getByText("Follow-up after install")).toBeInTheDocument();
+    expect(
+      screen.getByText("This update will require this after the package is installed."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Local Knowledge Reindex")).toBeInTheDocument();
+    expect(
+      screen.getByText("Refresh Local Knowledge vectors before affected workflows are ready."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Follow-up failed")).toBeNull();
+    expect(screen.queryByText("Failed")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run action" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Defer" })).toBeNull();
+  });
+
+  it("keeps post-install remediation failure scoped to the follow-up panel", async () => {
+    const { targetVersion: omittedTargetVersion, ...currentReport } = preflight({
+      currentVersion: "0.2.10",
+      updateAvailable: false,
+      status: "current",
+      availabilityState: "current",
+      severity: "none",
+      userActionRequired: true,
+      impact: {
+        entries: [],
+        releaseNoteBullets: ["Local Knowledge needs a follow-up."],
+        affectedStateStores: ["local-knowledge"],
+        stateImpact: [
+          {
+            store: "local-knowledge",
+            description: "Local Knowledge vectors must be rebuilt after the package update.",
+            remediation: "local-knowledge-reindex-required",
+            userActionRequired: true,
+          },
+        ],
+        userActionRequired: true,
+        remediations: ["local-knowledge-reindex-required"],
+      },
+    });
+    expect(omittedTargetVersion).toBe("0.2.10");
+    const api = apiFor({
+      report: currentReport,
+      status: sessionStatus({
+        lastSession: session({
+          phase: "succeeded",
+          restartRequired: false,
+          cancelable: false,
+          retryable: false,
+          message: "Update complete.",
+        }),
+      }),
+      remediation: remediation({
+        overallStatus: "failed",
+        updateCanComplete: false,
+        affectedFeatures: [
+          {
+            featureId: "local-knowledge",
+            label: "Local Knowledge",
+            state: "degraded",
+            reason: "Refresh Local Knowledge vectors before affected workflows are ready.",
+            actionIds: ["local-knowledge:reindex"],
+          },
+        ],
+        actions: [
+          {
+            actionId: "local-knowledge:reindex",
+            kind: "local-knowledge-reindex",
+            store: "local-knowledge",
+            remediation: "local-knowledge-reindex-required",
+            status: "failed",
+            required: true,
+            canRun: true,
+            canDefer: false,
+            userApprovalRequired: true,
+            featureIds: ["local-knowledge"],
+            scopeCounts: { stores: 1, artifacts: 0, retainedEntries: 0 },
+            message: "Refresh Local Knowledge vectors.",
+          },
+        ],
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update installed" })).toBeInTheDocument();
+    expect(screen.getByText("Follow-up failed")).toBeInTheDocument();
+    expect(
+      screen.getByText("The follow-up action did not complete. Run it again before continuing."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Run action" }));
+    await waitFor(() => {
+      expect(api.runRemediationAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: "local-knowledge:reindex",
+          decision: "run",
+          targetVersion: "0.2.10",
+        }),
+      );
+    });
   });
 
   it("lets deferred remediation be run later without repeating the defer action", async () => {
@@ -1193,6 +1504,27 @@ describe("UpdateWindow", () => {
     await waitFor(() => {
       expect(api.retrySession).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("checks again after a cancelled update session", async () => {
+    const api = apiFor({
+      status: sessionStatus({
+        lastSession: session({
+          phase: "cancelled",
+          retryable: false,
+          message: "Update cancelled.",
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => {
+      expect(api.checkPreflight).toHaveBeenCalledTimes(1);
+    });
+    expect(api.retrySession).not.toHaveBeenCalled();
   });
 
   it("renders in-flight update progress as indeterminate", async () => {

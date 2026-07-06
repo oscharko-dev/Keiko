@@ -109,28 +109,32 @@ class FakeUpdateSessionManager implements UpdateSessionManager {
 class FakeUpdateRemediationManager implements UpdateRemediationManager {
   public readonly completedRestarts: string[] = [];
 
-  public constructor(private readonly canComplete: boolean) {}
+  public constructor(private readonly report: UpdateRemediationStatusReport) {}
 
-  public readonly getStatus = (): UpdateRemediationStatusReport =>
-    remediationReport(this.canComplete);
+  public readonly getStatus = (): UpdateRemediationStatusReport => this.report;
 
   public readonly runAction = (
     _request: UpdateRemediationActionRequest,
-  ): Promise<UpdateRemediationStatusReport> => Promise.resolve(remediationReport(this.canComplete));
+  ): Promise<UpdateRemediationStatusReport> => Promise.resolve(this.report);
 
   public readonly completeRestart = (targetVersion?: string): UpdateRemediationStatusReport => {
     this.completedRestarts.push(targetVersion ?? "");
-    return remediationReport(this.canComplete);
+    return this.report;
   };
 
-  public readonly updateCanComplete = (): boolean => this.canComplete;
+  public readonly updateCanComplete = (): boolean => this.report.updateCanComplete;
 }
 
-function remediationReport(updateCanComplete: boolean): UpdateRemediationStatusReport {
+function remediationReport(
+  updateCanComplete: boolean,
+  overallStatus: UpdateRemediationStatusReport["overallStatus"] = updateCanComplete
+    ? "completed"
+    : "pending",
+): UpdateRemediationStatusReport {
   return {
     schemaVersion: 1,
     checkedAt: "2026-06-30T00:00:00.000Z",
-    overallStatus: updateCanComplete ? "completed" : "pending",
+    overallStatus,
     updateCanComplete,
     actions: [],
     affectedFeatures: [],
@@ -273,6 +277,40 @@ describe("update session routes", () => {
     expect(updateSession.starts[0]).toEqual({ targetVersion: "0.2.12", requestId: "req-1" });
   });
 
+  it("allows pending follow-up remediation when starting a session", async () => {
+    await rebuild({
+      updateRemediation: new FakeUpdateRemediationManager(remediationReport(false)),
+    });
+
+    const res = await fetch(`${baseUrl()}/api/update/session`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion: "0.2.12" }),
+    });
+
+    expect(res.status).toBe(202);
+    expect(updateSession.starts).toEqual([{ targetVersion: "0.2.12" }]);
+  });
+
+  it("blocks session start while required remediation needs manual review", async () => {
+    await rebuild({
+      updateRemediation: new FakeUpdateRemediationManager(
+        remediationReport(false, "manual-review-required"),
+      ),
+    });
+
+    const res = await fetch(`${baseUrl()}/api/update/session`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion: "0.2.12" }),
+    });
+    const body = (await res.json()) as { error: { code: string } };
+
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("UPDATE_REMEDIATION_REQUIRED");
+    expect(updateSession.starts).toEqual([]);
+  });
+
   it("rejects bad JSON and oversized update start bodies", async () => {
     const badJson = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
@@ -311,7 +349,7 @@ describe("update session routes", () => {
   });
 
   it("completes restart remediation before reporting restart verification success", async () => {
-    const updateRemediation = new FakeUpdateRemediationManager(true);
+    const updateRemediation = new FakeUpdateRemediationManager(remediationReport(true));
     await rebuild({ updateRemediation });
 
     const res = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
@@ -327,7 +365,9 @@ describe("update session routes", () => {
   });
 
   it("keeps restart verification non-terminal while follow-up remediation remains", async () => {
-    await rebuild({ updateRemediation: new FakeUpdateRemediationManager(false) });
+    await rebuild({
+      updateRemediation: new FakeUpdateRemediationManager(remediationReport(false)),
+    });
 
     const res = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
       method: "POST",
