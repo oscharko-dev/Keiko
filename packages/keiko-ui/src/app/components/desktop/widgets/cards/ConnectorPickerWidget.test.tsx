@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorPickerWidget } from "./ConnectorPickerWidget";
 import type {
   CapsuleListEntry,
+  CapsuleSetListEntry,
   CapsulesResponse,
   CapsuleSetsResponse,
 } from "@/lib/local-knowledge-api";
@@ -185,6 +186,56 @@ describe("ConnectorPickerWidget", () => {
 
     await user.click(screen.getByRole("combobox"));
     expect(screen.getByRole("option", { name: /Embedding mismatch/i })).toBeInTheDocument();
+  });
+
+  it("surfaces Knowledge Pod Set readiness guidance in selected and option states", async () => {
+    const guidedSet: CapsuleSetListEntry = {
+      ...CAPSULE_SET,
+      knowledgePod: {
+        readiness: "degraded",
+        setReadiness: {
+          readyCount: 1,
+          draftCount: 0,
+          degradedCount: 0,
+          unavailableCount: 1,
+          deniedCount: 0,
+          indexingCount: 0,
+          staleCount: 0,
+          errorCount: 0,
+          missingCount: 1,
+          reasonCodes: ["missing-member"],
+        },
+        reindexRecommended: false,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Members unavailable",
+          description:
+            "Some set members are missing, failed, or unavailable; retrieval will use only available members.",
+          tone: "danger",
+        },
+      },
+    };
+    mockFetchCapsules.mockResolvedValue({ capsules: [] });
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [guidedSet] });
+    const user = userEvent.setup();
+    render(
+      <ConnectorPickerWidget selectedKind="capsule-set" selectedId="set-xyz" onSelect={vi.fn()} />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    const selectedStatuses = screen.getAllByRole("status");
+    const selectedBadge = selectedStatuses.find((el) =>
+      el.textContent?.includes("Members unavailable"),
+    );
+    expect(selectedBadge).not.toBeUndefined();
+    expect(
+      screen.getAllByText(
+        "Some set members are missing, failed, or unavailable; retrieval will use only available members.",
+      ),
+    ).toHaveLength(2);
+
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("option", { name: /Members unavailable/i })).toBeInTheDocument();
   });
 
   it("shows an empty state with a 'Create' action when no Knowledge Pods exist", async () => {

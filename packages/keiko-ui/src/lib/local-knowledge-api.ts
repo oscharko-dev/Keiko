@@ -22,6 +22,7 @@ import type {
   LocalKnowledgeCapsuleSetsResponse as CapsuleSetsResponse,
   LocalKnowledgeCapsulesResponse as CapsulesResponse,
   KnowledgePodSummary,
+  KnowledgePodSetReadinessReasonCode,
   KnowledgePodModelUseOperation,
   KnowledgePodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
@@ -124,6 +125,75 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
   return undefined;
 }
 
+function hasSetReadinessReason(
+  reasonCodes: ReadonlySet<KnowledgePodSetReadinessReasonCode>,
+  candidates: readonly KnowledgePodSetReadinessReasonCode[],
+): boolean {
+  return candidates.some((candidate) => reasonCodes.has(candidate));
+}
+
+function guidanceForSetReadiness(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+  if (summary.kind !== "pod-set" || summary.setReadiness === undefined) return undefined;
+
+  const reasonCodes = new Set(summary.setReadiness.reasonCodes);
+  if (
+    hasSetReadinessReason(reasonCodes, [
+      "future-remote-member",
+      "future-federated-member",
+      "future-ephemeral-member",
+    ])
+  ) {
+    return {
+      label: "Future member placeholder",
+      description:
+        "This Knowledge Pod Set includes future remote, federated, or ephemeral placeholders; those members are not active retrieval sources yet.",
+      tone: "warning",
+    };
+  }
+  if (
+    hasSetReadinessReason(reasonCodes, ["missing-member", "member-error", "member-unavailable"])
+  ) {
+    return {
+      label: "Members unavailable",
+      description:
+        "Some set members are missing, failed, or unavailable; retrieval will use only available members.",
+      tone: "danger",
+    };
+  }
+  if (hasSetReadinessReason(reasonCodes, ["member-indexing", "member-stale", "member-draft"])) {
+    return {
+      label: "Members not ready",
+      description:
+        "Some set members are indexing, stale, or draft; refresh or index them before relying on this set.",
+      tone: "warning",
+    };
+  }
+  if (hasSetReadinessReason(reasonCodes, ["member-degraded", "no-sources", "no-vectors"])) {
+    return {
+      label: "Retrieval degraded",
+      description:
+        "Some set members have no sources, no vectors, or degraded indexing; lexical fallback may be the only available path.",
+      tone: "warning",
+    };
+  }
+  if (
+    hasSetReadinessReason(reasonCodes, [
+      "embedding-unknown",
+      "embedding-incompatible",
+      "embedding-unavailable",
+      "embedding-opaque",
+    ])
+  ) {
+    return {
+      label: "Embedding readiness warning",
+      description:
+        "Some set members need embedding review; Keiko does not compare raw vector scores across embedding spaces.",
+      tone: "warning",
+    };
+  }
+  return undefined;
+}
+
 function deniedModelOperations(
   modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
 ): readonly KnowledgePodModelUseOperation[] {
@@ -185,6 +255,8 @@ function metadataForSummary(
   const modelUsePolicy = resolvedModelUsePolicyForSummary(summary);
   const guidance = guidanceForSummary(summary);
   const policyGuidance = guidanceForPolicy(summary, modelUsePolicy);
+  const setReadinessGuidance = guidanceForSetReadiness(summary);
+  const selectedGuidance = policyGuidance ?? guidance ?? setReadinessGuidance;
   const deniedOperations = deniedModelOperations(modelUsePolicy);
   return {
     readiness: summary.readiness,
@@ -203,8 +275,7 @@ function metadataForSummary(
       : {}),
     reindexRecommended: summary.retrieval.reindexRecommended === true,
     queryEmbeddingAllowed: summary.retrieval.queryEmbeddingAllowed === true,
-    ...(policyGuidance !== undefined ? { guidance: policyGuidance } : {}),
-    ...(policyGuidance === undefined && guidance !== undefined ? { guidance } : {}),
+    ...(selectedGuidance !== undefined ? { guidance: selectedGuidance } : {}),
   };
 }
 
