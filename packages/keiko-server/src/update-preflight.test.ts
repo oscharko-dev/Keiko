@@ -255,7 +255,63 @@ function portableRelease(target: UpdatePortableTarget): Record<string, unknown> 
   };
 }
 
-function portableManifest(target: UpdatePortableTarget): Record<string, unknown> {
+function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
+  return {
+    name: "opencode-compatible",
+    kind: "coding-runtime",
+    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    adapterCompatibility: {
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "1",
+      protocolVersion: "coding-sidecar-v1",
+    },
+    platformTarget: target,
+    payloadRootPath: "runtime/sidecars/opencode-compatible",
+    executablePath: "runtime/sidecars/opencode-compatible/opencode.cmd",
+    payloadSha256: "f".repeat(64),
+    sizeBytes: 1234,
+    licenseEvidence: {
+      path: "runtime/sidecars/opencode-compatible/LICENSE.txt",
+      sha256: "d".repeat(64),
+    },
+    sbomEvidence: {
+      path: "runtime/sidecars/opencode-compatible/evidence/sbom.cdx.json",
+      sha256: "e".repeat(64),
+    },
+    signing: {
+      verificationPolicy: "production",
+      verificationStatus: "verified-production",
+      verificationReasonCodes: [],
+      signatureKind: target === "windows-x64" ? "authenticode" : "developer-id-notarized",
+      signatureVerified: true,
+      notarizationRequired: target !== "windows-x64",
+      notarizationVerified: target !== "windows-x64",
+      verificationChecks:
+        target === "windows-x64"
+          ? { publisherChainVerified: true, timestampVerified: true }
+          : {
+              developerIdVerified: true,
+              notarizationVerified: true,
+              stapleVerified: true,
+              assessmentVerified: true,
+            },
+    },
+  };
+}
+
+function sidecarRuntimeWith(
+  target: UpdatePortableTarget,
+  mutate: (sidecar: Record<string, unknown>) => void,
+): Record<string, unknown> {
+  const sidecar = sidecarRuntime(target);
+  mutate(sidecar);
+  return sidecar;
+}
+
+function portableManifest(
+  target: UpdatePortableTarget,
+  sidecarRuntimes: readonly Record<string, unknown>[] = [],
+): Record<string, unknown> {
   const archiveName = UPDATE_PORTABLE_TARGET_ASSET_NAMES[target];
   return {
     schemaVersion: 1,
@@ -289,8 +345,10 @@ function portableManifest(target: UpdatePortableTarget): Record<string, unknown>
         platformTarget: target,
         packageVersion: "0.2.11",
         archiveSha256: ARCHIVE_SHA,
+        ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
       },
     },
+    ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
     updateEligibility: {
       stableOnly: true,
       rollbackSupported: false,
@@ -533,6 +591,149 @@ describe("update preflight service", () => {
       `https://github.com/oscharko-dev/Keiko/releases/download/v0.2.11/${target}-portable-manifest.json`,
       `https://github.com/oscharko-dev/Keiko/releases/download/v0.2.11/${target}-SHA256SUMS.txt`,
     ]);
+    deps.store.close();
+  });
+
+  it("reports redacted sidecar summaries for sidecar-bearing portable assets", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const sidecar = sidecarRuntime(target);
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(portableManifest(target, [sidecar]))));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.oneClickEligible).toBe(true);
+    expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
+      name: "opencode-compatible",
+      upstreamVersion: "1.0.0",
+      platformTarget: target,
+      payloadSha256: "f".repeat(64),
+      payloadSha256Prefix: "f".repeat(12),
+      status: "verified",
+    });
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain("runtime/sidecars");
+    expect(serialized).not.toContain("opencode.cmd");
+    deps.store.close();
+  });
+
+  it("blocks portable one-click readiness when release-impact requires a missing sidecar", async () => {
+    const target: UpdatePortableTarget = "macos-x64";
+    const manifest = portableManifest(target);
+    const releaseImpact = manifest.releaseImpact as Record<string, unknown>;
+    releaseImpact.reviewedBinding = {
+      ...(releaseImpact.reviewedBinding as Record<string, unknown>),
+      sidecarRuntimes: [sidecarRuntime(target)],
+    };
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(manifest)));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-sidecar-verification-failed" }),
+    );
+    deps.store.close();
+  });
+
+  it.each([
+    [
+      "platform mismatch",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          sidecar.platformTarget = "windows-x64";
+        }),
+    ],
+    [
+      "missing license evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          delete sidecar.licenseEvidence;
+        }),
+    ],
+    [
+      "missing SBOM evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          delete sidecar.sbomEvidence;
+        }),
+    ],
+    [
+      "unverified signing evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          sidecar.signing = {
+            ...(sidecar.signing as Record<string, unknown>),
+            verificationStatus: "verification-failed",
+          };
+        }),
+    ],
+  ])("blocks portable one-click readiness for sidecar %s", async (_label, makeSidecar) => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const sidecar = makeSidecar(target);
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(portableManifest(target, [sidecar]))));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-sidecar-verification-failed" }),
+    );
     deps.store.close();
   });
 

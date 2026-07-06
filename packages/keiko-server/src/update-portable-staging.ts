@@ -1,4 +1,5 @@
 import type {
+  UpdatePortableSidecarSummary,
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
@@ -22,6 +23,7 @@ import {
   type PortableUpdateStagerOptions,
   PortableUpdateStagingError,
 } from "./update-portable-staging-shared.js";
+import { PortableSidecarVerificationError } from "./update-portable-sidecar-verification.js";
 
 export {
   PortableUpdateStagingError,
@@ -106,6 +108,9 @@ function recordStage(
     portableAssetSha256: summary.sha256,
     portableAssetSizeBytes: summary.sizeBytes,
   });
+  for (const sidecar of summary.sidecarRuntimes ?? []) {
+    recordSidecarVerification(options, summary.packageVersion, sidecar);
+  }
 }
 
 function recordFailure(options: PortableUpdateStagerOptions, targetVersion: string): void {
@@ -116,12 +121,53 @@ function recordFailure(options: PortableUpdateStagerOptions, targetVersion: stri
   });
 }
 
+function recordSidecarVerification(
+  options: PortableUpdateStagerOptions,
+  targetVersion: string,
+  summary: UpdatePortableSidecarSummary,
+): void {
+  options.localState?.recordAuditEvent("portable-sidecar-verification-result", {
+    targetVersion,
+    store: "package-install",
+    status: summary.status === "verified" ? "succeeded" : "failed",
+    portableSidecarName: summary.name,
+    portableSidecarKind: summary.kind,
+    portableSidecarVersion: summary.upstreamVersion,
+    portableSidecarTarget: summary.platformTarget,
+    portableSidecarPayloadSha256: summary.payloadSha256,
+    portableSidecarPayloadSha256Prefix: summary.payloadSha256Prefix,
+    portableSidecarStatus: summary.status,
+    ...(summary.failureCode === undefined
+      ? {}
+      : { portableSidecarFailureCode: summary.failureCode }),
+  });
+}
+
+function recordSidecarFailure(
+  options: PortableUpdateStagerOptions,
+  targetVersion: string,
+  error: PortableSidecarVerificationError,
+): void {
+  if (error.sidecarSummary !== undefined) {
+    recordSidecarVerification(options, targetVersion, error.sidecarSummary);
+    return;
+  }
+  options.localState?.recordAuditEvent("portable-sidecar-verification-result", {
+    targetVersion,
+    store: "package-install",
+    status: "failed",
+    portableSidecarStatus: "failed",
+    portableSidecarFailureCode: error.failureCode,
+  });
+}
+
 async function stagePortableUpdate(
   options: PortableUpdateStagerOptions,
   input: PortableUpdateStageInput,
 ): Promise<UpdatePortableStagingSummary> {
   const target = resolveTarget(input);
-  const { release, archive, manifest } = await resolvePortableStageAssets(options, input, target);
+  const stageAssets = await resolvePortableStageAssets(options, input, target);
+  const { release, archive, manifest, sidecars } = stageAssets;
   const archiveBytes = await fetchPortableAssetBytes(
     options,
     archive,
@@ -144,6 +190,7 @@ async function stagePortableUpdate(
     target,
     targetVersion: release.targetVersion,
     stageId,
+    sidecars,
   });
   const summary = portableStageSummary({
     stageId,
@@ -152,6 +199,7 @@ async function stagePortableUpdate(
     target,
     sha256,
     manifestSha256: manifest.sha256,
+    sidecarRuntimes: sidecars.map((sidecar) => sidecar.summary),
   });
   recordStage(options, summary);
   return summary;
@@ -165,6 +213,11 @@ export function createPortableUpdateStager(
       try {
         return await stagePortableUpdate(options, input);
       } catch (error) {
+        if (error instanceof PortableSidecarVerificationError) {
+          recordSidecarFailure(options, input.targetVersion, error);
+          recordFailure(options, input.targetVersion);
+          throw new PortableUpdateStagingError(error.reason, error.message);
+        }
         recordFailure(options, input.targetVersion);
         if (error instanceof PortableUpdateStagingError) throw error;
         throw new PortableUpdateStagingError("portable-staging-failed", "portable staging failed");

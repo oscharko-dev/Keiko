@@ -146,6 +146,7 @@ export function retryableFailure(reason: UpdateSessionFailureReason): boolean {
     reason === "timed-out" ||
     reason === "spawn-error" ||
     reason === "portable-download-failed" ||
+    reason === "portable-sidecar-verification-failed" ||
     reason === "portable-staging-failed" ||
     reason === "portable-activation-failed" ||
     reason === "portable-relaunch-failed" ||
@@ -170,6 +171,8 @@ const FAILURE_MESSAGES: Partial<Record<UpdateSessionFailureReason, string>> = {
     "The portable update candidate is no longer eligible. Re-run update preflight.",
   "portable-download-failed": "The portable update asset could not be downloaded.",
   "portable-verification-failed": "The portable update asset could not be verified.",
+  "portable-sidecar-verification-failed":
+    "The bundled sidecar payload could not be verified as part of the Keiko update.",
   "portable-staging-failed": "The portable update asset could not be staged safely.",
   "portable-activation-failed":
     "The portable update could not be activated safely. The current install was preserved when possible.",
