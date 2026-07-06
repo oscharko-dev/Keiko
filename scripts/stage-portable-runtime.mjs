@@ -16,12 +16,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, posix, resolve } from "node:path";
+import { basename, dirname, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
   createPortableVerificationChecks,
+  findForbiddenPortablePaths,
+  findPortableMetadataRedactionFailures,
   hashDirectoryTree,
+  isSafePortableRelativePath,
   portableTargetByName,
   PORTABLE_TARGET_NAMES,
   portableVerificationSummaryForManifest,
@@ -41,6 +44,7 @@ const NODE_ARCHIVE_MAX_BYTES = 128 * 1024 * 1024;
 const NODE_ARCHIVE_TIMEOUT_MS = 300_000;
 const NODE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const SIDECAR_RUNTIME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const STAGING_ASSET_ID_UNAVAILABLE = 0;
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
@@ -77,6 +81,7 @@ function parseArgs(argv) {
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     releaseId: Number(process.env.GITHUB_RUN_ID ?? 0),
     releaseTag: `v${rootPackage.version}`,
+    sidecarRuntimeSpecs: [],
     target: undefined,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -99,6 +104,10 @@ function applyArg(argv, index, options) {
     options.dryRun = true;
     return index;
   }
+  if (arg === "--sidecar-runtime-spec") {
+    options.sidecarRuntimeSpecs.push(parseSidecarRuntimeSpec(requiredArgValue(argv, index, arg)));
+    return index + 1;
+  }
   const fields = new Map([
     ["--commit-sha", "commitSha"],
     ["--launcher-binary", "launcherBinary"],
@@ -114,10 +123,24 @@ function applyArg(argv, index, options) {
   ]);
   const field = fields.get(arg);
   if (field === undefined) fail(`unsupported argument: ${arg}`);
-  const value = argv[index + 1];
-  if (value === undefined || value.length === 0) fail(`${arg} requires a value`);
+  const value = requiredArgValue(argv, index, arg);
   options[field] = field === "releaseId" ? Number(value) : value;
   return index + 1;
+}
+
+function requiredArgValue(argv, index, arg) {
+  const value = argv[index + 1];
+  if (value === undefined || value.length === 0) fail(`${arg} requires a value`);
+  return value;
+}
+
+function parseSidecarRuntimeSpec(value) {
+  try {
+    const text = value.trim().startsWith("{") ? value : readFileSync(resolve(value), "utf8");
+    return JSON.parse(text);
+  } catch {
+    fail("--sidecar-runtime-spec must be JSON or a JSON file path");
+  }
 }
 
 function validateNodeRuntimeOptions(options) {
@@ -154,6 +177,216 @@ function validateReleaseOptions(options) {
   if (rootPackage.version.includes("-") || options.releaseTag !== `v${rootPackage.version}`) {
     fail("--release-tag must match the stable package version for portable v1");
   }
+}
+
+function normalizeSidecarRuntimeSpecs(specs, target) {
+  const names = new Set();
+  return specs.map((spec, index) => normalizeSidecarRuntimeSpec(spec, target, names, index));
+}
+
+function normalizeSidecarRuntimeSpec(spec, target, names, index) {
+  if (!isRecord(spec)) fail(`sidecar spec ${String(index + 1)} must be an object`);
+  const name = normalizeSidecarName(spec, names);
+  const sourceRoot = resolve(requiredSpecString(spec, "sourceRoot"));
+  const files = sidecarTreeFiles(sourceRoot);
+  const payloadSha256 = hashDirectoryTree(sourceRoot);
+  validateExpectedSidecarDigest(spec, payloadSha256);
+  const payloadRootPath = `runtime/sidecars/${name}`;
+  const metadata = sidecarMetadataForSpec(
+    spec,
+    target,
+    payloadRootPath,
+    payloadSha256,
+    files,
+    sourceRoot,
+  );
+  validateSidecarMetadata(metadata);
+  return { ...metadata, sourceRoot };
+}
+
+function normalizeSidecarName(spec, names) {
+  const name = requiredSpecString(spec, "name");
+  if (!SIDECAR_RUNTIME_NAME_PATTERN.test(name)) {
+    fail("sidecar runtime name must be a stable kebab-case value");
+  }
+  if (names.has(name)) fail("sidecar runtime names must be unique");
+  names.add(name);
+  return name;
+}
+
+function sidecarMetadataForSpec(spec, target, payloadRootPath, payloadSha256, files, sourceRoot) {
+  const executablePath = sidecarPayloadPath(payloadRootPath, spec, "executablePath", files);
+  const licensePath = sidecarPayloadPath(payloadRootPath, spec, "licenseEvidencePath", files);
+  const sbomPath = sidecarPayloadPath(payloadRootPath, spec, "sbomEvidencePath", files);
+  return {
+    name: requiredSpecString(spec, "name"),
+    kind: requiredSpecString(spec, "kind"),
+    upstream: sidecarUpstream(spec),
+    adapterCompatibility: sidecarAdapterCompatibility(spec),
+    platformTarget: sidecarPlatformTarget(spec, target),
+    payloadRootPath,
+    executablePath,
+    payloadSha256,
+    sizeBytes: sidecarTreeSize(files),
+    licenseEvidence: sidecarEvidence(
+      sourceRoot,
+      sourcePathForSpec(spec, "licenseEvidencePath"),
+      licensePath,
+    ),
+    sbomEvidence: sidecarEvidence(
+      sourceRoot,
+      sourcePathForSpec(spec, "sbomEvidencePath"),
+      sbomPath,
+    ),
+    signing: sidecarSigningForSpec(spec, target),
+  };
+}
+
+function sidecarPayloadPath(payloadRootPath, spec, key, files) {
+  const sourcePath = sourcePathForSpec(spec, key);
+  if (!files.some((file) => file.relativePath === sourcePath)) fail(`sidecar ${key} is missing`);
+  return posix.join(payloadRootPath, sourcePath);
+}
+
+function sourcePathForSpec(spec, key) {
+  const path = requiredSpecString(spec, key).replaceAll("\\", "/");
+  if (!isSafePortableRelativePath(path)) fail(`sidecar ${key} must be a contained relative path`);
+  return path;
+}
+
+function sidecarUpstream(spec) {
+  const upstream = requiredSpecRecord(spec, "upstream");
+  return {
+    name: requiredSpecString(upstream, "name"),
+    version: requiredSpecString(upstream, "version"),
+  };
+}
+
+function sidecarAdapterCompatibility(spec) {
+  const adapter = requiredSpecRecord(spec, "adapterCompatibility");
+  return {
+    adapterName: requiredSpecString(adapter, "adapterName"),
+    adapterVersion: requiredSpecString(adapter, "adapterVersion"),
+    protocolVersion: requiredSpecString(adapter, "protocolVersion"),
+  };
+}
+
+function sidecarPlatformTarget(spec, target) {
+  const platformTarget = requiredSpecString(spec, "platformTarget");
+  if (platformTarget !== target.platformTarget) fail("sidecar platformTarget must match --target");
+  return platformTarget;
+}
+
+function sidecarEvidence(sourceRoot, sourcePath, payloadPath) {
+  return {
+    path: payloadPath,
+    sha256: sha256Bytes(readFileSync(resolveSidecarSourcePath(sourceRoot, sourcePath))),
+  };
+}
+
+function sidecarSigningForSpec(spec, target) {
+  if (spec.signing === undefined) return sidecarStagingSigning(target);
+  if (!isRecord(spec.signing)) fail("sidecar signing must be an object");
+  return JSON.parse(JSON.stringify(spec.signing));
+}
+
+function sidecarStagingSigning(target) {
+  return {
+    verificationPolicy: "staging",
+    verificationStatus: "unverified-staging",
+    verificationReasonCodes: ["staging-unverified"],
+    signatureKind: target.signatureKind,
+    signatureVerified: false,
+    notarizationRequired: target.nodePlatform === "darwin",
+    notarizationVerified: false,
+    verificationChecks: createPortableVerificationChecks(target.platformTarget, false),
+  };
+}
+
+function sidecarTreeFiles(sourceRoot) {
+  let rootEntry;
+  try {
+    rootEntry = lstatSync(sourceRoot);
+  } catch {
+    fail("sidecar sourceRoot must be an existing directory");
+  }
+  if (!rootEntry.isDirectory()) fail("sidecar sourceRoot must be a real directory");
+  const files = listSidecarFiles(sourceRoot, sourceRoot);
+  if (files.length === 0) fail("sidecar sourceRoot must contain payload files");
+  if (findForbiddenPortablePaths(files.map((file) => file.relativePath)).length > 0) {
+    fail("sidecar source tree contains forbidden portable payload paths");
+  }
+  return files;
+}
+
+function listSidecarFiles(root, current) {
+  const files = [];
+  for (const entry of readdirSync(current)) {
+    files.push(...sidecarEntryFiles(root, join(current, entry)));
+  }
+  return files;
+}
+
+function sidecarEntryFiles(root, path) {
+  const entry = lstatSync(path);
+  if (entry.isDirectory()) return listSidecarFiles(root, path);
+  if (!entry.isFile()) fail("sidecar source tree contains unsupported entries");
+  if (entry.nlink > 1) fail("sidecar source tree contains hardlinked files");
+  return [{ relativePath: portableRelativePath(root, path), sizeBytes: entry.size }];
+}
+
+function portableRelativePath(root, path) {
+  return relative(root, path).replaceAll("\\", "/");
+}
+
+function sidecarTreeSize(files) {
+  return files.reduce((total, file) => total + file.sizeBytes, 0);
+}
+
+function validateExpectedSidecarDigest(spec, payloadSha256) {
+  const expected = spec.expectedPayloadSha256 ?? spec.expectedSha256;
+  if (expected === undefined) return;
+  if (typeof expected !== "string" || !SHA256_PATTERN.test(expected)) {
+    fail("sidecar expected digest must be a SHA-256 digest");
+  }
+  if (expected !== payloadSha256) fail("sidecar expected digest does not match payload");
+}
+
+function validateSidecarMetadata(metadata) {
+  const failures = findPortableMetadataRedactionFailures(metadata, "sidecarRuntimeSpec");
+  if (failures.length > 0)
+    fail(`sidecar metadata is not redacted:\n  - ${failures.join("\n  - ")}`);
+}
+
+function resolveSidecarSourcePath(sourceRoot, sourcePath) {
+  const candidate = resolve(sourceRoot, sourcePath);
+  const rel = relative(sourceRoot, candidate);
+  if (rel.startsWith("..") || rel === "" || /^[A-Za-z]:/u.test(rel)) {
+    fail("sidecar source path must stay inside sourceRoot");
+  }
+  return candidate;
+}
+
+function requiredSpecRecord(spec, key) {
+  const value = spec[key];
+  if (!isRecord(value)) fail(`sidecar ${key} must be an object`);
+  return value;
+}
+
+function requiredSpecString(spec, key) {
+  const value = spec[key];
+  if (typeof value !== "string" || value.length === 0) {
+    fail(`sidecar ${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sha256Bytes(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
 }
 
 function run(cmd, args, options = {}) {
@@ -402,6 +635,28 @@ function validateStagedAppSurface(appRoot) {
     fail(`packed app surface is incomplete:\n  - ${failures.join("\n  - ")}`);
 }
 
+function stageSidecarRuntimes(sidecarRuntimeSpecs, resourceRoot) {
+  return sidecarRuntimeSpecs.map((spec) => stageSidecarRuntime(spec, resourceRoot));
+}
+
+function stageSidecarRuntime(spec, resourceRoot) {
+  const destinationRoot = join(resourceRoot, ...spec.payloadRootPath.split("/"));
+  copySafeTreeContents(spec.sourceRoot, destinationRoot);
+  if (hashDirectoryTree(destinationRoot) !== spec.payloadSha256) {
+    fail("copied sidecar payload digest does not match validated source payload");
+  }
+  requireRuntimeFile(resourceRoot, spec.executablePath);
+  requireRuntimeFile(resourceRoot, spec.licenseEvidence.path);
+  requireRuntimeFile(resourceRoot, spec.sbomEvidence.path);
+  return sidecarManifestMetadata(spec);
+}
+
+function sidecarManifestMetadata(spec) {
+  const metadata = { ...spec };
+  delete metadata.sourceRoot;
+  return metadata;
+}
+
 export function appSurfaceFailures(appRoot) {
   const failures = [];
   for (const file of REQUIRED_APP_SURFACE_FILES) {
@@ -600,13 +855,14 @@ function writeManifest(stageRoot, manifest) {
   );
 }
 
-function provenanceStatementFor(options, target, digests) {
+function provenanceStatementFor(options, target, digests, sidecarRuntimes) {
   return (
     JSON.stringify({
       artifact: target.assetName,
       buildWorkflowRunId: options.releaseId,
       packageVersion: rootPackage.version,
       sourceCommitSha: options.commitSha,
+      sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
       subjectDigest: digests.assetSha256,
       target: target.platformTarget,
     }) + "\n"
@@ -878,8 +1134,15 @@ function manifestEvidence() {
   };
 }
 
-function manifestReviewedBinding(options, target, digests, nodeIdentity, security) {
-  return {
+function manifestReviewedBinding(
+  options,
+  target,
+  digests,
+  nodeIdentity,
+  security,
+  sidecarRuntimes,
+) {
+  const binding = {
     releaseId: options.releaseId,
     releaseTag: options.releaseTag,
     assetId: STAGING_ASSET_ID_UNAVAILABLE,
@@ -903,6 +1166,8 @@ function manifestReviewedBinding(options, target, digests, nodeIdentity, securit
     notarizationVerified: security.notarizationVerified,
     verificationChecks: security.verificationChecks,
   };
+  if (sidecarRuntimes.length > 0) binding.sidecarRuntimes = cloneJson(sidecarRuntimes);
+  return binding;
 }
 
 function manifestReleaseImpact(
@@ -912,13 +1177,21 @@ function manifestReleaseImpact(
   nodeIdentity,
   security,
   releaseImpactEntry,
+  sidecarRuntimes,
 ) {
   return {
     catalogPath: "app/release-impact.catalog.json",
     entryId: releaseImpactEntry.id,
     entryPackageVersion: rootPackage.version,
     entryReleaseTag: options.releaseTag,
-    reviewedBinding: manifestReviewedBinding(options, target, digests, nodeIdentity, security),
+    reviewedBinding: manifestReviewedBinding(
+      options,
+      target,
+      digests,
+      nodeIdentity,
+      security,
+      sidecarRuntimes,
+    ),
   };
 }
 
@@ -945,12 +1218,12 @@ function manifestUpdateEligibility() {
   };
 }
 
-function manifestFor(options, target, digests) {
+function manifestFor(options, target, digests, sidecarRuntimes = []) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
   const security = manifestSecurity(target);
   const releaseImpactEntry = reviewedReleaseImpactEntry(options);
-  return {
+  const manifest = {
     schemaVersion: 1,
     product: manifestProduct(),
     release: manifestRelease(options),
@@ -973,9 +1246,16 @@ function manifestFor(options, target, digests) {
       nodeIdentity,
       security,
       releaseImpactEntry,
+      sidecarRuntimes,
     ),
     updateEligibility: manifestUpdateEligibility(),
   };
+  if (sidecarRuntimes.length > 0) manifest.sidecarRuntimes = sidecarRuntimes;
+  return manifest;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function supportLaunchersFor(target) {
@@ -1024,50 +1304,90 @@ function sameStringSet(actual, expected) {
 
 export async function assemblePortableStage(options, hooks = {}) {
   const target = portableTargetByName(options.target);
+  const sidecarSpecs = normalizeSidecarRuntimeSpecs(options.sidecarRuntimeSpecs ?? [], target);
   const tmp = mkdtempSync(join(tmpdir(), "keiko-portable-stage-"));
-  const finalRoot = resolve(options.outDir, target.platformTarget);
-  rmSync(finalRoot, { recursive: true, force: true });
+  const paths = portableStagePaths(tmp, target, options);
+  rmSync(paths.finalRoot, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   try {
-    const extractRoot = join(tmp, "extract");
-    const stageRoot = join(tmp, "stage", target.platformTarget);
-    const payloadContainer = join(stageRoot, "payload");
-    const payloadRoot = join(payloadContainer, "Keiko");
-    const resourceRoot = payloadResourceRoot(target, payloadRoot);
-    mkdirSync(extractRoot, { recursive: true });
-    mkdirSync(resourceRoot, { recursive: true });
-    const nodeArchiveSha256 = await stageNodeRuntime(options, target, resourceRoot);
-    (hooks.preparePackageSurface ?? preparePackageSurface)();
-    const tarball = packRoot(tmp);
-    stagePackedPackage(tarball, extractRoot, resourceRoot);
-    stageLauncher(target, payloadRoot, resourceRoot, options, hooks);
-    const appTreeSha256 = hashDirectoryTree(join(resourceRoot, "app"));
-    const tarballSha256 = await sha256File(tarball);
-    const assetPath = createZipArchive(payloadContainer, target.assetName, stageRoot);
-    const assetSha256 = await sha256File(assetPath);
-    const sizeBytes = statSync(assetPath).size;
-    const provenanceStatement = provenanceStatementFor(options, target, { assetSha256 });
-    const provenanceSha256 = sha256Text(provenanceStatement);
-    const manifest = manifestFor(options, target, {
-      appTreeSha256,
-      assetSha256,
-      nodeArchiveSha256,
-      provenanceSha256,
-      sizeBytes,
-      tarballSha256,
-    });
-    writeEvidence(stageRoot, manifest, provenanceStatement);
-    writeManifest(stageRoot, manifest);
-    const failures = validatePortableManifest(manifest, { allowUnverified: true });
-    if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
-    if (!options.dryRun) {
-      mkdirSync(resolve(options.outDir), { recursive: true });
-      renameSync(stageRoot, finalRoot);
-    }
-    return { finalRoot, manifest, tarball };
+    const result = await assembleStageRoot(options, hooks, target, sidecarSpecs, paths);
+    promoteStageRoot(options, paths);
+    return { finalRoot: paths.finalRoot, manifest: result.manifest, tarball: result.tarball };
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+function portableStagePaths(tmp, target, options) {
+  const stageRoot = join(tmp, "stage", target.platformTarget);
+  const payloadContainer = join(stageRoot, "payload");
+  const payloadRoot = join(payloadContainer, "Keiko");
+  return {
+    extractRoot: join(tmp, "extract"),
+    finalRoot: resolve(options.outDir, target.platformTarget),
+    payloadContainer,
+    payloadRoot,
+    resourceRoot: payloadResourceRoot(target, payloadRoot),
+    stageRoot,
+  };
+}
+
+async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
+  mkdirSync(paths.extractRoot, { recursive: true });
+  mkdirSync(paths.resourceRoot, { recursive: true });
+  const nodeArchiveSha256 = await stageNodeRuntime(options, target, paths.resourceRoot);
+  (hooks.preparePackageSurface ?? preparePackageSurface)();
+  const tarball = packRoot(dirname(paths.extractRoot));
+  stagePackedPackage(tarball, paths.extractRoot, paths.resourceRoot);
+  stageLauncher(target, paths.payloadRoot, paths.resourceRoot, options, hooks);
+  const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
+  const manifestInput = await manifestInputFor(options, target, paths, tarball, {
+    nodeArchiveSha256,
+    sidecarRuntimes,
+  });
+  writeEvidence(paths.stageRoot, manifestInput.manifest, manifestInput.provenanceStatement);
+  writeManifest(paths.stageRoot, manifestInput.manifest);
+  validateGeneratedManifest(manifestInput.manifest);
+  return { manifest: manifestInput.manifest, tarball };
+}
+
+async function manifestInputFor(options, target, paths, tarball, staged) {
+  const assetPath = createZipArchive(paths.payloadContainer, target.assetName, paths.stageRoot);
+  const assetSha256 = await sha256File(assetPath);
+  const provenanceStatement = provenanceStatementFor(
+    options,
+    target,
+    { assetSha256 },
+    staged.sidecarRuntimes,
+  );
+  const provenanceSha256 = sha256Text(provenanceStatement);
+  return {
+    manifest: manifestFor(
+      options,
+      target,
+      {
+        appTreeSha256: hashDirectoryTree(join(paths.resourceRoot, "app")),
+        assetSha256,
+        nodeArchiveSha256: staged.nodeArchiveSha256,
+        provenanceSha256,
+        sizeBytes: statSync(assetPath).size,
+        tarballSha256: await sha256File(tarball),
+      },
+      staged.sidecarRuntimes,
+    ),
+    provenanceStatement,
+  };
+}
+
+function validateGeneratedManifest(manifest) {
+  const failures = validatePortableManifest(manifest, { allowUnverified: true });
+  if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
+}
+
+function promoteStageRoot(options, paths) {
+  if (options.dryRun) return;
+  mkdirSync(resolve(options.outDir), { recursive: true });
+  renameSync(paths.stageRoot, paths.finalRoot);
 }
 
 export async function runPortableStage(argv = process.argv.slice(2)) {
