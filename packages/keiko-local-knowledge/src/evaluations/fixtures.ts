@@ -1375,6 +1375,165 @@ export const sealedPodFixture: RetrievalEvalFixture = {
   ],
 };
 
+// Epic #1855 / Issue #1888. Technical HTML manual retrieval over `html-block` units. Each chunk's
+// text mirrors what the improved parser (#1886) writes into the normalized projection — a
+// header-attached table row, a "Term: definition" pair, an anchored section, and English evidence
+// for a multilingual question — so the scorecard rewards structure-preserving extraction and
+// regresses if a query can no longer recall its structural target. Distinct from `exact-technical`
+// (Markdown sections, no HTML structure), `multilingual-retrieval` (Markdown), and
+// `structured-files` (one generic html-block with no table/anchor/definition query). All bodies
+// synthetic and body-safe.
+export const htmlManualStructureFixture: RetrievalEvalFixture = {
+  id: "html-manual-structure",
+  description:
+    "Technical HTML manual: table-row identifier, anchored section, definition, and multilingual " +
+    "question recall over html-block units.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-manual"),
+      displayName: "HTML Manual Structure",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-manual"),
+          documents: [
+            {
+              id: documentId("doc-html-manual"),
+              safeDisplayName: "device-handbook.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-html-errors",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Reference", "Error Codes"],
+                    anchorId: "error-codes",
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+                {
+                  id: "u-html-torque",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Installation", "Mounting", "Torque"],
+                    anchorId: "mounting-torque",
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+                {
+                  id: "u-html-glossary",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Glossary"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+                {
+                  id: "u-html-retries",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Reference", "Retries"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+                {
+                  id: "u-html-legal",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Legal", "Warranty"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-html-error-timeout"),
+                  text:
+                    "ErrorCode: E_TIMEOUT | Severity: high | Retryable: yes | " +
+                    "Description: the request expired before a response arrived.",
+                  topic: "error-timeout",
+                  parsedUnitId: "u-html-errors",
+                },
+                {
+                  id: chunkId("c-html-torque"),
+                  text: "Tighten each mounting bracket bolt to 12 Nm during installation.",
+                  topic: "mounting-torque",
+                  parsedUnitId: "u-html-torque",
+                },
+                {
+                  id: chunkId("c-html-def-timeout"),
+                  text: "Timeout: the number of seconds the system waits before abandoning a request.",
+                  topic: "definition-timeout",
+                  parsedUnitId: "u-html-glossary",
+                },
+                {
+                  id: chunkId("c-html-retries"),
+                  text:
+                    "The controller retries a failed request at most three times before reporting " +
+                    "an error.",
+                  topic: "retry-limit",
+                  parsedUnitId: "u-html-retries",
+                },
+                {
+                  id: chunkId("c-html-warranty-noise"),
+                  text: "Warranty terms cover manufacturing defects for twenty-four months.",
+                  topic: "warranty",
+                  parsedUnitId: "u-html-legal",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-html-error-timeout",
+      text: "What severity and retryable flag does error code E_TIMEOUT carry?",
+      topic: "error-timeout",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-manual") },
+      expectedChunkIds: [chunkId("c-html-error-timeout")],
+      topK: 1,
+    },
+    {
+      id: "q-html-torque",
+      text: "What tightening force is specified for the mounting bracket bolts during installation?",
+      topic: "mounting-torque",
+      strategy: "balanced",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-manual") },
+      expectedChunkIds: [chunkId("c-html-torque")],
+      topK: 1,
+    },
+    {
+      id: "q-html-def-timeout",
+      text: "What does the timeout parameter control?",
+      topic: "definition-timeout",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-manual") },
+      expectedChunkIds: [chunkId("c-html-def-timeout")],
+      topK: 1,
+    },
+    {
+      id: "q-html-retries-de",
+      text: "Wie oft wird eine fehlgeschlagene Anfrage automatisch wiederholt?",
+      topic: "retry-limit",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-manual") },
+      expectedChunkIds: [chunkId("c-html-retries")],
+      topK: 1,
+    },
+  ],
+};
+
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
@@ -1393,4 +1552,5 @@ export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   multilingualFixture,
   mixedStrategyFixture,
   sealedPodFixture,
+  htmlManualStructureFixture,
 ] as const;
