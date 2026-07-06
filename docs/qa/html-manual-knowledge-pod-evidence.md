@@ -12,7 +12,11 @@ Knowledge pipeline, with no second store and no parallel retrieval path:
 
 1. **Contract handoff (#1871).** A redacted `DocumentationIndexingApproval` (Epic #1852) is bridged
    into an internal `HtmlManualSource` via `deriveHtmlManualSource`, which fails closed when the
-   recomputed fingerprint or the source kind do not match the approval.
+   recomputed fingerprint or the source kind do not match the approval. This bridge is proven by its
+   own unit suite (`html-manual-source.test.ts`); it is not yet invoked by the end-to-end pod-creation
+   path below, which constructs its `HtmlManualSource` fixture directly — the server-side call site
+   that will exercise `deriveHtmlManualSource` on the real approval path belongs to the follow-up
+   chat-attach work (#1854).
 2. **Bounded discovery (#1872).** A breadth-first link-graph crawl resolves `<a>` / frame / iframe /
    canonical links, canonicalises and deduplicates them, follows framesets, and stays inside the
    governed page/depth/byte/time/link limits, emitting body-free denied-link reason codes.
@@ -39,16 +43,17 @@ Knowledge pipeline, with no second store and no parallel retrieval path:
 Measured by `packages/keiko-local-knowledge/src/manual-pod.e2e.test.ts` (hermetic, deterministic,
 network-free):
 
-| Metric                   | Value                                                                  |
-| ------------------------ | ---------------------------------------------------------------------- |
-| Crawled / accepted pages | 4 (index + 2 chapters + 1 reference)                                   |
-| Pod readiness            | `ready`                                                                |
-| Documents indexed        | 4                                                                      |
-| Chunks                   | > 0 (6 in the reference run)                                           |
-| Vectors persisted        | > 0 (6 in the reference run)                                           |
-| Progress phase           | `ready`                                                                |
-| Retrieval references     | > 0 grounded references, `noEvidence = false`                          |
-| Reference payload        | chunk/document/capsule lineage + citation metadata; no raw body or URL |
+| Metric                           | Value                                                                  |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| Crawled / accepted pages         | 4 (index + 2 chapters + 1 reference)                                   |
+| Pod readiness                    | `ready`                                                                |
+| Documents indexed                | 4                                                                      |
+| Chunks                           | > 0 (6 in the reference run)                                           |
+| Vectors persisted                | > 0 (6 in the reference run)                                           |
+| Progress phase                   | `ready`                                                                |
+| Denied links / skipped documents | 0 / 0                                                                  |
+| Retrieval references             | > 0 grounded references, `noEvidence = false`                          |
+| Reference payload                | chunk/document/capsule lineage + citation metadata; no raw body or URL |
 
 Retrieval uses a constant test embedding solely so a query reliably matches an indexed chunk; this
 proves index presence and the retrieval path, and makes no claim about final answer quality
@@ -56,7 +61,8 @@ proves index presence and the retrieval path, and makes no claim about final ans
 
 ## Gate command summary
 
-Run from the repository root against this branch. See the PR body for the exact captured output.
+Run from the repository root against this branch. See the implementation PR
+([#2028](https://github.com/oscharko-dev/Keiko/pull/2028)) body for the exact captured output.
 
 - `npm run typecheck` — TypeScript strict, full package graph.
 - `npm run lint` — ESLint `--max-warnings=0`.
@@ -82,3 +88,8 @@ Run from the repository root against this branch. See the PR body for the exact 
   with the rest of the manual UI.
 - **Deeper parser/citation quality.** Page-title and anchor-precise citations are deferred to
   structure-preservation work (#1855); refresh/diagnostics to #1856.
+- **Sequential (non-concurrent) page fetch.** `crawlManual` dispatches one fetch at a time rather than
+  a bounded concurrent pool. Given the crawl is already bounded by page/depth/byte/time limits, this is
+  a deliberate simplification for the initial static-manual path rather than a hard requirement; a
+  bounded-concurrency fetch stage (mirroring `indexing/embedding-batcher.ts`'s `runBounded` pattern) is
+  a straightforward follow-up if crawl latency for large manuals becomes a concern.

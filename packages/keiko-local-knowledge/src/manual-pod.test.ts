@@ -1,9 +1,11 @@
 import {
   DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+  sealedLocalPodModelUsePolicy,
   type HtmlManualSource,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";
 import { createInMemoryManualFetcher, type InMemoryManualPage } from "./crawl/index.js";
@@ -109,6 +111,49 @@ describe("createHtmlManualPod", () => {
     const result = await createHtmlManualPod(podDeps(withOrphan), httpManualSource());
     // orphan.html is not linked from any crawled page, so it is never fetched or indexed.
     expect(result.summary.counts.documentCount).toBe(3);
+  });
+
+  it("reports a page-limit-truncated crawl as degraded, not ready, even though indexing succeeds", async () => {
+    const source = httpManualSource();
+    const truncated: HtmlManualSource = {
+      ...source,
+      limits: { ...source.limits, maxPages: 1 },
+    };
+    const result = await createHtmlManualPod(podDeps(MANUAL_PAGES), truncated);
+    expect(result.crawl.status).toBe("limit-reached");
+    expect(result.indexing?.status).toBe("succeeded");
+    expect(result.progress.phase).toBe("degraded");
+    expect(result.progress.remediations.map((entry) => entry.reason)).toContain("page-limit");
+  });
+
+  it("creates the capsule with a caller-supplied sealed policy override, not the standard default", async () => {
+    const result = await createHtmlManualPod(
+      { ...podDeps(MANUAL_PAGES), modelUsePolicy: sealedLocalPodModelUsePolicy() },
+      httpManualSource(),
+    );
+    expect(result.summary.modelUsePolicy.mode).toBe("sealed-local");
+  });
+
+  it("reports a real embedding-adapter failure as a degraded pod with remediation guidance", async () => {
+    const deps = podDeps(MANUAL_PAGES);
+    const failingAdapter: typeof deps.embeddingAdapter = {
+      ...deps.embeddingAdapter,
+      request: (): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+    };
+    const result = await createHtmlManualPod(
+      { ...deps, embeddingAdapter: failingAdapter },
+      httpManualSource(),
+    );
+    expect(result.crawl.status).toBe("completed");
+    // A universally failing adapter aborts during the embedding-space preflight, before any
+    // document is processed — the job fails closed at the job level rather than accumulating
+    // per-document failures.
+    expect(result.indexing?.status).toBe("failed");
+    expect(result.progress.phase).toBe("degraded");
+    expect(result.progress.remediations.map((entry) => entry.reason)).toContain(
+      "EMBEDDING_ADAPTER_FAILED",
+    );
   });
 
   it("does not publish a ready pod when the crawl is cancelled (#1875)", async () => {
