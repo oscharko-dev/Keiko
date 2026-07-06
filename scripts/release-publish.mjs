@@ -29,6 +29,28 @@ const valueArgFields = new Map([
   ["--registry", "registry"],
   ["--tag", "tag"],
 ]);
+const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 13);
+const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 5000);
+
+function positiveIntegerEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.length === 0) return fallback;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isInteger(value) || value < 1) {
+    fail(`${name} must be a positive integer.`);
+  }
+  return value;
+}
+
+function nonNegativeIntegerEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw.length === 0) return fallback;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isInteger(value) || value < 0) {
+    fail(`${name} must be a non-negative integer.`);
+  }
+  return value;
+}
 
 function fail(message) {
   console.error(`release-publish: FAIL - ${message}`);
@@ -452,15 +474,20 @@ function ensureGithubRelease(rootPackage, options, notes) {
 }
 
 function npmViewVersion(pkg, npmEnv, registry) {
+  const result = npmViewVersionResult(pkg, npmEnv, registry);
+  return result.kind === "available" && result.version === pkg.version;
+}
+
+function npmViewVersionResult(pkg, npmEnv, registry) {
   const result = commandResult("npm", ["view", pkg.spec, "version", "--registry", registry], {
     env: npmEnv,
   });
-  if (result.status === 0 && result.stdout.trim() === pkg.version) {
-    return true;
+  if (result.status === 0) {
+    return { kind: "available", version: result.stdout.trim() };
   }
   const viewOutput = `${result.stdout}\n${result.stderr}`;
   if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {
-    return false;
+    return { kind: "missing", version: "" };
   }
   fail(
     `could not inspect ${pkg.spec} in ${registry}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
@@ -468,6 +495,12 @@ function npmViewVersion(pkg, npmEnv, registry) {
 }
 
 function npmViewDistTag(pkg, npmEnv, registry, tag) {
+  const result = npmViewDistTagResult(pkg, npmEnv, registry, tag);
+  if (result.kind === "available") return result.version;
+  return "";
+}
+
+function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
   const result = commandResult(
     "npm",
     ["view", pkg.name, `dist-tags.${tag}`, "--registry", registry],
@@ -475,12 +508,16 @@ function npmViewDistTag(pkg, npmEnv, registry, tag) {
       env: npmEnv,
     },
   );
-  if (result.status !== 0) {
-    fail(
-      `could not inspect ${pkg.name} dist-tag ${tag}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-    );
+  if (result.status === 0) {
+    return { kind: "available", version: result.stdout.trim() };
   }
-  return result.stdout.trim();
+  const viewOutput = `${result.stdout}\n${result.stderr}`;
+  if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {
+    return { kind: "missing", version: "" };
+  }
+  fail(
+    `could not inspect ${pkg.name} dist-tag ${tag}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
 }
 
 function packageRecord(manifest, packageDir) {
@@ -559,14 +596,53 @@ function ensurePackageDistTag(pkg, npmEnv, options) {
   });
 }
 
+function readVerificationState(pkg, npmEnv, registry, tag) {
+  return {
+    tag: npmViewDistTagResult(pkg, npmEnv, registry, tag),
+    version: npmViewVersionResult(pkg, npmEnv, registry),
+  };
+}
+
+function verificationSucceeded(pkg, state) {
+  return state.version.version === pkg.version && state.tag.version === pkg.version;
+}
+
+function logPendingVerification(pkg, state, tag, attempt) {
+  console.log(
+    `release-publish: VERIFY pending ${pkg.spec} ` +
+      `(attempt ${String(attempt)}/${String(verifyAttempts)}; ` +
+      `version=${state.version.version || state.version.kind}; ` +
+      `${tag}=${state.tag.version || state.tag.kind}).`,
+  );
+}
+
+function failVerification(pkg, state, registry, tag) {
+  if (state.version.version !== pkg.version) {
+    const observed = state.version.version || state.version.kind;
+    fail(`${pkg.spec} is not available in ${registry} after publish (observed ${observed}).`);
+  }
+  if (state.tag.version !== pkg.version) {
+    const observed = state.tag.version || state.tag.kind;
+    fail(`${pkg.name}@${tag} points to ${observed}, expected ${pkg.version}.`);
+  }
+}
+
 function verifyPackage(pkg, npmEnv, registry, tag) {
-  if (!npmViewVersion(pkg, npmEnv, registry)) {
-    fail(`${pkg.spec} is not available in ${registry} after publish.`);
+  let state = readVerificationState(pkg, npmEnv, registry, tag);
+  for (let attempt = 1; attempt <= verifyAttempts; attempt += 1) {
+    if (verificationSucceeded(pkg, state)) return;
+    if (attempt < verifyAttempts) {
+      logPendingVerification(pkg, state, tag, attempt);
+      waitForRegistryPropagation();
+      state = readVerificationState(pkg, npmEnv, registry, tag);
+    }
   }
-  const currentTag = npmViewDistTag(pkg, npmEnv, registry, tag);
-  if (currentTag !== pkg.version) {
-    fail(`${pkg.name}@${tag} points to ${currentTag}, expected ${pkg.version}.`);
-  }
+  failVerification(pkg, state, registry, tag);
+}
+
+function waitForRegistryPropagation() {
+  if (verifyDelayMs === 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, verifyDelayMs);
 }
 
 function runReleaseGates() {
