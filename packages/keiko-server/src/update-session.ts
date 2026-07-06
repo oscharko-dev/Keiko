@@ -28,6 +28,10 @@ import {
   type PortableUpdateStager,
 } from "./update-portable-staging.js";
 import {
+  PortableUpdateActivationError,
+  type PortableUpdateActivator,
+} from "./update-portable-activation.js";
+import {
   createRestartVerificationSession,
   defaultDetectorFor,
   failureFromError,
@@ -110,6 +114,7 @@ export interface UpdateSessionManagerOptions {
   readonly timeoutMs?: number | undefined;
   readonly lock?: UpdateSessionLock | undefined;
   readonly portableStager?: PortableUpdateStager | undefined;
+  readonly portableActivator?: PortableUpdateActivator | undefined;
 }
 
 class UpdateSessionManagerImpl implements UpdateSessionManager {
@@ -127,6 +132,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private readonly lock: UpdateSessionLock | undefined;
   private readonly facts: () => UpdateRuntimeFacts;
   private readonly portableStager: PortableUpdateStager | undefined;
+  private readonly portableActivator: PortableUpdateActivator | undefined;
   private active: UpdateSession | undefined;
   private last: UpdateSession | undefined;
   private activeAbort:
@@ -148,6 +154,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.lock = options.lock;
     this.facts = options.facts ?? ((): UpdateRuntimeFacts => productionUpdateFacts(this.env));
     this.portableStager = options.portableStager;
+    this.portableActivator = options.portableActivator;
   }
 
   public readonly getStatus = (): UpdateSessionStatus => ({
@@ -408,18 +415,26 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     session: UpdateSession,
     mode: UpdateInstallMode,
   ): Promise<void> {
-    if (this.portableStager === undefined) {
+    if (this.portableStager === undefined || this.portableActivator === undefined) {
       this.settleFailure(session, "portable-preflight-ineligible");
       return;
     }
     const controller = new AbortController();
     this.activeAbort = { sessionId: session.sessionId, controller };
     try {
+      const runtimeFacts = this.facts();
       const portableStage = await this.portableStager.stage({
         sessionId: session.sessionId,
         targetVersion: session.targetVersion,
         installMode: mode,
-        runtimeFacts: this.facts(),
+        runtimeFacts,
+        signal: controller.signal,
+      });
+      const portableActivation = await this.portableActivator.activate({
+        sessionId: session.sessionId,
+        targetVersion: session.targetVersion,
+        stage: portableStage,
+        runtimeFacts,
         signal: controller.signal,
       });
       this.finish(
@@ -430,18 +445,24 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
           retryable: false,
           restartRequired: false,
           portableStage,
-          message: `Portable update ${session.targetVersion} is verified and staged for activation.`,
+          portableActivation,
+          message: `Portable update ${session.targetVersion} is active and verified after relaunch.`,
         }),
       );
     } catch (error) {
-      const reason =
-        error instanceof PortableUpdateStagingError ? error.reason : "portable-staging-failed";
+      const reason = this.portableFailureReason(error);
       this.settleFailure(session, reason);
     } finally {
       if (this.activeAbort.sessionId === session.sessionId) {
         this.activeAbort = undefined;
       }
     }
+  }
+
+  private portableFailureReason(error: unknown): UpdateSessionFailureReason {
+    if (error instanceof PortableUpdateStagingError) return error.reason;
+    if (error instanceof PortableUpdateActivationError) return error.reason;
+    return "portable-staging-failed";
   }
 
   private async invokeCommand(session: UpdateSession, mode: UpdateInstallMode): Promise<void> {

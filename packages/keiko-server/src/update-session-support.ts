@@ -146,7 +146,10 @@ export function retryableFailure(reason: UpdateSessionFailureReason): boolean {
     reason === "timed-out" ||
     reason === "spawn-error" ||
     reason === "portable-download-failed" ||
-    reason === "portable-staging-failed"
+    reason === "portable-staging-failed" ||
+    reason === "portable-activation-failed" ||
+    reason === "portable-relaunch-failed" ||
+    reason === "portable-version-verification-failed"
   );
 }
 
@@ -157,26 +160,27 @@ export function failureFromError(error: unknown): UpdateSessionFailureReason {
   return "spawn-error";
 }
 
+const FAILURE_MESSAGES: Partial<Record<UpdateSessionFailureReason, string>> = {
+  "command-denied": "The update command was blocked by policy.",
+  "timed-out": "The package manager did not finish before the timeout.",
+  cancelled: "The update was cancelled.",
+  "restart-version-mismatch":
+    "Restart not detected yet. Run the restart command, then try Verify restart again.",
+  "portable-preflight-ineligible":
+    "The portable update candidate is no longer eligible. Re-run update preflight.",
+  "portable-download-failed": "The portable update asset could not be downloaded.",
+  "portable-verification-failed": "The portable update asset could not be verified.",
+  "portable-staging-failed": "The portable update asset could not be staged safely.",
+  "portable-activation-failed":
+    "The portable update could not be activated safely. The current install was preserved when possible.",
+  "portable-relaunch-failed":
+    "The portable update was activated, but Keiko could not relaunch automatically.",
+  "portable-version-verification-failed":
+    "Keiko relaunched, but the target version could not be verified.",
+};
+
 export function messageForFailure(reason: UpdateSessionFailureReason): string {
-  if (reason === "command-denied") return "The update command was blocked by policy.";
-  if (reason === "timed-out") return "The package manager did not finish before the timeout.";
-  if (reason === "cancelled") return "The update was cancelled.";
-  if (reason === "restart-version-mismatch") {
-    return "Restart not detected yet. Run the restart command, then try Verify restart again.";
-  }
-  if (reason === "portable-preflight-ineligible") {
-    return "The portable update candidate is no longer eligible. Re-run update preflight.";
-  }
-  if (reason === "portable-download-failed") {
-    return "The portable update asset could not be downloaded.";
-  }
-  if (reason === "portable-verification-failed") {
-    return "The portable update asset could not be verified.";
-  }
-  if (reason === "portable-staging-failed") {
-    return "The portable update asset could not be staged safely.";
-  }
-  return "The package manager could not complete the update.";
+  return FAILURE_MESSAGES[reason] ?? "The package manager could not complete the update.";
 }
 
 export function isTerminal(phase: UpdateSessionPhase): boolean {

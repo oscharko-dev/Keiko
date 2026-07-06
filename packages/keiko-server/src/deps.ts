@@ -56,6 +56,7 @@ import {
   type UpdateLocalStateManager,
 } from "./update-local-state.js";
 import { createPortableUpdateStager } from "./update-portable-staging.js";
+import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   createUpdateRemediationManager,
   type UpdateRemediationManager,
@@ -931,6 +932,10 @@ function buildUpdateSession(options: {
       egress: () =>
         options.runtimeConfig.current()?.egress ??
         resolveOutboundHttpEgressConfig(undefined, options.env),
+    }),
+    portableActivator: createPortableUpdateActivator({
+      env: options.env,
+      localState: options.updateLocalState,
     }),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);

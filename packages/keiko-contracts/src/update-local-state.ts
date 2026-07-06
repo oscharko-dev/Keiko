@@ -1,5 +1,9 @@
 import type { ReleaseImpactRemediation, ReleaseImpactStateImpact } from "./release-impact.js";
-import type { UpdatePortableStagingSummary, UpdatePortableTarget } from "./update-session.js";
+import type {
+  UpdatePortableActivationSummary,
+  UpdatePortableStagingSummary,
+  UpdatePortableTarget,
+} from "./update-session.js";
 
 export const UPDATE_LOCAL_STATE_SCHEMA_VERSION = 1 as const;
 
@@ -42,6 +46,8 @@ export const UPDATE_RUNTIME_EVENT_TYPES = [
   "package-update-result",
   "portable-download-result",
   "portable-staging-result",
+  "portable-activation-result",
+  "portable-relaunch-result",
   "remediation-completed",
   "remediation-failed",
   "remediation-deferred",
@@ -128,6 +134,7 @@ export interface UpdateRuntimeState {
   readonly targetVersion?: string | undefined;
   readonly snapshotId?: string | undefined;
   readonly portableStage?: UpdatePortableStagingSummary | undefined;
+  readonly portableActivation?: UpdatePortableActivationSummary | undefined;
   readonly remediations: readonly UpdateRemediationActionState[];
   readonly warnings: readonly UpdateRuntimeWarningCode[];
 }
@@ -140,6 +147,7 @@ export interface UpdateRuntimeAuditEvent {
   readonly targetVersion?: string | undefined;
   readonly snapshotId?: string | undefined;
   readonly portableStageId?: string | undefined;
+  readonly portableActivationId?: string | undefined;
   readonly portableTarget?: UpdatePortableTarget | undefined;
   readonly portableAssetName?: string | undefined;
   readonly portableAssetSha256?: string | undefined;
