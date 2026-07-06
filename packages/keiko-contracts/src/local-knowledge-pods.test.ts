@@ -435,6 +435,10 @@ describe("validateKnowledgePodSummary", () => {
     const encodedSecretEndpoint = "gateway.internal/v1?%63lient_secret=secret-value";
     const fragmentTokenText = "pod metadata #access_token=secret-value";
     const repeatedBareAssignment = `${"a=b ".repeat(2_000)}token=abc123`;
+    // The exact adversarial shape a polynomial key=value regex would choke on: a long run of a
+    // single repeated key-body character with no `=` in sight, so the backward scan from every
+    // `=` (there are none) never fires and the whole value-safety check must still return quickly.
+    const repeatedKeyBodyNoAssignment = "A".repeat(3_000);
 
     expect(isKnowledgePodEvidenceSafeText(repeatedSafeText)).toBe(true);
     expect(isKnowledgePodEvidenceSafeText(repeatedEndpoint)).toBe(false);
@@ -444,6 +448,7 @@ describe("validateKnowledgePodSummary", () => {
     expect(isKnowledgePodEvidenceSafeText(encodedSecretEndpoint)).toBe(false);
     expect(isKnowledgePodEvidenceSafeText(fragmentTokenText)).toBe(false);
     expect(isKnowledgePodEvidenceSafeText(repeatedBareAssignment)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(repeatedKeyBodyNoAssignment)).toBe(true);
   });
 
   it("requires compatibility to keep persisted Local Knowledge state unmigrated", () => {

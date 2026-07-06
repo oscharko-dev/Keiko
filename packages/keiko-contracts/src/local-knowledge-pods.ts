@@ -421,12 +421,28 @@ function containsTokenParameterKey(value: string): boolean {
 // example a config-dump or error-message fragment like `password=hunter2` or
 // `aws_secret_access_key=AKIA...` — which containsTokenKeyAfter never sees because it only scans
 // text following a literal `?` or `#`. This scans the whole value for identifier-like keys
-// immediately preceding `=` and reuses the same key-name check as the query-string path.
-const KEY_ASSIGNMENT_KEY_RE = /[A-Za-z][A-Za-z0-9_-]*(?==)/gu;
+// immediately preceding `=` and reuses the same key-name check as the query-string path. Uses a
+// bounded backward character scan rather than a regex quantifier, so it stays linear instead of
+// polynomial on adversarial input (a long run of key-body characters with no `=`).
+function isKeyAssignmentBodyChar(char: string): boolean {
+  return isAsciiLetter(char) || isAsciiDigit(char) || char === "_" || char === "-";
+}
 
 function containsBareTokenAssignment(value: string): boolean {
-  for (const match of value.matchAll(KEY_ASSIGNMENT_KEY_RE)) {
-    if (queryKeyContainsTokenName(match[0])) return true;
+  let searchFrom = 0;
+  while (searchFrom < value.length) {
+    const equals = value.indexOf("=", searchFrom);
+    if (equals === -1) return false;
+    let start = equals;
+    while (start > 0 && isKeyAssignmentBodyChar(value.charAt(start - 1))) start -= 1;
+    if (
+      start < equals &&
+      isAsciiLetter(value.charAt(start)) &&
+      queryKeyContainsTokenName(value.slice(start, equals))
+    ) {
+      return true;
+    }
+    searchFrom = equals + 1;
   }
   return false;
 }
