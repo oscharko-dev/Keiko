@@ -21,10 +21,19 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+  KnowledgePodSetReadinessReasonCode,
+} from "@oscharko-dev/keiko-contracts";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
-import type { CapsuleListEntry, ConnectorGraphProps, RowActionKind } from "./connector-graph-types";
+import type {
+  CapsuleListEntry,
+  CapsuleSetListEntry,
+  ConnectorGraphProps,
+  RowActionKind,
+} from "./connector-graph-types";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
@@ -57,7 +66,7 @@ function AlertBanner({
         <button
           type="button"
           onClick={onRetry}
-          aria-label="Retry loading capsules"
+          aria-label="Retry loading Knowledge Pods"
           className="lk-alert-retry"
         >
           Retry
@@ -169,7 +178,7 @@ function CreateCapsuleDialog({
     event.preventDefault();
     const trimmed = name.trim();
     if (trimmed.length === 0) {
-      setValidationError("Capsule display name is required.");
+      setValidationError("Pod display name is required.");
       return;
     }
     setValidationError(null);
@@ -189,18 +198,18 @@ function CreateCapsuleDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Create capsule
+          Create Knowledge Pod
         </h2>
         {/* Copy used to promise "creates and indexes it" — POST /capsules only
             creates a Draft; indexing is a separate step on the capsule page
             (uiux-fix F032, C232). */}
         <p id={descriptionId} className="mc-dialog-body">
-          Name the capsule. After creating it, connect a source and start indexing from the capsule
-          page.
+          Name this Knowledge Pod. After creating it, connect a source and start indexing from the
+          pod page.
         </p>
         <form onSubmit={(event) => void handleSubmit(event)}>
           <label className="mc-dialog-field" htmlFor={inputId}>
-            <span className="mc-dialog-label">Capsule display name</span>
+            <span className="mc-dialog-label">Knowledge Pod display name</span>
             <input
               id={inputId}
               ref={inputRef}
@@ -232,7 +241,7 @@ function CreateCapsuleDialog({
               Cancel
             </button>
             <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-              {busy ? "Creating…" : "Create capsule"}
+              {busy ? "Creating…" : "Create Knowledge Pod"}
             </button>
           </div>
         </form>
@@ -311,10 +320,10 @@ function DisconnectConfirmDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Disconnect capsule
+          Disconnect Knowledge Pod
         </h2>
         <p id={descriptionId} className="mc-dialog-body">
-          Disconnect &quot;{capsuleName}&quot;? The capsule keeps its index, but the source link is
+          Disconnect &quot;{capsuleName}&quot;? The pod keeps its index, but the source link is
           removed.
         </p>
         <div className="mc-dialog-actions">
@@ -345,6 +354,114 @@ function StatusBadge({ state }: { state: CapsuleLifecycleState }): ReactNode {
       {STATUS_LABELS[state]}
     </span>
   );
+}
+
+function guidanceBadgeState(tone: "warning" | "danger" | "muted"): CapsuleLifecycleState {
+  if (tone === "danger") return "error";
+  if (tone === "warning") return "stale";
+  return "draft";
+}
+
+function EmbeddingGuidanceBadge({
+  guidance,
+}: {
+  readonly guidance: NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"];
+}): ReactNode {
+  if (guidance === undefined) return null;
+  return (
+    <span className="lk-badge" data-state={guidanceBadgeState(guidance.tone)}>
+      {guidance.label}
+    </span>
+  );
+}
+
+function EmbeddingGuidanceDescription({
+  id,
+  guidance,
+}: {
+  readonly id: string;
+  readonly guidance: NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"];
+}): ReactNode {
+  if (guidance === undefined) return null;
+  return (
+    <small id={id}>
+      Knowledge Pod guidance: {guidance.label}. {guidance.description}
+    </small>
+  );
+}
+
+function readinessBadgeState(
+  readiness: NonNullable<CapsuleSetListEntry["knowledgePod"]>["readiness"] | undefined,
+): CapsuleLifecycleState {
+  if (readiness === "ready") return "ready";
+  if (readiness === "indexing") return "indexing";
+  if (readiness === "error" || readiness === "unavailable") return "error";
+  if (readiness === "stale" || readiness === "degraded") return "stale";
+  return "draft";
+}
+
+function readinessLabel(
+  readiness: NonNullable<CapsuleSetListEntry["knowledgePod"]>["readiness"] | undefined,
+): string {
+  if (readiness === undefined) return "Unknown";
+  if (readiness === "ready") return "Ready";
+  if (readiness === "indexing") return "Indexing";
+  if (readiness === "stale") return "Stale";
+  if (readiness === "degraded") return "Degraded";
+  if (readiness === "unavailable") return "Unavailable";
+  if (readiness === "error") return "Failed";
+  return "Draft";
+}
+
+type CapsuleSetReadinessSummary = NonNullable<
+  NonNullable<CapsuleSetListEntry["knowledgePod"]>["setReadiness"]
+>;
+
+const SET_READINESS_REASON_LABELS: Record<KnowledgePodSetReadinessReasonCode, string> = {
+  "member-draft": "draft",
+  "member-indexing": "indexing",
+  "member-stale": "stale",
+  "member-error": "error",
+  "member-unavailable": "unavailable",
+  "member-degraded": "degraded",
+  "missing-member": "missing",
+  "policy-denied": "policy denied",
+  "embedding-unknown": "embedding unknown",
+  "embedding-incompatible": "embedding mismatch",
+  "embedding-unavailable": "embedding unavailable",
+  "embedding-opaque": "embedding opaque",
+  "no-sources": "no sources",
+  "no-vectors": "no vectors",
+  "future-remote-member": "remote placeholder",
+  "future-federated-member": "federated placeholder",
+  "future-ephemeral-member": "ephemeral placeholder",
+};
+
+function setReasonLabels(setReadiness: CapsuleSetReadinessSummary): readonly string[] {
+  return setReadiness.reasonCodes.map((code) => SET_READINESS_REASON_LABELS[code]);
+}
+
+function setCountsLine(set: CapsuleSetListEntry): string {
+  const counts = set.knowledgePod?.counts;
+  if (counts === undefined) return `${set.capsuleCount.toString()} Knowledge Pods`;
+  const base = [
+    `${counts.capsuleCount.toString()} pods`,
+    `${counts.sourceCount.toString()} sources`,
+    `${counts.documentCount.toString()} docs`,
+    `${counts.chunkCount.toString()} chunks`,
+    `${counts.vectorCount.toString()} vectors`,
+  ];
+  const setReadiness = set.knowledgePod?.setReadiness;
+  if (setReadiness === undefined) return base.join(" / ");
+  const reasonLabels = setReasonLabels(setReadiness);
+  return [
+    ...base,
+    `${setReadiness.readyCount.toString()} ready`,
+    `${setReadiness.degradedCount.toString()} degraded`,
+    `${setReadiness.deniedCount.toString()} policy denied`,
+    `${setReadiness.missingCount.toString()} missing`,
+    ...(reasonLabels.length > 0 ? [`reasons: ${reasonLabels.join(", ")}`] : []),
+  ].join(" / ");
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +499,7 @@ function IndexOrCancelBtn({
         type="button"
         disabled={busy}
         aria-busy={busyKind === "cancel"}
-        aria-label={`Cancel indexing for capsule ${displayName}`}
+        aria-label={`Cancel indexing for Knowledge Pod ${displayName}`}
         onClick={() => {
           onCancel(id);
         }}
@@ -400,9 +517,9 @@ function IndexOrCancelBtn({
         disabled={busy}
         aria-disabled={hasSources ? undefined : true}
         aria-busy={busyKind === "index"}
-        aria-label={`Start indexing capsule ${displayName}`}
+        aria-label={`Start indexing Knowledge Pod ${displayName}`}
         aria-describedby={hasSources ? undefined : noSourceHintId}
-        title={hasSources ? undefined : "Attach a source before indexing this capsule."}
+        title={hasSources ? undefined : "Attach a source before indexing this Knowledge Pod."}
         onClick={() => {
           if (!hasSources) return;
           onStart(id);
@@ -434,7 +551,7 @@ function CapsuleRowActions({
   return (
     <div
       role="group"
-      aria-label={`Actions for capsule ${displayName}`}
+      aria-label={`Actions for Knowledge Pod ${displayName}`}
       className="lk-capsule-actions"
     >
       <IndexOrCancelBtn
@@ -447,7 +564,7 @@ function CapsuleRowActions({
       <button
         type="button"
         disabled={busy}
-        aria-label={`Add capsule ${displayName} to workspace`}
+        aria-label={`Add Knowledge Pod ${displayName} to workspace`}
         onClick={() => {
           onAddToWorkspace(id);
         }}
@@ -458,7 +575,7 @@ function CapsuleRowActions({
       <button
         type="button"
         disabled={busy}
-        aria-label={`Open details for capsule ${displayName}`}
+        aria-label={`Open details for Knowledge Pod ${displayName}`}
         onClick={() => {
           onHealth(id);
         }}
@@ -470,7 +587,7 @@ function CapsuleRowActions({
         type="button"
         disabled={busy}
         aria-busy={busyKind === "disconnect"}
-        aria-label={`Disconnect capsule ${displayName}`}
+        aria-label={`Disconnect Knowledge Pod ${displayName}`}
         onClick={() => {
           onDisconnect(id);
         }}
@@ -537,6 +654,9 @@ function CapsuleRow({
   onHealth,
   onAddToWorkspace,
 }: RowActionProps): ReactNode {
+  const guidance = capsule.knowledgePod?.guidance;
+  const guidanceDescriptionId = useId();
+  const guidanceDescribedBy = guidance === undefined ? undefined : guidanceDescriptionId;
   const [dragGhost, setDragGhost] = useState<CapsuleDragGhost | null>(null);
   const dragActiveRef = useRef(false);
   const dropDispatchedRef = useRef(false);
@@ -651,7 +771,11 @@ function CapsuleRow({
 
   return (
     <>
-      <article aria-label={`Capsule: ${capsule.displayName}`} className="lk-capsule-row">
+      <article
+        aria-label={`Knowledge Pod: ${capsule.displayName}`}
+        aria-describedby={guidanceDescribedBy}
+        className="lk-capsule-row"
+      >
         <button
           type="button"
           className="lk-capsule-drag-handle"
@@ -660,8 +784,9 @@ function CapsuleRow({
           // is removed from the Tab order (tabIndex={-1}) to avoid a redundant,
           // keyboard-inert stop (GEN-UI-KEYBOARD-004 / GEN-UI-INTERACTION-004).
           tabIndex={-1}
-          aria-label={`Drag ${capsule.displayName} to the workspace`}
-          title="Drag to the workspace to create a connector card"
+          aria-label={`Drag Knowledge Pod ${capsule.displayName} to the workspace`}
+          aria-describedby={guidanceDescribedBy}
+          title="Drag to the workspace to create a Knowledge Pod card"
           onPointerDown={onPointerDown}
           onMouseDown={onMouseDown}
           onDragStart={onDragStart}
@@ -676,6 +801,8 @@ function CapsuleRow({
               {capsule.displayName}
             </span>
             <StatusBadge state={capsule.lifecycleState} />
+            <EmbeddingGuidanceBadge guidance={guidance} />
+            <EmbeddingGuidanceDescription id={guidanceDescriptionId} guidance={guidance} />
           </span>
         </button>
         <CapsuleRowActions
@@ -726,21 +853,20 @@ function EmptyState({
         ⬡
       </span>
       <div>
-        <p className="lk-empty-title">No capsules yet</p>
+        <p className="lk-empty-title">No Knowledge Pods yet</p>
         <p className="lk-empty-body">
-          Create a capsule to start indexing your local knowledge sources.
+          Create a Knowledge Pod to start indexing governed local knowledge sources.
         </p>
       </div>
       <button
         type="button"
         disabled={creating}
-        aria-label="Create your first knowledge capsule"
         onClick={onCreateCapsule}
         className="lk-btn lk-btn-primary lk-btn-xl"
       >
-        {creating ? "Creating…" : "Create your first capsule"}
+        {creating ? "Creating…" : "Create your first Knowledge Pod"}
       </button>
-      {/* The permanently-disabled "Connect to existing capsule" button (with a
+      {/* The permanently-disabled "Connect to existing Knowledge Pod" button (with a
           dev-jargon title tooltip nobody could reach by keyboard) is removed
           until the feature exists (uiux-fix F032, C149/C227). */}
     </div>
@@ -779,7 +905,7 @@ function CapsuleSection({
   if (isLoading) {
     return (
       <p role="status" aria-live="polite" className="lk-loading">
-        Loading capsules…
+        Loading Knowledge Pods…
       </p>
     );
   }
@@ -788,7 +914,7 @@ function CapsuleSection({
   }
   return (
     <ul
-      aria-label="Knowledge capsule list"
+      aria-label="Knowledge Pod list"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -825,6 +951,136 @@ function CapsuleSection({
         </li>
       ))}
     </ul>
+  );
+}
+
+function CapsuleSetRow({
+  capsuleSet,
+  onAddToWorkspace,
+}: {
+  readonly capsuleSet: CapsuleSetListEntry;
+  readonly onAddToWorkspace: () => void;
+}): ReactNode {
+  const guidance = capsuleSet.knowledgePod?.guidance;
+  const guidanceDescriptionId = useId();
+  const countsId = useId();
+  const describedBy = [countsId, guidance === undefined ? undefined : guidanceDescriptionId]
+    .filter((id): id is string => id !== undefined)
+    .join(" ");
+  const readiness = capsuleSet.knowledgePod?.readiness;
+  const payload: LocalKnowledgeConnectorDragPayload = {
+    kind: "capsule-set",
+    id: capsuleSet.id,
+    label: capsuleSet.displayName,
+    lifecycleState: readiness ?? "unknown",
+  };
+  const onDragStart = (event: DragEvent<HTMLElement>): void => {
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(
+      LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+      serializeLocalKnowledgeConnectorDrag(payload),
+    );
+    event.dataTransfer.setData("text/plain", capsuleSet.displayName);
+  };
+  const onDragEnd = (event: DragEvent<HTMLElement>): void => {
+    if (isWorkspaceDropTarget(event.clientX, event.clientY)) {
+      dispatchConnectorDrop(payload, event);
+    }
+  };
+  return (
+    <article
+      aria-label={`Knowledge Pod Set: ${capsuleSet.displayName}`}
+      aria-describedby={describedBy}
+      className="lk-capsule-row"
+    >
+      <button
+        type="button"
+        className="lk-capsule-drag-handle"
+        tabIndex={-1}
+        aria-label={`Drag Knowledge Pod Set ${capsuleSet.displayName} to the workspace`}
+        aria-describedby={describedBy}
+        title="Drag to the workspace to create a Knowledge Pod Set card"
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+      >
+        <span aria-hidden="true" className="lk-capsule-icon">
+          ▣
+        </span>
+        <span className="lk-capsule-info">
+          <span className="lk-capsule-name" title={capsuleSet.displayName}>
+            {capsuleSet.displayName}
+          </span>
+          <span className="lk-badge" data-state={readinessBadgeState(readiness)}>
+            {readinessLabel(readiness)}
+          </span>
+          <span className="lk-badge" data-state="draft">
+            {capsuleSet.capsuleCount.toString()} Pods
+          </span>
+          <EmbeddingGuidanceBadge guidance={guidance} />
+          <small id={countsId} style={{ display: "block", color: "var(--text-secondary)" }}>
+            Knowledge Pod Set readiness: {readinessLabel(readiness)}. {setCountsLine(capsuleSet)}.
+          </small>
+          <EmbeddingGuidanceDescription id={guidanceDescriptionId} guidance={guidance} />
+        </span>
+      </button>
+      <div className="lk-capsule-actions">
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          onClick={onAddToWorkspace}
+          aria-label={`Add Knowledge Pod Set ${capsuleSet.displayName} to workspace`}
+          aria-describedby={describedBy}
+        >
+          Add to workspace
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function CapsuleSetSection({
+  capsuleSets,
+}: {
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
+}): ReactNode {
+  if (capsuleSets.length === 0) return null;
+  return (
+    <>
+      <h2 className="lk-section-head">Knowledge Pod Sets</h2>
+      <ul
+        aria-label="Knowledge Pod Set list"
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          listStyle: "none",
+          padding: 0,
+          margin: "0 0 12px",
+        }}
+      >
+        {capsuleSets.map((capsuleSet) => (
+          <li key={capsuleSet.id} style={{ display: "block" }}>
+            <CapsuleSetRow
+              capsuleSet={capsuleSet}
+              onAddToWorkspace={() => {
+                const center = getWorkspaceCenter();
+                if (center !== null)
+                  dispatchConnectorDrop(
+                    {
+                      kind: "capsule-set",
+                      id: capsuleSet.id,
+                      label: capsuleSet.displayName,
+                      lifecycleState: capsuleSet.knowledgePod?.readiness ?? "unknown",
+                    },
+                    center,
+                  );
+              }}
+            />
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 
@@ -869,7 +1125,7 @@ function GraphPageHeader({
   return (
     <>
       <header className="lk-header">
-        <h1 className="lk-title">Local Knowledge Connector</h1>
+        <h1 className="lk-title">Knowledge Pods</h1>
         <div className="lk-header-actions">
           {showBackToWorkspace ? (
             <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
@@ -883,34 +1139,34 @@ function GraphPageHeader({
             type="button"
             aria-disabled={combineDisabled}
             aria-describedby={combineDisabled ? combineHintId : undefined}
-            aria-label="Combine capsules into a set"
             aria-haspopup="dialog"
             aria-expanded={combineDialogOpen}
             title={
-              combineDisabled ? "Create capsules first, then combine them into a set." : undefined
+              combineDisabled
+                ? "Create Knowledge Pods first, then combine them into a set."
+                : undefined
             }
             onClick={() => {
               if (!combineDisabled) onCombineCapsules();
             }}
             className="lk-btn lk-btn-ghost lk-btn-lg"
           >
-            Combine capsules
+            Create Knowledge Pod Set
           </button>
           {combineDisabled ? (
             <span id={combineHintId} className="visually-hidden">
-              Create capsules first, then combine them into a set.
+              Create Knowledge Pods first, then combine them into a set.
             </span>
           ) : null}
           <button
             type="button"
             disabled={creating}
-            aria-label="Create a new knowledge capsule"
             aria-haspopup="dialog"
             aria-expanded={createDialogOpen}
             onClick={onCreateCapsule}
             className="lk-btn lk-btn-primary lk-btn-lg"
           >
-            {creating ? "Creating…" : "Create capsule"}
+            {creating ? "Creating…" : "Create Knowledge Pod"}
           </button>
         </div>
       </header>
@@ -936,10 +1192,17 @@ function GraphPageHeader({
 
 // Summary for the single persistent live region (uiux-fix F032, C226):
 // announces reload results without re-reading every row.
-function capsuleAnnouncement(capsules: readonly CapsuleListEntry[]): string {
+function catalogAnnouncement(
+  capsules: readonly CapsuleListEntry[],
+  capsuleSets: readonly CapsuleSetListEntry[],
+): string {
   const indexing = capsules.filter((c) => c.lifecycleState === "indexing").length;
-  const base = `${capsules.length.toString()} capsule${capsules.length === 1 ? "" : "s"}`;
-  return indexing > 0 ? `${base}, ${indexing.toString()} indexing` : base;
+  const base = `${capsules.length.toString()} Knowledge Pod${capsules.length === 1 ? "" : "s"}`;
+  const setBase = `${capsuleSets.length.toString()} Knowledge Pod Set${
+    capsuleSets.length === 1 ? "" : "s"
+  }`;
+  const catalog = capsuleSets.length > 0 ? `${base}, ${setBase}` : base;
+  return indexing > 0 ? `${catalog}, ${indexing.toString()} indexing` : catalog;
 }
 
 export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
@@ -957,6 +1220,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   );
   const {
     capsules,
+    capsuleSets,
     loadStatus,
     loadError,
     actionBusy,
@@ -1005,7 +1269,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
             reload();
           }}
         >
-          Back to capsules
+          Back to Knowledge Pods
         </button>
         <CapsuleDetail
           capsuleId={activeCapsuleId}
@@ -1040,14 +1304,14 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           re-announcing every row after each reload flooded screen readers
           (uiux-fix F032, C226; pattern of MemoryList). */}
       <p role="status" className="visually-hidden">
-        {!isLoading && loadError === null ? capsuleAnnouncement(capsules) : null}
+        {!isLoading && loadError === null ? catalogAnnouncement(capsules, capsuleSets) : null}
       </p>
       <section
-        aria-label="Knowledge capsules"
+        aria-label="Knowledge Pods"
         aria-busy={isLoading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
-        <h2 className="lk-section-head">Knowledge Capsules</h2>
+        <h2 className="lk-section-head">Knowledge Pods</h2>
         <CapsuleSection
           capsules={capsules}
           isLoading={isLoading}
@@ -1062,6 +1326,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           }
           onOpenHealth={handleOpenHealth}
         />
+        <CapsuleSetSection capsuleSets={capsuleSets} />
       </section>
       {createDialogOpen ? (
         <CreateCapsuleDialog

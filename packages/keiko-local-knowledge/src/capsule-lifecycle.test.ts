@@ -1,6 +1,10 @@
 // capsule-lifecycle.test.ts — CRUD round-trips plus the mutation-robust cascade test.
 
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+  type KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -54,6 +58,7 @@ describe("createCapsule + getCapsule", () => {
         maxContextChars: 512,
         documentContextMaxChars: 16_000,
       },
+      modelUsePolicy: standardPodModelUsePolicy(),
     });
     const created = createCapsule(store, input);
     expect(created.id).toBe(input.id);
@@ -64,6 +69,7 @@ describe("createCapsule + getCapsule", () => {
     expect(created.sourceRoutingInstructions).toBe("always go through alpha");
     expect(created.alwaysQuery).toBe(true);
     expect(created.contextualRetrieval).toStrictEqual(input.contextualRetrieval);
+    expect(created.modelUsePolicy).toStrictEqual(input.modelUsePolicy);
     expect(created.retrievalEffort).toBe(input.retrievalEffort);
     expect(created.outputMode).toBe(input.outputMode);
     expect(created.answerGroundingPolicy).toBe(input.answerGroundingPolicy);
@@ -83,6 +89,7 @@ describe("createCapsule + getCapsule", () => {
     expect("sourceRoutingInstructions" in created).toBe(false);
     expect("alwaysQuery" in created).toBe(false);
     expect("contextualRetrieval" in created).toBe(false);
+    expect("modelUsePolicy" in created).toBe(false);
     expect("modelRevision" in created.embeddingModelIdentity).toBe(false);
   });
 
@@ -139,6 +146,40 @@ describe("updateCapsuleDetails", () => {
     });
 
     expect(updated.contextualRetrieval).toStrictEqual({ enabled: false });
+  });
+
+  it("persists model-use policy updates and marks a ready capsule stale", () => {
+    let t = 100;
+    Object.defineProperty(store._internal, "now", { value: (): number => t, configurable: true });
+    const created = createCapsule(store, sampleCapsuleInput({ lifecycleState: "ready" }));
+    t = 250;
+
+    const updated = updateCapsuleDetails(store, created.id, {
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+    });
+
+    expect(updated.modelUsePolicy).toStrictEqual(sealedLocalPodModelUsePolicy());
+    expect(updated.lifecycleState).toBe("stale");
+    expect(updated.updatedAt).toBe(250);
+    expect(getCapsule(store, created.id)?.modelUsePolicy).toStrictEqual(
+      sealedLocalPodModelUsePolicy(),
+    );
+  });
+
+  it("fails closed when persisted model-use policy JSON is corrupt", () => {
+    const created = createCapsule(store, sampleCapsuleInput());
+    store._internal.db
+      .prepare("UPDATE capsules SET model_use_policy_json = :json WHERE id = :id")
+      .run({
+        id: created.id,
+        json: JSON.stringify({
+          schemaVersion: "1",
+          mode: "sealed-local",
+          operations: {},
+        }),
+      });
+
+    expect(() => getCapsule(store, created.id)).toThrow("Corrupt capsules.model_use_policy_json");
   });
 });
 

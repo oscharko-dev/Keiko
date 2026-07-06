@@ -17,13 +17,13 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.2.11" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.2.13" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.11" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.13" as const;
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
@@ -109,6 +109,7 @@ export type {
   UpdatePreflightBlockerCode,
   UpdatePreflightImpactEntry,
   UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNoteSection,
   UpdatePreflightPatchNotes,
   UpdatePreflightRegistryStatus,
   UpdatePreflightReleaseMetadataStatus,
@@ -136,6 +137,7 @@ export type {
   UpdateInstallPackageManager,
   UpdateMutationPolicy,
   UpdatePolicySource,
+  UpdateRestartCommandPreview,
   UpdateRestartVerificationRequest,
   UpdateRestartVerificationRequestParse,
   UpdateRestartVerificationRequestParseFail,
@@ -843,6 +845,8 @@ export type {
   ModelKind,
   CostClass,
   LatencyClass,
+  ModelTokenAccountingSource,
+  ModelTokenAccounting,
   InfillingAlignment,
   ModelCapability,
   CompletionInteractionMode,
@@ -1268,7 +1272,12 @@ export {
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
-export { stripUnsafeFormatChars } from "./text-safety.js";
+export {
+  containsAbsolutePath,
+  containsPseudoRoleMarker,
+  redactAbsolutePaths,
+  stripUnsafeFormatChars,
+} from "./text-safety.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
@@ -1328,6 +1337,8 @@ export type {
   ContextLaneId,
   ContextEvictionPolicy,
   ContextBudgetPressure,
+  ContextTokenAccountingSource,
+  ContextTokenAccounting,
   ContextModelMetadata,
   ContextProfile,
   ContextLaneBudget,
@@ -1337,6 +1348,9 @@ export type {
   ContextAssemblyDiagnostics,
   ContextCompactionRecord,
   ContextCompactionModelSummary,
+  ContextCompactionModelSummaryStatus,
+  ContextCompactionModelSummaryValidationState,
+  ContextCompactionModelSummaryFailureReason,
   ContextRehydrationHandle,
   ContextProvenanceRefKind,
   ContextProvenanceRef,
@@ -1349,13 +1363,23 @@ export type {
 export {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   DEFAULT_TOKEN_ESTIMATOR_ID,
+  DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
   CONTEXT_LANE_IDS,
   CONTEXT_EVICTION_POLICIES,
+  CONTEXT_TOKEN_ACCOUNTING_SOURCES,
   DEFAULT_CONTEXT_PROFILE,
   estimateTokens,
   estimateTokensForSegments,
+  countContextTokens,
+  countContextTokensForSegments,
+  resolveContextTokenAccounting,
   maxUtf8BytesForTokenBudget,
   deriveContextProfile,
   deriveContextProfileFromCapability,
@@ -1571,6 +1595,95 @@ export {
   validateCapsuleReindexRequest,
   validateConnectorGraphState,
 } from "./local-knowledge-validation.js";
+export type {
+  EmbeddingProfileCompatibilityDecision,
+  EmbeddingProfileCompatibilityReason,
+  EmbeddingProfileCompatibilityStatus,
+  EmbeddingProfileFromModelOptions,
+  EmbeddingProfileIdentity,
+  EmbeddingProfileLocality,
+  EmbeddingProfilePolicyCapability,
+} from "./local-knowledge-embedding-profiles.js";
+export {
+  EMBEDDING_PROFILE_COMPATIBILITY_REASONS,
+  EMBEDDING_PROFILE_COMPATIBILITY_STATUSES,
+  EMBEDDING_PROFILE_POLICY_CAPABILITIES,
+  EMBEDDING_PROFILE_SCHEMA_VERSION,
+  compareEmbeddingProfiles,
+  embeddingProfileFromModelIdentity,
+  embeddingProfileKey,
+  inferEmbeddingModelFamily,
+} from "./local-knowledge-embedding-profiles.js";
+export type {
+  KnowledgePodModelUseOperation,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodModelUsePolicyDecision,
+  KnowledgePodModelUsePolicyMode,
+  KnowledgePodModelUsePolicyOperations,
+  KnowledgePodModelUsePolicySource,
+  KnowledgePodModelUsePolicyResolvedDecision,
+  KnowledgePodResolvedModelUsePolicy,
+  KnowledgePodResolvedModelUsePolicyOperations,
+} from "./local-knowledge-model-use-policy.js";
+export {
+  KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_DECISIONS,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_MODES,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_RESOLVED_DECISIONS,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+  isKnowledgePodModelUseOperationAllowed,
+  resolveKnowledgePodModelUsePolicy,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+  validateKnowledgePodModelUsePolicy,
+} from "./local-knowledge-model-use-policy.js";
+export type {
+  KnowledgePodBackingKind,
+  KnowledgePodCompatibilitySummary,
+  KnowledgePodCounts,
+  KnowledgePodEvidenceMode,
+  KnowledgePodGovernanceSummary,
+  KnowledgePodLocationKind,
+  KnowledgePodModelUsePolicySummary,
+  KnowledgePodPolicyPosture,
+  KnowledgePodPrivacySummary,
+  KnowledgePodReadiness,
+  KnowledgePodRetrievalCapabilities,
+  KnowledgePodSealingPosture,
+  KnowledgePodSetReadinessReasonCode,
+  KnowledgePodSetReadinessSummary,
+  KnowledgePodSourceKind,
+  KnowledgePodSummary,
+  KnowledgePodSummaryKind,
+  LocalKnowledgeCapsuleListEntry,
+  LocalKnowledgeCapsuleSetListEntry,
+  LocalKnowledgeCapsuleSetsResponse,
+  LocalKnowledgeCapsulesResponse,
+} from "./local-knowledge-pods.js";
+export {
+  KNOWLEDGE_POD_SET_READINESS_REASON_CODES,
+  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
+} from "./local-knowledge-pods.js";
+export type {
+  KnowledgePodRetrievalActivity,
+  KnowledgePodRetrievalActivityMode,
+  KnowledgePodRetrievalActivityPod,
+  KnowledgePodRetrievalActivityPodCounts,
+  KnowledgePodRetrievalActivityPrivacy,
+  KnowledgePodRetrievalActivityReasonCode,
+  KnowledgePodRetrievalActivityState,
+  KnowledgePodRetrievalActivitySummary,
+} from "./local-knowledge-retrieval-activity.js";
+export {
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_MODES,
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_STATES,
+  isKnowledgePodRetrievalActivitySafeText,
+  validateKnowledgePodRetrievalActivity,
+} from "./local-knowledge-retrieval-activity.js";
 
 // ─── Bounded large-document ingestion (Epic #1160 / Issue #1286) ────────────────
 export type {

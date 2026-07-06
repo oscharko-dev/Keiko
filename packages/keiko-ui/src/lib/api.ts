@@ -408,6 +408,9 @@ export interface VoiceTranscriptionRequest {
   readonly durationMs?: number | undefined;
   // Optional BCP-47 language tag hint for the provider.
   readonly language?: string | undefined;
+  // Optional short domain-keyword prompt (length-bounded server-side) to bias transcription toward
+  // in-domain proper nouns / identifiers. Omitted lets the BFF apply its language-neutral default.
+  readonly prompt?: string | undefined;
 }
 
 export interface VoiceTranscriptionResult {

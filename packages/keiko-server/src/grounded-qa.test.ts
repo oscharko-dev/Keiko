@@ -11,7 +11,12 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
-import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
+import {
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+  maxUtf8BytesForTokenBudget,
+  standardPodModelUsePolicy,
+  type KnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type ConnectedContextPack,
@@ -214,6 +219,17 @@ function firstGatewayRequest(requests: readonly GatewayRequest[]): GatewayReques
     throw new Error("expected a gateway request");
   }
   return request;
+}
+
+function evidencePersistenceDeniedPolicy(): KnowledgePodModelUsePolicy {
+  return {
+    schemaVersion: KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+    mode: "custom",
+    operations: {
+      ...standardPodModelUsePolicy().operations,
+      evidencePersistence: "deny",
+    },
+  };
 }
 
 function expectGroundedGatewayRequest(request: GatewayRequest): void {
@@ -1336,6 +1352,53 @@ describe("handleGroundedAsk", () => {
       "model-context-sent",
       "retrieval-performed",
     ]);
+  });
+
+  it("answers without audit rows or preview metadata when evidence persistence is denied", async () => {
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);
+    const uiDbPath = join(tmp, "keiko-ui.db");
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      capsuleId: "cap-no-evidence-persist",
+      text: "alpha beta indexed knowledge context",
+      modelUsePolicy: evidencePersistenceDeniedPolicy(),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    store.updateChat(chat.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: NOW },
+    });
+    const requests: GatewayRequest[] = [];
+    const model = fakeModel("Alpha beta context from indexed knowledge [1].", requests);
+    const adapter = scriptedAdapter();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "What is alpha?" })),
+      deps(model, {}, { uiDbPath, localKnowledgeEmbeddingRequest: adapter.request }),
+    );
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.groundingKind).toBe("local-knowledge");
+    if (answer.groundingKind !== "local-knowledge") {
+      throw new Error("expected local-knowledge grounded answer");
+    }
+    expect(answer.citations).toHaveLength(1);
+    expect(firstGatewayRequest(requests).messages[1]?.content).toContain("alpha");
+    expect(store.findGroundedPreviewCitations(answer.assistantMessageId) ?? []).toEqual([]);
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const auditKinds = verify._internal.db
+      .prepare(
+        "SELECT kind FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC",
+      )
+      .all({ c: seeded.capsuleId }) as unknown as readonly { readonly kind: string }[];
+    verify.close();
+    expect(auditKinds.map((row) => row.kind)).toEqual([]);
   });
 
   it("redacts secret-shaped excerpt text out of the single-connector model prompt (#189 audit)", async () => {

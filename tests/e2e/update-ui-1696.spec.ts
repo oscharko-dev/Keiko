@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isAbsolute, relative, resolve } from "node:path";
+import { evidenceScreenshotPath } from "./support/evidence.js";
 
 // Issue #1696 (Epic #1687) - browser proof for the governed update UI. The test boots the
 // packaged CLI UI, opens Updates through the real Settings/startup entry points, mocks only the
@@ -146,6 +147,10 @@ function artifactPath(name: ArtifactName): string {
     throw new Error("Issue #1696 update UI evidence artifact path is a symlink");
   }
   return resolved;
+}
+
+function screenshotArtifactPath(name: ArtifactName): string {
+  return evidenceScreenshotPath(relative(REPO_ROOT, artifactPath(name)));
 }
 
 function cssSha256(): string {
@@ -617,7 +622,13 @@ async function assertDetailsDisclosure(updateWindow: Locator): Promise<void> {
 
   await technicalDetails.locator("summary").click();
   await expect(technicalDetails).toHaveAttribute("open", "");
-  await expect(updateWindow.getByText("npm install -g @oscharko-dev/keiko@0.2.11")).toBeVisible();
+  await expect(technicalDetails.getByText("Registry")).toBeVisible();
+  await expect(technicalDetails.getByText("ok")).toBeVisible();
+  await expect(technicalDetails.getByText("Release metadata")).toBeVisible();
+  await expect(technicalDetails.getByText("live")).toBeVisible();
+  await expect(technicalDetails.getByText("Install mode")).toBeVisible();
+  await expect(technicalDetails.getByText("supported")).toBeVisible();
+  await expect(updateWindow.getByText("npm install -g @oscharko-dev/keiko@0.2.11")).toHaveCount(0);
   await technicalDetails.locator("summary").click();
   await expect(technicalDetails).not.toHaveAttribute("open", "");
 }
@@ -627,16 +638,34 @@ async function assertManualPath(updateWindow: Locator): Promise<void> {
     updateWindow.getByRole("heading", { name: "Critical update available" }),
   ).toBeVisible();
   await expect(updateWindow.getByText("Manual update path", { exact: true })).toBeVisible();
-  await updateWindow.getByRole("button", { name: "Show instructions" }).click();
+  const manualInstructions = updateWindow.locator("details").filter({
+    hasText: "Manual update instructions",
+  });
+  await expect(manualInstructions).not.toHaveAttribute("open", "");
+  await manualInstructions.locator("summary").click();
+  await expect(manualInstructions).toHaveAttribute("open", "");
   await expect(
     updateWindow.getByText("Run the approved package update outside Keiko"),
   ).toBeVisible();
+  await expect(
+    updateWindow.getByText("npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.11"),
+  ).toBeVisible();
+  await expect(
+    updateWindow.getByText("yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.11"),
+  ).toBeVisible();
+  await expect(
+    updateWindow.getByText("npm install --global --ignore-scripts @oscharko-dev/keiko@latest"),
+  ).toHaveCount(0);
   await expect(updateWindow.getByRole("button", { name: "Check again" })).toBeEnabled();
 }
 
 async function capture(locator: Locator, name: ArtifactName): Promise<ArtifactName> {
   await locator.evaluate(() => document.fonts.ready.then(() => undefined));
-  await locator.screenshot({ path: artifactPath(name), animations: "disabled", caret: "hide" });
+  await locator.screenshot({
+    path: screenshotArtifactPath(name),
+    animations: "disabled",
+    caret: "hide",
+  });
   return name;
 }
 

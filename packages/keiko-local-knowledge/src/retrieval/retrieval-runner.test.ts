@@ -13,6 +13,10 @@ import type {
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 
 import { createCapsuleSet } from "../capsule-set-lifecycle.js";
@@ -49,11 +53,36 @@ function getFixture(): Fixture {
   return fixture;
 }
 
+function standardSampleCapsuleInput(
+  overrides: Parameters<typeof sampleCapsuleInput>[0] = {},
+): ReturnType<typeof sampleCapsuleInput> {
+  return sampleCapsuleInput({
+    ...overrides,
+    modelUsePolicy: overrides.modelUsePolicy ?? standardPodModelUsePolicy(),
+  });
+}
+
 function vectorBlob(first: number, second: number): Uint8Array {
   const vector = new Float32Array(DEFAULT_EMBEDDING.vectorDimensions);
   vector[0] = first;
   vector[1] = second;
   return new Uint8Array(vector.buffer.slice(0));
+}
+
+function isEmbeddingCapabilityProbe(input: string): boolean {
+  return input === "ping" || input.startsWith("Keiko embedding space probe:");
+}
+
+function fixedQueryVectorOutcome(input: string, vector: Float32Array): OpenAIEmbeddingOutcome {
+  return {
+    ok: true,
+    value: {
+      vector: isEmbeddingCapabilityProbe(input)
+        ? deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions)
+        : vector,
+      modelId: DEFAULT_EMBEDDING.modelId,
+    },
+  };
 }
 
 function setChunkVector(
@@ -116,7 +145,7 @@ describe("runLocalKnowledgeRetrieval — input guards", () => {
     const { store } = getFixture();
     const capsuleId = createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-invalid" as KnowledgeCapsuleId,
         alwaysQuery: true,
         lifecycleState: "ready",
@@ -139,7 +168,7 @@ describe("runLocalKnowledgeRetrieval — input guards", () => {
     const { store } = getFixture();
     const capsuleId = createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-invalid" as KnowledgeCapsuleId,
         alwaysQuery: true,
         lifecycleState: "ready",
@@ -196,7 +225,7 @@ describe("runLocalKnowledgeRetrieval — embedding identity drift", () => {
     const identity: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, vectorDimensions: 16 };
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-best" as KnowledgeCapsuleId,
         answerGroundingPolicy: "best-effort",
         embeddingModelIdentity: identity,
@@ -256,6 +285,66 @@ describe("runLocalKnowledgeRetrieval — embedding identity drift", () => {
   });
 });
 
+describe("runLocalKnowledgeRetrieval — model-use policy", () => {
+  it("returns policy-denied without invoking the embedding adapter when dense search is required", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-sealed",
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+    });
+    const calls: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        calls.push(req.input);
+        return fixedQueryVectorOutcome(req.input, deterministicVector(req.input, 1536));
+      },
+    });
+
+    const result = await runLocalKnowledgeRetrieval(
+      { store, embeddingAdapter: adapter },
+      { capsuleId: "cap-sealed" as KnowledgeCapsuleId, text: "zzzzzz no lexical match" },
+    );
+
+    expect(result.references).toEqual([]);
+    expect(result.noEvidence).toBe(true);
+    expect(result.reason).toBe("policy-denied");
+    expect(calls).toStrictEqual([]);
+    expect(result.diagnostics?.embeddingLanes?.[0]).toMatchObject({
+      status: "policy-denied",
+      queryEmbeddingRequested: false,
+    });
+  });
+
+  it("uses lexical fallback without embedding calls when a sealed pod has lexical candidates", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-sealed-lexical",
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+    });
+    const calls: string[] = [];
+
+    const result = await runLocalKnowledgeRetrieval(
+      {
+        store,
+        embeddingAdapter: scriptedAdapter({
+          responder: (req): OpenAIEmbeddingOutcome => {
+            calls.push(req.input);
+            return fixedQueryVectorOutcome(req.input, deterministicVector(req.input, 1536));
+          },
+        }),
+      },
+      { capsuleId: "cap-sealed-lexical" as KnowledgeCapsuleId, text: "alpha" },
+    );
+
+    expect(result.references.length).toBeGreaterThan(0);
+    expect(result.noEvidence).toBe(false);
+    expect(result.embeddingDegraded).toBe(true);
+    expect(calls).toStrictEqual([]);
+    expect(result.diagnostics?.mode).toBe("lexical-degraded");
+    expect(result.diagnostics?.embeddingLanes?.[0]?.status).toBe("policy-denied");
+  });
+});
+
 describe("runLocalKnowledgeRetrieval — answerGroundingPolicy", () => {
   it("require-citations + empty refs → references=[] + grounding rejects", async () => {
     const { store } = getFixture();
@@ -263,7 +352,7 @@ describe("runLocalKnowledgeRetrieval — answerGroundingPolicy", () => {
     // empty refs → the runner converts to "answer-grounding-rejected".
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-strict" as KnowledgeCapsuleId,
         answerGroundingPolicy: "require-citations",
       }),
@@ -283,7 +372,7 @@ describe("runLocalKnowledgeRetrieval — answerGroundingPolicy", () => {
     const { store } = getFixture();
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-loose" as KnowledgeCapsuleId,
         answerGroundingPolicy: "best-effort",
       }),
@@ -304,7 +393,7 @@ describe("runLocalKnowledgeRetrieval — answerGroundingPolicy", () => {
     const { store } = getFixture();
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-loose-strict" as KnowledgeCapsuleId,
         answerGroundingPolicy: "require-citations-or-state-no-evidence",
       }),
@@ -328,7 +417,7 @@ describe("runLocalKnowledgeRetrieval — answerGroundingPolicy", () => {
     const capsuleId = "cap-state-no-evidence" as KnowledgeCapsuleId;
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: capsuleId,
         answerGroundingPolicy: "require-citations-or-state-no-evidence",
       }),
@@ -368,7 +457,7 @@ describe("runLocalKnowledgeRetrieval — capsule-set scope with strictest-policy
     // Override capsule B's policy to best-effort by creating a fresh capsule directly.
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-best" as KnowledgeCapsuleId,
         answerGroundingPolicy: "best-effort",
       }),
@@ -407,14 +496,14 @@ describe("runLocalKnowledgeRetrieval — capsule-set scope with strictest-policy
     // require-citations. The strictest floor must drive the rejection.
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-best" as KnowledgeCapsuleId,
         answerGroundingPolicy: "best-effort",
       }),
     );
     createCapsule(
       store,
-      sampleCapsuleInput({
+      standardSampleCapsuleInput({
         id: "cap-strict" as KnowledgeCapsuleId,
         answerGroundingPolicy: "require-citations",
       }),
@@ -463,13 +552,8 @@ describe("runLocalKnowledgeRetrieval — topK and minScore pass-through", () => 
       );
     });
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req.input, new Float32Array(vectorBlob(1, 0).buffer)),
     });
     const unfiltered = await runLocalKnowledgeRetrieval(
       { store, embeddingAdapter: adapter },

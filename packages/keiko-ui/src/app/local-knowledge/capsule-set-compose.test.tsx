@@ -22,6 +22,22 @@ function capsule(id: string, displayName: string): CapsuleListEntry {
   };
 }
 
+function capsuleWithGuidance(
+  id: string,
+  displayName: string,
+  guidance: NonNullable<NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"]>,
+): CapsuleListEntry {
+  return {
+    ...capsule(id, displayName),
+    knowledgePod: {
+      readiness: "degraded",
+      reindexRecommended: true,
+      queryEmbeddingAllowed: false,
+      guidance,
+    },
+  };
+}
+
 const CAPSULES = [capsule("cap-1", "Alpha"), capsule("cap-2", "Beta"), capsule("cap-3", "Gamma")];
 
 function okSet(): { capsuleSet: CapsuleSetDetail } {
@@ -49,9 +65,9 @@ function defaultProps(
 }
 
 describe("CapsuleSetComposeDialog — rendering", () => {
-  it("lists every capsule as a selectable member", () => {
+  it("lists every Knowledge Pod as a selectable member", () => {
     render(<CapsuleSetComposeDialog {...defaultProps()} />);
-    const list = screen.getByRole("list", { name: /selectable capsules/i });
+    const list = screen.getByRole("list", { name: /selectable Knowledge Pods/i });
     expect(within(list).getAllByRole("checkbox")).toHaveLength(3);
   });
 
@@ -62,34 +78,55 @@ describe("CapsuleSetComposeDialog — rendering", () => {
     await user.click(screen.getByRole("checkbox", { name: /beta/i }));
     expect(screen.getByText(/2\/16/)).toBeInTheDocument();
   });
+
+  it("surfaces Knowledge Pod guidance before a member is selected", () => {
+    render(
+      <CapsuleSetComposeDialog
+        {...defaultProps({
+          capsules: [
+            capsuleWithGuidance("cap-legacy", "Legacy vectors", {
+              label: "Reindex recommended",
+              description: "Compatibility is unverified; lexical fallback remains available.",
+              tone: "warning",
+            }),
+          ],
+        })}
+      />,
+    );
+
+    const member = screen.getByRole("checkbox", { name: /legacy vectors/i });
+    expect(screen.getByText("Reindex recommended")).toBeInTheDocument();
+    expect(screen.getByText(/Compatibility is unverified/i)).toBeInTheDocument();
+    expect(member).toHaveAccessibleDescription(/Compatibility is unverified/i);
+  });
 });
 
 describe("CapsuleSetComposeDialog — validation", () => {
-  it("requires a set name", async () => {
+  it("requires a pod set name", async () => {
     const user = userEvent.setup();
     const createImpl = vi.fn().mockResolvedValue(okSet());
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
-    await user.click(screen.getByRole("button", { name: /^combine$/i }));
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
     const alert = screen.getByRole("alert");
-    const input = screen.getByLabelText(/set name/i);
-    expect(alert).toHaveTextContent(/set name is required/i);
+    const input = screen.getByLabelText(/Knowledge Pod Set name/i);
+    expect(alert).toHaveTextContent(/Knowledge Pod Set name is required/i);
     expect(input).toHaveAttribute("aria-invalid", "true");
-    expect(input).toHaveAccessibleDescription(/set name is required/i);
+    expect(input).toHaveAccessibleDescription(/Knowledge Pod Set name is required/i);
     expect(createImpl).not.toHaveBeenCalled();
   });
 
-  it("requires at least one selected capsule", async () => {
+  it("requires at least one selected Knowledge Pod", async () => {
     const user = userEvent.setup();
     const createImpl = vi.fn().mockResolvedValue(okSet());
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
-    await user.type(screen.getByLabelText(/set name/i), "My Set");
-    await user.click(screen.getByRole("button", { name: /^combine$/i }));
+    await user.type(screen.getByLabelText(/Knowledge Pod Set name/i), "My Set");
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
     const alert = screen.getByRole("alert");
-    const group = screen.getByRole("group", { name: /capsules/i });
-    expect(alert).toHaveTextContent(/at least one capsule/i);
+    const group = screen.getByRole("group", { name: /Knowledge Pods/i });
+    expect(alert).toHaveTextContent(/at least one Knowledge Pod/i);
     expect(group).toHaveAttribute("aria-invalid", "true");
-    expect(group).toHaveAccessibleDescription(/at least one capsule/i);
+    expect(group).toHaveAccessibleDescription(/at least one Knowledge Pod/i);
     expect(createImpl).not.toHaveBeenCalled();
   });
 });
@@ -101,10 +138,10 @@ describe("CapsuleSetComposeDialog — submit", () => {
     const onCreated = vi.fn();
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl, onCreated })} />);
 
-    await user.type(screen.getByLabelText(/set name/i), "Combined");
+    await user.type(screen.getByLabelText(/Knowledge Pod Set name/i), "Combined");
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
     await user.click(screen.getByRole("checkbox", { name: /gamma/i }));
-    await user.click(screen.getByRole("button", { name: /^combine$/i }));
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
 
     await waitFor(() => {
       expect(createImpl).toHaveBeenCalledWith({
@@ -123,9 +160,9 @@ describe("CapsuleSetComposeDialog — submit", () => {
     const onCreated = vi.fn();
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl, onCreated })} />);
 
-    await user.type(screen.getByLabelText(/set name/i), "Combined");
+    await user.type(screen.getByLabelText(/Knowledge Pod Set name/i), "Combined");
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
-    await user.click(screen.getByRole("button", { name: /^combine$/i }));
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/incompatible embedding identity/i);

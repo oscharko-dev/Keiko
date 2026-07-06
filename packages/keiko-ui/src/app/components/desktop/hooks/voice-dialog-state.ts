@@ -22,7 +22,16 @@ export type VoiceDialogState =
   "idle" | "connecting" | "listening" | "thinking" | "speaking" | "muted" | "interrupted" | "error";
 
 export type VoiceAuraState =
-  "ready" | "listening" | "thinking" | "speaking" | "muted" | "interrupted" | "error";
+  | "ready"
+  | "preparing" // initial connect in progress
+  | "reconnecting" // a live session dropped and is recovering
+  | "listening"
+  | "thinking"
+  | "checking-sources" // grounded retrieval in flight
+  | "speaking"
+  | "muted"
+  | "interrupted"
+  | "error";
 
 export type VoiceAuraIntensity = "low" | "medium" | "high";
 
@@ -41,6 +50,13 @@ export interface VoiceAuraStateInputs {
   readonly sending: boolean;
   readonly sendStatus: string;
   readonly hasSessionError: boolean;
+  // A live session dropped and is recovering (distinct from the initial connect, which the collapsed
+  // dialog state also reports as 'connecting'). Surfaced as 'reconnecting' so the user knows the link
+  // is being restored rather than thinking the assistant went quiet.
+  readonly reconnecting?: boolean | undefined;
+  // A grounded retrieval is in flight for the current turn. Surfaced as 'checking-sources' so the user
+  // knows Keiko is consulting connected sources rather than merely formulating an answer.
+  readonly retrieving?: boolean | undefined;
 }
 
 export interface VoiceAuraStateSnapshot {
@@ -91,7 +107,69 @@ export function deriveVoiceAuraState(inputs: VoiceAuraStateInputs): VoiceAuraSta
   if (!inputs.voiceDialogActive) {
     return { active: false, state: "ready", intensity: "low" };
   }
+  if (
+    !inputs.voiceDialogAvailable ||
+    inputs.hasSessionError ||
+    inputs.voiceDialogState === "error"
+  ) {
+    return { active: true, state: "error", intensity: "high" };
+  }
+  if (inputs.voiceDialogState === "interrupted") {
+    return { active: true, state: "interrupted", intensity: "high" };
+  }
+  // A recovery in progress dominates the steady states: the user must know the link dropped and is being
+  // restored. Ranked above muted/speaking because it is a transport condition affecting the whole session.
+  if (inputs.reconnecting === true) {
+    return { active: true, state: "reconnecting", intensity: "high" };
+  }
+  if (inputs.voiceDialogState === "muted") {
+    return { active: true, state: "muted", intensity: "medium" };
+  }
+  if (inputs.speaking || inputs.voiceDialogState === "speaking") {
+    return { active: true, state: "speaking", intensity: "high" };
+  }
+  // Grounded retrieval in flight — surfaced before generic "thinking" so the user knows Keiko is
+  // consulting sources, not just formulating a reply.
+  if (inputs.retrieving === true) {
+    return { active: true, state: "checking-sources", intensity: "high" };
+  }
+  const modelBusy =
+    inputs.sending ||
+    inputs.sendStatus === "queued" ||
+    inputs.sendStatus === "contacting" ||
+    inputs.sendStatus === "streaming";
+  if (inputs.voiceDialogState === "thinking" || modelBusy) {
+    return { active: true, state: "thinking", intensity: modelBusy ? "high" : "medium" };
+  }
+  if (inputs.listening || inputs.voiceDialogState === "listening") {
+    return { active: true, state: "listening", intensity: "medium" };
+  }
+  // Initial connect — a dedicated 'preparing' aura (not 'ready') so an empty-but-connecting session is
+  // never mistaken for a live, listening one.
+  if (inputs.voiceDialogState === "connecting") {
+    return { active: true, state: "preparing", intensity: "medium" };
+  }
   return { active: true, state: "ready", intensity: "low" };
+}
+
+// Assistive-text headline per aura state (professional English). A total record makes adding an aura
+// state without a headline a compile error. Drives the throttled dialog live region so the spoken
+// session's status is announced without contradicting the controls.
+const AURA_STATE_HEADLINE: Record<VoiceAuraState, string> = {
+  ready: "Voice dialogue is ready.",
+  preparing: "Preparing the voice dialogue…",
+  reconnecting: "Reconnecting the voice dialogue…",
+  listening: "Listening to you.",
+  thinking: "The assistant is thinking.",
+  "checking-sources": "Checking connected sources…",
+  speaking: "The assistant is speaking.",
+  muted: "Voice dialogue microphone is muted.",
+  interrupted: "Voice dialogue interrupted.",
+  error: "Voice dialogue could not continue. You can keep chatting in text.",
+};
+
+export function voiceAuraStateHeadline(state: VoiceAuraState): string {
+  return AURA_STATE_HEADLINE[state];
 }
 
 // Assistive-text headline per state (professional English). A total record makes adding a state without

@@ -97,8 +97,8 @@ export const DE_MESSAGES = {
     "Dadurch werden {count} Grounding-{sourceLabel} getrennt. Fortfahren?",
   "chat.grounding.sourceSingular": "Quelle",
   "chat.grounding.sourcePlural": "Quellen",
-  "chat.grounding.capsule": "Wissenskapsel: {name}",
-  "chat.grounding.capsuleSet": "Kapselset: {name}",
+  "chat.grounding.capsule": "Knowledge Pod: {name}",
+  "chat.grounding.capsuleSet": "Knowledge Pod Set: {name}",
   "chat.grounding.unavailable": "{label} (nicht verfuegbar)",
   "chat.memory.panel": "Konversationsspeicher",
   "chat.memory.included": "{count} Erinnerungen einbezogen",
@@ -467,6 +467,7 @@ export const DE_MESSAGES = {
   "updates.notice.notNow": "Nicht jetzt",
   "updates.versionUnknown": "unbekannt",
   "updates.versionLine": "Aktuell {current} -> Ziel {target}",
+  "updates.versionUnavailable": "Aktuell {current}; neueste Version konnte nicht geprueft werden.",
   "updates.versionInstalled": "Keiko laeuft jetzt mit {version}.",
   "updates.loading": "Update-Status wird geprueft...",
   "updates.error.title": "Update-Status nicht verfuegbar",
@@ -476,6 +477,7 @@ export const DE_MESSAGES = {
   "updates.status.available": "Update verfuegbar",
   "updates.status.critical": "Kritisches Update verfuegbar",
   "updates.status.degraded": "Update-Status eingeschraenkt",
+  "updates.status.unavailable": "Update-Status nicht verfuegbar",
   "updates.status.installing": "Update wird installiert",
   "updates.status.restart": "Neustart erforderlich",
   "updates.status.success": "Update installiert",
@@ -484,28 +486,39 @@ export const DE_MESSAGES = {
   "updates.primary.available":
     "Pruefe die Statusauswirkungen und installiere, wenn du bereit bist.",
   "updates.primary.current": "Kein Update verfuegbar. Du kannst jederzeit erneut pruefen.",
+  "updates.primary.unavailable":
+    "Update-Verfuegbarkeit konnte nicht geprueft werden. Pruefe erneut, wenn die Registry erreichbar ist.",
   "updates.primary.manual":
     "Automatische Installation ist nicht verfuegbar. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und pruefe erneut.",
+  "updates.primary.manualReview": "Beachte das lokale Zustandsrisiko vor der Installation.",
   "updates.primary.installed":
     "Das Update ist installiert. Keine weitere Aktion ist erforderlich, ausser du moechtest nach einer neueren Version suchen.",
   "updates.primary.cancelled":
-    "Das Update wurde abgebrochen. Pruefe erneut, bevor du einen weiteren Lauf startest.",
+    "Das Update wurde abgebrochen. Versuche es erneut, wenn du bereit bist.",
   "updates.primary.failed":
     "Das Update wurde nicht abgeschlossen. Pruefe die Fehlerdetails vor einem erneuten Versuch.",
-  "updates.primary.restart":
-    "Starte Keiko ausserhalb dieses Fensters neu und pruefe dann, ob die neue Version laeuft.",
+  "updates.primary.restart": "Neustart und Pruefung schliessen das Update ab.",
   "updates.action.check": "Erneut pruefen",
   "updates.action.install": "Update installieren",
   "updates.action.retry": "Update erneut versuchen",
   "updates.action.cancel": "Update abbrechen",
   "updates.action.verifyRestart": "Neustart pruefen",
-  "updates.action.showInstructions": "Anweisungen anzeigen",
-  "updates.action.hideInstructions": "Anweisungen ausblenden",
-  "updates.restart.verifyHelp":
-    "Diese Aktion startet Keiko nicht neu. Nutze zuerst deinen normalen Neustart-Befehl und pruefe danach hier.",
+  "updates.restart.summary": "Neustart-Anweisungen",
+  "updates.restart.ready":
+    "Keiko {version} ist installiert. Schliesse das Update mit einem Neustart ab.",
+  "updates.restart.notDetected":
+    "Neustart noch nicht erkannt. Fuehre den Neustart-Befehl aus und klicke danach erneut auf Neustart pruefen.",
+  "updates.restart.verifyHelp": "Wenn Keiko wieder geoeffnet ist, klicke auf Neustart pruefen.",
+  "updates.restart.instructions":
+    "Kopiere den Befehl unten, fuege ihn in dein Terminal ein und druecke Enter.",
+  "updates.restart.genericInstructions":
+    "Starte Keiko mit demselben Launcher wie zuvor neu und kehre dann hierher zur Pruefung zurueck.",
+  "updates.restart.commandListLabel": "Neustart-Befehl",
+  "updates.restart.commandLabel": "Keiko neu starten",
   "updates.check.checking": "Updates werden geprueft...",
   "updates.check.current": "Gerade geprueft. Kein neueres Update verfuegbar.",
   "updates.check.available": "Gerade geprueft. Ein neueres Update ist verfuegbar.",
+  "updates.check.unavailable": "Gerade geprueft. Update-Status konnte nicht geprueft werden.",
   "updates.check.manualStillRequired":
     "Manuelle Installation steht noch aus. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und pruefe erneut.",
   "updates.check.manualInstalled": "Update installiert. Keiko laeuft jetzt mit {version}.",
@@ -516,6 +529,11 @@ export const DE_MESSAGES = {
   "updates.impact.title": "Auswirkung",
   "updates.impact.body": "Dieses Update betrifft lokalen Zustand.",
   "updates.impact.required": "Erforderliche Aktion: {remediation}",
+  "updates.manualReview.title": "Lokales Zustandsrisiko vor Installation",
+  "updates.manualReview.body":
+    "Dieses Update kann lokalen Zustand betreffen. Fahre nur fort, wenn du das Risiko unten akzeptierst.",
+  "updates.manualReview.featureRisk":
+    "{feature} koennte nach diesem Update nicht mehr funktionieren oder Wiederherstellung erfordern.",
   "updates.remediation.title": "Folgeaktion",
   "updates.remediation.plannedTitle": "Folgeaktion nach der Installation",
   "updates.remediation.plannedBody":
@@ -523,6 +541,11 @@ export const DE_MESSAGES = {
   "updates.remediation.deferredTitle": "Aufgeschobene Folgeaktion",
   "updates.remediation.deferredBody":
     "Vorerst uebersprungen. Fuehre sie spaeter aus, wenn betroffene Workflows voll bereit sein sollen.",
+  "updates.remediation.failedTitle": "Folgeaktion fehlgeschlagen",
+  "updates.remediation.failedBody":
+    "Die Folgeaktion wurde nicht abgeschlossen. Fuehre sie erneut aus, bevor du fortfaehrst.",
+  "updates.remediation.failedActionHelp":
+    "Versuche diese Aktion erneut, um die Folgearbeit abzuschliessen.",
   "updates.remediation.canComplete": "Alle erforderlichen Folgearbeiten sind abgeschlossen.",
   "updates.remediation.needsAction":
     "Fuehre diese Aktion aus oder verschiebe sie vor dem Abschluss.",
@@ -533,7 +556,7 @@ export const DE_MESSAGES = {
   "updates.remediation.repair": "Lokale Statusreparatur",
   "updates.remediation.reindex": "Lokales Wissen neu indexieren",
   "updates.remediation.migration": "Migration erforderlich",
-  "updates.remediation.manualReview": "Manuelle Pruefung erforderlich",
+  "updates.remediation.manualReview": "Pruefung erforderlich",
   "updates.manual.title": "Manueller Update-Pfad",
   "updates.manual.body":
     "Keiko kann sich aus dieser Installation nicht sicher selbst aktualisieren. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und pruefe die Version danach hier.",
@@ -544,6 +567,19 @@ export const DE_MESSAGES = {
   "updates.manual.stepRestart": "Starte Keiko mit deinem normalen Launcher neu.",
   "updates.manual.stepCheck": "Kehre hierher zurueck und pruefe erneut die neue Version.",
   "updates.manual.instructionsSummary": "Manuelle Update-Anweisungen",
+  "updates.manual.copyInstructionLabel": "Freigegebene manuelle Anweisung",
+  "updates.manual.copyCommandLabel": "Freigegebener Update-Befehl",
+  "updates.manual.commandListLabel": "Paketmanager-Befehle",
+  "updates.manual.copyInstructions": "Manuelle Anweisungen kopieren",
+  "updates.manual.copyCommand": "Befehl kopieren",
+  "updates.manual.copyNpmCommand": "npm-Befehl kopieren",
+  "updates.manual.copyYarnCommand": "Yarn-Befehl kopieren",
+  "updates.manual.copyCopied": "Kopiert",
+  "updates.manual.copySelected": "Text ausgewaehlt. Nutze deinen System-Kopierbefehl.",
+  "updates.manual.copySelectedShort": "Text ausgewaehlt",
+  "updates.manual.copyFailed":
+    "Kopieren fehlgeschlagen. Waehle den Text aus und kopiere ihn manuell.",
+  "updates.manual.copyFailedShort": "Kopieren fehlgeschlagen",
   "updates.manual.finish":
     "Nachdem das manuelle Update abgeschlossen ist und Keiko neu gestartet wurde, hier verifizieren.",
   "updates.manual.releaseLink": "Versionshinweise oeffnen",
@@ -553,17 +589,18 @@ export const DE_MESSAGES = {
   "updates.details.releaseMetadata": "Release-Metadaten",
   "updates.details.installMode": "Installationsmodus",
   "updates.details.remediation": "Reparatur",
+  "updates.details.installLog": "Installer-Ausgabe",
   "updates.actionStatus.notNeeded": "Nicht erforderlich",
   "updates.actionStatus.pending": "Ausstehend",
   "updates.actionStatus.running": "Laeuft",
   "updates.actionStatus.completed": "Abgeschlossen",
   "updates.actionStatus.failed": "Fehlgeschlagen",
   "updates.actionStatus.deferred": "Aufgeschoben",
-  "updates.actionStatus.manualReview": "Manuelle Pruefung erforderlich",
+  "updates.actionStatus.manualReview": "Pruefung erforderlich",
   "updates.featureState.ready": "Bereit",
   "updates.featureState.degraded": "Eingeschraenkt",
   "updates.featureState.unavailable": "Nicht verfuegbar",
-  "updates.featureState.manualReview": "Manuelle Pruefung erforderlich",
+  "updates.featureState.manualReview": "Pruefung erforderlich",
   "updates.phase.preparing": "Update wird vorbereitet",
   "updates.phase.running": "Update wird installiert",
   "updates.phase.restartRequired": "Neustart erforderlich",

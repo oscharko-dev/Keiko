@@ -210,6 +210,31 @@ interface ValidatedAudio {
   readonly audio: Uint8Array;
   readonly mimeType: string;
   readonly language?: string;
+  readonly prompt?: string;
+}
+
+const MAX_DICTATION_PROMPT_LENGTH = 500;
+
+// A short, language-neutral domain-keyword prompt. Biases speech-to-text toward the correct spelling of
+// Keiko's product / domain proper nouns (which generic models often mis-transcribe as "Kaiko" etc.)
+// without steering the spoken language: it lists only proper nouns shared across languages, so a German
+// dictation is not pulled toward English. Callers may override it per request.
+const DEFAULT_DICTATION_PROMPT =
+  "Keiko. GitHub, TypeScript, React, Repository, Commit, Pull Request.";
+
+// Accepts a caller-supplied domain prompt: trims, drops empty, and length-bounds it so it cannot smuggle
+// a large payload. Non-strings become undefined (the default prompt then applies).
+function validatePrompt(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  return trimmed.length > MAX_DICTATION_PROMPT_LENGTH
+    ? trimmed.slice(0, MAX_DICTATION_PROMPT_LENGTH)
+    : trimmed;
 }
 
 function normalizeMimeType(raw: unknown): string | undefined {
@@ -301,10 +326,12 @@ function validateRequest(
   if (!language.ok) {
     return badRequest(deps, "INVALID_LANGUAGE", "The language tag is not a valid BCP-47 language.");
   }
+  const prompt = validatePrompt(body.prompt);
   return {
     audio: decoded,
     mimeType,
     ...(language.language !== undefined ? { language: language.language } : {}),
+    ...(prompt !== undefined ? { prompt } : {}),
   };
 }
 
@@ -350,6 +377,9 @@ function buildSttRequest(
     audio: validated.audio,
     mimeType: validated.mimeType,
     ...(validated.language !== undefined ? { language: validated.language } : {}),
+    // Caller override, else the language-neutral domain prompt so in-domain proper nouns transcribe
+    // correctly. Always present so a stock dictation still benefits from the domain vocabulary.
+    prompt: validated.prompt ?? DEFAULT_DICTATION_PROMPT,
     ...(egress !== undefined ? { egress } : {}),
     timeoutMs: provider.timeoutMs,
   };

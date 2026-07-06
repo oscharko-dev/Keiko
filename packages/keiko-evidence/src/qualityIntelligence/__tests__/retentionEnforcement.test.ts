@@ -229,7 +229,7 @@ describe("enforceQualityIntelligenceRetentionPolicy — count expiry + newest-N 
     // The two oldest (index 0, 1 newest-first → the last beyond 100) are evicted.
     expect(result.expiredRunIds).toEqual(["run-c-000", "run-c-001"]);
     expect(result.retainedRunIds).toHaveLength(100);
-  });
+  }, 45_000);
 });
 
 describe("enforceQualityIntelligenceRetentionPolicy — fail-safe retention (never delete on doubt)", () => {

@@ -29,7 +29,7 @@ export function useCapsuleDetail(
     async (opts: { readonly quiet?: boolean } = {}): Promise<void> => {
       if (capsuleId === "") {
         setData(null);
-        setLoadError("No capsule selected.");
+        setLoadError("No Knowledge Pod selected.");
         setLoadStatus("error");
         return;
       }

@@ -70,11 +70,15 @@ interface StubStats {
 function stubStore(
   chatTurns: readonly number[],
   unrelatedCount: number,
-  opts: { withPrefix: boolean },
+  opts: {
+    readonly withPrefix: boolean;
+    readonly persistedTurns?: readonly number[];
+    readonly extraMatchingRunIds?: readonly string[];
+  },
 ): { store: EvidenceStore; stats: StubStats } {
   const stats: StubStats = { listCalls: 0, listByPrefixCalls: 0, getRunIds: [] };
   const backing = createInMemoryEvidenceStore();
-  chatTurns.forEach((turn) => {
+  (opts.persistedTurns ?? chatTurns).forEach((turn) => {
     persistCompactionEvidence(
       {
         runId: chatRunId(turn),
@@ -92,7 +96,7 @@ function stubStore(
     { length: unrelatedCount },
     (_v, i) => `unrelated-manifest-${String(i)}`,
   );
-  const allRunIds = [...chatRunIds, ...unrelated];
+  const allRunIds = [...chatRunIds, ...(opts.extraMatchingRunIds ?? []), ...unrelated];
 
   const base: Record<string, unknown> = {
     list: (): readonly string[] => {
@@ -133,6 +137,52 @@ describe("buildChatCompactionResurfacingContext prefix scoping (GEN-PERF-CHAT-00
     // Only the 3 matching-prefix manifests are loaded — never the 10k unrelated ones.
     expect(stats.getRunIds).toHaveLength(3);
     expect(stats.getRunIds.every((runId) => runId.startsWith("chat-"))).toBe(true);
+  });
+
+  it("loads only the newest matching chat manifests before parsing structured summaries", () => {
+    const chatTurns = Array.from({ length: 5_000 }, (_value, index) => index + 1);
+    const { store, stats } = stubStore(chatTurns, 0, {
+      withPrefix: true,
+      persistedTurns: [4_998, 4_999, 5_000],
+    });
+
+    const context = buildChatCompactionResurfacingContext(store, CHAT_ID);
+
+    expect(context).toContain(CHAT_COMPACTION_CONTEXT_HEADER);
+    expect(context).toContain("Continue with the governed evidence manifest plan.");
+    expect(stats.getRunIds).toEqual([chatRunId(5_000), chatRunId(4_999), chatRunId(4_998)]);
+  });
+
+  it("orders chat run ids by numeric turn suffix instead of lexicographic adapter order", () => {
+    const { store, stats } = stubStore([98, 99, 100, 101], 0, {
+      withPrefix: true,
+      persistedTurns: [99, 100, 101],
+    });
+
+    const context = buildChatCompactionResurfacingContext(store, CHAT_ID);
+
+    expect(context).toContain(CHAT_COMPACTION_CONTEXT_HEADER);
+    expect(stats.getRunIds).toEqual([chatRunId(101), chatRunId(100), chatRunId(99)]);
+  });
+
+  it("falls back to manifest timestamps when a matching run id violates the turn suffix invariant", () => {
+    const legacyRunId = `chat-${sha256Hex(CHAT_ID).slice(0, 16)}-tlegacy`;
+    const { store, stats } = stubStore([1, 2, 3, 4], 0, {
+      withPrefix: true,
+      extraMatchingRunIds: [legacyRunId],
+      persistedTurns: [2, 3, 4],
+    });
+
+    const context = buildChatCompactionResurfacingContext(store, CHAT_ID);
+
+    expect(context).toContain(CHAT_COMPACTION_CONTEXT_HEADER);
+    expect(stats.getRunIds).toEqual([
+      chatRunId(1),
+      chatRunId(2),
+      chatRunId(3),
+      chatRunId(4),
+      legacyRunId,
+    ]);
   });
 
   it("falls back to list() with an identical result set when listByPrefix is absent", () => {

@@ -53,14 +53,21 @@ export interface UpdatePreflightReleaseSummary {
   readonly title: string;
   readonly summary: string;
   readonly notes: readonly string[];
+  readonly noteSections?: readonly UpdatePreflightPatchNoteSection[];
   readonly url?: string;
   readonly publishedAt?: string;
+}
+
+export interface UpdatePreflightPatchNoteSection {
+  readonly title: string;
+  readonly bullets: readonly string[];
 }
 
 export interface UpdatePreflightPatchNotes {
   readonly collapsed: true;
   readonly summary: string;
   readonly bullets: readonly string[];
+  readonly sections?: readonly UpdatePreflightPatchNoteSection[];
   readonly details: readonly string[];
 }
 

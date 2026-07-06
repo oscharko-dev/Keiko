@@ -890,6 +890,13 @@ describe("Fix 4 — dense desktop text clarity", () => {
   });
 
   it("keeps Files root controls above the micro-text floor", () => {
+    expect(css).toContain(".files {\n  --files-root-action-reserve: 92px");
+
+    expect(css).toContain("padding: 2px var(--files-root-action-reserve) 8px 2px");
+
+    const sidebarBarBlock = cssBlock(".ed-sidebar .files-root-bar");
+    expect(sidebarBarBlock).not.toContain("padding-right");
+
     const inputBlock = cssBlock(".files-root-input");
     expect(inputBlock).toContain("height: 28px");
     expect(inputBlock).toContain("font-size: 12.5px");
@@ -2324,6 +2331,43 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     expect(workbenchPointerBlock).toContain(
       "border-right: 1px solid var(--popover-border) !important",
     );
+  });
+
+  it("aligns updater command copy feedback with the editor copy affordance", () => {
+    const updaterCopyButtonBlock = cssBlock(".upd-command-copy-btn {");
+    expect(updaterCopyButtonBlock).toContain("border: 1px solid transparent");
+    expect(updaterCopyButtonBlock).toContain("background: transparent");
+    expect(updaterCopyButtonBlock).toContain("box-shadow: none");
+    expect(updaterCopyButtonBlock).toContain("transform: translateY(-50%)");
+
+    const updaterCommandCopyButtonBlock = cssBlock(
+      '.upd-command-copy[data-kind="command"] .upd-command-copy-btn {',
+    );
+    expect(updaterCommandCopyButtonBlock).toContain("border-color: transparent");
+    expect(updaterCommandCopyButtonBlock).toContain("background: transparent");
+
+    const updaterCopyHoverBlock = cssBlock(".upd-command-copy-btn:hover,");
+    expect(updaterCopyHoverBlock).toContain("border-color: transparent");
+    expect(updaterCopyHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--text-primary) 10%, transparent)",
+    );
+    expect(updaterCopyHoverBlock).toContain(
+      "box-shadow: 0 8px 18px -14px rgb(var(--shadow-ink-rgb) / 0.85)",
+    );
+
+    const updaterCopyActiveBlock = cssBlock(".upd-command-copy-btn:active {");
+    expect(updaterCopyActiveBlock).toContain(
+      "transform: translateY(-50%) translateY(1px) scale(0.98)",
+    );
+    expect(updaterCopyActiveBlock).toContain("background: var(--button-secondary-surface-hover)");
+
+    const updaterCopyStateBlock = cssBlock('.upd-command-copy-btn[data-pressed="true"],');
+    expect(updaterCopyStateBlock).toContain("border-color: transparent");
+    expect(updaterCopyStateBlock).toContain(
+      "box-shadow: 0 8px 18px -14px rgb(var(--shadow-ink-rgb) / 0.85)",
+    );
+    expect(updaterCopyStateBlock).not.toContain("var(--accent-line)");
+    expect(updaterCopyStateBlock).not.toContain("var(--feedback-success)");
   });
 });
 

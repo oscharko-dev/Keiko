@@ -1,6 +1,6 @@
 // Pure readonly contracts for the deterministic context-engineering layer (ADR-0052). No IO,
 // no clock, no randomness, no sibling @oscharko-dev/keiko-* import (contracts is a strict leaf).
-// estimateTokens is the single canonical token currency; the allocator that consumes
+// countContextTokens is the single canonical token currency; the allocator that consumes
 // ContextProfile lives in keiko-workflows. Validators follow the connected-context.ts
 // isRecord + predicate envelope and live in the sibling context-engineering-validation.ts to
 // keep both files under the 400-LOC budget (mirrors the memory-validation.ts split).
@@ -12,6 +12,26 @@ export const CONTEXT_ENGINEERING_SCHEMA_VERSION = "1" as const;
 // Provenance string recording which estimator produced a profile's counts. The estimator
 // function itself cannot be a JSON-serializable contract field, so the id is carried instead.
 export const DEFAULT_TOKEN_ESTIMATOR_ID = "keiko-conservative-content-v2" as const;
+
+export type ContextTokenAccountingSource = "calibrated" | "fallback-estimated";
+
+export const CONTEXT_TOKEN_ACCOUNTING_SOURCES: readonly ContextTokenAccountingSource[] = [
+  "calibrated",
+  "fallback-estimated",
+] as const;
+
+export interface ContextTokenAccounting {
+  readonly source: ContextTokenAccountingSource;
+  readonly counterId: string;
+  // Calibrated counters apply this multiplier to the fallback estimate. 1000 == 1.0x.
+  readonly scaleMilli?: number | undefined;
+  readonly offsetTokens?: number | undefined;
+}
+
+export const DEFAULT_CONTEXT_TOKEN_ACCOUNTING = {
+  source: "fallback-estimated",
+  counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
+} as const satisfies ContextTokenAccounting;
 
 // ─── Lane identity (the eight lanes) ──────────────────────────────────────── [PR1]
 export type ContextLaneId =
@@ -67,6 +87,8 @@ export interface ContextProfile {
   readonly effectiveInputBudget: number;
   // Provenance of the token counts (which estimator produced them). Required.
   readonly tokenEstimatorId: string;
+  // Content-free source metadata for the counter used by prompt-budget accounting.
+  readonly tokenAccounting?: ContextTokenAccounting | undefined;
   // Opaque provider/model metadata. Optional, never drives behavior.
   readonly model?: ContextModelMetadata | undefined;
 }
@@ -80,6 +102,7 @@ export const DEFAULT_CONTEXT_PROFILE: ContextProfile = {
   safetyMarginTokens: 4_000,
   effectiveInputBudget: 116_000,
   tokenEstimatorId: DEFAULT_TOKEN_ESTIMATOR_ID,
+  tokenAccounting: DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
 } as const;
 
 // ─── Per-lane budget allocation (one row per lane) ────────────────────────── [PR1]
@@ -229,13 +252,49 @@ export interface ContextInvalidationKey {
 export const CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION =
   "keiko-chat-compaction-summary-v1" as const;
 export const CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS = 1_200 as const;
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS = 6 as const;
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS = 180 as const;
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES = [
+  "valid",
+  "invalid",
+  "timed-out",
+  "unavailable",
+] as const;
+export type ContextCompactionModelSummaryStatus =
+  (typeof CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES)[number];
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES = [
+  "accepted",
+  "redacted",
+  "rejected",
+] as const;
+export type ContextCompactionModelSummaryValidationState =
+  (typeof CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES)[number];
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS = [
+  "missing-structured-output",
+  "invalid-structured-output",
+  "unsafe-output",
+  "timed-out",
+  "model-unavailable",
+] as const;
+export type ContextCompactionModelSummaryFailureReason =
+  (typeof CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS)[number];
 
 // Optional model-written continuity summary. This is an enrichment, not the authoritative raw
 // source: structured fields, sourceSpans, and rehydration handles remain the auditable basis.
 export interface ContextCompactionModelSummary {
   readonly promptVersion: typeof CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION;
   readonly modelId: string;
+  readonly status?: ContextCompactionModelSummaryStatus | undefined;
+  readonly validationState?: ContextCompactionModelSummaryValidationState | undefined;
+  readonly failureReason?: ContextCompactionModelSummaryFailureReason | undefined;
+  // Backward-compatible free-text continuity summary used by resurfacing. Failure statuses persist
+  // the empty string so governed failure metadata never injects unsafe text into future prompts.
   readonly content: string;
+  readonly decisions?: readonly string[] | undefined;
+  readonly constraints?: readonly string[] | undefined;
+  readonly filesAndSymbols?: readonly string[] | undefined;
+  readonly debuggingContext?: readonly string[] | undefined;
+  readonly openThreads?: readonly string[] | undefined;
 }
 
 // ─── Compaction record (PR1 stub extended additively) ─────────────────────── [PR2, additive]
@@ -450,6 +509,47 @@ export function estimateTokensForSegments(segments: readonly string[]): number {
   return total;
 }
 
+export function resolveContextTokenAccounting(
+  profile: Pick<ContextProfile, "tokenAccounting" | "tokenEstimatorId">,
+): ContextTokenAccounting {
+  return (
+    profile.tokenAccounting ?? {
+      source: "fallback-estimated",
+      counterId: profile.tokenEstimatorId,
+    }
+  );
+}
+
+function calibratedTokenCount(fallbackTokens: number, accounting: ContextTokenAccounting): number {
+  const scaleMilli = accounting.scaleMilli ?? 1_000;
+  const offsetTokens = accounting.offsetTokens ?? 0;
+  // Clamp defends callers that construct a ContextTokenAccounting object literal directly (the
+  // type system permits it) without passing through validateContextProfile.
+  return Math.max(0, Math.ceil((fallbackTokens * scaleMilli) / 1_000 + offsetTokens));
+}
+
+export function countContextTokens(
+  text: string,
+  accounting: ContextTokenAccounting | undefined = DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
+): number {
+  const fallbackTokens = estimateTokens(text);
+  if (accounting.source === "calibrated") {
+    return calibratedTokenCount(fallbackTokens, accounting);
+  }
+  return fallbackTokens;
+}
+
+export function countContextTokensForSegments(
+  segments: readonly string[],
+  accounting: ContextTokenAccounting | undefined = DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
+): number {
+  let total = 0;
+  for (const segment of segments) {
+    total += countContextTokens(segment, accounting);
+  }
+  return total;
+}
+
 // Converts a token budget back into a conservative UTF-8 byte ceiling. Since estimateTokens() is
 // content-aware, the bridge uses the worst-case divisor so callers can cap bytes before seeing
 // the final token shape. This is the only approved token->byte bridge for prompt assembly.
@@ -468,25 +568,28 @@ export function deriveContextProfile(input: {
   readonly maxInputTokens: number;
   readonly reservedOutputTokens: number;
   readonly safetyMarginTokens: number;
+  readonly tokenAccounting?: ContextTokenAccounting | undefined;
 }): ContextProfile {
   const effective = Math.max(
     0,
     input.maxInputTokens - input.reservedOutputTokens - input.safetyMarginTokens,
   );
+  const tokenAccounting = input.tokenAccounting ?? DEFAULT_CONTEXT_TOKEN_ACCOUNTING;
   return {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
     maxInputTokens: input.maxInputTokens,
     reservedOutputTokens: input.reservedOutputTokens,
     safetyMarginTokens: input.safetyMarginTokens,
     effectiveInputBudget: effective,
-    tokenEstimatorId: DEFAULT_TOKEN_ESTIMATOR_ID,
+    tokenEstimatorId: tokenAccounting.counterId,
+    tokenAccounting,
   };
 }
 
 // Derives a model-keyed ContextProfile from a configured chat capability. Unknown/placeholder
 // runtime capabilities (0 window / 0 output) fall back to the DEFAULT_CONTEXT_PROFILE geometry.
 export function deriveContextProfileFromCapability(
-  capability: Pick<ModelCapability, "id" | "contextWindow" | "maxOutputTokens">,
+  capability: Pick<ModelCapability, "id" | "contextWindow" | "maxOutputTokens" | "tokenAccounting">,
 ): ContextProfile {
   const maxInputTokens =
     capability.contextWindow > 0
@@ -507,7 +610,12 @@ export function deriveContextProfileFromCapability(
     ),
   );
   return {
-    ...deriveContextProfile({ maxInputTokens, reservedOutputTokens, safetyMarginTokens }),
+    ...deriveContextProfile({
+      maxInputTokens,
+      reservedOutputTokens,
+      safetyMarginTokens,
+      tokenAccounting: capability.tokenAccounting,
+    }),
     model: { id: capability.id },
   };
 }

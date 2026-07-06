@@ -296,6 +296,7 @@ describe("VoiceRealtimeStatusFromController", () => {
       speaking: false,
       canInterrupt: false,
       muted: false,
+      retrieving: false,
       error: undefined,
       start: vi.fn(),
       stop: vi.fn(),

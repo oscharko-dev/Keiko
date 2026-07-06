@@ -37,7 +37,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
-const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8");
+const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8").replace(/\r\n?/g, "\n");
 const POST_CSS_SHA256 = createHash("sha256").update(POST).digest("hex");
 const DS_DIR = resolve(REPO, "design-system");
 const REFERENCE_FILES = [

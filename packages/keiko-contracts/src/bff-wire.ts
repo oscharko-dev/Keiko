@@ -34,6 +34,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "./local-knowledge.js";
+import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
@@ -715,14 +716,45 @@ export interface GroundedUncertainty {
 }
 
 export type GroundedRerankerStatus =
-  "disabled" | "not-configured" | "unavailable" | "invalid-response" | "applied";
+  "disabled" | "denied" | "not-configured" | "unavailable" | "invalid-response" | "applied";
+
+export type GroundedRerankerMode = "none" | "local-only" | "provider-backed";
+
+export const GROUNDED_RERANKER_FAILURE_KINDS = [
+  "not-configured",
+  "policy-denied",
+  "wrong-header",
+  "rate-limited",
+  "unsupported-model",
+  "timeout",
+  "cancelled",
+  "transport",
+  "proxy-unreachable",
+  "proxy-auth-required",
+  "proxy-egress-failed",
+  "proxy-blocked-by-policy",
+  "tls-ca-failure",
+  "invalid-response",
+] as const;
+
+export type GroundedRerankerFailureKind = (typeof GROUNDED_RERANKER_FAILURE_KINDS)[number];
+
+export function isGroundedRerankerFailureKind(
+  value: unknown,
+): value is GroundedRerankerFailureKind {
+  return (
+    typeof value === "string" &&
+    (GROUNDED_RERANKER_FAILURE_KINDS as readonly string[]).includes(value)
+  );
+}
 
 export interface GroundedRerankerDiagnostics {
   readonly status: GroundedRerankerStatus;
+  readonly mode?: GroundedRerankerMode | undefined;
   readonly candidateCount: number;
   readonly documentCount: number;
   readonly keptCount: number;
-  readonly failureKind?: string | undefined;
+  readonly failureKind?: GroundedRerankerFailureKind | undefined;
   readonly latencyMs?: number | undefined;
 }
 
@@ -955,6 +987,7 @@ export interface LocalKnowledgeGroundedAnswer {
   readonly noEvidence: boolean;
   readonly noEvidenceReason?: string | undefined;
   readonly contextPack: LocalKnowledgeGroundedAnswerContextSummary;
+  readonly retrievalActivity?: KnowledgePodRetrievalActivity | undefined;
 }
 
 // Epic #189 — the hybrid grounded answer merges folder evidence (#177/#532 lexical) and connector
@@ -984,6 +1017,7 @@ export interface HybridGroundedAnswer {
   readonly omittedCount: number;
   readonly elapsedMs: number;
   readonly contextPack: HybridGroundedAnswerContextSummary;
+  readonly retrievalActivity?: KnowledgePodRetrievalActivity | undefined;
 }
 
 export type GroundedAnswer =

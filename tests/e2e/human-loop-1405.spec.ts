@@ -13,7 +13,7 @@ type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
 interface EvidenceManifest {
   readonly issue: "#1405";
-  readonly harness: "playwright.issue-1405-human-loop.config.ts";
+  readonly harness: "tests/e2e/config/playwright.issue-1405-human-loop.config.ts";
   readonly productCss: "packages/keiko-ui/src/app/globals.css";
   readonly generatedAt: string;
   readonly artifacts: readonly ArtifactName[];
@@ -224,7 +224,7 @@ test("Issue #1405 human-loop authority browser evidence", async ({ page }) => {
 
   const manifest: EvidenceManifest = {
     issue: "#1405",
-    harness: "playwright.issue-1405-human-loop.config.ts",
+    harness: "tests/e2e/config/playwright.issue-1405-human-loop.config.ts",
     productCss: "packages/keiko-ui/src/app/globals.css",
     generatedAt: new Date().toISOString(),
     artifacts: ARTIFACT_NAMES,

@@ -92,7 +92,7 @@ describe("Palette", () => {
     const dialog = screen.getByRole("dialog");
 
     expect(dialog).toHaveAttribute("data-columns", "3");
-    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Files", "Editor", "Agents"]);
+    expect(cardNames()).toEqual(["Chat", "Knowledge Pod", "Files", "Editor", "Agents"]);
   });
 
   it("uses the compact two-column arrangement for a two-card picker", () => {
@@ -127,6 +127,12 @@ describe("Palette", () => {
       expect(card.querySelector(".pal-name")).not.toBeNull();
       expect(card.querySelector(".pal-desc")).not.toBeNull();
     }
+  });
+
+  it("keeps palette chrome from inheriting the workspace drag cursor", () => {
+    renderPalette(PICKER_ORDER);
+
+    expect(screen.getByRole("dialog")).toHaveStyle({ cursor: "default" });
   });
 
   it("moves focus with arrow keys in the 3-column grid (C363)", () => {

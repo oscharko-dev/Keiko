@@ -1,6 +1,7 @@
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNoteSection,
   UpdatePreflightReleaseSummary,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
@@ -8,6 +9,7 @@ import { currentGatewayEgressConfig } from "./deps.js";
 
 export const PACKAGE_NAME = "@oscharko-dev/keiko";
 const REGISTRY_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}`;
+const NPM_INSTALL_METADATA_ACCEPT = "application/vnd.npm.install-v1+json";
 const RELEASE_OWNER = "oscharko-dev";
 const RELEASE_REPO = "keiko";
 const MAX_METADATA_BYTES = 256_000;
@@ -39,6 +41,7 @@ interface ValidatedGitHubRelease {
   readonly title: string;
   readonly summary: string;
   readonly notes: readonly string[];
+  readonly noteSections: readonly UpdatePreflightPatchNoteSection[];
   readonly url?: string;
   readonly publishedAt?: string;
 }
@@ -117,6 +120,39 @@ function extractNotes(body: string): readonly string[] {
   return paragraphs.slice(0, Math.min(paragraphs.length, BULLET_LIMIT));
 }
 
+function normalizeHeading(line: string): string | undefined {
+  const match = /^#{2,6}\s+(.+?)\s*#*$/u.exec(line.trim());
+  if (match === null) return undefined;
+  return normalizeText(match[1] ?? "");
+}
+
+function extractNoteSections(body: string): readonly UpdatePreflightPatchNoteSection[] {
+  const sections: { title: string; bullets: string[] }[] = [];
+  const seen = new Set<string>();
+  let current: { title: string; bullets: string[] } | undefined;
+  let total = 0;
+
+  for (const rawLine of body.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const heading = normalizeHeading(line);
+    if (heading !== undefined) {
+      current = { title: heading, bullets: [] };
+      sections.push(current);
+      continue;
+    }
+    const bulletMatch = /^[*-]\s+(.+)$/u.exec(line);
+    if (bulletMatch === null || current === undefined || total >= BULLET_LIMIT) continue;
+    const bullet = normalizeText(bulletMatch[1] ?? "");
+    const key = bullet.toLowerCase();
+    if (bullet.length === 0 || seen.has(key)) continue;
+    seen.add(key);
+    current.bullets.push(bullet);
+    total += 1;
+  }
+
+  return sections.filter((section) => section.bullets.length > 0);
+}
+
 function optionalGithubUrl(value: unknown): string | undefined {
   return typeof value === "string" && value.startsWith("https://github.com/") ? value : undefined;
 }
@@ -130,6 +166,10 @@ function releaseName(raw: Record<string, unknown>, targetVersion: string): strin
   return name.length > 0 ? name : `${DEFAULT_RELEASE_TITLE_PREFIX} ${targetVersion}`;
 }
 
+function visibleReleaseBody(body: string): string {
+  return body.replace(/<details\b[\s\S]*?<\/details>/giu, "");
+}
+
 function validateGitHubRelease(
   raw: unknown,
   targetVersion: string,
@@ -138,8 +178,9 @@ function validateGitHubRelease(
   const tag = typeof raw.tag_name === "string" ? raw.tag_name.trim() : "";
   if (tag !== `v${targetVersion}`) return undefined;
   const title = releaseName(raw, targetVersion);
-  const body = typeof raw.body === "string" ? raw.body : "";
+  const body = visibleReleaseBody(typeof raw.body === "string" ? raw.body : "");
   const notes = extractNotes(body);
+  const noteSections = extractNoteSections(body);
   const summary = notes[0] ?? title;
   if (summary.length === 0) return undefined;
   const url = optionalGithubUrl(raw.html_url);
@@ -149,6 +190,7 @@ function validateGitHubRelease(
     title,
     summary,
     notes,
+    noteSections,
     ...(url !== undefined ? { url } : {}),
     ...(publishedAt !== undefined ? { publishedAt } : {}),
   };
@@ -177,6 +219,7 @@ function liveGithubRelease(release: ValidatedGitHubRelease): GitHubReleaseOutcom
       title: release.title,
       summary: release.summary,
       notes: release.notes,
+      ...(release.noteSections.length > 0 ? { noteSections: release.noteSections } : {}),
       ...(release.url !== undefined ? { url: release.url } : {}),
       ...(release.publishedAt !== undefined ? { publishedAt: release.publishedAt } : {}),
     },
@@ -190,7 +233,7 @@ export async function fetchRegistryLatestVersion(
   try {
     const response = await gatewayFetch(REGISTRY_URL, {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: { Accept: NPM_INSTALL_METADATA_ACCEPT },
       fetchImpl: deps.gatewayReadinessFetch,
       timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
       maxResponseBytes: MAX_METADATA_BYTES,

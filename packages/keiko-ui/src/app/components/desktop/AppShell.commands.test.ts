@@ -73,7 +73,7 @@ function fakeUndoStack(overrides: Partial<WorkspaceUndoStackApi> = {}): Workspac
 }
 
 describe("buildAppShellCommands — command palette contract (epic #518 #526 #527)", () => {
-  it("opens Knowledge Connector directly while keeping configured windows behind the dialog", () => {
+  it("opens Knowledge Pod directly while keeping configured windows behind the dialog", () => {
     expect(opensDirectlyFromPalette("connector")).toBe(true);
     expect(opensDirectlyFromPalette("files")).toBe(false);
     expect(opensDirectlyFromPalette("editor")).toBe(false);

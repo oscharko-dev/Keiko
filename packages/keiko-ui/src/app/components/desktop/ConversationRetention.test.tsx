@@ -17,10 +17,14 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ChatMessage } from "@/lib/types";
 
-vi.mock("@/lib/local-knowledge-api", () => ({
-  fetchCapsules: vi.fn(async () => ({ capsules: [] })),
-  fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
-}));
+vi.mock("@/lib/local-knowledge-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/local-knowledge-api")>();
+  return {
+    ...actual,
+    fetchCapsules: vi.fn(async () => ({ capsules: [] })),
+    fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+  };
+});
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {

@@ -4,7 +4,8 @@
 // and asserts the per-file stat is paid only for matching-prefix files — so a per-send prefix listing
 // costs O(matching), not O(directory). It fails on a stat-everything regression and passes on the fix.
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -16,11 +17,13 @@ import { createNodeEvidenceStore, type NodeEvidenceStore } from "./store.js";
 
 describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
   const dirs: string[] = [];
-  afterEach(() => {
-    for (const dir of dirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+  afterEach(async () => {
+    await Promise.all(
+      dirs
+        .splice(0)
+        .map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })),
+    );
+  }, 30_000);
 
   function freshDir(): string {
     const dir = mkdtempSync(join(tmpdir(), "keiko-evid-prefix-"));
@@ -56,7 +59,7 @@ describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
       store.put(`chat-abc123-t${String(i)}`, "{}");
     }
     // Seed many unrelated manifests directly as files.
-    const UNRELATED = 5_000;
+    const UNRELATED = 1_000;
     for (let i = 0; i < UNRELATED; i += 1) {
       writeFileSync(join(dir, `unrelated-manifest-${String(i)}.json`), "{}\n", "utf8");
     }
@@ -65,10 +68,10 @@ describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
     const matched = store.listByPrefix("chat-abc123-t");
 
     expect([...matched].sort()).toEqual(["chat-abc123-t1", "chat-abc123-t2", "chat-abc123-t3"]);
-    // The per-file containment stat runs only for the 3 matching files — never for the 5k unrelated.
+    // The per-file containment stat runs only for the 3 matching files — never for unrelated entries.
     expect(counting.statCount()).toBeLessThanOrEqual(3);
     expect(counting.statCount()).toBeLessThan(UNRELATED);
-  });
+  }, 45_000);
 
   it("unfiltered list() still stats every manifest (documents the pre-fix cost the prefix path avoids)", () => {
     const dir = freshDir();

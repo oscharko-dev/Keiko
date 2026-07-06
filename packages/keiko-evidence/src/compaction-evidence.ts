@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 
 import {
   HARNESS_VERSION,
+  redactAbsolutePaths,
   type ContextCommandOutcome,
   type ContextCompactionModelSummary,
   type ContextCompactionRecord,
@@ -35,13 +36,6 @@ import {
 } from "./types.js";
 
 type Redactor = (input: string) => string;
-
-const POSIX_ABSOLUTE_PATH_FRAGMENT =
-  /(^|[^A-Za-z0-9._~/-])\/(?!\/)(?:[A-Za-z0-9._~+@-]+\/)+[A-Za-z0-9._~+@-]+/gu;
-const WINDOWS_DRIVE_ABSOLUTE_PATH_FRAGMENT =
-  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?:[A-Za-z0-9._~+@ -]+[\\/])*[A-Za-z0-9._~+@ -]+/gu;
-const WINDOWS_UNC_ABSOLUTE_PATH_FRAGMENT =
-  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)[A-Za-z0-9._~+@-]+[\\/][^\s("'`<>]+/gu;
 
 export interface CompactionEvidenceInput {
   readonly runId: string;
@@ -79,17 +73,7 @@ function workspaceRootAuditId(workspaceRoot: string, redact: Redactor): string {
 }
 
 function redactedPathSafe(value: string, redact: Redactor): string {
-  const redacted = redact(value);
-  return redacted
-    .replace(POSIX_ABSOLUTE_PATH_FRAGMENT, (_match, prefix: string) => `${prefix}[REDACTED_PATH]`)
-    .replace(
-      WINDOWS_DRIVE_ABSOLUTE_PATH_FRAGMENT,
-      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
-    )
-    .replace(
-      WINDOWS_UNC_ABSOLUTE_PATH_FRAGMENT,
-      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
-    );
+  return redactAbsolutePaths(redact(value));
 }
 
 function redactProvenanceRef(ref: ContextProvenanceRef, redact: Redactor): ContextProvenanceRef {
@@ -171,7 +155,25 @@ function redactModelSummary(
   return {
     promptVersion: summary.promptVersion,
     modelId: redactedPathSafe(summary.modelId, redact),
+    ...(summary.status === undefined ? {} : { status: summary.status }),
+    ...(summary.validationState === undefined ? {} : { validationState: summary.validationState }),
+    ...(summary.failureReason === undefined ? {} : { failureReason: summary.failureReason }),
     content: redactedPathSafe(summary.content, redact),
+    ...(summary.decisions === undefined
+      ? {}
+      : { decisions: redactStrings(summary.decisions, redact) }),
+    ...(summary.constraints === undefined
+      ? {}
+      : { constraints: redactStrings(summary.constraints, redact) }),
+    ...(summary.filesAndSymbols === undefined
+      ? {}
+      : { filesAndSymbols: redactStrings(summary.filesAndSymbols, redact) }),
+    ...(summary.debuggingContext === undefined
+      ? {}
+      : { debuggingContext: redactStrings(summary.debuggingContext, redact) }),
+    ...(summary.openThreads === undefined
+      ? {}
+      : { openThreads: redactStrings(summary.openThreads, redact) }),
   };
 }
 

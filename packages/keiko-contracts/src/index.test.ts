@@ -37,6 +37,9 @@ import {
   isSafeScopePath,
   isSafeStorageReference,
   isSafeDisplaySummary,
+  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
   validateEmbeddingModelIdentity,
   validateKnowledgeSourceScope,
   validateKnowledgeCapsule,
@@ -179,8 +182,8 @@ import {
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.2.11", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.2.11");
+  it("exposes the version constant pinned at 0.2.13", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.2.13");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -350,6 +353,9 @@ describe("keiko-contracts package surface", () => {
     expect(typeof isSafeScopePath).toBe("function");
     expect(typeof isSafeStorageReference).toBe("function");
     expect(typeof isSafeDisplaySummary).toBe("function");
+    expect(KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION).toBe("1");
+    expect(typeof isKnowledgePodEvidenceSafeText).toBe("function");
+    expect(typeof validateKnowledgePodSummary).toBe("function");
     expect(typeof validateEmbeddingModelIdentity).toBe("function");
     expect(typeof validateKnowledgeSourceScope).toBe("function");
     expect(typeof validateKnowledgeCapsule).toBe("function");
@@ -413,7 +419,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(23);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(24);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");

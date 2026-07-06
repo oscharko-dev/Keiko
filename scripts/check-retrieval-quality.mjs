@@ -8,6 +8,12 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { TextEncoder } from "node:util";
 
+import {
+  ALL_FIXTURES,
+  PASS_THRESHOLDS,
+  renderRetrievalEvalQualityGateReport,
+  runRetrievalEval,
+} from "@oscharko-dev/keiko-local-knowledge";
 import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText } from "@oscharko-dev/keiko-workspace";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -15,6 +21,16 @@ const DEFAULT_BUDGET_PATH = resolve(HERE, "check-retrieval-quality.budget.json")
 const MEM_ROOT = "/quality";
 const FIXED_NOW = () => 1_700_000_000_000;
 const EVAL_K = 5;
+const LOCAL_KNOWLEDGE_DIMENSIONS = [
+  "recall",
+  "precision",
+  "meanReciprocalRank",
+  "ndcg",
+  "sourceIsolation",
+  "citationQuality",
+  "noEvidenceAccuracy",
+  "contextBudgetFit",
+];
 
 const CASES = [
   {
@@ -491,26 +507,15 @@ function formatCaseFailure(result) {
   return `${result.id}: ${parts.join("; ")}`;
 }
 
-export async function runRetrievalQualityCheck({
-  budgetPath = DEFAULT_BUDGET_PATH,
-  log,
-  fail,
-} = {}) {
-  const onLog = log ?? ((message) => console.log(message));
-  const onFail =
-    fail ??
-    ((message) => {
-      console.error(`retrieval-quality check failed: ${message}`);
-      process.exit(1);
-    });
+async function runWorkspaceQualityCheck(workspaceCases, budgetPath, log) {
   const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
   const results = [];
-  for (const testCase of CASES) {
+  for (const testCase of workspaceCases) {
     results.push(await evaluateCase(testCase));
   }
   const summary = summarize(results);
   const budgetResult = evaluateQualityBudget(summary, budget);
-  onLog(
+  log(
     `retrieval-quality: cases=${String(summary.cases)} top1=${formatPct(
       summary.top1Rate,
     )} recall@${String(EVAL_K)}=${formatPct(summary.recallAtK)} mrr=${summary.mrr.toFixed(
@@ -523,12 +528,114 @@ export async function runRetrievalQualityCheck({
     (result) => !result.topHit || !result.lineHit || result.generatedLeakCount > 0,
   );
   for (const result of failed) {
-    onLog(`retrieval-quality failure: ${formatCaseFailure(result)}`);
-  }
-  if (!budgetResult.ok) {
-    onFail(`quality budget failed: ${budgetResult.failures.join(", ")}`);
+    log(`retrieval-quality failure: ${formatCaseFailure(result)}`);
   }
   return { summary, results, budgetResult };
+}
+
+function localKnowledgeFailuresFor(scorecard) {
+  const failures = [];
+  for (const dimension of LOCAL_KNOWLEDGE_DIMENSIONS) {
+    if (scorecard.dimensions[dimension] < PASS_THRESHOLDS[dimension]) failures.push(dimension);
+  }
+  if (!scorecard.passed && failures.length === 0) failures.push("passed");
+  return failures;
+}
+
+function summarizeLocalKnowledgeScorecards(scorecards) {
+  const failed = scorecards.filter((scorecard) => localKnowledgeFailuresFor(scorecard).length > 0);
+  return {
+    fixtures: scorecards.length,
+    passed: scorecards.length - failed.length,
+    failedFixtureIds: failed.map((scorecard) => scorecard.fixtureId),
+    recall: average(scorecards.map((scorecard) => scorecard.dimensions.recall)),
+    precision: average(scorecards.map((scorecard) => scorecard.dimensions.precision)),
+    meanReciprocalRank: average(
+      scorecards.map((scorecard) => scorecard.dimensions.meanReciprocalRank),
+    ),
+    ndcg: average(scorecards.map((scorecard) => scorecard.dimensions.ndcg)),
+    sourceIsolation: average(scorecards.map((scorecard) => scorecard.dimensions.sourceIsolation)),
+    noEvidenceAccuracy: average(
+      scorecards.map((scorecard) => scorecard.dimensions.noEvidenceAccuracy),
+    ),
+  };
+}
+
+function formatLocalKnowledgeFailure(scorecard) {
+  const failures = localKnowledgeFailuresFor(scorecard);
+  return `${scorecard.fixtureId}: failed=${failures.join(",")} recall=${scorecard.dimensions.recall.toFixed(
+    3,
+  )} precision=${scorecard.dimensions.precision.toFixed(
+    3,
+  )} mrr=${scorecard.dimensions.meanReciprocalRank.toFixed(
+    3,
+  )} ndcg=${scorecard.dimensions.ndcg.toFixed(3)}`;
+}
+
+export async function runLocalKnowledgeQualityCheck(
+  log,
+  fixtures = ALL_FIXTURES,
+  runner = runRetrievalEval,
+) {
+  const scorecards = [];
+  for (const fixture of fixtures) {
+    scorecards.push(await runner(fixture));
+  }
+  const summary = summarizeLocalKnowledgeScorecards(scorecards);
+  log(
+    `local-knowledge-retrieval-quality: fixtures=${String(summary.fixtures)} passed=${String(
+      summary.passed,
+    )} recall=${summary.recall.toFixed(3)} precision=${summary.precision.toFixed(
+      3,
+    )} mrr=${summary.meanReciprocalRank.toFixed(3)} ndcg=${summary.ndcg.toFixed(
+      3,
+    )} isolation=${summary.sourceIsolation.toFixed(
+      3,
+    )} no-evidence=${summary.noEvidenceAccuracy.toFixed(3)}.`,
+  );
+  for (const line of renderRetrievalEvalQualityGateReport(scorecards).split("\n")) {
+    log(`local-knowledge-retrieval-quality report: ${line}`);
+  }
+  const failed = scorecards.filter((scorecard) => localKnowledgeFailuresFor(scorecard).length > 0);
+  for (const scorecard of failed) {
+    log(`local-knowledge-retrieval-quality failure: ${formatLocalKnowledgeFailure(scorecard)}`);
+  }
+  return { summary, scorecards, ok: failed.length === 0 };
+}
+
+export async function runRetrievalQualityCheck({
+  budgetPath = DEFAULT_BUDGET_PATH,
+  log,
+  fail,
+  localKnowledgeQualityCheck = runLocalKnowledgeQualityCheck,
+  workspaceCases = CASES,
+} = {}) {
+  const onLog = log ?? ((message) => console.log(message));
+  const onFail =
+    fail ??
+    ((message) => {
+      console.error(`retrieval-quality check failed: ${message}`);
+      process.exit(1);
+    });
+  const { summary, results, budgetResult } = await runWorkspaceQualityCheck(
+    workspaceCases,
+    budgetPath,
+    onLog,
+  );
+  const localKnowledge = await localKnowledgeQualityCheck(onLog);
+  const failureMessages = [];
+  if (!localKnowledge.ok) {
+    failureMessages.push(
+      `local knowledge quality failed: ${localKnowledge.summary.failedFixtureIds.join(", ")}`,
+    );
+  }
+  if (!budgetResult.ok) {
+    failureMessages.push(`quality budget failed: ${budgetResult.failures.join(", ")}`);
+  }
+  if (failureMessages.length > 0) {
+    onFail(failureMessages.join("; "));
+  }
+  return { summary, results, budgetResult, localKnowledge };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

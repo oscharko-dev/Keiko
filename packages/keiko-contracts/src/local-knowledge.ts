@@ -15,6 +15,8 @@
 // contract surface remains safe to send to a browser surface without re-redaction. Raw
 // content lives only inside the local-knowledge runtime, never on the wire.
 
+import type { KnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
+
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const LOCAL_KNOWLEDGE_SCHEMA_VERSION = "1" as const;
 
@@ -177,6 +179,7 @@ export interface KnowledgeCapsule {
   readonly outputMode: CapsuleOutputMode;
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
   readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly lifecycleState: CapsuleLifecycleState;
   // Path relative to the runtime-state directory; never absolute and never containing `..`.
@@ -216,6 +219,7 @@ export interface UpdateCapsulePatch {
   readonly displayName?: string;
   readonly description?: string;
   readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
   // Back-compat optional — absent means "no change". A metadata map replaces the full
   // metadata on the capsule. Bounded by CAPSULE_METADATA_MAX_KEYS.
   readonly metadata?: Readonly<Record<string, string>>;

@@ -105,13 +105,14 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Local, per-contributor agent/IDE state — never shared.
 /.claude/
 /.codex/
 /.air/
 /.playwright-mcp/
 /.idea/
-/AGENTS.md
-/CLAUDE.md
+# NOTE: AGENTS.md and CLAUDE.md are intentionally TRACKED — they are the shared,
+# checked-in agent guide (AGENTS.md is canonical; CLAUDE.md imports it). Do not re-ignore.
 
 # Node
 node_modules/
@@ -162,7 +163,7 @@ packages/keiko-ui/.next/
 packages/keiko-ui/out/
 packages/keiko-ui/next-env.d.ts
 
-# TypeScript project-references incremental cache (ADR-0020 D3). Generated when `tsc -b` or
+# TypeScript project-references incremental cache (ADR-0020 D3). Generated when `tsc -b` or/Users/oscharko-dev/Projects/Keiko/CLAUDE.md
 # `tsc --build` runs in any workspace package; never commit it.
 *.tsbuildinfo
 

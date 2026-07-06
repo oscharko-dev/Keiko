@@ -68,8 +68,9 @@ function buildCore(
   const included = itemsByIds(allItems, lane.includedItemIds);
   const excluded = itemsByIds(allItems, lane.excludedItemIds);
   const spans = buildSourceSpans(excluded, input.provenance);
-  const tokensBefore = tokensForItems(allItems);
-  const tokensAfter = tokensForItems(included);
+  const tokenAccounting = input.result.diagnostics.profile.tokenAccounting;
+  const tokensBefore = tokensForItems(allItems, tokenAccounting);
+  const tokensAfter = tokensForItems(included, tokenAccounting);
   return {
     laneId: lane.laneId,
     reason: reasonFor(lane),

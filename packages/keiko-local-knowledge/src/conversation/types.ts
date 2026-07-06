@@ -26,7 +26,11 @@ import type { CitationReference, RetrievalReference } from "@oscharko-dev/keiko-
 import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import type { LocalKnowledgeGroundedContextPack } from "../retrieval/context-pack-assembler.js";
-import type { RetrievalNoEvidenceReason, RetrievalQuery } from "../retrieval/types.js";
+import type {
+  RetrievalDiagnostics,
+  RetrievalNoEvidenceReason,
+  RetrievalQuery,
+} from "../retrieval/types.js";
 
 // ─── Query / answer shapes ───────────────────────────────────────────────────
 
@@ -54,6 +58,8 @@ export interface ConversationGroundedAnswer {
   readonly noEvidence: boolean;
   readonly reason?: RetrievalNoEvidenceReason;
   readonly reranker?: GroundedRerankerDiagnostics | undefined;
+  readonly retrievalDiagnostics?: RetrievalDiagnostics | undefined;
+  readonly embeddingDegraded?: true | undefined;
 }
 
 // A `[n]` marker the answer text uses, paired with the citation it points at. `marker`

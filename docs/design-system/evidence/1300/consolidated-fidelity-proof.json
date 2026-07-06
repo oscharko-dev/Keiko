@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "postCssSha256": "1f98b563bc5503b5434beec14e113a1af4bc20f1c0660e8918d04b53c65ec6af",
+  "postCssSha256": "3fb769ffc1447e71bf68a5b2be70b8090556a4015267272efdb1c0fc7643d92e",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -12,18 +12,18 @@
     "keiko-nav.css"
   ],
   "referenceFileSha256": {
-    "keiko-tokens.css": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
-    "keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
-    "keiko-ai.css": "0874e344c4465364d6bca9ddeb8ac76e3b6aedbab14924f4981704d51c364bdf",
-    "keiko-data.css": "de90773fc5654626cd47c5eda0dda29002af359a9eccc272b3769822fbdb3b13",
-    "keiko-dataviz.css": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1",
-    "keiko-inputs.css": "18f699c14c7d28c50f0f4061174903c8aab21c67b0578cf7e17b34289f9e4054",
-    "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
+    "keiko-tokens.css": "9d375c08c7fa2cd99587b95f190d5aaf9b61a83ec8d6e107910f597f3bb33dcd",
+    "keiko-semantic-tokens.css": "42e9e1d3cb86fc139ad97712c705f00d2df6f3261f94f20e0a2c18b727f3496b",
+    "keiko-ai.css": "c5a167e23c8345863d782a0182e475fd545beb422bc1a25f580743a1c6818223",
+    "keiko-data.css": "b933f4d0015e08646b7814040e2b8ef10c18bf568da94d327f0aba3961ddb5c6",
+    "keiko-dataviz.css": "77050f8f916a189af7322ea492122b1e87cce189f4643c9ff22cad597be32b30",
+    "keiko-inputs.css": "cfba8fbe62db22e2498a41ef3e031c4e2e2dc3f42e8560c5806ddbf95d0bc8c0",
+    "keiko-nav.css": "550badb56b5f65c0d678c018811f5c49eaf6d8a2985f4cd5e59ce1ab441466d5"
   },
   "run": {
-    "startedAt": "2026-07-04T00:43:56.130Z",
-    "generatedAt": "2026-07-04T00:43:58.707Z",
-    "repoHeadSha": "6c3d061ebfd937f427c093652124f42bed3e8836"
+    "startedAt": "2026-07-05T13:27:09.195Z",
+    "generatedAt": "2026-07-05T13:27:31.177Z",
+    "repoHeadSha": "dfbdb37f3c25907d66ed69652e079faa3b33e172"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -276,9 +276,9 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.10000002384185791,
-    "afterScrollTop": 8363,
-    "scrollHeight": 8783,
+    "durationMs": 0.19999998807907104,
+    "afterScrollTop": 8613,
+    "scrollHeight": 9033,
     "clientHeight": 420,
     "stickyHeaderDeltaPx": 0
   },

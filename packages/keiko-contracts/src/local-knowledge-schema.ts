@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `23`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `24`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 23 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 24 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -55,6 +55,7 @@ CREATE TABLE capsules (
   contextual_retrieval_strict INTEGER,
   contextual_retrieval_max_context_chars INTEGER,
   contextual_retrieval_document_context_max_chars INTEGER,
+  model_use_policy_json TEXT,
   embedding_model_provider TEXT NOT NULL,
   embedding_model_id TEXT NOT NULL,
   embedding_model_revision TEXT,
@@ -810,7 +811,9 @@ export interface KnowledgeCapsuleMigration {
 // forward-only semantics we split v2 out as a *delta*: existing v1 databases run only the
 // new CREATE TABLE + CREATE INDEX. Fresh installs apply v1 followed by v2 and end at the
 // same on-disk shape. Each `up` entry stays a single complete statement.
-const CREATE_CAPSULES_V18 = CREATE_CAPSULES.replace(
+const CREATE_CAPSULES_PRE_V24 = CREATE_CAPSULES.replace("  model_use_policy_json TEXT,\n", "");
+
+const CREATE_CAPSULES_V18 = CREATE_CAPSULES_PRE_V24.replace(
   [
     "  contextual_retrieval_enabled INTEGER,",
     "  contextual_retrieval_model_id TEXT,",
@@ -1167,6 +1170,11 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "ALTER TABLE document_blobs_v23 RENAME TO document_blobs;",
       CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX,
     ],
+  },
+  {
+    version: 24,
+    reason: "Persist additive Knowledge Pod model-use policy JSON for sealed local pod behavior.",
+    up: ["ALTER TABLE capsules ADD COLUMN model_use_policy_json TEXT;"],
   },
 ] as const;
 

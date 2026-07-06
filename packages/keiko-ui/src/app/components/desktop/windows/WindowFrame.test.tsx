@@ -354,8 +354,8 @@ describe("WindowFrame content zoom controls", () => {
     });
     expect(windowSection?.style.zoom).toBe("");
     expect(contentZoom).toHaveStyle({
-      width: "500px",
-      height: "300px",
+      width: "498.571px",
+      height: "298.571px",
       transform: "scale(1.4)",
       transformOrigin: "0 0",
     });
@@ -367,6 +367,32 @@ describe("WindowFrame content zoom controls", () => {
     expect(screen.getByRole("group", { name: "Agents window controls" }).closest(".window")).toBe(
       windowSection,
     );
+  });
+
+  it("clips scrollable window content inside the frame while leaving resize handles outside", () => {
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const frameClip = container.querySelector<HTMLElement>(".win-frame-clip");
+    const contentZoom = container.querySelector<HTMLElement>(".win-content-zoom");
+    const body = container.querySelector<HTMLElement>(".win-body");
+    const southHandle = container.querySelector<HTMLElement>(".wz-s");
+
+    expect(frameClip).not.toBeNull();
+    expect(contentZoom).not.toBeNull();
+    expect(body).not.toBeNull();
+    expect(southHandle).not.toBeNull();
+    expect(frameClip?.contains(contentZoom)).toBe(true);
+    expect(frameClip?.contains(body)).toBe(true);
+    expect(frameClip?.contains(southHandle)).toBe(false);
   });
 
   it("requests connected Files context for Prompt Enhancer windows", () => {

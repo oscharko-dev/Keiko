@@ -20,6 +20,7 @@ import {
   listCapsuleSets,
   listCapsuleSources,
   listCapsules,
+  listKnowledgePodSummaries,
   listExtractionCheckpoints,
   listResumableDocuments,
   openKnowledgeStore,
@@ -51,6 +52,11 @@ import type {
   LargeDocumentResourcePolicy,
   ParserDiagnostic,
   KnowledgeSourceScope,
+  LocalKnowledgeCapsuleListEntry,
+  LocalKnowledgeCapsuleSetListEntry,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodSummary,
+  KnowledgePodSummaryKind,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
@@ -60,8 +66,11 @@ import {
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isSafeDisplaySummary,
   isSafeQualityWarning,
+  standardPodModelUsePolicy,
   validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
+  validateKnowledgePodModelUsePolicy,
+  validateKnowledgePodSummary,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
@@ -1411,13 +1420,20 @@ function safeOptionalDisplayText(field: string, value: unknown): string | undefi
 function parseCreateCapsuleInput(body: Record<string, unknown>): {
   readonly displayName: string;
   readonly description?: string;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 } {
   if (typeof body.displayName !== "string") {
     throw new InvalidRequest('Field "displayName" must be a non-empty string.');
   }
   const displayName = requireSafeDisplayText("displayName", body.displayName);
   const description = safeOptionalDisplayText("description", body.description);
-  return description === undefined ? { displayName } : { displayName, description };
+  const modelUsePolicy =
+    body.modelUsePolicy === undefined ? undefined : parseModelUsePolicyPatch(body.modelUsePolicy);
+  return {
+    displayName,
+    ...(description !== undefined ? { description } : {}),
+    ...(modelUsePolicy !== undefined ? { modelUsePolicy } : {}),
+  };
 }
 
 function normalizedEndpointFingerprint(baseUrl: string): string {
@@ -1947,6 +1963,60 @@ function failedSourceIds(
   return rows.map((row) => row.source_id as KnowledgeSourceId);
 }
 
+function listValidatedKnowledgePodSummaries(
+  store: ReturnType<typeof openKnowledgeStore>,
+  kind?: KnowledgePodSummaryKind,
+): readonly KnowledgePodSummary[] {
+  // Pass the kind down so the projection only materializes the requested collection: a corrupt
+  // capsule of one kind must not fail-close the listing of the other kind.
+  return listKnowledgePodSummaries(store, kind).map((summary) => {
+    const validation = validateKnowledgePodSummary(summary);
+    if (!validation.ok) {
+      throw new KnowledgeStoreError("Knowledge Pod summary validation failed.");
+    }
+    return validation.value;
+  });
+}
+
+function shouldIncludeKnowledgePods(ctx: RouteContext): boolean {
+  const value =
+    ctx.url.searchParams.get("includeKnowledgePods") ?? ctx.url.searchParams.get("knowledgePods");
+  return value === "1" || value === "true";
+}
+
+function knowledgePodDisplayNames(
+  summaries: readonly KnowledgePodSummary[],
+  kind: KnowledgePodSummaryKind,
+): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  for (const summary of summaries) {
+    if (summary.kind === kind) names.set(String(summary.id), summary.displayName);
+  }
+  return names;
+}
+
+function redactCapsuleListForKnowledgePods(
+  capsules: readonly LocalKnowledgeCapsuleListEntry[],
+  summaries: readonly KnowledgePodSummary[],
+): readonly LocalKnowledgeCapsuleListEntry[] {
+  const names = knowledgePodDisplayNames(summaries, "pod");
+  return capsules.map((capsule) => ({
+    ...capsule,
+    displayName: names.get(String(capsule.id)) ?? "Knowledge Pod",
+  }));
+}
+
+function redactCapsuleSetListForKnowledgePods(
+  capsuleSets: readonly LocalKnowledgeCapsuleSetListEntry[],
+  summaries: readonly KnowledgePodSummary[],
+): readonly LocalKnowledgeCapsuleSetListEntry[] {
+  const names = knowledgePodDisplayNames(summaries, "pod-set");
+  return capsuleSets.map((capsuleSet) => ({
+    ...capsuleSet,
+    displayName: names.get(String(capsuleSet.id)) ?? "Knowledge Pod Set",
+  }));
+}
+
 async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
   try {
     return await worker();
@@ -1971,7 +2041,7 @@ async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Pro
 }
 
 export async function handleListLocalKnowledgeCapsules(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(() => {
@@ -1984,7 +2054,15 @@ export async function handleListLocalKnowledgeCapsules(
         sourceCount: capsule.sourceIds.length,
         updatedAt: capsule.updatedAt,
       }));
-      return { status: 200, body: { capsules } };
+      if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsules } };
+      const knowledgePods = listValidatedKnowledgePodSummaries(env.store);
+      return {
+        status: 200,
+        body: {
+          capsules: redactCapsuleListForKnowledgePods(capsules, knowledgePods),
+          knowledgePods,
+        },
+      };
     } finally {
       env.close();
     }
@@ -1992,7 +2070,7 @@ export async function handleListLocalKnowledgeCapsules(
 }
 
 export async function handleListLocalKnowledgeCapsuleSets(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(() => {
@@ -2004,7 +2082,15 @@ export async function handleListLocalKnowledgeCapsuleSets(
         capsuleCount: capsuleSet.capsuleIds.length,
         composedAt: capsuleSet.composedAt,
       }));
-      return { status: 200, body: { capsuleSets } };
+      if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsuleSets } };
+      const knowledgePods = listValidatedKnowledgePodSummaries(env.store, "pod-set");
+      return {
+        status: 200,
+        body: {
+          capsuleSets: redactCapsuleSetListForKnowledgePods(capsuleSets, knowledgePods),
+          knowledgePods,
+        },
+      };
     } finally {
       env.close();
     }
@@ -2102,6 +2188,14 @@ function parseContextualRetrievalPatch(value: unknown): CapsuleContextualRetriev
   return validation.value;
 }
 
+function parseModelUsePolicyPatch(value: unknown): KnowledgePodModelUsePolicy {
+  const validation = validateKnowledgePodModelUsePolicy(value);
+  if (!validation.ok) {
+    throw new InvalidRequest(validation.errors.join(" "));
+  }
+  return validation.value;
+}
+
 function parseDisplayNamePatch(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") {
@@ -2126,7 +2220,8 @@ function patchHasFields(patch: CapsuleDetailsPatch): boolean {
   return (
     patch.displayName !== undefined ||
     patch.description !== undefined ||
-    patch.contextualRetrieval !== undefined
+    patch.contextualRetrieval !== undefined ||
+    patch.modelUsePolicy !== undefined
   );
 }
 
@@ -2143,6 +2238,7 @@ function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsP
     displayName?: string;
     description?: string;
     contextualRetrieval?: CapsuleContextualRetrievalSettings;
+    modelUsePolicy?: KnowledgePodModelUsePolicy;
   } = {};
   const displayName = parseDisplayNamePatch(body.displayName);
   const description = parseDescriptionPatch(body.description);
@@ -2155,9 +2251,12 @@ function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsP
   if (body.contextualRetrieval !== undefined) {
     patch.contextualRetrieval = parseContextualRetrievalPatch(body.contextualRetrieval);
   }
+  if (body.modelUsePolicy !== undefined) {
+    patch.modelUsePolicy = parseModelUsePolicyPatch(body.modelUsePolicy);
+  }
   if (!patchHasFields(patch)) {
     throw new InvalidRequest(
-      "Patch must include displayName, description, or contextualRetrieval.",
+      "Patch must include displayName, description, contextualRetrieval, or modelUsePolicy.",
     );
   }
   return patch;
@@ -2206,6 +2305,7 @@ export async function handleCreateLocalKnowledgeCapsule(
           retrievalEffort: "default",
           outputMode: "snippets",
           answerGroundingPolicy: "require-citations",
+          modelUsePolicy: input.modelUsePolicy ?? standardPodModelUsePolicy(),
           embeddingModelIdentity: embeddingIdentity.identity,
           lifecycleState: "draft",
           storageReference: createCapsuleStorageReference(capsuleId),

@@ -287,7 +287,12 @@ function withDefaultLocalRuntimeStateEnv(
   env: EnvSource,
 ): EnvSource {
   const stateDir = resolveRuntimeStateDir(cwd, env);
-  const next: Record<string, string | undefined> = { ...env, KEIKO_STATE_DIR: stateDir };
+  const next: Record<string, string | undefined> = {
+    ...env,
+    KEIKO_STATE_DIR: stateDir,
+    KEIKO_UI_HOST: UI_HOST,
+    KEIKO_UI_PORT: String(parsed.port),
+  };
   if (parsed.uiDbPath === undefined && !hasEnvValue(next.KEIKO_UI_DATA_DIR)) {
     next.KEIKO_UI_DATA_DIR = join(stateDir, "ui");
   }

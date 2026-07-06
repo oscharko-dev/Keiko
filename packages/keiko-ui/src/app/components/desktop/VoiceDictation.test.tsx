@@ -34,7 +34,7 @@ describe("VoiceDictationButton", () => {
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("is busy and inert while requesting or transcribing", () => {
+  it("is busy and inert while requesting, finalizing, or transcribing", () => {
     const onStart = vi.fn();
     const onStop = vi.fn();
     const { rerender } = render(
@@ -42,6 +42,12 @@ describe("VoiceDictationButton", () => {
     );
     let button = screen.getByRole("button", { name: "Starting microphone…" });
     expect(button).toHaveAttribute("aria-busy", "true");
+    fireEvent.click(button);
+
+    rerender(<VoiceDictationButton phase="finalizing" onStart={onStart} onStop={onStop} />);
+    button = screen.getByRole("button", { name: "Finishing dictation…" });
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(button).toHaveAttribute("data-recording", "true");
     fireEvent.click(button);
 
     rerender(<VoiceDictationButton phase="transcribing" onStart={onStart} onStop={onStop} />);
@@ -70,12 +76,17 @@ describe("VoiceDictationButton", () => {
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("has no axe violations in the transient requesting and transcribing button states", async () => {
+  it("has no axe violations in the transient requesting, finalizing, and transcribing button states", async () => {
     const req = render(
       <VoiceDictationButton phase="requesting" onStart={vi.fn()} onStop={vi.fn()} />,
     );
     expect(await axe(req.container)).toHaveNoViolations();
     req.unmount();
+    const fin = render(
+      <VoiceDictationButton phase="finalizing" onStart={vi.fn()} onStop={vi.fn()} />,
+    );
+    expect(await axe(fin.container)).toHaveNoViolations();
+    fin.unmount();
     const tr = render(
       <VoiceDictationButton phase="transcribing" onStart={vi.fn()} onStop={vi.fn()} />,
     );
@@ -126,7 +137,7 @@ function renderPreview(overrides: Partial<Parameters<typeof VoiceDictationPrevie
 }
 
 describe("VoiceDictationPreview", () => {
-  it("renders nothing while idle or recording", () => {
+  it("renders nothing while idle", () => {
     const { container } = render(
       <VoiceDictationPreview
         phase="idle"
@@ -139,6 +150,78 @@ describe("VoiceDictationPreview", () => {
       />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("announces live recording feedback before transcription", () => {
+    // Before the capture pipeline is verified live, the surface shows "Preparing mic" and does not yet
+    // invite the user to speak — and the level meter reads flat so no bar suggests capture is happening.
+    const { rerender } = render(
+      <VoiceDictationPreview
+        phase="recording"
+        transcript=""
+        audioLevel={0.7}
+        heardSpeech={false}
+        micReady={false}
+        error={undefined}
+        onTranscriptChange={vi.fn()}
+        onInsert={vi.fn()}
+        onDiscard={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Preparing mic…");
+    expect(document.querySelectorAll(".cmp-voice-level-bar[data-active='true']").length).toBe(0);
+
+    // Once ready, it invites speech and the level meter reflects the live signal.
+    rerender(
+      <VoiceDictationPreview
+        phase="recording"
+        transcript=""
+        audioLevel={0.7}
+        heardSpeech={false}
+        micReady
+        error={undefined}
+        onTranscriptChange={vi.fn()}
+        onInsert={vi.fn()}
+        onDiscard={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Listening…");
+    expect(
+      document.querySelectorAll(".cmp-voice-level-bar[data-active='true']").length,
+    ).toBeGreaterThan(0);
+
+    rerender(
+      <VoiceDictationPreview
+        phase="recording"
+        transcript=""
+        audioLevel={0.7}
+        heardSpeech
+        micReady
+        error={undefined}
+        onTranscriptChange={vi.fn()}
+        onInsert={vi.fn()}
+        onDiscard={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Capturing speech…");
+  });
+
+  it("announces the post-roll finalizing state before transcription", () => {
+    render(
+      <VoiceDictationPreview
+        phase="finalizing"
+        transcript=""
+        error={undefined}
+        onTranscriptChange={vi.fn()}
+        onInsert={vi.fn()}
+        onDiscard={vi.fn()}
+        onRetry={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("Finishing dictation…");
   });
 
   it("announces the transcribing state politely", () => {
@@ -283,8 +366,14 @@ describe("VoiceDictationPreviewFromController", () => {
   function makeController(overrides: Partial<DictationController> = {}): DictationController {
     return {
       phase: "preview",
+      mode: "batch",
       transcript: "bound text",
+      liveTranscript: "",
+      finalizationNote: undefined,
       error: undefined,
+      audioLevel: 0,
+      heardSpeech: false,
+      micReady: false,
       busy: false,
       start: vi.fn(),
       stop: vi.fn(),

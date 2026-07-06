@@ -18,9 +18,11 @@ import type {
   DocumentId,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 import type {
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingOutcome,
@@ -77,6 +79,7 @@ export interface SeedVectorsOptions {
   readonly safeDisplayName?: string;
   readonly chunkingOptions?: ChunkingOptions;
   readonly unitId?: string;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 // ─── Scripted adapter (deterministic vectors keyed to text input) ─────────────
@@ -155,7 +158,11 @@ function seedRows(store: KnowledgeStore, options: SeedVectorsOptions, seed: Reso
   if (options.skipCapsule !== true) {
     createCapsule(
       store,
-      sampleCapsuleInput({ id: seed.capsuleId, embeddingModelIdentity: seed.identity }),
+      sampleCapsuleInput({
+        id: seed.capsuleId,
+        embeddingModelIdentity: seed.identity,
+        modelUsePolicy: options.modelUsePolicy ?? standardPodModelUsePolicy(),
+      }),
     );
   }
   if (options.skipSource !== true) {

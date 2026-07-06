@@ -34,6 +34,9 @@ const PUBLIC_EXPORTS = [
   "deleteCapsuleSet",
   "getCapsuleSet",
   "listCapsuleSets",
+  "buildKnowledgePodSetSummary",
+  "buildKnowledgePodSummary",
+  "listKnowledgePodSummaries",
   // Parser registry + adapters (#266)
   "DEFAULT_MAX_BYTES",
   "DEFAULT_MAX_NESTING_DEPTH",
@@ -115,7 +118,15 @@ describe("barrel surface", () => {
     for (const name of listNames) {
       const fn = (api as Record<string, unknown>)[name];
       if (typeof fn !== "function") continue;
-      if (allowedStoreOnly.has(name)) {
+      if (name === "listKnowledgePodSummaries") {
+        // Top-level pod / pod-set enumeration with an OPTIONAL kind filter: (store, kind?).
+        // It never takes a capsule/set scope, so it does not leak internals; the optional
+        // filter lets callers project only the kind they need instead of the whole store.
+        expect(
+          fn.length,
+          `${name} should take the store plus at most an optional kind filter`,
+        ).toBeLessThanOrEqual(2);
+      } else if (allowedStoreOnly.has(name)) {
         expect(fn.length, `${name} should take exactly the store`).toBe(1);
       } else {
         expect(fn.length, `${name} should take store + scope arg`).toBeGreaterThanOrEqual(2);

@@ -15,10 +15,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import styles from "./ConnectorPickerWidget.module.css";
 import {
+  capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   fetchCapsules,
   fetchCapsuleSets,
   type CapsuleListEntry,
   type CapsuleSetListEntry,
+  type KnowledgePodUiGuidance,
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 import { Icons } from "../../Icons";
@@ -64,7 +67,7 @@ function formatLoadError(error: unknown): string {
   // parenthesised detail instead of a bold "INTERNAL:" prefix.
   if (error instanceof ApiError) return `${error.message} (${error.code})`;
   if (error instanceof Error) return error.message;
-  return "Failed to load connectors.";
+  return "Failed to load Knowledge Pods.";
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -72,7 +75,7 @@ function formatLoadError(error: unknown): string {
 function LoadingState(): ReactNode {
   return (
     <div className="connector-picker-status" role="status" aria-live="polite">
-      Loading connectors…
+      Loading Knowledge Pods…
     </div>
   );
 }
@@ -106,7 +109,7 @@ function EmptyState({
         className="lk-btn lk-btn-primary connector-picker-create-link"
         onClick={onManageConnectors}
       >
-        Create a connector
+        Create a Knowledge Pod
       </button>
     </div>
   );
@@ -119,22 +122,42 @@ interface SelectedBadgeProps {
   readonly selectedId: string | undefined;
 }
 
+type KnowledgePodPickerEntry = CapsuleListEntry | CapsuleSetListEntry;
+
+function selectedEntry(
+  capsules: readonly CapsuleListEntry[],
+  capsuleSets: readonly CapsuleSetListEntry[],
+  kind: string | undefined,
+  id: string | undefined,
+): KnowledgePodPickerEntry | null {
+  if (kind === undefined || id === undefined || id.length === 0) return null;
+  if (kind === "capsule") {
+    return capsules.find((c) => c.id === id) ?? null;
+  }
+  if (kind === "capsule-set") {
+    return capsuleSets.find((s) => s.id === id) ?? null;
+  }
+  return null;
+}
+
 function selectedLabel(
   capsules: readonly CapsuleListEntry[],
   capsuleSets: readonly CapsuleSetListEntry[],
   kind: string | undefined,
   id: string | undefined,
 ): string | null {
+  const entry = selectedEntry(capsules, capsuleSets, kind, id);
+  if (entry !== null) return entry.displayName;
   if (kind === undefined || id === undefined || id.length === 0) return null;
-  if (kind === "capsule") {
-    const cap = capsules.find((c) => c.id === id);
-    return cap !== undefined ? cap.displayName : `Capsule ${id}`;
-  }
-  if (kind === "capsule-set") {
-    const set = capsuleSets.find((s) => s.id === id);
-    return set !== undefined ? set.displayName : `Set ${id}`;
-  }
+  if (kind === "capsule") return `Knowledge Pod ${id}`;
+  if (kind === "capsule-set") return `Knowledge Pod Set ${id}`;
   return null;
+}
+
+function guidanceForEntry(
+  entry: KnowledgePodPickerEntry | null,
+): KnowledgePodUiGuidance | undefined {
+  return entry?.knowledgePod?.guidance;
 }
 
 function SelectedBadge({
@@ -144,13 +167,38 @@ function SelectedBadge({
   selectedId,
 }: SelectedBadgeProps): ReactNode {
   const label = selectedLabel(capsules, capsuleSets, selectedKind, selectedId);
+  const guidance = guidanceForEntry(selectedEntry(capsules, capsuleSets, selectedKind, selectedId));
   if (label === null) return null;
   return (
-    <div className="connector-picker-selected" role="status" aria-live="polite">
-      <span aria-hidden="true">●</span>
-      <span>{label}</span>
-    </div>
+    <>
+      <div className="connector-picker-selected" role="status" aria-live="polite">
+        <span aria-hidden="true">●</span>
+        <span>{label}</span>
+        {guidance !== undefined ? (
+          <span className="connector-picker-guidance" data-tone={guidance.tone}>
+            {guidance.label}
+          </span>
+        ) : null}
+      </div>
+      {guidance !== undefined ? (
+        <p className="connector-picker-notice" data-tone={guidance.tone}>
+          {guidance.description}
+        </p>
+      ) : null}
+    </>
   );
+}
+
+function pickerOptionGuidance(entry: KnowledgePodPickerEntry): {
+  readonly description?: string;
+  readonly badge?: string;
+} {
+  const guidance = entry.knowledgePod?.guidance;
+  if (guidance === undefined) return {};
+  return {
+    description: guidance.description,
+    badge: guidance.label,
+  };
 }
 
 function connectorNodeStateLabel(state: string | undefined): string {
@@ -182,7 +230,7 @@ function KnowledgeConnectorNode({
   const label =
     selectedLabel !== undefined && selectedLabel.trim().length > 0
       ? selectedLabel.trim()
-      : "Knowledge capsule";
+      : "Knowledge Pod";
   return (
     <div className="connector-node" data-testid="knowledge-connector-node">
       <div className="connector-node-icon" aria-hidden="true">
@@ -190,12 +238,12 @@ function KnowledgeConnectorNode({
       </div>
       <div className="connector-node-copy">
         <p className="connector-node-kicker">{connectorNodeStateLabel(selectedState)}</p>
-        {/* Non-heading element: this compact connector node is a leaf card with no
+        {/* Non-heading element: this compact Knowledge Pod node is a leaf card with no
             sectioning context, so a real <h2> was an orphan heading (GEN-UI-A11Y-018). */}
         <p className="connector-node-title" title={label}>
           {label}
         </p>
-        <p className="connector-node-meta">Local Knowledge capsule</p>
+        <p className="connector-node-meta">Local Knowledge Pod</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
         Manage
@@ -239,17 +287,21 @@ export function ConnectorPickerWidget({
       setSetsFailed(false);
       try {
         const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
-          fetchCapsules(),
-          fetchCapsuleSets(),
+          fetchCapsules({ includeKnowledgePods: true }),
+          fetchCapsuleSets({ includeKnowledgePods: true }),
         ]);
         if (cancelled) return;
         if (capsuleResult.status === "fulfilled") {
-          setCapsules(capsuleResult.value.capsules.filter((c) => c.lifecycleState === "ready"));
+          setCapsules(
+            capsulesForKnowledgePodUi(capsuleResult.value).filter(
+              (capsule) => capsule.lifecycleState === "ready",
+            ),
+          );
         } else {
           setError(formatLoadError(capsuleResult.reason));
         }
         if (capsuleSetResult.status === "fulfilled") {
-          setCapsuleSets(capsuleSetResult.value.capsuleSets);
+          setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResult.value));
         } else {
           setSetsFailed(true);
         }
@@ -315,21 +367,22 @@ export function ConnectorPickerWidget({
         selectedId={selectedId}
       />
 
-      <div className="connector-picker-label">Select a connector</div>
+      <div className="connector-picker-label">Select Knowledge Pod source</div>
       <KeikoSelect
         triggerClassName="connector-picker-select"
         value={currentValue}
-        ariaLabel="Select a connector"
-        placeholder="— choose a connector —"
-        menuTitle="Available connectors"
+        ariaLabel="Select Knowledge Pod source"
+        placeholder="— choose a Knowledge Pod source —"
+        menuTitle="Available Knowledge Pod sources"
         sections={[
           ...(hasCapsules
             ? [
                 {
-                  label: "Capsules",
+                  label: "Knowledge Pods",
                   options: capsules.map((cap) => ({
                     value: `capsule:${cap.id}`,
                     label: `${cap.displayName} (${lifecycleLabel(cap.lifecycleState)})`,
+                    ...pickerOptionGuidance(cap),
                   })),
                 },
               ]
@@ -337,10 +390,11 @@ export function ConnectorPickerWidget({
           ...(hasSets
             ? [
                 {
-                  label: "Capsule sets",
+                  label: "Knowledge Pod Sets",
                   options: capsuleSets.map((set) => ({
                     value: `capsule-set:${set.id}`,
-                    label: `${set.displayName} (${String(set.capsuleCount)} capsules)`,
+                    label: `${set.displayName} (${String(set.capsuleCount)} pods)`,
+                    ...pickerOptionGuidance(set),
                   })),
                 },
               ]
@@ -353,13 +407,13 @@ export function ConnectorPickerWidget({
 
       {setsFailed ? (
         <p className="connector-picker-notice" role="status">
-          Capsule sets could not be loaded.
+          Knowledge Pod Sets could not be loaded.
         </p>
       ) : null}
 
       <div className="connector-picker-footer">
         <button type="button" className="connector-picker-create-link" onClick={onManageConnectors}>
-          Create or manage connectors
+          Create or manage Knowledge Pods
         </button>
       </div>
     </div>

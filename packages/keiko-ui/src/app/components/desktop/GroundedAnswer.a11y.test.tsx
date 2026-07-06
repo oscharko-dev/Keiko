@@ -2,7 +2,7 @@
 // ContextPackSummary region. jest-axe runs the WCAG 2.2 AA rule set; this surface MUST emit
 // zero violations because it is one of the two primary UI affordances on a grounded answer.
 
-import { render } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
@@ -10,6 +10,7 @@ import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type {
   GroundedAnswer as GroundedAnswerType,
   GroundedAnswerContextPackSummary,
+  KnowledgePodRetrievalActivity,
   LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
 
@@ -112,6 +113,51 @@ function knowledgeCitation(
   };
 }
 
+function retrievalActivity(): KnowledgePodRetrievalActivity {
+  return {
+    schemaVersion: "1",
+    summary: {
+      searchedCount: 1,
+      skippedCount: 0,
+      degradedCount: 0,
+      deniedCount: 0,
+      unavailableCount: 0,
+      notSelectedCount: 0,
+      denseCandidateCount: 4,
+      lexicalCandidateCount: 2,
+      fusedCandidateCount: 3,
+      referenceCount: 2,
+      citationCount: 1,
+    },
+    privacy: {
+      localFirst: true,
+      rawContentExposed: false,
+      rawQueryExposed: false,
+      privatePathsExposed: false,
+      directVectorScoreComparison: false,
+    },
+    pods: [
+      {
+        podId: "cap-1" as KnowledgePodRetrievalActivity["pods"][number]["podId"],
+        podKind: "pod",
+        displayName: "Product Manual",
+        state: "searched",
+        modes: ["local-only", "hybrid", "vector"],
+        reasonCodes: ["searched"],
+        sourceIds: ["src-1" as KnowledgePodRetrievalActivity["pods"][number]["sourceIds"][number]],
+        counts: {
+          sourceCount: 1,
+          documentCount: 1,
+          chunkCount: 4,
+          vectorCount: 4,
+          referenceCount: 2,
+          citationCount: 1,
+        },
+      },
+    ],
+  };
+}
+
 function localKnowledgeAnswer(
   citations: readonly LocalKnowledgeEvidenceCitation[] = [knowledgeCitation()],
 ): GroundedAnswerType {
@@ -125,6 +171,7 @@ function localKnowledgeAnswer(
     omittedCount: 1,
     elapsedMs: 12,
     noEvidence: false,
+    retrievalActivity: retrievalActivity(),
     contextPack: {
       kind: "local-knowledge",
       scopeKind: "capsule",
@@ -166,6 +213,7 @@ function hybridAnswer(
     uncertainty: [],
     omittedCount: 0,
     elapsedMs: 33,
+    retrievalActivity: retrievalActivity(),
     contextPack: {
       kind: "hybrid",
       folderSourceCount: 2,
@@ -205,6 +253,19 @@ function citationPreviewController(
   };
 }
 
+function openEvidenceDisclosure(container: HTMLElement): HTMLDetailsElement {
+  const disclosure = container.querySelector("details.grounded-evidence-disclosure");
+  if (!(disclosure instanceof HTMLDetailsElement)) {
+    throw new Error("expected grounded evidence disclosure");
+  }
+  const summary = disclosure.querySelector("summary");
+  if (summary === null) {
+    throw new Error("expected grounded evidence summary");
+  }
+  fireEvent.click(summary);
+  return disclosure;
+}
+
 describe("GroundedAnswer a11y", () => {
   it("jest-axe: a fully populated grounded answer has no violations", async () => {
     const { container } = render(<GroundedAnswer answer={answer()} busy={false} />);
@@ -219,6 +280,15 @@ describe("GroundedAnswer a11y", () => {
 
   it("jest-axe: a hybrid answer has no violations", async () => {
     const { container } = render(<GroundedAnswer answer={hybridAnswer()} busy={false} />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("jest-axe: expanded Knowledge Pod retrieval activity has no violations", async () => {
+    const { container } = render(<GroundedAnswer answer={localKnowledgeAnswer()} busy={false} />);
+    openEvidenceDisclosure(container);
+    expect(
+      screen.getByRole("region", { name: "Knowledge Pod retrieval activity" }),
+    ).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
   });
 

@@ -34,6 +34,9 @@ export interface SpeechToTextRequest {
   readonly mimeType: string;
   // Optional BCP-47-ish language hint (validated by the caller); omitted lets the provider detect.
   readonly language?: string;
+  // Optional short domain-keyword prompt (validated + length-bounded by the caller). Biases the model
+  // toward correct spelling of in-domain terms (product names, technical identifiers). Never persisted.
+  readonly prompt?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
@@ -201,6 +204,14 @@ function buildMultipartBody(request: SpeechToTextRequest, boundary: string): Blo
       enc.encode(
         `--${boundary}\r\n` +
           `Content-Disposition: form-data; name="language"\r\n\r\n${sanitizeFieldValue(request.language)}\r\n`,
+      ),
+    );
+  }
+  if (request.prompt !== undefined && request.prompt.length > 0) {
+    parts.push(
+      enc.encode(
+        `--${boundary}\r\n` +
+          `Content-Disposition: form-data; name="prompt"\r\n\r\n${sanitizeFieldValue(request.prompt)}\r\n`,
       ),
     );
   }

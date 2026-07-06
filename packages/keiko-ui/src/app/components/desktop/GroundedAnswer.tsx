@@ -23,6 +23,9 @@ import type {
   GroundedRerankerDiagnostics,
   GroundedUncertainty,
   HybridGroundedAnswerContextSummary,
+  KnowledgePodRetrievalActivity,
+  KnowledgePodRetrievalActivityReasonCode,
+  KnowledgePodRetrievalActivityState,
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
@@ -288,6 +291,7 @@ function CitationReference({
 // one-sentence answer. Cap the default view at the top-scored chips and put the rest behind
 // an explicit disclosure so the strongest cited evidence references stay findable.
 const CITATION_DISPLAY_CAP = 8;
+const ACTIVITY_POD_DISPLAY_CAP = 8;
 
 function uniqueByStableId<T extends { readonly stableId: string }>(
   items: readonly T[],
@@ -320,6 +324,28 @@ function CitationDisclosureButton({
       onClick={onToggle}
     >
       {expanded ? "Show fewer citations" : `Show all ${String(total)} citations`}
+    </button>
+  );
+}
+
+function ActivityDisclosureButton({
+  total,
+  expanded,
+  onToggle,
+}: {
+  readonly total: number;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}): ReactNode {
+  if (total <= ACTIVITY_POD_DISPLAY_CAP) return null;
+  return (
+    <button
+      type="button"
+      className="grounded-citations-more"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      {expanded ? "Show fewer Knowledge Pods" : `Show all ${String(total)} Knowledge Pods`}
     </button>
   );
 }
@@ -391,6 +417,114 @@ function hybridEvidenceSummary(answer: HybridGroundedAnswer): string {
   const fileCount = uniqueCitationCount(answer.citations);
   const knowledgeCount = uniqueCitationCount(answer.knowledgeCitations);
   return `${formatCount(fileCount)} file ${pluralize(fileCount, "citation")} · ${formatCount(knowledgeCount)} knowledge ${pluralize(knowledgeCount, "citation")}`;
+}
+
+const ACTIVITY_STATE_LABELS: Record<KnowledgePodRetrievalActivityState, string> = {
+  searched: "Searched",
+  skipped: "Skipped",
+  degraded: "Degraded",
+  denied: "Denied",
+  unavailable: "Unavailable",
+  "not-selected": "Not selected",
+};
+
+const ACTIVITY_REASON_LABELS: Record<KnowledgePodRetrievalActivityReasonCode, string> = {
+  "selected-for-search": "selected for search",
+  searched: "searched",
+  "not-selected": "not selected",
+  "source-skipped": "source skipped",
+  "scope-not-ready": "scope not ready",
+  "indexing-in-progress": "indexing in progress",
+  "stale-capsule": "stale pod",
+  "retrieval-failure": "retrieval failure",
+  "no-scope": "no scope",
+  "no-vectors": "no vectors",
+  "incompatible-embedding-identity": "embedding model mismatch",
+  "dense-scan-too-large": "vector scan too large",
+  "below-min-score": "below minimum score",
+  "answer-grounding-rejected": "grounding rejected",
+  "no-evidence-stated": "no evidence stated",
+  "no-evidence": "no evidence",
+  "empty-query": "empty query",
+  "empty-answer": "empty answer",
+  "embedding-failed": "embedding failed",
+  "embedding-unavailable": "embedding unavailable",
+  "reranker-unavailable": "reranker unavailable",
+  "reranker-invalid-response": "reranker invalid response",
+  "policy-denied": "policy denied",
+  "capability-missing": "capability missing",
+  "remote-unavailable": "remote unavailable",
+  "pack-validation-failed": "pack validation failed",
+  "max-sources-exceeded": "source limit exceeded",
+};
+
+type RetrievalActivityPod = KnowledgePodRetrievalActivity["pods"][number];
+
+function activityPodLine(pod: RetrievalActivityPod): string {
+  const referenceLabel = pluralize(pod.counts.referenceCount, "reference");
+  const citationLabel = pluralize(pod.counts.citationCount, "citation");
+  return `${pod.displayName} · ${formatCount(pod.counts.referenceCount)} ${referenceLabel} · ${formatCount(pod.counts.citationCount)} ${citationLabel}`;
+}
+
+function activityReasons(pod: RetrievalActivityPod): string {
+  return pod.reasonCodes.map((reason) => ACTIVITY_REASON_LABELS[reason]).join(", ");
+}
+
+function activityModes(pod: RetrievalActivityPod): string {
+  return pod.modes.map(humanizeToken).join(", ");
+}
+
+function KnowledgePodRetrievalActivityPanel({
+  activity,
+}: {
+  readonly activity: KnowledgePodRetrievalActivity | undefined;
+}): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  if (activity === undefined || activity.pods.length === 0) return null;
+  const { summary } = activity;
+  const visiblePods = expanded ? activity.pods : activity.pods.slice(0, ACTIVITY_POD_DISPLAY_CAP);
+  return (
+    <section className="grounded-context-pack" aria-label="Knowledge Pod retrieval activity">
+      <div className="grounded-context-pack-headline">Knowledge Pod activity</div>
+      <dl className="grounded-context-pack-dl">
+        <MetricRow label="Searched" value={formatCount(summary.searchedCount)} />
+        <MetricRow label="Skipped" value={formatCount(summary.skippedCount)} />
+        <MetricRow label="Degraded" value={formatCount(summary.degradedCount)} />
+        <MetricRow label="Denied" value={formatCount(summary.deniedCount)} />
+        <MetricRow label="Unavailable" value={formatCount(summary.unavailableCount)} />
+        <MetricRow label="Not selected" value={formatCount(summary.notSelectedCount)} />
+        <MetricRow
+          label="Candidates"
+          value={`${formatCount(summary.denseCandidateCount)} vector · ${formatCount(summary.lexicalCandidateCount)} lexical · ${formatCount(summary.fusedCandidateCount)} fused`}
+        />
+        <MetricRow
+          label="Evidence"
+          value={`${formatCount(summary.referenceCount)} ${pluralize(summary.referenceCount, "reference")} · ${formatCount(summary.citationCount)} ${pluralize(summary.citationCount, "citation")}`}
+        />
+      </dl>
+      <ul className="grounded-uncertainty-list" aria-label="Knowledge Pod activity details">
+        {visiblePods.map((pod) => (
+          <li key={`${pod.podKind}-${pod.podId}`}>
+            <span className="grounded-evidence-summary-badge">
+              {ACTIVITY_STATE_LABELS[pod.state]}
+            </span>{" "}
+            {activityPodLine(pod)}
+            {" · "}
+            <span className="grounded-meta">
+              {`Modes: ${activityModes(pod)} · Reasons: ${activityReasons(pod)}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <ActivityDisclosureButton
+        total={activity.pods.length}
+        expanded={expanded}
+        onToggle={() => {
+          setExpanded((value) => !value);
+        }}
+      />
+    </section>
+  );
 }
 
 function GroundedEvidenceDisclosure({
@@ -670,7 +804,7 @@ function LocalKnowledgeContextPackSummary({
       <div className="grounded-context-pack-headline">{`Knowledge scope: ${contextPack.scopeLabel}`}</div>
       <dl className="grounded-context-pack-dl">
         <MetricRow label="Mode" value={humanizeToken(contextPack.scopeKind)} />
-        <MetricRow label="Capsules" value={String(contextPack.capsuleCount)} />
+        <MetricRow label="Knowledge Pods" value={String(contextPack.capsuleCount)} />
         <MetricRow label="Sources" value={String(contextPack.sourceCount)} />
         <MetricRow label="Citations" value={String(contextPack.citationCount)} />
         <MetricRow
@@ -682,7 +816,7 @@ function LocalKnowledgeContextPackSummary({
   );
 }
 
-// Epic #189 Slice 3 M5 — hybrid context pack: folder + connector source summaries side-by-side.
+// Epic #189 Slice 3 M5 — hybrid context pack: folder + Knowledge Pod sources side-by-side.
 function HybridContextPackSummary({
   contextPack,
 }: {
@@ -691,7 +825,7 @@ function HybridContextPackSummary({
   return (
     <section className="grounded-context-pack" aria-label="Hybrid source summary">
       <div className="grounded-context-pack-headline">
-        {`Hybrid: ${String(contextPack.folderSourceCount)} folder source${contextPack.folderSourceCount === 1 ? "" : "s"} + ${String(contextPack.connectorSourceCount)} connector source${contextPack.connectorSourceCount === 1 ? "" : "s"}`}
+        {`Hybrid: ${String(contextPack.folderSourceCount)} folder source${contextPack.folderSourceCount === 1 ? "" : "s"} + ${String(contextPack.connectorSourceCount)} Knowledge Pod source${contextPack.connectorSourceCount === 1 ? "" : "s"}`}
       </div>
       <ContextPackSummary contextPack={contextPack.folder} />
       <LocalKnowledgeContextPackSummary contextPack={contextPack.knowledge} />
@@ -699,7 +833,7 @@ function HybridContextPackSummary({
   );
 }
 
-// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker silently degraded to fallback (RRF/lexical) order.
+// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker silently degraded to fallback retrieval order.
 const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
   "unavailable",
   "invalid-response",
@@ -709,10 +843,16 @@ const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
 function rerankerDegradationNote(
   reranker: GroundedRerankerDiagnostics | undefined,
 ): string | undefined {
-  if (reranker === undefined || !DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
+  if (reranker === undefined) {
     return undefined;
   }
-  return "Ranking: reranker unavailable — showing fallback (lexical) order.";
+  if (reranker.status === "not-configured" || reranker.failureKind === "not-configured") {
+    return "Ranking: no reranker configured — showing fused retrieval order.";
+  }
+  if (!DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
+    return undefined;
+  }
+  return "Ranking: reranker unavailable — showing fused retrieval order.";
 }
 
 // GEN-AI-GROUNDING-007 (RB-4): compute the SUMMARY-LEVEL warnings that must be visible without
@@ -798,13 +938,14 @@ export function GroundedAnswer({
             citations={answer.citations}
             citationPreview={citationPreview}
           />
+          <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
           <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
         </GroundedEvidenceDisclosure>
       </div>
     );
   }
-  // Epic #189 Slice 3 M5 — hybrid answer: merged content, folder citations, connector citations.
+  // Epic #189 Slice 3 M5 — hybrid answer: merged content, folder citations, Knowledge Pod citations.
   if (answer.groundingKind === "hybrid") {
     return (
       <div className="grounded-answer">
@@ -821,11 +962,12 @@ export function GroundedAnswer({
             repositoryRoots={repositoryRoots}
             openRepositoryReference={openRepositoryReference}
           />
-          {/* Connector evidence (source-tagged) */}
+          {/* Knowledge Pod evidence (source-tagged) */}
           <LocalKnowledgeCitationList
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}
           />
+          <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
           <OmittedLine
             omittedCount={answer.omittedCount}

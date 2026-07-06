@@ -484,6 +484,83 @@ describe("parseGatewayConfig", () => {
     });
   });
 
+  it("round-trips calibrated token accounting through the inline provider capability path", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "calibrated-private-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 64_000,
+        maxOutputTokens: 4_096,
+        tokenAccounting: {
+          source: "calibrated",
+          counterId: "provider-calibrated-fixture-v1",
+          scaleMilli: 875,
+          offsetTokens: 3,
+        },
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    expect(config.capabilities?.[0]?.tokenAccounting).toEqual({
+      source: "calibrated",
+      counterId: "provider-calibrated-fixture-v1",
+      scaleMilli: 875,
+      offsetTokens: 3,
+    });
+  });
+
+  it("rejects malformed inline token accounting metadata", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "bad-calibrated-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 64_000,
+        tokenAccounting: {
+          source: "calibrated",
+          counterId: "provider-calibrated-fixture-v1",
+          scaleMilli: 0,
+        },
+      },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/tokenAccounting\.scaleMilli/u);
+  });
+
+  it("rejects whitespace-only inline token accounting counter ids", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "bad-calibrated-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 64_000,
+        tokenAccounting: {
+          source: "calibrated",
+          counterId: "   ",
+          scaleMilli: 1_000,
+        },
+      },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/tokenAccounting\.counterId/u);
+  });
+
+  it("rejects unknown nested token accounting fields", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "bad-calibrated-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 64_000,
+        tokenAccounting: {
+          source: "calibrated",
+          counterId: "provider-calibrated-fixture-v1",
+          scaleMilli: 1_000,
+          vocabularyPath: "/tmp/provider-tokenizer.json",
+        },
+      },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/tokenAccounting\.vocabularyPath/u);
+  });
+
   // Issue #810 (Epic #761 silent-drop gotcha): supportsImageInput must round-trip through
   // parseGatewayConfig via the inline provider-capability path. Validated against the real
   // deployment id llama-4-maverick-vision so a vision provider becomes capability-routable.
@@ -1048,8 +1125,16 @@ describe("toSafeObject", () => {
         modelId: "example-private-chat",
         capability: {
           kind: "chat",
+          contextWindow: 64_000,
+          maxOutputTokens: 4_096,
           toolCalling: true,
           structuredOutput: true,
+          tokenAccounting: {
+            source: "calibrated",
+            counterId: "provider-calibrated-fixture-v1",
+            scaleMilli: 875,
+            offsetTokens: 3,
+          },
         },
       })),
     );
@@ -1060,6 +1145,12 @@ describe("toSafeObject", () => {
       toolCalling: true,
       structuredOutput: true,
     });
+    expect(safe.capabilities?.[0]?.tokenAccounting).toEqual({
+      source: "calibrated",
+      scaleMilli: 875,
+      offsetTokens: 3,
+    });
+    expect(JSON.stringify(safe)).not.toContain("provider-calibrated-fixture-v1");
     expect(JSON.stringify(safe)).not.toContain("example-test-token-1234567890");
     expect(JSON.stringify(safe)).not.toContain("https://host.example/v1");
   });
@@ -1289,6 +1380,62 @@ describe("parseModelCapability", () => {
     const parsed = parseModelCapability(raw, "capabilities[0]");
     expect(parsed.kind).toBe("embedding");
     expect(parsed.workflowEligible).toBe(false);
+  });
+
+  it("accepts and round-trips calibrated token accounting", () => {
+    const raw = {
+      ...validCapability(),
+      tokenAccounting: {
+        source: "calibrated",
+        counterId: "strict-calibrated-fixture-v1",
+        scaleMilli: 1_125,
+        offsetTokens: 4,
+      },
+    };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.tokenAccounting).toEqual(raw.tokenAccounting);
+  });
+
+  it("rejects unsupported or malformed strict token accounting metadata", () => {
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          tokenAccounting: {
+            source: "exact",
+            counterId: "strict-calibrated-fixture-v1",
+            scaleMilli: 1_000,
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/tokenAccounting\.source/u);
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          tokenAccounting: {
+            source: "calibrated",
+            counterId: "strict-calibrated-fixture-v1",
+            scaleMilli: -1,
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/tokenAccounting\.scaleMilli/u);
+    expect(() =>
+      parseModelCapability(
+        {
+          ...validCapability(),
+          tokenAccounting: {
+            source: "calibrated",
+            counterId: "   ",
+            scaleMilli: 1_000,
+          },
+        },
+        "capabilities[0]",
+      ),
+    ).toThrow(/tokenAccounting\.counterId/u);
   });
 
   // Issue #1210: supportsInfilling / infillingAlignment are recognised strict-list keys and

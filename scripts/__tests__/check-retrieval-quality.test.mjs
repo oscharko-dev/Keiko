@@ -1,12 +1,54 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   evaluateQualityBudget,
   ndcgAtK,
   recallAtK,
   reciprocalRank,
+  runLocalKnowledgeQualityCheck,
+  runRetrievalQualityCheck,
   uniquePathsInOrder,
 } from "../check-retrieval-quality.mjs";
+
+function budgetFile() {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-retrieval-quality-test-"));
+  const path = join(dir, "budget.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      minTop1Rate: 0,
+      minRecallAtK: 0,
+      minMrr: 0,
+      minNdcgAtK: 0,
+      minLineHitRate: 0,
+      maxGeneratedLeakCount: 0,
+    }),
+  );
+  return { dir, path };
+}
+
+function scorecard(fixtureId, dimensions) {
+  return {
+    fixtureId,
+    runId: `eval-${fixtureId}`,
+    dimensions: {
+      recall: 1,
+      precision: 1,
+      meanReciprocalRank: 1,
+      ndcg: 1,
+      sourceIsolation: 1,
+      citationQuality: 1,
+      noEvidenceAccuracy: 1,
+      contextBudgetFit: 1,
+      latencyMs: 1,
+      ...dimensions,
+    },
+    passed: Object.values(dimensions).every((value) => value >= 1),
+  };
+}
 
 describe("check-retrieval-quality helpers", () => {
   it("deduplicates paths while preserving first-seen order", () => {
@@ -54,5 +96,43 @@ describe("check-retrieval-quality helpers", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.failures).toEqual(["top1Rate", "mrr", "generatedLeakCount", "caseFailures"]);
+  });
+
+  it("reports failing Local Knowledge retrieval scorecards", async () => {
+    const logs = [];
+    const result = await runLocalKnowledgeQualityCheck(
+      (line) => logs.push(line),
+      [{ id: "fixture-a" }],
+      () => Promise.resolve(scorecard("fixture-a", { recall: 0 })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.failedFixtureIds).toEqual(["fixture-a"]);
+    expect(logs.some((line) => line.includes("local-knowledge-retrieval-quality failure"))).toBe(
+      true,
+    );
+  });
+
+  it("fails the aggregate gate when the Local Knowledge branch regresses", async () => {
+    const { dir, path } = budgetFile();
+    const failures = [];
+    try {
+      await runRetrievalQualityCheck({
+        budgetPath: path,
+        workspaceCases: [],
+        log: () => undefined,
+        fail: (message) => failures.push(message),
+        localKnowledgeQualityCheck: () =>
+          Promise.resolve({
+            ok: false,
+            summary: { failedFixtureIds: ["fixture-a"] },
+            scorecards: [],
+          }),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(failures).toEqual(["local knowledge quality failed: fixture-a"]);
   });
 });

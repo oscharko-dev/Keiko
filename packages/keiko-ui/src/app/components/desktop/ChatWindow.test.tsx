@@ -4,7 +4,16 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  resolveKnowledgePodModelUsePolicy,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+  type CapsuleSetId,
+  type KnowledgeCapsuleId,
+  type KnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts";
 import { ChatWindow, clearKnowledgeCatalogCacheForTests, copyableMessageText } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
@@ -21,10 +30,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/local-knowledge-api", () => ({
-  fetchCapsules: vi.fn(async () => ({ capsules: [] })),
-  fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
-}));
+vi.mock("@/lib/local-knowledge-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/local-knowledge-api")>();
+  return {
+    ...actual,
+    fetchCapsules: vi.fn(async () => ({ capsules: [] })),
+    fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+  };
+});
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -180,6 +193,60 @@ function makeCapsuleId(value: string): KnowledgeCapsuleId {
 
 function makeCapsuleSetId(value: string): CapsuleSetId {
   return value as CapsuleSetId;
+}
+
+function knowledgePodSummary(
+  id: KnowledgeCapsuleId | CapsuleSetId,
+  kind: KnowledgePodSummary["kind"],
+  displayName: string,
+): KnowledgePodSummary {
+  return {
+    schemaVersion: KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+    id,
+    kind,
+    displayName,
+    tags: [],
+    readiness: "ready",
+    counts: {
+      capsuleCount: kind === "pod" ? 1 : 0,
+      sourceCount: 0,
+      documentCount: 0,
+      chunkCount: 0,
+      vectorCount: 0,
+    },
+    sourceKinds: [],
+    retrieval: {
+      lexicalIndex: false,
+      vectorIndex: false,
+      hybridGrounding: true,
+      crossSpaceScoreMixing: false,
+    },
+    privacy: {
+      localFirst: true,
+      modelOpen: true,
+      rawContentExposed: false,
+      privatePathsExposed: false,
+      evidenceMode: "counts-hashes-and-status",
+      storageLocation: "local-runtime-state",
+    },
+    governance: {
+      locationKind: "local",
+      sealingPosture: "local-store-policy",
+      policyPosture: "none",
+      managedServiceDependency: false,
+    },
+    modelUsePolicy: resolveKnowledgePodModelUsePolicy(standardPodModelUsePolicy()),
+    compatibility: {
+      backingKind: kind === "pod" ? "knowledge-capsule" : "capsule-set",
+      capsuleIds: kind === "pod" ? [id as KnowledgeCapsuleId] : [],
+      sourceIds: [],
+      localKnowledgeSchemaVersion: LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+      migrationRequired: false,
+      persistedStateRenamed: false,
+    },
+    updatedAt: 1,
+    degradationReasons: [],
+  };
 }
 
 async function openCombobox(user: ReturnType<typeof userEvent.setup>, name: string): Promise<void> {
@@ -1130,8 +1197,50 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     );
 
     await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    expect(fetchCapsulesMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
     expect(fetchCapsuleSetsMock).toHaveBeenCalledTimes(1);
+    expect(fetchCapsuleSetsMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
     expect(screen.getAllByRole("combobox", { name: "Grounding mode" })).toHaveLength(2);
+  });
+
+  it("uses redacted Knowledge Pod summaries for chat grounding options", async () => {
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("cap-private");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "/Users/alice/private/customer.pdf?client_secret=value",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        {
+          ...knowledgePodSummary(capsuleId, "pod", "Knowledge Pod"),
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await openCombobox(user, "Grounding mode");
+
+    expect(fetchCapsulesMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(screen.getByRole("option", { name: /Knowledge Pod: Knowledge Pod/u })).toBeVisible();
+    expect(screen.getByText("Policy denied")).toBeVisible();
+    expect(screen.getByText(/blocks grounded answer synthesis/u)).toBeVisible();
+    expect(screen.queryByText(/\/Users\/alice/u)).toBeNull();
+    expect(screen.queryByText(/client_secret/u)).toBeNull();
   });
 
   it("switches from Files grounding to a ready knowledge capsule and clears file scopes", async () => {
@@ -1177,7 +1286,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getByRole("option", { name: "Live Files context" })).not.toBeDisabled();
     expect(screen.queryByRole("option", { name: /Still indexing/i })).toBeNull();
 
-    await user.click(screen.getByRole("option", { name: "Knowledge capsule: Release notes" }));
+    await user.click(screen.getByRole("option", { name: "Knowledge Pod: Release notes" }));
 
     await waitFor(() => {
       // GRD-009: connecting a connector must NOT clear connected folders (no connectedScopes
@@ -1229,7 +1338,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Bravo");
 
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
@@ -1281,7 +1390,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -1329,7 +1438,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -1366,7 +1475,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     await openCombobox(user, "Grounding mode");
     expect(screen.getByRole("option", { name: "Live Files context" })).toBeDisabled();
 
-    await user.click(screen.getByRole("option", { name: "Capsule set: Release pack" }));
+    await user.click(screen.getByRole("option", { name: "Knowledge Pod Set: Release pack" }));
 
     await waitFor(() => {
       // GRD-009: non-destructive — no connectedScopes clear; appends the capsule set.
@@ -1431,7 +1540,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     updateChatMock.mockRejectedValueOnce(new Error("knowledge store unavailable"));
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Release notes");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Release notes");
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("knowledge store unavailable");
@@ -1456,14 +1565,14 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
-        "Knowledge capsule: cap-stale (unavailable)",
+        "Knowledge Pod: cap-stale (unavailable)",
       );
     });
     // uiux-fix F041 (C173) — "(unavailable)" is the single degraded suffix
     // (previously "(not ready)" for capsules vs "(unavailable)" for sets).
     await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
-      screen.getByRole("option", { name: "Knowledge capsule: cap-stale (unavailable)" }),
+      screen.getByRole("option", { name: "Knowledge Pod: cap-stale (unavailable)" }),
     ).toBeInTheDocument();
   });
 
@@ -1484,12 +1593,12 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
-        "Capsule set: set-1 (unavailable)",
+        "Knowledge Pod Set: set-1 (unavailable)",
       );
     });
     await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
-      screen.getByRole("option", { name: "Capsule set: set-1 (unavailable)" }),
+      screen.getByRole("option", { name: "Knowledge Pod Set: set-1 (unavailable)" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("capsule sets offline");
   });

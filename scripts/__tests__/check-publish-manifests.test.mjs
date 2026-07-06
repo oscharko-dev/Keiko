@@ -82,7 +82,7 @@ describe("validatePublishManifests", () => {
     );
   });
 
-  it("rejects productive model-gateway provider adapter subpath exports", () => {
+  it("rejects productive model-gateway provider runtime subpath exports", () => {
     const failures = validatePublishManifests(
       rootManifest({
         dependencies: {
@@ -103,13 +103,20 @@ describe("validatePublishManifests", () => {
               import: "./dist/openai-adapter.js",
               types: "./dist/openai-adapter.d.ts",
             },
+            "./internal/normalize": {
+              import: "./dist/normalize.js",
+              types: "./dist/normalize.d.ts",
+            },
           },
         }),
       ],
     );
 
     expect(failures.join("\n")).toContain(
-      "must not export productive provider adapter subpath ./internal/openai-adapter",
+      "must not export productive provider-runtime subpath ./internal/openai-adapter",
+    );
+    expect(failures.join("\n")).toContain(
+      "must not export productive provider-runtime subpath ./internal/normalize",
     );
   });
 

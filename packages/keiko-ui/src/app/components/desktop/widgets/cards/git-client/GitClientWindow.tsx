@@ -48,6 +48,8 @@ import {
   WORKSPACE_STYLE,
 } from "./git-client-styles";
 
+const EMPTY_BRANCHES: readonly GitBranchListEntry[] = [];
+
 export interface GitClientWindowProps {
   /** Repository path to preselect when opened from Files, Editor, or Runtime (resolveBoundRoot). */
   readonly projectId?: string | undefined;
@@ -134,6 +136,7 @@ export function GitClientWindow({
     projectId !== undefined && projectId !== "" ? projectId : null,
   );
   const [branches, setBranches] = useState<readonly GitBranchListEntry[]>([]);
+  const [branchesProjectKey, setBranchesProjectKey] = useState<string | null>(null);
   const [branchesLoading, setBranchesLoading] = useState(false);
   const [summary, setSummary] = useState<GitRepositorySummary | null>(null);
   const [summaryProjectKey, setSummaryProjectKey] = useState<string | null>(null);
@@ -251,6 +254,7 @@ export function GitClientWindow({
   useEffect(() => {
     if (selectedPath === null) {
       setBranches([]);
+      setBranchesProjectKey(null);
       return;
     }
     let cancelled = false;
@@ -259,11 +263,13 @@ export function GitClientWindow({
       (res) => {
         if (cancelled) return;
         setBranches(res.available ? res.branches : []);
+        setBranchesProjectKey(selectedPath);
         setBranchesLoading(false);
       },
       () => {
         if (cancelled) return;
         setBranches([]);
+        setBranchesProjectKey(selectedPath);
         setBranchesLoading(false);
       },
     );
@@ -451,6 +457,8 @@ export function GitClientWindow({
   );
 
   const activeStatus = selectedPath !== null && statusProjectKey === selectedPath ? status : null;
+  const activeBranches =
+    selectedPath !== null && branchesProjectKey === selectedPath ? branches : EMPTY_BRANCHES;
   const activeSummary =
     selectedPath !== null && summaryProjectKey === selectedPath ? summary : null;
   const activeRemotes = selectedPath !== null && remotesProjectKey === selectedPath ? remotes : [];
@@ -536,7 +544,7 @@ export function GitClientWindow({
       readonly baseBranchName: string;
     }): void => {
       if (selectedPath === null) return;
-      const baseBranch = branches.find((branch) => branch.name === baseBranchName);
+      const baseBranch = activeBranches.find((branch) => branch.name === baseBranchName);
       if (baseBranch === undefined) return;
       branchActions.runMutation(async () => {
         const created = await client.branchCreate({
@@ -552,7 +560,7 @@ export function GitClientWindow({
           : switched;
       });
     },
-    [branchActions, branches, client, selectedPath],
+    [activeBranches, branchActions, client, selectedPath],
   );
 
   const syncView = deriveSyncView(activeSummary, summaryLoading);
@@ -695,7 +703,7 @@ export function GitClientWindow({
       <RepositoryToolbar
         repositories={repositories}
         selectedPath={selectedPath}
-        branches={branches}
+        branches={activeBranches}
         branchesLoading={branchesLoading}
         status={activeStatus}
         statusLoading={statusLoading}
@@ -836,9 +844,9 @@ export function GitClientWindow({
       ) : null}
       {newBranchOpen ? (
         <NewBranchDialog
-          branches={branches}
+          branches={activeBranches}
           currentBranch={
-            activeStatus?.branch ?? branches.find((branch) => branch.current)?.name ?? ""
+            activeStatus?.branch ?? activeBranches.find((branch) => branch.current)?.name ?? ""
           }
           busy={branchActions.flow.busy}
           error={branchActions.flow.error}

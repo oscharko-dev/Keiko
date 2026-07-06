@@ -6,6 +6,7 @@ import {
   getCapsuleSet,
   listCapsuleSources,
   readCitationExcerpt,
+  resolveScopeModelUsePolicy,
   runGroundedAnswer,
   type AnswerGenerator,
   type AnswerGeneratorInput,
@@ -13,9 +14,11 @@ import {
   type QueryTransformer,
   type ReferenceReranker,
   type ReferenceRerankerResult,
+  type RetrievalEmbeddingLaneStatus,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   Chat,
   ChatLocalKnowledgeScope,
@@ -29,8 +32,19 @@ import type {
 import type {
   KnowledgeCapsule,
   KnowledgeCapsuleId,
+  KnowledgePodRetrievalActivity,
+  KnowledgePodRetrievalActivityMode,
+  KnowledgePodRetrievalActivityPod,
+  KnowledgePodRetrievalActivityReasonCode,
+  KnowledgePodRetrievalActivityState,
   KnowledgeSourceId,
   RetrievalReference,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
+  isKnowledgePodRetrievalActivitySafeText,
+  validateKnowledgePodRetrievalActivity,
 } from "@oscharko-dev/keiko-contracts";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import {
@@ -47,16 +61,17 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
+import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { requestConfiguredRerank } from "./grounded-model-reranker.js";
 
-export const DEFAULT_REFERENCE_BUDGET = 16;
-export const MAX_EXCERPT_CHARS = 900;
-export const MAX_PROMPT_REFERENCES = 16;
+export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
+export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
+export const MAX_PROMPT_REFERENCES = DEFAULT_GROUNDING_LIMITS.maxPromptReferences;
+const MAX_RETRIEVAL_ACTIVITY_PODS = 24;
 export const LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER =
   "No evidence found in the selected knowledge scope.";
 const LEGACY_LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWERS = [
@@ -140,20 +155,6 @@ function hashString32(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function normalizedEndpointFingerprint(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-}
-
-function embeddingProviderIdentity(baseUrl: string): string {
-  return `openai-compatible:${normalizedEndpointFingerprint(baseUrl)}`;
-}
-
-function storedProviderMatchesConfiguredProvider(storedProvider: string, baseUrl: string): boolean {
-  if (!storedProvider.startsWith("openai-compatible:")) return true;
-  return storedProvider === embeddingProviderIdentity(baseUrl);
-}
-
 function requestEmbeddingImpl(
   deps: UiHandlerDeps,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
@@ -164,6 +165,21 @@ function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boo
   return findConfiguredCapability(config, modelId)?.kind === "embedding";
 }
 
+function unavailableEmbeddingModelIds(
+  config: GatewayConfig,
+  capsules: readonly KnowledgeCapsule[],
+): ReadonlySet<string> {
+  const unavailable = new Set<string>();
+  for (const capsule of capsules) {
+    const modelId = capsule.embeddingModelIdentity.modelId;
+    const provider = config.providers.find((entry) => entry.modelId === modelId);
+    if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
+      unavailable.add(modelId);
+    }
+  }
+  return unavailable;
+}
+
 export function createEmbeddingAdapter(
   deps: UiHandlerDeps,
   capsules: readonly KnowledgeCapsule[],
@@ -172,30 +188,17 @@ export function createEmbeddingAdapter(
   if (config === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  for (const capsule of capsules) {
-    const modelId = capsule.embeddingModelIdentity.modelId;
-    const provider = config.providers.find((entry) => entry.modelId === modelId);
-    if (provider === undefined) {
-      return conflict(`No configured embedding provider matches local knowledge model ${modelId}.`);
-    }
-    if (!isConfiguredEmbeddingModel(config, provider.modelId)) {
-      return conflict(`Configured local knowledge model ${modelId} cannot serve embeddings.`);
-    }
-    if (
-      !storedProviderMatchesConfiguredProvider(
-        capsule.embeddingModelIdentity.provider,
-        provider.baseUrl,
-      )
-    ) {
-      return conflict(`Configured local knowledge gateway no longer matches model ${modelId}.`);
-    }
-  }
+  const unavailableModelIds = unavailableEmbeddingModelIds(config, capsules);
   return {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
       const provider = config.providers.find((entry) => entry.modelId === request.modelId);
-      if (provider === undefined) {
+      if (
+        provider === undefined ||
+        unavailableModelIds.has(request.modelId) ||
+        !isConfiguredEmbeddingModel(config, provider.modelId)
+      ) {
         return { ok: false, kind: "unsupported-model" };
       }
       return requestEmbeddingImpl(deps)({
@@ -221,19 +224,19 @@ export function selectedCapsulesForScope(
   if (scope.kind === "capsule") {
     const capsule = getCapsule(store, scope.capsuleId);
     if (capsule === undefined) {
-      return conflict("The selected knowledge capsule no longer exists.");
+      return conflict("The selected Knowledge Pod no longer exists.");
     }
     return { capsules: [capsule], scopeKind: "capsule", scopeLabel: capsule.displayName };
   }
   const set = getCapsuleSet(store, scope.capsuleSetId);
   if (set === undefined) {
-    return conflict("The selected knowledge capsule set no longer exists.");
+    return conflict("The selected Knowledge Pod Set no longer exists.");
   }
   const capsules: KnowledgeCapsule[] = [];
   for (const capsuleId of set.capsuleIds) {
     const capsule = getCapsule(store, capsuleId);
     if (capsule === undefined) {
-      return conflict(`Capsule set ${set.displayName} references a missing capsule.`);
+      return conflict(`Knowledge Pod Set ${set.displayName} references a missing Knowledge Pod.`);
     }
     capsules.push(capsule);
   }
@@ -276,6 +279,16 @@ export function scopeStateFailure(
     return {
       reason: "scope-not-ready",
       message: "The selected knowledge scope is not ready for grounded answers yet.",
+    };
+  }
+  const policy = resolveScopeModelUsePolicy(selected.capsules);
+  if (
+    policy.operations.answerSynthesis === "deny" ||
+    policy.operations.rawContentRelease === "deny"
+  ) {
+    return {
+      reason: "policy-denied",
+      message: "The selected Knowledge Pod policy does not allow grounded answer synthesis.",
     };
   }
   return undefined;
@@ -419,9 +432,10 @@ function buildReferenceLines(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly string[] {
   const lines: string[] = [];
-  const references = input.references.slice(0, MAX_PROMPT_REFERENCES);
+  const references = input.references.slice(0, limits.maxPromptReferences);
   // GRD-001: strip Trojan-source / invisible format chars before redaction so reordered or
   // hidden instructions in indexed document text never reach the model or the rendered wire.
   const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
@@ -434,7 +448,7 @@ function buildReferenceLines(
     // single-connector path would forward raw document content (e.g. an embedded API key)
     // verbatim to the configured gateway.
     const excerpt = safeRedact(
-      readCitationExcerpt(store, reference.capsuleId, reference.citation, MAX_EXCERPT_CHARS),
+      readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
     );
     lines.push(`[${String(i + 1)}] ${label}`);
     if (excerpt.length > 0) {
@@ -460,8 +474,9 @@ function buildLocalKnowledgeMessages(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly { readonly role: "system" | "user"; readonly content: string }[] {
-  const lines = buildReferenceLines(input, store, redactExcerpt);
+  const lines = buildReferenceLines(input, store, redactExcerpt, limits);
   const repairInstruction =
     input.citationRepair === true
       ? [
@@ -496,6 +511,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly store: KnowledgeStore,
     private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
     private readonly redactExcerpt: (value: string) => string,
+    private readonly limits: ReturnType<typeof currentGroundingLimits>,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
@@ -507,6 +523,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
           input,
           this.store,
           this.redactExcerpt,
+          this.limits,
         ),
         stream: false,
       },
@@ -514,6 +531,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     );
     const occurredAt = Date.now();
     for (const usage of summariseReferenceUsage(input.references)) {
+      if (!capsuleAllowsEvidencePersistence(getCapsule(this.store, usage.capsuleId))) continue;
       this.auditSink.emit({
         kind: "model-context-sent",
         capsuleId: usage.capsuleId,
@@ -628,6 +646,7 @@ function buildNoEvidenceAnswer(
   capsuleCount: number,
   sourceCount: number,
   reason: string,
+  limits: ReturnType<typeof currentGroundingLimits>,
   uncertainty: readonly GroundedUncertainty[] = [],
 ): LocalKnowledgeGroundedAnswer {
   return {
@@ -649,7 +668,7 @@ function buildNoEvidenceAnswer(
       capsuleCount,
       sourceCount,
       citationCount: 0,
-      referenceBudget: DEFAULT_REFERENCE_BUDGET,
+      referenceBudget: limits.maxPromptReferences,
       referencesUsed: 0,
       indexLifecycle: buildLocalKnowledgeIndexLifecycle(capsules),
     },
@@ -724,6 +743,18 @@ function summariseReferenceUsage(
     }));
 }
 
+function capsuleAllowsEvidencePersistence(capsule: KnowledgeCapsule | undefined): boolean {
+  if (capsule === undefined) return false;
+  return resolveScopeModelUsePolicy([capsule]).operations.evidencePersistence === "allow";
+}
+
+function referenceAllowsEvidencePersistence(
+  store: KnowledgeStore,
+  reference: RetrievalReference,
+): boolean {
+  return capsuleAllowsEvidencePersistence(getCapsule(store, reference.capsuleId));
+}
+
 function emitRetrievalAudit(
   sink: ReturnType<typeof createSqliteAuditSink>,
   selected: SelectedLocalKnowledgeScope,
@@ -733,6 +764,7 @@ function emitRetrievalAudit(
   const usage = summariseReferenceUsage(result.references);
   if (usage.length === 0) {
     for (const capsule of selected.capsules) {
+      if (!capsuleAllowsEvidencePersistence(capsule)) continue;
       sink.emit({
         kind: "retrieval-performed",
         capsuleId: capsule.id,
@@ -746,6 +778,8 @@ function emitRetrievalAudit(
     return;
   }
   for (const entry of usage) {
+    const capsule = selected.capsules.find((item) => String(item.id) === String(entry.capsuleId));
+    if (!capsuleAllowsEvidencePersistence(capsule)) continue;
     sink.emit({
       kind: "retrieval-performed",
       capsuleId: entry.capsuleId,
@@ -760,10 +794,12 @@ function emitRetrievalAudit(
 
 function emitAnswerContextAudit(
   sink: ReturnType<typeof createSqliteAuditSink>,
+  store: KnowledgeStore,
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   occurredAt: number,
 ): void {
   for (const entry of summariseReferenceUsage(result.references)) {
+    if (!capsuleAllowsEvidencePersistence(getCapsule(store, entry.capsuleId))) continue;
     sink.emit({
       kind: "answer-context-assembled",
       capsuleId: entry.capsuleId,
@@ -818,35 +854,53 @@ function isNoEvidenceAnswer(answer: string): boolean {
   return REFUSAL_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
+function localKnowledgeSpecificNoEvidenceAnswer(
+  reason: string,
+  german: boolean,
+): string | undefined {
+  if (reason === "incompatible-embedding-identity") {
+    return german
+      ? "Dieser Knowledge Pod wurde mit einem anderen Embedding-Modell indiziert. Indiziere ihn fuer das aktuelle Embedding-Modell neu."
+      : "This Knowledge Pod was indexed with a different embedding model. Re-index it for the current embedding model.";
+  }
+  if (reason === "embedding-failed") {
+    return german
+      ? "Das Embedding-Gateway hat keinen nutzbaren Query-Vektor geliefert. Pruefe den konfigurierten Embedding-Provider und versuche es erneut."
+      : "The embedding gateway did not return a usable query vector. Check the configured embedding provider and try again.";
+  }
+  if (reason === "no-vectors") {
+    return german
+      ? "Im ausgewaehlten Wissensumfang sind keine indexierten Vektoren verfuegbar. Indiziere den Knowledge Pod, bevor du fragst."
+      : "No indexed vectors are available for the selected knowledge scope. Index the Knowledge Pod before asking.";
+  }
+  return undefined;
+}
+
+function localKnowledgePolicyNoEvidenceAnswer(reason: string, german: boolean): string | undefined {
+  if (reason === "policy-denied") {
+    return german
+      ? "Die Richtlinie des ausgewaehlten Knowledge Pods erlaubt diesen Modellvorgang nicht."
+      : "The selected Knowledge Pod policy does not allow this model operation.";
+  }
+  if (reason === "dense-scan-too-large") {
+    return german
+      ? "Der ausgewaehlte Wissensumfang ist fuer die exakte Vektorsuche zu gross und hat keinen nutzbaren Lexikalindex. Erstelle oder repariere den Suchindex und versuche es erneut."
+      : "The selected knowledge scope is too large for exact vector search and has no usable lexical index. Build or repair the search index and try again.";
+  }
+  return undefined;
+}
+
 export function localKnowledgeNoEvidenceAnswer(
   reason: string | undefined,
   question?: string,
 ): string {
   const german = shouldUseGermanForSystemAnswer(question);
-  if (reason === "incompatible-embedding-identity") {
-    if (german) {
-      return "Dieser Connector wurde mit einem anderen Embedding-Modell indiziert. Indiziere ihn fuer das aktuelle Embedding-Modell neu.";
-    }
-    return "This connector was indexed with a different embedding model. Re-index it for the current embedding model.";
-  }
-  if (reason === "embedding-failed") {
-    if (german) {
-      return "Das Embedding-Gateway hat keinen nutzbaren Query-Vektor geliefert. Pruefe den konfigurierten Embedding-Provider und versuche es erneut.";
-    }
-    return "The embedding gateway did not return a usable query vector. Check the configured embedding provider and try again.";
-  }
-  if (reason === "no-vectors") {
-    if (german) {
-      return "Im ausgewaehlten Wissensumfang sind keine indexierten Vektoren verfuegbar. Indiziere den Connector, bevor du fragst.";
-    }
-    return "No indexed vectors are available for the selected knowledge scope. Index the connector before asking.";
-  }
-  if (reason === "dense-scan-too-large") {
-    if (german) {
-      return "Der ausgewaehlte Wissensumfang ist fuer die exakte Vektorsuche zu gross und hat keinen nutzbaren Lexikalindex. Erstelle oder repariere den Suchindex und versuche es erneut.";
-    }
-    return "The selected knowledge scope is too large for exact vector search and has no usable lexical index. Build or repair the search index and try again.";
-  }
+  const specific =
+    reason === undefined
+      ? undefined
+      : (localKnowledgeSpecificNoEvidenceAnswer(reason, german) ??
+        localKnowledgePolicyNoEvidenceAnswer(reason, german));
+  if (specific !== undefined) return specific;
   if (german) {
     return "Keine Evidenz im ausgewaehlten Wissensumfang gefunden.";
   }
@@ -897,6 +951,7 @@ function buildLocalKnowledgeContextPack(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   citations: readonly LocalKnowledgeEvidenceCitation[],
   redactLabel: LabelRedactor | undefined,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): LocalKnowledgeGroundedAnswer["contextPack"] {
   const safeScopeLabel = citationLabelPart(selected.scopeLabel, redactLabel);
   return {
@@ -907,7 +962,7 @@ function buildLocalKnowledgeContextPack(
     capsuleCount: result.pack.scope.capsuleCount,
     sourceCount: result.pack.scope.sourceCount,
     citationCount: citations.length,
-    referenceBudget: DEFAULT_REFERENCE_BUDGET,
+    referenceBudget: limits.maxPromptReferences,
     referencesUsed: result.references.length,
     indexLifecycle: buildLocalKnowledgeIndexLifecycle(selected.capsules),
     ...(result.reranker === undefined ? {} : { reranker: result.reranker }),
@@ -922,6 +977,7 @@ function buildLocalKnowledgeAnswer(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   elapsedMs: number,
   assistantContent: string,
+  limits: ReturnType<typeof currentGroundingLimits>,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
   redactLabel?: LabelRedactor,
 ): LocalKnowledgeGroundedAnswer {
@@ -933,6 +989,12 @@ function buildLocalKnowledgeAnswer(
     sourceLookup ?? buildSelectedScopeSourceLookup(store, selected),
     redactLabel,
   );
+  const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
+    store,
+    sources: [
+      { selected, result: retrievalActivityResultFromScoped(result, citations, noEvidenceReason) },
+    ],
+  });
   return {
     groundingKind: "local-knowledge",
     userMessageId: user.id,
@@ -944,15 +1006,25 @@ function buildLocalKnowledgeAnswer(
     elapsedMs,
     noEvidence: noEvidenceReason !== undefined,
     ...(noEvidenceReason !== undefined ? { noEvidenceReason } : {}),
-    contextPack: buildLocalKnowledgeContextPack(chat, selected, result, citations, redactLabel),
+    contextPack: buildLocalKnowledgeContextPack(
+      chat,
+      selected,
+      result,
+      citations,
+      redactLabel,
+      limits,
+    ),
+    ...(retrievalActivity === undefined ? {} : { retrievalActivity }),
   };
 }
 
 function buildStateFailureAnswer(
   chat: Chat,
+  store: KnowledgeStore,
   selected: SelectedLocalKnowledgeScope,
   persisted: readonly [ChatMessage, ChatMessage],
   stateFailure: { readonly reason: string; readonly message: string },
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): GroundedAnswer {
   const [user, assistant] = persisted;
   const answer = buildNoEvidenceAnswer(
@@ -964,12 +1036,19 @@ function buildStateFailureAnswer(
     selected.capsules.length,
     selectedSourceCount(selected),
     stateFailure.reason,
+    limits,
     [{ kind: stateFailure.reason, claim: persisted[1].content }],
   );
+  const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
+    store,
+    sources: [],
+    skipped: [{ selected, reason: stateFailure.reason }],
+  });
   return {
     ...answer,
     userMessageId: user.id,
     assistantMessageId: assistant.id,
+    ...(retrievalActivity === undefined ? {} : { retrievalActivity }),
   } satisfies GroundedAnswer;
 }
 
@@ -997,8 +1076,9 @@ function redactText(deps: UiHandlerDeps, value: string): string {
 
 function fallbackReferenceSelection(
   references: readonly RetrievalReference[],
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] {
-  return references.slice(0, MAX_PROMPT_REFERENCES);
+  return references.slice(0, limits.maxPromptReferences);
 }
 
 function withKeptCount(
@@ -1023,6 +1103,7 @@ function invalidRerankMappingDiagnostics(
 function applyReferenceRerankResults(
   references: readonly RetrievalReference[],
   results: readonly RerankResult[],
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] | undefined {
   if (references.length === 0) return [];
   if (results.length === 0) return undefined;
@@ -1036,39 +1117,41 @@ function applyReferenceRerankResults(
     const reference = references[result.index];
     if (reference === undefined) return undefined;
     used.add(result.index);
-    reranked.push(
-      result.relevanceScore === undefined
-        ? reference
-        : { ...reference, score: result.relevanceScore },
-    );
+    reranked.push(reference);
   }
-  return reranked.slice(0, MAX_PROMPT_REFERENCES);
+  return reranked.slice(0, limits.maxPromptReferences);
 }
 
 function rerankerDocumentText(
   deps: UiHandlerDeps,
   store: KnowledgeStore,
   reference: RetrievalReference,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): string {
   return stripUnsafeFormatChars(
     redactText(
       deps,
-      readCitationExcerpt(store, reference.capsuleId, reference.citation, MAX_EXCERPT_CHARS),
+      readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
     ),
   );
 }
 
-function createReferenceReranker(deps: UiHandlerDeps, store: KnowledgeStore): ReferenceReranker {
+function createReferenceReranker(
+  deps: UiHandlerDeps,
+  store: KnowledgeStore,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): ReferenceReranker {
   return {
     rerank: async (input): Promise<ReferenceRerankerResult> => {
-      const fallback = fallbackReferenceSelection(input.references);
+      const fallback = fallbackReferenceSelection(input.references, limits);
+      const candidates = input.references.slice(0, limits.maxPromptReferences);
       const attempt = await requestConfiguredRerank({
         deps,
         query: input.query.text,
-        documents: input.references.map((reference) =>
-          rerankerDocumentText(deps, store, reference),
+        documents: candidates.map((reference) =>
+          rerankerDocumentText(deps, store, reference, limits),
         ),
-        topN: MAX_PROMPT_REFERENCES,
+        topN: limits.maxPromptReferences,
         ...(input.signal !== undefined ? { signal: input.signal } : {}),
       });
       if (attempt.outcome === undefined) {
@@ -1077,7 +1160,11 @@ function createReferenceReranker(deps: UiHandlerDeps, store: KnowledgeStore): Re
           diagnostics: withKeptCount(attempt.diagnostics, fallback.length),
         };
       }
-      const reranked = applyReferenceRerankResults(input.references, attempt.outcome.value.results);
+      const reranked = applyReferenceRerankResults(
+        candidates,
+        attempt.outcome.value.results,
+        limits,
+      );
       if (reranked === undefined) {
         return {
           references: fallback,
@@ -1092,10 +1179,691 @@ function createReferenceReranker(deps: UiHandlerDeps, store: KnowledgeStore): Re
   };
 }
 
+type ReferenceRerankInput = Parameters<ReferenceReranker["rerank"]>[0];
+
+function createDisabledReferenceReranker(
+  limits: ReturnType<typeof currentGroundingLimits>,
+  diagnosticsFor: (
+    input: ReferenceRerankInput,
+    fallback: readonly RetrievalReference[],
+  ) => GroundedRerankerDiagnostics,
+): ReferenceReranker {
+  return {
+    rerank: (input): Promise<ReferenceRerankerResult> => {
+      const fallback = fallbackReferenceSelection(input.references, limits);
+      return Promise.resolve({
+        references: fallback,
+        diagnostics: diagnosticsFor(input, fallback),
+      });
+    },
+  };
+}
+
+function createNotConfiguredReranker(
+  limits: ReturnType<typeof currentGroundingLimits>,
+): ReferenceReranker {
+  return createDisabledReferenceReranker(limits, (input, fallback) => ({
+    status: "disabled",
+    mode: "none",
+    candidateCount: input.references.length,
+    documentCount: 0,
+    keptCount: fallback.length,
+    failureKind: "not-configured",
+    latencyMs: 0,
+  }));
+}
+
+function createPolicyDeniedReranker(
+  limits: ReturnType<typeof currentGroundingLimits>,
+): ReferenceReranker {
+  return createDisabledReferenceReranker(limits, (input, fallback) => ({
+    status: "denied",
+    mode: "local-only",
+    candidateCount: input.references.length,
+    documentCount: 0,
+    keptCount: fallback.length,
+    failureKind: "policy-denied",
+    latencyMs: 0,
+  }));
+}
+
+function referenceRerankerForScope(
+  deps: UiHandlerDeps,
+  store: KnowledgeStore,
+  selected: SelectedLocalKnowledgeScope,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): ReferenceReranker {
+  const policy = resolveScopeModelUsePolicy(selected.capsules);
+  if (policy.operations.externalReranking === "deny") {
+    return createPolicyDeniedReranker(limits);
+  }
+  if (currentGatewayConfig(deps)?.reranker === undefined) {
+    return createNotConfiguredReranker(limits);
+  }
+  return createReferenceReranker(deps, store, limits);
+}
+
 type ScopedGroundedResult = Awaited<ReturnType<typeof runGroundedAnswer>>;
+
+export interface KnowledgePodRetrievalActivityResultInput {
+  readonly references: readonly RetrievalReference[];
+  readonly citationCounts: ReadonlyMap<string, number>;
+  readonly noEvidence: boolean;
+  readonly reason?: string | undefined;
+  readonly retrievalDiagnostics?: ScopedGroundedResult["retrievalDiagnostics"];
+  readonly embeddingDegraded?: true | undefined;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
+}
+
+export interface KnowledgePodRetrievalActivitySourceInput {
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly result: KnowledgePodRetrievalActivityResultInput;
+}
+
+export interface KnowledgePodRetrievalActivitySkippedInput {
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly reason: string;
+}
+
+const ACTIVITY_REASON_CODES = new Set<string>(KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES);
+const RERANKER_DEGRADED = new Set<string>(["unavailable", "invalid-response", "not-configured"]);
+const DENIED_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
+  "answer-grounding-rejected",
+  "policy-denied",
+]);
+const DEGRADED_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
+  "embedding-failed",
+  "stale-capsule",
+  "retrieval-failure",
+  "reranker-unavailable",
+  "reranker-invalid-response",
+]);
+const DENSE_FALLBACK_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
+  "embedding-failed",
+  "incompatible-embedding-identity",
+  "dense-scan-too-large",
+  "embedding-unavailable",
+  "no-vectors",
+]);
+const SKIPPED_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
+  "source-skipped",
+  "max-sources-exceeded",
+]);
+const UNAVAILABLE_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
+  "no-scope",
+  "no-vectors",
+  "incompatible-embedding-identity",
+  "dense-scan-too-large",
+  "scope-not-ready",
+  "indexing-in-progress",
+  "embedding-unavailable",
+]);
+const ACTIVITY_FALLBACK_DISPLAY_NAME = "Knowledge Pod";
+interface ActivityCapsuleSummary {
+  readonly id: string;
+  readonly displayName: string;
+  readonly sourceIds: readonly string[];
+  readonly sourceCount: number;
+  readonly documentCount: number;
+  readonly chunkCount: number;
+  readonly vectorCount: number;
+}
+type ActivitySummaryCache = Map<string, ActivityCapsuleSummary>;
+
+export function retrievalActivityResultFromScoped(
+  result: ScopedGroundedResult,
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+  enforcedReason?: string,
+): KnowledgePodRetrievalActivityResultInput {
+  const noEvidence = enforcedReason !== undefined || result.noEvidence;
+  return {
+    references: result.references,
+    citationCounts: countCitationsByCapsule(citations),
+    noEvidence,
+    ...(enforcedReason !== undefined || result.reason !== undefined
+      ? { reason: enforcedReason ?? result.reason }
+      : {}),
+    ...(result.retrievalDiagnostics !== undefined
+      ? { retrievalDiagnostics: result.retrievalDiagnostics }
+      : {}),
+    ...(result.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
+    ...(result.reranker !== undefined ? { reranker: result.reranker } : {}),
+  };
+}
+
+function rerankerForHybridRetrievalActivity(
+  reranker: GroundedRerankerDiagnostics | undefined,
+): GroundedRerankerDiagnostics | undefined {
+  // Hybrid answers expose no-reranker configuration at context-pack level; it should not degrade
+  // every otherwise-successful Knowledge Pod activity row.
+  if (reranker?.status === "disabled" && reranker.failureKind === "not-configured") {
+    return undefined;
+  }
+  return reranker;
+}
+
+export function retrievalActivityResultFromRetrieval(
+  result: {
+    readonly references: readonly RetrievalReference[];
+    readonly noEvidence: boolean;
+    readonly reason?: string | undefined;
+    readonly diagnostics?: ScopedGroundedResult["retrievalDiagnostics"];
+    readonly embeddingDegraded?: true | undefined;
+  },
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+  reranker?: GroundedRerankerDiagnostics,
+): KnowledgePodRetrievalActivityResultInput {
+  const activityReranker = rerankerForHybridRetrievalActivity(reranker);
+  return {
+    references: result.references,
+    citationCounts: countCitationsByCapsule(citations),
+    noEvidence: result.noEvidence,
+    ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    ...(result.diagnostics !== undefined ? { retrievalDiagnostics: result.diagnostics } : {}),
+    ...(result.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
+    ...(activityReranker !== undefined ? { reranker: activityReranker } : {}),
+  };
+}
+
+function normaliseActivityReason(
+  reason: string | undefined,
+): KnowledgePodRetrievalActivityReasonCode {
+  if (reason !== undefined && ACTIVITY_REASON_CODES.has(reason)) {
+    return reason as KnowledgePodRetrievalActivityReasonCode;
+  }
+  return "source-skipped";
+}
+
+function stateForReason(
+  reason: KnowledgePodRetrievalActivityReasonCode,
+): KnowledgePodRetrievalActivityState {
+  if (DENIED_ACTIVITY_REASONS.has(reason)) return "denied";
+  if (DEGRADED_ACTIVITY_REASONS.has(reason)) return "degraded";
+  if (SKIPPED_ACTIVITY_REASONS.has(reason)) return "skipped";
+  if (UNAVAILABLE_ACTIVITY_REASONS.has(reason)) return "unavailable";
+  return "searched";
+}
+
+function activityModes(
+  result: KnowledgePodRetrievalActivityResultInput | undefined,
+): readonly KnowledgePodRetrievalActivityMode[] {
+  const modes = new Set<KnowledgePodRetrievalActivityMode>(["local-only"]);
+  addRetrievalMode(modes, result?.retrievalDiagnostics?.mode);
+  if (result?.reranker?.status === "applied") modes.add("reranked");
+  if (hasPolicyDeniedSignal(result)) modes.add("sealed");
+  return [...modes];
+}
+
+function addRetrievalMode(
+  modes: Set<KnowledgePodRetrievalActivityMode>,
+  mode: NonNullable<ScopedGroundedResult["retrievalDiagnostics"]>["mode"] | undefined,
+): void {
+  if (mode === "hybrid") {
+    modes.add("hybrid");
+    modes.add("lexical");
+    modes.add("vector");
+  } else if (mode === "dense-only") {
+    modes.add("vector");
+  } else if (mode === "lexical-only" || mode === "lexical-degraded") {
+    modes.add("lexical");
+  }
+}
+
+function hasPolicyDeniedSignal(
+  result: KnowledgePodRetrievalActivityResultInput | undefined,
+): boolean {
+  return (
+    result?.reason === "policy-denied" ||
+    result?.reranker?.failureKind === "policy-denied" ||
+    resultHasPolicyDeniedLane(result)
+  );
+}
+
+function resultHasPolicyDeniedLane(
+  result: KnowledgePodRetrievalActivityResultInput | undefined,
+): boolean {
+  return (
+    result?.retrievalDiagnostics?.embeddingLanes?.some((lane) => lane.status === "policy-denied") ??
+    false
+  );
+}
+
+function reasonCodesForPod(
+  result: KnowledgePodRetrievalActivityResultInput,
+  referenceCount: number,
+  capsuleId?: KnowledgeCapsuleId,
+): readonly KnowledgePodRetrievalActivityReasonCode[] {
+  const codes = new Set<KnowledgePodRetrievalActivityReasonCode>();
+  if (referenceCount > 0) codes.add("searched");
+  if (result.references.length > 0 && referenceCount === 0) codes.add("not-selected");
+  if (result.noEvidence) codes.add(normaliseActivityReason(result.reason));
+  addLaneReasonCodes(codes, result, capsuleId);
+  addLegacyEmbeddingDegradedCode(codes, result);
+  addRerankerReasonCode(codes, result);
+  if (codes.size === 0) codes.add("selected-for-search");
+  return [...codes];
+}
+
+function addLaneReasonCodes(
+  codes: Set<KnowledgePodRetrievalActivityReasonCode>,
+  result: KnowledgePodRetrievalActivityResultInput,
+  capsuleId: KnowledgeCapsuleId | undefined,
+): void {
+  for (const code of laneReasonCodesForPod(result, capsuleId)) codes.add(code);
+}
+
+function addLegacyEmbeddingDegradedCode(
+  codes: Set<KnowledgePodRetrievalActivityReasonCode>,
+  result: KnowledgePodRetrievalActivityResultInput,
+): void {
+  if (result.embeddingDegraded === true && !hasLaneDiagnostics(result))
+    codes.add("embedding-failed");
+}
+
+function addRerankerReasonCode(
+  codes: Set<KnowledgePodRetrievalActivityReasonCode>,
+  result: KnowledgePodRetrievalActivityResultInput,
+): void {
+  if (result.reranker?.failureKind === "policy-denied") {
+    codes.add("policy-denied");
+    return;
+  }
+  if (
+    result.reranker === undefined ||
+    (result.reranker.failureKind !== "not-configured" &&
+      !RERANKER_DEGRADED.has(result.reranker.status))
+  ) {
+    return;
+  }
+  codes.add(
+    result.reranker.status === "invalid-response"
+      ? "reranker-invalid-response"
+      : "reranker-unavailable",
+  );
+}
+
+function stateForPod(
+  result: KnowledgePodRetrievalActivityResultInput,
+  referenceCount: number,
+  capsuleId?: KnowledgeCapsuleId,
+): KnowledgePodRetrievalActivityState {
+  const codes = reasonCodesForPod(result, referenceCount, capsuleId);
+  if (referenceCount > 0 && codes.some((code) => code === "policy-denied")) return "degraded";
+  if (codes.some((code) => DENIED_ACTIVITY_REASONS.has(code))) return "denied";
+  if (referenceCount > 0 && codes.some((code) => DENSE_FALLBACK_ACTIVITY_REASONS.has(code))) {
+    return "degraded";
+  }
+  if (codes.some((code) => DEGRADED_ACTIVITY_REASONS.has(code))) return "degraded";
+  if (codes.some((code) => UNAVAILABLE_ACTIVITY_REASONS.has(code))) return "unavailable";
+  if (codes.some((code) => SKIPPED_ACTIVITY_REASONS.has(code))) return "skipped";
+  if (codes.some((code) => code === "not-selected")) return "not-selected";
+  return "searched";
+}
+
+function hasLaneDiagnostics(result: KnowledgePodRetrievalActivityResultInput): boolean {
+  return (result.retrievalDiagnostics?.embeddingLanes?.length ?? 0) > 0;
+}
+
+function laneReasonCodesForPod(
+  result: KnowledgePodRetrievalActivityResultInput,
+  capsuleId: KnowledgeCapsuleId | undefined,
+): readonly KnowledgePodRetrievalActivityReasonCode[] {
+  if (capsuleId === undefined) return [];
+  const lanes = result.retrievalDiagnostics?.embeddingLanes ?? [];
+  const codes = new Set<KnowledgePodRetrievalActivityReasonCode>();
+  for (const lane of lanes) {
+    if (!lane.capsuleIds.some((id) => String(id) === String(capsuleId))) continue;
+    const code = reasonCodeForLaneStatus(lane.status);
+    if (code !== undefined) codes.add(code);
+  }
+  return [...codes];
+}
+
+function reasonCodeForLaneStatus(
+  status: RetrievalEmbeddingLaneStatus,
+): KnowledgePodRetrievalActivityReasonCode | undefined {
+  if (status === "identity-incompatible") return "incompatible-embedding-identity";
+  if (status === "embedding-failed" || status === "degraded") return "embedding-failed";
+  if (status === "no-vectors") return "no-vectors";
+  if (status === "policy-denied") return "policy-denied";
+  return undefined;
+}
+
+function countReferencesByCapsule(
+  references: readonly RetrievalReference[],
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const reference of references) {
+    const key = String(reference.capsuleId);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function countCitationsByCapsule(
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>();
+  for (const citation of citations) {
+    const key = String(citation.lineage.capsuleId);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function activityOpaqueId(prefix: "pod" | "source", value: string): string {
+  const digest = createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return `${prefix}-${digest}`;
+}
+
+function activityPodId(value: string): KnowledgePodRetrievalActivityPod["podId"] {
+  return (
+    isKnowledgePodRetrievalActivitySafeText(value) ? value : activityOpaqueId("pod", value)
+  ) as KnowledgePodRetrievalActivityPod["podId"];
+}
+
+function activitySourceIds(
+  values: readonly string[],
+): KnowledgePodRetrievalActivityPod["sourceIds"] {
+  return values.map(
+    (value) =>
+      (isKnowledgePodRetrievalActivitySafeText(value)
+        ? value
+        : activityOpaqueId("source", value)) as KnowledgeSourceId,
+  );
+}
+
+function activityDisplayName(value: string): string {
+  return isKnowledgePodRetrievalActivitySafeText(value) ? value : ACTIVITY_FALLBACK_DISPLAY_NAME;
+}
+
+interface ActivityCountRow {
+  readonly n: number;
+}
+
+function activityCountRows(
+  store: KnowledgeStore,
+  table: "documents" | "chunks" | "vectors",
+  capsuleId: KnowledgeCapsuleId,
+): number {
+  const row = store._internal.db
+    .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :capsuleId`)
+    .get({ capsuleId: String(capsuleId) }) as ActivityCountRow | undefined;
+  return row?.n ?? 0;
+}
+
+function buildActivityCapsuleSummary(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+): ActivityCapsuleSummary {
+  const sources = listCapsuleSources(store, capsule.id);
+  return {
+    id: String(capsule.id),
+    displayName: capsule.displayName,
+    sourceIds: sources.map((source) => String(source.id)),
+    sourceCount: sources.length,
+    documentCount: activityCountRows(store, "documents", capsule.id),
+    chunkCount: activityCountRows(store, "chunks", capsule.id),
+    vectorCount: activityCountRows(store, "vectors", capsule.id),
+  };
+}
+
+function cachedActivitySummary(
+  store: KnowledgeStore,
+  cache: ActivitySummaryCache,
+  capsule: KnowledgeCapsule,
+): ActivityCapsuleSummary {
+  const key = String(capsule.id);
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const summary = buildActivityCapsuleSummary(store, capsule);
+  cache.set(key, summary);
+  return summary;
+}
+
+function activityPod(
+  store: KnowledgeStore,
+  cache: ActivitySummaryCache,
+  capsule: KnowledgeCapsule,
+  state: KnowledgePodRetrievalActivityState,
+  modes: readonly KnowledgePodRetrievalActivityMode[],
+  reasonCodes: readonly KnowledgePodRetrievalActivityReasonCode[],
+  counts: { readonly referenceCount: number; readonly citationCount: number },
+): KnowledgePodRetrievalActivityPod {
+  const summary = cachedActivitySummary(store, cache, capsule);
+  return {
+    podId: activityPodId(summary.id),
+    podKind: "pod",
+    displayName: activityDisplayName(summary.displayName),
+    state,
+    modes,
+    reasonCodes,
+    sourceIds: activitySourceIds(summary.sourceIds),
+    counts: {
+      sourceCount: summary.sourceCount,
+      documentCount: summary.documentCount,
+      chunkCount: summary.chunkCount,
+      vectorCount: summary.vectorCount,
+      referenceCount: counts.referenceCount,
+      citationCount: counts.citationCount,
+    },
+  };
+}
+
+function podsForSource(
+  store: KnowledgeStore,
+  cache: ActivitySummaryCache,
+  source: KnowledgePodRetrievalActivitySourceInput,
+): readonly KnowledgePodRetrievalActivityPod[] {
+  const refCounts = countReferencesByCapsule(source.result.references);
+  return source.selected.capsules.map((capsule) => {
+    const referenceCount = refCounts.get(String(capsule.id)) ?? 0;
+    const citationCount = source.result.citationCounts.get(String(capsule.id)) ?? 0;
+    return activityPod(
+      store,
+      cache,
+      capsule,
+      stateForPod(source.result, referenceCount, capsule.id),
+      activityModes(source.result),
+      reasonCodesForPod(source.result, referenceCount, capsule.id),
+      { referenceCount, citationCount },
+    );
+  });
+}
+
+function podsForSkipped(
+  store: KnowledgeStore,
+  cache: ActivitySummaryCache,
+  source: KnowledgePodRetrievalActivitySkippedInput,
+): readonly KnowledgePodRetrievalActivityPod[] {
+  return source.selected.capsules.map((capsule) => {
+    const reason = skippedReasonForCapsule(source.selected, capsule, source.reason);
+    const modes: readonly KnowledgePodRetrievalActivityMode[] =
+      reason === "policy-denied" ? ["local-only", "sealed"] : ["local-only"];
+    return activityPod(store, cache, capsule, stateForReason(reason), modes, [reason], {
+      referenceCount: 0,
+      citationCount: 0,
+    });
+  });
+}
+
+function skippedReasonForCapsule(
+  selected: SelectedLocalKnowledgeScope,
+  capsule: KnowledgeCapsule,
+  reason: string,
+): KnowledgePodRetrievalActivityReasonCode {
+  const normalised = normaliseActivityReason(reason);
+  if (selected.scopeKind !== "capsule-set") return normalised;
+  const memberReason = memberSkippedReason(capsule);
+  if (memberReason !== undefined) return memberReason;
+  const rule = SET_SKIPPED_REASON_RULES.find((entry) => entry.reason === normalised);
+  if (rule === undefined) return normalised;
+  return rule.matches(capsule) ? normalised : "source-skipped";
+}
+
+function memberSkippedReason(
+  capsule: KnowledgeCapsule,
+): KnowledgePodRetrievalActivityReasonCode | undefined {
+  if (capsule.lifecycleState === "indexing") return "indexing-in-progress";
+  if (capsule.lifecycleState === "stale") return "stale-capsule";
+  if (capsule.lifecycleState === "error") return "retrieval-failure";
+  if (capsule.lifecycleState !== "ready") return "scope-not-ready";
+  return capsuleBlocksAnswerSynthesis(capsule) ? "policy-denied" : undefined;
+}
+
+const SET_SKIPPED_REASON_RULES: readonly {
+  readonly reason: KnowledgePodRetrievalActivityReasonCode;
+  readonly matches: (capsule: KnowledgeCapsule) => boolean;
+}[] = [
+  { reason: "indexing-in-progress", matches: (capsule) => capsule.lifecycleState === "indexing" },
+  { reason: "stale-capsule", matches: (capsule) => capsule.lifecycleState === "stale" },
+  { reason: "retrieval-failure", matches: (capsule) => capsule.lifecycleState === "error" },
+  { reason: "scope-not-ready", matches: (capsule) => capsule.lifecycleState !== "ready" },
+  { reason: "policy-denied", matches: capsuleBlocksAnswerSynthesis },
+];
+
+function capsuleBlocksAnswerSynthesis(capsule: KnowledgeCapsule): boolean {
+  const policy = resolveScopeModelUsePolicy([capsule]);
+  return (
+    policy.operations.answerSynthesis === "deny" || policy.operations.rawContentRelease === "deny"
+  );
+}
+
+function sumCollapsedPodCounts(
+  pods: readonly KnowledgePodRetrievalActivityPod[],
+): KnowledgePodRetrievalActivityPod["counts"] {
+  return pods.reduce(
+    (acc, pod) => ({
+      sourceCount: acc.sourceCount + pod.counts.sourceCount,
+      documentCount: acc.documentCount + pod.counts.documentCount,
+      chunkCount: acc.chunkCount + pod.counts.chunkCount,
+      vectorCount: acc.vectorCount + pod.counts.vectorCount,
+      referenceCount: acc.referenceCount + pod.counts.referenceCount,
+      citationCount: acc.citationCount + pod.counts.citationCount,
+    }),
+    {
+      sourceCount: 0,
+      documentCount: 0,
+      chunkCount: 0,
+      vectorCount: 0,
+      referenceCount: 0,
+      citationCount: 0,
+    },
+  );
+}
+
+function collapsedActivityPod(
+  overflowPods: readonly KnowledgePodRetrievalActivityPod[],
+): KnowledgePodRetrievalActivityPod | undefined {
+  if (overflowPods.length === 0) return undefined;
+  return {
+    podId:
+      `pod-overflow-${String(overflowPods.length)}` as KnowledgePodRetrievalActivityPod["podId"],
+    podKind: "pod-set",
+    displayName: `${String(overflowPods.length)} additional Knowledge Pods`,
+    state: "skipped",
+    modes: ["local-only"],
+    reasonCodes: ["max-sources-exceeded"],
+    sourceIds: [],
+    counts: sumCollapsedPodCounts(overflowPods),
+  };
+}
+
+function boundedActivityPods(
+  pods: readonly KnowledgePodRetrievalActivityPod[],
+): readonly KnowledgePodRetrievalActivityPod[] {
+  if (pods.length <= MAX_RETRIEVAL_ACTIVITY_PODS) return pods;
+  const visibleCount = MAX_RETRIEVAL_ACTIVITY_PODS - 1;
+  const visible = pods.slice(0, visibleCount);
+  const collapsed = collapsedActivityPod(pods.slice(visibleCount));
+  return collapsed === undefined ? visible : [...visible, collapsed];
+}
+
+function summaryForActivity(
+  pods: readonly KnowledgePodRetrievalActivityPod[],
+  sources: readonly KnowledgePodRetrievalActivitySourceInput[],
+): KnowledgePodRetrievalActivity["summary"] {
+  const denseCandidateCount = sources.reduce(
+    (sum, source) => sum + (source.result.retrievalDiagnostics?.denseCandidateCount ?? 0),
+    0,
+  );
+  const lexicalCandidateCount = sources.reduce(
+    (sum, source) => sum + (source.result.retrievalDiagnostics?.lexicalCandidateCount ?? 0),
+    0,
+  );
+  const fusedCandidateCount = sources.reduce(
+    (sum, source) => sum + (source.result.retrievalDiagnostics?.fusedCandidateCount ?? 0),
+    0,
+  );
+  return {
+    searchedCount: pods.filter((pod) => pod.state === "searched").length,
+    skippedCount: pods.filter((pod) => pod.state === "skipped").length,
+    degradedCount: pods.filter((pod) => pod.state === "degraded").length,
+    deniedCount: pods.filter((pod) => pod.state === "denied").length,
+    unavailableCount: pods.filter((pod) => pod.state === "unavailable").length,
+    notSelectedCount: pods.filter((pod) => pod.state === "not-selected").length,
+    denseCandidateCount,
+    lexicalCandidateCount,
+    fusedCandidateCount,
+    referenceCount: pods.reduce((sum, pod) => sum + pod.counts.referenceCount, 0),
+    citationCount: pods.reduce((sum, pod) => sum + pod.counts.citationCount, 0),
+  };
+}
+
+export function buildKnowledgePodRetrievalActivity(input: {
+  readonly store: KnowledgeStore;
+  readonly sources: readonly KnowledgePodRetrievalActivitySourceInput[];
+  readonly skipped?: readonly KnowledgePodRetrievalActivitySkippedInput[] | undefined;
+}): KnowledgePodRetrievalActivity {
+  const summaryCache: ActivitySummaryCache = new Map();
+  const pods = [
+    ...input.sources.flatMap((source) => podsForSource(input.store, summaryCache, source)),
+    ...(input.skipped ?? []).flatMap((source) => podsForSkipped(input.store, summaryCache, source)),
+  ];
+  const boundedPods = boundedActivityPods(pods);
+  const activity: KnowledgePodRetrievalActivity = {
+    schemaVersion: KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
+    summary: summaryForActivity(pods, input.sources),
+    privacy: {
+      localFirst: true,
+      rawContentExposed: false,
+      rawQueryExposed: false,
+      privatePathsExposed: false,
+      directVectorScoreComparison: false,
+    },
+    pods: boundedPods,
+  };
+  const validation = validateKnowledgePodRetrievalActivity(activity);
+  if (!validation.ok) {
+    throw new Error("Knowledge Pod retrieval activity validation failed.");
+  }
+  return validation.value;
+}
+
+function isRetrievalActivityProjectionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === "Knowledge Pod summary validation failed." ||
+      error.message === "Knowledge Pod retrieval activity validation failed.")
+  );
+}
+
+export function tryBuildKnowledgePodRetrievalActivity(input: {
+  readonly store: KnowledgeStore;
+  readonly sources: readonly KnowledgePodRetrievalActivitySourceInput[];
+  readonly skipped?: readonly KnowledgePodRetrievalActivitySkippedInput[] | undefined;
+}): KnowledgePodRetrievalActivity | undefined {
+  try {
+    return buildKnowledgePodRetrievalActivity(input);
+  } catch (error) {
+    if (!isRetrievalActivityProjectionError(error)) throw error;
+    return undefined;
+  }
+}
 
 function buildPreviewCitationInputs(
   deps: UiHandlerDeps,
+  store: KnowledgeStore,
   result: ScopedGroundedResult,
   sourceLookup: LocalKnowledgeCitationSourceLookup,
 ): readonly {
@@ -1107,14 +1875,16 @@ function buildPreviewCitationInputs(
     reference: entry.reference,
     marker: entry.marker,
   }));
-  return citedReferences.map((entry) => {
-    const label = sourceLookup(entry.reference);
-    return {
-      marker: entry.marker,
-      ...(label === undefined ? {} : { sourceLabel: redactText(deps, label) }),
-      reference: entry.reference,
-    };
-  });
+  return citedReferences
+    .filter((entry) => referenceAllowsEvidencePersistence(store, entry.reference))
+    .map((entry) => {
+      const label = sourceLookup(entry.reference);
+      return {
+        marker: entry.marker,
+        ...(label === undefined ? {} : { sourceLabel: redactText(deps, label) }),
+        reference: entry.reference,
+      };
+    });
 }
 
 function attachGroundedAnswerWithPreviewCitations(
@@ -1127,9 +1897,30 @@ function attachGroundedAnswerWithPreviewCitations(
 ): void {
   const previewCitations = buildStoredPreviewCitations(
     env.store,
-    buildPreviewCitationInputs(deps, result, sourceLookup),
+    buildPreviewCitationInputs(deps, env.store, result, sourceLookup),
   );
   deps.store.attachGroundedAnswer(assistantMessageId, answer, previewCitations);
+}
+
+function scopedAssistantContent(result: ScopedGroundedResult, input: AskInput): string {
+  const noEvidenceReason = enforcedNoEvidenceReason(result);
+  return noEvidenceReason === undefined
+    ? result.answer.trim()
+    : localKnowledgeNoEvidenceAnswer(noEvidenceReason, input.content);
+}
+
+function persistRedactedGroundedExchange(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  input: AskInput,
+  assistantContent: string,
+): readonly [ChatMessage, ChatMessage] {
+  return persistGroundedExchange(
+    deps,
+    chat.id,
+    redactText(deps, input.content),
+    redactText(deps, assistantContent),
+  );
 }
 
 function persistScopedGroundedAnswer(
@@ -1145,21 +1936,12 @@ function persistScopedGroundedAnswer(
   const auditSink = createSqliteAuditSink(env.store);
   const occurredAt = Date.now();
   emitRetrievalAudit(auditSink, selected, result, occurredAt);
-  if (result.references.length > 0) emitAnswerContextAudit(auditSink, result, occurredAt);
-  const noEvidenceReason = enforcedNoEvidenceReason(result);
-  const assistantContent =
-    noEvidenceReason === undefined
-      ? result.answer.trim()
-      : localKnowledgeNoEvidenceAnswer(noEvidenceReason, input.content);
-  const redactedUserContent = redactText(deps, input.content);
-  const redactedAssistantContent = redactText(deps, assistantContent);
-  const persisted = persistGroundedExchange(
-    deps,
-    chat.id,
-    redactedUserContent,
-    redactedAssistantContent,
-  );
+  if (result.references.length > 0)
+    emitAnswerContextAudit(auditSink, env.store, result, occurredAt);
+  const assistantContent = scopedAssistantContent(result, input);
+  const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
+  const limits = currentGroundingLimits(deps);
   const answer = buildLocalKnowledgeAnswer(
     chat,
     env.store,
@@ -1167,7 +1949,8 @@ function persistScopedGroundedAnswer(
     persisted,
     result,
     elapsedMs,
-    redactedAssistantContent,
+    persisted[1].content,
+    limits,
     sourceLookup,
     (value: string): string => redactText(deps, value),
   ) satisfies GroundedAnswer;
@@ -1180,6 +1963,23 @@ function persistScopedGroundedAnswer(
     sourceLookup,
   );
   return answer;
+}
+
+function createScopedAnswerGenerator(
+  model: ModelPort,
+  modelId: string,
+  deps: UiHandlerDeps,
+  env: { readonly store: KnowledgeStore },
+  limits: ReturnType<typeof currentGroundingLimits>,
+): StoreBackedAnswerGenerator {
+  return new StoreBackedAnswerGenerator(
+    model,
+    modelId,
+    env.store,
+    createSqliteAuditSink(env.store),
+    (value: string): string => redactText(deps, value),
+    limits,
+  );
 }
 
 async function runScopedGroundedAnswer(
@@ -1195,9 +1995,8 @@ async function runScopedGroundedAnswer(
   const modelId = input.modelId ?? chat.selectedModel;
   const model = resolveModel(deps, modelId);
   if ("status" in model) return model;
-  const auditSink = createSqliteAuditSink(env.store);
-  const redact = (value: string): string => redactText(deps, value);
-  const generator = new StoreBackedAnswerGenerator(model, modelId, env.store, auditSink, redact);
+  const limits = currentGroundingLimits(deps);
+  const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
     {
@@ -1207,14 +2006,14 @@ async function runScopedGroundedAnswer(
         queryTransformer: createBroadQueryTransformer(model, modelId),
       },
       answerGenerator: generator,
-      referenceReranker: createReferenceReranker(deps, env.store),
+      referenceReranker: referenceRerankerForScope(deps, env.store, selected, limits),
       citationFaithfulness: {
         excerptForReference: (reference): string =>
           readCitationExcerpt(
             env.store,
             reference.capsuleId,
             reference.citation,
-            MAX_EXCERPT_CHARS,
+            limits.maxExcerptChars,
           ),
       },
       signal,
@@ -1225,6 +2024,33 @@ async function runScopedGroundedAnswer(
     throw new CancelledError("grounded request cancelled");
   }
   return persistScopedGroundedAnswer(chat, input, deps, env, selected, result, startedAt);
+}
+
+function stateFailureRoute(
+  chat: Chat,
+  input: AskInput,
+  deps: UiHandlerDeps,
+  env: { readonly store: KnowledgeStore },
+  selected: SelectedLocalKnowledgeScope,
+  stateFailure: { readonly reason: string; readonly message: string },
+): RouteResult {
+  const redactedMessage = redactText(deps, stateFailure.message);
+  const persisted = persistGroundedExchange(
+    deps,
+    chat.id,
+    redactText(deps, input.content),
+    redactedMessage,
+  );
+  const answer = buildStateFailureAnswer(
+    chat,
+    env.store,
+    selected,
+    persisted,
+    { ...stateFailure, message: redactedMessage },
+    currentGroundingLimits(deps),
+  );
+  deps.store.attachGroundedAnswer(persisted[1].id, answer);
+  return { status: 200, body: answer };
 }
 
 export async function handleLocalKnowledgeGroundedAsk(
@@ -1239,22 +2065,7 @@ export async function handleLocalKnowledgeGroundedAsk(
     if ("status" in selected) return selected;
     const stateFailure = scopeStateFailure(selected);
     if (stateFailure !== undefined) {
-      const redactedMessage = redactText(deps, stateFailure.message);
-      const persisted = persistGroundedExchange(
-        deps,
-        chat.id,
-        redactText(deps, input.content),
-        redactedMessage,
-      );
-      const answer = buildStateFailureAnswer(chat, selected, persisted, {
-        ...stateFailure,
-        message: redactedMessage,
-      });
-      deps.store.attachGroundedAnswer(persisted[1].id, answer);
-      return {
-        status: 200,
-        body: answer,
-      };
+      return stateFailureRoute(chat, input, deps, env, selected, stateFailure);
     }
     const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, signal);
     if ("status" in answer) return answer;

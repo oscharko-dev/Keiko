@@ -52,6 +52,12 @@ export interface UpdateCommandPreview {
   readonly label: string;
 }
 
+export interface UpdateRestartCommandPreview {
+  readonly executable: "keiko";
+  readonly args: readonly string[];
+  readonly label: string;
+}
+
 export interface UpdateInstallMode {
   readonly schemaVersion: typeof UPDATE_SESSION_SCHEMA_VERSION;
   readonly status: UpdateInstallModeStatus;
@@ -117,6 +123,7 @@ export interface UpdateSession {
   readonly packageManager?: UpdateInstallPackageManager | undefined;
   readonly installRoot?: string | undefined;
   readonly commandPreview?: UpdateCommandPreview | undefined;
+  readonly restartCommandPreview?: UpdateRestartCommandPreview | undefined;
   readonly startedAt: string;
   readonly updatedAt: string;
   readonly cancelable: boolean;

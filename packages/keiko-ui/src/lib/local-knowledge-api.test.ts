@@ -1,6 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { KnowledgeCapsuleId, KnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
 import {
+  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+  resolveKnowledgePodModelUsePolicy,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  KnowledgePodSummary,
+  KnowledgeSourceScope,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   cancelIndexing,
   connectCapsuleSource,
   createCapsule,
@@ -27,9 +40,339 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function podSummary(
+  id: KnowledgeCapsuleId | CapsuleSetId,
+  kind: KnowledgePodSummary["kind"],
+  displayName: string,
+  overrides: Partial<
+    Pick<KnowledgePodSummary, "readiness" | "retrieval" | "governance" | "modelUsePolicy">
+  > = {},
+): KnowledgePodSummary {
+  const modelUsePolicy =
+    overrides.modelUsePolicy ?? resolveKnowledgePodModelUsePolicy(standardPodModelUsePolicy());
+  return {
+    schemaVersion: "1",
+    id,
+    kind,
+    displayName,
+    tags: [],
+    readiness: overrides.readiness ?? "ready",
+    counts: { capsuleCount: 1, sourceCount: 0, documentCount: 0, chunkCount: 0, vectorCount: 0 },
+    sourceKinds: [],
+    retrieval: {
+      lexicalIndex: false,
+      vectorIndex: false,
+      hybridGrounding: true,
+      crossSpaceScoreMixing: false,
+      ...overrides.retrieval,
+    },
+    privacy: {
+      localFirst: true,
+      modelOpen: true,
+      rawContentExposed: false,
+      privatePathsExposed: false,
+      evidenceMode: "counts-hashes-and-status",
+      storageLocation: "local-runtime-state",
+    },
+    governance: overrides.governance ?? {
+      locationKind: "local",
+      sealingPosture: "local-store-policy",
+      policyPosture: "none",
+      managedServiceDependency: false,
+    },
+    modelUsePolicy,
+    compatibility: {
+      backingKind: kind === "pod" ? "knowledge-capsule" : "capsule-set",
+      capsuleIds: kind === "pod" ? [id as KnowledgeCapsuleId] : [],
+      sourceIds: [],
+      localKnowledgeSchemaVersion: LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+      migrationRequired: false,
+      persistedStateRenamed: false,
+    },
+    updatedAt: 1,
+    degradationReasons: [],
+  };
+}
+
 describe("local knowledge BFF boundary helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("uses redacted Knowledge Pod summary names for UI list labels when available", () => {
+    const capsuleId = "cap-private" as KnowledgeCapsuleId;
+    const setId = "set-private" as CapsuleSetId;
+
+    expect(
+      capsulesForKnowledgePodUi({
+        capsules: [
+          {
+            id: capsuleId,
+            displayName: "/Users/alice/private/customer.pdf",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 1,
+          },
+        ],
+        knowledgePods: [podSummary(capsuleId, "pod", "Knowledge Pod")],
+      })[0]?.displayName,
+    ).toBe("Knowledge Pod");
+
+    expect(
+      capsuleSetsForKnowledgePodUi({
+        capsuleSets: [
+          {
+            id: setId,
+            displayName: "https://gateway.example.test?client_secret=value",
+            capsuleCount: 1,
+            composedAt: 1,
+          },
+        ],
+        knowledgePods: [podSummary(setId, "pod-set", "Knowledge Pod Set")],
+      })[0]?.displayName,
+    ).toBe("Knowledge Pod Set");
+  });
+
+  it("maps Knowledge Pod embedding guidance into optional UI metadata", () => {
+    const capsuleId = "cap-legacy" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Legacy vectors",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Legacy vectors", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "unknown",
+            embeddingCompatibilityReason: "legacy-unverified-profile",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      readiness: "degraded",
+      embeddingCompatibilityStatus: "unknown",
+      embeddingCompatibilityReason: "legacy-unverified-profile",
+      reindexRecommended: true,
+      queryEmbeddingAllowed: false,
+      guidance: {
+        label: "Reindex recommended",
+        tone: "warning",
+      },
+    });
+  });
+
+  it("maps unavailable and incompatible Knowledge Pod guidance", () => {
+    const unavailableId = "cap-unavailable" as KnowledgeCapsuleId;
+    const incompatibleId = "cap-incompatible" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: unavailableId,
+          displayName: "Unavailable vectors",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: incompatibleId,
+          displayName: "Mismatched vectors",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(unavailableId, "pod", "Unavailable vectors", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "unavailable",
+            embeddingCompatibilityReason: "policy-denied",
+            reindexRecommended: false,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+        podSummary(incompatibleId, "pod", "Mismatched vectors", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "incompatible",
+            embeddingCompatibilityReason: "fingerprint-mismatch",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding unavailable",
+      tone: "danger",
+    });
+    expect(capsules[1]?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding mismatch",
+      tone: "danger",
+    });
+  });
+
+  it("maps sealed Knowledge Pod policy guidance and denied operation metadata", () => {
+    const capsuleId = "cap-sealed" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Sealed policy",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Sealed policy", {
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      sealed: true,
+      deniedModelOperations: [
+        "externalEmbeddings",
+        "externalReranking",
+        "answerSynthesis",
+        "rawContentRelease",
+      ],
+      guidance: {
+        label: "Policy denied",
+        tone: "danger",
+      },
+    });
+  });
+
+  it("uses Knowledge Pod Set copy for embedding guidance", () => {
+    const setId = "set-embedding-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Embedding guidance set",
+          capsuleCount: 2,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Embedding guidance set", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "incompatible",
+            embeddingCompatibilityReason: "fingerprint-mismatch",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding mismatch",
+      description:
+        "Semantic retrieval is disabled for affected set members until they are reindexed locally.",
+    });
+  });
+
+  it("uses Knowledge Pod Set copy for policy guidance", () => {
+    const setId = "set-policy-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Policy guidance set",
+          capsuleCount: 2,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Policy guidance set", {
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Policy denied",
+      description: expect.stringContaining("This Knowledge Pod Set blocks"),
+    });
+    expect(capsuleSet?.knowledgePod?.guidance?.description).toContain("affected members");
+  });
+
+  it("normalizes legacy Knowledge Pod summaries with omitted model-use policy", () => {
+    const capsuleId = "cap-legacy-policy" as KnowledgeCapsuleId;
+    const legacySummary = podSummary(capsuleId, "pod", "Legacy policy");
+    const legacyWire = { ...legacySummary } as Record<string, unknown>;
+    delete legacyWire.modelUsePolicy;
+
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Legacy policy",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [legacyWire as unknown as KnowledgePodSummary],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      sealed: true,
+      deniedModelOperations: [
+        "externalEmbeddings",
+        "externalReranking",
+        "answerSynthesis",
+        "rawContentRelease",
+      ],
+      guidance: {
+        label: "Policy denied",
+        tone: "danger",
+      },
+    });
   });
 
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {
@@ -47,6 +390,8 @@ describe("local knowledge BFF boundary helpers", () => {
 
     await fetchCapsules();
     await fetchCapsuleSets();
+    await fetchCapsules({ includeKnowledgePods: true });
+    await fetchCapsuleSets({ includeKnowledgePods: true });
     await createCapsule({ displayName: "Release corpus", description: "0.2.0 grounding" });
     await createCapsuleSet({
       displayName: "Mixed grounding set",
@@ -74,6 +419,14 @@ describe("local knowledge BFF boundary helpers", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules?includeKnowledgePods=1",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsule-sets?includeKnowledgePods=1",
       expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

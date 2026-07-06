@@ -168,4 +168,38 @@ describe("Workspace drop-listener / registry perf (STEP 07 cluster B)", () => {
     );
     expect(syncSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("accepts capsule-set connector drop events and creates connector windows", () => {
+    const baseApi = makeApi({ x: 0, y: 0, zoom: 1 });
+    const add = vi.fn<WorkspaceApi["add"]>(() => "connector-1");
+    const update = vi.fn<WorkspaceApi["update"]>();
+    const api: WorkspaceApi = { ...baseApi, add, update };
+    const ws = workspace(api, { wins: [] });
+    const wsRef = createRef<HTMLDivElement>();
+    render(<Workspace ws={ws} wsRef={wsRef} openPalette={() => undefined} />);
+
+    window.dispatchEvent(
+      new CustomEvent("keiko:local-knowledge-connector-drop", {
+        detail: {
+          payload: {
+            kind: "capsule-set",
+            id: "set-release",
+            label: "Release Readiness",
+            lifecycleState: "degraded",
+          },
+          clientX: 0,
+          clientY: 0,
+        },
+      }),
+    );
+
+    expect(add).toHaveBeenCalledWith("connector", {
+      presentation: "node",
+      selectedKind: "capsule-set",
+      selectedId: "set-release",
+      selectedLabel: "Release Readiness",
+      selectedState: "degraded",
+    });
+    expect(update).toHaveBeenCalledWith("connector-1", expect.objectContaining({ w: 260, h: 220 }));
+  });
 });
