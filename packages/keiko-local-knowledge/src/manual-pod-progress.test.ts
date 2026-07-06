@@ -86,6 +86,14 @@ describe("buildHtmlManualIndexingProgress", () => {
     expect(progress.phase).toBe("empty");
   });
 
+  it("reports a limit-reached (truncated) crawl as degraded, never ready, even when indexing fully succeeded", () => {
+    const progress = buildHtmlManualIndexingProgress(
+      crawlResult("limit-reached", [{ reason: "page-limit", count: 1 }]),
+      indexingResult(),
+    );
+    expect(progress.phase).toBe("degraded");
+  });
+
   it("maps an indexing policy denial to remediation guidance", () => {
     const progress = buildHtmlManualIndexingProgress(
       crawlResult("completed"),

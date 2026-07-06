@@ -60,6 +60,7 @@ const REMEDIATION_GUIDANCE: Readonly<Record<string, string>> = {
   "byte-budget": "The manual reached its total byte budget; narrow the scope or raise the limit.",
   "page-limit": "The manual reached its page limit; some pages were not crawled.",
   "depth-limit": "The manual reached its depth limit; deeper pages were not crawled.",
+  "time-limit": "The manual reached its crawl time limit; some pages were not crawled.",
   "fetch-failed": "Some pages could not be retrieved.",
   "empty-page": "Some pages had no indexable content.",
   POLICY_DENIED: "The pod's model-use policy denied the embedding operation; review the policy.",
@@ -98,6 +99,7 @@ function resolvePhase(
 ): ManualIndexingPhase {
   if (crawl.status === "cancelled" || indexing?.status === "cancelled") return "cancelled";
   if (indexing === undefined) return crawl.status === "empty" ? "empty" : "crawling";
+  if (crawl.status === "limit-reached") return "degraded";
   if (indexing.status === "succeeded" && indexing.failedDocuments === 0) return "ready";
   return "degraded";
 }
