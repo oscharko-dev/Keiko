@@ -72,7 +72,6 @@ import {
   validateKnowledgePodModelUsePolicy,
   validateKnowledgePodSummary,
   validateKnowledgeSourceScope,
-  isKnowledgePodEvidenceSafeText,
 } from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
