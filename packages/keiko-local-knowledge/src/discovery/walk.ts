@@ -65,7 +65,10 @@ function toPosixRelative(absoluteRoot: string, absolutePath: string): string {
   return normPath;
 }
 
-function isContained(absoluteRoot: string, absolutePath: string): boolean {
+// Exported for reuse by other realpath-containment checks in the package (e.g. the manual
+// crawler's local fetcher, `crawl/fetchers.ts`) so the trailing-separator-safe comparison is not
+// re-implemented as a bare `startsWith`.
+export function isContained(absoluteRoot: string, absolutePath: string): boolean {
   const normRoot = normaliseSep(absoluteRoot);
   const normPath = normaliseSep(absolutePath);
   if (normPath === normRoot) {

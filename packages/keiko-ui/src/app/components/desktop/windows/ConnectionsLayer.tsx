@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { GroundedAnswer as GroundedAnswerWire } from "@/lib/types";
 import { Icons } from "../Icons";
 import { connPath, relLabel } from "./connectionUtils";
@@ -63,7 +63,8 @@ function isDataChannel(a: AppWindow, b: AppWindow): boolean {
   return chatSide && sourceSide;
 }
 
-function resolveConnections(
+// Exported for tests (the cached variant below must stay result-equivalent).
+export function resolveConnections(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
 ): ResolvedConn[] {
@@ -75,6 +76,61 @@ function resolveConnections(
     if (a === undefined || b === undefined) continue;
     const p = connPath(a, b);
     out.push({ c, d: p.d, mid: p.mid, label: relLabel(a, b), dataChannel: isDataChannel(a, b) });
+  }
+  return out;
+}
+
+interface ResolvedConnCacheEntry {
+  readonly a: AppWindow;
+  readonly b: AppWindow;
+  readonly conn: Connection;
+  readonly resolved: ResolvedConn;
+}
+
+// GEN-PERF-WORKSPACE-006 — an edge's geometry/label depend ONLY on its two endpoint
+// windows, yet resolveConnections rebuilt every ResolvedConn (path string, label,
+// mid) whenever the `wins` array identity changed — i.e. on every drag/resize rAF
+// frame, for ALL connections, even ones untouched by the gesture. This cached
+// variant re-resolves an edge only when its Connection or one of its endpoint
+// windows actually changed identity (#1580's makeUpdate keeps unchanged windows
+// reference-equal), and — critically — preserves the ResolvedConn object identity
+// for untouched edges so the memoized ConnectionEdge/ConnectionBadge components
+// below skip re-rendering them entirely. Exported for tests.
+export function resolveConnectionsCached(
+  cache: Map<string, ResolvedConnCacheEntry>,
+  wins: readonly AppWindow[],
+  conns: readonly Connection[],
+): ResolvedConn[] {
+  const byId = new Map<string, AppWindow>(wins.map((w) => [w.id, w]));
+  const out: ResolvedConn[] = [];
+  const seen = new Set<string>();
+  for (const c of conns) {
+    const a = byId.get(c.a);
+    const b = byId.get(c.b);
+    if (a === undefined || b === undefined) continue;
+    seen.add(c.id);
+    const prev = cache.get(c.id);
+    if (prev !== undefined && prev.conn === c && prev.a === a && prev.b === b) {
+      out.push(prev.resolved);
+      continue;
+    }
+    const p = connPath(a, b);
+    const resolved: ResolvedConn = {
+      c,
+      d: p.d,
+      mid: p.mid,
+      label: relLabel(a, b),
+      dataChannel: isDataChannel(a, b),
+    };
+    cache.set(c.id, { a, b, conn: c, resolved });
+    out.push(resolved);
+  }
+  // Sweep entries for removed/orphaned connections so the cache cannot grow past
+  // the live connection set.
+  if (cache.size > seen.size) {
+    for (const key of Array.from(cache.keys())) {
+      if (!seen.has(key)) cache.delete(key);
+    }
   }
   return out;
 }
@@ -216,12 +272,11 @@ function useArmedRemove(): {
     }, REMOVE_ARM_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, [armedId]);
-  return {
-    armedId,
-    arm: (id: string) => setArmedId(id),
-    disarm: () => setArmedId(null),
-    autoCancelledNonce,
-  };
+  // Stable identities (GEN-PERF-WORKSPACE-006): these flow into the memoized
+  // ConnectionBadge props, so fresh closures per render would defeat that memo.
+  const arm = useCallback((id: string) => setArmedId(id), []);
+  const disarm = useCallback(() => setArmedId(null), []);
+  return { armedId, arm, disarm, autoCancelledNonce };
 }
 
 function usePrefersReducedMotion(): boolean {
@@ -305,6 +360,99 @@ function FlowParticles({
   );
 }
 
+interface ConnectionEdgeProps {
+  readonly item: ResolvedConn;
+  readonly active: boolean;
+  readonly intensity: FlowIntensity;
+  readonly reducedMotion: boolean;
+}
+
+// GEN-PERF-WORKSPACE-006 — memoized per-edge SVG. `item` keeps its identity while
+// both endpoint windows are untouched (resolveConnectionsCached), so dragging one
+// window re-renders only the edges attached to it instead of every edge per frame.
+const ConnectionEdge = memo(function ConnectionEdge({
+  item,
+  active,
+  intensity,
+  reducedMotion,
+}: ConnectionEdgeProps): ReactNode {
+  const pathId = `conn-path-${item.c.id}`;
+  return (
+    <g>
+      <path
+        id={pathId}
+        className="conn-path"
+        d={item.d}
+        data-active={active ? "true" : undefined}
+        data-intensity={active ? intensity : undefined}
+        data-reduced-motion={active && reducedMotion ? "true" : undefined}
+      />
+      {active && !reducedMotion ? <FlowParticles pathId={pathId} intensity={intensity} /> : null}
+    </g>
+  );
+});
+
+interface ConnectionBadgeProps {
+  readonly item: ResolvedConn;
+  readonly active: boolean;
+  readonly intensity: FlowIntensity;
+  readonly armed: boolean;
+  readonly onArm: (id: string) => void;
+  readonly onDisarm: () => void;
+  readonly onConfirmRemove: (id: string) => void;
+}
+
+// GEN-PERF-WORKSPACE-006 — memoized badge; same identity contract as ConnectionEdge
+// (the arm/disarm/remove callbacks are referentially stable in the parent).
+const ConnectionBadge = memo(function ConnectionBadge({
+  item,
+  active,
+  intensity,
+  armed,
+  onArm,
+  onDisarm,
+  onConfirmRemove,
+}: ConnectionBadgeProps): ReactNode {
+  const metadataLabel = connectionMetadataLabel(item);
+  return (
+    <button
+      type="button"
+      className="conn-badge"
+      data-active={active ? "true" : undefined}
+      data-intensity={active ? intensity : undefined}
+      data-armed={armed ? "true" : undefined}
+      style={{ left: item.mid.x, top: item.mid.y }}
+      onClick={() => {
+        // Audit C301 — two-stage removal: first click arms, second confirms.
+        if (armed) onConfirmRemove(item.c.id);
+        else onArm(item.c.id);
+      }}
+      onBlur={() => {
+        if (armed) onDisarm();
+      }}
+      title={
+        armed
+          ? `Click again to remove: ${item.label}\n\n${metadataLabel}`
+          : `${metadataLabel}\n\nClick once to arm removal.`
+      }
+      aria-label={
+        armed
+          ? `Confirm removal of connection: ${item.label}. Activate again to remove.`
+          : active
+            ? `${item.label} — ${intensity} data exchange in progress. Activate to remove connection.`
+            : `Remove connection: ${item.label}`
+      }
+    >
+      <Icons.git size={11} /> <span>{armed ? "Remove?" : item.label}</span>
+      {active && !armed ? (
+        <span className="conn-flow-tag" aria-hidden="true">
+          {intensity === "heavy" ? "⇶" : "→"}
+        </span>
+      ) : null}
+    </button>
+  );
+});
+
 function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayerProps): ReactNode {
   const activity = useOptionalChatSessionActivity();
   const reducedMotion = usePrefersReducedMotion();
@@ -332,7 +480,21 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
   // never on the pan/zoom view (the SVG lives inside the CSS-transformed .ws-scene),
   // so recompute only when those actually change. Combined with the memo wrapper
   // below this keeps the connections layer idle during pan/zoom.
-  const items = useMemo(() => resolveConnections(wins, conns), [wins, conns]);
+  // GEN-PERF-WORKSPACE-006 — the cached resolve additionally preserves ResolvedConn
+  // identity for edges whose endpoints did not change, so a drag frame re-resolves
+  // and re-renders ONLY the dragged window's edges.
+  const resolveCacheRef = useRef<Map<string, ResolvedConnCacheEntry>>(new Map());
+  const items = useMemo(
+    () => resolveConnectionsCached(resolveCacheRef.current, wins, conns),
+    [wins, conns],
+  );
+  const onConfirmRemove = useCallback(
+    (id: string): void => {
+      disarm();
+      api.removeConn(id);
+    },
+    [disarm, api],
+  );
   const visibleBadgeIds = useMemo(() => {
     const windowRects = wins.filter((win) => win.minimized !== true).map(windowRect);
     const ids = new Set<string>();
@@ -354,25 +516,15 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
           viewBox="-10000 -10000 20000 20000"
           preserveAspectRatio="xMidYMid meet"
         >
-          {items.map((it) => {
-            const active = flowing && it.dataChannel;
-            const pathId = `conn-path-${it.c.id}`;
-            return (
-              <g key={it.c.id}>
-                <path
-                  id={pathId}
-                  className="conn-path"
-                  d={it.d}
-                  data-active={active ? "true" : undefined}
-                  data-intensity={active ? intensity : undefined}
-                  data-reduced-motion={active && reducedMotion ? "true" : undefined}
-                />
-                {active && !reducedMotion ? (
-                  <FlowParticles pathId={pathId} intensity={intensity} />
-                ) : null}
-              </g>
-            );
-          })}
+          {items.map((it) => (
+            <ConnectionEdge
+              key={it.c.id}
+              item={it}
+              active={flowing && it.dataChannel}
+              intensity={intensity}
+              reducedMotion={reducedMotion}
+            />
+          ))}
           {temp !== null ? <path className="conn-path conn-temp" d={temp.d} /> : null}
           {temp !== null ? <circle className="conn-dot" cx={temp.ex} cy={temp.ey} r="5" /> : null}
         </svg>
@@ -388,51 +540,18 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
           {removalAnnouncement}
         </div>
         {items.map((it) => {
-          const active = flowing && it.dataChannel;
           if (!visibleBadgeIds.has(it.c.id)) return null;
-          const armed = armedId === it.c.id;
-          const metadataLabel = connectionMetadataLabel(it);
           return (
-            <button
+            <ConnectionBadge
               key={it.c.id}
-              type="button"
-              className="conn-badge"
-              data-active={active ? "true" : undefined}
-              data-intensity={active ? intensity : undefined}
-              data-armed={armed ? "true" : undefined}
-              style={{ left: it.mid.x, top: it.mid.y }}
-              onClick={() => {
-                // Audit C301 — two-stage removal: first click arms, second confirms.
-                if (armed) {
-                  disarm();
-                  api.removeConn(it.c.id);
-                } else {
-                  arm(it.c.id);
-                }
-              }}
-              onBlur={() => {
-                if (armed) disarm();
-              }}
-              title={
-                armed
-                  ? `Click again to remove: ${it.label}\n\n${metadataLabel}`
-                  : `${metadataLabel}\n\nClick once to arm removal.`
-              }
-              aria-label={
-                armed
-                  ? `Confirm removal of connection: ${it.label}. Activate again to remove.`
-                  : active
-                    ? `${it.label} — ${intensity} data exchange in progress. Activate to remove connection.`
-                    : `Remove connection: ${it.label}`
-              }
-            >
-              <Icons.git size={11} /> <span>{armed ? "Remove?" : it.label}</span>
-              {active && !armed ? (
-                <span className="conn-flow-tag" aria-hidden="true">
-                  {intensity === "heavy" ? "⇶" : "→"}
-                </span>
-              ) : null}
-            </button>
+              item={it}
+              active={flowing && it.dataChannel}
+              intensity={intensity}
+              armed={armedId === it.c.id}
+              onArm={arm}
+              onDisarm={disarm}
+              onConfirmRemove={onConfirmRemove}
+            />
           );
         })}
       </div>

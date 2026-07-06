@@ -103,6 +103,7 @@ function classifyFetch(
 ): { readonly accepted: CrawledManualPage } | { readonly denied: ManualCrawlDenyReason } {
   if (!result.ok) return { denied: result.reason };
   if (result.redirected === true) return { denied: "redirect" };
+  if (result.truncated === true) return { denied: "oversized-page" };
   if (result.bytes.length === 0) return { denied: "empty-page" };
   if (!isHtmlContentType(result.contentType)) return { denied: "non-html" };
   return {
@@ -167,16 +168,16 @@ async function processItem(
   enqueueLinks(state, deps, classified.accepted, source);
 }
 
-// True when a governed bound has been hit and the loop must stop accepting new pages.
-function budgetExhausted(
+// The governed bound that has been hit, or null while the loop may keep accepting new pages.
+function exhaustedBudgetReason(
   state: CrawlState,
   source: HtmlManualSource,
   deadline: number,
   now: () => number,
-): boolean {
-  if (state.pages.length >= source.limits.maxPages) return true;
-  if (state.bytesFetched >= source.limits.maxBytes) return true;
-  return now() >= deadline;
+): ManualCrawlDenyReason | null {
+  if (state.pages.length >= source.limits.maxPages) return "page-limit";
+  if (state.bytesFetched >= source.limits.maxBytes) return "byte-budget";
+  return now() >= deadline ? "time-limit" : null;
 }
 
 function resolveStatus(state: CrawlState, aborted: boolean): ManualCrawlStatus {
@@ -211,8 +212,10 @@ export async function crawlManual(
       aborted = true;
       break;
     }
-    if (budgetExhausted(state, source, deadline, now)) {
+    const exhausted = exhaustedBudgetReason(state, source, deadline, now);
+    if (exhausted !== null) {
       state.limitReached = true;
+      tallyDeny(state, deps, exhausted);
       break;
     }
     const item = state.queue.shift();

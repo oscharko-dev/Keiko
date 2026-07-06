@@ -20,6 +20,32 @@ const MAX_PDF_PREVIEW_ZOOM = 2;
 const MIN_PDF_PREVIEW_ZOOM = 0.5;
 const MIN_WINDOW_CONTENT_ZOOM = 0.5;
 const MAX_WINDOW_CONTENT_ZOOM = 2;
+// Persisted input is hostile (AGENTS.md trust rule): geometry passed Number.isFinite
+// but was never magnitude-bounded, so a tampered/corrupted snapshot with e.g.
+// w: 1e15 or z: 1e18 survived sanitize and reached layout math (layout-thrash DoS;
+// a z beyond safe-integer precision even breaks focus ordering permanently because
+// zc.current + 1 stops changing the value). Clamp — not reject — so a slightly
+// out-of-range state recovers usably, mirroring clampWindowContentZoom.
+const MAX_WINDOW_COORD = 1_000_000;
+const MAX_WINDOW_SIZE = 32_768;
+const MIN_WINDOW_SIZE = 1;
+const MAX_WINDOW_Z = 1_000_000_000;
+// Generic text cfg fields (title/url/paths) previously had NO length cap in the
+// fallback branch of sanitizeConfigValue — only figma/pdf/editor fields were
+// bounded — so one field could carry a multi-hundred-KB string into localStorage
+// (client-side unbounded) and toward the server PUT. Reject over-length values
+// (reject-not-truncate: a truncated path/URL is silently wrong, #449 field-safety).
+const MAX_GENERIC_CFG_TEXT_LENGTH = 2_048;
+// A hostile layoutJson could nest split nodes arbitrarily deep — unbounded
+// recursion in sanitizeEditorLayoutJson is a stack-overflow/hang candidate that
+// re-triggers on every hydration and cross-tab storage replay. Fail closed.
+const MAX_EDITOR_LAYOUT_SPLIT_DEPTH = 32;
+// Mirror the server's snapshot bounds (workspace-state-handlers.ts
+// MAX_WORKSPACE_WINDOWS/MAX_WORKSPACE_CONNECTIONS) on the client parse path: the
+// localStorage route otherwise accepts unbounded arrays the server would reject,
+// leaving local state permanently divergent from the server snapshot.
+const MAX_PERSISTED_WINDOWS = 128;
+const MAX_PERSISTED_CONNECTIONS = 512;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -82,6 +108,18 @@ function isFiniteNumber(value: unknown): value is number {
 
 function clampWindowContentZoom(value: number): number {
   return Math.max(MIN_WINDOW_CONTENT_ZOOM, Math.min(MAX_WINDOW_CONTENT_ZOOM, value));
+}
+
+function clampWindowCoord(value: number): number {
+  return Math.max(-MAX_WINDOW_COORD, Math.min(MAX_WINDOW_COORD, value));
+}
+
+function clampWindowSize(value: number): number {
+  return Math.max(MIN_WINDOW_SIZE, Math.min(MAX_WINDOW_SIZE, value));
+}
+
+function clampWindowZ(value: number): number {
+  return Math.max(1, Math.min(MAX_WINDOW_Z, value));
 }
 
 function isJsonScalar(value: unknown): value is JsonScalar {
@@ -380,8 +418,10 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
       };
     }
     const paneIds = new Set(Object.keys(panes));
-    const sanitizeNode = (node: unknown): unknown => {
-      if (!isRecord(node)) return null;
+    const sanitizeNode = (node: unknown, depth = 0): unknown => {
+      // Fail closed on absurd nesting: a null child collapses the whole split
+      // chain, so an over-deep tree rejects the layout instead of recursing on.
+      if (depth > MAX_EDITOR_LAYOUT_SPLIT_DEPTH || !isRecord(node)) return null;
       if (
         node["type"] === "pane" &&
         typeof node["paneId"] === "string" &&
@@ -390,8 +430,8 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
         return { type: "pane", paneId: node["paneId"] };
       }
       if (node["type"] === "split") {
-        const first = sanitizeNode(node["first"]);
-        const second = sanitizeNode(node["second"]);
+        const first = sanitizeNode(node["first"], depth + 1);
+        const second = sanitizeNode(node["second"], depth + 1);
         if (first === null || second === null) return null;
         const ratio =
           typeof node["ratio"] === "number" && Number.isFinite(node["ratio"])
@@ -490,6 +530,9 @@ function sanitizeConfigValue(
   }
   if (!isJsonScalar(value) || isCredentialKey(key)) return undefined;
   if (typeof value !== "string") return value;
+  // Length gate BEFORE the secret-shape scan: it bounds the persisted payload and
+  // keeps the O(n) scan off multi-hundred-KB strings.
+  if (value.length > MAX_GENERIC_CFG_TEXT_LENGTH) return undefined;
   const persistence = WIN_META[type].persistence;
   if (persistence === "evidence-reference") {
     return isSafeOpaqueReference(value) ? value : undefined;
@@ -526,10 +569,10 @@ function sanitizePrev(prev: unknown): AppWindow["prev"] | undefined {
     return undefined;
   }
   return {
-    x: prev["x"],
-    y: prev["y"],
-    w: prev["w"],
-    h: prev["h"],
+    x: clampWindowCoord(prev["x"]),
+    y: clampWindowCoord(prev["y"]),
+    w: clampWindowSize(prev["w"]),
+    h: clampWindowSize(prev["h"]),
   };
 }
 
@@ -551,11 +594,11 @@ function sanitizeWindow(win: unknown): AppWindow | null {
   const next: AppWindow = {
     id: win["id"],
     type,
-    x: win["x"],
-    y: win["y"],
-    w: win["w"],
-    h: win["h"],
-    z: win["z"],
+    x: clampWindowCoord(win["x"]),
+    y: clampWindowCoord(win["y"]),
+    w: clampWindowSize(win["w"]),
+    h: clampWindowSize(win["h"]),
+    z: clampWindowZ(win["z"]),
     cfg: sanitizeCfgForPersistence(type, win["cfg"]),
     max: win["max"],
   };
@@ -610,6 +653,9 @@ export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[
   for (const win of wins) {
     const next = sanitizeWindow(win);
     if (next !== null) out.push(migrateLegacyFigmaWindow(next));
+    // Mirror the server's MAX_WORKSPACE_WINDOWS bound; anything beyond it could
+    // never round-trip through the server snapshot anyway.
+    if (out.length >= MAX_PERSISTED_WINDOWS) break;
   }
   return dedupeSingletonWindows(out);
 }
@@ -665,6 +711,8 @@ export function sanitizePersistedConnections(
         ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
         : {}),
     });
+    // Mirror the server's MAX_WORKSPACE_CONNECTIONS bound (see sanitizePersistedWindows).
+    if (out.length >= MAX_PERSISTED_CONNECTIONS) break;
   }
   return out;
 }
