@@ -166,6 +166,12 @@ const UNSAFE_ACTIVITY_TEXTS = [
   "name@ex_ample.com",
   "Call +1 (415) 555-2671 now",
   "555-11-2222",
+  // An IPv4-shaped domain is still an email-like construct that identifies someone.
+  "alice@192.168.1.1",
+  // A single-segment path after punctuation, or a bare sensitive key=value assignment, must be
+  // caught even without a query-string `?`/`#` marker or an enumerated boundary character.
+  "key:/etc/passwd",
+  "password=hunter2",
 ] as const;
 
 // Names that legitimately contain a single slash or short numbers must NOT be over-redacted; this
