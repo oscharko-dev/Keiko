@@ -14,8 +14,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runRepairCli, type RepairCliDeps } from "./repair.js";
 import { runLauncherCli } from "./launcher.js";
@@ -71,6 +71,18 @@ function makeRoot(): string {
   const root = mkdtempSync(join(REAL_TMPDIR, "keiko-repair-"));
   tempRoots.push(root);
   return root;
+}
+
+function makePolicyAllowedRoot(prefix: string): string {
+  const cwdParent = dirname(process.cwd());
+  const parent = cwdParent.startsWith(REAL_TMPDIR) ? homedir() : cwdParent;
+  const root = mkdtempSync(join(parent, `.keiko-${prefix}-`));
+  tempRoots.push(root);
+  return root;
+}
+
+function makePortableHome(): string {
+  return makePolicyAllowedRoot("portable-home");
 }
 
 afterEach(() => {
@@ -177,14 +189,14 @@ function writePortableWindowsFixture(root: string, version = "0.2.11"): void {
 
 async function installPortableWindows(
   root: string,
-  options: { readonly managedRoot?: string | undefined } = {},
+  options: { readonly managedRoot?: string | undefined; readonly home?: string | undefined } = {},
 ): Promise<{
   readonly home: string;
   readonly managedRoot: string;
   readonly shortcut: string;
   readonly env: { readonly APPDATA: string; readonly LOCALAPPDATA: string };
 }> {
-  const home = join(root, "portable-home");
+  const home = options.home ?? makePortableHome();
   const source = join(root, "portable-bootstrap");
   const env = windowsPortableEnv(home);
   const managedRoot = options.managedRoot ?? join(env.LOCALAPPDATA, "Programs", "Keiko");
@@ -246,7 +258,7 @@ async function installPortableMacCustom(root: string): Promise<{
   readonly home: string;
   readonly managedRoot: string;
 }> {
-  const home = join(root, "portable-home");
+  const home = makePortableHome();
   const source = join(root, "portable-bootstrap");
   const managedRoot = join(home, "Portable Apps", "Keiko.app");
   writePortableMacFixture(source, "macos-x64");
@@ -439,14 +451,16 @@ describe("runRepairCli — portable managed install", () => {
   it("recreates a missing Windows Start Menu registration for a custom managed root using the local record hint", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
-    const customRoot = join(root, "portable-home", "PortableApps", "Keiko");
-    const { shortcut, env } = await installPortableWindows(root, { managedRoot: customRoot });
+    const home = makePortableHome();
+    const customRoot = join(home, "PortableApps", "Keiko");
+    const { shortcut, env } = await installPortableWindows(root, {
+      home,
+      managedRoot: customRoot,
+    });
     rmSync(shortcut, { force: true });
     const c = makeIo();
 
-    expect(runRepairCli([], c.io, env, portableRepairDeps(root, join(root, "portable-home")))).toBe(
-      0,
-    );
+    expect(runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(0);
     expect(c.out()).toContain("repaired 1 user-local registration artifact");
     expect(existsSync(shortcut)).toBe(true);
   });
@@ -499,8 +513,10 @@ describe("runRepairCli — portable managed install", () => {
   it("refuses a locator tampered toward a policy-invalid repository root even when hashes match", async () => {
     const root = makeRoot();
     seedInstalledLayout(root);
-    const customRoot = join(root, "portable-home", "PortableApps", "Keiko");
-    const { home, managedRoot, shortcut, env } = await installPortableWindows(root, {
+    const home = makePortableHome();
+    const customRoot = join(home, "PortableApps", "Keiko");
+    const { managedRoot, shortcut, env } = await installPortableWindows(root, {
+      home,
       managedRoot: customRoot,
     });
     const invalidRoot = tamperPortableRecordToRepoRoot(managedRoot, shortcut, join(root, ".keiko"));

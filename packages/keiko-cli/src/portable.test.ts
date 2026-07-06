@@ -81,6 +81,17 @@ function setupManifest(target: PortableTarget, version = "0.2.11"): string {
   )}\n`;
 }
 
+function setupManifestRecord(target: PortableTarget): Record<string, unknown> {
+  return JSON.parse(setupManifest(target)) as Record<string, unknown>;
+}
+
+function writeSetupManifest(root: string, manifest: unknown): void {
+  writeFileSync(
+    join(root, ".portable", "setup-manifest.json"),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -136,7 +147,146 @@ function registration(stateDir: string): Record<string, unknown> {
   return parsed;
 }
 
+function writePortableRegistration(stateDir: string, record: Record<string, unknown>): void {
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(
+    join(stateDir, "portable-install-state.json"),
+    `${JSON.stringify(record, null, 2)}\n`,
+  );
+}
+
+interface InvalidSetupManifestCase {
+  readonly name: string;
+  readonly manifest: (base: Record<string, unknown>) => unknown;
+  readonly message: string;
+}
+
+const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
+  {
+    name: "wrong schema",
+    manifest: (base) => ({ ...base, schemaVersion: 2 }),
+    message: "portable setup manifest is malformed",
+  },
+  {
+    name: "unsupported target",
+    manifest: (base) => ({ ...base, platformTarget: "linux-x64" }),
+    message: "portable setup manifest target is unsupported",
+  },
+  {
+    name: "malformed package fields",
+    manifest: (base) => ({ ...base, packageVersion: 11 }),
+    message: "portable setup manifest package fields are malformed",
+  },
+  {
+    name: "malformed state flags",
+    manifest: (base) => ({ ...base, stable: "yes" }),
+    message: "portable setup manifest state flags are malformed",
+  },
+  {
+    name: "malformed launcher",
+    manifest: (base) => ({ ...base, primaryLauncher: 42 }),
+    message: "portable setup manifest launcher field is malformed",
+  },
+  {
+    name: "malformed runtime",
+    manifest: (base) => ({ ...base, runtime: null }),
+    message: "portable setup manifest runtime is malformed",
+  },
+  {
+    name: "unsupported runtime platform",
+    manifest: (base) => ({
+      ...base,
+      runtime: { nodePlatform: "linux", nodeArchitecture: "x64" },
+    }),
+    message: "portable setup manifest runtime platform is unsupported",
+  },
+  {
+    name: "unsupported runtime architecture",
+    manifest: (base) => ({
+      ...base,
+      runtime: { nodePlatform: "win32", nodeArchitecture: "ppc64" },
+    }),
+    message: "portable setup manifest runtime architecture is unsupported",
+  },
+  {
+    name: "target mismatch",
+    manifest: (base) => ({ ...base, platformTarget: "macos-arm64" }),
+    message: "portable setup manifest target mismatch",
+  },
+  {
+    name: "package mismatch",
+    manifest: (base) => ({ ...base, packageName: "keiko" }),
+    message: "portable setup manifest package mismatch",
+  },
+  {
+    name: "unstable release",
+    manifest: (base) => ({ ...base, stable: false }),
+    message: "portable setup manifest must describe a stable release",
+  },
+  {
+    name: "bootstrap update eligible",
+    manifest: (base) => ({ ...base, bootstrapUpdateEligible: true }),
+    message: "bootstrap roots are not update eligible",
+  },
+  {
+    name: "launcher mismatch",
+    manifest: (base) => ({ ...base, primaryLauncher: "Keiko.app" }),
+    message: "portable setup manifest launcher target mismatch",
+  },
+  {
+    name: "runtime target mismatch",
+    manifest: (base) => ({
+      ...base,
+      runtime: { nodePlatform: "darwin", nodeArchitecture: "arm64" },
+    }),
+    message: "portable setup manifest runtime target mismatch",
+  },
+];
+
 describe("runPortableCli", () => {
+  it.each([[[]], [["--help"]], [["-h"]]] as const)(
+    "prints help for portable args %j",
+    async (args) => {
+      const c = capture();
+
+      const code = await runPortableCli(args, c.io, {});
+
+      expect(code).toBe(0);
+      expect(c.out()).toContain("keiko portable setup");
+    },
+  );
+
+  it.each([
+    ["unknown command", ["bogus"]],
+    ["unknown flag", ["setup", "--bogus"]],
+    ["missing flag value", ["setup", "--target"]],
+    ["unsupported target flag", ["setup", "--target", "linux-x64"]],
+  ] as const)("prints usage for invalid portable args: %s", async (_name, args) => {
+    const c = capture();
+
+    const code = await runPortableCli(args, c.io, {});
+
+    expect(code).toBe(2);
+    expect(c.err()).toContain("keiko portable setup");
+  });
+
+  it("rejects a host without an implicit portable target", async () => {
+    const c = capture();
+
+    const code = await runPortableCli(
+      ["setup"],
+      c.io,
+      {},
+      {
+        platform: () => "linux",
+        arch: () => "x64",
+      },
+    );
+
+    expect(code).toBe(2);
+    expect(c.err()).toContain("keiko portable setup");
+  });
+
   it("creates the Windows Start Menu shortcut only during explicit setup and targets the managed install", async () => {
     const root = tempRoot();
     const home = join(root, "home");
@@ -328,6 +478,42 @@ describe("runPortableCli", () => {
     });
   });
 
+  it.each(INVALID_SETUP_MANIFEST_CASES)(
+    "rejects invalid setup manifest: $name",
+    async ({ manifest, message }) => {
+      const root = tempRoot();
+      const source = join(root, "bootstrap");
+      const stateDir = join(root, "state");
+      writeWindowsFixture(source);
+      writeSetupManifest(source, manifest(setupManifestRecord("windows-x64")));
+      const c = capture();
+
+      const code = await runPortableCli(
+        [
+          "setup",
+          "--target",
+          "windows-x64",
+          "--portable-root",
+          source,
+          "--managed-root",
+          join(root, "managed", "Keiko"),
+          "--state-dir",
+          stateDir,
+        ],
+        c.io,
+        {},
+        { now: () => NOW },
+      );
+
+      expect(code).toBe(1);
+      expect(c.err()).toContain(message);
+      expect(registration(stateDir)).toMatchObject({
+        status: "setup-failed",
+        updateEligible: false,
+      });
+    },
+  );
+
   it("records setup-failed as not update eligible when validation fails", async () => {
     const root = tempRoot();
     const source = join(root, "bootstrap");
@@ -486,6 +672,64 @@ describe("runPortableCli", () => {
     expect(() => readPortableInstallRegistration(linkedState)).toThrow(
       "portable install record refuses symlinked state directory",
     );
+  });
+
+  it("returns undefined for missing or unrecognized portable install records", () => {
+    const root = tempRoot();
+    const stateDir = join(root, "state");
+
+    expect(readPortableInstallRegistration(stateDir)).toBeUndefined();
+
+    writePortableRegistration(stateDir, { schemaVersion: 1, status: "unknown" });
+
+    expect(readPortableInstallRegistration(stateDir)).toBeUndefined();
+  });
+
+  it("reads managed records with default and absolute-local locators", () => {
+    const root = tempRoot();
+    const stateDir = join(root, "state");
+
+    for (const managedRootLocator of [
+      { kind: "default" },
+      { kind: "absolute-local", path: "C:\\Users\\Keiko\\AppData\\Local\\Programs\\Keiko" },
+    ]) {
+      writePortableRegistration(stateDir, {
+        schemaVersion: 1,
+        status: "managed",
+        updateEligible: true,
+        platformTarget: "windows-x64",
+        packageVersion: "0.2.11",
+        stable: true,
+        managedRootLocator,
+      });
+
+      const parsed = readPortableInstallRegistration(stateDir);
+      expect(parsed).toMatchObject({
+        status: "managed",
+        managedRootLocator,
+        updatedAt: "",
+      });
+    }
+  });
+
+  it("reads failed records without optional failure details", () => {
+    const root = tempRoot();
+    const stateDir = join(root, "state");
+    writePortableRegistration(stateDir, {
+      schemaVersion: 1,
+      status: "setup-failed",
+      updateEligible: false,
+      platformTarget: "macos-arm64",
+      packageVersion: "unknown",
+      stable: false,
+    });
+
+    expect(readPortableInstallRegistration(stateDir)).toMatchObject({
+      status: "setup-failed",
+      platformTarget: "macos-arm64",
+      failureReason: undefined,
+      updatedAt: "",
+    });
   });
 
   it("classifies an unpromoted macOS app bundle as unmanaged", async () => {
@@ -668,6 +912,87 @@ describe("runPortableCli", () => {
     expect(spawns).toEqual([join(managedRoot, "Keiko.exe")]);
     expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
     expect(secondCapture.err()).not.toContain("already exists");
+  });
+
+  it("launches a same-path portable root through lifecycle after setup attestation", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const managedRoot = join(home, "managed", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const lifecycleStarts: string[] = [];
+    writeWindowsFixture(managedRoot);
+
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        managedRoot,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        now: () => NOW,
+        lifecycleFn: (_command, _args, _io, _env, deps) => {
+          lifecycleStarts.push(deps.cwd);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
+    expect(registration(stateDir)).toMatchObject({
+      status: "managed",
+      updateEligible: true,
+    });
+  });
+
+  it("launch can set up without relaunching when --no-relaunch is explicit", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const managedRoot = join(home, "managed", "Keiko");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const spawns: string[] = [];
+    writeWindowsFixture(source);
+
+    const code = await runPortableCli(
+      [
+        "launch",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+        "--no-relaunch",
+      ],
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: (command) => {
+          spawns.push(command);
+          return spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spawns).toEqual([]);
+    expect(existsSync(join(managedRoot, "Keiko.exe"))).toBe(true);
   });
 
   it("rejects managed roots that pass through a symlinked ancestor before copying", async () => {
