@@ -1251,6 +1251,37 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).not.toContain("published");
   });
 
+  it("does not fail closed on the capsules endpoint when an unrelated capsule set is corrupt", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "Audit Pod Set",
+      tags: [],
+      capsuleIds: [capId],
+    });
+    store._internal.db
+      .prepare("UPDATE schema_meta SET key = 'capsule_set:/tmp/set-1' WHERE key = :k")
+      .run({ k: "capsule_set:set-1" });
+    store._internal.db
+      .prepare("UPDATE capsule_set_members SET set_id = '/tmp/set-1' WHERE set_id = :s")
+      .run({ s: "set-1" });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsules(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsules: [{ id: capId, displayName: "Audit Capsule" }],
+      knowledgePods: [{ id: capId, kind: "pod" }],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("/tmp/set-1");
+  });
+
   it("lists persisted capsule sets without pod projection by default", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);

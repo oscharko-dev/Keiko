@@ -51,9 +51,8 @@ export type KnowledgePodSourceKind =
   KnowledgeSourceScopeKind | "remote" | "federated" | "ephemeral" | "policy" | "unknown";
 export type KnowledgePodEvidenceMode = "counts-hashes-and-status";
 export type KnowledgePodLocationKind = "local" | "remote" | "federated" | "ephemeral";
-export type KnowledgePodSealingPosture =
-  "local-store-policy" | "sealed-pod-policy" | "not-declared";
-export type KnowledgePodPolicyPosture = "none" | "policy-pack" | "not-declared";
+export type KnowledgePodSealingPosture = "local-store-policy" | "sealed-pod-policy";
+export type KnowledgePodPolicyPosture = "policy-pack" | "not-declared";
 export type KnowledgePodSetReadinessReasonCode =
   | "member-draft"
   | "member-indexing"
@@ -309,13 +308,8 @@ const LOCATION_KINDS: readonly KnowledgePodLocationKind[] = [
 const SEALING_POSTURES: readonly KnowledgePodSealingPosture[] = [
   "local-store-policy",
   "sealed-pod-policy",
-  "not-declared",
 ];
-const POLICY_POSTURES: readonly KnowledgePodPolicyPosture[] = [
-  "none",
-  "policy-pack",
-  "not-declared",
-];
+const POLICY_POSTURES: readonly KnowledgePodPolicyPosture[] = ["policy-pack", "not-declared"];
 const MODEL_USE_POLICY_SOURCES: readonly KnowledgePodModelUsePolicySource[] = [
   "explicit",
   "legacy-default",
@@ -351,9 +345,13 @@ const FUTURE_POD_REASON_BY_KIND: Record<
 // Redact filesystem paths wherever they appear, not only at a string boundary — an earlier
 // anchored form let `report=/Users/alice/secret.pdf`, `a/Users/…`, and non-ASCII-prefixed paths
 // leak. Matches Windows drive paths, UNC shares, home (`~/`), parent traversal (`../`), any
-// leading absolute path, and any multi-segment POSIX path (`/seg/…`). A single lone slash
-// (`UI/UX`, `TCP/IP`, `Q3 / Finance`) is intentionally not treated as a path.
-const FILESYSTEM_PATH_RE = /[A-Za-z]:[\\/]|\\\\|~[\\/]|\.\.[\\/]|\/[^/\s]+\/|^\s*\/[^/\s]/u;
+// multi-segment POSIX path (`/seg/…`), and any single-segment absolute path (`/etc`, `/private`)
+// that follows a word boundary. The boundary check on the single-segment alternative is required
+// so a lone slash in benign prose (`UI/UX`, `TCP/IP`, `Q3 / Finance`) is not treated as a path —
+// it must stay boundary-sensitive rather than anchored to the start of the string, or single-
+// segment paths embedded mid-string (`"scan of /etc failed"`) silently stop being redacted.
+const FILESYSTEM_PATH_RE =
+  /[A-Za-z]:[\\/]|\\\\|~[\\/]|\.\.[\\/]|\/[^/\s]+\/|(?:^|[\s"'`<({[])\/[^/\s]+/u;
 const SECRET_RE =
   /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
 const TOKEN_QUERY_KEYS = new Set([
