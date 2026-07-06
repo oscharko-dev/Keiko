@@ -231,9 +231,9 @@ describe("release-impact release notes", () => {
 
     expect(result.status).toBe(0);
     expect(output).toContain("-----BEGIN KEIKO RELEASE NOTES-----");
-    expect(output).toContain("## Keiko 0.2.11 Release Notes");
+    expect(output).toContain("## Keiko 0.2.13 Release Notes");
     expect(output).toContain(
-      "Release-impact metadata and validation now govern stable package publication.",
+      "Adds governed Knowledge Pod Sets with sealed model-use policy, embedding-space governance, hybrid retrieval quality controls, and retrieval-activity evidence.",
     );
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
   }, 60_000);
