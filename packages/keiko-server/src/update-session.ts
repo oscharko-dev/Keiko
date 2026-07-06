@@ -9,6 +9,8 @@ import {
   UPDATE_SESSION_SCHEMA_VERSION,
   type UpdateInstallMode,
   type UpdateInstallPackageManager,
+  type UpdatePortableActivationSummary,
+  type UpdatePortableStagingSummary,
   type UpdateRestartCommandPreview,
   type UpdateSession,
   type UpdateSessionFailureReason,
@@ -91,6 +93,8 @@ export interface UpdateSessionStartOutcome {
   readonly reused: boolean;
 }
 
+export type UpdateCompletionGate = (session: UpdateSession) => boolean;
+
 export interface UpdateSessionManager {
   readonly getStatus: () => UpdateSessionStatus;
   readonly start: (input: UpdateSessionStartRequest) => UpdateSessionStartOutcome;
@@ -115,6 +119,7 @@ export interface UpdateSessionManagerOptions {
   readonly lock?: UpdateSessionLock | undefined;
   readonly portableStager?: PortableUpdateStager | undefined;
   readonly portableActivator?: PortableUpdateActivator | undefined;
+  readonly portableCompletionGate?: UpdateCompletionGate | undefined;
 }
 
 class UpdateSessionManagerImpl implements UpdateSessionManager {
@@ -133,6 +138,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private readonly facts: () => UpdateRuntimeFacts;
   private readonly portableStager: PortableUpdateStager | undefined;
   private readonly portableActivator: PortableUpdateActivator | undefined;
+  private readonly portableCompletionGate: UpdateCompletionGate | undefined;
   private active: UpdateSession | undefined;
   private last: UpdateSession | undefined;
   private activeAbort:
@@ -155,6 +161,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.facts = options.facts ?? ((): UpdateRuntimeFacts => productionUpdateFacts(this.env));
     this.portableStager = options.portableStager;
     this.portableActivator = options.portableActivator;
+    this.portableCompletionGate = options.portableCompletionGate;
   }
 
   public readonly getStatus = (): UpdateSessionStatus => ({
@@ -437,18 +444,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
         runtimeFacts,
         signal: controller.signal,
       });
-      this.finish(
-        this.replace(session, {
-          phase: "succeeded",
-          failureReason: "none",
-          cancelable: false,
-          retryable: false,
-          restartRequired: false,
-          portableStage,
-          portableActivation,
-          message: `Portable update ${session.targetVersion} is active and verified after relaunch.`,
-        }),
-      );
+      this.settlePortableActivation(session, portableStage, portableActivation);
     } catch (error) {
       const reason = this.portableFailureReason(error);
       this.settleFailure(session, reason);
@@ -463,6 +459,31 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     if (error instanceof PortableUpdateStagingError) return error.reason;
     if (error instanceof PortableUpdateActivationError) return error.reason;
     return "portable-staging-failed";
+  }
+
+  private settlePortableActivation(
+    session: UpdateSession,
+    portableStage: UpdatePortableStagingSummary,
+    portableActivation: UpdatePortableActivationSummary,
+  ): void {
+    const activated = this.replace(session, {
+      phase: "restart-required",
+      failureReason: "none",
+      cancelable: false,
+      retryable: false,
+      restartRequired: false,
+      portableStage,
+      portableActivation,
+    });
+    const updateCanComplete = this.portableCompletionGate?.(activated) ?? true;
+    this.finish(
+      this.replace(activated, {
+        phase: updateCanComplete ? "succeeded" : "restart-required",
+        message: updateCanComplete
+          ? `Portable update ${session.targetVersion} is active and verified after relaunch.`
+          : `Keiko is now running ${session.targetVersion}. Complete remaining remediation before the update is marked successful.`,
+      }),
+    );
   }
 
   private async invokeCommand(session: UpdateSession, mode: UpdateInstallMode): Promise<void> {
