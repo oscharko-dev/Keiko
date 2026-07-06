@@ -26,6 +26,9 @@ describe("isContainedPathspec", () => {
     expect(isContainedPathspec("-flag")).toBe(false);
     expect(isContainedPathspec("/absolute")).toBe(false);
     expect(isContainedPathspec("C:\\windows")).toBe(false);
+    expect(isContainedPathspec("C:drive-relative")).toBe(false);
+    expect(isContainedPathspec("\\windows-rooted")).toBe(false);
+    expect(isContainedPathspec("\\\\server\\share\\file.txt")).toBe(false);
     expect(isContainedPathspec("../escape")).toBe(false);
     expect(isContainedPathspec(42)).toBe(false);
   });

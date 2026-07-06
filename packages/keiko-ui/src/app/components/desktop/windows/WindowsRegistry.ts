@@ -15,6 +15,7 @@ export type WindowType =
   | "files"
   | "editor"
   | "browser"
+  | "docbrowser"
   | "terminal"
   | "commands"
   | "runtime"
@@ -345,6 +346,23 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
         def: "",
         optional: true,
         placeholder: "https://…",
+      },
+    ],
+  },
+  docbrowser: {
+    title: "Documentation Browser",
+    icon: "file",
+    desc: "Inspect a local or intranet HTML manual",
+    w: 480,
+    h: 360,
+    config: [
+      {
+        key: "target",
+        label: "Documentation address",
+        type: "text",
+        def: "",
+        optional: true,
+        placeholder: "https://intranet/handbook or file:///…",
       },
     ],
   },

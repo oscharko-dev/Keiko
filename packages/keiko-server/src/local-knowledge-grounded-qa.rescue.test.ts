@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   ChunkId,
+  CapsuleSetId,
   DocumentId,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
@@ -20,6 +21,7 @@ import {
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  createCapsuleSet,
   getCapsule,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -50,6 +52,9 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 
 type GroundedResult = Parameters<typeof buildLocalKnowledgeCitations>[0];
+type TestGatewayConfig = NonNullable<UiHandlerDeps["config"]>;
+type TestGatewayProvider = TestGatewayConfig["providers"][number];
+type TestModelCapability = NonNullable<TestGatewayConfig["capabilities"]>[number];
 
 function ref(
   n: number,
@@ -112,6 +117,77 @@ function externalRerankingDeniedPolicy(): KnowledgePodModelUsePolicy {
       ...standardPodModelUsePolicy().operations,
       externalReranking: "deny",
     },
+  };
+}
+
+function testProvider(modelId: string): TestGatewayProvider {
+  return {
+    modelId,
+    baseUrl: "https://provider.example/v1",
+    apiKey: "test-api-key-1234567890",
+    timeoutMs: 30_000,
+    maxRetries: 0,
+    retryBaseDelayMs: 500,
+  };
+}
+
+function chatCapability(modelId: string): TestModelCapability {
+  return {
+    id: modelId,
+    kind: "chat",
+    contextWindow: 64_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "test",
+    preferredUseCases: [],
+    knownLimitations: [],
+  };
+}
+
+function embeddingCapability(modelId: string): TestModelCapability {
+  return {
+    id: modelId,
+    kind: "embedding",
+    contextWindow: 8_191,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test",
+    preferredUseCases: [],
+    knownLimitations: [],
+  };
+}
+
+function answerModel(content: string, requestId: string): ModelPort {
+  return {
+    call: () =>
+      Promise.resolve({
+        modelId: "chat-model",
+        content,
+        finishReason: "stop" as const,
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId,
+          promptTokens: 5,
+          completionTokens: 12,
+          latencyMs: 1,
+          costClass: "medium" as const,
+        },
+      }),
   };
 }
 
@@ -601,6 +677,14 @@ describe("local-knowledge preview metadata persistence", () => {
 
 type LocalKnowledgeAnswer = Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
 
+function expectProviderScoreNotProjected(
+  citation: LocalKnowledgeAnswer["citations"][number] | undefined,
+): void {
+  expect(citation?.score).not.toBe(42);
+  expect(citation?.score).toBeGreaterThanOrEqual(0);
+  expect(citation?.score).toBeLessThanOrEqual(1);
+}
+
 function expectAppliedRerankerDiagnostics(
   answer: LocalKnowledgeAnswer,
   capsuleId: KnowledgeCapsuleId,
@@ -620,7 +704,7 @@ function expectAppliedRerankerDiagnostics(
   expect(indexLifecycle?.capsules).toHaveLength(1);
   expect(indexedCapsule?.capsuleId).toBe(capsuleId);
   expect(typeof indexedCapsule?.updatedAt).toBe("number");
-  expect(citation?.score).toBe(0.91);
+  expectProviderScoreNotProjected(citation);
 }
 
 function expectRerankedRetrievalActivity(
@@ -784,7 +868,7 @@ describe("local-knowledge reranker diagnostics", () => {
           ok: true,
           value: {
             modelId: "qwen3-reranker",
-            results: [{ index: 0, relevanceScore: 0.91 }],
+            results: [{ index: 0, relevanceScore: 42 }],
           },
         });
       },
@@ -805,6 +889,100 @@ describe("local-knowledge reranker diagnostics", () => {
     expect(rerankCalls).toBe(1);
     expectAppliedRerankerDiagnostics(answer, seeded.capsuleId);
     expectRerankedRetrievalActivity(answer, seeded.capsuleId);
+  });
+
+  it("caps reranker candidates and preserves retrieval scores on cited references", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Reranker Budget Capsule",
+      capsuleId: "cap-reranker-budget",
+      sourceId: "src-reranker-budget",
+      text: "alpha beta first reference. alpha beta second reference. alpha beta third reference.",
+      chunkingOptions: { maxTokens: 4, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "reranker-budget-project");
+    const created = rescueStore.createChat(project.path, "Reranker budget", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const adapter = scriptedAdapter();
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+        grounding: { maxPromptReferences: 2 },
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://reranker.example/v1",
+          apiKey: "reranker-test-key",
+          timeoutMs: 30_000,
+        },
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", "reranker-budget"),
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+      rerankRequest: (request) => {
+        expect(request.topN).toBe(2);
+        expect(request.documents).toHaveLength(2);
+        return Promise.resolve({
+          ok: true,
+          value: {
+            modelId: "qwen3-reranker",
+            results: [
+              { index: 1, relevanceScore: 42 },
+              { index: 0, relevanceScore: 41 },
+            ],
+          },
+        });
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
+    expect(answer.citations.map((citation) => citation.score)).not.toContain(42);
+    expect(answer.citations.map((citation) => citation.score)).not.toContain(41);
+    expect(answer.citations.every((citation) => citation.score >= 0 && citation.score <= 1)).toBe(
+      true,
+    );
+    expect(answer.contextPack).toMatchObject({
+      referenceBudget: 2,
+      referencesUsed: 2,
+      reranker: {
+        status: "applied",
+        candidateCount: 2,
+        documentCount: 2,
+        keptCount: 2,
+      },
+    });
   });
 
   it("does not prepare external reranker requests when policy denies external reranking", async () => {
@@ -945,7 +1123,8 @@ describe("local-knowledge reranker diagnostics", () => {
     >;
     expect(rerankCalls).toBe(0);
     expect(answer.contextPack.reranker).toMatchObject({
-      status: "disabled",
+      status: "denied",
+      mode: "local-only",
       failureKind: "policy-denied",
       documentCount: 0,
     });
@@ -954,6 +1133,83 @@ describe("local-knowledge reranker diagnostics", () => {
       reasonCodes: ["searched", "policy-denied"],
     });
     expect(answer.retrievalActivity?.pods[0]?.modes).toContain("sealed");
+  });
+
+  it("preserves fused order without preparing reranker documents when no reranker is configured", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "No Reranker Capsule",
+      capsuleId: "cap-no-reranker",
+      sourceId: "src-no-reranker",
+      text: "alpha beta no reranker first. alpha beta no reranker second. alpha beta third.",
+      chunkingOptions: { maxTokens: 4, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "no-reranker-project");
+    const created = rescueStore.createChat(project.path, "No reranker", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+        grounding: { maxPromptReferences: 2 },
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", "no-reranker"),
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: scriptedAdapter().request,
+      rerankRequest: () => {
+        throw new Error("reranker must not be called without a configured reranker");
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "disabled",
+      mode: "none",
+      failureKind: "not-configured",
+      documentCount: 0,
+      keptCount: 2,
+    });
+    expect(answer.retrievalActivity?.summary.degradedCount).toBe(1);
+    expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+      state: "degraded",
+      reasonCodes: ["searched", "reranker-unavailable"],
+    });
+    expect(answer.contextPack).toMatchObject({
+      referenceBudget: 2,
+      referencesUsed: 2,
+    });
+    expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
   });
 });
 
@@ -1246,6 +1502,201 @@ describe("local-knowledge retrieval activity", () => {
     }
   });
 
+  it("keeps mixed-readiness set activity reasons on the affected members", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const ready = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Ready Set Member",
+        capsuleId: "cap-ready-set-member",
+        sourceId: "src-ready-set-member",
+      });
+      const indexing = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Indexing Set Member",
+        capsuleId: "cap-indexing-set-member",
+        sourceId: "src-indexing-set-member",
+      });
+      const sealed = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Sealed During Indexing Member",
+        capsuleId: "cap-sealed-during-indexing-member",
+        sourceId: "src-sealed-during-indexing-member",
+        modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      });
+      updateCapsuleState(knowledgeStore, ready.capsuleId, "ready");
+      updateCapsuleState(knowledgeStore, indexing.capsuleId, "indexing");
+      updateCapsuleState(knowledgeStore, sealed.capsuleId, "ready");
+      const selected: SelectedLocalKnowledgeScope = {
+        capsules: [
+          requireCapsule(knowledgeStore, ready.capsuleId),
+          requireCapsule(knowledgeStore, indexing.capsuleId),
+          requireCapsule(knowledgeStore, sealed.capsuleId),
+        ],
+        scopeKind: "capsule-set",
+        scopeLabel: "Mixed Readiness Set",
+      };
+
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [],
+        skipped: [{ selected, reason: "indexing-in-progress" }],
+      });
+
+      expect(activity.pods.find((pod) => pod.podId === ready.capsuleId)).toMatchObject({
+        state: "skipped",
+        reasonCodes: ["source-skipped"],
+      });
+      expect(activity.pods.find((pod) => pod.podId === indexing.capsuleId)).toMatchObject({
+        state: "unavailable",
+        reasonCodes: ["indexing-in-progress"],
+      });
+      expect(activity.pods.find((pod) => pod.podId === sealed.capsuleId)).toMatchObject({
+        state: "denied",
+        reasonCodes: ["policy-denied"],
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("preserves distinct member skip reasons for real capsule-set grounded asks", async () => {
+    const setId = "set-mixed-grounded-activity" as CapsuleSetId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const ready = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Ready Grounded Set Member",
+      capsuleId: "cap-ready-grounded-set-member",
+      sourceId: "src-ready-grounded-set-member",
+    });
+    const indexing = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Indexing Grounded Set Member",
+      capsuleId: "cap-indexing-grounded-set-member",
+      sourceId: "src-indexing-grounded-set-member",
+    });
+    const sealed = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Sealed Grounded Set Member",
+      capsuleId: "cap-sealed-grounded-set-member",
+      sourceId: "src-sealed-grounded-set-member",
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+    });
+    updateCapsuleState(knowledgeStore, ready.capsuleId, "ready");
+    updateCapsuleState(knowledgeStore, indexing.capsuleId, "indexing");
+    updateCapsuleState(knowledgeStore, sealed.capsuleId, "ready");
+    createCapsuleSet(knowledgeStore, {
+      id: setId,
+      displayName: "Mixed Grounded Activity Set",
+      tags: [],
+      capsuleIds: [ready.capsuleId, indexing.capsuleId, sealed.capsuleId],
+    });
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "mixed-grounded-activity-project");
+    const created = rescueStore.createChat(project.path, "Mixed grounded activity", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule-set", capsuleSetId: setId, connectedAtMs: 1 },
+    });
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => {
+        throw new Error("model must not be called for set state-failure activity");
+      },
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "Which set members can answer?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.noEvidenceReason).toBe("indexing-in-progress");
+    expect(
+      answer.retrievalActivity?.pods.find((pod) => pod.podId === ready.capsuleId),
+    ).toMatchObject({
+      state: "skipped",
+      reasonCodes: ["source-skipped"],
+    });
+    expect(
+      answer.retrievalActivity?.pods.find((pod) => pod.podId === indexing.capsuleId),
+    ).toMatchObject({
+      state: "unavailable",
+      reasonCodes: ["indexing-in-progress"],
+    });
+    expect(
+      answer.retrievalActivity?.pods.find((pod) => pod.podId === sealed.capsuleId),
+    ).toMatchObject({
+      state: "denied",
+      reasonCodes: ["policy-denied"],
+    });
+    expect(JSON.stringify(answer.retrievalActivity)).not.toContain("Which set members can answer?");
+  });
+
+  it("keeps set-level policy denial on the sealed member instead of every member", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const standard = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Standard Set Member",
+        capsuleId: "cap-standard-set-member",
+        sourceId: "src-standard-set-member",
+      });
+      const sealed = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Sealed Set Member",
+        capsuleId: "cap-sealed-set-member",
+        sourceId: "src-sealed-set-member",
+        modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      });
+      updateCapsuleState(knowledgeStore, standard.capsuleId, "ready");
+      updateCapsuleState(knowledgeStore, sealed.capsuleId, "ready");
+      const selected: SelectedLocalKnowledgeScope = {
+        capsules: [
+          requireCapsule(knowledgeStore, standard.capsuleId),
+          requireCapsule(knowledgeStore, sealed.capsuleId),
+        ],
+        scopeKind: "capsule-set",
+        scopeLabel: "Mixed Policy Set",
+      };
+
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [],
+        skipped: [{ selected, reason: "policy-denied" }],
+      });
+
+      expect(activity.pods.find((pod) => pod.podId === standard.capsuleId)).toMatchObject({
+        state: "skipped",
+        modes: ["local-only"],
+        reasonCodes: ["source-skipped"],
+      });
+      expect(activity.pods.find((pod) => pod.podId === sealed.capsuleId)).toMatchObject({
+        state: "denied",
+        modes: ["local-only", "sealed"],
+        reasonCodes: ["policy-denied"],
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
   it("caches Knowledge Pod summaries across repeated activity scopes", async () => {
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
@@ -1354,6 +1805,107 @@ describe("local-knowledge retrieval activity", () => {
         state: "degraded",
         reasonCodes: ["searched", "embedding-failed"],
       });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("fails closed by omitting the activity when a projected count breaks the contract", async () => {
+    const sourceId = "src-fail-closed" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Fail Closed Capsule",
+        capsuleId: "cap-fail-closed",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      // A negative citation count violates the non-negative-integer contract, so the builder must
+      // throw and the wrapper must omit the activity rather than emit an invalid projection.
+      const input = {
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(seeded.capsuleId, sourceId)],
+              citationCounts: new Map([[String(seeded.capsuleId), -1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+      } as const;
+      expect(() => buildKnowledgePodRetrievalActivity(input)).toThrow(
+        "Knowledge Pod retrieval activity validation failed.",
+      );
+      expect(tryBuildKnowledgePodRetrievalActivity(input)).toBeUndefined();
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("degrades pods and records reranker reason codes on reranker failures", async () => {
+    const sourceId = "src-reranker" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Reranker Capsule",
+        capsuleId: "cap-reranker",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const selected = selectedActivityScope(capsuleValue);
+      const reference = retrievalActivityReference(seeded.capsuleId, sourceId);
+      const citationCounts = new Map([[String(seeded.capsuleId), 1]]);
+
+      const invalidResponse = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [reference],
+              citationCounts,
+              noEvidence: false,
+              reranker: {
+                status: "invalid-response",
+                candidateCount: 3,
+                documentCount: 3,
+                keptCount: 0,
+              },
+            },
+          },
+        ],
+      });
+      const policyDenied = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [reference],
+              citationCounts,
+              noEvidence: false,
+              reranker: {
+                status: "unavailable",
+                candidateCount: 3,
+                documentCount: 3,
+                keptCount: 0,
+                failureKind: "policy-denied",
+              },
+            },
+          },
+        ],
+      });
+
+      expect(invalidResponse.pods[0]?.state).toBe("degraded");
+      expect(invalidResponse.pods[0]?.reasonCodes).toContain("reranker-invalid-response");
+      expect(policyDenied.pods[0]?.state).toBe("degraded");
+      expect(policyDenied.pods[0]?.reasonCodes).toContain("policy-denied");
     } finally {
       knowledgeStore.close();
     }

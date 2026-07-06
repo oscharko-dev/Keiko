@@ -1,1 +1,1 @@
-export const KEIKO_MEMORY_CONSOLIDATION_VERSION = "0.2.11" as const;
+export const KEIKO_MEMORY_CONSOLIDATION_VERSION = "0.2.14" as const;

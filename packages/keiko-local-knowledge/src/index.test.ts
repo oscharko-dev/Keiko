@@ -113,16 +113,20 @@ describe("barrel surface", () => {
     // *enumerations*. The store-only enumerations (`listCapsules`, `listCapsuleSets`)
     // are PERMITTED — they enumerate the top-level Foundry-IQ entities themselves, not
     // their internals. Anything else MUST be capsule-scoped.
-    const allowedStoreOnly = new Set([
-      "listCapsules",
-      "listCapsuleSets",
-      "listKnowledgePodSummaries",
-    ]);
+    const allowedStoreOnly = new Set(["listCapsules", "listCapsuleSets"]);
     const listNames = Object.keys(api).filter((name) => name.startsWith("list"));
     for (const name of listNames) {
       const fn = (api as Record<string, unknown>)[name];
       if (typeof fn !== "function") continue;
-      if (allowedStoreOnly.has(name)) {
+      if (name === "listKnowledgePodSummaries") {
+        // Top-level pod / pod-set enumeration with an OPTIONAL kind filter: (store, kind?).
+        // It never takes a capsule/set scope, so it does not leak internals; the optional
+        // filter lets callers project only the kind they need instead of the whole store.
+        expect(
+          fn.length,
+          `${name} should take the store plus at most an optional kind filter`,
+        ).toBeLessThanOrEqual(2);
+      } else if (allowedStoreOnly.has(name)) {
         expect(fn.length, `${name} should take exactly the store`).toBe(1);
       } else {
         expect(fn.length, `${name} should take store + scope arg`).toBeGreaterThanOrEqual(2);

@@ -17,13 +17,13 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.2.11" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.2.14" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.11" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.14" as const;
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
@@ -1271,6 +1271,35 @@ export {
   stripUnsafeFormatChars,
 } from "./text-safety.js";
 
+// ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
+export type {
+  DocumentationTargetClass,
+  DocumentationTargetClassification,
+  DocumentationTargetClassificationOk,
+  DocumentationTargetClassificationFail,
+  DocumentationNavigationReason,
+  DocumentationReasonSeverity,
+  DocumentationNavigationRequest,
+  DocumentationNavigationResult,
+  DocumentationNavigationResultInput,
+  DocumentationBrowserCapability,
+  DocumentationNavigationParse,
+  DocumentationNavigationParseOk,
+  DocumentationNavigationParseFail,
+} from "./documentation-browser.js";
+export {
+  DOCUMENTATION_BROWSER_SCHEMA_VERSION,
+  DOCUMENTATION_TARGET_CLASSES,
+  DOCUMENTATION_TARGET_MAX_LENGTH,
+  DOCUMENTATION_NAVIGATION_REASONS,
+  DOCUMENTATION_NAVIGATION_REASON_SEVERITY,
+  classifyDocumentationTarget,
+  mapBrowserErrorToDocumentationReason,
+  resolveDocumentationNavigationReason,
+  parseDocumentationNavigationRequest,
+  buildDocumentationNavigationResult,
+} from "./documentation-browser.js";
+
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
   SelectedScopeKind,
@@ -1642,6 +1671,8 @@ export type {
   KnowledgePodReadiness,
   KnowledgePodRetrievalCapabilities,
   KnowledgePodSealingPosture,
+  KnowledgePodSetReadinessReasonCode,
+  KnowledgePodSetReadinessSummary,
   KnowledgePodSourceKind,
   KnowledgePodSummary,
   KnowledgePodSummaryKind,
@@ -1651,6 +1682,7 @@ export type {
   LocalKnowledgeCapsulesResponse,
 } from "./local-knowledge-pods.js";
 export {
+  KNOWLEDGE_POD_SET_READINESS_REASON_CODES,
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,

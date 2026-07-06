@@ -18,6 +18,7 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   Chat,
   ChatLocalKnowledgeScope,
@@ -60,16 +61,16 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
+import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { requestConfiguredRerank } from "./grounded-model-reranker.js";
 
-export const DEFAULT_REFERENCE_BUDGET = 16;
-export const MAX_EXCERPT_CHARS = 900;
-export const MAX_PROMPT_REFERENCES = 16;
+export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
+export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
+export const MAX_PROMPT_REFERENCES = DEFAULT_GROUNDING_LIMITS.maxPromptReferences;
 const MAX_RETRIEVAL_ACTIVITY_PODS = 24;
 export const LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER =
   "No evidence found in the selected knowledge scope.";
@@ -431,9 +432,10 @@ function buildReferenceLines(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly string[] {
   const lines: string[] = [];
-  const references = input.references.slice(0, MAX_PROMPT_REFERENCES);
+  const references = input.references.slice(0, limits.maxPromptReferences);
   // GRD-001: strip Trojan-source / invisible format chars before redaction so reordered or
   // hidden instructions in indexed document text never reach the model or the rendered wire.
   const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
@@ -446,7 +448,7 @@ function buildReferenceLines(
     // single-connector path would forward raw document content (e.g. an embedded API key)
     // verbatim to the configured gateway.
     const excerpt = safeRedact(
-      readCitationExcerpt(store, reference.capsuleId, reference.citation, MAX_EXCERPT_CHARS),
+      readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
     );
     lines.push(`[${String(i + 1)}] ${label}`);
     if (excerpt.length > 0) {
@@ -472,8 +474,9 @@ function buildLocalKnowledgeMessages(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly { readonly role: "system" | "user"; readonly content: string }[] {
-  const lines = buildReferenceLines(input, store, redactExcerpt);
+  const lines = buildReferenceLines(input, store, redactExcerpt, limits);
   const repairInstruction =
     input.citationRepair === true
       ? [
@@ -508,6 +511,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly store: KnowledgeStore,
     private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
     private readonly redactExcerpt: (value: string) => string,
+    private readonly limits: ReturnType<typeof currentGroundingLimits>,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
@@ -519,6 +523,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
           input,
           this.store,
           this.redactExcerpt,
+          this.limits,
         ),
         stream: false,
       },
@@ -641,6 +646,7 @@ function buildNoEvidenceAnswer(
   capsuleCount: number,
   sourceCount: number,
   reason: string,
+  limits: ReturnType<typeof currentGroundingLimits>,
   uncertainty: readonly GroundedUncertainty[] = [],
 ): LocalKnowledgeGroundedAnswer {
   return {
@@ -662,7 +668,7 @@ function buildNoEvidenceAnswer(
       capsuleCount,
       sourceCount,
       citationCount: 0,
-      referenceBudget: DEFAULT_REFERENCE_BUDGET,
+      referenceBudget: limits.maxPromptReferences,
       referencesUsed: 0,
       indexLifecycle: buildLocalKnowledgeIndexLifecycle(capsules),
     },
@@ -945,6 +951,7 @@ function buildLocalKnowledgeContextPack(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   citations: readonly LocalKnowledgeEvidenceCitation[],
   redactLabel: LabelRedactor | undefined,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): LocalKnowledgeGroundedAnswer["contextPack"] {
   const safeScopeLabel = citationLabelPart(selected.scopeLabel, redactLabel);
   return {
@@ -955,7 +962,7 @@ function buildLocalKnowledgeContextPack(
     capsuleCount: result.pack.scope.capsuleCount,
     sourceCount: result.pack.scope.sourceCount,
     citationCount: citations.length,
-    referenceBudget: DEFAULT_REFERENCE_BUDGET,
+    referenceBudget: limits.maxPromptReferences,
     referencesUsed: result.references.length,
     indexLifecycle: buildLocalKnowledgeIndexLifecycle(selected.capsules),
     ...(result.reranker === undefined ? {} : { reranker: result.reranker }),
@@ -970,6 +977,7 @@ function buildLocalKnowledgeAnswer(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   elapsedMs: number,
   assistantContent: string,
+  limits: ReturnType<typeof currentGroundingLimits>,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
   redactLabel?: LabelRedactor,
 ): LocalKnowledgeGroundedAnswer {
@@ -998,7 +1006,14 @@ function buildLocalKnowledgeAnswer(
     elapsedMs,
     noEvidence: noEvidenceReason !== undefined,
     ...(noEvidenceReason !== undefined ? { noEvidenceReason } : {}),
-    contextPack: buildLocalKnowledgeContextPack(chat, selected, result, citations, redactLabel),
+    contextPack: buildLocalKnowledgeContextPack(
+      chat,
+      selected,
+      result,
+      citations,
+      redactLabel,
+      limits,
+    ),
     ...(retrievalActivity === undefined ? {} : { retrievalActivity }),
   };
 }
@@ -1009,6 +1024,7 @@ function buildStateFailureAnswer(
   selected: SelectedLocalKnowledgeScope,
   persisted: readonly [ChatMessage, ChatMessage],
   stateFailure: { readonly reason: string; readonly message: string },
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): GroundedAnswer {
   const [user, assistant] = persisted;
   const answer = buildNoEvidenceAnswer(
@@ -1020,6 +1036,7 @@ function buildStateFailureAnswer(
     selected.capsules.length,
     selectedSourceCount(selected),
     stateFailure.reason,
+    limits,
     [{ kind: stateFailure.reason, claim: persisted[1].content }],
   );
   const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
@@ -1059,8 +1076,9 @@ function redactText(deps: UiHandlerDeps, value: string): string {
 
 function fallbackReferenceSelection(
   references: readonly RetrievalReference[],
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] {
-  return references.slice(0, MAX_PROMPT_REFERENCES);
+  return references.slice(0, limits.maxPromptReferences);
 }
 
 function withKeptCount(
@@ -1085,6 +1103,7 @@ function invalidRerankMappingDiagnostics(
 function applyReferenceRerankResults(
   references: readonly RetrievalReference[],
   results: readonly RerankResult[],
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] | undefined {
   if (references.length === 0) return [];
   if (results.length === 0) return undefined;
@@ -1098,39 +1117,41 @@ function applyReferenceRerankResults(
     const reference = references[result.index];
     if (reference === undefined) return undefined;
     used.add(result.index);
-    reranked.push(
-      result.relevanceScore === undefined
-        ? reference
-        : { ...reference, score: result.relevanceScore },
-    );
+    reranked.push(reference);
   }
-  return reranked.slice(0, MAX_PROMPT_REFERENCES);
+  return reranked.slice(0, limits.maxPromptReferences);
 }
 
 function rerankerDocumentText(
   deps: UiHandlerDeps,
   store: KnowledgeStore,
   reference: RetrievalReference,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): string {
   return stripUnsafeFormatChars(
     redactText(
       deps,
-      readCitationExcerpt(store, reference.capsuleId, reference.citation, MAX_EXCERPT_CHARS),
+      readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
     ),
   );
 }
 
-function createReferenceReranker(deps: UiHandlerDeps, store: KnowledgeStore): ReferenceReranker {
+function createReferenceReranker(
+  deps: UiHandlerDeps,
+  store: KnowledgeStore,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): ReferenceReranker {
   return {
     rerank: async (input): Promise<ReferenceRerankerResult> => {
-      const fallback = fallbackReferenceSelection(input.references);
+      const fallback = fallbackReferenceSelection(input.references, limits);
+      const candidates = input.references.slice(0, limits.maxPromptReferences);
       const attempt = await requestConfiguredRerank({
         deps,
         query: input.query.text,
-        documents: input.references.map((reference) =>
-          rerankerDocumentText(deps, store, reference),
+        documents: candidates.map((reference) =>
+          rerankerDocumentText(deps, store, reference, limits),
         ),
-        topN: MAX_PROMPT_REFERENCES,
+        topN: limits.maxPromptReferences,
         ...(input.signal !== undefined ? { signal: input.signal } : {}),
       });
       if (attempt.outcome === undefined) {
@@ -1139,7 +1160,11 @@ function createReferenceReranker(deps: UiHandlerDeps, store: KnowledgeStore): Re
           diagnostics: withKeptCount(attempt.diagnostics, fallback.length),
         };
       }
-      const reranked = applyReferenceRerankResults(input.references, attempt.outcome.value.results);
+      const reranked = applyReferenceRerankResults(
+        candidates,
+        attempt.outcome.value.results,
+        limits,
+      );
       if (reranked === undefined) {
         return {
           references: fallback,
@@ -1154,35 +1179,68 @@ function createReferenceReranker(deps: UiHandlerDeps, store: KnowledgeStore): Re
   };
 }
 
-function createPolicyDeniedReranker(): ReferenceReranker {
+type ReferenceRerankInput = Parameters<ReferenceReranker["rerank"]>[0];
+
+function createDisabledReferenceReranker(
+  limits: ReturnType<typeof currentGroundingLimits>,
+  diagnosticsFor: (
+    input: ReferenceRerankInput,
+    fallback: readonly RetrievalReference[],
+  ) => GroundedRerankerDiagnostics,
+): ReferenceReranker {
   return {
     rerank: (input): Promise<ReferenceRerankerResult> => {
-      const fallback = fallbackReferenceSelection(input.references);
+      const fallback = fallbackReferenceSelection(input.references, limits);
       return Promise.resolve({
         references: fallback,
-        diagnostics: {
-          status: "disabled",
-          candidateCount: input.references.length,
-          documentCount: 0,
-          keptCount: fallback.length,
-          failureKind: "policy-denied",
-          latencyMs: 0,
-        },
+        diagnostics: diagnosticsFor(input, fallback),
       });
     },
   };
+}
+
+function createNotConfiguredReranker(
+  limits: ReturnType<typeof currentGroundingLimits>,
+): ReferenceReranker {
+  return createDisabledReferenceReranker(limits, (input, fallback) => ({
+    status: "disabled",
+    mode: "none",
+    candidateCount: input.references.length,
+    documentCount: 0,
+    keptCount: fallback.length,
+    failureKind: "not-configured",
+    latencyMs: 0,
+  }));
+}
+
+function createPolicyDeniedReranker(
+  limits: ReturnType<typeof currentGroundingLimits>,
+): ReferenceReranker {
+  return createDisabledReferenceReranker(limits, (input, fallback) => ({
+    status: "denied",
+    mode: "local-only",
+    candidateCount: input.references.length,
+    documentCount: 0,
+    keptCount: fallback.length,
+    failureKind: "policy-denied",
+    latencyMs: 0,
+  }));
 }
 
 function referenceRerankerForScope(
   deps: UiHandlerDeps,
   store: KnowledgeStore,
   selected: SelectedLocalKnowledgeScope,
+  limits: ReturnType<typeof currentGroundingLimits>,
 ): ReferenceReranker {
   const policy = resolveScopeModelUsePolicy(selected.capsules);
   if (policy.operations.externalReranking === "deny") {
-    return createPolicyDeniedReranker();
+    return createPolicyDeniedReranker(limits);
   }
-  return createReferenceReranker(deps, store);
+  if (currentGatewayConfig(deps)?.reranker === undefined) {
+    return createNotConfiguredReranker(limits);
+  }
+  return createReferenceReranker(deps, store, limits);
 }
 
 type ScopedGroundedResult = Awaited<ReturnType<typeof runGroundedAnswer>>;
@@ -1273,6 +1331,17 @@ export function retrievalActivityResultFromScoped(
   };
 }
 
+function rerankerForHybridRetrievalActivity(
+  reranker: GroundedRerankerDiagnostics | undefined,
+): GroundedRerankerDiagnostics | undefined {
+  // Hybrid answers expose no-reranker configuration at context-pack level; it should not degrade
+  // every otherwise-successful Knowledge Pod activity row.
+  if (reranker?.status === "disabled" && reranker.failureKind === "not-configured") {
+    return undefined;
+  }
+  return reranker;
+}
+
 export function retrievalActivityResultFromRetrieval(
   result: {
     readonly references: readonly RetrievalReference[];
@@ -1284,6 +1353,7 @@ export function retrievalActivityResultFromRetrieval(
   citations: readonly LocalKnowledgeEvidenceCitation[],
   reranker?: GroundedRerankerDiagnostics,
 ): KnowledgePodRetrievalActivityResultInput {
+  const activityReranker = rerankerForHybridRetrievalActivity(reranker);
   return {
     references: result.references,
     citationCounts: countCitationsByCapsule(citations),
@@ -1291,7 +1361,7 @@ export function retrievalActivityResultFromRetrieval(
     ...(result.reason !== undefined ? { reason: result.reason } : {}),
     ...(result.diagnostics !== undefined ? { retrievalDiagnostics: result.diagnostics } : {}),
     ...(result.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
-    ...(reranker !== undefined ? { reranker } : {}),
+    ...(activityReranker !== undefined ? { reranker: activityReranker } : {}),
   };
 }
 
@@ -1398,7 +1468,13 @@ function addRerankerReasonCode(
     codes.add("policy-denied");
     return;
   }
-  if (result.reranker === undefined || !RERANKER_DEGRADED.has(result.reranker.status)) return;
+  if (
+    result.reranker === undefined ||
+    (result.reranker.failureKind !== "not-configured" &&
+      !RERANKER_DEGRADED.has(result.reranker.status))
+  ) {
+    return;
+  }
   codes.add(
     result.reranker.status === "invalid-response"
       ? "reranker-invalid-response"
@@ -1600,14 +1676,56 @@ function podsForSkipped(
   cache: ActivitySummaryCache,
   source: KnowledgePodRetrievalActivitySkippedInput,
 ): readonly KnowledgePodRetrievalActivityPod[] {
-  const reason = normaliseActivityReason(source.reason);
-  const modes: readonly KnowledgePodRetrievalActivityMode[] =
-    reason === "policy-denied" ? ["local-only", "sealed"] : ["local-only"];
-  return source.selected.capsules.map((capsule) =>
-    activityPod(store, cache, capsule, stateForReason(reason), modes, [reason], {
+  return source.selected.capsules.map((capsule) => {
+    const reason = skippedReasonForCapsule(source.selected, capsule, source.reason);
+    const modes: readonly KnowledgePodRetrievalActivityMode[] =
+      reason === "policy-denied" ? ["local-only", "sealed"] : ["local-only"];
+    return activityPod(store, cache, capsule, stateForReason(reason), modes, [reason], {
       referenceCount: 0,
       citationCount: 0,
-    }),
+    });
+  });
+}
+
+function skippedReasonForCapsule(
+  selected: SelectedLocalKnowledgeScope,
+  capsule: KnowledgeCapsule,
+  reason: string,
+): KnowledgePodRetrievalActivityReasonCode {
+  const normalised = normaliseActivityReason(reason);
+  if (selected.scopeKind !== "capsule-set") return normalised;
+  const memberReason = memberSkippedReason(capsule);
+  if (memberReason !== undefined) return memberReason;
+  const rule = SET_SKIPPED_REASON_RULES.find((entry) => entry.reason === normalised);
+  if (rule === undefined) return normalised;
+  return rule.matches(capsule) ? normalised : "source-skipped";
+}
+
+function memberSkippedReason(
+  capsule: KnowledgeCapsule,
+): KnowledgePodRetrievalActivityReasonCode | undefined {
+  if (capsule.lifecycleState === "indexing") return "indexing-in-progress";
+  if (capsule.lifecycleState === "stale") return "stale-capsule";
+  if (capsule.lifecycleState === "error") return "retrieval-failure";
+  if (capsule.lifecycleState !== "ready") return "scope-not-ready";
+  return capsuleBlocksAnswerSynthesis(capsule) ? "policy-denied" : undefined;
+}
+
+const SET_SKIPPED_REASON_RULES: readonly {
+  readonly reason: KnowledgePodRetrievalActivityReasonCode;
+  readonly matches: (capsule: KnowledgeCapsule) => boolean;
+}[] = [
+  { reason: "indexing-in-progress", matches: (capsule) => capsule.lifecycleState === "indexing" },
+  { reason: "stale-capsule", matches: (capsule) => capsule.lifecycleState === "stale" },
+  { reason: "retrieval-failure", matches: (capsule) => capsule.lifecycleState === "error" },
+  { reason: "scope-not-ready", matches: (capsule) => capsule.lifecycleState !== "ready" },
+  { reason: "policy-denied", matches: capsuleBlocksAnswerSynthesis },
+];
+
+function capsuleBlocksAnswerSynthesis(capsule: KnowledgeCapsule): boolean {
+  const policy = resolveScopeModelUsePolicy([capsule]);
+  return (
+    policy.operations.answerSynthesis === "deny" || policy.operations.rawContentRelease === "deny"
   );
 }
 
@@ -1784,6 +1902,27 @@ function attachGroundedAnswerWithPreviewCitations(
   deps.store.attachGroundedAnswer(assistantMessageId, answer, previewCitations);
 }
 
+function scopedAssistantContent(result: ScopedGroundedResult, input: AskInput): string {
+  const noEvidenceReason = enforcedNoEvidenceReason(result);
+  return noEvidenceReason === undefined
+    ? result.answer.trim()
+    : localKnowledgeNoEvidenceAnswer(noEvidenceReason, input.content);
+}
+
+function persistRedactedGroundedExchange(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  input: AskInput,
+  assistantContent: string,
+): readonly [ChatMessage, ChatMessage] {
+  return persistGroundedExchange(
+    deps,
+    chat.id,
+    redactText(deps, input.content),
+    redactText(deps, assistantContent),
+  );
+}
+
 function persistScopedGroundedAnswer(
   chat: Chat,
   input: AskInput,
@@ -1799,20 +1938,10 @@ function persistScopedGroundedAnswer(
   emitRetrievalAudit(auditSink, selected, result, occurredAt);
   if (result.references.length > 0)
     emitAnswerContextAudit(auditSink, env.store, result, occurredAt);
-  const noEvidenceReason = enforcedNoEvidenceReason(result);
-  const assistantContent =
-    noEvidenceReason === undefined
-      ? result.answer.trim()
-      : localKnowledgeNoEvidenceAnswer(noEvidenceReason, input.content);
-  const redactedUserContent = redactText(deps, input.content);
-  const redactedAssistantContent = redactText(deps, assistantContent);
-  const persisted = persistGroundedExchange(
-    deps,
-    chat.id,
-    redactedUserContent,
-    redactedAssistantContent,
-  );
+  const assistantContent = scopedAssistantContent(result, input);
+  const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
+  const limits = currentGroundingLimits(deps);
   const answer = buildLocalKnowledgeAnswer(
     chat,
     env.store,
@@ -1820,7 +1949,8 @@ function persistScopedGroundedAnswer(
     persisted,
     result,
     elapsedMs,
-    redactedAssistantContent,
+    persisted[1].content,
+    limits,
     sourceLookup,
     (value: string): string => redactText(deps, value),
   ) satisfies GroundedAnswer;
@@ -1833,6 +1963,23 @@ function persistScopedGroundedAnswer(
     sourceLookup,
   );
   return answer;
+}
+
+function createScopedAnswerGenerator(
+  model: ModelPort,
+  modelId: string,
+  deps: UiHandlerDeps,
+  env: { readonly store: KnowledgeStore },
+  limits: ReturnType<typeof currentGroundingLimits>,
+): StoreBackedAnswerGenerator {
+  return new StoreBackedAnswerGenerator(
+    model,
+    modelId,
+    env.store,
+    createSqliteAuditSink(env.store),
+    (value: string): string => redactText(deps, value),
+    limits,
+  );
 }
 
 async function runScopedGroundedAnswer(
@@ -1848,9 +1995,8 @@ async function runScopedGroundedAnswer(
   const modelId = input.modelId ?? chat.selectedModel;
   const model = resolveModel(deps, modelId);
   if ("status" in model) return model;
-  const auditSink = createSqliteAuditSink(env.store);
-  const redact = (value: string): string => redactText(deps, value);
-  const generator = new StoreBackedAnswerGenerator(model, modelId, env.store, auditSink, redact);
+  const limits = currentGroundingLimits(deps);
+  const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
     {
@@ -1860,14 +2006,14 @@ async function runScopedGroundedAnswer(
         queryTransformer: createBroadQueryTransformer(model, modelId),
       },
       answerGenerator: generator,
-      referenceReranker: referenceRerankerForScope(deps, env.store, selected),
+      referenceReranker: referenceRerankerForScope(deps, env.store, selected, limits),
       citationFaithfulness: {
         excerptForReference: (reference): string =>
           readCitationExcerpt(
             env.store,
             reference.capsuleId,
             reference.citation,
-            MAX_EXCERPT_CHARS,
+            limits.maxExcerptChars,
           ),
       },
       signal,
@@ -1878,6 +2024,33 @@ async function runScopedGroundedAnswer(
     throw new CancelledError("grounded request cancelled");
   }
   return persistScopedGroundedAnswer(chat, input, deps, env, selected, result, startedAt);
+}
+
+function stateFailureRoute(
+  chat: Chat,
+  input: AskInput,
+  deps: UiHandlerDeps,
+  env: { readonly store: KnowledgeStore },
+  selected: SelectedLocalKnowledgeScope,
+  stateFailure: { readonly reason: string; readonly message: string },
+): RouteResult {
+  const redactedMessage = redactText(deps, stateFailure.message);
+  const persisted = persistGroundedExchange(
+    deps,
+    chat.id,
+    redactText(deps, input.content),
+    redactedMessage,
+  );
+  const answer = buildStateFailureAnswer(
+    chat,
+    env.store,
+    selected,
+    persisted,
+    { ...stateFailure, message: redactedMessage },
+    currentGroundingLimits(deps),
+  );
+  deps.store.attachGroundedAnswer(persisted[1].id, answer);
+  return { status: 200, body: answer };
 }
 
 export async function handleLocalKnowledgeGroundedAsk(
@@ -1892,22 +2065,7 @@ export async function handleLocalKnowledgeGroundedAsk(
     if ("status" in selected) return selected;
     const stateFailure = scopeStateFailure(selected);
     if (stateFailure !== undefined) {
-      const redactedMessage = redactText(deps, stateFailure.message);
-      const persisted = persistGroundedExchange(
-        deps,
-        chat.id,
-        redactText(deps, input.content),
-        redactedMessage,
-      );
-      const answer = buildStateFailureAnswer(chat, env.store, selected, persisted, {
-        ...stateFailure,
-        message: redactedMessage,
-      });
-      deps.store.attachGroundedAnswer(persisted[1].id, answer);
-      return {
-        status: 200,
-        body: answer,
-      };
+      return stateFailureRoute(chat, input, deps, env, selected, stateFailure);
     }
     const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, signal);
     if ("status" in answer) return answer;

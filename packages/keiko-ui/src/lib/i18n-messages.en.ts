@@ -479,9 +479,10 @@ export const EN_MESSAGES = {
     "Update availability could not be verified. Check again when the registry is reachable.",
   "updates.primary.manual":
     "Automatic install is unavailable. Follow the approved manual instructions, restart Keiko, then check again.",
+  "updates.primary.manualReview": "Check the local-state risk before installing.",
   "updates.primary.installed":
     "The update is installed. No further action is required unless you want to check for a newer release.",
-  "updates.primary.cancelled": "The update was cancelled. Check again before starting another run.",
+  "updates.primary.cancelled": "The update was cancelled. Retry when you are ready.",
   "updates.primary.failed":
     "The update did not complete. Review the failure details before retrying.",
   "updates.primary.restart": "Restart and verification are needed to finish the update.",
@@ -515,6 +516,11 @@ export const EN_MESSAGES = {
   "updates.impact.title": "Impact",
   "updates.impact.body": "This update affects local state.",
   "updates.impact.required": "Required action: {remediation}",
+  "updates.manualReview.title": "Local-state risk before install",
+  "updates.manualReview.body":
+    "This update could affect local state. Continue only if you accept the risk below.",
+  "updates.manualReview.featureRisk":
+    "{feature} could stop working or require recovery after this update.",
   "updates.remediation.title": "Follow-up action",
   "updates.remediation.plannedTitle": "Follow-up after install",
   "updates.remediation.plannedBody":
@@ -522,6 +528,10 @@ export const EN_MESSAGES = {
   "updates.remediation.deferredTitle": "Deferred follow-up",
   "updates.remediation.deferredBody":
     "Skipped for now. Run it later if you want affected workflows fully ready.",
+  "updates.remediation.failedTitle": "Follow-up failed",
+  "updates.remediation.failedBody":
+    "The follow-up action did not complete. Run it again before continuing.",
+  "updates.remediation.failedActionHelp": "Retry this action to finish the follow-up.",
   "updates.remediation.canComplete": "All required follow-up work is complete.",
   "updates.remediation.needsAction": "Run or defer this action before finishing.",
   "updates.remediation.userActionRequired":
@@ -531,7 +541,7 @@ export const EN_MESSAGES = {
   "updates.remediation.repair": "Local state repair",
   "updates.remediation.reindex": "Local Knowledge Reindex",
   "updates.remediation.migration": "Migration required",
-  "updates.remediation.manualReview": "Manual review required",
+  "updates.remediation.manualReview": "Review required",
   "updates.manual.title": "Manual update path",
   "updates.manual.body":
     "Keiko cannot safely update itself from this installation. Follow the approved manual instructions, restart Keiko, then verify the version here.",
@@ -569,11 +579,11 @@ export const EN_MESSAGES = {
   "updates.actionStatus.completed": "Completed",
   "updates.actionStatus.failed": "Failed",
   "updates.actionStatus.deferred": "Deferred",
-  "updates.actionStatus.manualReview": "Manual review required",
+  "updates.actionStatus.manualReview": "Review required",
   "updates.featureState.ready": "Ready",
   "updates.featureState.degraded": "Degraded",
   "updates.featureState.unavailable": "Unavailable",
-  "updates.featureState.manualReview": "Manual review required",
+  "updates.featureState.manualReview": "Review required",
   "updates.phase.preparing": "Preparing update",
   "updates.phase.running": "Installing update",
   "updates.phase.restartRequired": "Restart required",

@@ -603,11 +603,112 @@ export async function runLocalKnowledgeQualityCheck(
   return { summary, scorecards, ok: failed.length === 0 };
 }
 
+// ─── Non-tautology regression probes ─────────────────────────────────────────
+// A scorecard gate that only ever runs passing fixtures cannot prove it would catch a real
+// regression. Mirroring the injected-regression proof in `check-grounded-retrieval-quality.mjs`,
+// we deliberately repoint a probe fixture's ground-truth expectations at a decoy chunk the
+// retriever will NOT return, then assert the scorecard drops below the pass thresholds. If a
+// regressed probe still clears the floors, the Local Knowledge quality gate is tautological and is
+// failed here rather than silently rubber-stamping retrieval changes.
+
+export const REGRESSION_PROBE_FIXTURE_IDS = [
+  "exact-technical",
+  "semantic-paraphrase",
+  "multilingual-retrieval",
+  // #1818 embedding-space governance: prove the multi-space (two-lane) scorecard is not
+  // tautological either. The fixture's corpus is exactly its expected chunks, so the probe
+  // repoints expectations at the ABSENT_CHUNK_SENTINEL and asserts recall drops below floors.
+  "multi-space",
+];
+
+const ABSENT_CHUNK_SENTINEL = "__keiko_regression_absent_chunk__";
+
+function corpusChunkIds(fixture) {
+  const ids = [];
+  for (const capsule of fixture.capsules) {
+    for (const source of capsule.sources) {
+      for (const document of source.documents) {
+        for (const chunk of document.chunks) ids.push(String(chunk.id));
+      }
+    }
+  }
+  return ids;
+}
+
+export function regressFixtureExpectations(fixture) {
+  // Fixtures are plain JSON data (branded-string ids, numbers, nested arrays/objects) with no
+  // functions, Dates, Maps, or Sets, so a JSON round-trip is a safe, dependency-free deep clone.
+  const clone = JSON.parse(JSON.stringify(fixture));
+  const chunkIds = corpusChunkIds(clone);
+  clone.id = `${fixture.id}-regression-probe`;
+  clone.queries = clone.queries
+    .filter((query) => Array.isArray(query.expectedChunkIds) && query.expectedChunkIds.length > 0)
+    .map((query) => {
+      const expected = new Set(query.expectedChunkIds.map(String));
+      const decoy = chunkIds.find((id) => !expected.has(id)) ?? ABSENT_CHUNK_SENTINEL;
+      return { ...query, expectedChunkIds: [decoy] };
+    });
+  return clone;
+}
+
+export async function runLocalKnowledgeRegressionProbes(
+  log,
+  fixtures = ALL_FIXTURES,
+  runner = runRetrievalEval,
+  probeFixtureIds = REGRESSION_PROBE_FIXTURE_IDS,
+) {
+  const selected = fixtures.filter((fixture) => probeFixtureIds.includes(fixture.id));
+  const tautological = [];
+  let probed = 0;
+  for (const fixture of selected) {
+    const regressed = regressFixtureExpectations(fixture);
+    if (regressed.queries.length === 0) continue;
+    probed += 1;
+    const card = await runner(regressed);
+    const droppedBelowFloors = localKnowledgeFailuresFor(card).length > 0;
+    log(
+      `local-knowledge-retrieval-regression: probe=${fixture.id} expected=below-floors observed=${
+        droppedBelowFloors ? "below-floors" : "PASSED"
+      }`,
+    );
+    if (!droppedBelowFloors) tautological.push(fixture.id);
+  }
+  if (probed === 0) {
+    log(
+      `local-knowledge-retrieval-regression: no probe fixtures matched ${probeFixtureIds.join(", ")}`,
+    );
+  }
+  return { ok: tautological.length === 0 && probed > 0, tautological, probed };
+}
+
+function regressionFailureMessage(regression) {
+  if (regression.ok) return undefined;
+  return regression.probed === 0
+    ? "local knowledge regression probes did not run (no probe fixtures matched)"
+    : `local knowledge regression probes were tautological: ${regression.tautological.join(", ")}`;
+}
+
+function collectQualityFailures(localKnowledge, regression, budgetResult) {
+  const messages = [];
+  if (!localKnowledge.ok) {
+    messages.push(
+      `local knowledge quality failed: ${localKnowledge.summary.failedFixtureIds.join(", ")}`,
+    );
+  }
+  const regressionFailure = regressionFailureMessage(regression);
+  if (regressionFailure !== undefined) messages.push(regressionFailure);
+  if (!budgetResult.ok) {
+    messages.push(`quality budget failed: ${budgetResult.failures.join(", ")}`);
+  }
+  return messages;
+}
+
 export async function runRetrievalQualityCheck({
   budgetPath = DEFAULT_BUDGET_PATH,
   log,
   fail,
   localKnowledgeQualityCheck = runLocalKnowledgeQualityCheck,
+  regressionProbes = runLocalKnowledgeRegressionProbes,
   workspaceCases = CASES,
 } = {}) {
   const onLog = log ?? ((message) => console.log(message));
@@ -623,19 +724,12 @@ export async function runRetrievalQualityCheck({
     onLog,
   );
   const localKnowledge = await localKnowledgeQualityCheck(onLog);
-  const failureMessages = [];
-  if (!localKnowledge.ok) {
-    failureMessages.push(
-      `local knowledge quality failed: ${localKnowledge.summary.failedFixtureIds.join(", ")}`,
-    );
-  }
-  if (!budgetResult.ok) {
-    failureMessages.push(`quality budget failed: ${budgetResult.failures.join(", ")}`);
-  }
+  const regression = await regressionProbes(onLog);
+  const failureMessages = collectQualityFailures(localKnowledge, regression, budgetResult);
   if (failureMessages.length > 0) {
     onFail(failureMessages.join("; "));
   }
-  return { summary, results, budgetResult, localKnowledge };
+  return { summary, results, budgetResult, localKnowledge, regression };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

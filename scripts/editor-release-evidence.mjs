@@ -367,6 +367,7 @@ function evidenceDiffMessage(expected, actual) {
     );
   }
   for (const path of [
+    ["staticExport", "fileCount"],
     ["b1", "monacoMarkersInFirstLoad"],
     ["b2", "shipsTotalBytes"],
     ["b3", "largestWorkerBytes"],

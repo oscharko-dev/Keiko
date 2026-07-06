@@ -1,7 +1,7 @@
 // Issue #185 — unit tests for the grounded Q&A presentation component. Extended in #187
 // with ContextPackSummary coverage and an axe-based a11y smoke.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
@@ -477,6 +477,33 @@ describe("GroundedAnswer", () => {
     expect(
       screen.getByText(/Modes: local only, sealed · Reasons: policy denied/u),
     ).toBeInTheDocument();
+  });
+
+  it("keeps each per-pod activity state label announced in the activity list", () => {
+    const pod = retrievalActivityPod();
+    const activity = retrievalActivity({
+      pods: [
+        { ...pod, podId: "cap-searched" as typeof pod.podId, state: "searched" },
+        { ...pod, podId: "cap-denied" as typeof pod.podId, state: "denied" },
+        { ...pod, podId: "cap-degraded" as typeof pod.podId, state: "degraded" },
+      ],
+    });
+    render(
+      <GroundedAnswer
+        answer={{ ...localKnowledgeAnswer(), retrievalActivity: activity }}
+        busy={false}
+      />,
+    );
+
+    // Scope to the per-pod list (the summary <dl> carries the same words as MetricRow labels)
+    // and assert each state badge is announced: present in the accessibility tree and not inside
+    // an aria-hidden subtree — so an icon-only/aria-hidden badge refactor would fail here rather
+    // than silently drop the label from what a screen reader conveys.
+    const details = screen.getByRole("list", { name: "Knowledge Pod activity details" });
+    for (const label of ["Searched", "Denied", "Degraded"]) {
+      const badge = within(details).getByText(label);
+      expect(badge.closest("[aria-hidden='true']")).toBeNull();
+    }
   });
 
   it("bounds long Knowledge Pod activity lists behind a disclosure control", () => {
@@ -1105,5 +1132,28 @@ describe("GroundedAnswer", () => {
     const { container } = render(<GroundedAnswer answer={a} busy={false} />);
     const warning = container.querySelector(".grounded-uncertainty[role='alert']");
     expect(warning?.textContent?.toLowerCase()).toContain("reranker unavailable");
+  });
+
+  it("describes configured no-op reranking without exposing provider details", () => {
+    const base = localKnowledgeAnswer();
+    const a = {
+      ...base,
+      contextPack: {
+        ...base.contextPack,
+        reranker: {
+          status: "disabled" as const,
+          mode: "none" as const,
+          failureKind: "not-configured" as const,
+          candidateCount: 3,
+          documentCount: 0,
+          keptCount: 3,
+        },
+      },
+    } as GroundedAnswerType;
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent).toContain("no reranker configured");
+    expect(warning?.textContent).toContain("fused retrieval order");
+    expect(warning?.textContent).not.toContain("http");
   });
 });

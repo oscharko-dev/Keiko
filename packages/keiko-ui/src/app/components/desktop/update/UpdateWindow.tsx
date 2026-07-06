@@ -25,6 +25,7 @@ import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
   UpdatePreflightReport,
   UpdateRemediationAction,
+  UpdateRemediationAffectedFeature,
   UpdateRemediationStatusReport,
   UpdateSession,
   UpdateSessionStatus,
@@ -44,6 +45,7 @@ import {
   storeLabel,
   updateTone,
 } from "./update-copy";
+import styles from "./UpdateWindow.module.css";
 
 export interface UpdateWindowApi {
   readonly fetchPreflight: () => Promise<UpdatePreflightReport>;
@@ -218,6 +220,10 @@ function ManualInstructionCopyFrame({
         : copyState === "failed"
           ? t("updates.manual.copyFailedShort")
           : buttonLabel;
+  const copyStatusLabel =
+    copyState === "copied" || copyState === "selected" || copyState === "failed"
+      ? buttonFeedbackLabel
+      : "";
   useEffect(() => {
     if (copyState === "idle" || typeof window === "undefined") return;
     const resetMs = copyState === "pressed" ? COPY_PRESSED_RESET_MS : COPY_FEEDBACK_RESET_MS;
@@ -256,6 +262,9 @@ function ManualInstructionCopyFrame({
           <Icons.copy size={14} aria-hidden="true" />
           <span className="sr-only">{buttonLabel}</span>
         </button>
+        <span className="sr-only" role="status" aria-live="polite">
+          {copyStatusLabel}
+        </span>
       </div>
     </div>
   );
@@ -319,6 +328,7 @@ function restartCommands(session: UpdateSession, t: I18nTranslate): readonly Res
 function primaryActionText(
   report: UpdatePreflightReport,
   session: UpdateSessionStatus,
+  remediation: UpdateRemediationStatusReport,
   t: I18nTranslate,
   manualInstallVerified = false,
 ): string {
@@ -330,8 +340,30 @@ function primaryActionText(
   if (visibleSession?.phase === "restart-required") return t("updates.primary.restart");
   if (isUpdateCheckUnavailable(report)) return t("updates.primary.unavailable");
   if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
+  if (remediation.overallStatus === "manual-review-required") {
+    return t("updates.primary.manualReview");
+  }
   if (report.updateAvailable) return t("updates.primary.available");
   return t("updates.primary.current");
+}
+
+function classNames(...values: readonly (string | false | undefined)[]): string {
+  return values
+    .filter((value): value is string => value !== false && value !== undefined)
+    .join(" ");
+}
+
+function blocksAutomaticInstall(remediation: UpdateRemediationStatusReport): boolean {
+  return (
+    remediation.overallStatus === "manual-review-required" || remediation.overallStatus === "failed"
+  );
+}
+
+function manualReviewRisk(feature: UpdateRemediationAffectedFeature, t: I18nTranslate): string {
+  const reason = feature.reason.trim();
+  return reason.length > 0
+    ? reason
+    : t("updates.manualReview.featureRisk", { feature: feature.label });
 }
 
 function SummaryCard({
@@ -434,7 +466,7 @@ function PrimaryActions({
       </button>
     ) : null;
   }
-  if (manual || !report.updateAvailable || remediation.overallStatus === "manual-review-required") {
+  if (manual || !report.updateAvailable || blocksAutomaticInstall(remediation)) {
     if (manual) return null;
     return (
       <button type="button" className="upd-secondary-btn" disabled={disabled} onClick={onCheck}>
@@ -575,6 +607,7 @@ function ImpactPanel({
 }): ReactNode {
   const t = useTranslate();
   const impacts = report.impact?.stateImpact ?? [];
+  if (remediation.overallStatus === "manual-review-required") return null;
   if (remediation.actions.length > 0) return null;
   if (impacts.length === 0 && remediation.affectedFeatures.length === 0) return null;
   return (
@@ -594,6 +627,13 @@ function ImpactPanel({
         </ul>
       ) : null}
     </section>
+  );
+}
+
+function remediationHasFailure(remediation: UpdateRemediationStatusReport): boolean {
+  return (
+    remediation.overallStatus === "failed" ||
+    remediation.actions.some((action) => action.status === "failed")
   );
 }
 
@@ -667,26 +707,57 @@ function RemediationPanel({
   const visibleActions = remediation.actions.filter(actionVisible);
   if (remediation.actions.length > 0 && visibleActions.length === 0) return null;
   const showFeatureSummary = remediation.actions.length === 0;
+  const isManualReview = remediation.overallStatus === "manual-review-required";
+  const hasFailedAction = remediationHasFailure(remediation);
   const hasDeferredAction = visibleActions.some((action) => action.status === "deferred");
   const showDecisionCopy =
-    report.impact?.userActionRequired === true && !remediation.updateCanComplete;
+    !isManualReview && report.impact?.userActionRequired === true && !remediation.updateCanComplete;
   return (
-    <section className="upd-panel" aria-labelledby="updates-remediation-title">
+    <section
+      className={classNames(
+        "upd-panel",
+        isManualReview && styles.warningRemediation,
+        hasFailedAction && styles.failedRemediation,
+      )}
+      aria-labelledby="updates-remediation-title"
+      aria-live={hasFailedAction ? "assertive" : "polite"}
+      role={hasFailedAction ? "alert" : "status"}
+    >
       <div className="upd-panel-head">
         <strong id="updates-remediation-title">
-          {hasDeferredAction
-            ? t("updates.remediation.deferredTitle")
-            : t("updates.remediation.title")}
+          {isManualReview
+            ? t("updates.manualReview.title")
+            : hasFailedAction
+              ? t("updates.remediation.failedTitle")
+              : hasDeferredAction
+                ? t("updates.remediation.deferredTitle")
+                : t("updates.remediation.title")}
         </strong>
         <span>
-          {hasDeferredAction
-            ? t("updates.remediation.deferredBody")
-            : remediation.updateCanComplete
-              ? t("updates.remediation.canComplete")
-              : t("updates.remediation.needsAction")}
+          {isManualReview
+            ? t("updates.manualReview.body")
+            : hasFailedAction
+              ? t("updates.remediation.failedBody")
+              : hasDeferredAction
+                ? t("updates.remediation.deferredBody")
+                : remediation.updateCanComplete
+                  ? t("updates.remediation.canComplete")
+                  : t("updates.remediation.needsAction")}
         </span>
       </div>
-      {showFeatureSummary && remediation.affectedFeatures.length > 0 ? (
+      {showFeatureSummary && isManualReview
+        ? remediation.affectedFeatures.map((feature) => (
+            <div className="upd-action" key={feature.featureId}>
+              <div>
+                <div className="upd-action-title">
+                  <strong>{feature.label}</strong>
+                </div>
+                <small>{manualReviewRisk(feature, t)}</small>
+              </div>
+            </div>
+          ))
+        : null}
+      {showFeatureSummary && !isManualReview && remediation.affectedFeatures.length > 0 ? (
         <ul className="upd-feature-list">
           {remediation.affectedFeatures.map((feature) => (
             <li key={feature.featureId}>
@@ -699,16 +770,35 @@ function RemediationPanel({
       ) : null}
       {visibleActions.map((action) => {
         const feature = featureForAction(remediation, action);
+        const manualReviewAction = action.status === "manual-review-required";
         const open = actionStatusOpen(action);
         return (
-          <div className="upd-action" key={action.actionId}>
+          <div
+            className={classNames("upd-action", action.status === "failed" && styles.failedAction)}
+            key={action.actionId}
+          >
             <div>
               <div className="upd-action-title">
-                <strong>{remediationLabel(action.remediation, t)}</strong>
-                <span className="upd-chip">{actionStatusLabel(action.status, t)}</span>
+                <strong>
+                  {manualReviewAction
+                    ? (feature?.label ?? remediationLabel(action.remediation, t))
+                    : remediationLabel(action.remediation, t)}
+                </strong>
+                {manualReviewAction ? null : (
+                  <span className="upd-chip">{actionStatusLabel(action.status, t)}</span>
+                )}
               </div>
-              <small>{feature?.reason ?? action.message}</small>
+              <small>
+                {manualReviewAction && feature !== undefined
+                  ? manualReviewRisk(feature, t)
+                  : (feature?.reason ?? action.message)}
+              </small>
               {action.instructions !== undefined ? <small>{action.instructions}</small> : null}
+              {action.status === "failed" ? (
+                <small className={styles.failedCopy}>
+                  {t("updates.remediation.failedActionHelp")}
+                </small>
+              ) : null}
             </div>
             {open ? (
               <div className="upd-action-buttons">
@@ -1089,6 +1179,13 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   const outcomePatchNotesVisible =
     visibleSession?.phase === "succeeded" && hasReleaseNotes(patchNotesReport);
   const canRunRemediation = remediationRunnable(visibleSession);
+  const canShowManualReview =
+    remediation.overallStatus === "manual-review-required" &&
+    report.updateAvailable &&
+    visibleSession === undefined;
+  const shouldShowRemediation =
+    canShowManualReview ||
+    (canRunRemediation && remediation.overallStatus !== "manual-review-required");
   return (
     <section className="upd" aria-labelledby="updates-window-title">
       <SummaryCard
@@ -1101,7 +1198,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
       <div className="upd-primary">
         <div>
           <strong>{t("updates.primary.title")}</strong>
-          <span>{primaryActionText(report, session, t, manualInstallVerified)}</span>
+          <span>{primaryActionText(report, session, remediation, t, manualInstallVerified)}</span>
         </div>
         <PrimaryActions
           report={report}
@@ -1145,7 +1242,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         onCheck={() => void refresh(true)}
       />
       <ImpactPanel report={report} remediation={remediation} />
-      {canRunRemediation ? (
+      {shouldShowRemediation ? (
         <RemediationPanel
           report={report}
           remediation={remediation}

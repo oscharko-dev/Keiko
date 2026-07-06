@@ -1,0 +1,32 @@
+.warningRemediation {
+  border-color: color-mix(in oklch, var(--feedback-warning) 52%, var(--border-subtle));
+  background: linear-gradient(
+    145deg,
+    color-mix(in oklch, var(--feedback-warning-surface) 72%, var(--surface-primary)),
+    color-mix(in oklch, var(--surface-secondary) 72%, transparent)
+  );
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--feedback-warning) 6%, transparent);
+}
+
+.warningRemediation :global(.upd-action) {
+  border-color: color-mix(in oklch, var(--feedback-warning) 30%, var(--border-subtle));
+  background: color-mix(in oklch, var(--feedback-warning-surface) 24%, var(--surface-primary));
+}
+
+.failedRemediation {
+  border-color: color-mix(in oklch, var(--feedback-danger) 40%, var(--border-subtle));
+  background: linear-gradient(
+    145deg,
+    color-mix(in oklch, var(--feedback-danger-surface) 38%, var(--surface-secondary)),
+    color-mix(in oklch, var(--surface-secondary) 84%, transparent)
+  );
+}
+
+.failedAction {
+  border-color: color-mix(in oklch, var(--feedback-danger) 34%, var(--border-subtle));
+  background: color-mix(in oklch, var(--feedback-danger-surface) 26%, var(--surface-primary));
+}
+
+.failedCopy {
+  color: color-mix(in oklch, var(--feedback-danger) 78%, var(--text-secondary));
+}

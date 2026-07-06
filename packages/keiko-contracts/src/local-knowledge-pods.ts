@@ -47,12 +47,52 @@ export type KnowledgePodSummaryKind = "pod" | "pod-set";
 export type KnowledgePodBackingKind = "knowledge-capsule" | "capsule-set";
 export type KnowledgePodReadiness =
   "draft" | "indexing" | "ready" | "stale" | "degraded" | "unavailable" | "error";
-export type KnowledgePodSourceKind = KnowledgeSourceScopeKind | "remote" | "policy" | "unknown";
+export type KnowledgePodSourceKind =
+  KnowledgeSourceScopeKind | "remote" | "federated" | "ephemeral" | "policy" | "unknown";
 export type KnowledgePodEvidenceMode = "counts-hashes-and-status";
-export type KnowledgePodLocationKind = "local" | "remote" | "federated";
+export type KnowledgePodLocationKind = "local" | "remote" | "federated" | "ephemeral";
 export type KnowledgePodSealingPosture =
   "local-store-policy" | "sealed-pod-policy" | "not-declared";
 export type KnowledgePodPolicyPosture = "none" | "policy-pack" | "not-declared";
+export type KnowledgePodSetReadinessReasonCode =
+  | "member-draft"
+  | "member-indexing"
+  | "member-stale"
+  | "member-error"
+  | "member-unavailable"
+  | "member-degraded"
+  | "missing-member"
+  | "policy-denied"
+  | "embedding-unknown"
+  | "embedding-incompatible"
+  | "embedding-unavailable"
+  | "embedding-opaque"
+  | "no-sources"
+  | "no-vectors"
+  | "future-remote-member"
+  | "future-federated-member"
+  | "future-ephemeral-member";
+
+export const KNOWLEDGE_POD_SET_READINESS_REASON_CODES: readonly KnowledgePodSetReadinessReasonCode[] =
+  [
+    "member-draft",
+    "member-indexing",
+    "member-stale",
+    "member-error",
+    "member-unavailable",
+    "member-degraded",
+    "missing-member",
+    "policy-denied",
+    "embedding-unknown",
+    "embedding-incompatible",
+    "embedding-unavailable",
+    "embedding-opaque",
+    "no-sources",
+    "no-vectors",
+    "future-remote-member",
+    "future-federated-member",
+    "future-ephemeral-member",
+  ];
 
 export interface KnowledgePodCounts {
   readonly capsuleCount: number;
@@ -60,6 +100,19 @@ export interface KnowledgePodCounts {
   readonly documentCount: number;
   readonly chunkCount: number;
   readonly vectorCount: number;
+}
+
+export interface KnowledgePodSetReadinessSummary {
+  readonly readyCount: number;
+  readonly draftCount: number;
+  readonly degradedCount: number;
+  readonly unavailableCount: number;
+  readonly deniedCount: number;
+  readonly indexingCount: number;
+  readonly staleCount: number;
+  readonly errorCount: number;
+  readonly missingCount: number;
+  readonly reasonCodes: readonly KnowledgePodSetReadinessReasonCode[];
 }
 
 export interface KnowledgePodRetrievalCapabilities {
@@ -120,6 +173,7 @@ export interface KnowledgePodSummary {
   readonly readiness: KnowledgePodReadiness;
   readonly lifecycleState?: CapsuleLifecycleState;
   readonly counts: KnowledgePodCounts;
+  readonly setReadiness?: KnowledgePodSetReadinessSummary;
   readonly sourceKinds: readonly KnowledgePodSourceKind[];
   readonly retrieval: KnowledgePodRetrievalCapabilities;
   readonly privacy: KnowledgePodPrivacySummary;
@@ -165,6 +219,7 @@ const SUMMARY_KEYS = [
   "readiness",
   "lifecycleState",
   "counts",
+  "setReadiness",
   "sourceKinds",
   "retrieval",
   "privacy",
@@ -176,6 +231,18 @@ const SUMMARY_KEYS = [
 ] as const;
 
 const COUNT_KEYS = ["capsuleCount", "sourceCount", "documentCount", "chunkCount", "vectorCount"];
+const SET_READINESS_KEYS = [
+  "readyCount",
+  "draftCount",
+  "degradedCount",
+  "unavailableCount",
+  "deniedCount",
+  "indexingCount",
+  "staleCount",
+  "errorCount",
+  "missingCount",
+  "reasonCodes",
+] as const;
 const RETRIEVAL_KEYS = [
   "lexicalIndex",
   "vectorIndex",
@@ -227,7 +294,12 @@ const READINESS: readonly KnowledgePodReadiness[] = [
 ];
 const KINDS: readonly KnowledgePodSummaryKind[] = ["pod", "pod-set"];
 const BACKINGS: readonly KnowledgePodBackingKind[] = ["knowledge-capsule", "capsule-set"];
-const LOCATION_KINDS: readonly KnowledgePodLocationKind[] = ["local", "remote", "federated"];
+const LOCATION_KINDS: readonly KnowledgePodLocationKind[] = [
+  "local",
+  "remote",
+  "federated",
+  "ephemeral",
+];
 const SEALING_POSTURES: readonly KnowledgePodSealingPosture[] = [
   "local-store-policy",
   "sealed-pod-policy",
@@ -240,7 +312,6 @@ const POLICY_POSTURES: readonly KnowledgePodPolicyPosture[] = [
 ];
 const MODEL_USE_POLICY_SOURCES: readonly KnowledgePodModelUsePolicySource[] = [
   "explicit",
-  "sealed-default",
   "legacy-default",
 ];
 const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
@@ -248,11 +319,35 @@ const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
   "repository",
   "files",
   "remote",
+  "federated",
+  "ephemeral",
   "policy",
   "unknown",
 ];
 
-const ABSOLUTE_PATH_RE = /(?:^|[[\s("'`<{}])(?:~[\\/]|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^\s"'`<>)]*/u;
+type FuturePodPlaceholderKind = "remote" | "federated" | "ephemeral";
+
+const FUTURE_POD_PLACEHOLDER_KINDS: readonly FuturePodPlaceholderKind[] = [
+  "remote",
+  "federated",
+  "ephemeral",
+];
+
+const FUTURE_POD_REASON_BY_KIND: Record<
+  FuturePodPlaceholderKind,
+  KnowledgePodSetReadinessReasonCode
+> = {
+  remote: "future-remote-member",
+  federated: "future-federated-member",
+  ephemeral: "future-ephemeral-member",
+};
+
+// Redact filesystem paths wherever they appear, not only at a string boundary — an earlier
+// anchored form let `report=/Users/alice/secret.pdf`, `a/Users/…`, and non-ASCII-prefixed paths
+// leak. Matches Windows drive paths, UNC shares, home (`~/`), parent traversal (`../`), any
+// leading absolute path, and any multi-segment POSIX path (`/seg/…`). A single lone slash
+// (`UI/UX`, `TCP/IP`, `Q3 / Finance`) is intentionally not treated as a path.
+const FILESYSTEM_PATH_RE = /[A-Za-z]:[\\/]|\\\\|~[\\/]|\.\.[\\/]|\/[^/\s]+\/|^\s*\/[^/\s]/u;
 const SECRET_RE =
   /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
 const TOKEN_QUERY_KEYS = new Set([
@@ -529,7 +624,7 @@ function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
   if (!allowEmpty && value.trim().length === 0) return false;
   return (
     isSafeDisplaySummary(value) &&
-    !ABSOLUTE_PATH_RE.test(value) &&
+    !FILESYSTEM_PATH_RE.test(value) &&
     !SECRET_RE.test(value) &&
     !containsTokenParameterKey(value) &&
     !containsEndpointLikeText(value)
@@ -570,6 +665,70 @@ function validateCounts(value: unknown, errors: string[]): void {
       errors.push(`counts.${key} must be a non-negative integer`);
       return;
     }
+  }
+}
+
+function validateSetReadiness(
+  value: unknown,
+  kind: unknown,
+  counts: unknown,
+  errors: string[],
+): void {
+  if (value === undefined) return;
+  if (kind !== "pod-set") {
+    errors.push("setReadiness is only valid for pod-set summaries");
+    return;
+  }
+  if (!isRecord(value)) {
+    errors.push("setReadiness must be an object");
+    return;
+  }
+  onlyKeys(value, SET_READINESS_KEYS, "setReadiness", errors);
+  for (const key of SET_READINESS_KEYS) {
+    if (key === "reasonCodes") continue;
+    const count = value[key];
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
+      errors.push(`setReadiness.${key} must be a non-negative integer`);
+      return;
+    }
+  }
+  validateSetReadinessReasonCodes(value.reasonCodes, errors);
+  validateSetReadinessMemberTotal(value, counts, errors);
+}
+
+function validateSetReadinessReasonCodes(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push("setReadiness.reasonCodes must be an array");
+    return;
+  }
+  for (const code of value) {
+    if (
+      typeof code !== "string" ||
+      !KNOWLEDGE_POD_SET_READINESS_REASON_CODES.includes(code as KnowledgePodSetReadinessReasonCode)
+    ) {
+      errors.push("setReadiness.reasonCodes entries must be known reason codes");
+      return;
+    }
+  }
+}
+
+function validateSetReadinessMemberTotal(
+  value: Record<string, unknown>,
+  counts: unknown,
+  errors: string[],
+): void {
+  if (!isRecord(counts) || typeof counts.capsuleCount !== "number") return;
+  const total =
+    Number(value.readyCount) +
+    Number(value.draftCount) +
+    Number(value.degradedCount) +
+    Number(value.unavailableCount) +
+    Number(value.indexingCount) +
+    Number(value.staleCount) +
+    Number(value.errorCount) +
+    Number(value.missingCount);
+  if (total !== counts.capsuleCount) {
+    errors.push("setReadiness member counts must match counts.capsuleCount");
   }
 }
 
@@ -749,16 +908,78 @@ export function validateKnowledgePodSummary(
   onlyKeys(input, SUMMARY_KEYS, "summary", errors);
   validateSummaryScalars(input, errors);
   validateCounts(input.counts, errors);
+  validateSetReadiness(input.setReadiness, input.kind, input.counts, errors);
   validateSourceKinds(input.sourceKinds, errors);
   validateRetrieval(input.retrieval, errors);
   validatePrivacy(input.privacy, errors);
   validateGovernance(input.governance, errors);
   validateModelUsePolicy(input.modelUsePolicy, errors);
   validateCompatibility(input.compatibility, errors);
+  validateFuturePlaceholderPosture(input, errors);
   validateSafeTextArray(input.degradationReasons, "summary.degradationReasons", errors, true);
   return errors.length > 0
     ? { ok: false, errors }
     : { ok: true, value: input as unknown as KnowledgePodSummary };
+}
+
+function validateFuturePlaceholderPosture(input: Record<string, unknown>, errors: string[]): void {
+  const placeholderKinds = futurePlaceholderKinds(input);
+  if (placeholderKinds.length === 0) return;
+  if (input.readiness !== "degraded" && input.readiness !== "unavailable") {
+    errors.push("future pod placeholders must be degraded or unavailable");
+  }
+  if (!retrievalDisabled(input.retrieval)) {
+    errors.push("future pod placeholders must not advertise retrieval capabilities");
+  }
+  if (input.kind === "pod-set") {
+    validateFutureSetReadinessReasons(input.setReadiness, placeholderKinds, errors);
+  }
+}
+
+function futurePlaceholderKinds(
+  input: Record<string, unknown>,
+): readonly FuturePodPlaceholderKind[] {
+  const kinds = new Set<FuturePodPlaceholderKind>();
+  if (isRecord(input.governance) && isFuturePodPlaceholderKind(input.governance.locationKind)) {
+    kinds.add(input.governance.locationKind);
+  }
+  if (Array.isArray(input.sourceKinds)) {
+    for (const sourceKind of input.sourceKinds) {
+      if (isFuturePodPlaceholderKind(sourceKind)) kinds.add(sourceKind);
+    }
+  }
+  return Array.from(kinds);
+}
+
+function isFuturePodPlaceholderKind(value: unknown): value is FuturePodPlaceholderKind {
+  return (
+    typeof value === "string" &&
+    FUTURE_POD_PLACEHOLDER_KINDS.includes(value as FuturePodPlaceholderKind)
+  );
+}
+
+function retrievalDisabled(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.lexicalIndex === false &&
+    value.vectorIndex === false &&
+    value.hybridGrounding === false
+  );
+}
+
+function validateFutureSetReadinessReasons(
+  setReadiness: unknown,
+  placeholderKinds: readonly FuturePodPlaceholderKind[],
+  errors: string[],
+): void {
+  if (!isRecord(setReadiness) || !Array.isArray(setReadiness.reasonCodes)) return;
+  for (const placeholderKind of placeholderKinds) {
+    const reason = FUTURE_POD_REASON_BY_KIND[placeholderKind];
+    if (!setReadiness.reasonCodes.includes(reason)) {
+      errors.push(`setReadiness.reasonCodes must include ${reason} for future placeholders`);
+      return;
+    }
+  }
 }
 
 function validateSummaryScalars(input: Record<string, unknown>, errors: string[]): void {

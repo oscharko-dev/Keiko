@@ -121,6 +121,7 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
       // tabIndex -1: a click on non-focusable palette chrome keeps focus inside,
       // so the Escape handler stays reachable and onBlur does not misfire (audit C007).
       tabIndex={-1}
+      style={{ cursor: "default" }}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
       onBlur={onBlur}

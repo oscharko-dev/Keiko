@@ -15,10 +15,16 @@ import {
 } from "./connector-drag";
 import type {
   CapsulesResponse,
+  CapsuleSetsResponse,
   CapsuleActionResponse,
   CapsuleListEntry,
+  CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+} from "@oscharko-dev/keiko-contracts";
 
 const pushMock = vi.fn();
 
@@ -51,6 +57,10 @@ function makeCapsuleId(suffix: string): KnowledgeCapsuleId {
   return `cap-${suffix}` as KnowledgeCapsuleId;
 }
 
+function makeCapsuleSetId(suffix: string): CapsuleSetId {
+  return `set-${suffix}` as CapsuleSetId;
+}
+
 function makeCapsule(overrides: Partial<CapsuleListEntry> = {}): CapsuleListEntry {
   return {
     id: makeCapsuleId("1"),
@@ -58,6 +68,16 @@ function makeCapsule(overrides: Partial<CapsuleListEntry> = {}): CapsuleListEntr
     lifecycleState: "ready",
     sourceCount: 2,
     updatedAt: 1_000_000,
+    ...overrides,
+  };
+}
+
+function makeCapsuleSet(overrides: Partial<CapsuleSetListEntry> = {}): CapsuleSetListEntry {
+  return {
+    id: makeCapsuleSetId("1"),
+    displayName: "Release Set",
+    capsuleCount: 2,
+    composedAt: 1_000_001,
     ...overrides,
   };
 }
@@ -73,6 +93,12 @@ function emptyFetch(): Promise<CapsulesResponse> {
 
 function fetchWith(capsules: readonly CapsuleListEntry[]): () => Promise<CapsulesResponse> {
   return () => Promise.resolve({ capsules });
+}
+
+function fetchSetsWith(
+  capsuleSets: readonly CapsuleSetListEntry[],
+): () => Promise<CapsuleSetsResponse> {
+  return () => Promise.resolve({ capsuleSets });
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +203,66 @@ describe("ConnectorGraph — with capsules", () => {
     expect(dragHandle).toHaveAccessibleDescription(description);
   });
 
+  it("renders the danger-tone embedding mismatch guidance for an incompatible Knowledge Pod", async () => {
+    const capsule = makeCapsule({
+      displayName: "Mismatched Vectors",
+      knowledgePod: {
+        readiness: "degraded",
+        embeddingCompatibilityStatus: "incompatible",
+        embeddingCompatibilityReason: "fingerprint-mismatch",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Embedding mismatch",
+          description: "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+          tone: "danger",
+        },
+      },
+    });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const badge = await screen.findByText("Embedding mismatch");
+    const description =
+      "Knowledge Pod guidance: Embedding mismatch. Semantic retrieval is disabled for this pod until it is reindexed locally.";
+    const row = screen.getByRole("article", { name: "Knowledge Pod: Mismatched Vectors" });
+    const dragHandle = screen.getByRole("button", {
+      name: "Drag Knowledge Pod Mismatched Vectors to the workspace",
+    });
+
+    expect(badge).not.toHaveAttribute("title");
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(description);
+    expect(dragHandle).toHaveAccessibleDescription(description);
+  });
+
+  it("renders the policy-denied guidance for a sealed Knowledge Pod", async () => {
+    const capsule = makeCapsule({
+      displayName: "Sealed Pod",
+      knowledgePod: {
+        readiness: "degraded",
+        sealed: true,
+        reindexRecommended: false,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Policy denied",
+          description:
+            "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+          tone: "danger",
+        },
+      },
+    });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const badge = await screen.findByText("Policy denied");
+    const description =
+      "Knowledge Pod guidance: Policy denied. This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.";
+    const row = screen.getByRole("article", { name: "Knowledge Pod: Sealed Pod" });
+
+    expect(badge).not.toHaveAttribute("title");
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(description);
+  });
+
   it("does NOT render the empty-state panel when capsules are present", async () => {
     const capsules = [makeCapsule()];
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);
@@ -201,6 +287,107 @@ describe("ConnectorGraph — with capsules", () => {
 
     expect(screen.getByRole("region", { name: /knowledge pods/i })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("2 Knowledge Pods");
+  });
+
+  it("renders Knowledge Pod Sets with readiness counts and workspace add", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("alpha"), displayName: "Alpha Docs" });
+    const capsuleSet = makeCapsuleSet({
+      id: makeCapsuleSetId("release"),
+      displayName: "Release Readiness",
+      knowledgePod: {
+        readiness: "degraded",
+        counts: {
+          capsuleCount: 3,
+          sourceCount: 3,
+          documentCount: 4,
+          chunkCount: 5,
+          vectorCount: 6,
+        },
+        setReadiness: {
+          readyCount: 0,
+          draftCount: 0,
+          degradedCount: 1,
+          unavailableCount: 0,
+          deniedCount: 1,
+          indexingCount: 1,
+          staleCount: 0,
+          errorCount: 0,
+          missingCount: 1,
+          reasonCodes: [
+            "member-indexing",
+            "missing-member",
+            "policy-denied",
+            "embedding-incompatible",
+            "no-vectors",
+          ],
+        },
+        sourceKinds: ["files"],
+        degradationReasons: ["legacy-unverified-profile"],
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Reindex recommended",
+          description: "Compatibility is unverified; lexical fallback remains available.",
+          tone: "warning",
+        },
+      },
+    });
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    workspace.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        right: 900,
+        top: 50,
+        bottom: 750,
+        width: 800,
+        height: 700,
+        x: 100,
+        y: 50,
+        toJSON: () => undefined,
+      }) as DOMRect;
+    document.body.appendChild(workspace);
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([capsule])}
+        fetchCapsuleSetsImpl={fetchSetsWith([capsuleSet])}
+      />,
+    );
+
+    const row = await screen.findByRole("article", {
+      name: "Knowledge Pod Set: Release Readiness",
+    });
+    expect(within(row).getByText("Degraded")).toBeInTheDocument();
+    expect(within(row).getByText("Reindex recommended")).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(
+      /3 pods \/ 3 sources \/ 4 docs \/ 5 chunks \/ 6 vectors \/ 0 ready \/ 1 degraded \/ 1 policy denied \/ 1 missing \/ reasons: indexing, missing, policy denied, embedding mismatch, no vectors/i,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("1 Knowledge Pod, 1 Knowledge Pod Set");
+
+    const addButton = screen.getByRole("button", {
+      name: /add Knowledge Pod Set Release Readiness to workspace/i,
+    });
+    expect(addButton).toHaveAccessibleDescription(/embedding mismatch, no vectors/i);
+
+    await user.click(addButton);
+
+    expect(dropListener).toHaveBeenCalledTimes(1);
+    const event = dropListener.mock.calls[0]?.[0] as CustomEvent<LocalKnowledgeConnectorDropDetail>;
+    expect(event.detail.payload).toEqual({
+      kind: "capsule-set",
+      id: "set-release",
+      label: "Release Readiness",
+      lifecycleState: "degraded",
+    });
+    expect(event.detail.clientX).toBe(500);
+    expect(event.detail.clientY).toBe(400);
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    workspace.remove();
   });
 
   it("exports a capsule drag payload for dropping onto the workspace", async () => {
@@ -806,6 +993,52 @@ describe("ConnectorGraph — a11y", () => {
     const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);
     await waitFor(() => {
       expect(screen.getByText("A Doc")).toBeInTheDocument();
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("jest-axe: incompatible and policy-denied guidance render without violations", async () => {
+    const capsules = [
+      makeCapsule({
+        id: makeCapsuleId("incompatible"),
+        displayName: "Incompatible Pod",
+        lifecycleState: "ready",
+        knowledgePod: {
+          readiness: "degraded",
+          embeddingCompatibilityStatus: "incompatible",
+          embeddingCompatibilityReason: "fingerprint-mismatch",
+          reindexRecommended: true,
+          queryEmbeddingAllowed: false,
+          guidance: {
+            label: "Embedding mismatch",
+            description:
+              "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+            tone: "danger",
+          },
+        },
+      }),
+      makeCapsule({
+        id: makeCapsuleId("denied"),
+        displayName: "Denied Pod",
+        lifecycleState: "ready",
+        knowledgePod: {
+          readiness: "degraded",
+          sealed: true,
+          reindexRecommended: false,
+          queryEmbeddingAllowed: false,
+          guidance: {
+            label: "Policy denied",
+            description:
+              "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+            tone: "danger",
+          },
+        },
+      }),
+    ];
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);
+    await waitFor(() => {
+      expect(screen.getByText("Incompatible Pod")).toBeInTheDocument();
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();

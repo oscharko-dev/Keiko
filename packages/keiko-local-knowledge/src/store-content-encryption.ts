@@ -30,6 +30,7 @@ const ENCRYPTION_MARKER_VALUE = "aes-256-gcm/v1";
 const ENCRYPTION_PROBE_KEY = "content_encryption_probe";
 const ENCRYPTION_SCOPE_KEY = "content_encryption_scope";
 const ENCRYPTION_SCOPE_VALUE = "reconstructive-columns/v3";
+const UPGRADEABLE_ENCRYPTION_SCOPE_VALUES = new Set<string>(["reconstructive-columns/v2"]);
 // Fixed, non-secret sentinel. Sealed at migration time and re-opened on every encrypted open to prove
 // the resolved key matches the one the store was sealed with. Never carries customer content.
 const ENCRYPTION_PROBE_PLAINTEXT = "keiko-local-knowledge-content-encryption-v1";
@@ -347,6 +348,19 @@ function verifyProbe(db: DatabaseSync, cipher: StoreContentCipher): void {
   }
 }
 
+function assertSupportedEncryptionScope(scope: string | undefined): void {
+  if (
+    scope === undefined ||
+    scope === ENCRYPTION_SCOPE_VALUE ||
+    UPGRADEABLE_ENCRYPTION_SCOPE_VALUES.has(scope)
+  ) {
+    return;
+  }
+  throw new KnowledgeStoreError(
+    `unsupported Local Knowledge content encryption scope marker: ${scope}`,
+  );
+}
+
 // Reconciles the store's on-disk encryption state with the resolved cipher. Called once from
 // openKnowledgeStore after migrations and before the handle is returned.
 export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreContentCipher): void {
@@ -365,11 +379,7 @@ export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreConte
       );
     }
     verifyProbe(db, cipher);
-    if (scope !== undefined && scope !== ENCRYPTION_SCOPE_VALUE) {
-      throw new KnowledgeStoreError(
-        `unsupported Local Knowledge content encryption scope marker: ${scope}`,
-      );
-    }
+    assertSupportedEncryptionScope(scope);
     if (scope !== ENCRYPTION_SCOPE_VALUE) {
       upgradeEncryptedScope(db, cipher);
     }

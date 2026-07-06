@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
   validateKnowledgePodSummary,
   type CapsuleSetId,
@@ -30,6 +31,24 @@ const LEGACY_EMBEDDING = {
   modelId: "text-embedding-3-small",
   vectorDimensions: 1536,
   vectorMetric: "cosine",
+} as const;
+
+// Two hardened embedding spaces that agree on every identity field except the space fingerprint.
+// `provider`/`modelId`/`vectorDimensions`/`vectorMetric` match `seedIndexedDocument`'s vector rows
+// so the seed is consistent; the divergent fingerprint is what makes the pair incompatible.
+const HARDENED_EMBEDDING_A = {
+  provider: "openai",
+  modelId: "text-embedding-3-small",
+  vectorDimensions: 1536,
+  vectorMetric: "cosine",
+  normalization: "l2",
+  instructionVersion: "keiko-embedding-input-v1",
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+} as const;
+
+const HARDENED_EMBEDDING_B = {
+  ...HARDENED_EMBEDDING_A,
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
 } as const;
 
 function seedIndexedDocument(
@@ -242,6 +261,69 @@ describe("Knowledge Pod compatibility projection", () => {
     }
   });
 
+  it("surfaces incompatible embedding spaces across pod-set members instead of silently mixing them", () => {
+    const env = freshStore();
+    try {
+      const aId = "cap-space-a" as KnowledgeCapsuleId;
+      const bId = "cap-space-b" as KnowledgeCapsuleId;
+      const aSourceId = "src-space-a" as KnowledgeSourceId;
+      const bSourceId = "src-space-b" as KnowledgeSourceId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: aId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_A,
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: bId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_B,
+          storageReference: "engineering/space-b",
+        }),
+      );
+      addSourceToCapsule(env.store, aId, sampleSourceInput(aSourceId));
+      addSourceToCapsule(env.store, bId, sampleSourceInput(bSourceId));
+      seedIndexedDocument(env.store, aId, aSourceId, "space-a");
+      seedIndexedDocument(env.store, bId, bSourceId, "space-b");
+      const set = createCapsuleSet(env.store, {
+        id: "set-cross-space" as CapsuleSetId,
+        displayName: "Cross Space Set",
+        tags: [],
+        capsuleIds: [aId, bId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      // The two members are each internally consistent (self-`same`), so the incompatibility is a
+      // cross-member property the set-level decision must surface — never a silent fall-through to
+      // a compatible/query-eligible state.
+      expect(summary.retrieval).toMatchObject({
+        crossSpaceScoreMixing: false,
+        embeddingCompatibilityStatus: "incompatible",
+        embeddingCompatibilityReason: "fingerprint-mismatch",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["embedding-incompatible"]),
+      );
+      expect(summary.degradationReasons).toEqual(
+        expect.arrayContaining([
+          "Embedding profile is incompatible with the current semantic retrieval space.",
+        ]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+      // The raw space fingerprints are the discriminator, but they must never reach the wire.
+      expect(JSON.stringify(summary)).not.toContain("keiko-embedding-space-fingerprint-v1:");
+    } finally {
+      env.cleanup();
+    }
+  });
+
   it("projects explicit standard model-use policy without sealed posture", () => {
     const env = freshStore();
     try {
@@ -310,6 +392,106 @@ describe("Knowledge Pod compatibility projection", () => {
           rawContentRelease: "allow",
         },
       });
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("projects pod-set member readiness as closed counts and reason codes", () => {
+    const env = freshStore();
+    try {
+      const readyId = "cap-readiness-ready" as KnowledgeCapsuleId;
+      const sealedId = "cap-readiness-sealed" as KnowledgeCapsuleId;
+      const indexingId = "cap-readiness-indexing" as KnowledgeCapsuleId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: readyId,
+          lifecycleState: "ready",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: sealedId,
+          lifecycleState: "ready",
+          modelUsePolicy: sealedLocalPodModelUsePolicy(),
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: indexingId,
+          lifecycleState: "indexing",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      const set = createCapsuleSet(env.store, {
+        id: "set-readiness" as CapsuleSetId,
+        displayName: "Readiness Set",
+        tags: [],
+        capsuleIds: [readyId, sealedId, indexingId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.setReadiness).toMatchObject({
+        readyCount: 0,
+        draftCount: 0,
+        degradedCount: 2,
+        unavailableCount: 0,
+        deniedCount: 1,
+        indexingCount: 1,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["member-indexing", "policy-denied", "no-sources"]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("keeps missing pod-set members visible as degraded redacted counts", () => {
+    const env = freshStore();
+    try {
+      const presentId = "cap-present-member" as KnowledgeCapsuleId;
+      const missingId = "cap-missing-member" as KnowledgeCapsuleId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: presentId,
+          lifecycleState: "ready",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+
+      const summary = buildKnowledgePodSetSummary(env.store, {
+        id: "set-missing-member" as CapsuleSetId,
+        displayName: "Missing Member Set",
+        tags: [],
+        capsuleIds: [presentId, missingId],
+        composedAt: 1,
+      });
+
+      expect(summary).toMatchObject({
+        readiness: "degraded",
+        counts: {
+          capsuleCount: 2,
+        },
+        setReadiness: {
+          degradedCount: 1,
+          missingCount: 1,
+        },
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["missing-member", "no-sources"]),
+      );
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
     } finally {
       env.cleanup();
@@ -439,6 +621,60 @@ describe("Knowledge Pod compatibility projection", () => {
         .run({ id: capsuleId });
 
       expect(() => buildKnowledgePodSetSummary(env.store, set)).toThrow(KnowledgeStoreError);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("scopes the projection to the requested pod kind", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-scoped" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: capsuleId, lifecycleState: "ready" }));
+      createCapsuleSet(env.store, {
+        id: "set-scoped" as CapsuleSetId,
+        displayName: "Scoped Set",
+        tags: [],
+        capsuleIds: [capsuleId],
+      });
+
+      expect(
+        listKnowledgePodSummaries(env.store, "pod").map((summary) => summary.kind),
+      ).toStrictEqual(["pod"]);
+      expect(
+        listKnowledgePodSummaries(env.store, "pod-set").map((summary) => summary.kind),
+      ).toStrictEqual(["pod-set"]);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("does not fail the pod-set listing when an unrelated standalone capsule is corrupt", () => {
+    const env = freshStore();
+    try {
+      // A healthy pod-set with a healthy member.
+      const memberId = "cap-set-member" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: memberId, lifecycleState: "ready" }));
+      createCapsuleSet(env.store, {
+        id: "set-healthy" as CapsuleSetId,
+        displayName: "Healthy Set",
+        tags: [],
+        capsuleIds: [memberId],
+      });
+      // An unrelated standalone capsule with corrupt state, not a member of any set.
+      const strayId = "cap-unrelated-corrupt" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: strayId, lifecycleState: "ready" }));
+      env.store._internal.db
+        .prepare("UPDATE capsules SET vector_metric = 'manhattan' WHERE id = :id")
+        .run({ id: strayId });
+
+      // Requesting only pod-sets must not materialize the corrupt standalone capsule.
+      const podSets = listKnowledgePodSummaries(env.store, "pod-set");
+      expect(podSets.map((summary) => summary.kind)).toStrictEqual(["pod-set"]);
+      expect(podSets[0]?.id).toBe("set-healthy");
+
+      // The unscoped listing still fails closed on the corrupt standalone capsule.
+      expect(() => listKnowledgePodSummaries(env.store)).toThrow(KnowledgeStoreError);
     } finally {
       env.cleanup();
     }
