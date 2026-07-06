@@ -2,6 +2,10 @@
 
 Status: Issue #1698, capstone verification for Epic #1687.
 
+Portable updater v2 extends this governed updater evidence in
+[Portable Updater V2 QA Matrix](portable-updater-v2-qa-matrix.md), which closes Epic #1945 on the
+portable product delivery program branch.
+
 This record consolidates the governed updater evidence delivered across child issues #1689 through
 #1697. It is a verification artifact, not new runtime scope: implementation lives in the referenced
 child PRs, tests, design-system evidence, and release-impact metadata. The matrix proves that the

@@ -60,10 +60,12 @@ administrator rights by default.
 
 ## Update Journey
 
-Until #1945 lands, this guide does not claim that portable updater v2 is complete. The intended
-portable-managed update path remains the existing Keiko update notice and update window with one
-explicit user action. After that action, download, verification, staging, activation, relaunch, and
-version verification are handled by Keiko without asking the user to run command-line update steps.
+Portable updater v2 is integrated on the portable product delivery program branch and remains
+subject to final program QA before the `dev` PR. The portable-managed update path uses the existing
+in-app update notice and update window with one explicit user action. After that action, download,
+verification, staging, activation, relaunch, version verification, and required release-impact
+remediation handling are managed in-product without asking the user to perform technical update
+steps.
 
 The npm/Yarn updater remains a developer and compatibility path, not the promoted product journey
 for ordinary portable users.
@@ -93,5 +95,6 @@ Generated smoke evidence is a local release artifact. It must not be committed t
 
 - [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md)
 - [Release / Publish Workflow](release-publish-workflow.md)
+- [Portable updater v2 QA matrix](../qa/portable-updater-v2-qa-matrix.md)
 - [Portable launch/setup troubleshooting](../troubleshooting/portable-launch-setup.md)
 - [Local runtime state contract](../local-runtime-state-contract.md)
