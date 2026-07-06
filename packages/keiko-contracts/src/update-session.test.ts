@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   UPDATE_INSTALL_MODE_KINDS,
+  UPDATE_PORTABLE_ACTIVATION_STATUSES,
   UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES,
   UPDATE_PORTABLE_INSTALL_STATUSES,
   UPDATE_PORTABLE_STAGING_STATUSES,
@@ -10,6 +11,7 @@ import {
   UPDATE_SESSION_FAILURE_REASONS,
   UPDATE_UNSUPPORTED_REASONS,
   parseUpdateSessionStartRequest,
+  type UpdatePortableActivationSummary,
   type UpdatePortableAssetSummary,
   type UpdatePortableInstallSummary,
   type UpdatePortableStagingSummary,
@@ -60,9 +62,11 @@ describe("update session portable contract", () => {
 
     expect(install).not.toHaveProperty("managedRoot");
     expect(asset.fileName).toBe("keiko-macos-x64.zip");
+    expect(UPDATE_PORTABLE_ACTIVATION_STATUSES).toEqual(["pending", "activated", "failed"]);
     expect(UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES).toEqual(["pending", "verified", "failed"]);
     expect(UPDATE_PORTABLE_STAGING_STATUSES).toEqual(["pending", "staged", "failed"]);
     expect(UPDATE_SESSION_FAILURE_REASONS).toContain("portable-staging-failed");
+    expect(UPDATE_SESSION_FAILURE_REASONS).toContain("portable-activation-failed");
   });
 
   it("models content-free portable staging summaries", () => {
@@ -82,6 +86,24 @@ describe("update session portable contract", () => {
     expect(stage).not.toHaveProperty("stagingPath");
     expect(stage).not.toHaveProperty("downloadUrl");
     expect(stage).not.toHaveProperty("managedRoot");
+  });
+
+  it("models content-free portable activation summaries", () => {
+    const activation: UpdatePortableActivationSummary = {
+      activationId: "activation-1",
+      status: "activated",
+      stageId: "stage-1",
+      target: "macos-arm64",
+      packageVersion: "0.2.14",
+      registrationRefreshed: true,
+      shortcutRefreshed: true,
+      relaunchRequested: true,
+      versionVerified: true,
+    };
+
+    expect(activation).not.toHaveProperty("managedRoot");
+    expect(activation).not.toHaveProperty("stagingPath");
+    expect(activation).not.toHaveProperty("launcherPath");
   });
 
   it("keeps session start requests stable-only", () => {

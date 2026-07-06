@@ -124,6 +124,27 @@ export interface UpdatePortableStagingSummary {
   readonly manifestSha256: string;
 }
 
+export type UpdatePortableActivationStatus = "pending" | "activated" | "failed";
+
+export const UPDATE_PORTABLE_ACTIVATION_STATUSES: readonly UpdatePortableActivationStatus[] =
+  Object.freeze([
+    "pending",
+    "activated",
+    "failed",
+  ] as const satisfies readonly UpdatePortableActivationStatus[]);
+
+export interface UpdatePortableActivationSummary {
+  readonly activationId: string;
+  readonly status: UpdatePortableActivationStatus;
+  readonly stageId: string;
+  readonly target: UpdatePortableTarget;
+  readonly packageVersion: string;
+  readonly registrationRefreshed: boolean;
+  readonly shortcutRefreshed: boolean;
+  readonly relaunchRequested: boolean;
+  readonly versionVerified: boolean;
+}
+
 export type UpdateUnsupportedReason =
   | "unknown-path"
   | "local-checkout"
@@ -217,6 +238,9 @@ export type UpdateSessionFailureReason =
   | "portable-download-failed"
   | "portable-verification-failed"
   | "portable-staging-failed"
+  | "portable-activation-failed"
+  | "portable-relaunch-failed"
+  | "portable-version-verification-failed"
   | "restart-version-mismatch";
 
 export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason[] = Object.freeze([
@@ -232,6 +256,9 @@ export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason
   "portable-download-failed",
   "portable-verification-failed",
   "portable-staging-failed",
+  "portable-activation-failed",
+  "portable-relaunch-failed",
+  "portable-version-verification-failed",
   "restart-version-mismatch",
 ] as const satisfies readonly UpdateSessionFailureReason[]);
 
@@ -256,6 +283,7 @@ export interface UpdateSession {
   readonly commandPreview?: UpdateCommandPreview | undefined;
   readonly restartCommandPreview?: UpdateRestartCommandPreview | undefined;
   readonly portableStage?: UpdatePortableStagingSummary | undefined;
+  readonly portableActivation?: UpdatePortableActivationSummary | undefined;
   readonly startedAt: string;
   readonly updatedAt: string;
   readonly cancelable: boolean;

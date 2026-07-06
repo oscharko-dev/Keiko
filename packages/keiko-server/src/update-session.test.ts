@@ -3,13 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CommandCancelledError, type CommandResult } from "@oscharko-dev/keiko-tools";
-import type { UpdateInstallMode } from "@oscharko-dev/keiko-contracts";
+import type {
+  UpdateInstallMode,
+  UpdatePortableActivationSummary,
+  UpdatePortableStagingSummary,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createUpdateSessionManager,
   UpdateSessionError,
   type UpdateSessionManagerOptions,
 } from "./update-session.js";
 import type { PortableUpdateStager } from "./update-portable-staging.js";
+import type { PortableUpdateActivator } from "./update-portable-activation.js";
 import { detectUpdateInstallMode, type UpdateRuntimeFacts } from "./update-install-mode.js";
 import {
   createFileUpdateSessionLock,
@@ -52,6 +57,35 @@ function portableMode(): UpdateInstallMode {
   };
 }
 
+function portableStageSummary(): UpdatePortableStagingSummary {
+  return {
+    stageId: "stage-1",
+    status: "staged",
+    target: "windows-x64",
+    packageVersion: "0.2.12",
+    assetName: "keiko-windows-x64.zip",
+    assetId: 123,
+    releaseId: 456,
+    sizeBytes: 789,
+    sha256: "a".repeat(64),
+    manifestSha256: "b".repeat(64),
+  };
+}
+
+function portableActivationSummary(): UpdatePortableActivationSummary {
+  return {
+    activationId: "activation-1",
+    status: "activated",
+    stageId: "stage-1",
+    target: "windows-x64",
+    packageVersion: "0.2.12",
+    registrationRefreshed: true,
+    shortcutRefreshed: true,
+    relaunchRequested: true,
+    versionVerified: true,
+  };
+}
+
 function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
   return {
     command: "npm",
@@ -65,6 +99,28 @@ function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
     truncated: false,
     ...overrides,
   };
+}
+
+function expectPortableStageInput(
+  stage: ReturnType<typeof vi.fn<PortableUpdateStager["stage"]>>,
+): void {
+  const stageInput = stage.mock.calls[0]?.[0];
+  expect(stageInput?.sessionId).toBe("session-1");
+  expect(stageInput?.targetVersion).toBe("0.2.12");
+  expect(stageInput?.installMode.installKind).toBe("portable-managed");
+  expect(stageInput?.runtimeFacts?.packageRoot).toBe("/Users/alice/Applications/Keiko/app");
+}
+
+function expectPortableActivationInput(input: {
+  readonly activate: ReturnType<typeof vi.fn<PortableUpdateActivator["activate"]>>;
+  readonly stageSummary: UpdatePortableStagingSummary;
+}): void {
+  const activationInput = input.activate.mock.calls[0]?.[0];
+  expect(activationInput?.sessionId).toBe("session-1");
+  expect(activationInput?.targetVersion).toBe("0.2.12");
+  expect(activationInput?.stage).toEqual(input.stageSummary);
+  expect(activationInput?.runtimeFacts?.packageRoot).toBe("/Users/alice/Applications/Keiko/app");
+  expect(activationInput?.signal).toBeInstanceOf(AbortSignal);
 }
 
 function lockRecord(sessionId: string): UpdateSessionLockRecord {
@@ -215,26 +271,26 @@ describe("UpdateSessionManager", () => {
 
   it("stages portable-managed updates without invoking package-manager commands", async () => {
     const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+    const stageSummary = portableStageSummary();
+    const activationSummary = portableActivationSummary();
     const stage = vi.fn<PortableUpdateStager["stage"]>().mockResolvedValue({
-      stageId: "stage-1",
-      status: "staged",
-      target: "windows-x64",
-      packageVersion: "0.2.12",
-      assetName: "keiko-windows-x64.zip",
-      assetId: 123,
-      releaseId: 456,
-      sizeBytes: 789,
-      sha256: "a".repeat(64),
-      manifestSha256: "b".repeat(64),
+      ...stageSummary,
+    });
+    const activate = vi.fn<PortableUpdateActivator["activate"]>().mockResolvedValue({
+      ...activationSummary,
     });
     const portableStager: PortableUpdateStager = {
       stage,
+    };
+    const portableActivator: PortableUpdateActivator = {
+      activate,
     };
     const manager = createUpdateSessionManager({
       detector: () => portableMode(),
       facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
       idFactory: () => "session-1",
       portableStager,
+      portableActivator,
       runCommandImpl,
     });
 
@@ -243,15 +299,13 @@ describe("UpdateSessionManager", () => {
 
     expect(started.session.commandPreview).toBeUndefined();
     expect(runCommandImpl).not.toHaveBeenCalled();
-    const stageInput = stage.mock.calls[0]?.[0];
-    expect(stageInput?.sessionId).toBe("session-1");
-    expect(stageInput?.targetVersion).toBe("0.2.12");
-    expect(stageInput?.installMode.installKind).toBe("portable-managed");
-    expect(stageInput?.runtimeFacts?.packageRoot).toBe("/Users/alice/Applications/Keiko/app");
+    expectPortableStageInput(stage);
+    expectPortableActivationInput({ activate, stageSummary });
     expect(manager.getStatus().lastSession).toMatchObject({
       phase: "succeeded",
       restartRequired: false,
       portableStage: { stageId: "stage-1", status: "staged" },
+      portableActivation: { activationId: "activation-1", status: "activated" },
     });
   });
 
