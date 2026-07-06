@@ -304,11 +304,13 @@ function sidecarStagingSigning(target) {
 }
 
 function sidecarTreeFiles(sourceRoot) {
+  let rootEntry;
   try {
-    if (!statSync(sourceRoot).isDirectory()) fail("sidecar sourceRoot must be a directory");
+    rootEntry = lstatSync(sourceRoot);
   } catch {
     fail("sidecar sourceRoot must be an existing directory");
   }
+  if (!rootEntry.isDirectory()) fail("sidecar sourceRoot must be a real directory");
   const files = listSidecarFiles(sourceRoot, sourceRoot);
   if (files.length === 0) fail("sidecar sourceRoot must contain payload files");
   if (findForbiddenPortablePaths(files.map((file) => file.relativePath)).length > 0) {

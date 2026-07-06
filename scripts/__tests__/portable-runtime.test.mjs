@@ -469,6 +469,27 @@ function verifiedSidecarSigning(target) {
   };
 }
 
+function stagingSidecarSigning(target) {
+  return {
+    verificationPolicy: "staging",
+    verificationStatus: "unverified-staging",
+    verificationReasonCodes: ["staging-unverified"],
+    signatureKind: target.signatureKind,
+    signatureVerified: false,
+    notarizationRequired: target.nodePlatform === "darwin",
+    notarizationVerified: false,
+    verificationChecks:
+      target.nodePlatform === "win32"
+        ? windowsVerificationChecks({ publisherChainVerified: false, timestampVerified: false })
+        : macVerificationChecks({
+            assessmentVerified: false,
+            developerIdVerified: false,
+            notarizationVerified: false,
+            stapleVerified: false,
+          }),
+  };
+}
+
 function addSidecarRuntime(candidate, platformTarget, overrides = {}) {
   candidate.sidecarRuntimes = [sidecarRuntimeFor(platformTarget, overrides)];
   syncReviewedBinding(candidate);
@@ -845,6 +866,9 @@ describe("verify-portable-runtime-signing", () => {
   it("allows unsigned pull-request artifacts but marks them as non-production", () => {
     const dir = tempDir();
     const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64", {
+      signing: stagingSidecarSigning(portableTarget("windows-x64")),
+    });
     const { manifestPath, stageRoot } = writeManifestFixture(candidate, dir);
 
     const result = runSigningVerify(["--manifest", manifestPath, "--policy", "pull-request"]);
@@ -865,6 +889,18 @@ describe("verify-portable-runtime-signing", () => {
     expect(summary.status).toBe("unsigned-non-production");
     expect(summary.policy).toBe("pull-request");
     expect(summary.platformSignatureLocallyVerified).toBe(false);
+    expect(manifestAfter.sidecarRuntimes[0].signing.verificationStatus).toBe(
+      "unsigned-non-production",
+    );
+    expect(manifestAfter.sidecarRuntimes[0].signing.verificationReasonCodes).toEqual([
+      "non-production-artifact",
+      "non-production-unsigned-allowed",
+      "windows-publisher-chain-unverified",
+      "windows-timestamp-unverified",
+    ]);
+    expect(manifestAfter.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
+      manifestAfter.sidecarRuntimes,
+    );
   });
 
   it("rejects verification input that tries to persist certificate internals or raw logs", () => {
@@ -927,6 +963,156 @@ describe("verify-portable-runtime-signing", () => {
         stapleVerified: false,
       });
     }
+  });
+
+  it("upgrades every sidecar runtime signing record during production verification", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    candidate.sidecarRuntimes = [
+      sidecarRuntimeFor("windows-x64", {
+        name: "opencode-compatible",
+        signing: stagingSidecarSigning(portableTarget("windows-x64")),
+      }),
+      sidecarRuntimeFor("windows-x64", {
+        name: "codex-compatible",
+        signing: stagingSidecarSigning(portableTarget("windows-x64")),
+      }),
+    ];
+    syncReviewedBinding(candidate);
+    const { manifestPath, stageRoot } = writeManifestFixture(candidate, dir);
+    const verificationInput = writeVerificationInput(dir, {
+      verificationChecks: windowsVerificationChecks(),
+      sidecarRuntimes: [
+        { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
+        { name: "codex-compatible", verificationChecks: windowsVerificationChecks() },
+      ],
+    });
+
+    const result = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      verificationInput,
+    ]);
+
+    expect(result.status).toBe(0);
+    const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const summary = JSON.parse(
+      readFileSync(join(stageRoot, "evidence", "signing-verification.json"), "utf8"),
+    );
+    expect(
+      manifestAfter.sidecarRuntimes.map((runtime) => runtime.signing.verificationStatus),
+    ).toEqual(["verified-production", "verified-production"]);
+    expect(manifestAfter.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
+      manifestAfter.sidecarRuntimes,
+    );
+    expect(summary.sidecarRuntimes.map((runtime) => runtime.signingStatus)).toEqual([
+      "verified-production",
+      "verified-production",
+    ]);
+    expect(validatePortableManifest(manifestAfter)).toEqual([]);
+  });
+
+  it("fails production verification when a sidecar remains unverifiable", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64", {
+      signing: stagingSidecarSigning(portableTarget("windows-x64")),
+    });
+    const { manifestPath } = writeManifestFixture(candidate, dir);
+    const verificationInput = writeVerificationInput(dir, {
+      verificationChecks: windowsVerificationChecks(),
+      sidecarRuntimes: [
+        {
+          name: "opencode-compatible",
+          verificationChecks: windowsVerificationChecks({ publisherChainVerified: false }),
+        },
+      ],
+    });
+
+    const result = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      verificationInput,
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("opencode-compatible:windows-publisher-chain-unverified");
+    const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
+    expect(manifestAfter.security.verificationStatus).toBe("verified-production");
+    expect(manifestAfter.sidecarRuntimes[0].signing.verificationStatus).toBe("verification-failed");
+    expect(validatePortableManifest(manifestAfter).join("\n")).toContain(
+      "sidecarRuntimes[0].signing.signatureVerified: must be true",
+    );
+  });
+
+  it("fails production verification when sidecar verification input is missing", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64", {
+      signing: stagingSidecarSigning(portableTarget("windows-x64")),
+    });
+    const { manifestPath } = writeManifestFixture(candidate, dir);
+    const verificationInput = writeVerificationInput(dir, {
+      verificationChecks: windowsVerificationChecks(),
+    });
+
+    const result = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      verificationInput,
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("opencode-compatible:verification-input-missing");
+  });
+
+  it("rejects unknown and duplicate sidecar verification inputs", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    const { manifestPath } = writeManifestFixture(candidate, dir);
+    const duplicateInput = writeVerificationInput(dir, {
+      verificationChecks: windowsVerificationChecks(),
+      sidecarRuntimes: [
+        { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
+        { name: "opencode-compatible", verificationChecks: windowsVerificationChecks() },
+      ],
+    });
+    expect(
+      runSigningVerify([
+        "--manifest",
+        manifestPath,
+        "--policy",
+        "production",
+        "--verification-input",
+        duplicateInput,
+      ]).stderr,
+    ).toContain("duplicate sidecar verification input: opencode-compatible");
+    const unknownInput = writeVerificationInput(dir, {
+      verificationChecks: windowsVerificationChecks(),
+      sidecarRuntimes: [
+        { name: "unknown-sidecar", verificationChecks: windowsVerificationChecks() },
+      ],
+    });
+    expect(
+      runSigningVerify([
+        "--manifest",
+        manifestPath,
+        "--policy",
+        "production",
+        "--verification-input",
+        unknownInput,
+      ]).stderr,
+    ).toContain("unknown sidecar verification input: unknown-sidecar");
   });
 });
 
@@ -1273,6 +1459,20 @@ describe("stage-portable-runtime", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("sidecar sbomEvidencePath is missing");
+  });
+
+  it("fails closed when a sidecar source root is a symlink", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64");
+    const symlinkRoot = join(dir, "sidecar-source-link");
+    symlinkSync(sidecarSpec.sourceRoot, symlinkRoot, "dir");
+    sidecarSpec.sourceRoot = symlinkRoot;
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar sourceRoot must be a real directory");
   });
 
   it("fails closed when a sidecar source tree contains forbidden Keiko state paths", () => {
