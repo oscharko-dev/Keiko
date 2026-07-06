@@ -397,6 +397,16 @@ export type {
   GatewayReadinessVerifiedCapabilities,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
+// Governed documentation browser contracts (Epic #1851, ADR-0113). Re-exported from the contract
+// package so the widget and API wrapper share the canonical wire types rather than redeclaring them.
+export type {
+  DocumentationTargetClass,
+  DocumentationNavigationReason,
+  DocumentationReasonSeverity,
+  DocumentationNavigationResult,
+  DocumentationBrowserCapability,
+} from "@oscharko-dev/keiko-contracts";
+
 // ─── Prompt Enhancer wire types (Epic #1307 / Issue #1314) ──────────────────────────
 export type {
   PromptEnhancementWireRequest,

@@ -188,6 +188,7 @@ import {
   handleCreateBrowserSession,
   handleDeleteBrowserSession,
 } from "./browser.js";
+import { handleDocsBrowserNavigate } from "./docs-browser.js";
 import {
   handleCancelLocalKnowledgeCapsuleIndexing,
   handleConnectLocalKnowledgeCapsule,
@@ -877,6 +878,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/browser/sessions/:sessionId/events",
     handler: handleBrowserEvents,
   },
+  // Epic #1851 (ADR-0113) — governed documentation browser navigation (product-level adapter).
+  { method: "POST", pattern: "/api/docs-browser/navigate", handler: handleDocsBrowserNavigate },
   // Issue #278 (Epic #270) — Quality Intelligence connector routes (additive).
   // Authorisation defaults to FALSE; only flips on explicit gateway-config flags.
   // No outbound network call; no provider SDK import.

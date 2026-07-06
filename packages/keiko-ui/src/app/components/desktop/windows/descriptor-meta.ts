@@ -67,6 +67,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "transient",
   },
+  docbrowser: {
+    lifecycle: ["idle", "live", "error"],
+    trustBoundary: ["ui", "network"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
   terminal: {
     lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
     trustBoundary: ["ui", "tool"],
