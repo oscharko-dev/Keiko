@@ -36,6 +36,15 @@ manifest/evidence fields and fails closed for `--policy production`; `--policy d
 `--policy pull-request` may record unsigned non-production artifacts but must not present them as
 portable-complete release assets.
 
+Optional coding sidecar runtime payloads are release inputs, not customer-installed tools.
+`scripts/stage-portable-runtime.mjs` may receive controlled local sidecar specs through
+`--sidecar-runtime-spec`; those specs can name a local `sourceRoot`, but only contained relative
+payload paths, digests, size, license/SBOM evidence, adapter compatibility, platform target, and
+signing/notarization status are written to portable manifests/evidence. A sidecar refresh requires a
+Keiko release decision and regenerated Windows x64, macOS arm64, and macOS x64 artifacts. It must
+not be implemented as a customer-side download during install, first run, app launch, or update.
+Sidecar execution authority remains deferred to later Coding Workbench runtime-adapter work.
+
 ## Triggering
 
 - Tag pushes matching `v*` run the full release verification job.
@@ -96,6 +105,9 @@ The script:
 - checks release-impact metadata for the current package version,
 - requires portable production artifacts to carry verified signing/notarization sidecar status
   before they may be treated as portable-complete release assets,
+- rejects portable artifacts with sidecar payload metadata that is unverified, wrong-platform,
+  checksum-mismatched, missing executable/license/SBOM evidence, or not contained under
+  `runtime/sidecars/<runtime-name>`,
 - generates GitHub Release notes from reviewed release-impact metadata,
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,

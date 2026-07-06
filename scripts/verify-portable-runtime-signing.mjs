@@ -58,11 +58,12 @@ function exactInputKeys(input) {
   return Object.keys(input).sort();
 }
 
-function readVerificationInput(path, target, policy) {
+function readVerificationInput(path, target, policy, sidecars) {
   const emptyChecks = createPortableVerificationChecks(target.platformTarget, false);
   if (path === undefined) {
     return {
       reasonCodes: policy === "production" ? ["verification-input-missing"] : [],
+      sidecarRuntimes: missingSidecarInputs(sidecars, policy),
       verificationChecks: emptyChecks,
     };
   }
@@ -71,7 +72,7 @@ function readVerificationInput(path, target, policy) {
     fail("verification input must be a JSON object");
   }
   for (const key of exactInputKeys(input)) {
-    if (!["reasonCodes", "verificationChecks"].includes(key)) {
+    if (!["reasonCodes", "sidecarRuntimes", "verificationChecks"].includes(key)) {
       fail(`unsupported verification input key: ${key}`);
     }
   }
@@ -79,7 +80,8 @@ function readVerificationInput(path, target, policy) {
   if (redactionFailures.length > 0) fail(redactionFailures.join("\n  - "));
   const reasonCodes = readReasonCodes(input.reasonCodes);
   const verificationChecks = readVerificationChecks(input.verificationChecks, target);
-  return { reasonCodes, verificationChecks };
+  const sidecarRuntimes = readSidecarInputs(input.sidecarRuntimes, sidecars, policy);
+  return { reasonCodes, sidecarRuntimes, verificationChecks };
 }
 
 function readReasonCodes(value) {
@@ -110,6 +112,69 @@ function readVerificationChecks(value, target) {
     checks[key] = value[key];
   }
   return checks;
+}
+
+function readSidecarInputs(value, sidecars, policy) {
+  if (value === undefined) return missingSidecarInputs(sidecars, policy);
+  if (!Array.isArray(value)) fail("verification input sidecarRuntimes must be an array");
+  const sidecarsByName = new Map(sidecars.map((sidecar) => [sidecar.name, sidecar]));
+  const inputsByName = new Map();
+  for (const entry of value) {
+    const sidecarInput = readSidecarInputEntry(entry, sidecarsByName);
+    if (inputsByName.has(sidecarInput.name)) {
+      fail(`duplicate sidecar verification input: ${sidecarInput.name}`);
+    }
+    inputsByName.set(sidecarInput.name, sidecarInput);
+  }
+  return sidecars.map(
+    (sidecar) => inputsByName.get(sidecar.name) ?? missingSidecarInput(sidecar, policy),
+  );
+}
+
+function readSidecarInputEntry(entry, sidecarsByName) {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+    fail("verification input sidecar runtime must be an object");
+  }
+  for (const key of exactInputKeys(entry)) {
+    if (!["name", "reasonCodes", "verificationChecks"].includes(key)) {
+      fail(`unsupported sidecar verification input key: ${key}`);
+    }
+  }
+  const name = readSidecarName(entry.name);
+  const sidecar = sidecarsByName.get(name);
+  if (sidecar === undefined) fail(`unknown sidecar verification input: ${name}`);
+  const target = sidecarTarget(sidecar);
+  return {
+    name,
+    reasonCodes: readReasonCodes(entry.reasonCodes),
+    verificationChecks: readVerificationChecks(entry.verificationChecks, target),
+  };
+}
+
+function readSidecarName(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    fail("sidecar verification input name must be a non-empty string");
+  }
+  return value;
+}
+
+function missingSidecarInputs(sidecars, policy) {
+  return sidecars.map((sidecar) => missingSidecarInput(sidecar, policy));
+}
+
+function missingSidecarInput(sidecar, policy) {
+  const target = sidecarTarget(sidecar);
+  return {
+    name: sidecar.name,
+    reasonCodes: policy === "production" ? ["verification-input-missing"] : [],
+    verificationChecks: createPortableVerificationChecks(target.platformTarget, false),
+  };
+}
+
+function sidecarTarget(sidecar) {
+  const target = portableTargetByName(sidecar.platformTarget);
+  if (target === undefined) fail(`sidecar ${sidecar.name} platformTarget is unsupported`);
+  return target;
 }
 
 function verificationSucceeded(target, checks) {
@@ -189,7 +254,7 @@ function verificationReasonCodesFor(target, policy, verified, input) {
   ];
 }
 
-function applyVerificationState(manifest, state) {
+function applyVerificationState(manifest, state, sidecarStates) {
   manifest.security = {
     ...manifest.security,
     verificationPolicy: state.verificationPolicy,
@@ -201,6 +266,7 @@ function applyVerificationState(manifest, state) {
     notarizationVerified: state.notarizationVerified,
     verificationChecks: state.verificationChecks,
   };
+  applySidecarVerificationStates(manifest, sidecarStates);
   manifest.releaseImpact.reviewedBinding = {
     ...manifest.releaseImpact.reviewedBinding,
     verificationPolicy: state.verificationPolicy,
@@ -214,8 +280,68 @@ function applyVerificationState(manifest, state) {
     notarizationVerified: state.notarizationVerified,
     verificationChecks: state.verificationChecks,
   };
+  syncReviewedSidecars(manifest);
   manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified =
     portableVerificationSummaryForManifest(manifest).platformSignatureLocallyVerified;
+}
+
+function applySidecarVerificationStates(manifest, sidecarStates) {
+  if (!Array.isArray(manifest.sidecarRuntimes)) return;
+  const statesByName = new Map(sidecarStates.map((entry) => [entry.name, entry.state]));
+  manifest.sidecarRuntimes = manifest.sidecarRuntimes.map((sidecar) => ({
+    ...sidecar,
+    signing: {
+      ...sidecar.signing,
+      ...statesByName.get(sidecar.name),
+    },
+  }));
+}
+
+function sidecarVerificationStates(manifest, policy, inputs) {
+  const sidecars = Array.isArray(manifest.sidecarRuntimes) ? manifest.sidecarRuntimes : [];
+  const inputsByName = new Map(inputs.map((input) => [input.name, input]));
+  return sidecars.map((sidecar) => {
+    const input = inputsByName.get(sidecar.name);
+    if (input === undefined) fail(`sidecar verification input missing for ${sidecar.name}`);
+    return {
+      name: sidecar.name,
+      state: verificationStateFor(sidecarTarget(sidecar), policy, input),
+    };
+  });
+}
+
+function syncReviewedSidecars(manifest) {
+  if (!Array.isArray(manifest.sidecarRuntimes) || manifest.sidecarRuntimes.length === 0) {
+    delete manifest.releaseImpact.reviewedBinding.sidecarRuntimes;
+    return;
+  }
+  manifest.releaseImpact.reviewedBinding.sidecarRuntimes = JSON.parse(
+    JSON.stringify(manifest.sidecarRuntimes),
+  );
+}
+
+function productionVerificationFailures(manifest) {
+  if (manifest.security.verificationStatus !== "verified-production") {
+    return manifest.security.verificationReasonCodes;
+  }
+  return sidecarProductionFailures(manifest);
+}
+
+function sidecarProductionFailures(manifest) {
+  if (!Array.isArray(manifest.sidecarRuntimes)) return [];
+  return manifest.sidecarRuntimes
+    .filter((sidecar) => sidecar.signing?.verificationStatus !== "verified-production")
+    .flatMap((sidecar) => sidecarFailureReasonCodes(sidecar));
+}
+
+function sidecarFailureReasonCodes(sidecar) {
+  const reasons = sidecar.signing?.verificationReasonCodes ?? ["verification-input-missing"];
+  return reasons.map((reason) => `${sidecar.name}:${reason}`);
+}
+
+function assertProductionVerified(manifest) {
+  const failures = productionVerificationFailures(manifest);
+  if (failures.length > 0) fail(failures.join(", "));
 }
 
 function writeOutputs(manifestPath, manifest) {
@@ -242,21 +368,27 @@ export function runPortableRuntimeSigningVerify(argv = process.argv.slice(2)) {
   const manifest = readPortableManifest(options.manifest);
   const target = portableTargetByName(manifest.artifact?.platformTarget);
   if (target === undefined) fail("manifest artifact.platformTarget is unsupported");
+  const sidecars = Array.isArray(manifest.sidecarRuntimes) ? manifest.sidecarRuntimes : [];
   const verificationInput = readVerificationInput(
     options.verificationInput,
     target,
     options.policy,
+    sidecars,
   );
-  applyVerificationState(manifest, verificationStateFor(target, options.policy, verificationInput));
+  const sidecarStates = sidecarVerificationStates(
+    manifest,
+    options.policy,
+    verificationInput.sidecarRuntimes,
+  );
+  applyVerificationState(
+    manifest,
+    verificationStateFor(target, options.policy, verificationInput),
+    sidecarStates,
+  );
   writeOutputs(options.manifest, manifest);
   const failures = validatePortableManifest(manifest, { allowUnverified: true });
   if (failures.length > 0) fail(failures.join("\n  - "));
-  if (
-    options.policy === "production" &&
-    manifest.security.verificationStatus !== "verified-production"
-  ) {
-    fail(manifest.security.verificationReasonCodes.join(", "));
-  }
+  if (options.policy === "production") assertProductionVerified(manifest);
   console.log(
     `portable-signing verify: PASS ${manifest.artifact.platformTarget} ${manifest.security.verificationStatus}`,
   );
