@@ -490,10 +490,11 @@ export const DE_MESSAGES = {
     "Update-Verfuegbarkeit konnte nicht geprueft werden. Pruefe erneut, wenn die Registry erreichbar ist.",
   "updates.primary.manual":
     "Automatische Installation ist nicht verfuegbar. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und pruefe erneut.",
+  "updates.primary.manualReview": "Beachte das lokale Zustandsrisiko vor der Installation.",
   "updates.primary.installed":
     "Das Update ist installiert. Keine weitere Aktion ist erforderlich, ausser du moechtest nach einer neueren Version suchen.",
   "updates.primary.cancelled":
-    "Das Update wurde abgebrochen. Pruefe erneut, bevor du einen weiteren Lauf startest.",
+    "Das Update wurde abgebrochen. Versuche es erneut, wenn du bereit bist.",
   "updates.primary.failed":
     "Das Update wurde nicht abgeschlossen. Pruefe die Fehlerdetails vor einem erneuten Versuch.",
   "updates.primary.restart": "Neustart und Pruefung schliessen das Update ab.",
@@ -528,6 +529,11 @@ export const DE_MESSAGES = {
   "updates.impact.title": "Auswirkung",
   "updates.impact.body": "Dieses Update betrifft lokalen Zustand.",
   "updates.impact.required": "Erforderliche Aktion: {remediation}",
+  "updates.manualReview.title": "Lokales Zustandsrisiko vor Installation",
+  "updates.manualReview.body":
+    "Dieses Update kann lokalen Zustand betreffen. Fahre nur fort, wenn du das Risiko unten akzeptierst.",
+  "updates.manualReview.featureRisk":
+    "{feature} koennte nach diesem Update nicht mehr funktionieren oder Wiederherstellung erfordern.",
   "updates.remediation.title": "Folgeaktion",
   "updates.remediation.plannedTitle": "Folgeaktion nach der Installation",
   "updates.remediation.plannedBody":
@@ -535,6 +541,11 @@ export const DE_MESSAGES = {
   "updates.remediation.deferredTitle": "Aufgeschobene Folgeaktion",
   "updates.remediation.deferredBody":
     "Vorerst uebersprungen. Fuehre sie spaeter aus, wenn betroffene Workflows voll bereit sein sollen.",
+  "updates.remediation.failedTitle": "Folgeaktion fehlgeschlagen",
+  "updates.remediation.failedBody":
+    "Die Folgeaktion wurde nicht abgeschlossen. Fuehre sie erneut aus, bevor du fortfaehrst.",
+  "updates.remediation.failedActionHelp":
+    "Versuche diese Aktion erneut, um die Folgearbeit abzuschliessen.",
   "updates.remediation.canComplete": "Alle erforderlichen Folgearbeiten sind abgeschlossen.",
   "updates.remediation.needsAction":
     "Fuehre diese Aktion aus oder verschiebe sie vor dem Abschluss.",
@@ -545,7 +556,7 @@ export const DE_MESSAGES = {
   "updates.remediation.repair": "Lokale Statusreparatur",
   "updates.remediation.reindex": "Lokales Wissen neu indexieren",
   "updates.remediation.migration": "Migration erforderlich",
-  "updates.remediation.manualReview": "Manuelle Pruefung erforderlich",
+  "updates.remediation.manualReview": "Pruefung erforderlich",
   "updates.manual.title": "Manueller Update-Pfad",
   "updates.manual.body":
     "Keiko kann sich aus dieser Installation nicht sicher selbst aktualisieren. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und pruefe die Version danach hier.",
@@ -585,11 +596,11 @@ export const DE_MESSAGES = {
   "updates.actionStatus.completed": "Abgeschlossen",
   "updates.actionStatus.failed": "Fehlgeschlagen",
   "updates.actionStatus.deferred": "Aufgeschoben",
-  "updates.actionStatus.manualReview": "Manuelle Pruefung erforderlich",
+  "updates.actionStatus.manualReview": "Pruefung erforderlich",
   "updates.featureState.ready": "Bereit",
   "updates.featureState.degraded": "Eingeschraenkt",
   "updates.featureState.unavailable": "Nicht verfuegbar",
-  "updates.featureState.manualReview": "Manuelle Pruefung erforderlich",
+  "updates.featureState.manualReview": "Pruefung erforderlich",
   "updates.phase.preparing": "Update wird vorbereitet",
   "updates.phase.running": "Update wird installiert",
   "updates.phase.restartRequired": "Neustart erforderlich",
