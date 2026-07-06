@@ -8,7 +8,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   REGISTRATION_FILE,
   defaultManagedRoot,
@@ -88,7 +88,20 @@ function assertRegistrationFileSafe(path: string): void {
   }
 }
 
+function assertStateDirSafe(stateDir: string): void {
+  let cursor = resolve(stateDir);
+  for (;;) {
+    if (existsSync(cursor) && lstatSync(cursor).isSymbolicLink()) {
+      throw new Error("portable install record refuses symlinked state directory");
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) return;
+    cursor = parent;
+  }
+}
+
 function writeRegistration(stateDir: string, registration: PortableInstallRegistration): void {
+  assertStateDirSafe(stateDir);
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const path = join(stateDir, REGISTRATION_FILE);
   assertRegistrationFileSafe(path);
@@ -187,6 +200,7 @@ export function writeFailedRegistration(
 export function readPortableInstallRegistration(
   stateDir: string,
 ): PortableInstallRegistration | undefined {
+  assertStateDirSafe(stateDir);
   const path = join(stateDir, REGISTRATION_FILE);
   if (!existsSync(path)) return undefined;
   assertRegistrationFileSafe(path);

@@ -12,7 +12,10 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { runPortableCli } from "./portable.js";
-import { readPortableInstallRegistration } from "./portable-registration.js";
+import {
+  readPortableInstallRegistration,
+  writeFailedRegistration,
+} from "./portable-registration.js";
 
 type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
 
@@ -440,6 +443,53 @@ describe("runPortableCli", () => {
 
     expect(() => readPortableInstallRegistration(stateDir)).toThrow(
       "portable install record refuses symlinked state file",
+    );
+  });
+
+  it("refuses to write through a symlinked state directory", () => {
+    const root = tempRoot();
+    const outsideState = join(root, "outside-state");
+    const linkedState = join(root, "linked-state");
+    mkdirSync(outsideState, { recursive: true });
+    symlinkSync(outsideState, linkedState, "dir");
+
+    expect((): void => {
+      writeFailedRegistration(
+        "windows-x64",
+        linkedState,
+        NOW,
+        "portable setup manifest is broken",
+      );
+    }).toThrow("portable install record refuses symlinked state directory");
+    expect(existsSync(join(outsideState, "portable-install-state.json"))).toBe(false);
+  });
+
+  it("refuses to read through a symlinked state directory", () => {
+    const root = tempRoot();
+    const outsideState = join(root, "outside-state");
+    const linkedState = join(root, "linked-state");
+    mkdirSync(outsideState, { recursive: true });
+    writeFileSync(
+      join(outsideState, "portable-install-state.json"),
+      `${JSON.stringify(
+        {
+          schemaVersion: 1,
+          status: "setup-failed",
+          updateEligible: false,
+          platformTarget: "windows-x64",
+          packageVersion: "unknown",
+          stable: false,
+          failureReason: "setup-failed",
+          updatedAt: NOW.toISOString(),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    symlinkSync(outsideState, linkedState, "dir");
+
+    expect(() => readPortableInstallRegistration(linkedState)).toThrow(
+      "portable install record refuses symlinked state directory",
     );
   });
 
