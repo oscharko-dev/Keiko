@@ -17,6 +17,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 
 import type { RetrievalEvalFixture } from "./types.js";
 
@@ -1310,6 +1311,70 @@ export const mixedStrategyFixture: RetrievalEvalFixture = {
   ],
 };
 
+// Governance goldset entry (#2011): a sealed-local pod must refuse the external-embedding
+// retrieval lane and surface `policy-denied` no-evidence — a governance outcome, NOT a
+// retrieval-quality miss. The query is lexically DISJOINT from the chunk body so no lexical
+// candidate survives; the only route to the chunk is the (policy-denied) dense lane. It
+// shares the chunk's topic salt, so a *standard* pod WOULD retrieve it — proving the seal,
+// not a lexical/semantic gap, produces the outcome (the mutation is proven in the test).
+// This makes sealed-pod enforcement (Epic #1819, unit-tested at the policy layer) visible at
+// the scorecard layer the way `multi-space` (Epic #1818) already is.
+export const sealedPodFixture: RetrievalEvalFixture = {
+  id: "sealed-pod",
+  description:
+    "A sealed-local pod denies external-embedding retrieval; a dense-only query surfaces as " +
+    "policy-denied governance behaviour rather than a retrieval-quality miss.",
+  capsules: [
+    {
+      id: capsuleId("cap-sealed"),
+      displayName: "Sealed Pod",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      sources: [
+        {
+          id: sourceId("src-sealed"),
+          documents: [
+            {
+              id: documentId("doc-sealed"),
+              safeDisplayName: "sealed.md",
+              parsedUnits: [
+                {
+                  id: "section-sealed",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Sealed"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-sealed"),
+                  text: "Restricted compliance dossier body retained inside the sealed capsule.",
+                  topic: "sealed-pod",
+                  parsedUnitId: "section-sealed",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-sealed",
+      text: "Which governed lane may expose the embargoed filings?",
+      topic: "sealed-pod",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-sealed") },
+      expectedNoEvidence: true,
+      expectedNoEvidenceReason: "policy-denied",
+    },
+  ],
+};
+
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
@@ -1327,4 +1392,5 @@ export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   semanticParaphraseFixture,
   multilingualFixture,
   mixedStrategyFixture,
+  sealedPodFixture,
 ] as const;

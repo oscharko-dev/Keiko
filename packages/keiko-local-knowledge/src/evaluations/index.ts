@@ -48,6 +48,15 @@ export { renderRetrievalEvalQualityGateReport } from "./report.js";
 export { runRetrievalEval, type RunRetrievalEvalDeps } from "./runner.js";
 
 export {
+  RETRIEVAL_COMPARISON_MODE_MAP,
+  computeRetrievalModeComparison,
+  renderRetrievalModeComparisonReport,
+  type RetrievalComparisonMode,
+  type RetrievalComparisonRow,
+  type RetrievalModeComparison,
+} from "./comparison.js";
+
+export {
   PASS_THRESHOLDS,
   type EvalCapsuleSpec,
   type EvalChunkSpec,

@@ -17,6 +17,7 @@ import {
   multiSpaceFixture,
   multilingualFixture,
   noEvidenceFixture,
+  sealedPodFixture,
   semanticParaphraseFixture,
   singleTopicFixture,
   staleIndexFixture,
@@ -63,6 +64,7 @@ describe("fixtures — registry", () => {
       semanticParaphraseFixture.id,
       multilingualFixture.id,
       mixedStrategyFixture.id,
+      sealedPodFixture.id,
     ]);
   });
 

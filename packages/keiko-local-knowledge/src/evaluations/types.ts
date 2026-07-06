@@ -22,6 +22,7 @@ import type {
   DocumentId,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
@@ -86,6 +87,11 @@ export interface EvalCapsuleSpec {
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly sources: readonly EvalSourceSpec[];
+  // Optional pod model-use policy. When omitted the runner seeds the standard (all-allow)
+  // policy so every existing fixture keeps its current behaviour. A fixture sets this to a
+  // sealed-local policy to prove that governance denial surfaces as `policy-denied`
+  // no-evidence at the scorecard level rather than as a retrieval-quality miss (#1819/#2011).
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 // Discriminator on retrieval scope. The runner translates this into either a `capsuleId`
