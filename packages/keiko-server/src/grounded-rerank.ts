@@ -107,8 +107,7 @@ export function rerankAndSelect<P>(
     if (selected.length >= budget.maxCandidates) break;
 
     const fits = runningBytes + r.bytes <= budget.maxExcerptBytes;
-    // Floor: always keep the first candidate even if it alone exceeds the byte budget.
-    if (!fits && selected.length > 0) continue;
+    if (!fits) continue;
 
     runningBytes += r.bytes;
     selected.push({
