@@ -33,11 +33,14 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  applyReferenceRerankResults,
   buildKnowledgePodRetrievalActivity,
   buildLocalKnowledgeCitations,
   createEmbeddingAdapter,
   enforcedNoEvidenceReason,
+  fallbackReferenceSelection,
   handleLocalKnowledgeGroundedAsk,
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   localKnowledgeNoEvidenceAnswer,
@@ -1135,6 +1138,106 @@ describe("local-knowledge reranker diagnostics", () => {
     expect(answer.retrievalActivity?.pods[0]?.modes).toContain("sealed");
   });
 
+  it("denies external reranking across a mixed capsule-set while synthesis proceeds (deny-wins)", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const setId = "set-mixed-external-rerank-deny" as CapsuleSetId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const open = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Open Rerank Member",
+      capsuleId: "cap-open-rerank-member",
+      sourceId: "src-open-rerank-member",
+      text: "alpha beta open member evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+      modelUsePolicy: standardPodModelUsePolicy(),
+    });
+    const restricted = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Rerank-Restricted Member",
+      capsuleId: "cap-rerank-restricted-member",
+      sourceId: "src-rerank-restricted-member",
+      text: "alpha beta restricted member evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+      modelUsePolicy: externalRerankingDeniedPolicy(),
+    });
+    updateCapsuleState(knowledgeStore, open.capsuleId, "ready");
+    updateCapsuleState(knowledgeStore, restricted.capsuleId, "ready");
+    createCapsuleSet(knowledgeStore, {
+      id: setId,
+      displayName: "Mixed External Rerank Deny Set",
+      tags: [],
+      capsuleIds: [open.capsuleId, restricted.capsuleId],
+    });
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "mixed-external-rerank-deny-project");
+    const created = rescueStore.createChat(
+      project.path,
+      "Mixed external rerank deny",
+      "chat-model",
+    );
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule-set", capsuleSetId: setId, connectedAtMs: 1 },
+    });
+    const adapter = scriptedAdapter();
+    let rerankCalls = 0;
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://reranker.example/v1",
+          apiKey: "reranker-test-key",
+          timeoutMs: 30_000,
+        },
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => answerModel("Alpha beta evidence [1].", "mixed-external-rerank-deny"),
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+      rerankRequest: () => {
+        rerankCalls += 1;
+        throw new Error(
+          "reranker must not be called when any set member denies external reranking",
+        );
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    // Deny-wins: a single member that denies external reranking vetoes the provider call for the whole
+    // fused candidate set, yet synthesis still proceeds over the preserved order (#1923 / #1924).
+    expect(rerankCalls).toBe(0);
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "denied",
+      mode: "local-only",
+      failureKind: "policy-denied",
+      documentCount: 0,
+    });
+  });
+
   it("preserves fused order without preparing reranker documents when no reranker is configured", async () => {
     const embeddingModelId = "text-embedding-3-small";
     const knowledgeStore = openKnowledgeStore({
@@ -1200,16 +1303,61 @@ describe("local-knowledge reranker diagnostics", () => {
       documentCount: 0,
       keptCount: 2,
     });
-    expect(answer.retrievalActivity?.summary.degradedCount).toBe(1);
+    // A reranker that was simply never configured is the default, fully-supported install state — it
+    // must NOT degrade the Knowledge Pod activity row (#1922 regression: the single-scope path now
+    // matches the hybrid path, which already suppresses not-configured). The redacted diagnostics
+    // still surface on the context pack for observability, but the activity pod stays "searched".
+    expect(answer.retrievalActivity?.summary.degradedCount).toBe(0);
     expect(answer.retrievalActivity?.pods[0]).toMatchObject({
-      state: "degraded",
-      reasonCodes: ["searched", "reranker-unavailable"],
+      state: "searched",
+      reasonCodes: ["searched"],
     });
+    expect(answer.retrievalActivity?.pods[0]?.reasonCodes).not.toContain("reranker-unavailable");
     expect(answer.contextPack).toMatchObject({
       referenceBudget: 2,
       referencesUsed: 2,
     });
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
+  });
+});
+
+describe("reranker reference selection helpers (#1922 / #1925 / #1926)", () => {
+  const limits = { ...DEFAULT_GROUNDING_LIMITS, maxPromptReferences: 4 };
+
+  it("no-op fallback preserves fused reference order and caps at the budget", () => {
+    const references = [ref(1), ref(2), ref(3), ref(4), ref(5)];
+    // A reverse / shuffle / dedupe mutation of the no-op path would fail this exact-order assertion.
+    expect(fallbackReferenceSelection(references, limits).map((r) => String(r.chunkId))).toEqual([
+      "chunk-1",
+      "chunk-2",
+      "chunk-3",
+      "chunk-4",
+    ]);
+  });
+
+  it("applies a valid provider reordering strictly by returned index", () => {
+    const references = [ref(1), ref(2), ref(3)];
+    const reranked = applyReferenceRerankResults(
+      references,
+      [{ index: 2 }, { index: 0 }, { index: 1 }],
+      limits,
+    );
+    expect(reranked?.map((r) => String(r.chunkId))).toEqual(["chunk-3", "chunk-1", "chunk-2"]);
+  });
+
+  it("rejects malformed provider index mappings so the caller falls back to fused order", () => {
+    const references = [ref(1), ref(2)];
+    // Duplicate, out-of-range, and non-integer indices must all reject to undefined (→ invalid-response).
+    expect(
+      applyReferenceRerankResults(references, [{ index: 0 }, { index: 0 }], limits),
+    ).toBeUndefined();
+    expect(applyReferenceRerankResults(references, [{ index: 5 }], limits)).toBeUndefined();
+    expect(applyReferenceRerankResults(references, [{ index: 1.5 }], limits)).toBeUndefined();
+  });
+
+  it("returns undefined for empty provider results but an empty selection for empty references", () => {
+    expect(applyReferenceRerankResults([ref(1)], [], limits)).toBeUndefined();
+    expect(applyReferenceRerankResults([], [{ index: 0 }], limits)).toEqual([]);
   });
 });
 
