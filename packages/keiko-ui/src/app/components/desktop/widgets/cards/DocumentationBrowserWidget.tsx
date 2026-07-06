@@ -204,7 +204,8 @@ type IndexingPhase =
   | { readonly kind: "idle" }
   | { readonly kind: "proposing" }
   | { readonly kind: "proposed"; readonly proposal: DocumentationIndexingProposal }
-  | { readonly kind: "approving"; readonly proposal: DocumentationIndexingProposal }
+  // "approving" renders only a busy spinner, so it carries no payload.
+  | { readonly kind: "approving" }
   | { readonly kind: "approved"; readonly approval: DocumentationIndexingApproval }
   | { readonly kind: "error"; readonly error: ErrorState };
 
