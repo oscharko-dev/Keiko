@@ -154,15 +154,8 @@ jobs:
           PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
           PORTABLE_ASSETS_MANIFEST: ${{ inputs.portable_assets_manifest }}
           PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
-        run: |
-          manifest="$PORTABLE_ASSETS_MANIFEST"
-          if [ -n "$PORTABLE_ASSETS_RUN_ID" ] || [ -n "$PORTABLE_ASSETS_ARTIFACT_NAME" ]; then
-            if [ -z "$manifest" ]; then
-              manifest="portable-assets.json"
-            fi
-            manifest=".portable-release-assets/$manifest"
-          fi
-          echo "manifest=$manifest" >> "$GITHUB_OUTPUT"
+          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: node scripts/resolve-release-portable-assets.mjs
       - name: Publish package
         env:
           GITHUB_TOKEN: ${{ github.token }}

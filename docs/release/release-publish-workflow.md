@@ -101,7 +101,9 @@ Sidecar execution authority remains deferred to later Coding Workbench runtime-a
   `portable_assets_run_id` and `portable_assets_artifact_name`; the workflow downloads that bundle
   with `gh run download` before resolving `portable_assets_manifest`. If
   `portable_assets_manifest` is empty in that mode, it defaults to
-  `.portable-release-assets/portable-assets.json`.
+  `.portable-release-assets/portable-assets.json`. The manifest input is interpreted only as a
+  relative path inside the downloaded artifact bundle; absolute paths, parent traversal, symlinked
+  manifests, and non-file manifests are rejected before publish starts.
 
 ## Release-branch workflow
 
