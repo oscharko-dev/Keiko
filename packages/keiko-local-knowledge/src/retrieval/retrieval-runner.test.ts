@@ -315,7 +315,12 @@ describe("runLocalKnowledgeRetrieval — model-use policy", () => {
     });
   });
 
-  it("uses lexical fallback without embedding calls when a sealed pod has lexical candidates", async () => {
+  // Regression for #2011 audit finding: this test previously asserted that a sealed pod's
+  // lexically-matching candidates were served through the "lexical-degraded" fallback —
+  // i.e. that denying `externalEmbeddings` alone was sufficient sealing. It is not: sealed
+  // pods also deny `rawContentRelease`, and the lexical lane returns raw chunk text, so a
+  // lexically-matching query must be refused exactly like a dense-only query is.
+  it("denies the lexical lane too when a sealed pod has lexically-matching candidates", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {
       capsuleId: "cap-sealed-lexical",
@@ -336,11 +341,10 @@ describe("runLocalKnowledgeRetrieval — model-use policy", () => {
       { capsuleId: "cap-sealed-lexical" as KnowledgeCapsuleId, text: "alpha" },
     );
 
-    expect(result.references.length).toBeGreaterThan(0);
-    expect(result.noEvidence).toBe(false);
-    expect(result.embeddingDegraded).toBe(true);
+    expect(result.references).toEqual([]);
+    expect(result.noEvidence).toBe(true);
+    expect(result.reason).toBe("policy-denied");
     expect(calls).toStrictEqual([]);
-    expect(result.diagnostics?.mode).toBe("lexical-degraded");
     expect(result.diagnostics?.embeddingLanes?.[0]?.status).toBe("policy-denied");
   });
 });

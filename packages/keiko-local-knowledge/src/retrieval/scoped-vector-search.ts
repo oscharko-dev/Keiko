@@ -1279,6 +1279,10 @@ interface LexicalCollection {
   readonly candidates: readonly LexicalCandidate[];
   readonly indexedRowCount: number;
   readonly queryError: boolean;
+  // True when at least one in-scope capsule's `rawContentRelease` policy denied the
+  // lexical lane (see `isRawContentReleaseAllowed`). Threaded through to `SearchState` so
+  // `selectTopCandidates` reports `policy-denied` instead of a generic empty result.
+  readonly policyDenied: boolean;
 }
 
 function boundedCandidateBudget(topK: number, multiplier: number, extraCap: number): number {
@@ -1318,15 +1322,52 @@ function lexicalCandidateLimit(topK: number, profile: QueryProfile): number {
   return candidateBudgets(topK, profile).lexicalCandidateBudget;
 }
 
+interface LexicalCapsuleCollection {
+  readonly candidates: readonly LexicalCandidate[];
+  readonly indexedRowCount: number;
+  readonly policyDenied: boolean;
+}
+
+function mergeExactLexicalCandidates(
+  byKey: Map<string, LexicalCandidate>,
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  profile: QueryProfile,
+  limit: number,
+): void {
+  for (const candidate of readExactLexicalCandidatesForCapsule(
+    store,
+    capsule.id,
+    sourceFilter,
+    uniqueStrings([...profile.exactTerms, ...profile.exactPhrases]),
+    limit,
+  )) {
+    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    const existing = byKey.get(key);
+    const promoted =
+      existing === undefined ? candidate : { ...candidate, bm25Score: existing.bm25Score };
+    if (existing === undefined || lexicalCandidateAsc(promoted, existing) < 0) {
+      byKey.set(key, promoted);
+    }
+  }
+}
+
 function collectLexicalCandidatesForCapsule(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
   profile: QueryProfile,
   limit: number,
-): { readonly candidates: readonly LexicalCandidate[]; readonly indexedRowCount: number } {
+): LexicalCapsuleCollection {
   const indexedRowCount = countLexicalRowsForCapsuleScope(store, capsule.id, sourceFilter);
-  if (indexedRowCount === 0) return { candidates: [], indexedRowCount };
+  if (indexedRowCount === 0) return { candidates: [], indexedRowCount, policyDenied: false };
+  if (!isRawContentReleaseAllowed(capsule)) {
+    // The capsule's governance was tightened after its lexical rows were persisted
+    // (capsule-lifecycle.ts marks it `stale` but does not purge the FTS index). Refuse to
+    // surface those rows rather than trusting stale on-disk state.
+    return { candidates: [], indexedRowCount, policyDenied: true };
+  }
   const byKey = new Map<string, LexicalCandidate>();
   const matchQuery = buildFtsMatchQuery(profile);
   if (matchQuery !== undefined) {
@@ -1340,29 +1381,11 @@ function collectLexicalCandidatesForCapsule(
       byKey.set(`${String(candidate.capsuleId)}|${candidate.chunkId}`, candidate);
     }
   }
-  for (const candidate of readExactLexicalCandidatesForCapsule(
-    store,
-    capsule.id,
-    sourceFilter,
-    uniqueStrings([...profile.exactTerms, ...profile.exactPhrases]),
-    limit,
-  )) {
-    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
-    const existing = byKey.get(key);
-    const promoted =
-      existing === undefined
-        ? candidate
-        : {
-            ...candidate,
-            bm25Score: existing.bm25Score,
-          };
-    if (existing === undefined || lexicalCandidateAsc(promoted, existing) < 0) {
-      byKey.set(key, promoted);
-    }
-  }
+  mergeExactLexicalCandidates(byKey, store, capsule, sourceFilter, profile, limit);
   return {
     candidates: [...byKey.values()].sort(lexicalCandidateAsc).slice(0, limit),
     indexedRowCount,
+    policyDenied: false,
   };
 }
 
@@ -1376,6 +1399,7 @@ function collectLexicalCandidates(
   const limit = lexicalCandidateLimit(topK, profile);
   const out: LexicalCandidate[] = [];
   let indexedRowCount = 0;
+  let policyDenied = false;
   try {
     for (const capsule of capsules) {
       const collected = collectLexicalCandidatesForCapsule(
@@ -1386,15 +1410,17 @@ function collectLexicalCandidates(
         limit,
       );
       indexedRowCount += collected.indexedRowCount;
+      policyDenied ||= collected.policyDenied;
       out.push(...collected.candidates);
       if (out.length >= limit) break;
     }
   } catch {
-    return { candidates: [], indexedRowCount, queryError: true };
+    return { candidates: [], indexedRowCount, queryError: true, policyDenied };
   }
   return {
     candidates: out.sort(lexicalCandidateAsc).slice(0, limit),
     indexedRowCount,
+    policyDenied,
     queryError: false,
   };
 }
@@ -1603,16 +1629,19 @@ async function searchQueriesFor(
 function mergeLexicalCollections(collections: readonly LexicalCollection[]): LexicalCollection {
   let indexedRowCount = 0;
   let queryError = false;
+  let policyDenied = false;
   const candidates: LexicalCandidate[] = [];
   for (const collection of collections) {
     indexedRowCount = Math.max(indexedRowCount, collection.indexedRowCount);
     queryError ||= collection.queryError;
+    policyDenied ||= collection.policyDenied;
     candidates.push(...collection.candidates);
   }
   return {
     candidates: dedupeLexicalCandidates(candidates),
     indexedRowCount,
     queryError,
+    policyDenied,
   };
 }
 
@@ -1849,6 +1878,17 @@ function isExternalEmbeddingAllowed(capsule: KnowledgeCapsule): boolean {
   return resolveCapsuleModelUsePolicy(capsule).operations.externalEmbeddings === "allow";
 }
 
+// The lexical/BM25 lane never calls an embedding model, so `externalEmbeddings` does not
+// govern it — but it DOES return raw chunk text as a citation body, which is exactly what
+// `rawContentRelease` governs (see ADR-backed sealed-local defaults in
+// `local-knowledge-model-use-policy.ts`). Without this gate a capsule whose policy was
+// tightened to sealed-local after indexing (capsule-lifecycle.ts only flips the lifecycle
+// hint to `stale`; it does not purge already-persisted lexical rows) would still leak its
+// content through any lexically-matching query.
+function isRawContentReleaseAllowed(capsule: KnowledgeCapsule): boolean {
+  return resolveCapsuleModelUsePolicy(capsule).operations.rawContentRelease === "allow";
+}
+
 function denseCandidatesFromVectorIndex(
   candidates: readonly VectorIndexCandidate[],
   capsule: KnowledgeCapsule,
@@ -2062,6 +2102,7 @@ type CandidateSelection =
 function selectTopCandidates(
   state: SearchState,
   candidates: readonly FusedCandidate[],
+  lexicalPolicyDenied: boolean,
 ): CandidateSelection {
   if (!state.anyVectorSeen && candidates.length === 0) {
     return { ok: false, reason: "no-vectors" };
@@ -2072,7 +2113,7 @@ function selectTopCandidates(
   if (state.embeddingFailed && candidates.length === 0) {
     return { ok: false, reason: "embedding-failed" };
   }
-  if (state.embeddingPolicyDenied && candidates.length === 0) {
+  if ((state.embeddingPolicyDenied || lexicalPolicyDenied) && candidates.length === 0) {
     return { ok: false, reason: "policy-denied" };
   }
   if (
@@ -2088,12 +2129,13 @@ function selectTopCandidates(
   return { ok: true, top: candidates };
 }
 
-function hasEmbeddingDegradation(state: SearchState): boolean {
+function hasEmbeddingDegradation(state: SearchState, lexicalPolicyDenied: boolean): boolean {
   return (
     state.embeddingFailed ||
     state.embeddingPolicyDenied ||
     state.anyIdentityIncompatible ||
-    state.denseSkippedTooLarge
+    state.denseSkippedTooLarge ||
+    lexicalPolicyDenied
   );
 }
 
@@ -2161,7 +2203,7 @@ function retrievalMode(
 ): RetrievalDiagnostics["mode"] {
   const hasDense = state.candidates.length > 0;
   const hasLexical = lexical.candidates.length > 0;
-  const denseDegraded = hasEmbeddingDegradation(state);
+  const denseDegraded = hasEmbeddingDegradation(state, lexical.policyDenied);
   if (denseDegraded && hasLexical && !hasDense) return "lexical-degraded";
   if (hasDense && hasLexical) return "hybrid";
   if (hasLexical) return "lexical-only";
@@ -2276,12 +2318,12 @@ export async function searchVectorsForScope(
     budgets,
     searchQueries.length,
   );
-  const selection = selectTopCandidates(state, fused);
+  const selection = selectTopCandidates(state, fused, lexical.policyDenied);
   if (!selection.ok) {
     return { references: [], noEvidenceReason: selection.reason, diagnostics };
   }
   const refs = buildReferences(store, selection.top, options.topK, profile);
-  return hasEmbeddingDegradation(state)
+  return hasEmbeddingDegradation(state, lexical.policyDenied)
     ? { references: refs, embeddingDegraded: true, diagnostics }
     : { references: refs, diagnostics };
 }
