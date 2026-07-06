@@ -642,6 +642,7 @@ function buildNoEvidenceAnswer(
   assistantContent: string,
   scopeKind: "capsule" | "capsule-set",
   scopeLabel: string,
+  redactLabel: (value: string) => string,
   capsules: readonly KnowledgeCapsule[],
   capsuleCount: number,
   sourceCount: number,
@@ -649,6 +650,7 @@ function buildNoEvidenceAnswer(
   limits: ReturnType<typeof currentGroundingLimits>,
   uncertainty: readonly GroundedUncertainty[] = [],
 ): LocalKnowledgeGroundedAnswer {
+  const safeScopeLabel = activityDisplayName(redactLabel(scopeLabel));
   return {
     groundingKind: "local-knowledge",
     userMessageId: `pending-user-${chat.id}`,
@@ -664,7 +666,7 @@ function buildNoEvidenceAnswer(
       kind: "local-knowledge",
       scopeKind,
       scopeId: `lk-${hashString32(`${chat.id}|${scopeLabel}`)}`,
-      scopeLabel,
+      scopeLabel: safeScopeLabel,
       capsuleCount,
       sourceCount,
       citationCount: 0,
@@ -1024,6 +1026,7 @@ function buildStateFailureAnswer(
   selected: SelectedLocalKnowledgeScope,
   persisted: readonly [ChatMessage, ChatMessage],
   stateFailure: { readonly reason: string; readonly message: string },
+  redactLabel: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
 ): GroundedAnswer {
   const [user, assistant] = persisted;
@@ -1032,6 +1035,7 @@ function buildStateFailureAnswer(
     assistant.content,
     selected.scopeKind,
     selected.scopeLabel,
+    redactLabel,
     selected.capsules,
     selected.capsules.length,
     selectedSourceCount(selected),
@@ -2058,6 +2062,7 @@ function stateFailureRoute(
     selected,
     persisted,
     { ...stateFailure, message: redactedMessage },
+    (value: string): string => redactText(deps, value),
     currentGroundingLimits(deps),
   );
   deps.store.attachGroundedAnswer(persisted[1].id, answer);
