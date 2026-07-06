@@ -14,6 +14,7 @@
 // a model here — producing a proposal or an approval starts no indexing work.
 
 import {
+  applyAuthenticationRequiredOverride,
   asAlreadyIndexedProposal,
   buildDocumentationIndexingProposal,
   buildManualScopePreview,
@@ -31,6 +32,7 @@ import {
   type DocumentationIndexingApproval,
   type DocumentationIndexingProposal,
   type DocumentationManualSourceKind,
+  type DocumentationNavigationReason,
   type DocumentationTargetClass,
   type KnowledgePodSummary,
 } from "@oscharko-dev/keiko-contracts";
@@ -63,10 +65,10 @@ function normalizedManualRoot(rawTarget: string): string | null {
     return null;
   }
   if (parsed.protocol === "file:") {
-    return `file://${rootDirectory(parsed.pathname)}`;
+    return `file://${rootDirectory(parsed.pathname)}`.toLowerCase();
   }
   if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-    return `${parsed.origin.toLowerCase()}${rootDirectory(parsed.pathname)}`;
+    return `${parsed.origin}${rootDirectory(parsed.pathname)}`.toLowerCase();
   }
   return null;
 }
@@ -120,14 +122,21 @@ function targetClassOf(rawTarget: string): DocumentationTargetClass {
 /**
  * Resolve the indexing proposal for a target: detect the manual shape, build the redacted proposal,
  * and override to already-indexed when an existing pod covers the same normalized root. Pure with
- * respect to the documentation target — it never fetches or crawls it.
+ * respect to the documentation target — it never fetches or crawls it. When the caller reports that
+ * the last navigation to this target required authentication, an otherwise-approvable detection is
+ * overridden to `authentication-required` — Keiko never offers to index a target the user was just
+ * told it will not sign in to (child issue #1869).
  */
 export function resolveManualProposal(
   target: string,
   deps: UiHandlerDeps,
   listPods: KnowledgePodLister = safeListKnowledgePods,
+  lastNavigationReason: DocumentationNavigationReason | null = null,
 ): DocumentationIndexingProposal {
-  const detection = detectIndexableManual(target);
+  const detection = applyAuthenticationRequiredOverride(
+    detectIndexableManual(target),
+    lastNavigationReason,
+  );
   const proposal = buildDocumentationIndexingProposal({
     detection,
     targetClass: targetClassOf(target),
@@ -173,15 +182,20 @@ const NOT_APPROVABLE: ManualApprovalDecision = {
 
 /**
  * Decide whether a target may be approved for indexing and, if so, produce the redaction-safe consent
- * handoff. Fails closed: a non-approvable manual, an already-indexed root, or a target with no stable
- * root is refused rather than approved. Starts no indexing work.
+ * handoff. Fails closed: a non-approvable manual, an already-indexed root, a target that required
+ * authentication on the last navigation, or a target with no stable root is refused rather than
+ * approved. Starts no indexing work.
  */
 export function resolveManualApproval(
   target: string,
   deps: UiHandlerDeps,
   listPods: KnowledgePodLister = safeListKnowledgePods,
+  lastNavigationReason: DocumentationNavigationReason | null = null,
 ): ManualApprovalDecision {
-  const detection = detectIndexableManual(target);
+  const detection = applyAuthenticationRequiredOverride(
+    detectIndexableManual(target),
+    lastNavigationReason,
+  );
   if (!isApprovableProposalState(detection.state) || detection.sourceKind === null) {
     return NOT_APPROVABLE;
   }
@@ -199,8 +213,13 @@ export function resolveManualApproval(
 
 // ─── HTTP handlers ────────────────────────────────────────────────────────────────────
 
+interface TargetRequest {
+  readonly target: string;
+  readonly lastNavigationReason: DocumentationNavigationReason | null;
+}
+
 type TargetOutcome =
-  | { readonly ok: true; readonly target: string }
+  | { readonly ok: true; readonly request: TargetRequest }
   | { readonly ok: false; readonly error: RouteResult };
 
 async function readTarget(ctx: RouteContext): Promise<TargetOutcome> {
@@ -211,7 +230,13 @@ async function readTarget(ctx: RouteContext): Promise<TargetOutcome> {
     const body = errorBody("BAD_REQUEST", parsed.errors.join("; "), ctx.correlationId);
     return { ok: false, error: { status: 400, body } };
   }
-  return { ok: true, target: parsed.value.target };
+  return {
+    ok: true,
+    request: {
+      target: parsed.value.target,
+      lastNavigationReason: parsed.value.lastNavigationReason,
+    },
+  };
 }
 
 export async function handleDocsBrowserPropose(
@@ -220,7 +245,12 @@ export async function handleDocsBrowserPropose(
 ): Promise<RouteResult> {
   const outcome = await readTarget(ctx);
   if (!outcome.ok) return outcome.error;
-  const proposal = resolveManualProposal(outcome.target, deps);
+  const proposal = resolveManualProposal(
+    outcome.request.target,
+    deps,
+    safeListKnowledgePods,
+    outcome.request.lastNavigationReason,
+  );
   if (!validateDocumentationIndexingProposal(proposal).ok) {
     const body = errorBody("INTERNAL", "Proposal failed redaction checks.", ctx.correlationId);
     return { status: 500, body };
@@ -234,7 +264,12 @@ export async function handleDocsBrowserApprove(
 ): Promise<RouteResult> {
   const outcome = await readTarget(ctx);
   if (!outcome.ok) return outcome.error;
-  const decision = resolveManualApproval(outcome.target, deps);
+  const decision = resolveManualApproval(
+    outcome.request.target,
+    deps,
+    safeListKnowledgePods,
+    outcome.request.lastNavigationReason,
+  );
   if (!decision.ok) {
     return { status: 409, body: errorBody(decision.code, decision.message, ctx.correlationId) };
   }

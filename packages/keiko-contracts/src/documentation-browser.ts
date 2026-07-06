@@ -218,12 +218,27 @@ function classifyNamedHost(lower: string): DocumentationTargetClass {
   return "external-http";
 }
 
+const IPV4_MAPPED_IPV6_PATTERN = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/u;
+
+// Unwrap an IPv4-mapped IPv6 literal (WHATWG URL normalises `::ffff:127.0.0.1` to the compressed hex
+// form `::ffff:7f00:1`) back to its embedded IPv4 octets so it classifies identically to the
+// dotted-decimal address it represents, instead of falling through to the named-host branch.
+function parseIpv4MappedIpv6Octets(lower: string): readonly number[] | null {
+  const match = IPV4_MAPPED_IPV6_PATTERN.exec(lower);
+  if (match === null) return null;
+  const [highWord, lowWord] = match.slice(1).map((part) => Number.parseInt(part, 16));
+  if (highWord === undefined || lowWord === undefined) return null;
+  return [highWord >> 8, highWord & 0xff, lowWord >> 8, lowWord & 0xff];
+}
+
 // Classify the host of an http(s) target. Loopback and private/link-local ranges plus single-label
 // and *.local/*.internal/… names are treated as intranet-class; everything else is external.
 function classifyHttpHost(rawHost: string): DocumentationTargetClass {
   const host = rawHost.startsWith("[") && rawHost.endsWith("]") ? rawHost.slice(1, -1) : rawHost;
   const lower = host.toLowerCase();
   if (lower === "localhost" || lower === "::1") return "loopback";
+  const mappedOctets = parseIpv4MappedIpv6Octets(lower);
+  if (mappedOctets !== null) return classifyIpv4(mappedOctets);
   const octets = parseIpv4Octets(lower);
   return octets !== null ? classifyIpv4(octets) : classifyNamedHost(lower);
 }
