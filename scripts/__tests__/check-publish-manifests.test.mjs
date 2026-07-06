@@ -9,6 +9,10 @@ function rootManifest(overrides = {}) {
   return {
     name: "@oscharko-dev/keiko",
     version: VERSION,
+    repository: {
+      type: "git",
+      url: "https://github.com/oscharko-dev/Keiko",
+    },
     dependencies: {
       "@oscharko-dev/keiko-contracts": VERSION,
     },
@@ -47,6 +51,16 @@ describe("validatePublishManifests", () => {
 
     expect(failures.join("\n")).toContain("must set private: true");
     expect(failures.join("\n")).toContain("only the root package is published");
+  });
+
+  it("rejects root manifests without the npm provenance repository url", () => {
+    const failures = validatePublishManifests(
+      rootManifest({ repository: { type: "git", url: "" } }),
+      [workspace("@oscharko-dev/keiko-contracts")],
+    );
+
+    expect(failures.join("\n")).toContain("repository.url must be");
+    expect(failures.join("\n")).toContain("npm provenance");
   });
 
   it("rejects build-time-only private workspaces in the root published contract", () => {

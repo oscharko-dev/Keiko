@@ -65,7 +65,7 @@ describe("keiko-harness public surface", () => {
   it("exposes the documented value barrel members", () => {
     // Package version (distinct from HARNESS_VERSION which is the runtime/event-schema
     // version re-exported from @oscharko-dev/keiko-contracts).
-    expect(harness.KEIKO_HARNESS_VERSION).toBe("0.2.11");
+    expect(harness.KEIKO_HARNESS_VERSION).toBe("0.2.13");
     // Session API:
     expect(typeof harness.createSession).toBe("function");
     expect(typeof harness.runAgent).toBe("function");
