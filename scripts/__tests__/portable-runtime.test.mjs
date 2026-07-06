@@ -23,7 +23,7 @@ import {
   validatePortableManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
-import { appSurfaceFailures } from "../stage-portable-runtime.mjs";
+import { appSurfaceFailures, assemblePortableStage } from "../stage-portable-runtime.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -32,6 +32,7 @@ const DIGEST_D = "d".repeat(64);
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567";
 const NODE_VERSION = "24.14.0";
 const STAGE_COMMAND_TIMEOUT_MS = 300_000;
+let packageSurfacePreparedForTest = false;
 
 const BASE_MANIFEST = {
   schemaVersion: 1,
@@ -236,6 +237,32 @@ function runStage(args) {
   });
 }
 
+function preparePackageSurfaceForTest() {
+  if (packageSurfacePreparedForTest) return;
+  runFixtureCommand("npm", ["run", "build"], process.cwd());
+  runFixtureCommand("npm", ["run", "prepare:bin"], process.cwd());
+  packageSurfacePreparedForTest = true;
+}
+
+async function assembleStageForTest(target, nodeArchive, outDir, dir) {
+  return assemblePortableStage(
+    {
+      commitSha: COMMIT_SHA,
+      dryRun: false,
+      nodeArchive: nodeArchive.path,
+      nodeArchiveUrl: undefined,
+      nodeCacheDir: join(dir, "cache"),
+      nodeSha256: nodeArchive.sha256,
+      nodeVersion: NODE_VERSION,
+      outDir,
+      releaseId: 123456789,
+      releaseTag: "v0.2.11",
+      target,
+    },
+    { preparePackageSurface: preparePackageSurfaceForTest },
+  );
+}
+
 describe("portable runtime target contract", () => {
   it("defines exactly the first-class portable release targets", () => {
     expect(
@@ -387,9 +414,10 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain('"--ignore-scripts"');
     expect(source).toContain('"--pack-destination"');
     expect(source).toContain('["run", "check:package-surface"]');
-    expect(source.indexOf("preparePackageSurface();")).toBeLessThan(
-      source.indexOf("const tarball = packRoot(tmp);"),
-    );
+    expect(
+      source.indexOf("(hooks.preparePackageSurface ?? preparePackageSurface)();"),
+    ).toBeLessThan(source.indexOf("const tarball = packRoot(tmp);"));
+    expect(source).toContain("await assemblePortableStage(options);");
     expect(source).not.toContain('["install"');
   });
 
@@ -410,29 +438,7 @@ describe("stage-portable-runtime", () => {
     const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64");
     const outDir = join(dir, "out");
 
-    const result = runStage([
-      "--target",
-      "macos-arm64",
-      "--node-archive",
-      nodeArchive.path,
-      "--node-sha256",
-      nodeArchive.sha256,
-      "--node-version",
-      NODE_VERSION,
-      "--commit-sha",
-      COMMIT_SHA,
-      "--release-id",
-      "123456789",
-      "--release-tag",
-      "v0.2.11",
-      "--node-cache-dir",
-      join(dir, "cache"),
-      "--out-dir",
-      outDir,
-    ]);
-
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
+    await assembleStageForTest("macos-arm64", nodeArchive, outDir, dir);
     const root = join(outDir, "macos-arm64");
     const assetPath = join(root, "keiko-macos-arm64.zip");
     const manifestPath = join(root, "manifest", "portable-manifest.json");
@@ -556,34 +562,13 @@ describe("stage-portable-runtime", () => {
     expect(existsSync(join(root, "payload", "Keiko", "app"))).toBe(false);
   }, 360_000);
 
-  it("stages Windows resources with an extracted bundled Node runtime", () => {
+  it("stages Windows resources with an extracted bundled Node runtime", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
     const outDir = join(dir, "out");
 
-    const result = runStage([
-      "--target",
-      "windows-x64",
-      "--node-archive",
-      nodeArchive.path,
-      "--node-sha256",
-      nodeArchive.sha256,
-      "--node-version",
-      NODE_VERSION,
-      "--commit-sha",
-      COMMIT_SHA,
-      "--release-id",
-      "123456789",
-      "--release-tag",
-      "v0.2.11",
-      "--node-cache-dir",
-      join(dir, "cache"),
-      "--out-dir",
-      outDir,
-    ]);
+    await assembleStageForTest("windows-x64", nodeArchive, outDir, dir);
 
-    expect(result.stderr).toBe("");
-    expect(result.status).toBe(0);
     const runtimeRoot = join(outDir, "windows-x64", "payload", "Keiko", "runtime", "node");
     expect(existsSync(join(runtimeRoot, "node.exe"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "LICENSE"))).toBe(true);
