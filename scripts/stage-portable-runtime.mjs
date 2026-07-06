@@ -909,7 +909,7 @@ function sameStringSet(actual, expected) {
   return actualSet.size === expected.length && expected.every((value) => actualSet.has(value));
 }
 
-async function assemble(options) {
+export async function assemblePortableStage(options, hooks = {}) {
   const target = portableTargetByName(options.target);
   const tmp = mkdtempSync(join(tmpdir(), "keiko-portable-stage-"));
   const finalRoot = resolve(options.outDir, target.platformTarget);
@@ -924,7 +924,7 @@ async function assemble(options) {
     mkdirSync(extractRoot, { recursive: true });
     mkdirSync(resourceRoot, { recursive: true });
     const nodeArchiveSha256 = await stageNodeRuntime(options, target, resourceRoot);
-    preparePackageSurface();
+    (hooks.preparePackageSurface ?? preparePackageSurface)();
     const tarball = packRoot(tmp);
     stagePackedPackage(tarball, extractRoot, resourceRoot);
     stageLauncher(target, payloadRoot);
@@ -959,7 +959,7 @@ async function assemble(options) {
 
 export async function runPortableStage(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const result = await assemble(options);
+  const result = await assemblePortableStage(options);
   console.log(
     `portable-stage: PASS ${options.target} staged from ${basename(result.tarball)} at ${result.finalRoot}`,
   );
