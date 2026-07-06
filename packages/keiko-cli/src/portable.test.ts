@@ -454,12 +454,7 @@ describe("runPortableCli", () => {
     symlinkSync(outsideState, linkedState, "dir");
 
     expect((): void => {
-      writeFailedRegistration(
-        "windows-x64",
-        linkedState,
-        NOW,
-        "portable setup manifest is broken",
-      );
+      writeFailedRegistration("windows-x64", linkedState, NOW, "portable setup manifest is broken");
     }).toThrow("portable install record refuses symlinked state directory");
     expect(existsSync(join(outsideState, "portable-install-state.json"))).toBe(false);
   });
