@@ -303,17 +303,17 @@ describe("Knowledge Pod compatibility projection", () => {
       // a compatible/query-eligible state.
       expect(summary.retrieval).toMatchObject({
         crossSpaceScoreMixing: false,
-        embeddingCompatibilityStatus: "incompatible",
+        embeddingCompatibilityStatus: "unknown",
         embeddingCompatibilityReason: "fingerprint-mismatch",
         reindexRecommended: true,
         queryEmbeddingAllowed: false,
       });
       expect(summary.setReadiness?.reasonCodes).toEqual(
-        expect.arrayContaining(["embedding-incompatible"]),
+        expect.arrayContaining(["embedding-unknown"]),
       );
       expect(summary.degradationReasons).toEqual(
         expect.arrayContaining([
-          "Embedding profile is incompatible with the current semantic retrieval space.",
+          "Embedding profile compatibility is unverified; full re-embed is recommended.",
         ]),
       );
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
