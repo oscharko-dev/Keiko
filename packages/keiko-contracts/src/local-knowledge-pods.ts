@@ -312,7 +312,6 @@ const POLICY_POSTURES: readonly KnowledgePodPolicyPosture[] = [
 ];
 const MODEL_USE_POLICY_SOURCES: readonly KnowledgePodModelUsePolicySource[] = [
   "explicit",
-  "sealed-default",
   "legacy-default",
 ];
 const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [

@@ -15,6 +15,10 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
@@ -302,6 +306,60 @@ describe("searchVectorsForScope — composed capsule set", () => {
     const capsuleIds = new Set(outcome.references.map((r) => String(r.capsuleId)));
     expect(capsuleIds.has("cap-a")).toBe(true);
     expect(capsuleIds.has("cap-b")).toBe(true);
+  });
+
+  it("gates each member independently: a sealed member's model is never embedded", async () => {
+    const { store } = getFixture();
+    // Distinct model ids put the sealed and standard members in separate lanes, so every
+    // provider call names the member it belongs to and per-member gating is observable.
+    const sealedIdentity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "model-sealed",
+    };
+    const standardIdentity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "model-standard",
+    };
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-sealed",
+      sourceId: "src-sealed",
+      documentId: "doc-sealed",
+      identity: sealedIdentity,
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      text: "alpha alpha alpha beta beta beta gamma gamma gamma",
+    });
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-standard",
+      sourceId: "src-standard",
+      documentId: "doc-standard",
+      identity: standardIdentity,
+      modelUsePolicy: standardPodModelUsePolicy(),
+      text: "epsilon epsilon epsilon zeta zeta zeta eta eta eta",
+    });
+    const embeddedModelIds: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        embeddedModelIds.push(req.modelId);
+        return {
+          ok: true,
+          value: { vector: deterministicVector(req.input, 1536), modelId: req.modelId },
+        };
+      },
+    });
+    const scope: RetrievalScopeInput = {
+      capsuleIds: ["cap-sealed" as KnowledgeCapsuleId, "cap-standard" as KnowledgeCapsuleId],
+    };
+
+    const outcome = await searchVectorsForScope(store, adapter, scope, "query", { topK: 20 });
+
+    expect(embeddedModelIds).not.toContain("model-sealed");
+    expect(embeddedModelIds).toContain("model-standard");
+    const refCapsuleIds = new Set(outcome.references.map((r) => String(r.capsuleId)));
+    expect(refCapsuleIds.has("cap-standard")).toBe(true);
+    expect(refCapsuleIds.has("cap-sealed")).toBe(false);
+    const laneStatuses = (outcome.diagnostics.embeddingLanes ?? []).map((lane) => lane.status);
+    expect(laneStatuses).toContain("policy-denied");
+    expect(laneStatuses).toContain("searched");
   });
 
   it("uses lane-local dense ranks before fusing incompatible raw score spaces", async () => {
