@@ -287,6 +287,13 @@ function profileMismatchReason(
   return PROFILE_COMPARISONS.find((comparison) => !comparison.matches(left, right))?.reason;
 }
 
+function profileMismatchDecision(
+  reason: EmbeddingProfileCompatibilityReason | undefined,
+): EmbeddingProfileCompatibilityDecision | undefined {
+  if (reason === undefined) return undefined;
+  return reason === "fingerprint-mismatch" ? unknown(reason) : incompatible(reason);
+}
+
 export function compareEmbeddingProfiles(
   left: EmbeddingProfileIdentity | undefined,
   right: EmbeddingProfileIdentity | undefined,
@@ -296,8 +303,8 @@ export function compareEmbeddingProfiles(
   if (left.locality === "opaque" || right.locality === "opaque") return opaqueDecision();
   if (!profileHasQueryEmbedding(left) || !profileHasQueryEmbedding(right))
     return unavailableDecision();
-  const mismatch = profileMismatchReason(left, right);
-  if (mismatch !== undefined) return incompatible(mismatch);
+  const mismatch = profileMismatchDecision(profileMismatchReason(left, right));
+  if (mismatch !== undefined) return mismatch;
   if (legacyOrUnverified(left) || legacyOrUnverified(right)) {
     return unknown("legacy-unverified-profile");
   }
