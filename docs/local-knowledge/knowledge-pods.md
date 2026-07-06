@@ -229,6 +229,24 @@ If a reranker is not configured, denied by policy, unavailable, times out, throw
 returns an invalid mapping, Keiko preserves the fused retrieval order and records the
 redacted no-op/degraded diagnostics instead of failing the grounded answer.
 
+Three clarifications on the current behavior:
+
+- `mode: "local-only"` on a policy-denied result does not mean a local reranker executed.
+  Keiko ships no local reranker yet, so a sealed or reranking-denied pod degrades to a
+  redacted no-op that preserves the fused retrieval order. The `localReranking` policy
+  operation is reserved forward-compatible surface for a future local reranker and has no
+  runtime consumer today; only `externalReranking` currently gates the provider call.
+- A reranker that is simply not configured is the default, fully-supported install state.
+  It is reported as `status: "disabled"` with failure kind `not-configured` and is treated
+  as an ordinary searched pod, not a degraded one, on both the single-scope and hybrid
+  grounding paths. Only genuine failures (unavailable, timeout, transport, invalid-response)
+  degrade the pod activity row.
+- Reranker input is bounded by the existing grounding budgets. The Knowledge Pod path caps
+  candidate count and excerpt length with `maxPromptReferences` and `maxExcerptChars` (its
+  input is already rank-capped upstream, so it needs no separate pre-fusion pool budget),
+  while the connector+folder hybrid path additionally applies `hybridMaxCandidates` and
+  `hybridMaxExcerptBytes` to bound its pre-fusion RRF candidate pool.
+
 ## Retrieval activity projection
 
 Grounded local-knowledge and hybrid answers may include a `retrievalActivity` object.
