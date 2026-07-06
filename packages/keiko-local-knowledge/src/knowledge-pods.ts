@@ -20,12 +20,12 @@ import {
   type KnowledgePodCounts,
   type KnowledgePodModelUsePolicySummary,
   type KnowledgePodReadiness,
-  type KnowledgePodResolvedModelUsePolicyOperations,
   type KnowledgePodRetrievalCapabilities,
   type KnowledgePodSetReadinessReasonCode,
   type KnowledgePodSetReadinessSummary,
   type KnowledgePodSourceKind,
   type KnowledgePodSummary,
+  type KnowledgePodSummaryKind,
   type KnowledgeSource,
   isKnowledgePodEvidenceSafeText,
   resolveKnowledgePodModelUsePolicy,
@@ -35,6 +35,7 @@ import {
 import { getCapsule, listCapsules } from "./capsule-lifecycle.js";
 import { listCapsuleSets } from "./capsule-set-lifecycle.js";
 import { KnowledgeStoreError } from "./errors.js";
+import { resolveScopeModelUsePolicy } from "./model-use-policy.js";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -98,11 +99,22 @@ const MEMBER_READINESS_BUCKETS: Record<
   error: { countKey: "errorCount", reason: "member-error" },
 };
 
-export function listKnowledgePodSummaries(store: KnowledgeStore): readonly KnowledgePodSummary[] {
-  return [
-    ...listCapsules(store).map((capsule) => buildKnowledgePodSummary(store, capsule)),
-    ...listCapsuleSets(store).map((set) => buildKnowledgePodSetSummary(store, set)),
-  ];
+export function listKnowledgePodSummaries(
+  store: KnowledgeStore,
+  kind?: KnowledgePodSummaryKind,
+): readonly KnowledgePodSummary[] {
+  // Scope the projection to the requested kind before building. Building a summary can fail
+  // closed on corrupt state, so materializing an unrelated collection here would let one
+  // corrupt standalone capsule 503 the pod-set listing (and vice versa).
+  const pods =
+    kind === "pod-set"
+      ? []
+      : listCapsules(store).map((capsule) => buildKnowledgePodSummary(store, capsule));
+  const sets =
+    kind === "pod"
+      ? []
+      : listCapsuleSets(store).map((set) => buildKnowledgePodSetSummary(store, set));
+  return [...pods, ...sets];
 }
 
 export function buildKnowledgePodSummary(
@@ -227,52 +239,9 @@ function capsuleModelUsePolicySummary(
 function setModelUsePolicySummary(
   members: readonly CapsuleProjectionInput[],
 ): KnowledgePodModelUsePolicySummary {
-  if (members.length === 0) {
-    return resolveKnowledgePodModelUsePolicy(undefined);
-  }
-  const memberPolicies = members.map((member) => capsuleModelUsePolicySummary(member.capsule));
-  return {
-    source: aggregatePolicySource(memberPolicies),
-    mode: aggregatePolicyMode(memberPolicies),
-    operations: aggregatePolicyOperations(memberPolicies),
-  };
-}
-
-function aggregatePolicySource(
-  policies: readonly KnowledgePodModelUsePolicySummary[],
-): KnowledgePodModelUsePolicySummary["source"] {
-  if (policies.every((policy) => policy.source === "explicit")) return "explicit";
-  if (policies.every((policy) => policy.source === "sealed-default")) return "sealed-default";
-  return "legacy-default";
-}
-
-function aggregatePolicyMode(
-  policies: readonly KnowledgePodModelUsePolicySummary[],
-): KnowledgePodModelUsePolicySummary["mode"] {
-  if (policies.some((policy) => policy.mode === "sealed-local")) return "sealed-local";
-  if (policies.every((policy) => policy.mode === "standard")) return "standard";
-  return "custom";
-}
-
-function aggregatePolicyOperations(
-  policies: readonly KnowledgePodModelUsePolicySummary[],
-): KnowledgePodResolvedModelUsePolicyOperations {
-  return {
-    externalEmbeddings: aggregatePolicyOperation(policies, "externalEmbeddings"),
-    localEmbeddings: aggregatePolicyOperation(policies, "localEmbeddings"),
-    externalReranking: aggregatePolicyOperation(policies, "externalReranking"),
-    localReranking: aggregatePolicyOperation(policies, "localReranking"),
-    answerSynthesis: aggregatePolicyOperation(policies, "answerSynthesis"),
-    rawContentRelease: aggregatePolicyOperation(policies, "rawContentRelease"),
-    evidencePersistence: aggregatePolicyOperation(policies, "evidencePersistence"),
-  };
-}
-
-function aggregatePolicyOperation(
-  policies: readonly KnowledgePodModelUsePolicySummary[],
-  operation: keyof KnowledgePodResolvedModelUsePolicyOperations,
-): KnowledgePodResolvedModelUsePolicyOperations[typeof operation] {
-  return policies.some((policy) => policy.operations[operation] === "deny") ? "deny" : "allow";
+  // Reuse the single canonical scope-aggregation path (model-use-policy.ts) that already governs
+  // retrieval gating, so a pod-set's displayed policy never diverges from its enforced policy.
+  return resolveScopeModelUsePolicy(members.map((member) => member.capsule));
 }
 
 function governanceForPolicy(
