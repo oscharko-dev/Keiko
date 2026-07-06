@@ -118,6 +118,11 @@ const SEARCH_STOPWORDS = new Set([
 export interface RetrievalScopeInput {
   readonly capsuleIds: readonly KnowledgeCapsuleId[];
   readonly sourceFilter?: readonly KnowledgeSourceId[];
+  // Pre-loaded capsule metadata for exactly `capsuleIds` (existing members only,
+  // same order), threaded from scope resolution so the search never re-fetches it
+  // (GEN-PERF-LK-001). Optional: callers without the objects in hand omit it and
+  // the search falls back to loading by id — behaviour is identical either way.
+  readonly capsules?: readonly KnowledgeCapsule[];
 }
 
 export interface SearchOptions {
@@ -154,7 +159,7 @@ export function toScopeInput(
   if ("capsuleId" in scope) {
     return { capsuleIds: [scope.capsuleId] };
   }
-  return { capsuleIds: scope.capsuleIds, sourceFilter: scope.sourceIds };
+  return { capsuleIds: scope.capsuleIds, sourceFilter: scope.sourceIds, capsules: scope.capsules };
 }
 
 // ─── Vector row reader ───────────────────────────────────────────────────────
@@ -2256,7 +2261,7 @@ export async function searchVectorsForScope(
   query: string,
   options: SearchOptions,
 ): Promise<SearchOutcome> {
-  const capsules = loadCapsules(store, scope.capsuleIds);
+  const capsules = scope.capsules ?? loadCapsules(store, scope.capsuleIds);
   if (capsules.length === 0) {
     const profile = profileQuery(query, options.strategy);
     const budgets = candidateBudgets(options.topK, profile);
