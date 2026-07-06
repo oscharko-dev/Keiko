@@ -8,6 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorPickerWidget } from "./ConnectorPickerWidget";
+import { ApiError } from "@/lib/api";
 import type {
   CapsuleListEntry,
   CapsulesResponse,
@@ -220,6 +221,26 @@ describe("ConnectorPickerWidget", () => {
     render(<ConnectorPickerWidget onSelect={vi.fn()} />);
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("network error");
+    });
+  });
+
+  it("shows local-knowledge unavailable diagnostics with recovery guidance", async () => {
+    const error = new ApiError(
+      "LOCAL_KNOWLEDGE_UNAVAILABLE",
+      "Local knowledge storage is unavailable.",
+      503,
+    );
+    error.correlationId = "lk-unavailable-1";
+    mockFetchCapsules.mockRejectedValue(error);
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
+
+    render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("Local knowledge storage is unavailable.");
+      expect(alert).toHaveTextContent("Restart Keiko, reopen Local Knowledge, then try again.");
+      expect(alert).toHaveTextContent("LOCAL_KNOWLEDGE_UNAVAILABLE; support ID lk-unavailable-1");
     });
   });
 });

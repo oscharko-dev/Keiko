@@ -23,7 +23,7 @@ import {
   type CapsuleSetListEntry,
   type KnowledgePodUiGuidance,
 } from "@/lib/local-knowledge-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "@/app/local-knowledge/format-error";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
 
@@ -60,14 +60,6 @@ function lifecycleLabel(state: CapsuleListEntry["lifecycleState"]): string {
     default:
       return state;
   }
-}
-
-function formatLoadError(error: unknown): string {
-  // uiux-fix F018 C124: lead with the human message; the machine code follows as a
-  // parenthesised detail instead of a bold "INTERNAL:" prefix.
-  if (error instanceof ApiError) return `${error.message} (${error.code})`;
-  if (error instanceof Error) return error.message;
-  return "Failed to load Knowledge Pods.";
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -298,7 +290,7 @@ export function ConnectorPickerWidget({
             ),
           );
         } else {
-          setError(formatLoadError(capsuleResult.reason));
+          setError(formatError(capsuleResult.reason));
         }
         if (capsuleSetResult.status === "fulfilled") {
           setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResult.value));
@@ -306,7 +298,7 @@ export function ConnectorPickerWidget({
           setSetsFailed(true);
         }
       } catch (caught) {
-        if (!cancelled) setError(formatLoadError(caught));
+        if (!cancelled) setError(formatError(caught));
       } finally {
         if (!cancelled) setLoading(false);
       }
