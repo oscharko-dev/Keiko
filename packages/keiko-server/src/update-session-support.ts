@@ -141,7 +141,13 @@ export function logPreview(
 }
 
 export function retryableFailure(reason: UpdateSessionFailureReason): boolean {
-  return reason === "non-zero-exit" || reason === "timed-out" || reason === "spawn-error";
+  return (
+    reason === "non-zero-exit" ||
+    reason === "timed-out" ||
+    reason === "spawn-error" ||
+    reason === "portable-download-failed" ||
+    reason === "portable-staging-failed"
+  );
 }
 
 export function failureFromError(error: unknown): UpdateSessionFailureReason {
@@ -157,6 +163,18 @@ export function messageForFailure(reason: UpdateSessionFailureReason): string {
   if (reason === "cancelled") return "The update was cancelled.";
   if (reason === "restart-version-mismatch") {
     return "Restart not detected yet. Run the restart command, then try Verify restart again.";
+  }
+  if (reason === "portable-preflight-ineligible") {
+    return "The portable update candidate is no longer eligible. Re-run update preflight.";
+  }
+  if (reason === "portable-download-failed") {
+    return "The portable update asset could not be downloaded.";
+  }
+  if (reason === "portable-verification-failed") {
+    return "The portable update asset could not be verified.";
+  }
+  if (reason === "portable-staging-failed") {
+    return "The portable update asset could not be staged safely.";
   }
   return "The package manager could not complete the update.";
 }

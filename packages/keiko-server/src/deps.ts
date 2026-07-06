@@ -55,6 +55,7 @@ import {
   createUpdateLocalStateManager,
   type UpdateLocalStateManager,
 } from "./update-local-state.js";
+import { createPortableUpdateStager } from "./update-portable-staging.js";
 import {
   createUpdateRemediationManager,
   type UpdateRemediationManager,
@@ -921,11 +922,20 @@ function buildUpdateSession(options: {
   readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
+  readonly updateLocalState: UpdateLocalStateManager;
+  readonly runtimeConfig: RuntimeGatewayConfig;
 }): UpdateSessionManager {
   if (options.injected !== undefined) return options.injected;
   return createUpdateSessionManager({
     processEnv: options.env,
     lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
+    portableStager: createPortableUpdateStager({
+      env: options.env,
+      localState: options.updateLocalState,
+      egress: () =>
+        options.runtimeConfig.current()?.egress ??
+        resolveOutboundHttpEgressConfig(undefined, options.env),
+    }),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1371,6 +1381,8 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       injected: args.options.updateSession,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
+      updateLocalState,
+      runtimeConfig: args.runtimeConfig,
     }),
     updatePreflight: args.options.updatePreflight,
     updateLocalState,

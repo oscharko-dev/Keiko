@@ -102,6 +102,28 @@ export interface UpdatePortableAssetSummary {
   readonly verificationStatus?: UpdatePortableAssetVerificationStatus | undefined;
 }
 
+export type UpdatePortableStagingStatus = "pending" | "staged" | "failed";
+
+export const UPDATE_PORTABLE_STAGING_STATUSES: readonly UpdatePortableStagingStatus[] =
+  Object.freeze([
+    "pending",
+    "staged",
+    "failed",
+  ] as const satisfies readonly UpdatePortableStagingStatus[]);
+
+export interface UpdatePortableStagingSummary {
+  readonly stageId: string;
+  readonly status: UpdatePortableStagingStatus;
+  readonly target: UpdatePortableTarget;
+  readonly packageVersion: string;
+  readonly assetName: string;
+  readonly assetId: number;
+  readonly releaseId: number;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly manifestSha256: string;
+}
+
 export type UpdateUnsupportedReason =
   | "unknown-path"
   | "local-checkout"
@@ -191,6 +213,10 @@ export type UpdateSessionFailureReason =
   | "non-zero-exit"
   | "timed-out"
   | "cancelled"
+  | "portable-preflight-ineligible"
+  | "portable-download-failed"
+  | "portable-verification-failed"
+  | "portable-staging-failed"
   | "restart-version-mismatch";
 
 export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason[] = Object.freeze([
@@ -202,6 +228,10 @@ export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason
   "non-zero-exit",
   "timed-out",
   "cancelled",
+  "portable-preflight-ineligible",
+  "portable-download-failed",
+  "portable-verification-failed",
+  "portable-staging-failed",
   "restart-version-mismatch",
 ] as const satisfies readonly UpdateSessionFailureReason[]);
 
@@ -225,6 +255,7 @@ export interface UpdateSession {
   readonly installRoot?: string | undefined;
   readonly commandPreview?: UpdateCommandPreview | undefined;
   readonly restartCommandPreview?: UpdateRestartCommandPreview | undefined;
+  readonly portableStage?: UpdatePortableStagingSummary | undefined;
   readonly startedAt: string;
   readonly updatedAt: string;
   readonly cancelable: boolean;

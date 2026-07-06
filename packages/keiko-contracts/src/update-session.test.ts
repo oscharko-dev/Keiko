@@ -3,13 +3,16 @@ import {
   UPDATE_INSTALL_MODE_KINDS,
   UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES,
   UPDATE_PORTABLE_INSTALL_STATUSES,
+  UPDATE_PORTABLE_STAGING_STATUSES,
   UPDATE_PORTABLE_TARGET_ASSET_NAMES,
   UPDATE_PORTABLE_TARGETS,
   UPDATE_RECOMMENDED_ACTIONS,
+  UPDATE_SESSION_FAILURE_REASONS,
   UPDATE_UNSUPPORTED_REASONS,
   parseUpdateSessionStartRequest,
   type UpdatePortableAssetSummary,
   type UpdatePortableInstallSummary,
+  type UpdatePortableStagingSummary,
 } from "./update-session.js";
 
 describe("update session portable contract", () => {
@@ -58,6 +61,27 @@ describe("update session portable contract", () => {
     expect(install).not.toHaveProperty("managedRoot");
     expect(asset.fileName).toBe("keiko-macos-x64.zip");
     expect(UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES).toEqual(["pending", "verified", "failed"]);
+    expect(UPDATE_PORTABLE_STAGING_STATUSES).toEqual(["pending", "staged", "failed"]);
+    expect(UPDATE_SESSION_FAILURE_REASONS).toContain("portable-staging-failed");
+  });
+
+  it("models content-free portable staging summaries", () => {
+    const stage: UpdatePortableStagingSummary = {
+      stageId: "stage-1",
+      status: "staged",
+      target: "windows-x64",
+      packageVersion: "0.2.14",
+      assetName: "keiko-windows-x64.zip",
+      assetId: 123,
+      releaseId: 456,
+      sizeBytes: 789,
+      sha256: "c".repeat(64),
+      manifestSha256: "d".repeat(64),
+    };
+
+    expect(stage).not.toHaveProperty("stagingPath");
+    expect(stage).not.toHaveProperty("downloadUrl");
+    expect(stage).not.toHaveProperty("managedRoot");
   });
 
   it("keeps session start requests stable-only", () => {

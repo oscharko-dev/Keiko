@@ -9,6 +9,7 @@ import {
   UpdateSessionError,
   type UpdateSessionManagerOptions,
 } from "./update-session.js";
+import type { PortableUpdateStager } from "./update-portable-staging.js";
 import { detectUpdateInstallMode, type UpdateRuntimeFacts } from "./update-install-mode.js";
 import {
   createFileUpdateSessionLock,
@@ -32,6 +33,23 @@ function facts(overrides: Partial<UpdateRuntimeFacts> = {}): UpdateRuntimeFacts 
 
 function supportedMode(packageManager: "npm" | "yarn" = "npm"): UpdateInstallMode {
   return detectUpdateInstallMode(facts({ packageManagerHint: packageManager }));
+}
+
+function portableMode(): UpdateInstallMode {
+  return {
+    schemaVersion: "1",
+    status: "supported",
+    packageName: "@oscharko-dev/keiko",
+    installKind: "portable-managed",
+    portable: {
+      status: "managed",
+      target: "windows-x64",
+      updateEligible: true,
+      packageVersion: "0.2.11",
+      stable: true,
+    },
+    recommendedAction: "portable-managed-update",
+  };
 }
 
 function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
@@ -195,6 +213,48 @@ describe("UpdateSessionManager", () => {
     ]);
   });
 
+  it("stages portable-managed updates without invoking package-manager commands", async () => {
+    const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+    const stage = vi.fn<PortableUpdateStager["stage"]>().mockResolvedValue({
+      stageId: "stage-1",
+      status: "staged",
+      target: "windows-x64",
+      packageVersion: "0.2.12",
+      assetName: "keiko-windows-x64.zip",
+      assetId: 123,
+      releaseId: 456,
+      sizeBytes: 789,
+      sha256: "a".repeat(64),
+      manifestSha256: "b".repeat(64),
+    });
+    const portableStager: PortableUpdateStager = {
+      stage,
+    };
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      idFactory: () => "session-1",
+      portableStager,
+      runCommandImpl,
+    });
+
+    const started = manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "succeeded");
+
+    expect(started.session.commandPreview).toBeUndefined();
+    expect(runCommandImpl).not.toHaveBeenCalled();
+    const stageInput = stage.mock.calls[0]?.[0];
+    expect(stageInput?.sessionId).toBe("session-1");
+    expect(stageInput?.targetVersion).toBe("0.2.12");
+    expect(stageInput?.installMode.installKind).toBe("portable-managed");
+    expect(stageInput?.runtimeFacts?.packageRoot).toBe("/Users/alice/Applications/Keiko/app");
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "succeeded",
+      restartRequired: false,
+      portableStage: { stageId: "stage-1", status: "staged" },
+    });
+  });
+
   it("attaches duplicate starts and rejects conflicting concurrent starts", () => {
     const gate = deferred();
     const manager = createUpdateSessionManager({
@@ -257,6 +317,9 @@ describe("UpdateSessionManager", () => {
 
     expect(requested.phase).toBe("running");
     expect(requested.cancelable).toBe(false);
+    expect(requested.message).toBe(
+      "Cancellation requested. Waiting for the update operation to stop.",
+    );
     await aborted.promise;
     await waitForPhase(manager, "cancelled");
     expect(manager.getStatus().lastSession).toMatchObject({
