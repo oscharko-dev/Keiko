@@ -516,7 +516,7 @@ Validation rules:
   targets.
 - macOS targets require Developer ID signature and notarization verification. Windows requires
   Authenticode publisher-chain verification.
-- The release-impact entry must bind the full reviewed ADR-0113 tuple for the same artifact:
+- The release-impact entry must bind the full reviewed ADR-0114 tuple for the same artifact:
   release id/tag, asset id/name/size, package version, runtime identity, archive digest, build
   provenance, SBOM/license/checksum evidence, platform target, signing/notarization status, and any
   included `sidecarRuntimes[]` entries.

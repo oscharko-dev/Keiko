@@ -96,5 +96,6 @@ Generated smoke evidence is a local release artifact. It must not be committed t
 - [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md)
 - [Release / Publish Workflow](release-publish-workflow.md)
 - [Portable updater v2 QA matrix](../qa/portable-updater-v2-qa-matrix.md)
+- [Portable product delivery v2 integrated QA](../qa/portable-product-delivery-v2-integrated-qa.md)
 - [Portable launch/setup troubleshooting](../troubleshooting/portable-launch-setup.md)
 - [Local runtime state contract](../local-runtime-state-contract.md)
