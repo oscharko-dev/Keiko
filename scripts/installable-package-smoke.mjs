@@ -25,9 +25,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 90_000;
-const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 300_000;
-const NPM_INSTALL_TIMEOUT_MS =
+const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
+const DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS =
   process.platform === "win32" ? WINDOWS_NPM_INSTALL_TIMEOUT_MS : DEFAULT_NPM_INSTALL_TIMEOUT_MS;
+const NPM_INSTALL_TIMEOUT_MS =
+  parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS") ??
+  DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const LIFECYCLE_COMMAND_TIMEOUT_MS = 90_000;
@@ -48,6 +51,21 @@ function parseArgs(argv) {
 function fail(message) {
   console.error(`installable-smoke failed: ${message}`);
   process.exit(1);
+}
+
+function parsePositiveTimeoutEnv(name) {
+  const value = process.env[name];
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  if (!/^[1-9]\d*$/u.test(value)) {
+    fail(`${name} must be a positive integer number of milliseconds.`);
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    fail(`${name} must be a safe integer number of milliseconds.`);
+  }
+  return parsed;
 }
 
 function run(cmd, args, options = {}) {
