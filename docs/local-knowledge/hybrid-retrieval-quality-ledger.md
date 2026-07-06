@@ -221,8 +221,11 @@ Status after implementation and post-audit hardening on 2026-07-05:
 - Four new synthetic fixtures were added:
   - `exact-technical`: exact ADR id, API name, policy clause, and error-code retrieval.
   - `semantic-paraphrase`: broad semantic query with wording that differs from the corpus.
-  - `multilingual-retrieval`: German-language query with English evidence, proving deterministic
-    cross-lingual vector recall rather than same-language lexical overlap.
+  - `multilingual-retrieval`: German-language query with English evidence, exercising the
+    cross-lingual retrieval path end to end. Under the deterministic scripted adapter this proves the
+    query routes to the correct English chunk through production retrieval instead of relying on
+    same-language lexical overlap; it does not certify a specific production embedding model's real
+    cross-lingual quality (see "Known Limitations And Follow-Ups").
   - `mixed-strategy`: exact, broad, and balanced queries in one capsule.
 - Fixture registry, determinism, and threshold tests now iterate `ALL_FIXTURES`, preventing future
   registry drift.
@@ -238,6 +241,13 @@ Status after implementation and post-audit hardening on 2026-07-05:
   to the deterministic eval harness, while production indexing already owns lexical rows.
 
 ## Verification Log
+
+> Note on point-in-time counts: the fixture and test counts recorded in the dated blocks below were
+> accurate at the #1817 delivery commit. The Local Knowledge eval suite shares a single
+> `ALL_FIXTURES` registry that later epics extend (for example #1818 added the `multi-space`
+> fixture), so re-running today yields higher counts. Treat the absolute counts below as historical
+> snapshots; the reproducible, current figures are in "Post-Merge Audit Re-Verification (2026-07-06)"
+> at the end of this section.
 
 Baseline targeted verification before edits on 2026-07-05:
 
@@ -329,17 +339,55 @@ Final local verification on 2026-07-05:
   - PASS after the final script extraction; package build, package graph, and root `tsc --noEmit`
     completed.
 
+Post-Merge Audit Re-Verification (2026-07-06):
+
+An independent post-merge audit of Epic #1817 re-ran the local gates at `dev` HEAD `627706e4` and
+added evidence-hardening and test coverage only — no production retrieval behavior (ranking, budgets,
+fusion, schema, or gateway) changed. Reproducible gate outputs:
+
+- `npm run check:retrieval-quality` — PASS; workspace retrieval cases: 15 (top1 100.0%, recall@5
+  100.0%, MRR 1.000, nDCG@5 1.000, line-hit 100.0%, generated leaks 0); Local Knowledge fixtures:
+  16 of 16 passed (recall, precision, MRR, nDCG, isolation, and no-evidence all 1.000). The gate now
+  additionally runs three non-tautology regression probes (`exact-technical`, `semantic-paraphrase`,
+  `multilingual-retrieval`) whose ground truth is repointed at a decoy chunk; all three correctly
+  drop below the pass floors (`observed=below-floors`), proving the Local Knowledge scorecard gate is
+  not tautological.
+- `npm run check:grounded-retrieval-quality` — PASS; baseline cases 10, with the `reranker-reversed`
+  and `embedding-flat` regression controls failing closed.
+- `npm run check:grounded-faithfulness` — PASS; fixtures 8; unsupported detection, citation
+  precision, and abstention-on-empty all 100.0%.
+- `npm run typecheck`, `npm run lint`, `npm run format:check` — PASS.
+- `npm run arch:check` — PASS (no dependency violations across 2,583 modules; import policy and
+  contract boundaries hold). `npm run arch:check:negative` — PASS (negative fixtures fire as designed).
+- Targeted retrieval/evaluation/gate tests (`scoped-vector-search.test.ts`, `runner.test.ts`,
+  `runner-strategy.test.ts`, `fixtures.test.ts`, `check-retrieval-quality.test.mjs`) — PASS; 5 files,
+  97 tests. The `@oscharko-dev/keiko-local-knowledge` package suite — PASS; 78 files, 910 tests. These
+  absolute counts are point-in-time at `627706e4`.
+
+Audit additions (test/evidence only): auto-strategy classification coverage for identifier-bearing
+questions in `scoped-vector-search.test.ts`; the non-tautology regression probes in
+`check-retrieval-quality.mjs`; a forwarding-contract scope note on `runner-strategy.test.ts`; and the
+accuracy and limitation corrections in this ledger. No retrieval ranking, candidate budget, RRF
+fusion, persisted schema, or Model Gateway behavior was changed.
+
 ## Release Evidence Summary
 
 - Exact technical behavior is covered by `exact-technical` and the low-level hostile-input lexical
   test. The exact fixture uses synthetic ADR/API/policy/error-code terms and passes through
   `check:retrieval-quality`.
 - Semantic behavior is covered by `semantic-paraphrase`, which uses the deterministic scripted
-  embedding adapter so the gate does not depend on any provider call.
+  embedding adapter so the gate does not depend on any provider call. The scripted adapter models
+  topic proximity deterministically, so the fixture proves the semantic retrieval path routes a
+  reworded query to the right chunk — not a production model's absolute semantic quality.
 - Multilingual behavior is covered by `multilingual-retrieval`, a German-language synthetic fixture
-  with deterministic vector recall.
-- Hybrid and strategy behavior is covered by `mixed-strategy`, `broad-query-diversity`, strategy
-  diagnostics tests, and existing guided/ANN/lexical-degraded tests.
+  with deterministic vector recall through the same scripted-adapter routing. Real production-model
+  cross-lingual quality is a documented harness limitation (see below), not a claim of this gate.
+- Hybrid and strategy behavior is covered by `mixed-strategy`, `broad-query-diversity`, the RRF
+  fusion tests in `scoped-vector-search.test.ts` (a dense-second candidate lifted above the
+  dense-first candidate by an exact lexical match), strategy/auto-classification diagnostics tests,
+  and existing guided/ANN/lexical-degraded tests. The Local Knowledge quality gate additionally runs
+  non-tautology regression probes (see the re-verification section) that repoint a fixture's
+  ground-truth at a decoy chunk and assert the scorecard drops below the pass floors.
 - Candidate budgets are strategy-aware and exposed as redacted diagnostics: exact uses the highest
   lexical/fused budget, broad keeps dense-oriented fusion for recall/diversity, balanced remains the
   safe default for short non-exact queries, and all modes still fuse by ADR-0036 RRF.
@@ -379,8 +427,25 @@ Final local verification on 2026-07-05:
   without adding schema or migration work.
 - The grounded retrieval and faithfulness gates still emit Node's experimental SQLite warning in this
   local environment. The warning is non-sensitive and pre-existing for those gates.
+- Auto-strategy classification: a natural-language question that names a concrete identifier (for
+  example `How does ADR-0036 work?`) resolves to the `exact` strategy because a strong lexical-recall
+  term is present. This is intentional — the dense/semantic leg still runs and fuses, so exact mode
+  never disables semantic recall (pinned by
+  `scoped-vector-search.test.ts` "resolves the auto strategy for identifier-bearing questions"). A
+  future refinement could route interrogative identifier queries to `balanced`; that is a reviewed
+  ranking change and is deliberately not made here.
+- Evaluation-harness scope: the scripted embedding adapter is deterministic and models topic
+  proximity, so the semantic and multilingual fixtures certify the retrieval, fusion, and routing
+  path — not a production embedding model's absolute semantic or cross-lingual quality. Certifying a
+  real model would require a non-hermetic smoke test outside CI determinism and is a follow-up.
+- Eval-fixture fusion coverage: RRF fusion necessity is proven at the unit layer
+  (`scoped-vector-search.test.ts`) and by the gate's non-tautology regression probes. A first-class
+  eval fixture whose ground truth is reachable only by fusing both legs would additionally require a
+  per-input embedding-boost extension to the scripted adapter (the current per-topic boost map cannot
+  grade two same-topic chunks); this is a scoped follow-up, not an acceptance gap.
 - No additional follow-up issue is required for this implementation unless PR review or CI surfaces a
-  new acceptance-blocking gap.
+  new acceptance-blocking gap. The items above are dispositioned as reviewed limitations/follow-ups,
+  not open defects.
 
 ## Operating Guidance
 

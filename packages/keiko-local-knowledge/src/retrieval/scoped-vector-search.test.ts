@@ -1678,6 +1678,51 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(JSON.stringify(explicit.diagnostics)).not.toContain("ADR-0036");
   });
 
+  it("resolves the auto strategy for identifier-bearing questions without disabling semantic recall", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-auto-strategy",
+      text: "ADR-0036 documents how RRF_K governs hybrid retrieval fusion for Knowledge Pods.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const scope = { capsuleIds: ["cap-auto-strategy" as KnowledgeCapsuleId] };
+
+    // A natural-language QUESTION that names a concrete identifier resolves to `exact`. This is
+    // intentional (the caller referenced a specific id, so lexical precision leads), and it must
+    // NOT disable semantic recall: the dense leg still runs and the identifier chunk is still
+    // returned even though the question words ("how", "work") are absent from the document.
+    const identifierQuestion = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      scope,
+      "How does ADR-0036 work?",
+      { topK: 1 },
+    );
+    expect(identifierQuestion.diagnostics.strategy).toBe("exact");
+    expect(identifierQuestion.references.length).toBeGreaterThan(0);
+
+    // A plain natural-language question with no identifier falls back to the safe `balanced`
+    // default rather than being forced into exact or broad.
+    const plainQuestion = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      scope,
+      "What is the capital of France?",
+      { topK: 1 },
+    );
+    expect(plainQuestion.diagnostics.strategy).toBe("balanced");
+
+    // A comparison/summary-style question resolves to `broad` for wider recall.
+    const broadQuestion = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      scope,
+      "Compare and summarize the retrieval policy evidence across every connected source",
+      { topK: 1 },
+    );
+    expect(broadQuestion.diagnostics.strategy).toBe("broad");
+  });
+
   it("reports strategy-specific candidate budgets as redacted diagnostics", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {
