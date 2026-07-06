@@ -130,6 +130,8 @@ function runPublish({ npmBody, initState }) {
     // Deterministic npmrc generation; the stub npm never uses this token.
     NPM_CONFIG_STRICT_SSL: "true",
     NODE_AUTH_TOKEN: "stub-token-never-sent",
+    KEIKO_RELEASE_VERIFY_ATTEMPTS: "3",
+    KEIKO_RELEASE_VERIFY_DELAY_MS: "0",
   };
   // GH_TOKEN would be forwarded to the stub gh; drop it so nothing real is carried.
   Reflect.deleteProperty(env, "GH_TOKEN");
@@ -259,6 +261,38 @@ describe("release-publish pipeline (real orchestrator, stubbed npm/gh/git)", () 
 
     // Verification still runs: the dist-tag is re-read even on the skip path.
     expect(lastRun.calls.some(isDistTagView)).toBe(true);
+  });
+
+  it("retries post-publish registry visibility before failing the release", () => {
+    // Real npm can accept the publish and dist-tag update before every registry view
+    // endpoint sees the new version. The release must wait for propagation instead of
+    // turning a successful publish into a red workflow.
+    const viewBody = [
+      "  const s = state();",
+      '  if (argv.includes("version")) {',
+      "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
+      "    const attempts = s.versionVerifyAttempts ?? 0;",
+      "    if (attempts === 0) {",
+      "      setState({ versionVerifyAttempts: attempts + 1 });",
+      "      process.stderr.write('npm error code E404\\n');",
+      "      process.exit(1);",
+      "    }",
+      '    process.stdout.write(VERSION + "\\n");',
+      "    process.exit(0);",
+      "  }",
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+      '    process.stdout.write(VERSION + "\\n");',
+      "    process.exit(0);",
+      "  }",
+    ].join("\n");
+
+    lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+
+    expect(lastRun.status).toBe(0);
+    expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
+    expect(lastRun.stdout).toContain(`VERIFY pending ${RELEASE_SPEC}`);
+    expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+    expect(lastRun.calls.filter(isVersionView).length).toBeGreaterThanOrEqual(3);
   });
 
   it("fails the release when the dist-tag never resolves to the published version", () => {
