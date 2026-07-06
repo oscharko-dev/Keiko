@@ -45,6 +45,9 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // so the stubs must answer with that same version rather than a hardcoded one. This
 // keeps the gate correct across version bumps.
 const ROOT_MANIFEST = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
+const RELEASE_IMPACT_CATALOG = JSON.parse(
+  readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
+);
 const RELEASE_VERSION = ROOT_MANIFEST.version;
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
@@ -106,6 +109,23 @@ function makeStub(binDir, name, body, logFile, stateFile) {
   chmodSync(path, 0o755);
 }
 
+function releaseImpactCatalogForPublishTest() {
+  return {
+    ...RELEASE_IMPACT_CATALOG,
+    entries: RELEASE_IMPACT_CATALOG.entries.map((entry) =>
+      entry.packageName === RELEASE_NAME && entry.packageVersion === RELEASE_VERSION
+        ? {
+            ...entry,
+            review: {
+              ...entry.review,
+              approvalReference: "github-pr-review:oscharko-dev/Keiko#999#888",
+            },
+          }
+        : entry,
+    ),
+  };
+}
+
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.
 // `npmBody` is the stub-`npm` behaviour under test; `initState` seeds the publish state.
 // Returns the exit status, stdout/stderr, and the ordered list of intercepted calls.
@@ -113,8 +133,10 @@ function runPublish({ npmBody, initState }) {
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const logFile = join(binDir, "calls.log");
   const stateFile = join(binDir, "state.json");
+  const catalogFile = join(binDir, "release-impact.catalog.json");
   writeFileSync(logFile, "", "utf8");
   writeFileSync(stateFile, JSON.stringify(initState), "utf8");
+  writeFileSync(catalogFile, JSON.stringify(releaseImpactCatalogForPublishTest()), "utf8");
 
   makeStub(binDir, "npm", npmBody, logFile, stateFile);
   makeStub(binDir, "gh", ghStubBody(), logFile, stateFile);
@@ -126,6 +148,7 @@ function runPublish({ npmBody, initState }) {
     // Satisfy the release-owner approval gate offline: the repository must match the
     // approval references in the live catalog, and the reviewer login must be allowed.
     GITHUB_REPOSITORY: "oscharko-dev/Keiko",
+    KEIKO_RELEASE_IMPACT_CATALOG_PATH: catalogFile,
     KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "release-owner",
     // Deterministic npmrc generation; the stub npm never uses this token.
     NPM_CONFIG_STRICT_SSL: "true",
