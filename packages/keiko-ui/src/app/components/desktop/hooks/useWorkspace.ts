@@ -28,12 +28,18 @@ import {
   connectorChatBind,
   boundScopeOf,
   filesChatBindScope,
+  isWorkspaceWindowSelectable,
   makeConnectActions,
   makeLayoutActions,
   makeMutations,
   makeSnapActions,
+  moveSelectedWorkspaceWindows,
+  normalizeWorkspaceSelection,
+  replaceWorkspaceSelection,
+  toggleWorkspaceSelection,
 } from "./workspaceActions";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
@@ -1451,6 +1457,10 @@ export function useWorkspace(
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
   const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
+    focusedWindowId: null,
+    selectedWindowIds: [],
+  });
   const [snapPrev, setSnapPrev] = useState<SnapPrev | null>(null);
   const [palOpen, setPalOpen] = useState(false);
   const [conns, setConns] = useState<Connection[]>([]);
@@ -1515,6 +1525,8 @@ export function useWorkspace(
 
   const winsRef = useRef<AppWindow[]>([]);
   winsRef.current = wins ?? [];
+  const selectionRef = useRef<WorkspaceUiSelectionState>(selection);
+  selectionRef.current = selection;
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
   const winsById = useMemo<ReadonlyMap<string, AppWindow>>(
@@ -1585,6 +1597,18 @@ export function useWorkspace(
 
   useConnectionPrune(wins, setConns);
 
+  useEffect(() => {
+    if (wins === null) {
+      setSelection((current) =>
+        current.focusedWindowId === null && current.selectedWindowIds.length === 0
+          ? current
+          : { focusedWindowId: null, selectedWindowIds: [] },
+      );
+      return;
+    }
+    setSelection((current) => normalizeWorkspaceSelection(wins, current));
+  }, [wins]);
+
   // Debounced localStorage persistence (issue #1580): a drag/resize mutates wins
   // every frame; without this each frame ran a synchronous sanitize + JSON.stringify
   // + setItem. Sanitize windows once and reuse the result for connection pruning/persistence.
@@ -1626,6 +1650,21 @@ export function useWorkspace(
     () => makeMutations({ setWins, zc, worldVP, winsRef }),
     [setWins, zc, worldVP, winsRef],
   );
+  const focusWindow = useCallback<WorkspaceApi["focus"]>(
+    (id) => {
+      const target = winsByIdRef.current.get(id);
+      if (target !== undefined && isWorkspaceWindowSelectable(target)) {
+        setSelection((current) =>
+          normalizeWorkspaceSelection(winsRef.current, {
+            ...current,
+            focusedWindowId: id,
+          }),
+        );
+      }
+      mutations.focus(id);
+    },
+    [mutations, winsByIdRef, winsRef],
+  );
   const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
   const snap = useMemo(
     () => makeSnapActions({ setSnapPrev, snapZone, worldVP, update: mutations.update }),
@@ -1647,7 +1686,7 @@ export function useWorkspace(
         connsByEndpointRef,
         connectingRef,
         connectCleanupRef,
-        focus: mutations.focus,
+        focus: focusWindow,
         setConns,
         setConnecting,
         onScopeBind: stableScopeBind,
@@ -1665,7 +1704,7 @@ export function useWorkspace(
       connsByEndpointRef,
       connectingRef,
       connectCleanupRef,
-      mutations,
+      focusWindow,
       setConns,
       setConnecting,
       stableScopeBind,
@@ -1736,6 +1775,53 @@ export function useWorkspace(
   // Issue #1580 — stable accessor for the live view (mirrors rect()); lets window
   // children read pan/zoom at gesture-start without a per-frame `view` prop.
   const currentView = useCallback((): View => viewRef.current, [viewRef]);
+  const currentSelection = useCallback<WorkspaceApi["currentSelection"]>(
+    () => selectionRef.current,
+    [selectionRef],
+  );
+  const replaceSelection = useCallback<WorkspaceApi["replaceSelection"]>(
+    (windowIds) => {
+      setSelection((current) => {
+        const next = replaceWorkspaceSelection(winsRef.current, windowIds);
+        return next.focusedWindowId === current.focusedWindowId &&
+          next.selectedWindowIds.length === current.selectedWindowIds.length &&
+          next.selectedWindowIds.every((id, index) => id === current.selectedWindowIds[index])
+          ? current
+          : next;
+      });
+    },
+    [winsRef],
+  );
+  const toggleWindowSelection = useCallback<WorkspaceApi["toggleWindowSelection"]>(
+    (windowId) => {
+      setSelection((current) => toggleWorkspaceSelection(winsRef.current, current, windowId));
+    },
+    [winsRef],
+  );
+  const clearSelection = useCallback<WorkspaceApi["clearSelection"]>(() => {
+    setSelection((current) =>
+      current.focusedWindowId === null && current.selectedWindowIds.length === 0
+        ? current
+        : { focusedWindowId: null, selectedWindowIds: [] },
+    );
+  }, []);
+  const moveSelectedWindowsBy = useCallback<WorkspaceApi["moveSelectedWindowsBy"]>(
+    (dx, dy) => {
+      const vp = worldVP();
+      if (vp === null) return;
+      setWins((ws) =>
+        ws === null
+          ? ws
+          : (moveSelectedWorkspaceWindows(
+              ws,
+              selectionRef.current.selectedWindowIds,
+              { dx, dy },
+              vp,
+            ) as AppWindow[] | null),
+      );
+    },
+    [selectionRef, setWins, worldVP],
+  );
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -1758,7 +1844,12 @@ export function useWorkspace(
       add: mutations.add,
       openEditorFile: mutations.openEditorFile,
       toggleTool: mutations.toggleTool,
-      focus: mutations.focus,
+      focus: focusWindow,
+      currentSelection,
+      replaceSelection,
+      toggleWindowSelection,
+      clearSelection,
+      moveSelectedWindowsBy,
       close: closeWithTeardown,
       minimize: mutations.minimize,
       restore: mutations.restore,
@@ -1797,6 +1888,12 @@ export function useWorkspace(
       layout,
       connectActions,
       closeWithTeardown,
+      focusWindow,
+      currentSelection,
+      replaceSelection,
+      toggleWindowSelection,
+      clearSelection,
+      moveSelectedWindowsBy,
       updateConnBoundScope,
       currentView,
       zoomTo,
@@ -1807,5 +1904,16 @@ export function useWorkspace(
     ],
   );
 
-  return { wins, winsById, snapPrev, palOpen, setPalOpen, conns, connecting, view, api };
+  return {
+    wins,
+    winsById,
+    snapPrev,
+    palOpen,
+    setPalOpen,
+    conns,
+    connecting,
+    selection,
+    view,
+    api,
+  };
 }
