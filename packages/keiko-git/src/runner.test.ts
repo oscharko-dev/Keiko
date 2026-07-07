@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGitProcessRunner, defaultGitProcessRunner, GIT_BASE_ARGS } from "./runner.js";
@@ -40,6 +40,32 @@ describe("createGitProcessRunner", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr.length).toBeGreaterThan(0);
     expect(result.timedOut).toBe(false);
+  });
+
+  it.each(["--upload-pack=touch /tmp/x", "--receive-pack=evil", "--exec=evil", "--upload-pack"])(
+    "refuses the remote-command option %s before spawning git",
+    async (badArg) => {
+      // A fake git on PATH would create a marker if it ran; the guard must reject before spawn.
+      const marker = join(root, "spawned.marker");
+      const result = await defaultGitProcessRunner([...GIT_BASE_ARGS, "clone", "--", badArg], {
+        cwd: root,
+        maxBytes: 1024,
+        timeoutMs: 10_000,
+      });
+      expect(result.exitCode).toBe(128);
+      expect(result.stderr).toContain("refused git option");
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+
+  it("still allows legitimate look-alike flags (--exec-path, -c)", async () => {
+    // These are used by real Keiko git invocations and must NOT be caught by the guard.
+    const result = await defaultGitProcessRunner(
+      [...GIT_BASE_ARGS, "-c", "gc.auto=0", "--exec-path"],
+      { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+    );
+    // --exec-path prints git's exec path and exits 0; the point is it was NOT refused (128 + message).
+    expect(result.stderr).not.toContain("refused git option");
   });
 
   it("maps a missing binary to exit 127 via the spawn error path", async () => {

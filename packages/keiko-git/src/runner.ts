@@ -16,6 +16,18 @@ const KILL_GRACE_MS = 2_000;
 // read must not block the user's own concurrent git commands on the same repository.
 export const GIT_BASE_ARGS: readonly string[] = ["--no-pager", "--no-optional-locks"];
 
+// Git options that make a remote-facing subcommand run a local command of the caller's choosing:
+// `git clone --upload-pack=<cmd>` / `--receive-pack=<cmd>` / `git send-pack --exec=<cmd>`. No Keiko
+// git invocation ever needs these, so the single spawn boundary refuses them for EVERY command —
+// defense in depth against option injection that does not depend on any one call site validating
+// its positionals. The `=`-or-word-boundary anchor keeps legitimate flags like `--exec-path` and
+// `--upload-archive` allowed; `-c` (config override) is a separate, permitted option.
+const FORBIDDEN_GIT_OPTION = /^--(?:upload-pack|receive-pack|exec)(?:=|$)/u;
+
+function forbiddenGitOption(args: readonly string[]): string | undefined {
+  return args.find((arg) => FORBIDDEN_GIT_OPTION.test(arg));
+}
+
 interface OutputAccumulator {
   readonly chunks: Buffer[];
   bytes: number;
@@ -93,6 +105,21 @@ const SPAWN_ERROR_RESULT: Omit<GitProcessResult, "truncated" | "timedOut"> = {
 export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitProcessRunner {
   return (args, options) =>
     new Promise((resolveResult) => {
+      // Fail closed before the spawn: a remote-command option (`--upload-pack`/`--receive-pack`/
+      // `--exec`) in the args — however it got there — is refused, so git can never be steered
+      // into executing an arbitrary local command via a hostile URL argument.
+      const forbidden = forbiddenGitOption(args);
+      if (forbidden !== undefined) {
+        resolveResult({
+          exitCode: 128,
+          signal: null,
+          stdout: "",
+          stderr: `refused git option: ${forbidden.split("=")[0] ?? forbidden}`,
+          truncated: false,
+          timedOut: false,
+        });
+        return;
+      }
       const child = spawn("git", args, {
         cwd: options.cwd,
         env: buildEnv(),
