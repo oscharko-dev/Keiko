@@ -9,6 +9,7 @@ import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-
 
 import { createCapsule } from "./capsule-lifecycle.js";
 import {
+  computeManualCrawlRunFingerprint,
   computeManualPageFingerprint,
   readManualPageFingerprints,
   replaceManualPageFingerprints,
@@ -67,6 +68,33 @@ describe("computeManualPageFingerprint", () => {
   it("is redaction-safe: no path, URL, whitespace, or credential markers", () => {
     const digest = computeManualPageFingerprint(new TextEncoder().encode("/Users/secret/x"));
     expect(digest).not.toMatch(/[\s/\\?#@]/u);
+  });
+});
+
+describe("computeManualCrawlRunFingerprint", () => {
+  it("is deterministic and order-independent for the same page set", () => {
+    const guide = fp("guide.html", new TextEncoder().encode("guide"));
+    const reference = fp("reference.html", new TextEncoder().encode("reference"));
+    const a = computeManualCrawlRunFingerprint([guide, reference]);
+    const b = computeManualCrawlRunFingerprint([reference, guide]);
+    expect(a).toBe(b);
+    expect(a.startsWith("sha256:")).toBe(true);
+  });
+
+  it("differs when a page's content changes", () => {
+    const before = [fp("guide.html", new TextEncoder().encode("guide v1"))];
+    const after = [fp("guide.html", new TextEncoder().encode("guide v2"))];
+    expect(computeManualCrawlRunFingerprint(before)).not.toBe(
+      computeManualCrawlRunFingerprint(after),
+    );
+  });
+
+  it("differs when the page set changes shape (added/removed page)", () => {
+    const guide = fp("guide.html", new TextEncoder().encode("guide"));
+    const reference = fp("reference.html", new TextEncoder().encode("reference"));
+    expect(computeManualCrawlRunFingerprint([guide])).not.toBe(
+      computeManualCrawlRunFingerprint([guide, reference]),
+    );
   });
 });
 

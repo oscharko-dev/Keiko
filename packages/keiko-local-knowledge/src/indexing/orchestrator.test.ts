@@ -1011,6 +1011,52 @@ describe("runIndexingJob — incremental", () => {
     expect(remainingDocuments.n).toBe(1);
   });
 
+  it("does not prune a deleted file's document when another file in the same run fails to re-embed", async () => {
+    // Regression: pruneDeletedSourceDocuments previously ran unconditionally once discovery
+    // completed, even when a document elsewhere in the same run failed to (re-)embed — so a
+    // legitimately-deleted file's document was removed in the same run a failure was reported,
+    // even though the run's discoveredPaths set (and therefore the prune decision) is not a fully
+    // trustworthy picture of a run that did not fully succeed. Mirrors the existing maxFiles guard,
+    // which already refuses to prune on an incomplete discovered-path set for the same reason.
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const deletedDocumentId = documentIdFor({
+      capsuleId: fixture.capsuleId,
+      sourceId: fixture.sourceId,
+      relativePath: "beta.txt",
+    });
+    expect(
+      readExistingDocumentRow(fixture.store._internal.db, fixture.capsuleId, deletedDocumentId),
+    ).toBeDefined();
+
+    const failingAdapter = scriptedAdapter({
+      responder: (req) =>
+        req.input.includes("MARKERFAIL")
+          ? { ok: false, kind: "unsupported-model" }
+          : {
+              ok: true,
+              value: {
+                vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+                modelId: DEFAULT_EMBEDDING.modelId,
+              },
+            },
+    });
+    const secondEvents = await drain(
+      runIndexingJob(
+        buildOptions(fixture, {
+          embeddingAdapter: failingAdapter,
+          workspaceFs: memoryFs(ROOT, [
+            { relativePath: "alpha.txt", content: "MARKERFAIL alpha changed. ".repeat(32) },
+          ]),
+        }),
+      ),
+    );
+
+    expect(secondEvents.some((e) => e.kind === "document-failed")).toBe(true);
+    expect(
+      readExistingDocumentRow(fixture.store._internal.db, fixture.capsuleId, deletedDocumentId),
+    ).toBeDefined();
+  });
+
   it("keeps persisted rows when a bounded discovery pass reaches the file cap", async () => {
     await drain(runIndexingJob(buildOptions(fixture)));
     const cappedOutDocumentId = documentIdFor({

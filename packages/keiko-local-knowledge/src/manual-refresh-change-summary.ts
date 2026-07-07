@@ -5,8 +5,10 @@
 // combines that with the crawl deny tally and the indexing counters to produce the body-free
 // `ManualRefreshChangeSummary` contract (counts + reason codes + an opaque crawl-run fingerprint).
 // No raw page path, URL, body, or diagnostic string ever appears — only the redaction-safe contract
-// fields. Removal detection is reported as not-evaluated when the crawl reached its page/byte/depth
-// limit, because a truncated crawl cannot distinguish "removed upstream" from "beyond the budget".
+// fields. Added/changed/removed counts and removal detection are reported as not-evaluated/zero
+// whenever the refresh did not apply (a limit-reached, empty, or cancelled crawl): the crawl's page
+// set in that case is truncated, partial, or absent, not the pod's new state, so a diff against it
+// cannot distinguish "removed/changed upstream" from "not part of this run".
 
 import {
   HTML_MANUAL_REFRESH_SCHEMA_VERSION,
@@ -18,7 +20,7 @@ import {
   type ManualRefreshRemovalDetection,
 } from "@oscharko-dev/keiko-contracts";
 
-import type { ManualCrawlResult } from "./crawl/index.js";
+import type { ManualCrawlDenyReason, ManualCrawlResult } from "./crawl/index.js";
 import type { IndexingResult } from "./indexing/index.js";
 import {
   computeManualCrawlRunFingerprint,
@@ -72,29 +74,50 @@ function diffPages(
   return { added, changed, removed, unchanged };
 }
 
-function removalDetectionFor(crawl: ManualCrawlResult): ManualRefreshRemovalDetection {
-  // A truncated crawl cannot tell "removed upstream" apart from "beyond the page/byte/depth budget".
-  return crawl.status === "limit-reached" ? "not-evaluated-page-limit" : "evaluated";
+// Crawl-runtime bookkeeping entries tallied when the crawl loop stops because it hit a governed
+// page/byte/time budget (crawl-runner.ts's `exhaustedBudgetReason`). Each one fires at most once
+// per crawl and marks *where the loop stopped*, not a link-level scope or safety refusal — folding
+// it into the same tally as real denials (cross-origin, credentialed-url, non-html, …) would make a
+// budget-limited crawl with zero actual scope violations report "links were denied".
+const BUDGET_EXHAUSTION_DENY_REASONS: ReadonlySet<ManualCrawlDenyReason> = new Set([
+  "page-limit",
+  "byte-budget",
+  "time-limit",
+]);
+
+function removalDetectionFor(applied: boolean): ManualRefreshRemovalDetection {
+  // Removal is only evaluable against a page set that was actually applied to the pod: a
+  // limit-reached crawl is truncated by a budget, and an empty or cancelled crawl was never applied
+  // at all (manual-pod-refresh.ts's `shouldApply` requires a completed, non-empty crawl) — in every
+  // one of those cases the crawl's page set does not represent the pod's current content, so a diff
+  // against it cannot tell "removed upstream" apart from "not part of this run".
+  return applied ? "evaluated" : "not-evaluated-page-limit";
 }
 
 function deniedLinkCount(crawl: ManualCrawlResult): number {
-  return crawl.denied.reduce((total, tally) => total + tally.count, 0);
+  return crawl.denied
+    .filter((tally) => !BUDGET_EXHAUSTION_DENY_REASONS.has(tally.reason))
+    .reduce((total, tally) => total + tally.count, 0);
 }
 
 function countsFor(
   delta: PageDelta,
   crawl: ManualCrawlResult,
   indexing: IndexingResult | undefined,
-  removalDetection: ManualRefreshRemovalDetection,
+  applied: boolean,
 ): ManualRefreshChangeCounts {
-  // When removal detection is skipped we report 0 removed rather than under-reporting an uncertain
-  // number; the removalDetection field and the reason code carry the "not evaluated" signal.
-  const removedPages = removalDetection === "evaluated" ? delta.removed : 0;
+  // A refresh that never applied never touched the pod's indexed content: the crawl's page set is
+  // partial or absent, not the pod's new state, so an added/changed/removed diff against it would
+  // claim indexing or removal that did not happen. Report 0 for all three and let the outcome +
+  // reason codes carry the "not applied" signal instead of an inaccurate count.
+  const appliedDelta = applied
+    ? delta
+    : { added: 0, changed: 0, removed: 0, unchanged: delta.unchanged };
   return {
-    addedPages: delta.added,
-    changedPages: delta.changed,
-    removedPages,
-    unchangedPages: delta.unchanged,
+    addedPages: appliedDelta.added,
+    changedPages: appliedDelta.changed,
+    removedPages: appliedDelta.removed,
+    unchangedPages: appliedDelta.unchanged,
     failedPages: indexing?.failedDocuments ?? 0,
     deniedLinks: deniedLinkCount(crawl),
   };
@@ -115,14 +138,20 @@ function resolveOutcome(
 
 function scopeReasonCodes(
   input: ManualRefreshChangeInput,
-  removalDetection: ManualRefreshRemovalDetection,
   codes: Set<ManualRefreshReasonCode>,
 ): void {
   // Scope preservation is the headline governance guarantee of every refresh: the scope + limits are
   // always reconstructed from persisted approved state, never widened.
   codes.add("scope-preserved");
-  if (input.crawl.status === "limit-reached") codes.add("scope-limit-reached");
-  if (removalDetection === "not-evaluated-page-limit") codes.add("removal-detection-skipped");
+  if (input.crawl.status === "limit-reached") {
+    // "removal-detection-skipped" guidance text specifically says the crawl reached its page limit
+    // (see MANUAL_REFRESH_REASON_GUIDANCE), so it is only fired for that exact status — an empty or
+    // cancelled crawl is also not-applied (see `removalDetectionFor`), but for a different reason,
+    // and already gets its own accurate "crawl-empty"/"crawl-cancelled" code from
+    // `statusReasonCodes`.
+    codes.add("scope-limit-reached");
+    codes.add("removal-detection-skipped");
+  }
 }
 
 function countReasonCodes(
@@ -154,10 +183,9 @@ function statusReasonCodes(
 function collectReasonCodes(
   input: ManualRefreshChangeInput,
   counts: ManualRefreshChangeCounts,
-  removalDetection: ManualRefreshRemovalDetection,
 ): readonly ManualRefreshReasonCode[] {
   const codes = new Set<ManualRefreshReasonCode>();
-  scopeReasonCodes(input, removalDetection, codes);
+  scopeReasonCodes(input, codes);
   countReasonCodes(counts, codes);
   statusReasonCodes(input, codes);
   return [...codes];
@@ -167,9 +195,9 @@ function collectReasonCodes(
 export function computeManualRefreshChangeSummary(
   input: ManualRefreshChangeInput,
 ): ManualRefreshChangeSummary {
-  const removalDetection = removalDetectionFor(input.crawl);
+  const removalDetection = removalDetectionFor(input.applied);
   const delta = diffPages(input.priorFingerprints, input.newPages);
-  const counts = countsFor(delta, input.crawl, input.indexing, removalDetection);
+  const counts = countsFor(delta, input.crawl, input.indexing, input.applied);
   return {
     schemaVersion: HTML_MANUAL_REFRESH_SCHEMA_VERSION,
     outcome: resolveOutcome(input, counts),
@@ -177,7 +205,7 @@ export function computeManualRefreshChangeSummary(
     counts,
     removalDetection,
     crawlRunFingerprint: computeManualCrawlRunFingerprint(input.newPages),
-    reasonCodes: collectReasonCodes(input, counts, removalDetection),
+    reasonCodes: collectReasonCodes(input, counts),
     refreshedAt: input.refreshedAt,
   };
 }

@@ -1624,6 +1624,10 @@ async function* runOneSource(
     completed: false,
     discoveredPaths: new Set<string>(),
   };
+  // Snapshot the job-wide failure counter before this source's documents are processed so
+  // finalizeSourceRun can tell whether ANY document belonging to THIS source failed during this
+  // run, without conflating it with failures from other sources in the same multi-source job.
+  const failedDocumentsBefore = state.failedDocuments;
   for await (const evt of stream) {
     observeSourceEvent(progress, evt);
     if (cancellationRequested(state)) {
@@ -1641,7 +1645,7 @@ async function* runOneSource(
       break;
     }
   }
-  finalizeSourceRun(state, source, progress);
+  finalizeSourceRun(state, source, progress, state.failedDocuments - failedDocumentsBefore);
 }
 
 interface SourceRunProgress {
@@ -1700,10 +1704,17 @@ function finalizeSourceRun(
   state: RunState,
   source: KnowledgeSource,
   progress: SourceRunProgress,
+  failedDocumentsThisSource: number,
 ): void {
   if (progress.cancelled) return;
   if (!progress.completed || progress.sawScopeError) return;
   if (progress.discoveredPaths.size >= resolvedDiscoveryOptions(state).maxFiles) return;
+  // A document belonging to this source failed to (re-)extract/chunk/embed during this run: the
+  // discovered-path set this run observed is not a trustworthy full picture of the source's current
+  // pages, so pruning "not discovered this run" documents here could delete a document whose page
+  // is still live but simply failed to process — mirrors the maxFiles guard above, which already
+  // refuses to prune on an incomplete/uncertain discovered-path set for the same reason.
+  if (failedDocumentsThisSource > 0) return;
   pruneDeletedSourceDocuments(state, source, progress.discoveredPaths);
 }
 
