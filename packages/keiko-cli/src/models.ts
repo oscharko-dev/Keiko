@@ -1,11 +1,12 @@
-// `keiko models` CLI handler. Synchronous by design: `list` reads built-in
-// capability metadata; `validate` reads a config file with readFileSync and runs
-// the hand-rolled validator. Neither path needs a live async Gateway, so the
-// existing `process.exit(runCli(...))` shim stays synchronous. No credential value
-// is ever written to stdout or stderr.
+// `keiko models` CLI handler. `list` reads built-in capability metadata;
+// `validate` reads a config file and runs the hand-rolled validator. Neither
+// needs a live Gateway; both are async only so the model-gateway module graph
+// (provider SDKs) loads on dispatch instead of at CLI parse time
+// (GEN-PERF-CLI-001). No credential value is ever written to stdout or stderr.
 
-import { listCapabilities, type EnvSource, GatewayError } from "@oscharko-dev/keiko-model-gateway";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { loadGatewayConfigFromFile, resolveConfigPathFromArgs } from "./gateway-config.js";
+import { loadModelGateway } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
@@ -17,7 +18,8 @@ function formatUseCases(useCases: readonly string[]): string {
   return useCases.map((useCase) => useCase.toLowerCase().replace(/\s+/g, "-")).join(",");
 }
 
-function listModels(io: CliIo): number {
+async function listModels(io: CliIo): Promise<number> {
+  const { listCapabilities } = await loadModelGateway();
   io.out("ID\tKIND\tCOST\tLATENCY\tTOOLS\tSTRUCT\tUSE-CASES\n");
   for (const cap of listCapabilities()) {
     const tools = cap.toolCalling ? "yes" : "no";
@@ -29,7 +31,7 @@ function listModels(io: CliIo): number {
   return 0;
 }
 
-function validateConfig(args: readonly string[], io: CliIo, env: EnvSource): number {
+async function validateConfig(args: readonly string[], io: CliIo, env: EnvSource): Promise<number> {
   const resolution = resolveConfigPathFromArgs(args, env);
   if (resolution.kind === "missing-value") {
     io.err("Error: --config requires a path argument.\n");
@@ -41,8 +43,9 @@ function validateConfig(args: readonly string[], io: CliIo, env: EnvSource): num
     );
     return 1;
   }
+  const { GatewayError } = await loadModelGateway();
   try {
-    const config = loadGatewayConfigFromFile(resolution.path, env);
+    const config = await loadGatewayConfigFromFile(resolution.path, env);
     io.out(
       `Gateway config valid. ${String(config.providers.length)} model providers configured.\n`,
     );
@@ -56,7 +59,11 @@ function validateConfig(args: readonly string[], io: CliIo, env: EnvSource): num
   }
 }
 
-export function runModelsCli(args: readonly string[], io: CliIo, env: EnvSource): number {
+export function runModelsCli(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): number | Promise<number> {
   const sub = args[0];
   if (sub === "list") {
     return listModels(io);

@@ -47,17 +47,17 @@ afterEach(() => {
 });
 
 describe("runContextCli — --help / -h (issue #640)", () => {
-  it("exits 0 with usage on stdout for --help", () => {
+  it("exits 0 with usage on stdout for --help", async () => {
     const c = makeIo();
-    const code = runContextCli(["--help"], c.io);
+    const code = await runContextCli(["--help"], c.io);
     expect(code).toBe(0);
     expect(c.out()).toContain("Usage:");
     expect(c.err()).toBe("");
   });
 
-  it("exits 0 with usage on stdout for -h", () => {
+  it("exits 0 with usage on stdout for -h", async () => {
     const c = makeIo();
-    const code = runContextCli(["-h"], c.io);
+    const code = await runContextCli(["-h"], c.io);
     expect(code).toBe(0);
     expect(c.out()).toContain("Usage:");
     expect(c.err()).toBe("");
@@ -65,77 +65,80 @@ describe("runContextCli — --help / -h (issue #640)", () => {
 });
 
 describe("runContextCli", () => {
-  it("prints a human summary and exits 0", () => {
+  it("prints a human summary and exits 0", async () => {
     const c = makeIo();
-    const code = runContextCli(["--dir", dir], c.io);
+    const code = await runContextCli(["--dir", dir], c.io);
     expect(code).toBe(0);
     expect(c.out()).toContain("Workspace:");
     expect(c.out()).toContain("ctx-demo");
     expect(c.out()).toContain("vitest");
   });
 
-  it("emits JSON with --json", () => {
+  it("emits JSON with --json", async () => {
     const c = makeIo();
-    const code = runContextCli(["--dir", dir, "--json"], c.io);
+    const code = await runContextCli(["--dir", dir, "--json"], c.io);
     expect(code).toBe(0);
     const parsed: unknown = JSON.parse(c.out());
     expect(parsed).toMatchObject({ name: "ctx-demo", version: "0.9.0" });
   });
 
-  it("builds a context pack with selection reasons when --task is given", () => {
+  it("builds a context pack with selection reasons when --task is given", async () => {
     const c = makeIo();
-    const code = runContextCli(["--dir", dir, "--task", "explain the entrypoint", "--json"], c.io);
+    const code = await runContextCli(
+      ["--dir", dir, "--task", "explain the entrypoint", "--json"],
+      c.io,
+    );
     expect(code).toBe(0);
     const parsed = JSON.parse(c.out()) as { context?: { entries: { selectionReason: string }[] } };
     expect(parsed.context).toBeDefined();
     expect(parsed.context?.entries.some((e) => e.selectionReason === "entrypoint")).toBe(true);
   });
 
-  it("never leaks denied secret-file contents", () => {
+  it("never leaks denied secret-file contents", async () => {
     const c = makeIo();
-    runContextCli(["--dir", dir, "--task", "anything", "--json"], c.io);
+    await runContextCli(["--dir", dir, "--task", "anything", "--json"], c.io);
     expect(c.out()).not.toContain("topsecret");
   });
 
-  it("returns 2 on a malformed --budget", () => {
+  it("returns 2 on a malformed --budget", async () => {
     const c = makeIo();
-    expect(runContextCli(["--dir", dir, "--budget", "notanumber"], c.io)).toBe(2);
+    expect(await runContextCli(["--dir", dir, "--budget", "notanumber"], c.io)).toBe(2);
     expect(c.err()).toContain("Usage");
   });
-  it("returns 2 when --budget has a non-integer suffix like '10kb'", () => {
+  it("returns 2 when --budget has a non-integer suffix like '10kb'", async () => {
     const c = makeIo();
-    expect(runContextCli(["--dir", dir, "--budget", "10kb"], c.io)).toBe(2);
-    expect(c.err()).toContain("Usage");
-  });
-
-  it("returns 2 when --budget is zero", () => {
-    const c = makeIo();
-    expect(runContextCli(["--dir", dir, "--budget", "0"], c.io)).toBe(2);
+    expect(await runContextCli(["--dir", dir, "--budget", "10kb"], c.io)).toBe(2);
     expect(c.err()).toContain("Usage");
   });
 
-  it("returns 2 when --budget is negative", () => {
+  it("returns 2 when --budget is zero", async () => {
     const c = makeIo();
-    expect(runContextCli(["--dir", dir, "--budget", "-100"], c.io)).toBe(2);
+    expect(await runContextCli(["--dir", dir, "--budget", "0"], c.io)).toBe(2);
     expect(c.err()).toContain("Usage");
   });
 
-  it("returns 2 when --budget exceeds the safe integer range", () => {
+  it("returns 2 when --budget is negative", async () => {
     const c = makeIo();
-    expect(runContextCli(["--dir", dir, "--budget", "9007199254740992"], c.io)).toBe(2);
+    expect(await runContextCli(["--dir", dir, "--budget", "-100"], c.io)).toBe(2);
     expect(c.err()).toContain("Usage");
   });
 
-  it("returns 2 when --dir is supplied without a value", () => {
+  it("returns 2 when --budget exceeds the safe integer range", async () => {
     const c = makeIo();
-    expect(runContextCli(["--dir"], c.io)).toBe(2);
+    expect(await runContextCli(["--dir", dir, "--budget", "9007199254740992"], c.io)).toBe(2);
+    expect(c.err()).toContain("Usage");
   });
 
-  it("returns 1 with a workspace error code when no workspace exists", () => {
+  it("returns 2 when --dir is supplied without a value", async () => {
+    const c = makeIo();
+    expect(await runContextCli(["--dir"], c.io)).toBe(2);
+  });
+
+  it("returns 1 with a workspace error code when no workspace exists", async () => {
     const orphan = mkdtempSync(join(tmpdir(), "keiko-noroot-"));
     try {
       const c = makeIo();
-      const code = runContextCli(["--dir", join(orphan, "child")], c.io);
+      const code = await runContextCli(["--dir", join(orphan, "child")], c.io);
       // If the temp dir sits under a repo, detection may still succeed; assert the error
       // contract only when it fails, otherwise it must be a clean success.
       if (code === 1) {
@@ -148,9 +151,9 @@ describe("runContextCli", () => {
     }
   });
 
-  it("runs to success for a --task without error (dry-run path)", () => {
+  it("runs to success for a --task without error (dry-run path)", async () => {
     const c = makeIo();
-    const code = runContextCli(["--dir", dir, "--task", "explain", "--json"], c.io);
+    const code = await runContextCli(["--dir", dir, "--task", "explain", "--json"], c.io);
     expect(code).toBe(0);
     expect(c.err()).toBe("");
   });

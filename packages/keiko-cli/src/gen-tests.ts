@@ -6,21 +6,21 @@
 // gateway is needed. Exit 0 on completed/dry-run, 1 on rejected/cancelled/failed/runtime, 2 on
 // usage. Mirrors runVerifyCli's flag-parse / typed-error-catch structure.
 
-import {
-  Gateway,
-  type EnvSource,
-  ConfigInvalidError,
-  GatewayError,
-  assertConfiguredModel,
-  selectConfiguredModel,
-  redact,
-} from "@oscharko-dev/keiko-model-gateway";
-import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
-import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
-import { generateUnitTests, renderMarkdownReport } from "@oscharko-dev/keiko-workflows";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UnitTestTarget, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
+// GEN-PERF-CLI-001 — heavy graphs load at dispatch; module scope stays type-only.
+import {
+  loadHarness,
+  loadModelGateway,
+  loadWorkflows,
+  loadWorkspaceModule,
+} from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+
+type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
+type HarnessModule = typeof import("@oscharko-dev/keiko-harness");
 
 const USAGE = `Usage:
   keiko gen-tests (--file PATH | --dir PATH) [--function NAME] [--changed FILE[,FILE]]
@@ -134,23 +134,27 @@ function resolveTarget(parsed: GenTestsArgs): UnitTestTarget {
 // Builds a ModelPort from the gateway config, or returns a usage/runtime error code via io. The
 // default selector is workflow-safe: generated test patches need tool use and structured output.
 // Explicit --model remains operator-controlled after config membership checks.
-function buildModel(
+async function buildModel(
   parsed: GenTestsArgs,
   io: CliIo,
   env: EnvSource,
-): { port: ModelPort; modelId: string } | number {
+  gateway: GatewayModule,
+  harness: HarnessModule,
+): Promise<{ port: ModelPort; modelId: string } | number> {
   try {
     const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
     if (path === undefined) {
-      throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+      throw new gateway.ConfigInvalidError(
+        "no config source; pass --config PATH or set KEIKO_CONFIG_FILE",
+      );
     }
-    const config = loadGatewayConfigFromFile(path, env);
+    const config = await loadGatewayConfigFromFile(path, env);
     if (parsed.model !== undefined) {
-      assertConfiguredModel(config, parsed.model);
+      gateway.assertConfiguredModel(config, parsed.model);
     }
     const modelId =
       parsed.model ??
-      selectConfiguredModel(config, {
+      gateway.selectConfiguredModel(config, {
         kind: "chat",
         toolCalling: true,
         structuredOutput: true,
@@ -159,11 +163,11 @@ function buildModel(
       io.err("Error: no configured workflow-capable chat model is available.\n");
       return 1;
     }
-    return { port: new GatewayModelPort(new Gateway(config)), modelId };
+    return { port: new harness.GatewayModelPort(new gateway.Gateway(config)), modelId };
   } catch (error) {
-    if (error instanceof GatewayError) {
+    if (error instanceof gateway.GatewayError) {
       io.err(
-        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
           `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
       );
       return 1;
@@ -172,49 +176,59 @@ function buildModel(
   }
 }
 
-function resolveConfiguredModelId(parsed: GenTestsArgs, env: EnvSource): string | undefined {
+async function resolveConfiguredModelId(
+  parsed: GenTestsArgs,
+  env: EnvSource,
+  gateway: GatewayModule,
+): Promise<string | undefined> {
   const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
   if (path === undefined) {
     return parsed.model ?? "default";
   }
-  const config = loadGatewayConfigFromFile(path, env);
+  const config = await loadGatewayConfigFromFile(path, env);
   if (parsed.model !== undefined) {
-    assertConfiguredModel(config, parsed.model);
+    gateway.assertConfiguredModel(config, parsed.model);
     return parsed.model;
   }
-  return selectConfiguredModel(config, {
+  return gateway.selectConfiguredModel(config, {
     kind: "chat",
     toolCalling: true,
     structuredOutput: true,
   });
 }
 
-function resolveModel(
+async function resolveModel(
   parsed: GenTestsArgs,
   io: CliIo,
   env: EnvSource,
   deps: GenTestsDeps,
-): { port: ModelPort; modelId: string } | number {
+  gateway: GatewayModule,
+  harness: HarnessModule,
+): Promise<{ port: ModelPort; modelId: string } | number> {
   if (deps.model !== undefined) {
     try {
-      const modelId = resolveConfiguredModelId(parsed, env);
+      const modelId = await resolveConfiguredModelId(parsed, env, gateway);
       if (modelId === undefined) {
         io.err("Error: no configured workflow-capable chat model is available.\n");
         return 1;
       }
       return { port: deps.model, modelId };
     } catch (error) {
-      if (error instanceof GatewayError) {
-        io.err(`Error: model gateway configuration problem — ${redact(error.message)}\n`);
+      if (error instanceof gateway.GatewayError) {
+        io.err(`Error: model gateway configuration problem — ${gateway.redact(error.message)}\n`);
         return 1;
       }
       throw error;
     }
   }
-  return buildModel(parsed, io, env);
+  return buildModel(parsed, io, env, gateway, harness);
 }
 
-function printText(report: UnitTestWorkflowReport, io: CliIo): void {
+function printText(
+  report: UnitTestWorkflowReport,
+  io: CliIo,
+  renderMarkdownReport: (report: UnitTestWorkflowReport) => string,
+): void {
   io.out(`${renderMarkdownReport(report)}\n`);
   if (report.dryRunPreview !== undefined) {
     io.out(`\n${report.dryRunPreview}\n`);
@@ -245,12 +259,18 @@ export async function runGenTestsCli(
     io.err(USAGE);
     return 2;
   }
-  const model = resolveModel(parsed, io, env, deps);
+  const [gateway, harness, workflows, { WorkspaceError }] = await Promise.all([
+    loadModelGateway(),
+    loadHarness(),
+    loadWorkflows(),
+    loadWorkspaceModule(),
+  ]);
+  const model = await resolveModel(parsed, io, env, deps, gateway, harness);
   if (typeof model === "number") {
     return model;
   }
   try {
-    const report = await generateUnitTests(
+    const report = await workflows.generateUnitTests(
       {
         workspaceRoot: parsed.dirRoot,
         target: resolveTarget(parsed),
@@ -262,7 +282,7 @@ export async function runGenTestsCli(
     if (parsed.json) {
       io.out(`${JSON.stringify(report, null, 2)}\n`);
     } else {
-      printText(report, io);
+      printText(report, io, workflows.renderMarkdownReport);
     }
     return exitCodeFor(report.status);
   } catch (error) {

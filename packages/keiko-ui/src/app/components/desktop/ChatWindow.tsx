@@ -3642,16 +3642,29 @@ export function ChatWindow({
     pendingQuestionScrollRef.current = null;
     setFocusedQuestionId(null);
   }, [activeChat?.id]);
+  // GEN-PERF-CHAT-013 — this effect re-runs on every coalesced stream flush
+  // (lastContent changes per chunk commit); the old cleanup cancelled and
+  // rescheduled a fresh animation frame each time, doubling the per-chunk rAF
+  // churn on top of the content-flush rAF. Keep at most ONE pending frame: an
+  // already-scheduled frame reads the live refs, so it covers newer chunks too.
+  const stickFrameRef = useRef<number | null>(null);
   useEffect(() => {
     if (sending && !prevSendingRef.current) stickRef.current = true;
     prevSendingRef.current = sending;
     if (!stickRef.current) return;
-    const frame = window.requestAnimationFrame(() => {
+    if (stickFrameRef.current !== null) return;
+    stickFrameRef.current = window.requestAnimationFrame(() => {
+      stickFrameRef.current = null;
       const el = scrollRef.current;
       if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
     });
-    return () => window.cancelAnimationFrame(frame);
   }, [visible.length, sending, lastContent]);
+  useEffect(
+    () => () => {
+      if (stickFrameRef.current !== null) window.cancelAnimationFrame(stickFrameRef.current);
+    },
+    [],
+  );
 
   return (
     <div

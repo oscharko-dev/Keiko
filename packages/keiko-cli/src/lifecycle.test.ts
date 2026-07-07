@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { runLifecycleCli, safeKillProcess } from "./lifecycle.js";
@@ -159,7 +160,7 @@ describe("runLifecycleCli", () => {
     const root = makeRoot();
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
-    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
     const code = await runLifecycleCli(
       "start",
@@ -206,7 +207,7 @@ describe("runLifecycleCli", () => {
     const root = makeRoot();
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
-    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
     const code = await withEnvVar("KEIKO_CLI_BIN_PATH", "/tmp/fake-keiko-bin.js", async () =>
       runLifecycleCli(
@@ -244,7 +245,7 @@ describe("runLifecycleCli", () => {
     writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n", "utf8");
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
-    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
     const code = await withEnvVar(
       "KEIKO_CLI_BIN_PATH",
@@ -285,7 +286,7 @@ describe("runLifecycleCli", () => {
   it("accepts --open and opens the UI URL after a healthy start", async () => {
     const root = makeRoot();
     const c = makeIo();
-    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     const openExternal = vi.fn();
 
     const code = await runLifecycleCli(
@@ -344,7 +345,7 @@ describe("runLifecycleCli", () => {
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
     const spawned: { command: string; args: readonly string[]; opts: SpawnOptions }[] = [];
-    const child = { pid: 67890, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 67890, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     let oldProcessAlive = true;
     const killProcess = vi.fn((pid: number) => {
       if (pid === 12345) oldProcessAlive = false;
@@ -396,7 +397,7 @@ describe("runLifecycleCli", () => {
     mkdirSync(join(root, ".keiko"), { recursive: true });
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
-    const child = { pid: 67890, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 67890, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     let oldProcessAlive = true;
     const killProcess = vi.fn((pid: number) => {
       if (pid === 12345) oldProcessAlive = false;
@@ -442,7 +443,7 @@ describe("runLifecycleCli", () => {
     mkdirSync(join(root, ".keiko"), { recursive: true });
     writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
     const c = makeIo();
-    const child = { pid: 67890, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 67890, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     let oldProcessAlive = true;
     let fetchCalls = 0;
     const killProcess = vi.fn((pid: number) => {
@@ -520,7 +521,7 @@ describe("runLifecycleCli", () => {
   it("does not treat another process health response as a successful child start", async () => {
     const root = makeRoot();
     const c = makeIo();
-    const child = { pid: 24680, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 24680, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     const killProcess = vi.fn();
 
     const code = await runLifecycleCli(
@@ -557,7 +558,7 @@ describe("runLifecycleCli", () => {
     // so a wrong-version 200 keeps looping until the deadline and returns false.
     const root = makeRoot();
     const c = makeIo();
-    const child = { pid: 24681, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 24681, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
     const fetchImpl = vi.fn(() =>
       Promise.resolve(Response.json({ status: "ok", version: "0.0.0-wrong" }, { status: 200 })),
     );
@@ -596,10 +597,45 @@ describe("runLifecycleCli", () => {
     }
   });
 
+  // A detached spawn can fail ASYNCHRONOUSLY after returning; without an 'error'
+  // listener Node throws the event and `keiko start` crashed with a raw stack.
+  it("surfaces an async child spawn error cleanly instead of crashing", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = new EventEmitter() as unknown as ChildProcess & EventEmitter;
+    Object.assign(child, { pid: 13579, unref: vi.fn() });
+
+    const code = await runLifecycleCli(
+      "start",
+      [],
+      c.io,
+      {},
+      {
+        cwd: root,
+        // The async failure surfaces only after spawn returned (real EMFILE shape).
+        spawnFn: () => {
+          queueMicrotask(() => {
+            child.emit("error", new Error("spawn EMFILE"));
+          });
+          return child;
+        },
+        // The failed child never becomes healthy and is not alive.
+        fetchImpl: () => Promise.reject(new Error("connection refused")),
+        isProcessAlive: () => false,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("failed to launch (spawn EMFILE)");
+  });
+
   it("fails cleanly when the UI child process has no pid", async () => {
     const root = makeRoot();
     const c = makeIo();
-    const child = { pid: undefined, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: undefined, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
     const code = await runLifecycleCli(
       "start",
@@ -658,7 +694,7 @@ describe("runLifecycleCli", () => {
   it("keeps a healthy start successful when opening the browser fails", async () => {
     const root = makeRoot();
     const c = makeIo();
-    const child = { pid: 12345, unref: vi.fn() } as unknown as ChildProcess;
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
 
     const code = await runLifecycleCli(
       "start",

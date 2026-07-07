@@ -530,6 +530,14 @@ export interface ConversationAttachmentDescriptorWire {
   readonly sizeBytes: number;
 }
 
+// The loopback endpoint every Keiko surface binds/dials (ADR-0011): one host and one
+// default port shared by the BFF host (keiko-server re-exports these) and the CLI
+// lifecycle/ui commands. Living in the contracts leaf lets the CLI resolve them
+// without statically loading the full server module graph at process start
+// (GEN-PERF-CLI-001 — that eager graph cost ~410ms on every `keiko` invocation).
+export const UI_HOST = "127.0.0.1";
+export const DEFAULT_UI_PORT = 1983;
+
 // Issue #149 — canonical attachment allowlist + per-attachment ceiling + MIME classifier
 // (GEN-DUP-SEMANTIC-013 / GEN-DUP-SEMANTIC-014). Both the keiko-ui composer (useChatSession)
 // and the keiko-server conversation validator had re-declared this policy inline and drifted:

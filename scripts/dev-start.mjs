@@ -8,6 +8,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
 } from "node:fs";
@@ -258,7 +259,15 @@ async function resolveDevPorts() {
 
 function spawnDevelopmentRunner(bffPort, nextPort) {
   mkdirSync(stateDir, { recursive: true });
-  const logFd = openSync(logFile, "a", 0o600);
+  // Bounded log growth: append mode grew dev-ui.log without limit across daily
+  // dev sessions (webpack/next/tsc-watch output is verbose). Keep exactly one
+  // previous generation for post-mortems and start each run on a fresh file.
+  try {
+    renameSync(logFile, `${logFile}.prev`);
+  } catch {
+    // First run in this state dir — nothing to rotate.
+  }
+  const logFd = openSync(logFile, "w", 0o600);
   const child = spawn(process.execPath, [runnerScript], {
     cwd: repoRoot,
     detached: true,
