@@ -16,7 +16,7 @@ import {
   type CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { emitServerDiagnostic } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
@@ -373,21 +373,15 @@ function validationErrorForChatRequest(
   return undefined;
 }
 
-function emitGatewayFailureDiagnostic(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  error: unknown,
-): void {
-  emitServerDiagnostic(
-    deps.diagnostics,
-    serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? "unknown",
-      operation: CODING_SIDECAR_GATEWAY_ROUTE,
-      source: "coding-sidecar-gateway.chat",
-      error,
-      redact: (message: string): string => String(deps.redactor(message)),
-    }),
-  );
+function emitGatewayFailureDiagnostic(ctx: RouteContext, deps: UiHandlerDeps): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: ctx.correlationId ?? "unknown",
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.chat",
+    errorClass: "CodingSidecarGatewayFailure",
+    message: "sidecar-gateway-failed",
+  });
 }
 
 async function executeGatewayChat(
@@ -405,7 +399,7 @@ async function executeGatewayChat(
     return openAiResponse(modelAlias, response.content, response.usage);
   } catch (error) {
     persistRoutingEvidence(ctx, deps, "failed", modelSource);
-    emitGatewayFailureDiagnostic(ctx, deps, error);
+    emitGatewayFailureDiagnostic(ctx, deps);
     throw error;
   }
 }

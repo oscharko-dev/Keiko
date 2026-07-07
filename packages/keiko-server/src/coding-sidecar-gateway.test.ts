@@ -15,6 +15,7 @@ import {
   type CodingWorkbenchEvidenceRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
@@ -609,7 +610,7 @@ describe("coding-sidecar gateway", () => {
 
   it("emits a content-free routing diagnostic instead of writing to the root evidence store when no dedicated coding store is configured", async () => {
     const rootPut = vi.fn((_runId: string, _json: string): string => "");
-    const diagnostics = { record: vi.fn() };
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const deps = depsValue(
       configValue(provider(), capability()),
       (
@@ -769,13 +770,20 @@ describe("coding-sidecar gateway", () => {
   it("writes failed routing evidence and emits a diagnostic when the gateway call throws", async () => {
     const rootPut = vi.fn((_runId: string, _json: string): string => "");
     const codingPut = vi.fn((_runId: string, _json: string): string => "");
-    const diagnostics = { record: vi.fn() };
+    let capturedDiagnostic: ServerDiagnosticRecord | undefined;
+    const diagnostics = {
+      record: vi.fn((record: ServerDiagnosticRecord): void => {
+        capturedDiagnostic = record;
+      }),
+    };
+    const hostileMessage =
+      "tool call '/Users/customer/private-repo/secret-tool' has non-JSON arguments";
     const deps = depsValue(
       configValue(provider(), capability()),
       (): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
         return (request: GatewayRequest): Promise<NormalizedResponse> => {
           void request;
-          return Promise.reject(new Error("gateway-failure"));
+          return Promise.reject(new Error(hostileMessage));
         };
       },
       {},
@@ -803,7 +811,7 @@ describe("coding-sidecar gateway", () => {
         }),
         deps,
       ),
-    ).rejects.toThrow("gateway-failure");
+    ).rejects.toThrow(hostileMessage);
     expect(rootPut).not.toHaveBeenCalled();
     expect(codingPut).toHaveBeenCalledTimes(1);
     const evidenceJson = String(codingPut.mock.calls[0]?.[1]);
@@ -815,7 +823,18 @@ describe("coding-sidecar gateway", () => {
       denied: true,
     });
     expect(evidenceJson).not.toContain("continue");
-    expect(evidenceJson).not.toContain("gateway-failure");
+    expect(evidenceJson).not.toContain(hostileMessage);
     expect(diagnostics.record).toHaveBeenCalledTimes(1);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "coding-sidecar-gateway.chat",
+        errorClass: "CodingSidecarGatewayFailure",
+        message: "sidecar-gateway-failed",
+      }),
+    );
+    expect(JSON.stringify(capturedDiagnostic)).not.toContain(hostileMessage);
+    expect(JSON.stringify(capturedDiagnostic)).not.toContain(
+      "/Users/customer/private-repo/secret-tool",
+    );
   });
 });
