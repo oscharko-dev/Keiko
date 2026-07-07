@@ -568,6 +568,7 @@ export {
 // permission requests, deployment ceilings, model-source routing, and content-free evidence.
 // This module is browser-safe and dependency-free apart from leaf-local text-redaction helpers.
 export type {
+  CodingWorkbenchActionPolicyDecision,
   CodingWorkbenchActionClass,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchBudget,
@@ -585,6 +586,7 @@ export type {
   CodingWorkbenchObservationChannel,
   CodingWorkbenchPermissionRequest,
   CodingWorkbenchPermissionRequestKind,
+  CodingWorkbenchPolicyDenialReason,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeEventKind,
   CodingWorkbenchRuntimeHealth,
@@ -615,6 +617,8 @@ export {
   CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  decideCodingWorkbenchActionForMode,
+  isCodingWorkbenchActionAllowedForMode,
   isCodingWorkbenchModelSource,
   isCodingWorkbenchMode,
   isCodingWorkbenchRuntimeSource,

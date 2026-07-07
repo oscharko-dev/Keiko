@@ -11,6 +11,8 @@ import {
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  decideCodingWorkbenchActionForMode,
+  isCodingWorkbenchActionAllowedForMode,
   isCodingWorkbenchEvidenceSafeText,
   redactCodingWorkbenchEvidenceText,
   resolveEffectiveCodingWorkbenchMode,
@@ -337,6 +339,49 @@ describe("resolveEffectiveCodingWorkbenchMode", () => {
     expect(resolveEffectiveCodingWorkbenchMode("autonomous-delivery", "wide-open")).toBe(
       "governed-assist",
     );
+  });
+});
+
+describe("decideCodingWorkbenchActionForMode", () => {
+  it.each([
+    ["workspace-write", "workspace-write-denied"],
+    ["command-execution", "command-execution-denied"],
+    ["network-egress", "network-denied"],
+    ["delivery-substrate", "delivery-denied"],
+  ] as const)("denies governed-assist %s escalation", (actionClass, reasonCode) => {
+    expect(decideCodingWorkbenchActionForMode("governed-assist", actionClass)).toEqual({
+      allowed: false,
+      reasonCode,
+    });
+  });
+
+  it("allows governed-assist read-only work and denies write-capable connector scopes", () => {
+    expect(isCodingWorkbenchActionAllowedForMode("governed-assist", "workspace-read")).toBe(true);
+    expect(isCodingWorkbenchActionAllowedForMode("governed-assist", "verification")).toBe(true);
+    expect(
+      decideCodingWorkbenchActionForMode("governed-assist", "connector-access", [
+        "source-control.read",
+        "issue-tracker.read",
+      ]),
+    ).toEqual({ allowed: true });
+    expect(
+      decideCodingWorkbenchActionForMode("governed-assist", "connector-access", [
+        "source-control.write",
+      ]),
+    ).toEqual({ allowed: false, reasonCode: "connector-write-denied" });
+  });
+
+  it("keeps supervised coding below delivery substrate authority", () => {
+    expect(isCodingWorkbenchActionAllowedForMode("supervised-coding", "workspace-write")).toBe(
+      true,
+    );
+    expect(isCodingWorkbenchActionAllowedForMode("supervised-coding", "command-execution")).toBe(
+      true,
+    );
+    expect(decideCodingWorkbenchActionForMode("supervised-coding", "delivery-substrate")).toEqual({
+      allowed: false,
+      reasonCode: "delivery-denied",
+    });
   });
 });
 

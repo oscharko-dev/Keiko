@@ -1,0 +1,24 @@
+{
+  "issue": 1991,
+  "epic": 1982,
+  "generatedAt": "2026-07-07T20:20:00Z",
+  "harness": "tests/e2e/config/playwright.issue-1991-governed-assist.config.ts",
+  "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-1991",
+  "result": "PASS",
+  "artifacts": [
+    "01-proposed-diff.png",
+    "02-blocked-action.png",
+    "03-blocked-narrow.png",
+    "coding-workbench-governed-assist-fidelity-proof.json",
+    "a11y-proof.json"
+  ],
+  "redactionBoundary": {
+    "customerRepositoryFilesIncluded": false,
+    "secretsIncluded": false,
+    "privatePathsIncluded": false,
+    "rawDiffsIncluded": false,
+    "rawModelPromptsIncluded": false,
+    "rawModelOutputsIncluded": false,
+    "tokensIncluded": false
+  }
+}

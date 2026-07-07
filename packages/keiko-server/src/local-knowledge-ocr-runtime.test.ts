@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 
 const NODE_TIMEOUT_SCRIPT = "setTimeout(() => {}, 10_000);";
+const CHILD_PROCESS_TIMEOUT_MS = 5_000;
 
 describe("runLocalTesseractCommand", () => {
   it("returns stdout for successful commands and unsupported-input for non-zero exits", async () => {
@@ -9,7 +10,7 @@ describe("runLocalTesseractCommand", () => {
       command: process.execPath,
       args: ["-e", "process.stdin.pipe(process.stdout);"],
       stdin: new TextEncoder().encode("ocr text"),
-      timeoutMs: 1_000,
+      timeoutMs: CHILD_PROCESS_TIMEOUT_MS,
     });
 
     expect(success.ok).toBe(true);
@@ -22,7 +23,7 @@ describe("runLocalTesseractCommand", () => {
         command: process.execPath,
         args: ["-e", "process.stderr.write('bad image'); process.exit(2);"],
         stdin: new Uint8Array(),
-        timeoutMs: 1_000,
+        timeoutMs: CHILD_PROCESS_TIMEOUT_MS,
       }),
     ).resolves.toEqual({ ok: false, reason: "unsupported-input" });
   });

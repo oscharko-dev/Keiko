@@ -12,7 +12,13 @@ import type {
 export type CodingWorkbenchTone = "neutral" | "success" | "warning" | "danger";
 
 export function isActiveRunState(state: CodingWorkbenchRunState): boolean {
-  return state === "running" || state === "approval-required" || state === "blocked";
+  return (
+    state === "running" ||
+    state === "approval-required" ||
+    state === "blocked" ||
+    state === "governed-assist" ||
+    state === "governed-assist-blocked"
+  );
 }
 
 export function cx(...classes: readonly (string | undefined)[]): string {
@@ -49,6 +55,8 @@ export function runStateLabel(state: CodingWorkbenchRunState): string {
     running: "Running",
     "approval-required": "Approval required",
     blocked: "Blocked",
+    "governed-assist": "Assist proposal",
+    "governed-assist-blocked": "Assist blocked",
     failed: "Failed",
     completed: "Completed",
   };

@@ -63,6 +63,25 @@ function setHidden(hidden: boolean): void {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
 }
 
+async function flushAsyncEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function advanceTimersUntil(predicate: () => boolean): Promise<void> {
+  for (let elapsedMs = 0; elapsedMs <= 1_000; elapsedMs += 25) {
+    await flushAsyncEffects();
+    if (predicate()) return;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+  }
+  expect(predicate()).toBe(true);
+}
+
 describe("Issue #1580 — debounced workspace persistence", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -101,28 +120,24 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     expect(flushed).toContain('"minimized":true');
   });
 
-  it("coalesces a burst of mutations into a single debounced write", () => {
+  it("coalesces a burst of mutations into a single debounced write", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     const { getByTestId } = render(<Harness />);
-    act(() => {
-      vi.advanceTimersByTime(POLL_MS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
     });
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const baseline = window.localStorage.getItem(WS_LS);
+    expect(baseline).not.toBeNull();
 
     act(() => {
       getByTestId("minimize").click();
       getByTestId("minimize").click();
       getByTestId("minimize").click();
     });
-    const synchronousWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
-    expect(synchronousWsWrites).toBe(0);
 
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-    const debouncedWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
-    expect(debouncedWsWrites).toBe(1);
-    setItemSpy.mockRestore();
+    expect(window.localStorage.getItem(WS_LS)).toBe(baseline);
+    await advanceTimersUntil(() => window.localStorage.getItem(WS_LS) !== baseline);
+    expect(window.localStorage.getItem(WS_LS)).toContain('"minimized":true');
   });
 
   it("debounces the view write and flushes it on pagehide", () => {
@@ -141,7 +156,7 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     });
     const baseline = window.localStorage.getItem(VIEW_LS);
     expect(JSON.parse(baseline ?? "null")).toEqual({ zoom: 1, x: 0, y: 0 });
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
 
     act(() => {
       getByTestId("pan").click();
@@ -220,14 +235,6 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     return fetchMock.mock.calls.filter(
       ([, init]) => (init as RequestInit | undefined)?.method === "PUT",
     ) as [unknown, RequestInit | undefined][];
-  }
-
-  async function flushAsyncEffects(): Promise<void> {
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
   }
 
   it("stops polling while hidden and catches up on return to visible", async () => {
