@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 26 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 27 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -123,7 +123,10 @@ CREATE TABLE capsule_sources (
 ) STRICT;
 `.trim();
 
-const CREATE_HTML_MANUAL_SOURCES = `
+// v26 shape (Epic #1854): approved manual source identity + scope discriminant only. The v26
+// migration applies this exact shape; the v27 migration ALTERs it up to the full shape below so a
+// store created at v26 and a fresh install converge.
+const CREATE_HTML_MANUAL_SOURCES_V26 = `
 CREATE TABLE html_manual_sources (
   capsule_id TEXT NOT NULL,
   source_id TEXT NOT NULL,
@@ -135,6 +138,56 @@ CREATE TABLE html_manual_sources (
   path_prefix TEXT,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (capsule_id, source_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+// v27 full shape (Epic #1856): additionally persists the approved crawl limits so an explicit
+// refresh reproduces the exact bounded crawl WITHOUT widening scope, plus additive refresh
+// bookkeeping (scope version, last refresh time, last crawl-run id). All added columns are nullable
+// so rows written at v26 remain valid. `follow_redirects` is stored 0/1 (STRICT has no BOOLEAN).
+const CREATE_HTML_MANUAL_SOURCES = `
+CREATE TABLE html_manual_sources (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('html-manual-local', 'html-manual-http')),
+  source_fingerprint TEXT NOT NULL,
+  root_path TEXT,
+  entry_path TEXT,
+  origin TEXT,
+  path_prefix TEXT,
+  created_at INTEGER NOT NULL,
+  max_pages INTEGER,
+  max_depth INTEGER,
+  max_bytes INTEGER,
+  max_link_sample INTEGER,
+  timeout_ms INTEGER,
+  follow_redirects INTEGER,
+  source_scope_version INTEGER,
+  last_refreshed_at INTEGER,
+  last_crawl_run_id TEXT,
+  last_change_summary_json TEXT,
+  PRIMARY KEY (capsule_id, source_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+// Per-page content fingerprints for HTML Manual Knowledge Pods (Epic #1856, Issue #1890). One row
+// per reachable page from the most recent crawl, keyed by the page's scope-relative path. The
+// fingerprint is an opaque content hash (never the raw body); it lets an explicit refresh classify
+// pages as added / changed / removed / unchanged without storing or exposing any page content.
+const CREATE_HTML_MANUAL_PAGE_FINGERPRINTS = `
+CREATE TABLE html_manual_page_fingerprints (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  byte_length INTEGER NOT NULL,
+  crawl_run_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (capsule_id, source_id, relative_path),
   FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
   FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
 ) STRICT;
@@ -772,6 +825,8 @@ const CREATE_PAGES_CAPSULE_DOC_SPAN_INDEX =
   "CREATE INDEX idx_pages_capsule_doc_span ON pages(capsule_id, document_id, character_start, character_end, page_number, page_label);";
 const CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX =
   "CREATE INDEX idx_html_manual_sources_fingerprint ON html_manual_sources(source_fingerprint);";
+const CREATE_HTML_MANUAL_PAGE_FINGERPRINTS_SOURCE_INDEX =
+  "CREATE INDEX idx_html_manual_page_fingerprints_source ON html_manual_page_fingerprints(capsule_id, source_id);";
 
 const CREATE_SECTIONS_SECTION_PATH_HASH_INDEX =
   "CREATE UNIQUE INDEX idx_sections_document_section_path_hash ON sections(document_id, section_path_hash) WHERE section_path_hash IS NOT NULL;";
@@ -784,6 +839,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_KNOWLEDGE_SOURCES,
   CREATE_CAPSULE_SOURCES,
   CREATE_HTML_MANUAL_SOURCES,
+  CREATE_HTML_MANUAL_PAGE_FINGERPRINTS,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
   CREATE_DOCUMENT_BLOBS,
@@ -812,6 +868,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
 export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_knowledge_sources_updated ON knowledge_sources(updated_at DESC, id ASC);",
   CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX,
+  CREATE_HTML_MANUAL_PAGE_FINGERPRINTS_SOURCE_INDEX,
   "CREATE INDEX idx_capsule_set_members_capsule ON capsule_set_members(capsule_id);",
   "CREATE INDEX idx_document_texts_capsule ON document_texts(capsule_id);",
   "CREATE INDEX idx_pages_capsule ON pages(capsule_id);",
@@ -1237,7 +1294,26 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     version: 26,
     reason:
       "Persist approved HTML manual source metadata for governed citation reopen without exposing raw roots on browser wires (#1854).",
-    up: [CREATE_HTML_MANUAL_SOURCES, CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX],
+    up: [CREATE_HTML_MANUAL_SOURCES_V26, CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX],
+  },
+  {
+    version: 27,
+    reason:
+      "Persist approved HTML manual crawl limits and per-page content fingerprints so an explicit refresh reproduces the exact bounded crawl and classifies added/changed/removed/unchanged pages without exposing raw content (#1856).",
+    up: [
+      "ALTER TABLE html_manual_sources ADD COLUMN max_pages INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN max_depth INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN max_bytes INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN max_link_sample INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN timeout_ms INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN follow_redirects INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN source_scope_version INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN last_refreshed_at INTEGER;",
+      "ALTER TABLE html_manual_sources ADD COLUMN last_crawl_run_id TEXT;",
+      "ALTER TABLE html_manual_sources ADD COLUMN last_change_summary_json TEXT;",
+      CREATE_HTML_MANUAL_PAGE_FINGERPRINTS,
+      CREATE_HTML_MANUAL_PAGE_FINGERPRINTS_SOURCE_INDEX,
+    ],
   },
 ] as const;
 
@@ -1267,6 +1343,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   ...KNOWLEDGE_CAPSULE_V1_TABLES,
   "knowledge_sources",
   "html_manual_sources",
+  "html_manual_page_fingerprints",
   "document_texts",
   "capsule_membership_changes",
   "capsule_audit_events",
@@ -1281,6 +1358,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_knowledge_sources_updated",
   "idx_html_manual_sources_fingerprint",
+  "idx_html_manual_page_fingerprints_source",
   "idx_capsule_set_members_capsule",
   "idx_document_texts_capsule",
   "idx_pages_capsule",

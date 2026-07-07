@@ -41,6 +41,10 @@ import {
   type LocalKnowledgeValidation,
 } from "./local-knowledge-validation.js";
 import type { HtmlManualSourceKind } from "./html-manual-source.js";
+import {
+  validateManualRefreshChangeSummary,
+  type ManualRefreshChangeSummary,
+} from "./html-manual-refresh.js";
 
 export const KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION = "1" as const;
 
@@ -193,6 +197,10 @@ export interface KnowledgePodSummary {
   // documentation browser detect an already-indexed manual without exposing any raw path/URL. It is a
   // hash, never a path. Absent for every pod not backed by an HTML manual source.
   readonly manualSourceFingerprint?: string;
+  // Optional redacted summary of the most recent explicit refresh of this HTML manual pod (Epic
+  // #1856). Counts + reason codes + an opaque crawl-run fingerprint only — never a raw path or body.
+  // Absent until the pod has been refreshed at least once, and for every non-manual pod.
+  readonly manualRefresh?: ManualRefreshChangeSummary;
 }
 
 export interface LocalKnowledgeCapsuleListEntry {
@@ -240,6 +248,7 @@ const SUMMARY_KEYS = [
   "updatedAt",
   "degradationReasons",
   "manualSourceFingerprint",
+  "manualRefresh",
 ] as const;
 
 const COUNT_KEYS = ["capsuleCount", "sourceCount", "documentCount", "chunkCount", "vectorCount"];
@@ -1054,6 +1063,15 @@ function validateSummaryScalars(input: Record<string, unknown>, errors: string[]
     "summary.manualSourceFingerprint",
     errors,
   );
+  validateOptionalManualRefresh(input.manualRefresh, errors);
+}
+
+function validateOptionalManualRefresh(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const result = validateManualRefreshChangeSummary(value);
+  if (!result.ok) {
+    errors.push(...result.errors.map((error) => `summary.manualRefresh: ${error}`));
+  }
 }
 
 function validateUpdatedAt(value: unknown, errors: string[]): void {

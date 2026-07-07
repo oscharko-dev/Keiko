@@ -1366,6 +1366,23 @@ export {
   parseHtmlManualSourceTagMetadata,
 } from "./html-manual-source.js";
 
+// ─── HTML Manual Knowledge Pod refresh change summary (Epic #1856, Issue #1890) ──────
+export type {
+  ManualRefreshOutcome,
+  ManualRefreshRemovalDetection,
+  ManualRefreshReasonCode,
+  ManualRefreshChangeCounts,
+  ManualRefreshChangeSummary,
+} from "./html-manual-refresh.js";
+export {
+  HTML_MANUAL_REFRESH_SCHEMA_VERSION,
+  MANUAL_REFRESH_OUTCOMES,
+  MANUAL_REFRESH_REMOVAL_DETECTIONS,
+  MANUAL_REFRESH_REASON_CODES,
+  MANUAL_REFRESH_REASON_GUIDANCE,
+  validateManualRefreshChangeSummary,
+} from "./html-manual-refresh.js";
+
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
   SelectedScopeKind,

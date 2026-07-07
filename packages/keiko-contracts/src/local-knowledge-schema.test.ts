@@ -253,8 +253,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 26 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(26);
+  it("is the integer 27 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(27);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -996,6 +996,93 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
         .prepare("SELECT anchor_id FROM parsed_units WHERE id = ?")
         .get(handles.parsedUnitId) as { readonly anchor_id: string | null } | undefined;
       expect(row?.anchor_id).toBe("section-2");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v27 on top of a v26 database, adding nullable crawl-limit columns and the page-fingerprint table", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v27 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 27);
+      if (v27 === undefined) {
+        throw new Error("expected v27 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 27) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+      // A v26 store already carries an html_manual_sources row with only the identity columns.
+      db.prepare(
+        `INSERT INTO html_manual_sources (
+           capsule_id, source_id, source_kind, source_fingerprint, root_path, entry_path,
+           origin, path_prefix, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        handles.capsuleId,
+        handles.sourceId,
+        "html-manual-local",
+        "sha256:abc",
+        "docs/manual",
+        "index.html",
+        null,
+        null,
+        1000,
+      );
+
+      const beforeColumns = db.prepare("PRAGMA table_info('html_manual_sources')").all() as {
+        name?: string;
+      }[];
+      expect(beforeColumns.some((column) => column.name === "max_pages")).toBe(false);
+      expect(listSqliteMaster(db, "table")).not.toContain("html_manual_page_fingerprints");
+
+      for (const stmt of v27.up) db.exec(stmt);
+
+      const afterColumns = db.prepare("PRAGMA table_info('html_manual_sources')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const afterByName = new Map(afterColumns.map((column) => [column.name ?? "", column]));
+      for (const added of [
+        "max_pages",
+        "max_depth",
+        "max_bytes",
+        "max_link_sample",
+        "timeout_ms",
+        "follow_redirects",
+        "source_scope_version",
+        "last_refreshed_at",
+        "last_crawl_run_id",
+      ]) {
+        // Every new column is nullable so pre-existing v26 rows remain valid.
+        expect(afterByName.get(added)?.notnull).toBe(0);
+      }
+      // The pre-existing row survived the ALTERs and its new columns default to NULL.
+      const migratedRow = db
+        .prepare(
+          "SELECT max_pages, last_crawl_run_id FROM html_manual_sources WHERE capsule_id = ? AND source_id = ?",
+        )
+        .get(handles.capsuleId, handles.sourceId) as {
+        readonly max_pages: number | null;
+        readonly last_crawl_run_id: string | null;
+      };
+      expect(migratedRow.max_pages).toBeNull();
+      expect(migratedRow.last_crawl_run_id).toBeNull();
+
+      expect(listSqliteMaster(db, "table")).toContain("html_manual_page_fingerprints");
+      expect(listSqliteMaster(db, "index")).toContain("idx_html_manual_page_fingerprints_source");
+
+      // The new table enforces one fingerprint per (capsule, source, path) and cascades on delete.
+      db.prepare(
+        `INSERT INTO html_manual_page_fingerprints (
+           capsule_id, source_id, relative_path, content_fingerprint, byte_length, crawl_run_id, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(handles.capsuleId, handles.sourceId, "index.html", "sha256:page", 42, "run-1", 2000);
+      expect(countRows(db, "html_manual_page_fingerprints")).toBe(1);
+      db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: handles.capsuleId });
+      expect(countRows(db, "html_manual_page_fingerprints")).toBe(0);
     } finally {
       db.close();
     }
