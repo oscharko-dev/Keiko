@@ -8,6 +8,7 @@
 
 import {
   DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+  sealedLocalPodModelUsePolicy,
   validateManualRefreshChangeSummary,
   type HtmlManualSource,
   type KnowledgeCapsuleId,
@@ -15,7 +16,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { createCapsule } from "./capsule-lifecycle.js";
+import { createCapsule, updateCapsuleDetails } from "./capsule-lifecycle.js";
 import { createInMemoryManualFetcher, type InMemoryManualPage } from "./crawl/index.js";
 import { listPersistedDocumentsForSource } from "./discovery/persist.js";
 import { createHtmlManualPod, type CreateHtmlManualPodDeps } from "./manual-pod.js";
@@ -200,6 +201,27 @@ describe("refreshHtmlManualPod", () => {
     expect(result.changeSummary.counts.removedPages).toBe(0);
     // The prior single-page pod is left fully intact (no scope mutation, no pruning).
     expect(result.summary.counts.documentCount).toBe(1);
+  });
+
+  it("fails closed on refresh when the pod policy denies external embeddings (#1920)", async () => {
+    // Regression for Epic #1819/#1920: the refresh lifecycle reuses `runIndexingJob`'s
+    // model-use-policy preflight (orchestrator.ts) unconditionally, so a pod sealed AFTER
+    // creation must still block re-indexing on refresh rather than silently re-embedding.
+    await createBasePod();
+    updateCapsuleDetails(store, CAPSULE_ID, { modelUsePolicy: sealedLocalPodModelUsePolicy() });
+    const mutated = baseManual();
+    mutated.set(GUIDE, manualPage("Guide Revised Under Seal", ["/"]));
+
+    const result = await refreshHtmlManualPod(refreshDeps(mutated));
+
+    expect(result.indexing?.status).toBe("failed");
+    expect(result.indexing?.lastError).toMatchObject({ code: "POLICY_DENIED" });
+    expect(result.progress.phase).toBe("degraded");
+    expect(result.progress.remediations.map((entry) => entry.reason)).toContain("POLICY_DENIED");
+    // The seal blocks re-indexing only — the prior ready pod (3 documents, real vectors) is left
+    // fully intact rather than being wiped or partially overwritten.
+    expect(result.summary.counts.documentCount).toBe(3);
+    expect(result.summary.counts.vectorCount).toBeGreaterThan(0);
   });
 
   it("does not widen scope: cross-origin links are denied even when the fetcher serves them", async () => {
