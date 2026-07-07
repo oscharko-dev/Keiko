@@ -38,6 +38,7 @@ import { CHAT_MINI_W, WIN_TYPES, type WindowCfgByType, type WindowType } from ".
 import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
+import selectionStyles from "../WorkspaceSelection.module.css";
 
 const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 type Handle = (typeof HANDLES)[number];
@@ -63,6 +64,8 @@ interface WindowFrameProps {
   readonly connState: ConnState;
   readonly api: WorkspaceApi;
   readonly wsRef: RefObject<HTMLElement | null>;
+  readonly selected?: boolean;
+  readonly selectedWindowCount?: number;
   /**
    * Bumped by the parent whenever the cross-window link context changes (a
    * connection added/removed or any window's cfg/type mutated) but NOT on pure
@@ -391,6 +394,68 @@ function attachDragListeners(
   window.addEventListener("pointercancel", up);
 }
 
+function attachGroupDragListeners(
+  api: WorkspaceApi,
+  geo: DragGeometry,
+  startClientX: number,
+  startClientY: number,
+  onDragEnd?: (() => void) | undefined,
+): void {
+  let lastX = geo.toWX(startClientX);
+  let lastY = geo.toWY(startClientY);
+  let pendingX = lastX;
+  let pendingY = lastY;
+  let hasPending = false;
+  let frame: number | null = null;
+  const flush = (): void => {
+    frame = null;
+    if (!hasPending) return;
+    hasPending = false;
+    const dx = pendingX - lastX;
+    const dy = pendingY - lastY;
+    if (dx !== 0 || dy !== 0) {
+      lastX = pendingX;
+      lastY = pendingY;
+      api.moveSelectedWindowsBy(dx, dy);
+    }
+  };
+  const schedule = (): void => {
+    if (frame !== null) return;
+    frame =
+      typeof window.requestAnimationFrame === "function"
+        ? window.requestAnimationFrame(flush)
+        : window.setTimeout(flush, 0);
+  };
+  const cancelFrame = (): void => {
+    if (frame === null) return;
+    if (typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(frame);
+    } else {
+      window.clearTimeout(frame);
+    }
+    frame = null;
+  };
+  const move = (ev: PointerEvent): void => {
+    pendingX = geo.toWX(ev.clientX);
+    pendingY = geo.toWY(ev.clientY);
+    hasPending = true;
+    schedule();
+  };
+  const up = (): void => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    cancelFrame();
+    flush();
+    releaseBodyStyle();
+    onDragEnd?.();
+  };
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
+
 function resizeCursor(dir: Handle): string {
   if (dir === "n" || dir === "s") return "ns-resize";
   if (dir === "e" || dir === "w") return "ew-resize";
@@ -538,6 +603,8 @@ function WindowFrameImpl({
   connState,
   api,
   wsRef,
+  selected = false,
+  selectedWindowCount = 0,
   linkRevision,
 }: WindowFrameProps): ReactNode {
   const def = WIN_TYPES[win.type];
@@ -739,6 +806,14 @@ function WindowFrameImpl({
       // accessor instead of a per-frame `view` prop; the value is byte-identical
       // to what the prop held at this instant.
       const geo = makeDragGeometry(rect, api.currentView());
+      if (selected && selectedWindowCount > 1 && !win.max) {
+        setDraggingWindow(true);
+        attachGroupDragListeners(api, geo, e.clientX, e.clientY, () => setDraggingWindow(false));
+        return;
+      }
+      if (!selected) {
+        api.replaceSelection([win.id]);
+      }
       const wasMax = win.max;
       const restoredW = wasMax ? (win.prev?.w ?? 480) : win.w;
       const restoredH = wasMax ? (win.prev?.h ?? 360) : win.h;
@@ -761,6 +836,8 @@ function WindowFrameImpl({
       win.prev,
       wsRef,
       connState,
+      selected,
+      selectedWindowCount,
       focusWindowForTarget,
     ],
   );
@@ -1014,7 +1091,7 @@ function WindowFrameImpl({
     // Enter/Space when a port itself is focused.
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.1 keyboard parity on the focusable window region
     <section
-      className="window"
+      className={selected ? `window ${selectionStyles.selectedWindow}` : "window"}
       // Audit C408 — a name turns the section into a named region, so AT users
       // can perceive window boundaries and jump between windows; C297 — the sub
       // (path/URL/title) disambiguates multiple windows of the same type.
@@ -1023,6 +1100,7 @@ function WindowFrameImpl({
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
+      data-selected={selected ? "true" : undefined}
       data-dragging={draggingWindow ? "true" : undefined}
       data-window-id={win.id}
       style={sectionStyle}

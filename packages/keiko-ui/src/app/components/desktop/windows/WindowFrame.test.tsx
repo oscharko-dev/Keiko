@@ -528,6 +528,7 @@ describe("WindowFrame content zoom controls", () => {
 
   it("drags the window from the header with the primary button", () => {
     const focus = vi.fn();
+    const replaceSelection = vi.fn();
     const update = vi.fn();
     const setSnap = vi.fn();
     const commitSnap = vi.fn();
@@ -537,7 +538,7 @@ describe("WindowFrame content zoom controls", () => {
         top
         connState={null}
         linkRevision={0}
-        api={api({ focus, update, setSnap, commitSnap })}
+        api={api({ focus, replaceSelection, update, setSnap, commitSnap })}
         wsRef={workspaceRef(domRect())}
       />,
     );
@@ -552,6 +553,7 @@ describe("WindowFrame content zoom controls", () => {
     fireEvent.pointerUp(window);
 
     expect(focus).toHaveBeenCalledWith("agents-1");
+    expect(replaceSelection).toHaveBeenCalledWith(["agents-1"]);
     expect(update).toHaveBeenLastCalledWith("agents-1", { x: 680, y: -0 });
     expect(setSnap).toHaveBeenLastCalledWith("tr");
     expect(commitSnap).toHaveBeenCalledWith("agents-1");
@@ -588,6 +590,105 @@ describe("WindowFrame content zoom controls", () => {
     expect(setSnap).toHaveBeenLastCalledWith("tr");
     expect(commitSnap).toHaveBeenCalledWith("agents-1");
     expect(document.body.style.cursor).toBe("");
+  });
+
+  it("moves the selected group from a selected window header without single-window snap", () => {
+    const focus = vi.fn();
+    const replaceSelection = vi.fn();
+    const update = vi.fn();
+    const setSnap = vi.fn();
+    const commitSnap = vi.fn();
+    const moveSelectedWindowsBy = vi.fn();
+    const frames = installAnimationFrameQueue();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          selected
+          selectedWindowCount={2}
+          linkRevision={0}
+          api={api({
+            focus,
+            replaceSelection,
+            update,
+            setSnap,
+            commitSnap,
+            moveSelectedWindowsBy,
+          })}
+          wsRef={workspaceRef(domRect())}
+        />,
+      );
+
+      const header = container.querySelector<HTMLElement>(".win-head");
+      const section = container.querySelector<HTMLElement>(".window");
+      expect(header).not.toBeNull();
+      expect(section).not.toBeNull();
+      expect(section).toHaveAttribute("data-selected", "true");
+      expect(section).toHaveAccessibleName("Agents");
+
+      fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
+      fireEvent.pointerMove(window, { clientX: 140, clientY: 120 });
+      fireEvent.pointerMove(window, { clientX: 180, clientY: 150 });
+      expect(moveSelectedWindowsBy).not.toHaveBeenCalled();
+
+      frames.flushNextFrame();
+      expect(moveSelectedWindowsBy).toHaveBeenCalledTimes(1);
+      expect(moveSelectedWindowsBy).toHaveBeenCalledWith(80, 60);
+      expect(update).not.toHaveBeenCalled();
+      expect(setSnap).not.toHaveBeenCalled();
+
+      fireEvent.pointerUp(window);
+
+      expect(focus).toHaveBeenCalledWith("agents-1");
+      expect(replaceSelection).not.toHaveBeenCalled();
+      expect(commitSnap).not.toHaveBeenCalled();
+      expect(document.body.style.cursor).toBe("");
+      expect(document.body.style.userSelect).toBe("");
+    } finally {
+      frames.restore();
+    }
+  });
+
+  it("flushes and cleans up selected group drag on pointer cancel", () => {
+    const moveSelectedWindowsBy = vi.fn();
+    const frames = installAnimationFrameQueue();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          selected
+          selectedWindowCount={2}
+          linkRevision={0}
+          api={api({ moveSelectedWindowsBy })}
+          wsRef={workspaceRef(domRect())}
+        />,
+      );
+
+      const header = container.querySelector<HTMLElement>(".win-head");
+      const section = container.querySelector<HTMLElement>(".window");
+      expect(header).not.toBeNull();
+      expect(section).not.toBeNull();
+
+      fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
+      expect(section).toHaveAttribute("data-dragging", "true");
+      expect(document.body.style.cursor).toBe("grabbing");
+
+      fireEvent.pointerMove(window, { clientX: 180, clientY: 150 });
+      fireEvent.pointerCancel(window);
+
+      expect(moveSelectedWindowsBy).toHaveBeenCalledTimes(1);
+      expect(moveSelectedWindowsBy).toHaveBeenCalledWith(80, 60);
+      expect(document.body.style.cursor).toBe("");
+      expect(document.body.style.userSelect).toBe("");
+      expect(section).not.toHaveAttribute("data-dragging");
+      expect(frames.frames.size).toBe(0);
+    } finally {
+      frames.restore();
+    }
   });
 
   it("coalesces rapid drag pointermoves into one update per animation frame (issue #1580)", () => {
