@@ -172,40 +172,29 @@ function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boo
   return findConfiguredCapability(config, modelId)?.kind === "embedding";
 }
 
-function unavailableEmbeddingModelIds(
-  config: GatewayConfig,
-  capsules: readonly KnowledgeCapsule[],
-): ReadonlySet<string> {
-  const unavailable = new Set<string>();
-  for (const capsule of capsules) {
-    const modelId = capsule.embeddingModelIdentity.modelId;
-    const provider = config.providers.find((entry) => entry.modelId === modelId);
-    if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
-      unavailable.add(modelId);
-    }
-  }
-  return unavailable;
-}
+// ONE adapter per live GatewayConfig object (the deps holder returns the same config reference
+// until setup replaces it). The retrieval layer scopes its cross-request query-embedding and
+// identity-preflight caches PER ADAPTER INSTANCE, so reusing the adapter is what lets repeated
+// asks skip redundant embedding/preflight network calls — and replacing the gateway config
+// naturally rotates the adapter, dropping every cache scoped to it. Availability is checked
+// live per request (equivalent to the former precomputed per-capsule unavailable set: both
+// reduce to `provider === undefined || !isConfiguredEmbeddingModel(config, modelId)`), so the
+// adapter is independent of the selected capsules.
+const EMBEDDING_ADAPTERS_BY_CONFIG = new WeakMap<GatewayConfig, OpenAIEmbeddingAdapter>();
 
-export function createEmbeddingAdapter(
-  deps: UiHandlerDeps,
-  capsules: readonly KnowledgeCapsule[],
-): OpenAIEmbeddingAdapter | RouteResult {
+export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdapter | RouteResult {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const unavailableModelIds = unavailableEmbeddingModelIds(config, capsules);
-  return {
+  const cached = EMBEDDING_ADAPTERS_BY_CONFIG.get(config);
+  if (cached !== undefined) return cached;
+  const adapter: OpenAIEmbeddingAdapter = {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
       const provider = config.providers.find((entry) => entry.modelId === request.modelId);
-      if (
-        provider === undefined ||
-        unavailableModelIds.has(request.modelId) ||
-        !isConfiguredEmbeddingModel(config, provider.modelId)
-      ) {
+      if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
         return { ok: false, kind: "unsupported-model" };
       }
       return requestEmbeddingImpl(deps)({
@@ -219,6 +208,8 @@ export function createEmbeddingAdapter(
       });
     },
   };
+  EMBEDDING_ADAPTERS_BY_CONFIG.set(config, adapter);
+  return adapter;
 }
 
 // Resolves ONE connector scope (capsule or capsule-set) to its capsules + display label. Extracted
@@ -2131,7 +2122,7 @@ async function runScopedGroundedAnswer(
   selected: SelectedLocalKnowledgeScope,
   signal: AbortSignal,
 ): Promise<GroundedAnswer | RouteResult> {
-  const embeddingAdapter = createEmbeddingAdapter(deps, selected.capsules);
+  const embeddingAdapter = createEmbeddingAdapter(deps);
   if ("status" in embeddingAdapter) return embeddingAdapter;
   const modelId = input.modelId ?? chat.selectedModel;
   const model = resolveModel(deps, modelId);

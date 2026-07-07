@@ -647,6 +647,10 @@ export const REGRESSION_PROBE_FIXTURE_IDS = [
   // #1855 technical HTML structure: prove the new manual-structure axis is non-tautological —
   // repointing each query at a different-topic decoy row must drop recall below the floors.
   "html-manual-structure",
+  // Code-repository + chained-question retrieval: prove the new source-code and multi-part
+  // question axes are non-tautological the same way — repointed expectations must fail.
+  "code-repository",
+  "chained-question",
 ];
 
 const ABSENT_CHUNK_SENTINEL = "__keiko_regression_absent_chunk__";
