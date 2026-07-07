@@ -253,8 +253,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 25 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(25);
+  it("is the integer 26 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(26);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -954,6 +954,48 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
         .prepare("SELECT kind, details_json FROM capsule_audit_events WHERE id = 'a-1'")
         .get() as { readonly kind: string; readonly details_json: string | null } | undefined;
       expect(row).toEqual({ kind: "capsule-deleted", details_json: null });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v25 on top of a v24 database and adds a nullable parsed_units.anchor_id column", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v25 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 25);
+      if (v25 === undefined) {
+        throw new Error("expected v25 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 25) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+
+      const beforeColumns = db.prepare("PRAGMA table_info('parsed_units')").all() as {
+        name?: string;
+      }[];
+      expect(beforeColumns.some((column) => column.name === "anchor_id")).toBe(false);
+
+      for (const stmt of v25.up) db.exec(stmt);
+
+      const afterColumns = db.prepare("PRAGMA table_info('parsed_units')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const anchorIdColumn = afterColumns.find((column) => column.name === "anchor_id");
+      expect(anchorIdColumn?.type).toBe("TEXT");
+      expect(anchorIdColumn?.notnull).toBe(0);
+
+      db.prepare("UPDATE parsed_units SET anchor_id = ? WHERE id = ?").run(
+        "section-2",
+        handles.parsedUnitId,
+      );
+      const row = db
+        .prepare("SELECT anchor_id FROM parsed_units WHERE id = ?")
+        .get(handles.parsedUnitId) as { readonly anchor_id: string | null } | undefined;
+      expect(row?.anchor_id).toBe("section-2");
     } finally {
       db.close();
     }

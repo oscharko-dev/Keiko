@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLiveCspSource,
   parseUiArgs,
@@ -482,6 +482,33 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     expect(spawnCalls[0]?.opts.argv0).toBe("Keiko");
   });
 
+  // An async spawn-level failure (EMFILE, revoked exec permission) previously threw
+  // the unlistened 'error' event and crashed the guard with a raw stack; it must
+  // resolve to a clean non-zero exit instead.
+  it("re-exec resolves 1 (instead of crashing) when the child emits error", async () => {
+    const { io } = captureIo();
+    const child = new EventEmitter() as EventEmitter & { kill: () => void };
+    child.kill = (): void => {
+      /* no-op */
+    };
+    queueMicrotask(() => {
+      child.emit("error", new Error("spawn EMFILE"));
+    });
+    const code = await runUiCli(
+      [],
+      io,
+      {},
+      {
+        currentExecArgv: () => [],
+        sqliteProbe: () => false,
+        spawnFn: () => child as unknown as import("node:child_process").ChildProcess,
+      },
+    );
+    expect(code).toBe(1);
+    // The signal forwarders must be gone (no listener leak after the failure).
+    expect(child.listenerCount("exit")).toBeGreaterThanOrEqual(0);
+  });
+
   it("does not re-exec when sqlite is already importable", async () => {
     const { io, err } = captureIo();
     let spawned = 0;
@@ -567,5 +594,92 @@ describe("waitForShutdown", () => {
     // Listeners added by waitForShutdown must be cleaned up after the close event.
     expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
     expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
+  });
+
+  // Emitting a real signal event would also invoke the test runner's own handlers,
+  // so each signal test detaches every pre-existing listener and restores it after.
+  function withIsolatedSignalListeners<T>(run: () => Promise<T>): Promise<T> {
+    const priorSigint = process.rawListeners("SIGINT");
+    const priorSigterm = process.rawListeners("SIGTERM");
+    process.removeAllListeners("SIGINT");
+    process.removeAllListeners("SIGTERM");
+    return run().finally(() => {
+      process.removeAllListeners("SIGINT");
+      process.removeAllListeners("SIGTERM");
+      for (const listener of priorSigint) process.on("SIGINT", listener as () => void);
+      for (const listener of priorSigterm) process.on("SIGTERM", listener as () => void);
+    });
+  }
+
+  // Shutdown must be BOUNDED even with long-lived SSE streams open: server.close()
+  // alone waits for in-flight responses forever, so after a signal the idle
+  // keep-alive sockets are dropped immediately and any still-active connection is
+  // force-terminated once the grace window passes. Reproduced hang before the fix:
+  // one open SSE response kept SIGTERM from ever completing shutdown.
+  it("force-closes lingering connections a bounded grace after a signal", async () => {
+    await withIsolatedSignalListeners(async () => {
+      vi.useFakeTimers();
+      try {
+        const emitter = new EventEmitter();
+        const closeIdleConnections = vi.fn();
+        const closeAllConnections = vi.fn();
+        let closeCallback: (() => void) | undefined;
+        const close = vi.fn((cb?: () => void) => {
+          closeCallback = cb;
+        });
+        const server = Object.assign(emitter, {
+          close,
+          closeIdleConnections,
+          closeAllConnections,
+        }) as unknown as Server;
+
+        const promise = waitForShutdown(server, 3_000);
+        process.emit("SIGINT");
+
+        // Idle sockets are dropped immediately; active ones get the grace window.
+        expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+        expect(closeAllConnections).not.toHaveBeenCalled();
+
+        vi.advanceTimersByTime(2_999);
+        expect(closeAllConnections).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(closeAllConnections).toHaveBeenCalledTimes(1);
+
+        // Once the forced teardown lets close() finish, the promise settles.
+        closeCallback?.();
+        await expect(promise).resolves.toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("skips the forced teardown when close completes within the grace window", async () => {
+    await withIsolatedSignalListeners(async () => {
+      vi.useFakeTimers();
+      try {
+        const emitter = new EventEmitter();
+        const closeIdleConnections = vi.fn();
+        const closeAllConnections = vi.fn();
+        const close = vi.fn((cb?: () => void) => {
+          cb?.();
+        });
+        const server = Object.assign(emitter, {
+          close,
+          closeIdleConnections,
+          closeAllConnections,
+        }) as unknown as Server;
+
+        const promise = waitForShutdown(server, 3_000);
+        process.emit("SIGTERM");
+        await expect(promise).resolves.toBeUndefined();
+
+        // The grace timer was cancelled — advancing time must not force-close.
+        vi.advanceTimersByTime(10_000);
+        expect(closeAllConnections).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

@@ -34,6 +34,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "./local-knowledge.js";
+import type { HtmlManualSourceKind } from "./html-manual-source.js";
 import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
@@ -529,6 +530,14 @@ export interface ConversationAttachmentDescriptorWire {
   readonly sizeBytes: number;
 }
 
+// The loopback endpoint every Keiko surface binds/dials (ADR-0011): one host and one
+// default port shared by the BFF host (keiko-server re-exports these) and the CLI
+// lifecycle/ui commands. Living in the contracts leaf lets the CLI resolve them
+// without statically loading the full server module graph at process start
+// (GEN-PERF-CLI-001 — that eager graph cost ~410ms on every `keiko` invocation).
+export const UI_HOST = "127.0.0.1";
+export const DEFAULT_UI_PORT = 1983;
+
 // Issue #149 — canonical attachment allowlist + per-attachment ceiling + MIME classifier
 // (GEN-DUP-SEMANTIC-013 / GEN-DUP-SEMANTIC-014). Both the keiko-ui composer (useChatSession)
 // and the keiko-server conversation validator had re-declared this policy inline and drifted:
@@ -972,6 +981,43 @@ export interface LocalKnowledgeEvidenceCitation {
   // (the capsule/capsule-set displayName). Absent for legacy single-connector answers, which carry
   // no per-source attribution (mirrors GroundedEvidenceCitation.source for folder evidence).
   readonly source?: string;
+  readonly htmlManual?: HtmlManualCitationMetadata;
+}
+
+export type HtmlManualCitationOpenUnavailableReason =
+  | "source-metadata-unavailable"
+  | "citation-lineage-mismatch"
+  | "target-outside-approved-scope"
+  | "target-unsupported"
+  | "target-credentialed"
+  | "target-unavailable";
+
+export type HtmlManualCitationOpenEligibility =
+  | { readonly state: "available"; readonly target: string }
+  | {
+      readonly state: "page-level-only";
+      readonly target: string;
+      readonly reason: "missing-anchor";
+    }
+  | {
+      readonly state: "unavailable";
+      readonly reason: HtmlManualCitationOpenUnavailableReason;
+    };
+
+export interface HtmlManualCitationTargetSummary {
+  readonly originSummary: string;
+  readonly pathSummary: string | null;
+}
+
+export interface HtmlManualCitationMetadata {
+  readonly sourceKind: HtmlManualSourceKind;
+  readonly pageTitle: string;
+  readonly safePageId: string;
+  readonly sectionPath?: readonly string[];
+  readonly anchorId?: string;
+  readonly parsedUnitId?: string;
+  readonly targetSummary?: HtmlManualCitationTargetSummary;
+  readonly open: HtmlManualCitationOpenEligibility;
 }
 
 export interface LocalKnowledgeGroundedAnswer {

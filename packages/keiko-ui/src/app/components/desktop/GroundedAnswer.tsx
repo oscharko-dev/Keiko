@@ -10,6 +10,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { formatBytes, formatMs } from "@/lib/format";
+import { navigateDocumentation } from "@/lib/docs-browser-api";
 import {
   RepositoryReferenceInline,
   type OpenRepositoryReference,
@@ -23,6 +24,7 @@ import type {
   GroundedRerankerDiagnostics,
   GroundedUncertainty,
   HybridGroundedAnswerContextSummary,
+  HtmlManualCitationMetadata,
   KnowledgePodRetrievalActivity,
   KnowledgePodRetrievalActivityReasonCode,
   KnowledgePodRetrievalActivityState,
@@ -568,6 +570,9 @@ function LocalKnowledgeCitationList({
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
   function labelForCitation(citation: LocalKnowledgeEvidenceCitation): string {
+    if (citation.htmlManual !== undefined) {
+      return manualCitationLabel(citation);
+    }
     return citation.source === undefined
       ? `${citation.marker} ${citation.label}`
       : `${citation.marker} ${citation.source} · ${citation.label}`;
@@ -601,9 +606,75 @@ function LocalKnowledgeCitationList({
 }
 
 function knowledgeCitationTitle(citation: LocalKnowledgeEvidenceCitation): string {
+  if (citation.htmlManual !== undefined) {
+    const section = citation.htmlManual.sectionPath?.join(" · ");
+    const suffix = section === undefined ? "" : ` · ${section}`;
+    return `${citation.htmlManual.pageTitle}${suffix} — HTML manual evidence, relevance ${citation.score.toFixed(2)}`;
+  }
   return citation.source === undefined
     ? `${citation.label} — relevance ${citation.score.toFixed(2)}`
     : `${citation.source} · ${citation.label} — relevance ${citation.score.toFixed(2)}`;
+}
+
+function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
+  const manual = citation.htmlManual;
+  if (manual === undefined) return `${citation.marker} ${citation.label}`;
+  const source = citation.source === undefined ? "HTML manual" : `${citation.source} · HTML manual`;
+  const section = manual.sectionPath?.join(" · ");
+  const sectionSuffix = section === undefined || section.length === 0 ? "" : ` · ${section}`;
+  return `${citation.marker} ${source} · ${manual.pageTitle}${sectionSuffix}`;
+}
+
+function manualCitationActionLabel(manual: HtmlManualCitationMetadata): string {
+  if (manual.open.state === "available") return "Open manual";
+  if (manual.open.state === "page-level-only") return "Open page";
+  return humanizeToken(manual.open.reason);
+}
+
+function ManualCitationChip({
+  citation,
+  label,
+}: {
+  readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly label: string;
+}): ReactNode {
+  const manual = citation.htmlManual;
+  const [state, setState] = useState<"idle" | "opening" | "opened" | "failed">("idle");
+  if (manual === undefined) return null;
+  const unavailable = manual.open.state === "unavailable";
+  const opening = state === "opening";
+  const actionLabel =
+    state === "opened"
+      ? "Opened"
+      : state === "failed"
+        ? "Open failed"
+        : manualCitationActionLabel(manual);
+  const target = manual.open.state === "unavailable" ? undefined : manual.open.target;
+  return (
+    <button
+      type="button"
+      className="grounded-citation grounded-citation-action"
+      aria-disabled={unavailable || opening ? "true" : undefined}
+      aria-label={`${label} · ${actionLabel}`}
+      title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
+      onClick={() => {
+        if (target === undefined || unavailable || opening) return;
+        setState("opening");
+        void navigateDocumentation(target).then(
+          () => {
+            setState("opened");
+          },
+          () => {
+            setState("failed");
+          },
+        );
+      }}
+    >
+      <span className="grounded-citation-range">{label}</span>
+      <span className="grounded-citation-action-label">{actionLabel}</span>
+      <CitationScore score={citation.score} />
+    </button>
+  );
 }
 
 function KnowledgeCitationChip({
@@ -615,6 +686,9 @@ function KnowledgeCitationChip({
   readonly citationPreview: CitationPreviewController | undefined;
   readonly label: string;
 }): ReactNode {
+  if (citation.htmlManual !== undefined) {
+    return <ManualCitationChip citation={citation} label={label} />;
+  }
   const affordance = citationPreview?.forCitation(citation);
   if (affordance === undefined) {
     return (

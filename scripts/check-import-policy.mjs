@@ -16,7 +16,34 @@ const LOCAL_KNOWLEDGE_EGRESS_PATTERN =
 const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
   /^packages\/keiko-tools\/src\/(_support|exec|writer)\.[cm]?tsx?$/;
 
+// GEN-PERF-CLI-001 — the CLI barrel is evaluated on every `keiko` invocation (the
+// root bin imports it), so keiko-cli modules must not STATICALLY value-import the
+// heavy workspace package graphs or the keiko-sdk fat barrel at module scope. The
+// eager graph cost a measured ~410ms of ESM loading per command (`keiko --version`
+// ~440-490ms vs ~80ms once lazy). `import type` (erased at build) and dynamic
+// `import()` (the lazy-modules.ts loaders) stay allowed; the light leaves
+// (contracts, security, tools, memory-vault, keiko-server/credential-vault) stay
+// allowed. dependency-cruiser cannot see this distinction on resolved workspace
+// edges in this repository configuration, so this AST rule is the enforcement.
+const CLI_HEAVY_PACKAGE_PATTERN =
+  /^@oscharko-dev\/keiko-(server|harness|workflows|evaluations|verification|evidence|model-gateway|workspace|quality-intelligence|sdk)($|\/)/;
+const CLI_HEAVY_PACKAGE_ALLOWED_SUBPATHS = /^@oscharko-dev\/keiko-server\/credential-vault($|\/)/;
+
 const IMPORT_POLICY_RULES = [
+  {
+    name: "gen-perf-cli-001-cli-heavy-graphs-load-lazily",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/cli-lazy-heavy-imports/`)
+        : /^packages\/keiko-cli\/src\//.test(path) &&
+          path !== "packages/keiko-cli/src/lazy-modules.ts",
+    matchesSpecifier: (specifier) =>
+      CLI_HEAVY_PACKAGE_PATTERN.test(specifier) &&
+      !CLI_HEAVY_PACKAGE_ALLOWED_SUBPATHS.test(specifier),
+    // Only a plain static value import/re-export is a violation; `import type`
+    // and the memoized dynamic loaders are the sanctioned access paths.
+    matchesImportKind: (kind) => kind === "static",
+  },
   {
     name: "adr-0019-trust-1-provider-sdk-isolation",
     matchesFile: (path, mode) =>
@@ -138,11 +165,24 @@ function isStringLiteralLike(node) {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
 }
 
+// Import-kind taxonomy (consumed by a rule's optional matchesImportKind):
+//   "static"      — a plain `import`/`export … from` VALUE binding (evaluated at load)
+//   "static-type" — a fully type-only `import type`/`export type … from` (erased at build)
+//   "type"        — an `import("…")` TYPE position (ImportTypeNode; erased at build)
+//   "dynamic"     — a runtime dynamic `import("…")` expression (loads on demand)
+//   "require"     — a CommonJS require("…") call (evaluated at call time)
+//   "call"        — a non-import call the policies also inspect (e.g. bare fetch)
 function moduleSpecifierEntry(node) {
   if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
-    return isStringLiteralLike(node.moduleSpecifier)
-      ? { node: node.moduleSpecifier, specifier: node.moduleSpecifier.text }
-      : undefined;
+    if (!isStringLiteralLike(node.moduleSpecifier)) return undefined;
+    const typeOnly = ts.isImportDeclaration(node)
+      ? node.importClause?.isTypeOnly === true
+      : node.isTypeOnly;
+    return {
+      node: node.moduleSpecifier,
+      specifier: node.moduleSpecifier.text,
+      kind: typeOnly ? "static-type" : "static",
+    };
   }
   return undefined;
 }
@@ -151,22 +191,22 @@ function importTypeEntry(node) {
   if (!ts.isImportTypeNode(node)) return undefined;
   const literal = ts.isLiteralTypeNode(node.argument) ? node.argument.literal : null;
   return literal && isStringLiteralLike(literal)
-    ? { node: literal, specifier: literal.text }
+    ? { node: literal, specifier: literal.text, kind: "type" }
     : undefined;
 }
 
 function callExpressionEntry(node) {
   if (!ts.isCallExpression(node)) return undefined;
   if (ts.isIdentifier(node.expression) && node.expression.text === "fetch") {
-    return { node: node.expression, specifier: "fetch" };
+    return { node: node.expression, specifier: "fetch", kind: "call" };
   }
   const [firstArg] = node.arguments;
   if (!firstArg || !isStringLiteralLike(firstArg)) return undefined;
   if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-    return { node: firstArg, specifier: firstArg.text };
+    return { node: firstArg, specifier: firstArg.text, kind: "dynamic" };
   }
   if (ts.isIdentifier(node.expression) && node.expression.text === "require") {
-    return { node: firstArg, specifier: firstArg.text };
+    return { node: firstArg, specifier: firstArg.text, kind: "require" };
   }
   return undefined;
 }
@@ -230,10 +270,14 @@ async function collectPolicyFiles(root, mode) {
   return mode === "fixtures" ? collectFixtureFiles(root) : collectProductionFiles(root);
 }
 
-function matchingRules(relativePath, mode, specifier) {
+function matchingRules(relativePath, mode, specifierEntry) {
   return IMPORT_POLICY_RULES.filter(
     (rule) =>
-      rule.matchesFile(relativePath, mode) && rule.matchesSpecifier(specifier, relativePath),
+      rule.matchesFile(relativePath, mode) &&
+      rule.matchesSpecifier(specifierEntry.specifier, relativePath) &&
+      // Rules without matchesImportKind keep their historical behavior: every
+      // import form (static, type-only, dynamic, require, call) is in scope.
+      (rule.matchesImportKind === undefined || rule.matchesImportKind(specifierEntry.kind)),
   );
 }
 
@@ -242,7 +286,7 @@ async function violationsForFile(file, relativePath, mode) {
   const sourceFile = parseSourceFile(file, text);
   const violations = [];
   for (const specifierEntry of collectImportSpecifiers(sourceFile)) {
-    for (const rule of matchingRules(relativePath, mode, specifierEntry.specifier)) {
+    for (const rule of matchingRules(relativePath, mode, specifierEntry)) {
       violations.push(violationFor(rule, file, relativePath, sourceFile, specifierEntry));
     }
   }

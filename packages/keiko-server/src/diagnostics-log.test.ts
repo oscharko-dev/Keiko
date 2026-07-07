@@ -119,3 +119,27 @@ describe("resolveCorrelationId (RB-6)", () => {
     expect(isValidCorrelationId(a)).toBe(true);
   });
 });
+
+describe("describeError partial-usage passthrough", () => {
+  it("carries counts-only partialUsage from a mid-stream gateway failure", () => {
+    const error = Object.assign(new Error("stream read failed"), {
+      code: "GATEWAY_TRANSPORT",
+      partialUsage: { promptTokens: 41, completionTokens: 7, streamedChars: 999 },
+    });
+    const described = describeError(error, (message) => message);
+    // Counts survive; the char counter (and anything else) is not forwarded.
+    expect(described.partialUsage).toEqual({ promptTokens: 41, completionTokens: 7 });
+  });
+
+  it("drops malformed or non-numeric partialUsage shapes (fail closed)", () => {
+    const hostile = Object.assign(new Error("x"), {
+      partialUsage: { promptTokens: "41 tokens of content", completionTokens: 7 },
+    });
+    expect(describeError(hostile, (m) => m).partialUsage).toBeUndefined();
+    const nan = Object.assign(new Error("x"), {
+      partialUsage: { promptTokens: Number.NaN, completionTokens: 7 },
+    });
+    expect(describeError(nan, (m) => m).partialUsage).toBeUndefined();
+    expect(describeError(new Error("x"), (m) => m).partialUsage).toBeUndefined();
+  });
+});

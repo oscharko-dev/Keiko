@@ -97,6 +97,23 @@ function deriveOpenTools(wins: readonly AppWindow[] | null): ReadonlySet<string>
   return out;
 }
 
+// GEN-PERF-WORKSPACE-008 — cheap signature of exactly the window fields the
+// always-mounted chrome renders: LeftRail/RightRail read the tool-membership set
+// and Footer reads id/type/minimized/max/z (cfg identity is covered separately by
+// useLinkRevision). `ws.wins` gets a fresh array identity on every drag/resize rAF
+// frame, so keying the chrome props on it defeated their React.memo for the whole
+// gesture; keying on this signature keeps their identities until a field the
+// chrome actually shows changes. Exported for tests.
+export function chromeWindowsSignatureOf(wins: readonly AppWindow[] | null): string {
+  if (wins === null) return "";
+  return wins
+    .map(
+      (w) =>
+        `${w.id}:${w.type}:${w.minimized === true ? "1" : "0"}:${w.max ? "1" : "0"}:${String(w.z)}`,
+    )
+    .join("|");
+}
+
 function branchLabelOrFallback(label: string | undefined): string {
   return label !== undefined && label.trim().length > 0 ? label : "No branch selected";
 }
@@ -631,7 +648,20 @@ function AppShellInner(): ReactNode {
 
   const winCount = ws.wins?.length ?? 0;
   const active = topWindow(ws.wins);
-  const openTools = useMemo(() => deriveOpenTools(ws.wins), [ws.wins]);
+  // GEN-PERF-WORKSPACE-008 — keep the chrome props referentially stable across
+  // geometry-only frames (see chromeWindowsSignatureOf): a fresh Set/array per
+  // drag frame defeated the LeftRail/RightRail/Footer memos for whole gestures.
+  const chromeWindowsSignature = useMemo(() => chromeWindowsSignatureOf(ws.wins), [ws.wins]);
+  const openTools = useMemo(
+    () => deriveOpenTools(ws.wins),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- chromeWindowsSignature covers the type membership deriveOpenTools reads; geometry-only frames must keep the Set identity
+    [chromeWindowsSignature],
+  );
+  const footerWindows = useMemo(
+    () => ws.wins ?? [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature covers id/type/minimized/max/z and workspaceLinkRevision covers cfg — every field Footer renders; geometry-only frames must keep the array identity
+    [chromeWindowsSignature, workspaceLinkRevision],
+  );
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
   // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed <TaskWorkspaceSwitcher/>
   // element inline defeated that memo (new element identity every AppShell render). Memoizing the
@@ -902,7 +932,7 @@ function AppShellInner(): ReactNode {
               </div>
               <Footer
                 winCount={winCount}
-                windows={ws.wins ?? []}
+                windows={footerWindows}
                 windowPaletteOpen={windowPaletteOpen}
                 onToggleWindowPalette={toggleWindowPalette}
                 onSelectWindow={selectFooterWindow}

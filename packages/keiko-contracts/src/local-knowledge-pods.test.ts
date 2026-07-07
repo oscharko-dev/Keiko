@@ -555,6 +555,15 @@ describe("validateKnowledgePodSummary", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts HTML manual source kinds without teaching them to KnowledgeSourceScope", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      sourceKinds: ["html-manual-local", "html-manual-http"],
+      manualSourceFingerprint: "fp-device-handbook",
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects a manual source fingerprint that leaks a raw path", () => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),

@@ -226,6 +226,10 @@ export interface UiHandlerDeps {
   // Resolved UI database file path when known. Project onboarding uses this to prevent the UI DB
   // and selected repositories from overlapping on disk.
   readonly uiDbPath?: string | undefined;
+  // Releases process-lifetime resources owned by these deps (today: the shared node:sqlite
+  // handle, closed with an explicit WAL checkpoint instead of relying on process exit).
+  // Optional and idempotent; hosts call it once the HTTP server has fully shut down.
+  readonly dispose?: (() => void) | undefined;
   // Project path selected by the process that launched this loopback UI. When set, /api/projects
   // reports this project first so first-run UI state cannot drift to stale persisted rows.
   readonly preferredProjectPath?: string | undefined;
@@ -1028,6 +1032,9 @@ function resolveLoopbackWorkspaceId(env: EnvSource): string {
 // relationship-engine tests inject their own deps.
 interface ComposedPersistence {
   readonly store: UiStore;
+  // Closes the underlying node:sqlite handle (WAL checkpoint) on graceful shutdown.
+  // Undefined when a UiStore is injected (tests own their store's lifecycle).
+  readonly dispose: (() => void) | undefined;
   readonly relationship: RelationshipHandlerDeps | undefined;
   // Issue #445: the durable task-workspace instance store, composed over the SAME DatabaseSync handle
   // (schema.ts §V7) so the V7 sibling table shares the single-writer transaction model. Undefined when
@@ -1047,6 +1054,7 @@ function composePersistence(
   if (injected !== undefined) {
     return {
       store: injected,
+      dispose: undefined,
       relationship: undefined,
       workspaceInstanceStore: undefined,
       activeWorkspacePointerStore: undefined,
@@ -1060,8 +1068,20 @@ function composePersistence(
     }),
     store: createRelationshipStorePort({ db, redactString }),
   };
+  // Idempotent: SIGTERM/SIGINT and the runUiCli finally block may both reach it.
+  let closed = false;
+  const dispose = (): void => {
+    if (closed) return;
+    closed = true;
+    try {
+      db.close();
+    } catch {
+      // Already closed by the runtime — nothing to release.
+    }
+  };
   return {
     store,
+    dispose,
     relationship,
     workspaceInstanceStore: buildWorkspaceInstanceStoreOverDatabase(db),
     activeWorkspacePointerStore: buildActiveWorkspacePointerStoreOverDatabase(db),
@@ -1432,6 +1452,8 @@ function resolveEvidenceDirAndEnforceRetention(options: BuildHandlerDepsOptions)
 
 interface PersistenceBundle {
   readonly uiStore: UiStore;
+  // Passthrough of ComposedPersistence.dispose (closes the shared sqlite handle).
+  readonly dispose: (() => void) | undefined;
   readonly relationship: RelationshipHandlerDeps | undefined;
   readonly workspaceProvisioning: WorkspaceProvisioningService | undefined;
   readonly workspaceLifecycle: WorkspaceLifecycleService | undefined;
@@ -1570,7 +1592,7 @@ function buildPersistenceBundle(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
 ): PersistenceBundle {
-  const { store, relationship, workspaceInstanceStore, activeWorkspacePointerStore } =
+  const { store, dispose, relationship, workspaceInstanceStore, activeWorkspacePointerStore } =
     composePersistence(options.store, resolvedUiDbPath, redactString, options.env);
   const services = composeTaskWorkspaceServices(
     options,
@@ -1582,6 +1604,7 @@ function buildPersistenceBundle(
   );
   return {
     uiStore: store,
+    dispose,
     relationship,
     ...services,
     managedTaskWorkspaceRoot:
@@ -1695,6 +1718,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     }),
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
+    ...(args.bundle.dispose !== undefined ? { dispose: args.bundle.dispose } : {}),
   };
 }
 

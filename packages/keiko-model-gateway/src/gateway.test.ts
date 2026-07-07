@@ -248,6 +248,7 @@ describe("Gateway.chat", () => {
           : Promise.resolve(okResponse("example-chat-model"));
       }),
       clock,
+      random: (): number => 1, // top of the jitter band keeps the backoff at exactly 100ms
     });
     await gateway.chat(REQUEST);
     expect(seenTimeouts).toEqual([1000, 200]);

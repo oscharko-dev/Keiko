@@ -87,21 +87,57 @@ describe("HTML Manual Knowledge Pod — end-to-end evidence (#1877)", () => {
     expect(pod.progress.crawl.deniedCount).toBe(0);
     expect(pod.progress.indexing?.skippedDocuments).toBe(0);
 
-    // The pod is searchable through the existing retrieval path.
-    const retrieval = await runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter: adapter },
-      { text: "installation steps", capsuleId: pod.capsuleId, topK: 5 },
+    // The pod is searchable through the existing retrieval path for exact technical terms and
+    // natural-language questions; no manual-specific runner or score mixing is involved.
+    const retrievalCases = [
+      { text: "max_pages = 200", expectedPage: "config.html" },
+      {
+        text: "How are configuration values loaded when the product starts?",
+        expectedPage: "config.html",
+      },
+    ] as const;
+    const retrievals = await Promise.all(
+      retrievalCases.map((query) =>
+        runLocalKnowledgeRetrieval(
+          { store, embeddingAdapter: adapter },
+          { text: query.text, capsuleId: pod.capsuleId, topK: 5 },
+        ),
+      ),
     );
-    expect(retrieval.noEvidence).toBe(false);
-    expect(retrieval.references.length).toBeGreaterThan(0);
+    for (let index = 0; index < retrievals.length; index += 1) {
+      const retrieval = retrievals[index];
+      const expectedPage = retrievalCases[index]?.expectedPage;
+      if (retrieval === undefined || expectedPage === undefined) {
+        throw new Error("manual retrieval case was not executed");
+      }
+      expect(retrieval.noEvidence).toBe(false);
+      expect(retrieval.references.length).toBeGreaterThan(0);
+      expect(
+        retrieval.references.some((reference) =>
+          reference.citation.safeDisplayName.endsWith(expectedPage),
+        ),
+      ).toBe(true);
+    }
+    const retrieval = retrievals[0];
+    if (retrieval === undefined) throw new Error("manual retrieval was not executed");
 
     // Retrieval references are body-free: the excerpt is a hash, and only safe citation metadata
     // (page label, heading path, offsets) crosses the wire — never the raw page body or a URL.
     const serialized = JSON.stringify(retrieval.references);
     expect(serialized).not.toContain("Welcome to the handbook");
     expect(serialized).not.toContain("settings file at startup");
+    expect(serialized).not.toContain("max_pages = 200");
     expect(serialized).not.toMatch(/https?:\/\//u);
     // References carry capsule/document/chunk lineage back to the manual pod, not raw text.
     expect(retrieval.references[0]?.citation.capsuleId).toBe(pod.capsuleId);
+    expect(
+      retrieval.references.some((reference) => reference.citation.anchorId !== undefined),
+    ).toBe(true);
+    expect(
+      retrieval.references.some((reference) => reference.citation.parsedUnitId !== undefined),
+    ).toBe(true);
+    expect(
+      retrieval.references.some((reference) => (reference.citation.sectionPath ?? []).length > 0),
+    ).toBe(true);
   });
 });

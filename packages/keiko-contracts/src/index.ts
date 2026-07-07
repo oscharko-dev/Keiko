@@ -1261,6 +1261,8 @@ export {
   ALLOWED_DOCUMENT_MIME_PREFIXES,
   ALLOWED_DOCUMENT_MIME_LITERALS,
   classifyAttachmentMime,
+  UI_HOST,
+  DEFAULT_UI_PORT,
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
@@ -1359,6 +1361,9 @@ export {
   summarizeHtmlManualSource,
   htmlManualLocalFolderScope,
   htmlManualReachableFilesScope,
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+  parseHtmlManualSourceTagMetadata,
 } from "./html-manual-source.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────

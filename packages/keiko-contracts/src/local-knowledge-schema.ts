@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `25`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `26`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 25 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 26 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -120,6 +120,23 @@ CREATE TABLE capsule_sources (
   updated_at INTEGER NOT NULL,
   FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
   UNIQUE (capsule_id, id)
+) STRICT;
+`.trim();
+
+const CREATE_HTML_MANUAL_SOURCES = `
+CREATE TABLE html_manual_sources (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  source_kind TEXT NOT NULL CHECK (source_kind IN ('html-manual-local', 'html-manual-http')),
+  source_fingerprint TEXT NOT NULL,
+  root_path TEXT,
+  entry_path TEXT,
+  origin TEXT,
+  path_prefix TEXT,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (capsule_id, source_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 
@@ -753,6 +770,8 @@ const CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX =
   "CREATE INDEX idx_document_text_windows_span ON document_text_windows(capsule_id, document_id, character_start);";
 const CREATE_PAGES_CAPSULE_DOC_SPAN_INDEX =
   "CREATE INDEX idx_pages_capsule_doc_span ON pages(capsule_id, document_id, character_start, character_end, page_number, page_label);";
+const CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX =
+  "CREATE INDEX idx_html_manual_sources_fingerprint ON html_manual_sources(source_fingerprint);";
 
 const CREATE_SECTIONS_SECTION_PATH_HASH_INDEX =
   "CREATE UNIQUE INDEX idx_sections_document_section_path_hash ON sections(document_id, section_path_hash) WHERE section_path_hash IS NOT NULL;";
@@ -764,6 +783,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CAPSULES,
   CREATE_KNOWLEDGE_SOURCES,
   CREATE_CAPSULE_SOURCES,
+  CREATE_HTML_MANUAL_SOURCES,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
   CREATE_DOCUMENT_BLOBS,
@@ -791,6 +811,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
 // ─── Indexes (scoped-query patterns only — no full-table scans) ──────────────────
 export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_knowledge_sources_updated ON knowledge_sources(updated_at DESC, id ASC);",
+  CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX,
   "CREATE INDEX idx_capsule_set_members_capsule ON capsule_set_members(capsule_id);",
   "CREATE INDEX idx_document_texts_capsule ON document_texts(capsule_id);",
   "CREATE INDEX idx_pages_capsule ON pages(capsule_id);",
@@ -1212,6 +1233,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "Persist additive html-block anchor_id (in-document fragment id) for high-quality technical HTML manual retrieval and anchor-precise citations (#1855).",
     up: ["ALTER TABLE parsed_units ADD COLUMN anchor_id TEXT;"],
   },
+  {
+    version: 26,
+    reason:
+      "Persist approved HTML manual source metadata for governed citation reopen without exposing raw roots on browser wires (#1854).",
+    up: [CREATE_HTML_MANUAL_SOURCES, CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -1239,6 +1266,7 @@ export const KNOWLEDGE_CAPSULE_V1_TABLES: readonly string[] = [
 export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   ...KNOWLEDGE_CAPSULE_V1_TABLES,
   "knowledge_sources",
+  "html_manual_sources",
   "document_texts",
   "capsule_membership_changes",
   "capsule_audit_events",
@@ -1252,6 +1280,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_knowledge_sources_updated",
+  "idx_html_manual_sources_fingerprint",
   "idx_capsule_set_members_capsule",
   "idx_document_texts_capsule",
   "idx_pages_capsule",

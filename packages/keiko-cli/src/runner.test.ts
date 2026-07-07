@@ -122,9 +122,9 @@ describe("runCli", () => {
     expect(c.err()).toBe("");
   });
 
-  it("dispatches the evidence subcommand (usage error 2 with no subcommand, no disk touched)", () => {
+  it("dispatches the evidence subcommand (usage error 2 with no subcommand, no disk touched)", async () => {
     const c = makeIo();
-    const code = runCli(["evidence"], c.io);
+    const code = await runCli(["evidence"], c.io);
     expect(code).toBe(2);
     expect(c.err().toLowerCase()).toContain("usage");
   });

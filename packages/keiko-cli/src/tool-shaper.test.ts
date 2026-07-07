@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts";
 import type { ToolCallResult } from "@oscharko-dev/keiko-harness";
-import { createHarnessToolShaper, harnessToolShaper } from "./tool-shaper.js";
+import { createHarnessToolShaper } from "./tool-shaper.js";
 
 const SANDBOX = {
   envAllowlist: ["PATH"],
@@ -34,8 +34,8 @@ function commandResult(output: string, omittedByteCount?: number): ToolCallResul
   };
 }
 
-describe("harnessToolShaper", () => {
-  it("shapes a run_command result into a valid command observation", () => {
+describe("createHarnessToolShaper", () => {
+  it("shapes a run_command result into a valid command observation", async () => {
     const output = JSON.stringify({
       exitCode: 0,
       signal: null,
@@ -44,7 +44,7 @@ describe("harnessToolShaper", () => {
       stdout: "hello",
       stderr: "",
     });
-    const observation = harnessToolShaper({
+    const observation = (await createHarnessToolShaper())({
       result: commandResult(output),
       toolName: "run_command",
       toolCallId: "call-1",
@@ -55,7 +55,7 @@ describe("harnessToolShaper", () => {
     expect(validateContextToolObservation(observation)).toEqual({ ok: true });
   });
 
-  it("preserves omittedByteCount internally without adding it to the model-facing output JSON", () => {
+  it("preserves omittedByteCount internally without adding it to the model-facing output JSON", async () => {
     const output = JSON.stringify({
       exitCode: null,
       signal: "SIGTERM",
@@ -66,7 +66,7 @@ describe("harnessToolShaper", () => {
     });
     expect(output).not.toContain("omittedByteCount");
 
-    const observation = harnessToolShaper({
+    const observation = (await createHarnessToolShaper())({
       result: commandResult(output, 2048),
       toolName: "run_command",
       toolCallId: "call-1",
@@ -81,9 +81,9 @@ describe("harnessToolShaper", () => {
     expect(validateContextToolObservation(observation)).toEqual({ ok: true });
   });
 
-  it("persists truncated command artifacts through an injected writer", () => {
+  it("persists truncated command artifacts through an injected writer", async () => {
     const artifacts = new Map<string, string>();
-    const shaper = createHarnessToolShaper({
+    const shaper = await createHarnessToolShaper({
       artifactWriter: {
         write: (artifactId, content): void => {
           artifacts.set(artifactId, content);
@@ -116,8 +116,8 @@ describe("harnessToolShaper", () => {
     expect(artifacts.get(observation.rehydration?.artifactId ?? "")).toContain("full stdout");
   });
 
-  it("returns undefined for a non-command tool", () => {
-    const observation = harnessToolShaper({
+  it("returns undefined for a non-command tool", async () => {
+    const observation = (await createHarnessToolShaper())({
       result: { toolCallId: "c", output: "{}", durationMs: 1 },
       toolName: "read_file",
       toolCallId: "c",
@@ -126,8 +126,8 @@ describe("harnessToolShaper", () => {
     expect(observation).toBeUndefined();
   });
 
-  it("returns undefined (never throws) for malformed command output", () => {
-    const observation = harnessToolShaper({
+  it("returns undefined (never throws) for malformed command output", async () => {
+    const observation = (await createHarnessToolShaper())({
       result: commandResult("not json"),
       toolName: "run_command",
       toolCallId: "call-1",
@@ -136,8 +136,8 @@ describe("harnessToolShaper", () => {
     expect(observation).toBeUndefined();
   });
 
-  it("returns undefined when the output JSON lacks stream fields", () => {
-    const observation = harnessToolShaper({
+  it("returns undefined when the output JSON lacks stream fields", async () => {
+    const observation = (await createHarnessToolShaper())({
       result: commandResult(JSON.stringify({ exitCode: 0 })),
       toolName: "run_command",
       toolCallId: "call-1",

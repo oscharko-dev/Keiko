@@ -664,6 +664,7 @@ interface CitationRow {
   readonly capsule_id: string;
   readonly source_id: string;
   readonly document_id: string;
+  readonly parsed_unit_id: string | null;
   readonly safe_display_name: string | null;
   readonly page_number: number | null;
   readonly page_label: string | null;
@@ -671,6 +672,7 @@ interface CitationRow {
   readonly json_pointer: string | null;
   readonly table_name: string | null;
   readonly row_index: number | null;
+  readonly anchor_id: string | null;
   readonly character_start: number | null;
   readonly character_end: number | null;
 }
@@ -683,7 +685,7 @@ function readCitationRows(
   if (chunkIds.length === 0) return [];
   const placeholders = chunkIds.map((_, i) => `:c${String(i)}`).join(", ");
   const sql = [
-    "SELECT c.id AS chunk_id, c.capsule_id, c.source_id, c.document_id,",
+    "SELECT c.id AS chunk_id, c.capsule_id, c.source_id, c.document_id, c.parsed_unit_id,",
     "  d.safe_display_name AS safe_display_name,",
     "  COALESCE(pu.page_number, (",
     "    SELECT p.page_number FROM pages p",
@@ -702,7 +704,7 @@ function readCitationRows(
     "    ORDER BY p.page_number ASC LIMIT 1",
     "  )) AS page_label,",
     "  COALESCE(pu.section_path_json, pu.heading_path_json) AS section_path_json,",
-    "  pu.json_pointer, pu.table_name, pu.row_index,",
+    "  pu.json_pointer, pu.table_name, pu.row_index, pu.anchor_id,",
     "  COALESCE(c.character_start, pu.character_start) AS character_start,",
     "  COALESCE(c.character_end, pu.character_end) AS character_end",
     "FROM chunks c",
@@ -1000,8 +1002,39 @@ function parseSectionPath(
   }
 }
 
+function openOptionalText(value: string | null, cipher: StoreContentCipher): string | undefined {
+  if (value === null) return undefined;
+  const opened = cipher.openText(value);
+  return opened.trim().length === 0 ? undefined : opened;
+}
+
+function rowCitationPageMetadata(row: CitationRow): Partial<CitationReference> {
+  return {
+    ...(row.parsed_unit_id !== null ? { parsedUnitId: row.parsed_unit_id } : {}),
+    ...(row.page_number !== null ? { pageNumber: row.page_number } : {}),
+    ...(row.page_label !== null ? { pageLabel: row.page_label } : {}),
+    ...(row.json_pointer !== null ? { jsonPointer: row.json_pointer } : {}),
+  };
+}
+
+function rowCitationStructuredMetadata(
+  row: CitationRow,
+  sectionPath: readonly string[] | undefined,
+  anchorId: string | undefined,
+): Partial<CitationReference> {
+  return {
+    ...(sectionPath !== undefined ? { sectionPath } : {}),
+    ...(anchorId !== undefined ? { anchorId } : {}),
+    ...(row.table_name !== null ? { tableName: row.table_name } : {}),
+    ...(row.row_index !== null ? { rowIndex: row.row_index } : {}),
+    ...(row.character_start !== null ? { characterStart: row.character_start } : {}),
+    ...(row.character_end !== null ? { characterEnd: row.character_end } : {}),
+  };
+}
+
 function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationReference {
   const sectionPath = parseSectionPath(row.section_path_json, cipher);
+  const anchorId = openOptionalText(row.anchor_id, cipher);
   // Build the citation without `undefined` literals to keep `exactOptionalPropertyTypes`
   // happy. The contract permits omission of each optional field but rejects the explicit
   // `undefined` value.
@@ -1011,14 +1044,8 @@ function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationRe
     sourceId: row.source_id as CitationReference["sourceId"],
     chunkId: row.chunk_id as CitationReference["chunkId"],
     safeDisplayName: row.safe_display_name ?? row.document_id,
-    ...(row.page_number !== null ? { pageNumber: row.page_number } : {}),
-    ...(row.page_label !== null ? { pageLabel: row.page_label } : {}),
-    ...(sectionPath !== undefined ? { sectionPath } : {}),
-    ...(row.json_pointer !== null ? { jsonPointer: row.json_pointer } : {}),
-    ...(row.table_name !== null ? { tableName: row.table_name } : {}),
-    ...(row.row_index !== null ? { rowIndex: row.row_index } : {}),
-    ...(row.character_start !== null ? { characterStart: row.character_start } : {}),
-    ...(row.character_end !== null ? { characterEnd: row.character_end } : {}),
+    ...rowCitationPageMetadata(row),
+    ...rowCitationStructuredMetadata(row, sectionPath, anchorId),
   };
 }
 

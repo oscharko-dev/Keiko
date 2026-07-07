@@ -125,6 +125,45 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
   return undefined;
 }
 
+function isHtmlManualSummary(summary: KnowledgePodSummary): boolean {
+  return (
+    summary.sourceKinds.includes("html-manual-local") ||
+    summary.sourceKinds.includes("html-manual-http")
+  );
+}
+
+function manualCountSummary(counts: KnowledgePodSummary["counts"]): string {
+  return [
+    `${counts.documentCount.toString()} docs`,
+    `${counts.chunkCount.toString()} chunks`,
+    `${counts.vectorCount.toString()} vectors`,
+  ].join(" · ");
+}
+
+function guidanceForHtmlManual(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+  if (!isHtmlManualSummary(summary)) return undefined;
+  if (summary.readiness === "ready") {
+    return {
+      label: "HTML manual",
+      description: `Ready for chat retrieval through Local Knowledge. ${manualCountSummary(summary.counts)}.`,
+      tone: "muted",
+    };
+  }
+  if (summary.readiness === "degraded") {
+    return {
+      label: "Manual degraded",
+      description: `Manual retrieval is degraded; answers may use only available evidence. ${manualCountSummary(summary.counts)}.`,
+      tone: "warning",
+    };
+  }
+  return {
+    label: "Manual unavailable",
+    description: `Manual retrieval is ${summary.readiness}; it cannot contribute silently as empty evidence.`,
+    tone:
+      summary.readiness === "error" || summary.readiness === "unavailable" ? "danger" : "warning",
+  };
+}
+
 function hasSetReadinessReason(
   reasonCodes: ReadonlySet<KnowledgePodSetReadinessReasonCode>,
   candidates: readonly KnowledgePodSetReadinessReasonCode[],
@@ -256,7 +295,8 @@ function metadataForSummary(
   const guidance = guidanceForSummary(summary);
   const policyGuidance = guidanceForPolicy(summary, modelUsePolicy);
   const setReadinessGuidance = guidanceForSetReadiness(summary);
-  const selectedGuidance = policyGuidance ?? guidance ?? setReadinessGuidance;
+  const manualGuidance = guidanceForHtmlManual(summary);
+  const selectedGuidance = policyGuidance ?? guidance ?? setReadinessGuidance ?? manualGuidance;
   const deniedOperations = deniedModelOperations(modelUsePolicy);
   return {
     readiness: summary.readiness,

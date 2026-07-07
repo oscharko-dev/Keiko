@@ -1243,6 +1243,66 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.queryByText(/client_secret/u)).toBeNull();
   });
 
+  it("surfaces HTML manual pod readiness and selects it through the existing grounding flow", async () => {
+    const user = userEvent.setup();
+    const replaceChat = vi.fn();
+    const capsuleId = makeCapsuleId("cap-manual");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "https://docs.internal/manual?token=secret",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        {
+          ...knowledgePodSummary(capsuleId, "pod", "Device Handbook"),
+          sourceKinds: ["html-manual-http"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 1,
+            documentCount: 3,
+            chunkCount: 8,
+            vectorCount: 8,
+          },
+          manualSourceFingerprint: "fp-device-handbook",
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    updateChatMock.mockResolvedValueOnce({
+      chat: makeChat({
+        localKnowledgeScopes: [{ kind: "capsule", capsuleId, connectedAtMs: 123 }],
+      }),
+    });
+
+    renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
+
+    await openCombobox(user, "Grounding mode");
+
+    const manualOption = screen.getByRole("option", { name: /Knowledge Pod: Device Handbook/u });
+    expect(manualOption).toBeVisible();
+    expect(screen.getByText("HTML manual")).toBeVisible();
+    expect(screen.getByText(/3 docs · 8 chunks · 8 vectors/u)).toBeVisible();
+    expect(screen.queryByText(/docs\.internal/u)).toBeNull();
+    expect(screen.queryByText(/token=secret/u)).toBeNull();
+
+    await user.click(manualOption);
+
+    await waitFor(() => {
+      expect(updateChatMock).toHaveBeenCalledWith(
+        "chat-1",
+        expect.objectContaining({
+          localKnowledgeScopes: [expect.objectContaining({ kind: "capsule", capsuleId })],
+        }),
+      );
+    });
+    expect(replaceChat).toHaveBeenCalled();
+  });
+
   it("distinguishes a sealed-local warning from a policy-denied pod in grounding options", async () => {
     const user = userEvent.setup();
     const capsuleId = makeCapsuleId("cap-sealed-local");
