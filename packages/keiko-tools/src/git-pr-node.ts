@@ -169,9 +169,13 @@ async function createPullRequest(
     return rejectionFromExit(result);
   }
   const createdPrExternalId = parsePrNumber(result.stdout);
-  return executionResult("succeeded", result.durationMs, {
-    ...(createdPrExternalId !== undefined ? { createdPrExternalId } : {}),
-  });
+  if (createdPrExternalId === undefined) {
+    // Exit 0 with an unparsable number (`--jq .number` emits `null` on an unexpected response
+    // shape) means the provider gave us nothing the caller can reference. Reporting success
+    // without an id would strand the UI on a PR it cannot open — fail closed instead.
+    return executionResult("failed", result.durationMs, { errorCode: "internal-error" });
+  }
+  return executionResult("succeeded", result.durationMs, { createdPrExternalId });
 }
 
 // Performs the draft↔ready transition the REST update endpoint cannot: looks up the PR's GraphQL node

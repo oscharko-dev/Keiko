@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./packages/keiko-contracts" },
+    { "path": "./packages/keiko-git" },
     { "path": "./packages/keiko-editor" },
     { "path": "./packages/keiko-security" },
     { "path": "./packages/keiko-quality-intelligence" },

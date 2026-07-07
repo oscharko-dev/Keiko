@@ -38,6 +38,7 @@ import {
   type EditorDocumentSession,
   type EditorDocumentVersion,
 } from "@oscharko-dev/keiko-contracts";
+import { containsPath } from "@oscharko-dev/keiko-git";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
   STREAMING,
@@ -345,12 +346,8 @@ function nativePath(root: string, relativePath: string): string {
   return resolve(root, ...relativePath.split("/").filter((part) => part.length > 0));
 }
 
-function isContained(root: string, target: string): boolean {
-  const rootCmp = process.platform === "win32" ? root.toLowerCase() : root;
-  const targetCmp = process.platform === "win32" ? target.toLowerCase() : target;
-  const rel = relative(rootCmp, targetCmp);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
+// Platform-correct path identity (case/NFC on darwin+win32) lives in the shared git core.
+const isContained = containsPath;
 
 function rootRelativePosixPath(root: string, target: string): string {
   const rel = relative(root, target);

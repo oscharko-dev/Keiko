@@ -240,4 +240,37 @@ describe("GovernedMergeCard", () => {
       ),
     );
   });
+
+  it("hides a finished outcome and stale readiness once a target field changes", async () => {
+    render(<GovernedMergeCard projectId={PROJECT} client={makeClient()} />);
+    fillTarget();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(screen.getByTestId("gm-readiness")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("gm-submit"));
+    await waitFor(() => expect(screen.getByTestId("gm-outcome")).toBeInTheDocument());
+    // Retargeting the form must hide the old target's outcome banner AND readiness panel — a
+    // stale "merged" banner over a different PR number misreports what actually happened.
+    fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "1501" } });
+    expect(screen.queryByTestId("gm-outcome")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("gm-readiness")).not.toBeInTheDocument();
+    expect(screen.getByTestId("gm-live")).toHaveTextContent("");
+    // Restoring the executed target brings the still-valid outcome back.
+    fireEvent.change(screen.getByLabelText("Pull Request number"), { target: { value: "1500" } });
+    expect(screen.getByTestId("gm-outcome")).toBeInTheDocument();
+  });
+
+  it("rejects a non-numeric PR number before any request and explains the format", () => {
+    const client = makeClient();
+    render(<GovernedMergeCard projectId={PROJECT} client={client} />);
+    fillTarget();
+    fireEvent.change(screen.getByLabelText("Pull Request number"), {
+      target: { value: "PR#15" },
+    });
+    expect(screen.getByTestId("gm-pr-number-hint")).toHaveTextContent(
+      "numeric Pull Request number",
+    );
+    expect(screen.getByLabelText("Pull Request number")).toHaveAttribute("aria-invalid", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(client.mergePreview).not.toHaveBeenCalled();
+  });
 });

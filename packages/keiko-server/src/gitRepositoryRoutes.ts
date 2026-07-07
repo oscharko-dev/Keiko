@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { stat } from "node:fs/promises";
 import { isIP } from "node:net";
@@ -14,7 +13,7 @@ import {
   validateProjectPath,
   type Project,
 } from "./store/index.js";
-import { networkGitEnv } from "./gitRoutes.js";
+import { defaultGitNetworkProcessRunner } from "@oscharko-dev/keiko-git";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -209,20 +208,24 @@ type CloneRepositoryRunner = (
   destinationPath: string,
 ) => Promise<RouteResult | null>;
 
-const cloneRepository: CloneRepositoryRunner = function cloneRepository(
+// Clone goes through the shared hardened runner (single spawn path, byte cap, timeout with
+// SIGTERM→SIGKILL escalation) with the credential-capable network env.
+const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
   repositoryUrl: string,
   destinationPath: string,
 ): Promise<RouteResult | null> {
-  return new Promise((resolveResult) => {
-    const child = spawn("git", ["clone", "--", repositoryUrl, destinationPath], {
-      cwd: dirname(destinationPath),
-      env: networkGitEnv(),
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    monitorCloneProcess(child, resolveResult);
-  });
+  const result = await defaultGitNetworkProcessRunner(
+    ["clone", "--", repositoryUrl, destinationPath],
+    { cwd: dirname(destinationPath), maxBytes: MAX_OUTPUT_BYTES, timeoutMs: CLONE_TIMEOUT_MS },
+  );
+  if (result.exitCode === 127) {
+    return {
+      status: 503,
+      body: errorBody("GIT_UNAVAILABLE", "Git is not available on this host."),
+    };
+  }
+  if (result.exitCode === 0) return null;
+  return cloneFailure(result.truncated);
 };
 
 function cloneFailure(truncated: boolean): RouteResult {
@@ -235,47 +238,6 @@ function cloneFailure(truncated: boolean): RouteResult {
         : "Repository clone failed. Check the URL, credentials, and destination path.",
     ),
   };
-}
-
-function monitorCloneProcess(
-  child: ReturnType<typeof spawn>,
-  resolveResult: (result: RouteResult | null) => void,
-): void {
-  let outputBytes = 0;
-  let truncated = false;
-  let settled = false;
-  const timer = setTimeout(() => {
-    truncated = true;
-    child.kill("SIGTERM");
-  }, CLONE_TIMEOUT_MS);
-  const capture = (chunk: Buffer): void => {
-    outputBytes += chunk.byteLength;
-    if (outputBytes > MAX_OUTPUT_BYTES) {
-      truncated = true;
-      child.kill("SIGTERM");
-    }
-  };
-  child.stdout?.on("data", capture);
-  child.stderr?.on("data", capture);
-  child.on("error", () => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    resolveResult({
-      status: 503,
-      body: errorBody("GIT_UNAVAILABLE", "Git is not available on this host."),
-    });
-  });
-  child.on("close", (code) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    if (code === 0) {
-      resolveResult(null);
-      return;
-    }
-    resolveResult(cloneFailure(truncated));
-  });
 }
 
 export function createCloneRepositoryHandler(

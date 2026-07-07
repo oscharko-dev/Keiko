@@ -65,6 +65,18 @@
         "functions": 95.32
       }
     },
+    "keiko-git": {
+      "files": 6,
+      "uncoveredFiles": 0,
+      "uncoveredLines": 4,
+      "totalLines": 78,
+      "coverage": {
+        "lines": 94.87,
+        "statements": 95.24,
+        "branches": 78.57,
+        "functions": 95.65
+      }
+    },
     "keiko-harness": {
       "files": 22,
       "uncoveredFiles": 1,
