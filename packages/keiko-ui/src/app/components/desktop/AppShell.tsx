@@ -60,7 +60,6 @@ import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bind
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
-import { InstallBanner } from "./install/InstallBanner";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
@@ -958,7 +957,6 @@ function AppShellInner(): ReactNode {
               )}
               {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
               {needsGatewaySetup ? <GatewaySetupDialog /> : null}
-              <InstallBanner />
             </div>
           </AnnouncerProvider>
         </WsContext.Provider>
@@ -979,10 +977,9 @@ export function AppShell(): ReactNode {
     clearAppBootRecoveryReloadMarker();
     setMounted(true);
   }, []);
-  // Register the PWA service worker exactly once per client mount (issue #126, ADR-0024 D6).
-  // Sitting in the outer mount component means we register on first client render and never
-  // again across the inner shell's remount cycle. `registerSw` is a silent no-op on SSR /
-  // unsupported browsers / failure, so this effect cannot break the app.
+  // Register the static-shell service worker exactly once per client mount. The portable-first
+  // app shell no longer advertises a browser install manifest, so this is cache/update plumbing,
+  // not a browser-managed product installation path.
   useEffect(() => {
     registerSw();
   }, []);

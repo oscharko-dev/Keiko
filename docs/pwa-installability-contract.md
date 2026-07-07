@@ -1,9 +1,14 @@
-# PWA Installability Contract
+# Historical PWA Installability Contract
 
-This document describes the user-facing installability experience for Keiko as a Progressive
-Web App (PWA). It is an operational companion to
-[ADR-0024](adr/ADR-0024-installable-pwa-architecture.md) and covers the first-run user
-journey, the browser and platform support matrix, the reversibility model, and scope boundaries.
+Status: historical. This document records the npm-era browser PWA installability design governed
+by [ADR-0024](adr/ADR-0024-installable-pwa-architecture.md). For portable product delivery v2,
+[ADR-0115](adr/ADR-0115-portable-first-browser-install-suppression.md) supersedes browser-managed
+PWA installation as an ordinary product installation path.
+
+Current portable users should install Keiko from the platform ZIP/native launcher flow documented
+in [Portable Launch And Setup Guide](release/portable-launch-setup-guide.md). Browser-managed PWA
+shortcuts do not install the bundled Keiko payload, do not create the portable managed install
+root, and do not participate in portable updater v2.
 
 ## Structural limitation
 

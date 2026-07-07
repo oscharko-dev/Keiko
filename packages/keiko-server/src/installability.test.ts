@@ -1,7 +1,7 @@
-// ADR-0024 D10 — cross-platform installability gates (issue #127). Each describe block
-// exercises ONE installability criterion over a live in-process server that serves real PWA
-// assets from packages/keiko-ui/public. No new runtime dependencies: vitest + node:http +
-// globalThis.fetch only. The test boots on an ephemeral port and tears down after each suite.
+// ADR-0115 — retained browser asset gates. Each describe block exercises ONE retained browser
+// asset criterion over a live in-process server that serves real public assets from
+// packages/keiko-ui/public. No new runtime dependencies: vitest + node:http + globalThis.fetch
+// only. The test boots on an ephemeral port and tears down after each suite.
 
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,9 +13,8 @@ import { buildRedactor, createInMemoryUiStore } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 
-// The real keiko-ui public directory — contains manifest, icons, and sw.js produced by the
-// prior children (#123/#125/#126). Using the real assets is load-bearing: this test must
-// exercise the actual on-wire content, not a stub.
+// The real keiko-ui public directory contains browser metadata, icons, and sw.js. Using the real
+// assets is load-bearing: this test must exercise the actual on-wire content, not a stub.
 const here = dirname(fileURLToPath(import.meta.url));
 const STATIC_ROOT = resolve(here, "../../../packages/keiko-ui/public");
 
@@ -83,9 +82,9 @@ function url(path: string): string {
   return `${baseUrl}${path}`;
 }
 
-// ─── Gate 1: manifest reachable + correct Content-Type + D4 field contract ────
+// ─── Gate 1: manifest reachable + correct Content-Type + non-installable field contract ────
 
-describe("Gate 1 — manifest reachable and conformant (ADR-0024 D4)", () => {
+describe("Gate 1 — manifest reachable as retained browser metadata (ADR-0115)", () => {
   it("GET /manifest.webmanifest returns 200", async () => {
     const res = await fetch(url("/manifest.webmanifest"));
     expect(res.status).toBe(200);
@@ -101,16 +100,19 @@ describe("Gate 1 — manifest reachable and conformant (ADR-0024 D4)", () => {
     ["short_name", "Keiko"],
     ["start_url", "/"],
     ["scope", "/"],
-    ["display", "standalone"],
+    ["display", "browser"],
     ["theme_color", "#4EBA87"],
     ["background_color", "#1B1E23"],
     ["lang", "en"],
     ["dir", "ltr"],
-  ] as const)("manifest field %s is the exact D4 value %s", async (field, expected) => {
-    const res = await fetch(url("/manifest.webmanifest"));
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body[field]).toBe(expected);
-  });
+  ] as const)(
+    "manifest field %s is the exact browser metadata value %s",
+    async (field, expected) => {
+      const res = await fetch(url("/manifest.webmanifest"));
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body[field]).toBe(expected);
+    },
+  );
 
   // uiux-fix F038 C376: "business" leads — the install surface follows the official
   // knowledge-work positioning (README), not the historical developer-tools framing.

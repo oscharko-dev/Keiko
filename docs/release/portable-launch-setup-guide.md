@@ -19,7 +19,10 @@ The normal user path is intentionally simple:
    Spotlight.
 
 The primary path does not ask users to install Node.js, install npm, run a package manager, type
-terminal commands, restart by hand, or manually verify the running version.
+terminal commands, restart by hand, manually verify the running version, or use the browser's
+`Install Keiko` / PWA shortcut action. Browser-managed PWA installation is not a product install
+path for portable delivery; see
+[ADR-0115](../adr/ADR-0115-portable-first-browser-install-suppression.md).
 
 ## Platform Artifacts
 
@@ -69,6 +72,13 @@ steps.
 
 The npm/Yarn updater remains a developer and compatibility path, not the promoted product journey
 for ordinary portable users.
+
+## Browser Install Prompt
+
+Keiko's browser tab may still use normal favicon, title, theme-color, and static shell cache
+metadata. It must not promote a separate browser-managed `Install Keiko` action for ordinary
+portable users. Browser PWA shortcuts do not install the bundled Keiko payload, do not create the
+managed install root, and do not participate in portable updater v2.
 
 ## Operator Verification
 

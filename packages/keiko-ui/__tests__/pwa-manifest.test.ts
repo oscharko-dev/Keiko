@@ -37,7 +37,7 @@ const ABSOLUTE_URL = /^https?:\/\//i;
 const HOST_WITH_PORT = /:\d+/;
 const SECRET_SHAPED = /^(sk-|pk-|ghp_|github_pat_)/;
 
-describe("PWA manifest contract (ADR-0024 D4, issue #123)", () => {
+describe("legacy web manifest metadata", () => {
   it("is valid JSON and parses to an object", () => {
     expect(() => loadManifest()).not.toThrow();
   });
@@ -48,12 +48,12 @@ describe("PWA manifest contract (ADR-0024 D4, issue #123)", () => {
     ["description", "Keiko — a governed agentic workspace for knowledge work."],
     ["start_url", "/"],
     ["scope", "/"],
-    ["display", "standalone"],
+    ["display", "browser"],
     ["theme_color", "#4EBA87"],
     ["background_color", "#1B1E23"],
     ["lang", "en"],
     ["dir", "ltr"],
-  ] as const)("sets %s to the exact D4 value %s", (field, expected) => {
+  ] as const)("sets %s to the portable-first browser metadata value %s", (field, expected) => {
     const m = loadManifest() as unknown as Record<string, unknown>;
     expect(m[field]).toBe(expected);
   });

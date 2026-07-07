@@ -52,7 +52,7 @@ async function flushMicrotasks(times = 4): Promise<void> {
   }
 }
 
-describe("registerSw (issue #126)", () => {
+describe("registerSw static-shell caching", () => {
   beforeEach(() => {
     removeServiceWorker();
     restoreCaches();

@@ -51,7 +51,7 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 | Footer + window palette                | `components/desktop/Footer.tsx`                                                                    | default / hover / disabled (0 windows) / palette-open / status tones ok·warn·danger / Alt+S focus target                     |
 | Workspace canvas + shader + empty blob | `components/desktop/Workspace.tsx`, `WorkspaceShader.tsx`, `EmptyWorkspaceBlob.tsx`                | empty(blob) / default / panning / hand-tool / connecting(valid·invalid) / window-maxed / zoom 30–200%                        |
 | Window frame chassis (31 window types) | `components/desktop/windows/WindowFrame.tsx`, `WindowsRegistry.ts`, `windows/ConnectionsLayer.tsx` | top/not-top, max, dragging, conn source·valid·invalid, **density full · mini(<430px) · tiny/TooSmall**, content-zoom 0.5–2.0 |
-| PWA install banner + boot recovery     | `components/desktop/install/InstallBanner.tsx`, `app/layout.tsx:46`                                | hidden(standalone·installed·dismissed·unsupported) / supported(CTA) / iOS add-to-home                                        |
+| Browser boot recovery                  | `app/layout.tsx`, `components/desktop/install/registerSw.ts`                                       | portable-first shell starts without a browser-managed install prompt; boot placeholder/recovery remains visible and stable   |
 
 ## 3. Window-type surfaces (rendered on the canvas)
 
