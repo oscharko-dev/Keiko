@@ -57,7 +57,7 @@ export interface PortablePromotionResult {
 }
 
 const REGISTRATION_FILE = "portable-install-state.json";
-const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()\-./\\:]+$/u;
+const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()/\\:-]+$/u;
 
 export class PortableUpdateActivationError extends Error {
   public constructor(

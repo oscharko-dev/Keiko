@@ -439,6 +439,82 @@ describe("searchVectorsForScope — composed capsule set", () => {
     expect(queryRequest?.egress).toBe(egress);
   });
 
+  it("reuses a cached query embedding on a repeated request instead of re-embedding", async () => {
+    // GEN-PERF-LK-002 added a cross-request LRU keyed by (identity, query). A cache hit must
+    // skip both the capability-probe preflight and the actual embedding call on the second
+    // identical request against the same adapter instance.
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-embed-cache",
+      sourceId: "src-embed-cache",
+      documentId: "doc-embed-cache",
+      text: "alpha beta gamma delta",
+      modelUsePolicy: standardPodModelUsePolicy(),
+    });
+    const requests: OpenAIEmbeddingRequest[] = [];
+    const base = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, deterministicVector(req.input, 1536)),
+    });
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...base,
+      request: async (req): Promise<OpenAIEmbeddingOutcome> => {
+        requests.push(req);
+        return base.request(req);
+      },
+    };
+    const scope = { capsuleIds: ["cap-embed-cache" as KnowledgeCapsuleId] };
+
+    await searchVectorsForScope(store, adapter, scope, "repeated cache query", { topK: 1 });
+    const afterFirstCall = requests.length;
+    await searchVectorsForScope(store, adapter, scope, "repeated cache query", { topK: 1 });
+
+    expect(userEmbeddingInputs(requests.map((req) => req.input))).toHaveLength(1);
+    // The second call must hit both the preflight TTL cache and the query-embedding LRU — no
+    // new adapter calls of any kind (probe or embedding) beyond what the first call already made.
+    expect(requests).toHaveLength(afterFirstCall);
+  });
+
+  it("keeps query-embedding caches isolated per adapter instance", async () => {
+    // The LRU and preflight-TTL caches are scoped via WeakMap<adapter, ...>. Two distinct
+    // adapter instances sharing the same embedding identity and query text must not leak a
+    // cache entry between them — each probes and embeds independently.
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-embed-isolation",
+      sourceId: "src-embed-isolation",
+      documentId: "doc-embed-isolation",
+      text: "alpha beta gamma delta",
+      modelUsePolicy: standardPodModelUsePolicy(),
+    });
+    const scope = { capsuleIds: ["cap-embed-isolation" as KnowledgeCapsuleId] };
+    const requestsA: OpenAIEmbeddingRequest[] = [];
+    const requestsB: OpenAIEmbeddingRequest[] = [];
+    function trackedAdapter(sink: OpenAIEmbeddingRequest[]): OpenAIEmbeddingAdapter {
+      const base = scriptedAdapter({
+        responder: (req): OpenAIEmbeddingOutcome =>
+          fixedQueryVectorOutcome(req, deterministicVector(req.input, 1536)),
+      });
+      return {
+        ...base,
+        request: async (req): Promise<OpenAIEmbeddingOutcome> => {
+          sink.push(req);
+          return base.request(req);
+        },
+      };
+    }
+
+    await searchVectorsForScope(store, trackedAdapter(requestsA), scope, "shared isolation query", {
+      topK: 1,
+    });
+    await searchVectorsForScope(store, trackedAdapter(requestsB), scope, "shared isolation query", {
+      topK: 1,
+    });
+
+    expect(userEmbeddingInputs(requestsA.map((req) => req.input))).toHaveLength(1);
+    expect(userEmbeddingInputs(requestsB.map((req) => req.input))).toHaveLength(1);
+  });
+
   it("uses lane-local dense ranks before fusing incompatible raw score spaces", async () => {
     const { store } = getFixture();
     const identityA: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-a" };
@@ -2116,6 +2192,163 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(JSON.stringify(outcome.diagnostics)).not.toContain("treasury recovery checklist");
   });
 
+  it("retrieves evidence for BOTH legs of a chained question via deterministic decomposition", async () => {
+    const { store } = getFixture();
+    const torque = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-chain-a",
+      sourceId: "src-chain-a",
+      documentId: "doc-torque",
+      safeDisplayName: "mounting.md",
+      text: "spindle bracket mounting requires torque of twelve newton meters",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const errors = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-chain-b",
+      sourceId: "src-chain-b",
+      documentId: "doc-errors",
+      safeDisplayName: "errors.md",
+      text: "error E410 signals a sensor timeout during calibration",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [torque.capsuleId, errors.capsuleId] },
+      "What torque do the spindle brackets need? What does error E410 mean?",
+      { topK: 4 },
+    );
+
+    // The chain decomposes into two sub-queries plus the original (3 variants), and the fused
+    // result must carry evidence from BOTH documents — a single-embedding search lands between
+    // the topics and misses one leg.
+    expect(outcome.diagnostics.queryVariantCount).toBe(3);
+    const documents = new Set(outcome.references.map((ref) => String(ref.citation.documentId)));
+    expect(documents.has("doc-torque")).toBe(true);
+    expect(documents.has("doc-errors")).toBe(true);
+  });
+
+  it("recovers lexical recall via OR fallback when one query term is absent from the index", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-or-fallback",
+      text: "torque wrench calibration procedure for spindle mounts",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+
+    // Balanced strategy, three term groups; "flurbedingung" appears nowhere in the index, so
+    // the strict AND query returns zero FTS rows. Pre-fallback the whole lexical lane died on
+    // that single unmatched term (diagnostics.lexicalCandidateCount === 0); the bounded OR
+    // retry recovers the chunk that matches the other terms.
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seeded.capsuleId] },
+      "torque calibration flurbedingung",
+      { topK: 3 },
+    );
+
+    expect(outcome.diagnostics.strategy).toBe("balanced");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+    const seededChunkIds = new Set(seeded.chunkIds.map(String));
+    expect(outcome.references.some((ref) => seededChunkIds.has(String(ref.chunkId)))).toBe(true);
+  });
+
+  it("does not discount a strict lexical match when a different chained-question leg needed the OR fallback", async () => {
+    const { store } = getFixture();
+    // Leg 1 ("ADR-0036 reciprocal rank fusion") strict-AND matches this document cleanly — no
+    // fallback needed for THIS leg.
+    const exact = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-exact-leg",
+      safeDisplayName: "adr.md",
+      text: "ADR-0036 defines the reciprocal rank fusion formula used by hybrid retrieval.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    // Leg 2 ("torque calibration flurbedingung procedure") has one term absent from the whole
+    // capsule, so its strict AND pass finds nothing and triggers the whole-lane OR fallback —
+    // exactly like "recovers lexical recall via OR fallback" above, but now as one leg of a
+    // chained question rather than a standalone query.
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-fallback-leg",
+      safeDisplayName: "mounts.md",
+      text: "torque wrench calibration procedure for spindle mounts",
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-fallback-leg",
+      contentHash: "1".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    // Two dense-only distractors with no lexical relevance to either leg. RRF_K=60 makes
+    // rrf(1) = 1/61 and rrf(2) = 1/62 — a value strictly between the ADR chunk's buggy
+    // half-weight score (0.5 * 1/61) and its correct full-weight score (1 * 1/61), so the
+    // "competitor" chunk only outranks the genuine exact match if the cross-leg discount bug
+    // is present.
+    const blocker = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-blocker",
+      safeDisplayName: "blocker.md",
+      text: "unrelated filler content about a completely different topic",
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-blocker",
+      contentHash: "2".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const competitor = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-competitor",
+      safeDisplayName: "competitor.md",
+      text: "another unrelated filler passage discussing something else entirely",
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-competitor",
+      contentHash: "3".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+
+    const exactChunk = exact.chunkIds[0];
+    const blockerChunk = blocker.chunkIds[0];
+    const competitorChunk = competitor.chunkIds[0];
+    if (exactChunk === undefined || blockerChunk === undefined || competitorChunk === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    // Keep the ADR chunk far from the fixed query vector in the dense lane so its fused score
+    // is driven by the lexical weight alone, not a dense-lane contribution.
+    setChunkVector(store, exact.capsuleId, exactChunk, vectorBlob(0, 1));
+    setChunkVector(store, blocker.capsuleId, blockerChunk, vectorBlob(1, 0));
+    setChunkVector(
+      store,
+      competitor.capsuleId,
+      competitorChunk,
+      vectorBlob(0.999, Math.sqrt(1 - 0.999 * 0.999)),
+    );
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [exact.capsuleId] },
+      "What is ADR-0036 reciprocal rank fusion and what is the torque calibration flurbedingung procedure?",
+      { topK: 1 },
+    );
+
+    // Confirms the query actually decomposed (original + 2 legs) and that leg 2 triggered the
+    // fallback — otherwise this test would not exercise the bug at all.
+    expect(outcome.diagnostics.queryVariantCount).toBeGreaterThan(1);
+    expect(outcome.diagnostics.lexicalOrFallbackUsed).toBe(true);
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.references[0]?.citation.documentId).toBe("doc-exact-leg");
+  });
+
   it("keeps hostile lexical input scoped and redacted in diagnostics", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, {
@@ -2253,6 +2486,50 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(new Set(outcome.references.map((ref) => String(ref.citation.documentId)))).toEqual(
       new Set(["doc-a", "doc-b"]),
     );
+  });
+
+  it("computes cosine scores bit-identically to the reference single-pass formula", async () => {
+    // Locks the cosine fast path (precomputed row norms, `denseRowScore`) to the same ordering
+    // as a textbook single-pass cosine formula. A future refactor that silently mis-groups the
+    // dot-product/norm terms would flip or tie this ranking and fail here.
+    const { store } = getFixture();
+    const angles = [1, 0.9, 0.7, 0.3, 0.1];
+    const docs = await Promise.all(
+      angles.map(async (cos, index) => {
+        const sin = Math.sqrt(Math.max(0, 1 - cos * cos));
+        const seeded = await seedCapsuleWithVectors(store, {
+          capsuleId: "cap-cosine",
+          sourceId: "src-cosine",
+          documentId: `doc-cosine-${String(index)}`,
+          safeDisplayName: `cosine-${String(index)}.md`,
+          text: `unrelated filler passage number ${String(index)} with no shared vocabulary`,
+          skipCapsule: index > 0,
+          skipSource: index > 0,
+          unitId: `unit-cosine-${String(index)}`,
+          contentHash: String(index).padStart(64, "0"),
+          chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+        });
+        const chunk = seeded.chunkIds[0];
+        if (chunk === undefined) throw new Error("expected seeded chunk");
+        setChunkVector(store, seeded.capsuleId, chunk, vectorBlob(cos, sin));
+        return { documentId: `doc-cosine-${String(index)}`, cos };
+      }),
+    );
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-cosine" as KnowledgeCapsuleId] },
+      "please retrieve the topmost matching entry",
+      { topK: docs.length, strategy: "broad" },
+    );
+
+    const expectedOrder = [...docs].sort((a, b) => b.cos - a.cos).map((doc) => doc.documentId);
+    expect(outcome.references.map((ref) => String(ref.citation.documentId))).toEqual(expectedOrder);
   });
 });
 

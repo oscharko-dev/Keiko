@@ -40,6 +40,11 @@ import {
   isSafeDisplaySummary,
   type LocalKnowledgeValidation,
 } from "./local-knowledge-validation.js";
+import type { HtmlManualSourceKind } from "./html-manual-source.js";
+import {
+  validateManualRefreshChangeSummary,
+  type ManualRefreshChangeSummary,
+} from "./html-manual-refresh.js";
 
 export const KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION = "1" as const;
 
@@ -48,7 +53,13 @@ export type KnowledgePodBackingKind = "knowledge-capsule" | "capsule-set";
 export type KnowledgePodReadiness =
   "draft" | "indexing" | "ready" | "stale" | "degraded" | "unavailable" | "error";
 export type KnowledgePodSourceKind =
-  KnowledgeSourceScopeKind | "remote" | "federated" | "ephemeral" | "policy" | "unknown";
+  | KnowledgeSourceScopeKind
+  | HtmlManualSourceKind
+  | "remote"
+  | "federated"
+  | "ephemeral"
+  | "policy"
+  | "unknown";
 export type KnowledgePodEvidenceMode = "counts-hashes-and-status";
 export type KnowledgePodLocationKind = "local" | "remote" | "federated" | "ephemeral";
 export type KnowledgePodSealingPosture = "local-store-policy" | "sealed-pod-policy";
@@ -186,6 +197,10 @@ export interface KnowledgePodSummary {
   // documentation browser detect an already-indexed manual without exposing any raw path/URL. It is a
   // hash, never a path. Absent for every pod not backed by an HTML manual source.
   readonly manualSourceFingerprint?: string;
+  // Optional redacted summary of the most recent explicit refresh of this HTML manual pod (Epic
+  // #1856). Counts + reason codes + an opaque crawl-run fingerprint only — never a raw path or body.
+  // Absent until the pod has been refreshed at least once, and for every non-manual pod.
+  readonly manualRefresh?: ManualRefreshChangeSummary;
 }
 
 export interface LocalKnowledgeCapsuleListEntry {
@@ -233,6 +248,7 @@ const SUMMARY_KEYS = [
   "updatedAt",
   "degradationReasons",
   "manualSourceFingerprint",
+  "manualRefresh",
 ] as const;
 
 const COUNT_KEYS = ["capsuleCount", "sourceCount", "documentCount", "chunkCount", "vectorCount"];
@@ -287,6 +303,29 @@ const COMPATIBILITY_KEYS = [
   "migrationRequired",
   "persistedStateRenamed",
 ] as const;
+// Mirrors ManualRefreshChangeSummary (packages/keiko-contracts/src/html-manual-refresh.ts). That
+// leaf validator checks required-field presence/type/enum membership but — unlike every other
+// nested object on KnowledgePodSummary — does not reject unknown/extra keys. Enforce the same
+// onlyKeys defense-in-depth here, at the summary layer, so a corrupted or accidentally-widened
+// persisted record cannot ride an unexpected field through to the UI/evidence surface.
+const MANUAL_REFRESH_KEYS = [
+  "schemaVersion",
+  "outcome",
+  "sourceKind",
+  "counts",
+  "removalDetection",
+  "crawlRunFingerprint",
+  "reasonCodes",
+  "refreshedAt",
+] as const;
+const MANUAL_REFRESH_COUNT_KEYS = [
+  "addedPages",
+  "changedPages",
+  "removedPages",
+  "unchangedPages",
+  "failedPages",
+  "deniedLinks",
+] as const;
 
 const READINESS: readonly KnowledgePodReadiness[] = [
   "draft",
@@ -318,6 +357,8 @@ const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
   "folder",
   "repository",
   "files",
+  "html-manual-local",
+  "html-manual-http",
   "remote",
   "federated",
   "ephemeral",
@@ -373,6 +414,17 @@ const TOKEN_QUERY_KEYS = new Set([
   "session_token",
   "token",
 ]);
+
+// Cookie headers and chat/prompt template scaffolding never belong in body-free evidence, yet
+// neither was caught by the path/secret/token/endpoint gates above (Epic #1858, Issue #1904). A
+// `Set-Cookie: sessionId=…` header slips the token-key check because `sessionId` is not a known
+// token key, and a ChatML/harness `[[topic:…]]` marker matches no other pattern. Both are matched
+// by shape here. The cookie form requires the header colon and a negative lookbehind so benign
+// prose ("cookie consent banner", "third-party cookies accepted") is not over-redacted; the prompt
+// form matches only unambiguous template delimiters that cannot occur in a real manual summary.
+const COOKIE_HEADER_RE = /(?<![A-Za-z0-9_])(?:set-)?cookie\s*:/iu;
+const PROMPT_SCAFFOLD_RE =
+  /<\|(?:im_(?:start|end)|system|user|assistant|endoftext)\|>|\[\[topic:|\[\/?INST\]|<<\/?SYS>>/iu;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -668,7 +720,9 @@ function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
     !FILESYSTEM_PATH_RE.test(value) &&
     !SECRET_RE.test(value) &&
     !containsTokenParameterKey(value) &&
-    !containsEndpointLikeText(value)
+    !containsEndpointLikeText(value) &&
+    !COOKIE_HEADER_RE.test(value) &&
+    !PROMPT_SCAFFOLD_RE.test(value)
   );
 }
 
@@ -1045,6 +1099,23 @@ function validateSummaryScalars(input: Record<string, unknown>, errors: string[]
     "summary.manualSourceFingerprint",
     errors,
   );
+  validateOptionalManualRefresh(input.manualRefresh, errors);
+}
+
+function validateOptionalManualRefresh(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("summary.manualRefresh must be an object");
+    return;
+  }
+  onlyKeys(value, MANUAL_REFRESH_KEYS, "summary.manualRefresh", errors);
+  if (isRecord(value.counts)) {
+    onlyKeys(value.counts, MANUAL_REFRESH_COUNT_KEYS, "summary.manualRefresh.counts", errors);
+  }
+  const result = validateManualRefreshChangeSummary(value);
+  if (!result.ok) {
+    errors.push(...result.errors.map((error) => `summary.manualRefresh: ${error}`));
+  }
 }
 
 function validateUpdatedAt(value: unknown, errors: string[]): void {

@@ -1,9 +1,9 @@
 {
-  "$comment": "Retrieval-latency budget (enterprise retrieval M3). Enforced deterministically by scripts/check-retrieval-latency.mjs (`npm run check:retrieval-latency`), which measures keiko-workspace searchText over a FIXED synthetic in-memory repository of fixtureFileCount files. The budget is a generous p95 CEILING (~4x the observed local p95) so it catches algorithmic regressions (e.g. an accidental O(n^2) candidate scan) without flaking on CI machine variance. Methodology: warmupIterations discarded, then `iterations` timed runs of a project-metadata query; the `percentile` of those durations must stay <= budgetMs.",
+  "$comment": "Retrieval-latency budget (enterprise retrieval M3). Enforced deterministically by scripts/check-retrieval-latency.mjs (`npm run check:retrieval-latency`), which measures keiko-workspace searchText over a FIXED synthetic in-memory repository of fixtureFileCount files. The budget is a generous p95 CEILING (~30x the observed local p95) so it catches algorithmic regressions (e.g. an accidental O(n^2) candidate scan) without flaking on CI machine variance. The previous 3000ms ceiling was calibrated against a fixture-dominated measurement: the fixture fs resolved every path in O(fileCount), so ~86% of the observed 619ms was harness overhead; the fixture is now O(1) per fs call and the measurement is dominated by keiko-workspace code. Methodology: warmupIterations discarded, then `iterations` timed runs of a project-metadata query; the `percentile` of those durations must stay <= budgetMs.",
   "fixtureFileCount": 2000,
   "warmupIterations": 5,
   "iterations": 20,
   "percentile": 95,
-  "budgetMs": 3000,
-  "observedMs": 619
+  "budgetMs": 500,
+  "observedMs": 16
 }

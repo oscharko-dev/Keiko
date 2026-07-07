@@ -518,8 +518,8 @@ function connectorQuery(scope: ChatLocalKnowledgeScope, content: string): Retrie
 type RetrievalQueryShape = Parameters<typeof runLocalKnowledgeRetrieval>[1];
 
 function defaultConnectorRetrieve(ctx: HybridGroundedAskCtx): ConnectorRetrieve {
-  return async (store, scope, selected): Promise<RetrievalResult> => {
-    const embeddingAdapter = createEmbeddingAdapter(ctx.deps, selected.capsules);
+  return async (store, scope, _selected): Promise<RetrievalResult> => {
+    const embeddingAdapter = createEmbeddingAdapter(ctx.deps);
     if ("status" in embeddingAdapter) {
       throw new EmbeddingAdapterError(embeddingAdapter);
     }
@@ -537,6 +537,61 @@ export class EmbeddingAdapterError extends Error {
   }
 }
 
+// Bounded concurrency for connector retrieval, mirroring MAX_RETRIEVAL_CONCURRENCY on the
+// folder-source path: the SQLite reads are synchronous either way, but each connector's query
+// embedding is a network call, and paying those serially made multi-connector asks scale with
+// the connector count instead of the slowest single connector.
+const MAX_CONNECTOR_RETRIEVAL_CONCURRENCY = 4;
+
+type ConnectorSlot =
+  | { readonly kind: "retrieved"; readonly value: RetrievedConnector }
+  | { readonly kind: "skipped"; readonly value: SkippedConnector }
+  | undefined;
+
+async function retrieveConnectorIntoSlot(
+  retrieve: ConnectorRetrieve,
+  store: KnowledgeStore,
+  inputs: {
+    readonly scope: ChatLocalKnowledgeScope;
+    readonly selected: SelectedLocalKnowledgeScope;
+    readonly label: string;
+  },
+): Promise<ConnectorSlot> {
+  const failure = scopeStateFailure(inputs.selected);
+  if (failure !== undefined) {
+    return {
+      kind: "skipped",
+      value: {
+        label: inputs.label,
+        reason: failure.reason,
+        message: failure.message,
+        selected: inputs.selected,
+      },
+    };
+  }
+  const outcome = await retrieveOneConnector(retrieve, store, inputs.scope, inputs.selected);
+  if ("status" in outcome) {
+    return {
+      kind: "skipped",
+      value: {
+        label: inputs.label,
+        reason: "embedding-unavailable",
+        message: "Embedding adapter unavailable.",
+        selected: inputs.selected,
+      },
+    };
+  }
+  return {
+    kind: "retrieved",
+    value: {
+      label: inputs.label,
+      selected: inputs.selected,
+      references: outcome.references,
+      result: outcome,
+    },
+  };
+}
+
 async function retrieveConnectors(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
@@ -545,30 +600,34 @@ async function retrieveConnectors(
 ): Promise<ConnectorRetrieval | RouteResult> {
   const retrieve = ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx);
   const labels = connectorLabels(resolved.map((s) => s.scopeLabel));
+  // Index-addressed slots keep the emitted order identical to the scope order regardless of
+  // which worker finishes first — evidence and labels stay deterministic.
+  const slots: ConnectorSlot[] = new Array<ConnectorSlot>(connectorScopes.length).fill(undefined);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < connectorScopes.length) {
+      const i = nextIndex;
+      nextIndex += 1;
+      ensureNotCancelled(ctx.signal);
+      const scope = connectorScopes[i];
+      const selected = resolved[i];
+      const label = labels[i];
+      if (scope === undefined || selected === undefined || label === undefined) continue;
+      slots[i] = await retrieveConnectorIntoSlot(retrieve, store, {
+        scope,
+        selected,
+        label,
+      });
+    }
+  };
+  const workerCount = Math.min(MAX_CONNECTOR_RETRIEVAL_CONCURRENCY, connectorScopes.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
   const retrieved: RetrievedConnector[] = [];
   const skipped: SkippedConnector[] = [];
-  for (let i = 0; i < connectorScopes.length; i += 1) {
-    ensureNotCancelled(ctx.signal);
-    const scope = connectorScopes[i];
-    const selected = resolved[i];
-    const label = labels[i];
-    if (scope === undefined || selected === undefined || label === undefined) continue;
-    const failure = scopeStateFailure(selected);
-    if (failure !== undefined) {
-      skipped.push({ label, reason: failure.reason, message: failure.message, selected });
-      continue;
-    }
-    const outcome = await retrieveOneConnector(retrieve, store, scope, selected);
-    if ("status" in outcome) {
-      skipped.push({
-        label,
-        reason: "embedding-unavailable",
-        message: "Embedding adapter unavailable.",
-        selected,
-      });
-      continue;
-    }
-    retrieved.push({ label, selected, references: outcome.references, result: outcome });
+  for (const slot of slots) {
+    if (slot === undefined) continue;
+    if (slot.kind === "retrieved") retrieved.push(slot.value);
+    else skipped.push(slot.value);
   }
   return { retrieved, skipped };
 }
@@ -679,6 +738,7 @@ function selectedFolderCitations(
 }
 
 function selectedConnectorCitations(
+  store: KnowledgeStore,
   selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
 ): readonly LocalKnowledgeEvidenceCitation[] {
@@ -690,6 +750,7 @@ function selectedConnectorCitations(
         `[${String(s.marker)}]`,
         s.payload.lookup,
         (value) => redactString(redactor, value),
+        store,
       ),
     );
 }
@@ -1208,7 +1269,7 @@ function assembleHybridAnswer(
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
   const citations = selectedFolderCitations(selected, redactor);
-  const knowledgeCitations = selectedConnectorCitations(selected, redactor);
+  const knowledgeCitations = selectedConnectorCitations(store, selected, redactor);
   const retrievalActivity = buildHybridRetrievalActivity(
     store,
     sources.connectors,

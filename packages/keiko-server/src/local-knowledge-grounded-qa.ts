@@ -5,7 +5,9 @@ import {
   getCapsule,
   getCapsuleSet,
   listCapsuleSources,
+  readHtmlManualSourceMetadata,
   readCitationExcerpt,
+  resolveHtmlManualCitationTarget,
   resolveScopeModelUsePolicy,
   runGroundedAnswer,
   type AnswerGenerator,
@@ -26,6 +28,9 @@ import type {
   GroundedRerankerDiagnostics,
   GroundedAnswer,
   GroundedUncertainty,
+  HtmlManualCitationMetadata,
+  HtmlManualCitationOpenEligibility,
+  HtmlManualCitationOpenUnavailableReason,
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -41,6 +46,7 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  classifyDocumentationTarget,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
   isKnowledgePodRetrievalActivitySafeText,
@@ -67,6 +73,7 @@ import { errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -165,40 +172,29 @@ function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boo
   return findConfiguredCapability(config, modelId)?.kind === "embedding";
 }
 
-function unavailableEmbeddingModelIds(
-  config: GatewayConfig,
-  capsules: readonly KnowledgeCapsule[],
-): ReadonlySet<string> {
-  const unavailable = new Set<string>();
-  for (const capsule of capsules) {
-    const modelId = capsule.embeddingModelIdentity.modelId;
-    const provider = config.providers.find((entry) => entry.modelId === modelId);
-    if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
-      unavailable.add(modelId);
-    }
-  }
-  return unavailable;
-}
+// ONE adapter per live GatewayConfig object (the deps holder returns the same config reference
+// until setup replaces it). The retrieval layer scopes its cross-request query-embedding and
+// identity-preflight caches PER ADAPTER INSTANCE, so reusing the adapter is what lets repeated
+// asks skip redundant embedding/preflight network calls — and replacing the gateway config
+// naturally rotates the adapter, dropping every cache scoped to it. Availability is checked
+// live per request (equivalent to the former precomputed per-capsule unavailable set: both
+// reduce to `provider === undefined || !isConfiguredEmbeddingModel(config, modelId)`), so the
+// adapter is independent of the selected capsules.
+const EMBEDDING_ADAPTERS_BY_CONFIG = new WeakMap<GatewayConfig, OpenAIEmbeddingAdapter>();
 
-export function createEmbeddingAdapter(
-  deps: UiHandlerDeps,
-  capsules: readonly KnowledgeCapsule[],
-): OpenAIEmbeddingAdapter | RouteResult {
+export function createEmbeddingAdapter(deps: UiHandlerDeps): OpenAIEmbeddingAdapter | RouteResult {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const unavailableModelIds = unavailableEmbeddingModelIds(config, capsules);
-  return {
+  const cached = EMBEDDING_ADAPTERS_BY_CONFIG.get(config);
+  if (cached !== undefined) return cached;
+  const adapter: OpenAIEmbeddingAdapter = {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
       const provider = config.providers.find((entry) => entry.modelId === request.modelId);
-      if (
-        provider === undefined ||
-        unavailableModelIds.has(request.modelId) ||
-        !isConfiguredEmbeddingModel(config, provider.modelId)
-      ) {
+      if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
         return { ok: false, kind: "unsupported-model" };
       }
       return requestEmbeddingImpl(deps)({
@@ -212,6 +208,8 @@ export function createEmbeddingAdapter(
       });
     },
   };
+  EMBEDDING_ADAPTERS_BY_CONFIG.set(config, adapter);
+  return adapter;
 }
 
 // Resolves ONE connector scope (capsule or capsule-set) to its capsules + display label. Extracted
@@ -405,14 +403,118 @@ export function buildSelectedScopeSourceLookup(
   };
 }
 
+function manualOpenUnavailable(
+  reason: HtmlManualCitationOpenUnavailableReason,
+): HtmlManualCitationOpenEligibility {
+  return { state: "unavailable", reason };
+}
+
+function manualOpenReasonForClassification(
+  reason: "invalid-target" | "unsupported-scheme" | "credentials-in-target",
+): HtmlManualCitationOpenUnavailableReason {
+  if (reason === "credentials-in-target") return "target-credentialed";
+  if (reason === "unsupported-scheme") return "target-unsupported";
+  return "target-unavailable";
+}
+
+// Epic #1854 (#1879) — anchorId is a parser-derived HTML id (from html-parser.ts's anchorFromTag,
+// which only bounds length/rejects "://"/NUL) and, unlike pageTitle/safePageId/sectionPath, was
+// spread onto the wire and into the navigation target's URL fragment without the same
+// stripUnsafeFormatChars pass every other citation label field receives. An empty result after
+// stripping is treated as "no real anchor", matching the existing missing-anchor fallback.
+function safeAnchorId(anchorId: string | undefined): string | undefined {
+  if (anchorId === undefined) return undefined;
+  const stripped = stripUnsafeFormatChars(anchorId);
+  return stripped.length > 0 ? stripped : undefined;
+}
+
+function classifiedManualOpen(
+  reference: RetrievalReference,
+  rawTarget: string,
+): Pick<HtmlManualCitationMetadata, "targetSummary" | "open"> {
+  const classification = classifyDocumentationTarget(rawTarget);
+  if (!classification.ok) {
+    return {
+      open: manualOpenUnavailable(manualOpenReasonForClassification(classification.reason)),
+    };
+  }
+  if (classification.targetClass === "external-http") {
+    return { open: manualOpenUnavailable("target-outside-approved-scope") };
+  }
+  const anchorId = safeAnchorId(reference.citation.anchorId);
+  const target = buildHtmlManualCitationNavigationTarget({
+    capsuleId: reference.capsuleId,
+    sourceId: reference.citation.sourceId,
+    documentId: reference.citation.documentId,
+    chunkId: reference.chunkId,
+    ...(anchorId !== undefined ? { anchorId } : {}),
+  });
+  return {
+    targetSummary: {
+      originSummary: classification.originSummary,
+      pathSummary: classification.pathSummary,
+    },
+    open:
+      anchorId === undefined
+        ? { state: "page-level-only", target, reason: "missing-anchor" }
+        : { state: "available", target },
+  };
+}
+
+function projectHtmlManualCitationMetadata(
+  store: KnowledgeStore | undefined,
+  reference: RetrievalReference,
+  redactLabel: LabelRedactor | undefined,
+): HtmlManualCitationMetadata | undefined {
+  if (store === undefined) return undefined;
+  const metadata = readHtmlManualSourceMetadata(
+    store,
+    reference.capsuleId,
+    reference.citation.sourceId,
+  );
+  if (metadata === undefined) return undefined;
+  const anchorId = safeAnchorId(reference.citation.anchorId);
+  const resolved = resolveHtmlManualCitationTarget(store, {
+    capsuleId: reference.capsuleId,
+    sourceId: reference.citation.sourceId,
+    documentId: reference.citation.documentId,
+    ...(anchorId !== undefined ? { anchorId } : {}),
+  });
+  const base = {
+    sourceKind: metadata.sourceKind,
+    pageTitle: citationLabelFallback(
+      citationLabelPart(reference.citation.safeDisplayName, redactLabel),
+    ),
+    safePageId: citationLabelFallback(
+      citationLabelPart(String(reference.citation.documentId), redactLabel),
+    ),
+    ...(reference.citation.sectionPath !== undefined
+      ? {
+          sectionPath: reference.citation.sectionPath.map((part) =>
+            citationLabelPart(part, redactLabel),
+          ),
+        }
+      : {}),
+    ...(anchorId !== undefined ? { anchorId } : {}),
+    ...(reference.citation.parsedUnitId !== undefined
+      ? { parsedUnitId: reference.citation.parsedUnitId }
+      : {}),
+  };
+  return resolved.ok
+    ? { ...base, ...classifiedManualOpen(reference, resolved.target) }
+    : { ...base, open: manualOpenUnavailable(resolved.reason) };
+}
+
 export function projectLocalKnowledgeCitation(
   reference: RetrievalReference,
   marker: string,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
   redactLabel?: LabelRedactor,
+  store?: KnowledgeStore,
 ): LocalKnowledgeEvidenceCitation {
   const source = sourceLookup?.(reference);
   const safeSource = source === undefined ? undefined : citationLabelPart(source, redactLabel);
+  const htmlManual = projectHtmlManualCitationMetadata(store, reference, redactLabel);
   return {
     stableId: citationStableId(reference, marker),
     marker,
@@ -425,6 +527,7 @@ export function projectLocalKnowledgeCitation(
       chunkId: reference.chunkId,
     },
     ...(safeSource !== undefined && safeSource.length > 0 ? { source: safeSource } : {}),
+    ...(htmlManual !== undefined ? { htmlManual } : {}),
   };
 }
 
@@ -923,12 +1026,19 @@ export function buildLocalKnowledgeCitations(
   noEvidenceReason: string | undefined,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
   redactLabel?: LabelRedactor,
+  store?: KnowledgeStore,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   if (noEvidenceReason !== undefined) return [];
   // When the model emitted [n] markers, honour exactly what it cited.
   if (result.citations.length > 0) {
     return result.citations.map((entry) =>
-      projectLocalKnowledgeCitation(entry.reference, entry.marker, sourceLookup, redactLabel),
+      projectLocalKnowledgeCitation(
+        entry.reference,
+        entry.marker,
+        sourceLookup,
+        redactLabel,
+        store,
+      ),
     );
   }
   return [];
@@ -996,6 +1106,7 @@ function buildLocalKnowledgeAnswer(
     noEvidenceReason,
     sourceLookup ?? buildSelectedScopeSourceLookup(store, selected),
     redactLabel,
+    store,
   );
   const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
     store,
@@ -2011,7 +2122,7 @@ async function runScopedGroundedAnswer(
   selected: SelectedLocalKnowledgeScope,
   signal: AbortSignal,
 ): Promise<GroundedAnswer | RouteResult> {
-  const embeddingAdapter = createEmbeddingAdapter(deps, selected.capsules);
+  const embeddingAdapter = createEmbeddingAdapter(deps);
   if ("status" in embeddingAdapter) return embeddingAdapter;
   const modelId = input.modelId ?? chat.selectedModel;
   const model = resolveModel(deps, modelId);

@@ -10,6 +10,7 @@
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -25,7 +26,10 @@ import type {
   KnowledgeCapsuleId,
   CapsuleLifecycleState,
   KnowledgePodSetReadinessReasonCode,
+  ManualRefreshChangeSummary,
+  ManualRefreshReasonCode,
 } from "@oscharko-dev/keiko-contracts";
+import { MANUAL_REFRESH_REASON_GUIDANCE } from "@oscharko-dev/keiko-contracts";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import type {
@@ -45,6 +49,7 @@ import {
   type LocalKnowledgeConnectorDropDetail,
   serializeLocalKnowledgeConnectorDrag,
 } from "./connector-drag";
+import manualRefreshStyles from "./manual-refresh-panel.module.css";
 
 // ---------------------------------------------------------------------------
 // AlertBanner
@@ -390,6 +395,100 @@ function EmbeddingGuidanceDescription({
   );
 }
 
+// ---------------------------------------------------------------------------
+// ManualRefreshPanel — read-only diagnostics for the most recent explicit HTML
+// manual refresh (Epic #1856, Issue #1893). There is no refresh trigger route
+// in this epic; this panel only renders what the server already redacted onto
+// `KnowledgePodSummary.manualRefresh`. Never renders a raw path/URL/body, and
+// never renders the crawl-run fingerprint verbatim (it is an opaque token).
+// ---------------------------------------------------------------------------
+
+function manualRefreshBadgeState(
+  outcome: ManualRefreshChangeSummary["outcome"],
+): CapsuleLifecycleState {
+  if (outcome === "updated" || outcome === "unchanged") return "ready";
+  if (outcome === "partial") return "stale";
+  if (outcome === "failed") return "error";
+  return "draft";
+}
+
+function manualRefreshOutcomeLabel(outcome: ManualRefreshChangeSummary["outcome"]): string {
+  if (outcome === "unchanged") return "Unchanged";
+  if (outcome === "updated") return "Updated";
+  if (outcome === "partial") return "Partial";
+  if (outcome === "failed") return "Failed";
+  return "Cancelled";
+}
+
+const MANUAL_REFRESH_COUNT_LABELS: Record<keyof ManualRefreshChangeSummary["counts"], string> = {
+  addedPages: "Added",
+  changedPages: "Changed",
+  removedPages: "Removed",
+  unchangedPages: "Unchanged",
+  failedPages: "Failed",
+  deniedLinks: "Denied links",
+};
+
+function manualRefreshCounts(counts: ManualRefreshChangeSummary["counts"]): ReactNode {
+  const entries = Object.entries(MANUAL_REFRESH_COUNT_LABELS) as ReadonlyArray<
+    [keyof ManualRefreshChangeSummary["counts"], string]
+  >;
+  return (
+    <dl className="lkd-manual-refresh-counts">
+      {entries.map(([key, label]) => (
+        <Fragment key={key}>
+          <dt>{label}</dt>
+          <dd>{counts[key].toString()}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
+function manualRefreshGuidanceLines(reasonCodes: readonly ManualRefreshReasonCode[]): ReactNode {
+  if (reasonCodes.length === 0) return null;
+  return (
+    <ul className="lkd-manual-refresh-guidance">
+      {reasonCodes.map((code) => (
+        <li key={code}>{MANUAL_REFRESH_REASON_GUIDANCE[code]}</li>
+      ))}
+    </ul>
+  );
+}
+
+function ManualRefreshPanel({
+  manualRefresh,
+  headingId,
+}: {
+  readonly manualRefresh: ManualRefreshChangeSummary | undefined;
+  readonly headingId: string;
+}): ReactNode {
+  if (manualRefresh === undefined) return null;
+  const removalSkipped = manualRefresh.removalDetection === "not-evaluated-page-limit";
+  return (
+    <section
+      className={`lkd-manual-refresh ${manualRefreshStyles.panelScope}`}
+      aria-labelledby={headingId}
+    >
+      <div className="lkd-manual-refresh-heading">
+        <span id={headingId} className="lkd-manual-refresh-title">
+          Last refresh
+        </span>
+        <span className="lk-badge" data-state={manualRefreshBadgeState(manualRefresh.outcome)}>
+          {manualRefreshOutcomeLabel(manualRefresh.outcome)}
+        </span>
+      </div>
+      {manualRefreshCounts(manualRefresh.counts)}
+      {removalSkipped ? (
+        <p className="lkd-manual-refresh-note">
+          Removed pages could not be detected this run (the crawl reached its page limit).
+        </p>
+      ) : null}
+      {manualRefreshGuidanceLines(manualRefresh.reasonCodes)}
+    </section>
+  );
+}
+
 function readinessBadgeState(
   readiness: NonNullable<CapsuleSetListEntry["knowledgePod"]>["readiness"] | undefined,
 ): CapsuleLifecycleState {
@@ -661,6 +760,8 @@ function CapsuleRow({
   const guidance = capsule.knowledgePod?.guidance;
   const guidanceDescriptionId = useId();
   const guidanceDescribedBy = guidance === undefined ? undefined : guidanceDescriptionId;
+  const manualRefresh = capsule.knowledgePod?.manualRefresh;
+  const manualRefreshHeadingId = useId();
   const [dragGhost, setDragGhost] = useState<CapsuleDragGhost | null>(null);
   const dragActiveRef = useRef(false);
   const dropDispatchedRef = useRef(false);
@@ -820,6 +921,7 @@ function CapsuleRow({
           onAddToWorkspace={onAddToWorkspace}
         />
       </article>
+      <ManualRefreshPanel manualRefresh={manualRefresh} headingId={manualRefreshHeadingId} />
       {dragGhost !== null
         ? createPortal(
             <div

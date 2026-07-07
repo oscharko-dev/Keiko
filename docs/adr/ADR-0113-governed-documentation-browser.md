@@ -220,6 +220,46 @@ The crawler consumes the pre-validated, redacted approval and never re-detects, 
 re-approves a target. The `keiko-server` egress route and any user-facing UI that drives the crawl remain
 the concern of later, separately governed work (chat-attach Epic #1854 and siblings).
 
+## Extension: citation-driven navigation for HTML manual chat answers (Epic #1854)
+
+Accepted as an extension of this ADR (Epic #1854, Issues #1878-#1883, 2026-07-06). Epic #1854 turns
+an indexed HTML Manual Knowledge Pod into grounded chat evidence and lets a user reopen cited manual
+pages or sections through the governed documentation browser. The caller changes, but the trust model
+above does not: citation opening is navigation only, never crawl, capture, indexing, refresh, or model
+consent.
+
+- **Chat retrieval reuses Local Knowledge.** HTML manual pods are projected as ordinary
+  `KnowledgePodSummary` entries with additive manual source tags and an opaque
+  `manualSourceFingerprint`. Chat selection, retrieval, hybrid/RRF ranking, context-pack assembly,
+  grounded QA, retrieval activity, and evidence manifests continue to use the existing Knowledge Pod
+  and Local Knowledge paths. No manual-specific retrieval runner, browser-side model call, or
+  cross-space score mixer is introduced.
+- **Manual citation targets are resolved server-side.** The Local Knowledge store persists additive
+  `html_manual_sources` metadata keyed by capsule/source lineage: manual source kind, fingerprint, and
+  the approved local root or http origin/path-prefix. Browser-facing citations carry safe page labels,
+  section/heading path, `anchorId` when available, parsed-unit lineage, and an opaque
+  `keiko-html-manual-citation:` target. Raw roots, origins with paths, query strings, credentials,
+  page bodies, and virtual storage roots are not sent to the UI.
+- **The docs-browser route remains authoritative.** The citation open action calls
+  `POST /api/docs-browser/navigate` via `navigateDocumentation`. The BFF resolves the opaque citation
+  handle against the persisted manual metadata, reconstructs the local or intranet target, and then
+  uses the existing `classifyDocumentationTarget` / navigation reason model. A malformed handle,
+  missing source metadata, lineage mismatch, outside-prefix target, unsupported scheme, or denied
+  target fails closed with a redacted documentation-browser result.
+- **Anchor precision is additive and bounded.** Section-level citations reuse the sealed `anchorId`
+  field added to `ParsedUnit` and `CitationReference` by the HTML-structure work. When an anchor is
+  unavailable, the UI renders a page-level-only state instead of inventing another section identifier
+  or exposing a path. Setting a fragment on a resolved target never widens the approved origin/path
+  scope.
+- **Evidence stays body-free.** Retrieval activity and citation UI report counts, selected/cited/
+  degraded states, safe labels, redacted origin/path summaries, and opaque lineage only. They do not
+  expose raw query text, excerpts beyond existing grounded-answer policy, vectors, prompts, provider
+  endpoints, private paths, token-bearing URLs, cookies, or customer manual content.
+
+This extension keeps ADR-0113 as the single documentation-browser trust record. Future rendered
+capture, refresh, parser-quality expansion, or customer-pilot egress changes still require their own
+explicit scope and security review.
+
 ## References
 
 - ADR-0017 (browser tool over CDP), ADR-0019 (package boundaries), ADR-0029 (workspace descriptor

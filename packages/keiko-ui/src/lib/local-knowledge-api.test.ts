@@ -10,6 +10,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgePodSummary,
   KnowledgeSourceScope,
+  ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
 import {
   capsulesForKnowledgePodUi,
@@ -55,6 +56,7 @@ function podSummary(
       | "counts"
       | "setReadiness"
       | "sourceKinds"
+      | "manualRefresh"
     >
   > = {},
 ): KnowledgePodSummary {
@@ -108,6 +110,30 @@ function podSummary(
     },
     updatedAt: 1,
     degradationReasons: [],
+    ...(overrides.manualRefresh !== undefined ? { manualRefresh: overrides.manualRefresh } : {}),
+  };
+}
+
+function manualRefreshSummary(
+  overrides: Partial<ManualRefreshChangeSummary> = {},
+): ManualRefreshChangeSummary {
+  return {
+    schemaVersion: "1",
+    outcome: "updated",
+    sourceKind: "html-manual-http",
+    counts: {
+      addedPages: 2,
+      changedPages: 1,
+      removedPages: 0,
+      unchangedPages: 8,
+      failedPages: 0,
+      deniedLinks: 0,
+    },
+    removalDetection: "evaluated",
+    crawlRunFingerprint: "fp-test-1",
+    reasonCodes: ["pages-added"],
+    refreshedAt: 1_700_000_000_000,
+    ...overrides,
   };
 }
 
@@ -190,6 +216,116 @@ describe("local knowledge BFF boundary helpers", () => {
         tone: "warning",
       },
     });
+  });
+
+  it("surfaces HTML manual source kind and readiness through existing pod metadata", () => {
+    const readyId = "cap-manual-ready" as KnowledgeCapsuleId;
+    const degradedId = "cap-manual-degraded" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: readyId,
+          displayName: "Device Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: degradedId,
+          displayName: "Service Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(readyId, "pod", "Device Handbook", {
+          sourceKinds: ["html-manual-http"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 1,
+            documentCount: 3,
+            chunkCount: 8,
+            vectorCount: 8,
+          },
+        }),
+        podSummary(degradedId, "pod", "Service Handbook", {
+          readiness: "degraded",
+          sourceKinds: ["html-manual-local"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 1,
+            documentCount: 1,
+            chunkCount: 2,
+            vectorCount: 0,
+          },
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod).toMatchObject({
+      sourceKinds: ["html-manual-http"],
+      guidance: {
+        label: "HTML manual",
+        description: expect.stringContaining("3 docs · 8 chunks · 8 vectors"),
+        tone: "muted",
+      },
+    });
+    expect(capsules[1]?.knowledgePod).toMatchObject({
+      readiness: "degraded",
+      sourceKinds: ["html-manual-local"],
+      guidance: {
+        label: "Manual degraded",
+        description: expect.stringContaining("1 docs · 2 chunks · 0 vectors"),
+        tone: "warning",
+      },
+    });
+    expect(JSON.stringify(capsules)).not.toContain("https://docs.internal");
+    expect(JSON.stringify(capsules)).not.toContain("/Users/alice");
+  });
+
+  it("threads manualRefresh (Epic #1856, Issue #1893) through to UI metadata unchanged", () => {
+    const manualId = "cap-manual-refresh" as KnowledgeCapsuleId;
+    const refresh = manualRefreshSummary({ outcome: "partial", reasonCodes: ["pages-failed"] });
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: manualId,
+          displayName: "Refreshed Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(manualId, "pod", "Refreshed Handbook", {
+          sourceKinds: ["html-manual-http"],
+          manualRefresh: refresh,
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.manualRefresh).toEqual(refresh);
+  });
+
+  it("omits manualRefresh from UI metadata when the pod has never been refreshed", () => {
+    const capsuleId = "cap-never-refreshed" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Fresh Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Fresh Handbook", { sourceKinds: ["html-manual-http"] }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.manualRefresh).toBeUndefined();
   });
 
   it("maps unavailable and incompatible Knowledge Pod guidance", () => {
@@ -285,6 +421,56 @@ describe("local knowledge BFF boundary helpers", () => {
         "answerSynthesis",
         "rawContentRelease",
       ],
+      guidance: {
+        label: "Policy denied",
+        tone: "danger",
+      },
+    });
+  });
+
+  it("prefers policy-denied guidance over an embedding mismatch on the same pod", () => {
+    // A pod can be simultaneously policy-denied (sealed) and embedding-incompatible (e.g. a
+    // sealed-local pod whose stored profile also drifted after a policy change). This pins the
+    // intentional precedence in `metadataForSummary` (`policyGuidance ?? guidance ?? ...`): the
+    // policy reason is surfaced and the embedding-mismatch reason is deliberately not shown
+    // alongside it, rather than leaving the choice unverified by any test.
+    const capsuleId = "cap-sealed-and-incompatible" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Sealed and mismatched",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Sealed and mismatched", {
+          readiness: "degraded",
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "incompatible",
+            embeddingCompatibilityReason: "provider-mismatch",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      sealed: true,
       guidance: {
         label: "Policy denied",
         tone: "danger",
@@ -479,6 +665,124 @@ describe("local knowledge BFF boundary helpers", () => {
         tone: "danger",
       },
     });
+  });
+
+  it("maps unavailable and incompatible Knowledge Pod guidance for HTML manual capsules", () => {
+    const capsuleId = "cap-manual-unavailable" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Retired Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Retired Handbook", {
+          readiness: "unavailable",
+          sourceKinds: ["html-manual-http"],
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "unavailable",
+            embeddingCompatibilityReason: "policy-denied",
+            reindexRecommended: false,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding unavailable",
+      tone: "danger",
+    });
+  });
+
+  it("distinguishes in-progress HTML manual readiness from a hard-failure readiness", () => {
+    const indexingId = "cap-manual-indexing" as KnowledgeCapsuleId;
+    const staleId = "cap-manual-stale" as KnowledgeCapsuleId;
+    const errorId = "cap-manual-error" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: indexingId,
+          displayName: "Indexing Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: staleId,
+          displayName: "Stale Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: errorId,
+          displayName: "Broken Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(indexingId, "pod", "Indexing Handbook", {
+          readiness: "indexing",
+          sourceKinds: ["html-manual-local"],
+        }),
+        podSummary(staleId, "pod", "Stale Handbook", {
+          readiness: "stale",
+          sourceKinds: ["html-manual-local"],
+        }),
+        podSummary(errorId, "pod", "Broken Handbook", {
+          readiness: "error",
+          sourceKinds: ["html-manual-local"],
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.guidance).toMatchObject({
+      label: "Manual indexing",
+      tone: "warning",
+      description: expect.stringContaining("not yet ready to contribute evidence"),
+    });
+    expect(capsules[1]?.knowledgePod?.guidance).toMatchObject({
+      label: "Manual indexing",
+      tone: "warning",
+    });
+    expect(capsules[2]?.knowledgePod?.guidance).toMatchObject({
+      label: "Manual unavailable",
+      tone: "danger",
+      description: expect.stringContaining("cannot contribute silently as empty evidence"),
+    });
+  });
+
+  it("does not label a mixed HTML-manual and ordinary Knowledge Pod Set as an HTML manual", () => {
+    const setId = "set-mixed-manual" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Mixed set",
+          capsuleCount: 2,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Mixed set", {
+          sourceKinds: ["html-manual-http", "folder"],
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.sourceKinds).toEqual(["html-manual-http", "folder"]);
+    expect(capsuleSet?.knowledgePod?.guidance).toBeUndefined();
   });
 
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {

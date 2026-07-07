@@ -467,6 +467,16 @@ function ChatBubbleImpl({
     windowId,
     windows: previewWindows,
   });
+  // Epic #1854 (#1881) — opens the target in the existing governed documentation browser widget
+  // (ADR-0113) rather than calling navigateDocumentation directly, so the widget's own reason/
+  // severity rendering stays the single source of truth for the navigation outcome.
+  const openDocumentationTarget = useCallback(
+    (target: string): boolean => {
+      if (previewWindows === undefined) return false;
+      return previewWindows.add("docbrowser", { target }) !== null;
+    },
+    [previewWindows],
+  );
   const canCollapse =
     !streaming && !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
 
@@ -581,6 +591,7 @@ function ChatBubbleImpl({
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
               citationPreview={citationPreview}
+              openDocumentationTarget={openDocumentationTarget}
             />
             <ContextStatusPanel contextSummary={contextSummaryOf(message.groundedAnswer)} />
           </div>

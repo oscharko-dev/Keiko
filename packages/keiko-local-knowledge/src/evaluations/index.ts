@@ -9,6 +9,8 @@ export {
   EVAL_TOPIC_BOOST,
   ambiguousQueryFixture,
   broadQueryDiversityFixture,
+  chainedQuestionFixture,
+  codeRepositoryFixture,
   contextBudgetFixture,
   exactTechnicalFixture,
   mixedStrategyFixture,

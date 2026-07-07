@@ -246,6 +246,35 @@ export {
   type CreateHtmlManualPodDeps,
   type CreateHtmlManualPodResult,
 } from "./manual-pod.js";
+// Explicit refresh over an existing manual pod (Epic #1856, Issues #1891/#1892). Reuses the same
+// crawl + indexing lifecycle; adds a redacted change summary. No second crawl/retrieval path.
+export {
+  refreshHtmlManualPod,
+  type RefreshHtmlManualPodDeps,
+  type RefreshHtmlManualPodResult,
+} from "./manual-pod-refresh.js";
+export {
+  computeManualRefreshChangeSummary,
+  type ManualRefreshChangeInput,
+} from "./manual-refresh-change-summary.js";
+export {
+  persistHtmlManualSourceMetadata,
+  readHtmlManualSourceMetadata,
+  updateHtmlManualRefreshState,
+  resolveHtmlManualCitationTarget,
+  type HtmlManualCitationTargetFailureReason,
+  type HtmlManualCitationTargetResolution,
+  type HtmlManualRefreshState,
+  type HtmlManualSourceMetadata,
+  type ResolveHtmlManualCitationTargetInput,
+} from "./manual-source-metadata.js";
+export {
+  computeManualPageFingerprint,
+  computeManualCrawlRunFingerprint,
+  readManualPageFingerprints,
+  replaceManualPageFingerprints,
+  type ManualPageFingerprint,
+} from "./manual-page-fingerprints.js";
 export {
   buildHtmlManualIndexingProgress,
   type HtmlManualIndexingProgress,

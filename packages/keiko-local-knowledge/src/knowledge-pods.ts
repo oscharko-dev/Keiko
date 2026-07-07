@@ -28,13 +28,17 @@ import {
   type KnowledgePodSummaryKind,
   type KnowledgeSource,
   isKnowledgePodEvidenceSafeText,
+  parseHtmlManualSourceTagMetadata,
   resolveKnowledgePodModelUsePolicy,
   validateKnowledgePodSummary,
+  validateManualRefreshChangeSummary,
+  type ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule, listCapsules } from "./capsule-lifecycle.js";
 import { listCapsuleSets } from "./capsule-set-lifecycle.js";
 import { KnowledgeStoreError } from "./errors.js";
+import { readHtmlManualSourceMetadata } from "./manual-source-metadata.js";
 import { resolveScopeModelUsePolicy } from "./model-use-policy.js";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
@@ -125,20 +129,46 @@ export function buildKnowledgePodSummary(
   const counts = capsuleCounts(store, capsule.id);
   const embeddingProfile = capsuleEmbeddingProfile(capsule);
   const embeddingDecision = compareEmbeddingProfiles(embeddingProfile, embeddingProfile);
+  const projection = capsuleProjection({
+    capsule,
+    sources,
+    counts: {
+      capsuleCount: 1,
+      sourceCount: sources.length,
+      ...counts,
+    },
+    embeddingProfile,
+    embeddingDecision,
+    degradationReasons: capsuleDegradationReasons(capsule, sources, counts, embeddingDecision),
+  });
+  const manualRefresh = readManualRefreshSummary(store, capsule.id, sources);
   return assertValidSummary(
-    capsuleProjection({
-      capsule,
-      sources,
-      counts: {
-        capsuleCount: 1,
-        sourceCount: sources.length,
-        ...counts,
-      },
-      embeddingProfile,
-      embeddingDecision,
-      degradationReasons: capsuleDegradationReasons(capsule, sources, counts, embeddingDecision),
-    }),
+    manualRefresh !== undefined ? { ...projection, manualRefresh } : projection,
   );
+}
+
+// Surface the last explicit-refresh change summary (Epic #1856) for an HTML manual pod. It is read
+// from persisted approved-source metadata and re-validated as a defense-in-depth boundary; a corrupt
+// or absent record is silently omitted rather than failing the whole pod summary.
+function readManualRefreshSummary(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sources: readonly KnowledgeSource[],
+): ManualRefreshChangeSummary | undefined {
+  for (const source of sources) {
+    if (parseHtmlManualSourceTagMetadata(source.tags).sourceKind === undefined) continue;
+    const json = readHtmlManualSourceMetadata(store, capsuleId, source.id)?.lastChangeSummaryJson;
+    if (json === undefined) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      continue;
+    }
+    const validation = validateManualRefreshChangeSummary(parsed);
+    if (validation.ok) return validation.value;
+  }
+  return undefined;
 }
 
 export function buildKnowledgePodSetSummary(
@@ -227,6 +257,7 @@ function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
     },
     updatedAt: input.capsule.updatedAt,
     degradationReasons: input.degradationReasons,
+    ...manualSourceFingerprint(input.sources),
   };
 }
 
@@ -518,9 +549,26 @@ function embeddingDegradationReasons(
 }
 
 function uniqueSourceKinds(sources: readonly KnowledgeSource[]): readonly KnowledgePodSourceKind[] {
-  return uniqueStrings(
-    sources.map((source) => source.scope.kind),
-  ) as readonly KnowledgePodSourceKind[];
+  return uniqueStrings(sources.map(sourceKindForSummary)) as readonly KnowledgePodSourceKind[];
+}
+
+function sourceKindForSummary(source: KnowledgeSource): KnowledgePodSourceKind {
+  return parseHtmlManualSourceTagMetadata(source.tags).sourceKind ?? source.scope.kind;
+}
+
+function manualSourceFingerprint(sources: readonly KnowledgeSource[]): {
+  readonly manualSourceFingerprint?: string;
+} {
+  const fingerprints = uniqueStrings(
+    sources
+      .map((source) => parseHtmlManualSourceTagMetadata(source.tags).sourceFingerprint)
+      .filter(
+        (fingerprint): fingerprint is string =>
+          fingerprint !== undefined && isKnowledgePodEvidenceSafeText(fingerprint),
+      ),
+  );
+  const fingerprint = fingerprints.length === 1 ? fingerprints[0] : undefined;
+  return fingerprint === undefined ? {} : { manualSourceFingerprint: fingerprint };
 }
 
 function uniqueSourceIds(

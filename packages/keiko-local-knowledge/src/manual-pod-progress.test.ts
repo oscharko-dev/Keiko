@@ -94,6 +94,19 @@ describe("buildHtmlManualIndexingProgress", () => {
     expect(progress.phase).toBe("degraded");
   });
 
+  it("reports a limit-reached refresh with no indexing run as degraded, not crawling (Epic #1856 fail-closed skip)", () => {
+    // refreshHtmlManualPod's shouldApply skips indexing entirely on a limit-reached crawl, so
+    // `indexing` is undefined for an already-finished, already-failed-closed refresh. Unlike pod
+    // creation (where indexing===undefined only ever means "still in progress"), this specific
+    // combination is terminal and must never read as an in-flight "crawling" phase.
+    const progress = buildHtmlManualIndexingProgress(
+      crawlResult("limit-reached", [{ reason: "page-limit", count: 1 }]),
+      undefined,
+    );
+    expect(progress.phase).toBe("degraded");
+    expect(progress.indexing).toBeNull();
+  });
+
   it("maps an indexing policy denial to remediation guidance", () => {
     const progress = buildHtmlManualIndexingProgress(
       crawlResult("completed"),

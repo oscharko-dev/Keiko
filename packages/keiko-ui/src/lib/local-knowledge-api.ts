@@ -25,6 +25,7 @@ import type {
   KnowledgePodSetReadinessReasonCode,
   KnowledgePodModelUseOperation,
   KnowledgePodModelUsePolicy,
+  ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
@@ -59,6 +60,9 @@ export interface KnowledgePodUiMetadata {
   readonly reindexRecommended: boolean;
   readonly queryEmbeddingAllowed: boolean;
   readonly guidance?: KnowledgePodUiGuidance;
+  // Epic #1856, Issue #1893 — read-only diagnostics for the most recent explicit HTML manual
+  // refresh. Absent until the pod has been refreshed at least once, and for every non-manual pod.
+  readonly manualRefresh?: ManualRefreshChangeSummary;
 }
 
 export type CapsuleListEntry = CapsuleListEntryBase & {
@@ -123,6 +127,56 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
     };
   }
   return undefined;
+}
+
+function isHtmlManualSourceKind(sourceKind: string): boolean {
+  return sourceKind === "html-manual-local" || sourceKind === "html-manual-http";
+}
+
+function isHtmlManualSummary(summary: KnowledgePodSummary): boolean {
+  return summary.sourceKinds.length > 0 && summary.sourceKinds.every(isHtmlManualSourceKind);
+}
+
+function manualCountSummary(counts: KnowledgePodSummary["counts"]): string {
+  return [
+    `${counts.documentCount.toString()} docs`,
+    `${counts.chunkCount.toString()} chunks`,
+    `${counts.vectorCount.toString()} vectors`,
+  ].join(" · ");
+}
+
+function guidanceForHtmlManual(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+  if (!isHtmlManualSummary(summary)) return undefined;
+  if (summary.readiness === "ready") {
+    return {
+      label: "HTML manual",
+      description: `Ready for chat retrieval through Local Knowledge. ${manualCountSummary(summary.counts)}.`,
+      tone: "muted",
+    };
+  }
+  if (summary.readiness === "degraded") {
+    return {
+      label: "Manual degraded",
+      description: `Manual retrieval is degraded; answers may use only available evidence. ${manualCountSummary(summary.counts)}.`,
+      tone: "warning",
+    };
+  }
+  if (
+    summary.readiness === "draft" ||
+    summary.readiness === "indexing" ||
+    summary.readiness === "stale"
+  ) {
+    return {
+      label: "Manual indexing",
+      description: `Manual retrieval is ${summary.readiness}; it is not yet ready to contribute evidence.`,
+      tone: "warning",
+    };
+  }
+  return {
+    label: "Manual unavailable",
+    description: `Manual retrieval is ${summary.readiness}; it cannot contribute silently as empty evidence.`,
+    tone: "danger",
+  };
 }
 
 function hasSetReadinessReason(
@@ -256,7 +310,8 @@ function metadataForSummary(
   const guidance = guidanceForSummary(summary);
   const policyGuidance = guidanceForPolicy(summary, modelUsePolicy);
   const setReadinessGuidance = guidanceForSetReadiness(summary);
-  const selectedGuidance = policyGuidance ?? guidance ?? setReadinessGuidance;
+  const manualGuidance = guidanceForHtmlManual(summary);
+  const selectedGuidance = policyGuidance ?? guidance ?? setReadinessGuidance ?? manualGuidance;
   const deniedOperations = deniedModelOperations(modelUsePolicy);
   return {
     readiness: summary.readiness,
@@ -276,6 +331,7 @@ function metadataForSummary(
     reindexRecommended: summary.retrieval.reindexRecommended === true,
     queryEmbeddingAllowed: summary.retrieval.queryEmbeddingAllowed === true,
     ...(selectedGuidance !== undefined ? { guidance: selectedGuidance } : {}),
+    ...(summary.manualRefresh !== undefined ? { manualRefresh: summary.manualRefresh } : {}),
   };
 }
 

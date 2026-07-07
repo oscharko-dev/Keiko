@@ -1083,6 +1083,149 @@ describe("GroundedAnswer", () => {
     expect(citationPreview.openCitation).not.toHaveBeenCalled();
   });
 
+  it("opens an eligible HTML manual citation in the existing documentation browser widget", () => {
+    // Epic #1854 (#1879/#1881) regression: the citation chip must hand the opaque target to the
+    // existing governed docs-browser widget (which alone calls navigateDocumentation and renders
+    // the real reason/severity) instead of resolving/discarding the outcome itself.
+    const openDocumentationTarget = vi.fn().mockReturnValue(true);
+    const manualCitation = knowledgeCitation({
+      source: "Device Handbook",
+      htmlManual: {
+        sourceKind: "html-manual-http",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        sectionPath: ["Troubleshooting", "Timeouts"],
+        anchorId: "timeouts",
+        parsedUnitId: "unit-device",
+        targetSummary: {
+          originSummary: "https://manual.internal",
+          pathSummary: "/…",
+        },
+        open: {
+          state: "available",
+          target: "keiko-html-manual-citation:opaque",
+        },
+      },
+    });
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: "[1] Device Handbook · HTML manual · device-handbook.html · Troubleshooting · Timeouts · Open manual",
+    });
+    expect(chip).not.toHaveClass("grounded-citation-action--blocked");
+    fireEvent.click(chip);
+
+    expect(openDocumentationTarget).toHaveBeenCalledWith("keiko-html-manual-citation:opaque");
+    expect(screen.getByText("Opened")).toBeInTheDocument();
+  });
+
+  it("opens a page-level-only HTML manual citation (missing anchor) in the documentation browser widget", () => {
+    const openDocumentationTarget = vi.fn().mockReturnValue(true);
+    const manualCitation = knowledgeCitation({
+      htmlManual: {
+        sourceKind: "html-manual-local",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        open: {
+          state: "page-level-only",
+          target: "keiko-html-manual-citation:opaque-page",
+          reason: "missing-anchor",
+        },
+      },
+    });
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: "[1] HTML manual · device-handbook.html · Open page",
+    });
+    expect(chip).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(chip);
+
+    expect(openDocumentationTarget).toHaveBeenCalledWith("keiko-html-manual-citation:opaque-page");
+    expect(screen.getByText("Opened")).toBeInTheDocument();
+  });
+
+  it("shows a failed state when the documentation browser widget could not be opened", () => {
+    const openDocumentationTarget = vi.fn().mockReturnValue(false);
+    const manualCitation = knowledgeCitation({
+      htmlManual: {
+        sourceKind: "html-manual-local",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        open: {
+          state: "available",
+          target: "keiko-html-manual-citation:opaque",
+        },
+      },
+    });
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    fireEvent.click(
+      screen.getByRole("button", { name: "[1] HTML manual · device-handbook.html · Open manual" }),
+    );
+
+    expect(openDocumentationTarget).toHaveBeenCalledWith("keiko-html-manual-citation:opaque");
+    const chip = screen.getByRole("button", {
+      name: "[1] HTML manual · device-handbook.html · Open failed",
+    });
+    expect(screen.getByText("Open failed")).toBeInTheDocument();
+    expect(chip).toHaveClass("grounded-citation-action--blocked");
+  });
+
+  it("renders unavailable HTML manual citation targets without opening the documentation browser", () => {
+    const openDocumentationTarget = vi.fn();
+    const manualCitation = knowledgeCitation({
+      htmlManual: {
+        sourceKind: "html-manual-http",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        sectionPath: ["Troubleshooting"],
+        open: {
+          state: "unavailable",
+          reason: "source-metadata-unavailable",
+        },
+      },
+    });
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: "[1] HTML manual · device-handbook.html · Troubleshooting · Source unavailable",
+    });
+    expect(chip).toHaveAttribute("aria-disabled", "true");
+    expect(chip).toHaveClass("grounded-citation-action--blocked");
+    fireEvent.click(chip);
+
+    expect(openDocumentationTarget).not.toHaveBeenCalled();
+  });
+
   it("never renders answer.content into the panel — neither as text nor as markup", () => {
     // uiux-fix F009 C025: the panel no longer re-renders answer.content at all
     // (the persisted assistant bubble is the canonical rendering). Mutation guard:
@@ -1141,7 +1284,10 @@ describe("GroundedAnswer", () => {
     expect(warning?.textContent?.toLowerCase()).toContain("reranker unavailable");
   });
 
-  it("describes configured no-op reranking without exposing provider details", () => {
+  it("RB-4 (GEN-AI-RETRIEVAL-001): does not surface a Needs review banner for a not-configured reranker (default, safe install state)", () => {
+    // Regression for Epic #1820 / #1922: a reranker that was simply never configured is the
+    // default, fully-supported state, not a degradation — the summary banner must stay silent
+    // even though the redacted diagnostics still carry failureKind "not-configured".
     const base = localKnowledgeAnswer();
     const a = {
       ...base,
@@ -1158,9 +1304,6 @@ describe("GroundedAnswer", () => {
       },
     } as GroundedAnswerType;
     const { container } = render(<GroundedAnswer answer={a} busy={false} />);
-    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
-    expect(warning?.textContent).toContain("no reranker configured");
-    expect(warning?.textContent).toContain("fused retrieval order");
-    expect(warning?.textContent).not.toContain("http");
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
   });
 });

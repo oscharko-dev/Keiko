@@ -200,6 +200,33 @@ the normalised scores are compared directly to rank merged candidates.
   lists with similar score spreads (the common case); RRF uses rank position directly, which is
   the stable signal that normalisation approximates.
 
+## Amendment (2026-07-06): weighted lexical OR-fallback discount
+
+The Local Knowledge cross-space retrieval path (`scoped-vector-search.ts`, Epic #1818) reuses this
+ADR's RRF formula and `k = 60` constant for its own lane-local and cross-lane fusion, as required by
+Epic #1818's reuse gate. A later performance pass (#2049) introduced
+`LEXICAL_OR_FALLBACK_RRF_WEIGHT = 0.5`: a lexical candidate that only matched because its capsule's
+strict AND-match lexical query fell back to an OR match contributes at half its reciprocal-rank
+weight (`lexicalFusionWeight(candidate) * rrf(rank)`) instead of the full weight used by a strict
+AND match.
+
+This is a narrower, intentional refinement, not a change to the "equal-weight" principle this ADR
+establishes:
+
+- It applies only **within** the lexical/BM25 lane's own candidate set, to distinguish a strict
+  match from a lower-confidence OR-fallback match. It does not touch cross-engine weighting (dense
+  vs. lexical) or cross-space dense-lane fusion, both of which remain unweighted per this ADR.
+- Without the discount, a weak OR-fallback match and a strict AND match at the same rank would
+  receive identical fusion credit, which is what regression #2052 fixed after a chained/decomposed
+  query let a fallback match on one leg silently outrank a strict match relevant to a different leg.
+- The constant is applied uniformly (not per-deployment-tunable) and is covered by a dedicated
+  regression test (`scoped-vector-search.test.ts`, "does not discount a strict lexical match when a
+  different chained-question leg needed the OR fallback").
+
+"Equal-weight" as used elsewhere in this ADR continues to mean: no source is structurally favored by
+budget or raw-score comparison, and RRF rank contributions are otherwise unweighted. It does not mean
+every candidate within a single engine's lane is assumed equally confident.
+
 ## Related
 
 - [ADR-0034](ADR-0034-hybrid-multi-source-grounding.md): establishes the hybrid merge layer and

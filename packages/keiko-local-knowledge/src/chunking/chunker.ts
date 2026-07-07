@@ -329,20 +329,26 @@ function chooseChunkEnd(
     maxEnd,
   );
   if (heading !== undefined && heading > start) return heading;
-  const sentence = lastBoundaryAtOrAfter(
-    collectBoundaryMatches(sourceText, start, maxEnd, SENTENCE_BOUNDARY_PATTERN, "after-match"),
-    minBoundaryEnd,
-    maxEnd,
-  );
-  if (sentence !== undefined) return sentence;
-  // Prefer a line/row start over a mid-line hard cut so preserved code lines and serialized
-  // table/definition rows are not sliced apart when a unit exceeds the token budget.
+  // Prefer a line/row start over a mid-line sentence boundary so preserved code lines and
+  // serialized table/definition rows are not sliced apart. A line boundary is a stronger
+  // structural signal than mid-line sentence-shaped punctuation: technical content (decimal
+  // literals, trailing-period comments, decimal table cells) routinely contains a
+  // "period + whitespace" sequence that looks like a sentence end but sits mid-statement/
+  // mid-row. Checking this before SENTENCE_BOUNDARY_PATTERN prevents that punctuation from
+  // starving the line probe whenever a newline boundary is available within budget
+  // (Epic #1855 / Issue #1887, post-merge fix).
   const line = lastBoundaryAtOrAfter(
     collectBoundaryMatches(sourceText, start, maxEnd, LINE_BOUNDARY_PATTERN, "after-match"),
     minBoundaryEnd,
     maxEnd,
   );
   if (line !== undefined) return line;
+  const sentence = lastBoundaryAtOrAfter(
+    collectBoundaryMatches(sourceText, start, maxEnd, SENTENCE_BOUNDARY_PATTERN, "after-match"),
+    minBoundaryEnd,
+    maxEnd,
+  );
+  if (sentence !== undefined) return sentence;
   return adjustedHardEnd(sourceText, minBoundaryEnd, maxEnd);
 }
 
