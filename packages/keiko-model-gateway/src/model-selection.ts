@@ -18,10 +18,17 @@ import type {
   GatewayConfig,
   ModelCapability,
   ModelKind,
+  ModelProviderConfig,
   ModelTokenAccounting,
   VoiceCapabilityResolution,
   VoicePersona,
 } from "./types.js";
+import type {
+  CodingWorkbenchModelSource,
+  CodingWorkbenchSidecarGatewayProjection,
+  CodingWorkbenchSidecarGatewayResult,
+  CodingWorkbenchSidecarGatewayUnavailableReason,
+} from "@oscharko-dev/keiko-contracts";
 
 const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
@@ -49,6 +56,11 @@ export interface ConfiguredCapabilitySource {
 
 export interface SafeModelCapability extends Omit<ModelCapability, "tokenAccounting"> {
   readonly tokenAccounting?: Omit<ModelTokenAccounting, "counterId"> | undefined;
+}
+
+export interface ResolveCodingSafeSidecarGatewayProfileOptions {
+  readonly deploymentPolicyDisabled?: boolean | undefined;
+  readonly modelSource?: CodingWorkbenchModelSource | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
@@ -138,6 +150,133 @@ export function selectConfiguredModel(
     }
   }
   return best?.id;
+}
+
+function codingSidecarUnavailable(
+  reason: CodingWorkbenchSidecarGatewayUnavailableReason,
+): CodingWorkbenchSidecarGatewayResult {
+  return { status: "unavailable", reason };
+}
+
+function codingSidecarProjection(
+  capability: ModelCapability,
+): CodingWorkbenchSidecarGatewayProjection {
+  return {
+    status: "available",
+    profileId: "coding-safe-openai-compatible",
+    modelAlias: capability.id,
+    localEndpointPath: "/api/coding-sidecar/gateway",
+    supportsStreaming: false,
+    supportsToolCalling: true,
+    runMetadata: {
+      maxPromptTokens: Math.max(1, capability.contextWindow),
+      maxOutputTokens: Math.max(1, capability.maxOutputTokens),
+      maxInputMessages: 64,
+      maxRequestBytes: 64_000,
+    },
+  };
+}
+
+function normalizePreferredUseCase(useCase: string): string {
+  return useCase.trim().toLowerCase().replace(/\s+/g, "-");
+}
+
+function hasCodingPreferredUseCase(capability: ModelCapability): boolean {
+  return capability.preferredUseCases.some((useCase) => {
+    const normalized = normalizePreferredUseCase(useCase);
+    return (
+      normalized === "coding" ||
+      normalized === "code" ||
+      normalized === "software-development" ||
+      normalized === "code-review" ||
+      normalized.includes("coding")
+    );
+  });
+}
+
+function isCodingSafeSidecarCapability(capability: ModelCapability): boolean {
+  return (
+    capability.kind === "chat" &&
+    capability.toolCalling &&
+    capability.workflowEligible &&
+    hasCodingPreferredUseCase(capability)
+  );
+}
+
+function selectCodingSafeSidecarCapability(
+  config: ConfiguredCapabilitySource,
+): ModelCapability | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!isCodingSafeSidecarCapability(capability)) {
+      continue;
+    }
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best;
+}
+
+function providerFor(config: GatewayConfig, modelId: string): ModelProviderConfig | undefined {
+  return config.providers.find((provider) => provider.modelId === modelId);
+}
+
+function hasCredential(provider: ModelProviderConfig): boolean {
+  return provider.baseUrl.trim().length > 0 && provider.apiKey.trim().length > 0;
+}
+
+function unavailableReasonForSidecarConfig(
+  config: GatewayConfig,
+): CodingWorkbenchSidecarGatewayUnavailableReason {
+  const capabilities = listConfiguredCapabilities(config);
+  const codingEligibleCapabilities = capabilities.filter(
+    (capability) =>
+      capability.kind === "chat" && capability.toolCalling && capability.workflowEligible,
+  );
+  if (codingEligibleCapabilities.length > 0) {
+    return "non-coding-capable";
+  }
+  if (capabilities.length === 0) {
+    return "missing-provider";
+  }
+  if (capabilities.every((capability) => capability.kind !== "chat")) {
+    return "non-chat";
+  }
+  if (capabilities.some((capability) => !capability.toolCalling)) {
+    return "no-tool-calling";
+  }
+  if (capabilities.some((capability) => !capability.workflowEligible)) {
+    return "non-workflow-eligible";
+  }
+  return "non-coding-capable";
+}
+
+export function resolveCodingSafeSidecarGatewayProfile(
+  config: GatewayConfig | undefined,
+  options: ResolveCodingSafeSidecarGatewayProfileOptions = {},
+): CodingWorkbenchSidecarGatewayResult {
+  if (options.deploymentPolicyDisabled === true) {
+    return codingSidecarUnavailable("deployment-policy-disabled");
+  }
+  if (options.modelSource === "chatgpt-codex-subscription-profile") {
+    return codingSidecarUnavailable("subscription-source");
+  }
+  if (config === undefined || config.providers.length === 0) {
+    return codingSidecarUnavailable("missing-config");
+  }
+  const selected = selectCodingSafeSidecarCapability(config);
+  if (selected === undefined) {
+    return codingSidecarUnavailable(unavailableReasonForSidecarConfig(config));
+  }
+  const provider = providerFor(config, selected.id);
+  if (provider === undefined) {
+    return codingSidecarUnavailable("missing-provider");
+  }
+  if (!hasCredential(provider)) {
+    return codingSidecarUnavailable("missing-credentials");
+  }
+  return codingSidecarProjection(selected);
 }
 
 // Completion-oriented model selection (Issue #1210, ADR-0042 D5). Resolves the configured

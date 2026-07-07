@@ -134,9 +134,11 @@ export {
   selectSpeechOutputModel,
   selectSpeechToTextModel,
   selectVoicePersonaVoice,
+  resolveCodingSafeSidecarGatewayProfile,
   type ConfiguredCapabilityProvider,
   type ConfiguredCapabilitySource,
   type ModelSelectionQuery,
+  type ResolveCodingSafeSidecarGatewayProfileOptions,
 } from "./model-selection.js";
 
 export {

@@ -138,11 +138,23 @@ function isStateChangingMethod(method: string): boolean {
   return method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE";
 }
 
+function isCsrfExemptStateChange(method: string, pathname: string): boolean {
+  return method === "POST" && pathname === "/api/coding-sidecar/gateway/chat/completions";
+}
+
 // Returns true when the request was rejected (caller should return immediately).
-function rejectIfInvalidStateChange(req: IncomingMessage, res: ServerResponse): boolean {
+function rejectIfInvalidStateChange(
+  req: IncomingMessage,
+  res: ServerResponse,
+  method: string,
+  pathname: string,
+): boolean {
   if (!isJsonRequest(req)) {
     rejectUnsupportedMediaType(req, res);
     return true;
+  }
+  if (isCsrfExemptStateChange(method, pathname)) {
+    return false;
   }
   if (!hasCsrfHeader(req)) {
     rejectCsrf(req, res);
@@ -168,7 +180,7 @@ async function dispatchApi(
     writeJson(req, res, 405, methodNotAllowedBody());
     return;
   }
-  if (isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res)) {
+  if (isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res, method, url.pathname)) {
     return;
   }
   const ctx: RouteContext = { req, res, params: match.params, url, correlationId };
