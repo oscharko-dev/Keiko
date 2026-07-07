@@ -635,6 +635,34 @@ export {
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-validation.js";
+export type {
+  CodingWorkbenchCodexAuthCommandLabel,
+  CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexAuthSetupRequest,
+  CodingWorkbenchCodexAuthStateRoot,
+  CodingWorkbenchCodexAuthStateScope,
+  CodingWorkbenchCodexAuthStatus,
+  CodingWorkbenchCodexCredentialStore,
+  CodingWorkbenchCodexCredentialTransport,
+  CodingWorkbenchCodexRuntimeBinarySource,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchRuntimeAdapterKind,
+  CodingWorkbenchRuntimeProfileSelection,
+} from "./coding-workbench-codex-auth.js";
+export {
+  CODING_WORKBENCH_CODEX_AUTH_COMMAND_LABELS,
+  CODING_WORKBENCH_CODEX_AUTH_METHODS,
+  CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
+  CODING_WORKBENCH_CODEX_AUTH_STATE_SCOPES,
+  CODING_WORKBENCH_CODEX_AUTH_STATUSES,
+  CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
+  CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  selectCodingWorkbenchRuntimeProfile,
+  validateCodingWorkbenchCodexAuthSetupPlan,
+  validateCodingWorkbenchCodexAuthSetupRequest,
+  validateCodingWorkbenchCodexSubscriptionProfile,
+} from "./coding-workbench-codex-auth.js";
 
 // ─── Git repository status/diff BFF (Issue #1386, Epic #1491) ─────────────────────
 // Read-only status/diff contract for the local BFF. The browser receives bounded, redacted

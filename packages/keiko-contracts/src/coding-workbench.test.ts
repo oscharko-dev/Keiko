@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_CODEX_AUTH_METHODS,
+  CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
+  CODING_WORKBENCH_CODEX_AUTH_STATUSES,
+  CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
+  CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
@@ -9,11 +14,17 @@ import {
   isCodingWorkbenchEvidenceSafeText,
   redactCodingWorkbenchEvidenceText,
   resolveEffectiveCodingWorkbenchMode,
+  selectCodingWorkbenchRuntimeProfile,
   validateCodingWorkbenchAuthorityEnvelope,
+  validateCodingWorkbenchCodexAuthSetupPlan,
+  validateCodingWorkbenchCodexAuthSetupRequest,
+  validateCodingWorkbenchCodexSubscriptionProfile,
   validateCodingWorkbenchEvidenceRecord,
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
   type CodingWorkbenchAuthorityEnvelope,
+  type CodingWorkbenchCodexAuthSetupPlan,
+  type CodingWorkbenchCodexSubscriptionProfile,
   type CodingWorkbenchEvidenceRecord,
   type CodingWorkbenchPermissionRequest,
   type CodingWorkbenchRuntimeEvent,
@@ -138,8 +149,174 @@ describe("coding-workbench constants", () => {
       "openai-api-key-through-gateway",
       "chatgpt-codex-subscription-profile",
     ]);
+    expect(CODING_WORKBENCH_CODEX_AUTH_METHODS).toEqual([
+      "chatgpt-browser-login",
+      "chatgpt-device-code",
+      "codex-access-token",
+    ]);
+    expect(CODING_WORKBENCH_CODEX_AUTH_STATUSES).toContain("disabled-by-deployment");
+    expect(CODING_WORKBENCH_CODEX_CREDENTIAL_STORES).toEqual(["file", "keyring", "auto"]);
+    expect(CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS).toEqual([
+      "keiko-codex-runtime-state",
+      "os-credential-store",
+    ]);
+    expect(CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES).toEqual([
+      "managed-sidecar-runtime",
+      "policy-allowed-local-install",
+    ]);
     expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("permission-requested");
     expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
+  });
+});
+
+function codexSubscriptionProfile(): CodingWorkbenchCodexSubscriptionProfile {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    profileId: "codex-subscription",
+    modelSource: "chatgpt-codex-subscription-profile",
+    runtimeSource: "codex-cli-adapter",
+    status: "connected",
+    authMethod: "chatgpt-device-code",
+    credentialStore: "keyring",
+    stateScope: "os-credential-store",
+    stateRoot: "os-credential-store",
+    usesGlobalCodexHome: false,
+    runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
+    supportsBrowserLogin: true,
+    supportsDeviceCode: true,
+    supportsAccessToken: true,
+    deploymentPolicyDisabled: false,
+    headless: false,
+  };
+}
+
+function codexSetupPlan(): CodingWorkbenchCodexAuthSetupPlan {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    profileId: "codex-subscription",
+    method: "codex-access-token",
+    modelSource: "chatgpt-codex-subscription-profile",
+    runtimeSource: "codex-cli-adapter",
+    credentialStore: "keyring",
+    stateScope: "os-credential-store",
+    stateRoot: "os-credential-store",
+    usesGlobalCodexHome: false,
+    commandLabel: "codex-login-with-access-token",
+    requiresSecretInput: true,
+    credentialTransport: "stdin",
+  };
+}
+
+describe("coding workbench Codex subscription profile", () => {
+  it("validates a content-free profile without token, account, cache, or path fields", () => {
+    const profile = codexSubscriptionProfile();
+
+    expect(validateCodingWorkbenchCodexSubscriptionProfile(profile)).toEqual({
+      ok: true,
+      value: profile,
+    });
+    expect(JSON.stringify(profile)).not.toMatch(/token|refresh|auth\\.json|account|\\.codex/u);
+  });
+
+  it("rejects raw credentials, private account labels, and global auth cache paths", () => {
+    const parsed = validateCodingWorkbenchCodexSubscriptionProfile({
+      ...codexSubscriptionProfile(),
+      profileId: "sk-1234567890",
+      accountEmail: "user@example.com",
+      authCachePath: "/Users/alice/.codex/auth.json",
+      accessToken: "Bearer secret-token",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("profile.profileId must be content-free evidence-safe text");
+      expect(parsed.errors).toContain("profile.accountEmail is not allowed");
+      expect(parsed.errors).toContain("profile.authCachePath is not allowed");
+      expect(parsed.errors).toContain("profile.accessToken is not allowed");
+    }
+  });
+
+  it("selects the Codex adapter for subscription profiles and the sidecar for gateway profiles", () => {
+    expect(selectCodingWorkbenchRuntimeProfile("chatgpt-codex-subscription-profile")).toEqual({
+      schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+      modelSource: "chatgpt-codex-subscription-profile",
+      runtimeSource: "codex-cli-adapter",
+      adapterKind: "codex-cli-adapter",
+      sidecarGatewayAllowed: false,
+      codexSubscriptionAllowed: true,
+      runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
+    });
+    expect(selectCodingWorkbenchRuntimeProfile("openai-api-key-through-gateway")).toMatchObject({
+      modelSource: "openai-api-key-through-gateway",
+      runtimeSource: "keiko-sidecar",
+      adapterKind: "model-gateway-sidecar",
+      sidecarGatewayAllowed: true,
+      codexSubscriptionAllowed: false,
+      runtimeBinarySources: [],
+    });
+  });
+
+  it("validates setup requests and plans without carrying secrets", () => {
+    expect(validateCodingWorkbenchCodexAuthSetupRequest({ method: "chatgpt-device-code" })).toEqual(
+      { ok: true, value: { method: "chatgpt-device-code" } },
+    );
+    expect(validateCodingWorkbenchCodexAuthSetupPlan(codexSetupPlan())).toEqual({
+      ok: true,
+      value: codexSetupPlan(),
+    });
+    expect(
+      validateCodingWorkbenchCodexAuthSetupRequest({
+        method: "codex-access-token",
+        accessToken: "secret",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["setup.accessToken is not allowed"],
+    });
+  });
+
+  it("keeps Codex subscription authority bounded by the same envelope policy", () => {
+    const envelope = {
+      ...baseAuthorityEnvelope(),
+      runtimeSource: "codex-cli-adapter",
+      modelProfile: {
+        profileId: "codex-subscription",
+        source: "chatgpt-codex-subscription-profile",
+        supportsStreaming: true,
+        supportsToolCalling: true,
+      },
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      actionClasses: ["workspace-read", "verification", "connector-access"],
+      commandPolicy: {
+        mode: "deny",
+        allow: [],
+        deny: ["curl"],
+        maxCommandTimeoutMs: 30_000,
+        requirePerCommandApproval: true,
+      },
+      connectorScopes: ["source-control.read"],
+      networkPolicy: {
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: [],
+      },
+    };
+
+    expect(validateCodingWorkbenchAuthorityEnvelope(envelope)).toEqual({
+      ok: true,
+      value: envelope,
+    });
+    expect(
+      validateCodingWorkbenchAuthorityEnvelope({
+        ...envelope,
+        actionClasses: [...envelope.actionClasses, "command-execution"],
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["authorityEnvelope.actionClasses[3] exceeds the effective mode"],
+    });
   });
 });
 
