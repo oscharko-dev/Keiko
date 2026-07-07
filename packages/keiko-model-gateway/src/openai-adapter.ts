@@ -9,6 +9,7 @@ import {
   ContextOverflowError,
   ERROR_CODES,
   GatewayEgressError,
+  GatewayError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
@@ -22,6 +23,7 @@ import {
   OutboundHttpEgressError,
   readJsonCapped,
   readSseStream,
+  SseIdleTimeoutError,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import { normalizeChatResponse, textFromContent } from "./normalize.js";
@@ -179,6 +181,13 @@ function buildBody(request: GatewayRequest): ChatRequestBody {
 }
 
 // Streaming body: identical to buildBody plus the OpenAI/Azure streaming flags.
+// A provider stream that stops producing chunks (half-open socket, wedged proxy,
+// stalled upstream) previously hung until the CLIENT disconnected: the wall-clock
+// deadline bounds only the buffered path's total call. 60s without a single SSE
+// chunk is far beyond any healthy inter-token gap, so treat it as a typed,
+// retry-classified TimeoutError. Exported for tests.
+export const STREAM_IDLE_TIMEOUT_MS = 60_000;
+
 // `include_usage` requests a final usage-only chunk so token accounting survives.
 function buildStreamBody(request: GatewayRequest): ChatRequestBody {
   return {
@@ -466,6 +475,9 @@ export class OpenAiAdapter implements ProviderAdapter {
   // Iterates the SSE stream, yielding redacted content tokens while mutating `acc`.
   // A suffix that matches the start of a configured secret is held until the next
   // delta proves it safe or completes the secret so redaction can match it.
+  // Every chunk read races the idle-stream timeout: the total wall-clock deadline
+  // only bounds the whole call, so a provider stream that silently hangs
+  // mid-response previously held the BFF response (and its SSE client) forever.
   private async *streamDeltas(
     response: Response,
     config: ModelProviderConfig,
@@ -475,7 +487,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     let pending = "";
     const activeSecrets = configuredSecrets(secrets);
     try {
-      for await (const chunk of readSseStream(response)) {
+      for await (const chunk of readSseStream(response, undefined, STREAM_IDLE_TIMEOUT_MS)) {
         const content = deltaFromChunk(chunk);
         if (content !== undefined) {
           acc.content += content;
@@ -502,8 +514,24 @@ export class OpenAiAdapter implements ProviderAdapter {
         if (redacted.length > 0) yield redacted;
       }
     } catch (error) {
-      throw this.mapStreamError(error, config, secrets);
+      throw this.withPartialUsage(this.mapStreamError(error, config, secrets), acc);
     }
+  }
+
+  // Retain the usage the stream had already accumulated (counts only, never
+  // content) so a mid-stream failure does not silently discard cost data.
+  private withPartialUsage(
+    mapped: Error,
+    acc: { content: string; prompt: number; completion: number },
+  ): Error {
+    if (mapped instanceof GatewayError && mapped.partialUsage === undefined) {
+      mapped.partialUsage = {
+        promptTokens: acc.prompt,
+        completionTokens: acc.completion,
+        streamedChars: acc.content.length,
+      };
+    }
+    return mapped;
   }
 
   private assembleResponse(
@@ -530,6 +558,9 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   // A mid-stream read failure surfaces as a TransportError; an already-typed
   // cancellation/timeout (e.g. raised by the underlying reader) passes through.
+  // The transport-layer idle marker maps onto the typed, secret-redacting
+  // TimeoutError so the retry/breaker classification sees a timeout, not an
+  // anonymous transport fault.
   private mapStreamError(
     error: unknown,
     config: ModelProviderConfig,
@@ -537,6 +568,14 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Error {
     if (error instanceof CancelledError || error instanceof TimeoutError) {
       return error;
+    }
+    if (error instanceof SseIdleTimeoutError) {
+      return new TimeoutError(
+        `provider stream for '${config.modelId}' produced no chunk for ${String(
+          STREAM_IDLE_TIMEOUT_MS,
+        )}ms`,
+        secrets,
+      );
     }
     const egressError = mapOutboundEgressError(error, secrets);
     if (egressError !== undefined) {
