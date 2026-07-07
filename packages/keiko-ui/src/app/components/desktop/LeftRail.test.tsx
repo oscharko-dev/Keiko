@@ -128,6 +128,36 @@ describe("LeftRail — workspace tool buttons", () => {
     );
   });
 
+  it("renders Coding Workbench as a tool button (not a page-route link)", () => {
+    renderRail();
+    expect(screen.getByRole("button", { name: "Coding Workbench" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Coding Workbench" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Coding Workbench via onTool('coding') when clicked", async () => {
+    const onTool = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Coding Workbench" }));
+    expect(onTool).toHaveBeenCalledWith("coding");
+  });
+
+  it("marks the Coding Workbench button pressed when its window is open", () => {
+    renderRail(new Set(["coding"]));
+    expect(screen.getByRole("button", { name: "Coding Workbench" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   it("opens the Git window via onTool('governedGit') when clicked", async () => {
     const onTool = vi.fn();
     const user = userEvent.setup();

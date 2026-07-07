@@ -10,6 +10,7 @@ import {
   connectedRunSourcesCfgFromSources,
   connectedRunSourcesFromWindowCfg,
 } from "./quality-intelligence/connectedSources";
+import { codingWorkbenchProjectionForState } from "./coding-workbench/codingWorkbenchProjection";
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import type { ChatMessage } from "@/lib/types";
 
@@ -100,6 +101,10 @@ const CommandsWidget = dynamic(
 );
 const RuntimeHubWidget = dynamic(
   () => import("./cards/RuntimeHubWidget").then((mod) => mod.RuntimeHubWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const CodingWorkbenchWindow = dynamic(
+  () => import("./coding-workbench/CodingWorkbenchWindow").then((mod) => mod.CodingWorkbenchWindow),
   { ssr: false, loading: windowChunkFallback },
 );
 const GitClientWindow = dynamic(
@@ -608,6 +613,9 @@ registerWindowRender("runtime", (cfg, ctx) => {
     />
   );
 });
+registerWindowRender("coding", (cfg) => (
+  <CodingWorkbenchWindow projection={codingWorkbenchProjectionForState(str(cfg, "state"))} />
+));
 // Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
 // Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
 // Files/Editor window root; an empty state renders when none is available. The shell persists the
