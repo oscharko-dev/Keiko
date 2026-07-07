@@ -518,7 +518,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("writes content-free accepted routing evidence after a successful chat completion", async () => {
-    const put = vi.fn(() => "");
+    const put = vi.fn((_runId: string, _json: string): string => "");
     const deps = depsValue(
       configValue(provider(), capability()),
       (
@@ -589,7 +589,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("returns a content-free unavailable error for the injected subscription-backed model source", async () => {
-    const put = vi.fn(() => "");
+    const put = vi.fn((_runId: string, _json: string): string => "");
     const deps = depsValue(
       configValue(provider(), capability()),
       undefined,
@@ -630,7 +630,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("writes failed routing evidence and emits a diagnostic when the gateway call throws", async () => {
-    const put = vi.fn(() => "");
+    const put = vi.fn((_runId: string, _json: string): string => "");
     const diagnostics = { record: vi.fn() };
     const deps = depsValue(
       configValue(provider(), capability()),
