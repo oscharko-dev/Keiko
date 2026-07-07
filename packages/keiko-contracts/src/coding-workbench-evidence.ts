@@ -90,6 +90,7 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "control",
   "contracts",
   "degraded",
+  "denied",
   "delivery",
   "dev",
   "digest",

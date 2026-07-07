@@ -27,6 +27,7 @@ import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  type CodingWorkbenchModelSource,
   deriveContextProfileFromCapability,
   type ContextProfile,
   type UpdatePreflightReport,
@@ -231,6 +232,10 @@ export interface UiHandlerDeps {
   readonly modelPortFactory: ModelPortFactory;
   // Injectable OpenAI-compatible chat seam for the coding-sidecar gateway route.
   readonly codingSidecarGatewayChatFactory?: CodingSidecarGatewayChatFactory | undefined;
+  // Issue #1987 — the coding-sidecar gateway must fail closed for subscription-backed model sources
+  // even on live routes, so handlers thread this source into the projection helper instead of
+  // silently defaulting every request to keiko-model-gateway semantics.
+  readonly codingSidecarGatewayModelSource?: CodingWorkbenchModelSource | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the

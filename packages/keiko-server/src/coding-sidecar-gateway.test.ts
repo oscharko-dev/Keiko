@@ -7,6 +7,10 @@ import {
   type ModelProviderConfig,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import {
+  validateCodingWorkbenchEvidenceRecord,
+  type CodingWorkbenchEvidenceRecord,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
@@ -74,6 +78,10 @@ function depsValue(
     get: () => undefined,
     delete: () => undefined,
   },
+  options: {
+    readonly diagnostics?: UiHandlerDeps["diagnostics"];
+    readonly modelSource?: UiHandlerDeps["codingSidecarGatewayModelSource"];
+  } = {},
 ): UiHandlerDeps {
   return {
     config,
@@ -81,10 +89,14 @@ function depsValue(
     evidenceStore,
     env,
     redactor: buildRedactor({}),
+    ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
     ...(chatFactory === undefined ? {} : { codingSidecarGatewayChatFactory: chatFactory }),
+    ...(options.modelSource === undefined
+      ? {}
+      : { codingSidecarGatewayModelSource: options.modelSource }),
   };
 }
 
@@ -119,6 +131,14 @@ function assistantResponse(modelId: string): NormalizedResponse {
       costClass: "medium",
     },
   };
+}
+
+function parseEvidenceRecord(value: string): CodingWorkbenchEvidenceRecord {
+  const parsed = validateCodingWorkbenchEvidenceRecord(JSON.parse(value));
+  if (!parsed.ok) {
+    throw new Error(parsed.errors.join("; "));
+  }
+  return parsed.value;
 }
 
 describe("coding-sidecar gateway", () => {
@@ -156,6 +176,38 @@ describe("coding-sidecar gateway", () => {
     });
     expect(JSON.stringify(result.body)).not.toContain("baseUrl");
     expect(JSON.stringify(result.body)).not.toContain("apiKey");
+  });
+
+  it("fails closed through the profile route when the injected model source is subscription-backed", () => {
+    const context = {
+      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+    } satisfies RouteContext;
+    const result = handleCodingSidecarGatewayProfile(
+      context,
+      depsValue(
+        configValue(provider(), capability()),
+        undefined,
+        {},
+        {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        { modelSource: "chatgpt-codex-subscription-profile" },
+      ),
+    );
+
+    expect(result).toEqual({
+      status: 200,
+      body: {
+        status: "unavailable",
+        reason: "subscription-source",
+      },
+    });
   });
 
   it.each([
@@ -395,7 +447,77 @@ describe("coding-sidecar gateway", () => {
     });
   });
 
-  it("does not write evidence when forwarding a chat prompt and receiving raw assistant content", async () => {
+  it("returns BAD_REQUEST for invalid temperature before calling the gateway", async () => {
+    const seenRequests: GatewayRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [{ role: "user", content: "continue" }],
+        temperature: 2.1,
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body temperature must be a finite number between 0 and 2.",
+        },
+      },
+    });
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it("returns BAD_REQUEST for invalid top_p before calling the gateway", async () => {
+    const seenRequests: GatewayRequest[] = [];
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          seenRequests.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [{ role: "user", content: "continue" }],
+        top_p: 1.1,
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Request body top_p must be a finite number between 0 and 1.",
+        },
+      },
+    });
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it("writes content-free accepted routing evidence after a successful chat completion", async () => {
     const put = vi.fn(() => "");
     const deps = depsValue(
       configValue(provider(), capability()),
@@ -426,7 +548,23 @@ describe("coding-sidecar gateway", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(put).toHaveBeenCalledTimes(0);
+    expect(put).toHaveBeenCalledTimes(1);
+    const evidenceJson = put.mock.calls[0]?.[1];
+    expect(typeof evidenceJson).toBe("string");
+    const record = parseEvidenceRecord(String(evidenceJson));
+    expect(record).toMatchObject({
+      kind: "run",
+      effectiveMode: "governed-assist",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      safeSummary: "sidecar-gateway-ready",
+    });
+    expect(record.denied).toBeUndefined();
+    expect(String(evidenceJson)).not.toContain("continue");
+    expect(String(evidenceJson)).not.toContain("assistant-content");
+    expect(String(evidenceJson)).not.toContain("provider-secret");
+    expect(String(evidenceJson)).not.toContain("api-key");
+    expect(String(evidenceJson)).not.toContain("https://provider.example/v1");
   });
 
   it("returns a content-free unavailable error when deployment policy disables the gateway", async () => {
@@ -448,5 +586,89 @@ describe("coding-sidecar gateway", () => {
         },
       },
     });
+  });
+
+  it("returns a content-free unavailable error for the injected subscription-backed model source", async () => {
+    const put = vi.fn(() => "");
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      undefined,
+      {},
+      {
+        put,
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      { modelSource: "chatgpt-codex-subscription-profile" },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [{ role: "user", content: "continue" }],
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 503,
+      body: {
+        error: {
+          code: "CODING_SIDECAR_UNAVAILABLE",
+          message: "Coding sidecar gateway is unavailable.",
+        },
+      },
+    });
+    expect(put).toHaveBeenCalledTimes(1);
+    const record = parseEvidenceRecord(String(put.mock.calls[0]?.[1]));
+    expect(record).toMatchObject({
+      kind: "failure",
+      modelSource: "chatgpt-codex-subscription-profile",
+      safeSummary: "sidecar-gateway-denied",
+      denied: true,
+    });
+  });
+
+  it("writes failed routing evidence and emits a diagnostic when the gateway call throws", async () => {
+    const put = vi.fn(() => "");
+    const diagnostics = { record: vi.fn() };
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          void request;
+          return Promise.reject(new Error("gateway-failure"));
+        };
+      },
+      {},
+      {
+        put,
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      { diagnostics },
+    );
+
+    await expect(
+      handleCodingSidecarGatewayChatCompletions(
+        routeContext({
+          messages: [{ role: "user", content: "continue" }],
+        }),
+        deps,
+      ),
+    ).rejects.toThrow("gateway-failure");
+    expect(put).toHaveBeenCalledTimes(1);
+    const evidenceJson = String(put.mock.calls[0]?.[1]);
+    const record = parseEvidenceRecord(evidenceJson);
+    expect(record).toMatchObject({
+      kind: "failure",
+      modelSource: "keiko-model-gateway",
+      safeSummary: "sidecar-gateway-failed",
+      denied: true,
+    });
+    expect(evidenceJson).not.toContain("continue");
+    expect(evidenceJson).not.toContain("gateway-failure");
+    expect(diagnostics.record).toHaveBeenCalledTimes(1);
   });
 });

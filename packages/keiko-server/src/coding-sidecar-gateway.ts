@@ -7,13 +7,24 @@ import {
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import {
+  CODING_WORKBENCH_SCHEMA_VERSION,
+  validateCodingWorkbenchEvidenceRecord,
+  validateGatewaySamplingParameters,
+  type CodingWorkbenchEvidenceRecord,
+  type CodingWorkbenchModelSource,
+  type CodingWorkbenchSidecarGatewayResult,
+} from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
+const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
+let routingEvidenceSequence = 0;
 
 export interface CodingSidecarGatewayChatCompletionRequest {
   readonly model?: string | undefined;
@@ -33,6 +44,14 @@ export type CodingSidecarGatewayChatFactory = (
   config: GatewayConfig,
   modelId: string,
 ) => (request: GatewayRequest) => Promise<NormalizedResponse>;
+
+interface ResolvedGatewayProfile {
+  readonly config: GatewayConfig | undefined;
+  readonly modelSource: CodingWorkbenchModelSource;
+  readonly result: CodingWorkbenchSidecarGatewayResult;
+}
+
+type RoutingDecision = "accepted" | "blocked" | "failed";
 
 function envEnabled(value: string | undefined): boolean {
   return value !== undefined && ENABLE_TOKENS.has(value.trim().toLowerCase());
@@ -215,32 +234,91 @@ function sidecarPolicyDisabled(deps: UiHandlerDeps): boolean {
   return envEnabled(deps.env[CODING_SIDECAR_DISABLED_ENV]);
 }
 
-export function handleCodingSidecarGatewayProfile(
-  _ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
-  const config = currentGatewayConfig(deps);
-  const result = resolveCodingSafeSidecarGatewayProfile(config, {
-    deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
-  });
-  return { status: 200, body: result };
+function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {
+  return deps.codingSidecarGatewayModelSource ?? "keiko-model-gateway";
 }
 
-export async function handleCodingSidecarGatewayChatCompletions(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
   const config = currentGatewayConfig(deps);
+  const modelSource = currentModelSource(deps);
   const result = resolveCodingSafeSidecarGatewayProfile(config, {
     deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
+    modelSource,
   });
-  if (result.status === "unavailable") {
-    return unavailableError();
+  return { config, modelSource, result };
+}
+
+function nextRoutingEvidenceSuffix(): string {
+  routingEvidenceSequence += 1;
+  return `${String(Date.now())}${String(routingEvidenceSequence)}`;
+}
+
+function routingSummaryFor(decision: RoutingDecision): string {
+  switch (decision) {
+    case "accepted":
+      return "sidecar-gateway-ready";
+    case "blocked":
+      return "sidecar-gateway-denied";
+    case "failed":
+      return "sidecar-gateway-failed";
   }
-  if (config === undefined) {
-    return unavailableError();
+}
+
+function routingKindFor(decision: RoutingDecision): CodingWorkbenchEvidenceRecord["kind"] {
+  return decision === "accepted" ? "run" : "failure";
+}
+
+function validatedRoutingEvidence(
+  decision: RoutingDecision,
+  modelSource: CodingWorkbenchModelSource,
+): CodingWorkbenchEvidenceRecord {
+  const suffix = nextRoutingEvidenceSuffix();
+  const record: CodingWorkbenchEvidenceRecord = {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    recordId: `keiko-sidecar-gateway-record-${suffix}`,
+    runId: `keiko-sidecar-gateway-run-${suffix}`,
+    occurredAt: new Date(Date.now()).toISOString(),
+    kind: routingKindFor(decision),
+    effectiveMode: "governed-assist",
+    runtimeSource: "keiko-sidecar",
+    modelSource,
+    safeSummary: routingSummaryFor(decision),
+    ...(decision === "accepted" ? {} : { denied: true }),
+  };
+  const parsed = validateCodingWorkbenchEvidenceRecord(record);
+  if (!parsed.ok) {
+    throw new Error(parsed.errors.join("; "));
   }
-  const body = await readJsonObject(ctx.req, result.runMetadata.maxRequestBytes);
+  return parsed.value;
+}
+
+function persistRoutingEvidence(
+  deps: UiHandlerDeps,
+  decision: RoutingDecision,
+  modelSource: CodingWorkbenchModelSource,
+): void {
+  const record = validatedRoutingEvidence(decision, modelSource);
+  deps.evidenceStore.put(record.runId, JSON.stringify(record));
+}
+
+function samplingValidationMessage(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+): string | undefined {
+  const [issue] = validateGatewaySamplingParameters({
+    temperature: parsed.temperature,
+    topP: parsed.top_p,
+  });
+  if (issue === undefined) {
+    return undefined;
+  }
+  return `Request body ${issue.message.replace("topP", "top_p")}.`;
+}
+
+async function readChatCompletionRequest(
+  ctx: RouteContext,
+  maxRequestBytes: number,
+): Promise<CodingSidecarGatewayChatCompletionRequest | RouteResult> {
+  const body = await readJsonObject(ctx.req, maxRequestBytes);
   if (isRouteResult(body)) {
     return body;
   }
@@ -248,22 +326,112 @@ export async function handleCodingSidecarGatewayChatCompletions(
     return badRequest("Request body must be a JSON object.");
   }
   const parsed = parseChatRequest(body);
-  if (isRouteResult(parsed)) {
-    return parsed;
-  }
   if (parsed === undefined) {
     return badRequest("Request body must include a non-empty messages array.");
+  }
+  return parsed;
+}
+
+function validationErrorForChatRequest(
+  parsed: CodingSidecarGatewayChatCompletionRequest | RouteResult,
+  modelAlias: string,
+): RouteResult | undefined {
+  if (isRouteResult(parsed)) {
+    return parsed;
   }
   if (parsed.stream === true) {
     return unsupportedStreaming();
   }
-  if (!isMatchingModelAlias(parsed.model, result.modelAlias)) {
+  const invalidSamplingMessage = samplingValidationMessage(parsed);
+  if (invalidSamplingMessage !== undefined) {
+    return badRequest(invalidSamplingMessage);
+  }
+  if (!isMatchingModelAlias(parsed.model, modelAlias)) {
     return {
       status: 400,
       body: errorBody("INVALID_MODEL", "Request model does not match the selected profile."),
     };
   }
-  const chat = chatFactoryFor(deps)(config, result.modelAlias);
-  const response = await chat(buildChatRequest(parsed, result.modelAlias));
-  return openAiResponse(result.modelAlias, response.content, response.usage);
+  return undefined;
+}
+
+function emitGatewayFailureDiagnostic(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: ctx.correlationId ?? "unknown",
+      operation: CODING_SIDECAR_GATEWAY_ROUTE,
+      source: "coding-sidecar-gateway.chat",
+      error,
+      redact: (message: string): string => String(deps.redactor(message)),
+    }),
+  );
+}
+
+async function executeGatewayChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+  modelAlias: string,
+  modelSource: CodingWorkbenchModelSource,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+): Promise<RouteResult> {
+  try {
+    const chat = chatFactoryFor(deps)(config, modelAlias);
+    const response = await chat(buildChatRequest(parsed, modelAlias));
+    persistRoutingEvidence(deps, "accepted", modelSource);
+    return openAiResponse(modelAlias, response.content, response.usage);
+  } catch (error) {
+    persistRoutingEvidence(deps, "failed", modelSource);
+    emitGatewayFailureDiagnostic(ctx, deps, error);
+    throw error;
+  }
+}
+
+export function handleCodingSidecarGatewayProfile(
+  _ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  const resolved = resolveGatewayProfile(deps);
+  persistRoutingEvidence(
+    deps,
+    resolved.result.status === "available" ? "accepted" : "blocked",
+    resolved.modelSource,
+  );
+  return { status: 200, body: resolved.result };
+}
+
+export async function handleCodingSidecarGatewayChatCompletions(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const resolved = resolveGatewayProfile(deps);
+  if (resolved.result.status === "unavailable") {
+    persistRoutingEvidence(deps, "blocked", resolved.modelSource);
+    return unavailableError();
+  }
+  if (resolved.config === undefined) {
+    persistRoutingEvidence(deps, "blocked", resolved.modelSource);
+    return unavailableError();
+  }
+  const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);
+  const validationError = validationErrorForChatRequest(parsed, resolved.result.modelAlias);
+  if (validationError !== undefined) {
+    return validationError;
+  }
+  if (isRouteResult(parsed)) {
+    return parsed;
+  }
+  return executeGatewayChat(
+    ctx,
+    deps,
+    resolved.config,
+    resolved.result.modelAlias,
+    resolved.modelSource,
+    parsed,
+  );
 }
