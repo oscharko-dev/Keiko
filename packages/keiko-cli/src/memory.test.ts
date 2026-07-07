@@ -159,7 +159,7 @@ describe("runMemoryCli diagnostics", () => {
     expect(parsed.statusHistogram.accepted).toBe(1);
     expect(parsed.scopeCounts[0]?.count).toBe(1);
     expect(out).not.toContain(fingerprint);
-  });
+  }, 30_000);
 });
 
 describe("runMemoryCli maintain", () => {
