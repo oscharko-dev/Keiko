@@ -98,8 +98,14 @@ function resolvePhase(
   indexing: IndexingResult | undefined,
 ): ManualIndexingPhase {
   if (crawl.status === "cancelled" || indexing?.status === "cancelled") return "cancelled";
-  if (indexing === undefined) return crawl.status === "empty" ? "empty" : "crawling";
+  // A limit-reached crawl is always a terminal, fail-closed state (crawl-runner.ts stops the loop
+  // for good once a budget is hit). For pod creation, indexing still runs against the truncated page
+  // set, so `indexing` is defined here and this falls through to the check below. For a refresh
+  // (Epic #1856, Issue #1891), `shouldApply` skips indexing entirely on a limit-reached crawl, so
+  // `indexing` is undefined — checking this before the `indexing === undefined` fallback keeps a
+  // finished, failed-closed refresh from being misreported as still "crawling".
   if (crawl.status === "limit-reached") return "degraded";
+  if (indexing === undefined) return crawl.status === "empty" ? "empty" : "crawling";
   if (indexing.status === "succeeded" && indexing.failedDocuments === 0) return "ready";
   return "degraded";
 }

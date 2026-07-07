@@ -61,13 +61,16 @@ export const MANUAL_REFRESH_REASON_GUIDANCE: Readonly<Record<ManualRefreshReason
   "pages-added": "New pages were discovered and indexed.",
   "pages-changed": "Existing pages changed and were re-indexed.",
   "pages-removed": "Pages that are no longer reachable were removed from the pod.",
-  "pages-failed": "Some pages could not be indexed and were left unchanged.",
+  "pages-failed":
+    "Some pages could not be re-indexed and may be temporarily unsearchable; a future successful refresh will retry them.",
   "links-denied": "Some links were skipped because they fell outside the approved scope.",
   "embedding-incompatible":
     "The embedding model changed; re-index the manual to refresh its vectors.",
   "crawl-empty": "The refresh crawl found no indexable pages.",
-  "crawl-cancelled": "The refresh was cancelled; the previous pod state is unchanged.",
-  "index-failed": "Indexing failed during refresh; the previous pod state is unchanged.",
+  "crawl-cancelled":
+    "The refresh was cancelled. Pages not yet reached are unaffected; a page already being re-indexed at that moment may be temporarily unsearchable until a future successful refresh.",
+  "index-failed":
+    "Indexing failed during refresh. Pages that were being re-indexed at the time of failure may be temporarily unsearchable until a future successful refresh repairs them.",
 };
 
 // Per-category counts. Every value is a non-negative integer; no path or content ever appears.
@@ -104,12 +107,44 @@ const COUNT_KEYS: readonly (keyof ManualRefreshChangeCounts)[] = [
   "deniedLinks",
 ];
 
+// The complete, known key set of `ManualRefreshChangeSummary`. Anything else on the input is
+// rejected rather than silently carried through — mirrors the `onlyKeys` guard every sibling
+// redaction validator in local-knowledge-pods.ts applies to its own object fields.
+const REFRESH_SUMMARY_KEYS: readonly (keyof ManualRefreshChangeSummary)[] = [
+  "schemaVersion",
+  "outcome",
+  "sourceKind",
+  "counts",
+  "removalDetection",
+  "crawlRunFingerprint",
+  "reasonCodes",
+  "refreshedAt",
+];
+
 function isRefreshRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+// Rejects any object carrying a property outside `allowed`. Fail-closed: an unexpected field on a
+// redacted, browser-facing contract is treated as a validation error, not silently dropped or
+// passed through — a corrupt or tampered record must never smuggle an extra raw-content field.
+function onlyKnownKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+  field: string,
+  errors: string[],
+): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) {
+    if (!allowedSet.has(key)) {
+      errors.push(`${field} must not include ${key}`);
+      return;
+    }
+  }
 }
 
 function pushEnum(
@@ -123,11 +158,15 @@ function pushEnum(
   }
 }
 
-// A redaction-safe opaque fingerprint token: non-empty, bounded, with no whitespace or
-// path/URL/credential markers. The single character class is linear (no backtracking).
+// A redaction-safe opaque fingerprint token: non-empty, bounded, and shaped exactly like the
+// `<algorithm>:<base64url-digest>` token `computeManualCrawlRunFingerprint` produces (e.g.
+// `sha256:AbC-_123`). Allowlist, not denylist: only unreserved base64url characters plus the single
+// `:` separator are accepted, so an obfuscated or percent-encoded path/URL string — which contains
+// no whitespace, slash, or `@`/`#`/`?` but is not a real fingerprint — cannot slip through via an
+// unlisted character. The character class is linear (no backtracking).
 function isSafeFingerprint(value: unknown): value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > 256) return false;
-  return !/[\s/\\?#@]/u.test(value);
+  return /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/u.test(value);
 }
 
 function validateRefreshCounts(input: unknown, errors: string[]): void {
@@ -135,6 +174,7 @@ function validateRefreshCounts(input: unknown, errors: string[]): void {
     errors.push("refreshSummary.counts must be an object");
     return;
   }
+  onlyKnownKeys(input, COUNT_KEYS, "refreshSummary.counts", errors);
   for (const key of COUNT_KEYS) {
     if (!isNonNegativeInteger(input[key])) {
       errors.push(`refreshSummary.counts.${key} must be a non-negative integer`);
@@ -203,6 +243,7 @@ export function validateManualRefreshChangeSummary(
     return { ok: false, errors: ["refreshSummary must be an object"] };
   }
   const errors: string[] = [];
+  onlyKnownKeys(input, REFRESH_SUMMARY_KEYS, "refreshSummary", errors);
   validateRefreshIdentity(input, errors);
   validateRefreshEnums(input, errors);
   validateRefreshCounts(input.counts, errors);

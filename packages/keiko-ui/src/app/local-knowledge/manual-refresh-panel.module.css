@@ -5,7 +5,11 @@
   --manual-refresh-scope: 1;
 }
 
-.panelScope :global(.lkd-manual-refresh) {
+/* Compound (no-space) selector: the section in connector-graph.tsx carries both `.lkd-manual-refresh`
+   and `panelScope` on the SAME root element, not on separate ancestor/descendant elements — a
+   descendant-combinator rule here would never match. The nested rules below are genuine descendants
+   of that section, so they correctly keep the space form. */
+.panelScope:global(.lkd-manual-refresh) {
   margin-top: 6px;
   padding: 8px 10px;
   border: 1px solid var(--line-soft);

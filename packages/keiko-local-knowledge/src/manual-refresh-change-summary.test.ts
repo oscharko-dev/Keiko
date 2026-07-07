@@ -112,13 +112,21 @@ describe("computeManualRefreshChangeSummary", () => {
     expect(summary.reasonCodes).toStrictEqual(["scope-preserved"]);
   });
 
-  it("does not report removals and flags detection-skipped when the crawl reached its limit", () => {
+  it("does not report removals, additions, or changes when the crawl reached its limit", () => {
     const prior = priorMap(
       page("index.html", "a"),
       page("guide.html", "c"),
       page("gone.html", "z"),
     );
-    const newPages = [page("index.html", "a")];
+    // "index.html" is unchanged, "guide.html" would look changed, and "brand-new.html" would look
+    // added if the diff were taken at face value — but a limit-reached crawl is never applied
+    // (manual-pod-refresh.ts's `shouldApply`), so none of that partial page set is the pod's new
+    // state.
+    const newPages = [
+      page("index.html", "a"),
+      page("guide.html", "c2"),
+      page("brand-new.html", "d"),
+    ];
     const summary = computeManualRefreshChangeSummary({
       priorFingerprints: prior,
       newPages,
@@ -128,12 +136,23 @@ describe("computeManualRefreshChangeSummary", () => {
       applied: false,
       refreshedAt: 1,
     });
-    // Two prior pages are absent, but a truncated crawl cannot claim they were removed.
-    expect(summary.counts.removedPages).toBe(0);
+    // Two prior pages are absent and one page looks new/changed, but a truncated, unapplied crawl
+    // cannot claim any of that as real pod change.
+    expect(summary.counts).toStrictEqual({
+      addedPages: 0,
+      changedPages: 0,
+      removedPages: 0,
+      unchangedPages: 1,
+      failedPages: 0,
+      deniedLinks: 0,
+    });
     expect(summary.removalDetection).toBe("not-evaluated-page-limit");
     expect(summary.outcome).toBe("partial");
     expect(summary.reasonCodes).toContain("scope-limit-reached");
     expect(summary.reasonCodes).toContain("removal-detection-skipped");
+    expect(summary.reasonCodes).not.toContain("pages-added");
+    expect(summary.reasonCodes).not.toContain("pages-changed");
+    expect(summary.reasonCodes).not.toContain("pages-removed");
   });
 
   it("marks the refresh partial when some pages failed to index", () => {
@@ -190,9 +209,13 @@ describe("computeManualRefreshChangeSummary", () => {
     expect(summary.outcome).toBe("failed");
   });
 
-  it("reports cancelled without claiming any change", () => {
+  it("reports cancelled without claiming any change, including no false page removal", () => {
+    // Three pages were previously fingerprinted; a cancelled crawl produces no new page set at all.
+    // manual-pod-refresh.ts's `shouldApply` never applies a cancelled crawl, so a naive diff against
+    // an empty `newPages` would claim all three prior pages were removed from the pod.
+    const prior = priorMap(page("index.html", "a"), page("guide.html", "c"), page("old.html", "b"));
     const summary = computeManualRefreshChangeSummary({
-      priorFingerprints: priorMap(page("index.html", "a")),
+      priorFingerprints: prior,
       newPages: [],
       crawl: crawlResult("cancelled", []),
       indexing: undefined,
@@ -202,6 +225,51 @@ describe("computeManualRefreshChangeSummary", () => {
     });
     expect(summary.outcome).toBe("cancelled");
     expect(summary.reasonCodes).toContain("crawl-cancelled");
+    // Nothing was applied, so the pod's page set is unchanged: no removal, addition, or change may
+    // be claimed, and the false-positive "pages-removed" code must not fire.
+    expect(summary.counts).toStrictEqual({
+      addedPages: 0,
+      changedPages: 0,
+      removedPages: 0,
+      unchangedPages: 0,
+      failedPages: 0,
+      deniedLinks: 0,
+    });
+    expect(summary.reasonCodes).not.toContain("pages-removed");
+    expect(summary.reasonCodes).not.toContain("pages-added");
+    expect(summary.reasonCodes).not.toContain("pages-changed");
+    // The "reached its page limit" guidance is specific to a limit-reached crawl; a cancelled crawl
+    // must not fire it even though removal detection was equally skipped.
+    expect(summary.reasonCodes).not.toContain("removal-detection-skipped");
+    expect(summary.removalDetection).toBe("not-evaluated-page-limit");
+  });
+
+  it("reports an empty crawl without claiming any prior page was removed", () => {
+    // An empty crawl (e.g. every fetch failed) is never applied either, and its `newPages` is also
+    // empty — the same false-mass-removal shape as a cancelled crawl, but reached via a different
+    // crawl status.
+    const prior = priorMap(page("index.html", "a"), page("guide.html", "c"), page("old.html", "b"));
+    const summary = computeManualRefreshChangeSummary({
+      priorFingerprints: prior,
+      newPages: [],
+      crawl: crawlResult("empty", []),
+      indexing: undefined,
+      sourceKind: "html-manual-http",
+      applied: false,
+      refreshedAt: 1,
+    });
+    expect(summary.outcome).toBe("failed");
+    expect(summary.reasonCodes).toContain("crawl-empty");
+    expect(summary.counts).toStrictEqual({
+      addedPages: 0,
+      changedPages: 0,
+      removedPages: 0,
+      unchangedPages: 0,
+      failedPages: 0,
+      deniedLinks: 0,
+    });
+    expect(summary.reasonCodes).not.toContain("pages-removed");
+    expect(summary.removalDetection).toBe("not-evaluated-page-limit");
   });
 
   it("counts denied links from the crawl deny tally", () => {
@@ -219,6 +287,42 @@ describe("computeManualRefreshChangeSummary", () => {
       refreshedAt: 1,
     });
     expect(summary.counts.deniedLinks).toBe(3);
+    expect(summary.reasonCodes).toContain("links-denied");
+  });
+
+  it("excludes budget-exhaustion bookkeeping entries from the denied-link count", () => {
+    // crawl-runner.ts tallies "page-limit"/"byte-budget"/"time-limit" once whenever the crawl loop
+    // stops on a governed bound — it is loop-termination bookkeeping, not a real scope/safety
+    // denial, and must not inflate deniedLinks or fire the scope-safety "links-denied" code.
+    const pages = [page("index.html", "a"), page("guide.html", "b")];
+    const summary = computeManualRefreshChangeSummary({
+      priorFingerprints: priorMap(...pages),
+      newPages: pages,
+      crawl: crawlResult("limit-reached", pages, [{ reason: "page-limit", count: 1 }]),
+      indexing: undefined,
+      sourceKind: "html-manual-http",
+      applied: false,
+      refreshedAt: 1,
+    });
+    expect(summary.counts.deniedLinks).toBe(0);
+    expect(summary.reasonCodes).not.toContain("links-denied");
+  });
+
+  it("still counts real denials alongside a budget-exhaustion bookkeeping entry", () => {
+    const pages = [page("index.html", "a")];
+    const summary = computeManualRefreshChangeSummary({
+      priorFingerprints: priorMap(...pages),
+      newPages: pages,
+      crawl: crawlResult("limit-reached", pages, [
+        { reason: "page-limit", count: 1 },
+        { reason: "cross-origin", count: 2 },
+      ]),
+      indexing: undefined,
+      sourceKind: "html-manual-http",
+      applied: false,
+      refreshedAt: 1,
+    });
+    expect(summary.counts.deniedLinks).toBe(2);
     expect(summary.reasonCodes).toContain("links-denied");
   });
 
