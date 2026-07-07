@@ -17,6 +17,14 @@ interface Box extends Point {
   readonly height: number;
 }
 
+interface WorkspaceProofLocators {
+  readonly workspace: Locator;
+  readonly selectionStatus: Locator;
+  readonly first: Locator;
+  readonly second: Locator;
+  readonly third: Locator;
+}
+
 test.use({ viewport: { width: 1280, height: 860 } });
 
 async function seedWorkspace(page: Page): Promise<void> {
@@ -94,33 +102,31 @@ async function expectSelected(locator: Locator): Promise<void> {
   await expect(locator).toHaveAttribute("data-selected", "true");
 }
 
-test.afterEach(() => {
-  if (fixtureRoot === null) return;
-  rmSync(fixtureRoot, { recursive: true, force: true });
-  fixtureRoot = null;
-});
+function workspaceProofLocators(page: Page): WorkspaceProofLocators {
+  return {
+    workspace: page.locator("main.workspace"),
+    selectionStatus: page.getByTestId("workspace-selection-status"),
+    first: windowById(page, WINDOW_IDS[0]),
+    second: windowById(page, WINDOW_IDS[1]),
+    third: windowById(page, WINDOW_IDS[2]),
+  };
+}
 
-test("workspace multi-selection supports marquee, grouped drag, and local duplication #2055", async ({
-  page,
-}) => {
-  await seedWorkspace(page);
-  await page.goto("/");
-
-  const workspace = page.locator("main.workspace");
-  const selectionStatus = page.getByTestId("workspace-selection-status");
-  const first = windowById(page, WINDOW_IDS[0]);
-  const second = windowById(page, WINDOW_IDS[1]);
-  const third = windowById(page, WINDOW_IDS[2]);
-
-  await expect(workspace).toBeVisible();
+async function expectSeededWorkspace(page: Page, locators: WorkspaceProofLocators): Promise<void> {
+  await expect(locators.workspace).toBeVisible();
   for (const id of WINDOW_IDS) {
     await expect(windowById(page, id)).toBeVisible();
   }
-  await expect(selectionStatus).toHaveText("No workspace windows selected");
+  await expect(locators.selectionStatus).toHaveText("No workspace windows selected");
+}
 
-  const workspaceBox = await requiredBox(workspace, "workspace");
-  const firstBox = await requiredBox(first, "first window");
-  const secondBox = await requiredBox(second, "second window");
+async function selectFirstTwoWithMarquee(
+  page: Page,
+  locators: WorkspaceProofLocators,
+): Promise<void> {
+  const workspaceBox = await requiredBox(locators.workspace, "workspace");
+  const firstBox = await requiredBox(locators.first, "first window");
+  const secondBox = await requiredBox(locators.second, "second window");
   const marqueeStart = {
     x: Math.max(workspaceBox.x + 24, Math.min(firstBox.x, secondBox.x) - 36),
     y: Math.max(workspaceBox.y + 24, Math.min(firstBox.y, secondBox.y) - 36),
@@ -136,31 +142,44 @@ test("workspace multi-selection supports marquee, grouped drag, and local duplic
   await expect(page.getByTestId("workspace-marquee")).toBeVisible();
   await page.mouse.up();
 
-  await expectSelected(first);
-  await expectSelected(second);
-  await expect(third).not.toHaveAttribute("data-selected", "true");
-  await expect(selectionStatus).toHaveText("2 workspace windows selected");
+  await expectSelected(locators.first);
+  await expectSelected(locators.second);
+  await expect(locators.third).not.toHaveAttribute("data-selected", "true");
+  await expect(locators.selectionStatus).toHaveText("2 workspace windows selected");
+}
 
-  await third.focus();
+async function addThirdWindowFromKeyboard(
+  page: Page,
+  locators: WorkspaceProofLocators,
+): Promise<void> {
+  await locators.third.focus();
   await page.keyboard.press("Space");
-  await expectSelected(third);
-  await expect(selectionStatus).toHaveText("3 workspace windows selected");
+  await expectSelected(locators.third);
+  await expect(locators.selectionStatus).toHaveText("3 workspace windows selected");
+}
 
+async function expectGroupedDragMovesSelected(
+  page: Page,
+  locators: WorkspaceProofLocators,
+): Promise<void> {
   const before = await Promise.all([
-    requiredBox(first, "first window before drag"),
-    requiredBox(second, "second window before drag"),
-    requiredBox(third, "third window before drag"),
+    requiredBox(locators.first, "first window before drag"),
+    requiredBox(locators.second, "second window before drag"),
+    requiredBox(locators.third, "third window before drag"),
   ]);
-  const headerBox = await requiredBox(first.locator("header").first(), "first window header");
+  const headerBox = await requiredBox(
+    locators.first.locator("header").first(),
+    "first window header",
+  );
   await dragPointer(
     page,
     { x: headerBox.x + headerBox.width / 2, y: headerBox.y + 18 },
     { x: headerBox.x + headerBox.width / 2 + 72, y: headerBox.y + 54 },
   );
   const after = await Promise.all([
-    requiredBox(first, "first window after drag"),
-    requiredBox(second, "second window after drag"),
-    requiredBox(third, "third window after drag"),
+    requiredBox(locators.first, "first window after drag"),
+    requiredBox(locators.second, "second window after drag"),
+    requiredBox(locators.third, "third window after drag"),
   ]);
   const firstDelta = delta(before[0], after[0]);
   expect(firstDelta.x).toBeGreaterThan(40);
@@ -169,8 +188,10 @@ test("workspace multi-selection supports marquee, grouped drag, and local duplic
   expect(delta(before[1], after[1]).y).toBeCloseTo(firstDelta.y, 0);
   expect(delta(before[2], after[2]).x).toBeCloseTo(firstDelta.x, 0);
   expect(delta(before[2], after[2]).y).toBeCloseTo(firstDelta.y, 0);
+}
 
-  await workspace.focus();
+async function expectLocalDuplication(page: Page, locators: WorkspaceProofLocators): Promise<void> {
+  await locators.workspace.focus();
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyC");
@@ -179,8 +200,27 @@ test("workspace multi-selection supports marquee, grouped drag, and local duplic
 
   const copies = page.locator('.window[data-window-id^="files-copy-"]');
   await expect(copies).toHaveCount(3);
-  await expect(selectionStatus).toHaveText("3 workspace windows selected");
+  await expect(locators.selectionStatus).toHaveText("3 workspace windows selected");
   for (let index = 0; index < 3; index += 1) {
     await expect(copies.nth(index)).toHaveAttribute("data-selected", "true");
   }
+}
+
+test.afterEach(() => {
+  if (fixtureRoot === null) return;
+  rmSync(fixtureRoot, { recursive: true, force: true });
+  fixtureRoot = null;
+});
+
+test("workspace multi-selection supports marquee, grouped drag, and local duplication #2055", async ({
+  page,
+}) => {
+  await seedWorkspace(page);
+  await page.goto("/");
+  const locators = workspaceProofLocators(page);
+  await expectSeededWorkspace(page, locators);
+  await selectFirstTwoWithMarquee(page, locators);
+  await addThirdWindowFromKeyboard(page, locators);
+  await expectGroupedDragMovesSelected(page, locators);
+  await expectLocalDuplication(page, locators);
 });
