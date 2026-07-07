@@ -2178,6 +2178,101 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.references.some((ref) => seededChunkIds.has(String(ref.chunkId)))).toBe(true);
   });
 
+  it("does not discount a strict lexical match when a different chained-question leg needed the OR fallback", async () => {
+    const { store } = getFixture();
+    // Leg 1 ("ADR-0036 reciprocal rank fusion") strict-AND matches this document cleanly — no
+    // fallback needed for THIS leg.
+    const exact = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-exact-leg",
+      safeDisplayName: "adr.md",
+      text: "ADR-0036 defines the reciprocal rank fusion formula used by hybrid retrieval.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    // Leg 2 ("torque calibration flurbedingung procedure") has one term absent from the whole
+    // capsule, so its strict AND pass finds nothing and triggers the whole-lane OR fallback —
+    // exactly like "recovers lexical recall via OR fallback" above, but now as one leg of a
+    // chained question rather than a standalone query.
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-fallback-leg",
+      safeDisplayName: "mounts.md",
+      text: "torque wrench calibration procedure for spindle mounts",
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-fallback-leg",
+      contentHash: "1".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    // Two dense-only distractors with no lexical relevance to either leg. RRF_K=60 makes
+    // rrf(1) = 1/61 and rrf(2) = 1/62 — a value strictly between the ADR chunk's buggy
+    // half-weight score (0.5 * 1/61) and its correct full-weight score (1 * 1/61), so the
+    // "competitor" chunk only outranks the genuine exact match if the cross-leg discount bug
+    // is present.
+    const blocker = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-blocker",
+      safeDisplayName: "blocker.md",
+      text: "unrelated filler content about a completely different topic",
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-blocker",
+      contentHash: "2".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const competitor = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-crossleg",
+      sourceId: "src-crossleg",
+      documentId: "doc-competitor",
+      safeDisplayName: "competitor.md",
+      text: "another unrelated filler passage discussing something else entirely",
+      skipCapsule: true,
+      skipSource: true,
+      unitId: "unit-competitor",
+      contentHash: "3".repeat(64),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+
+    const exactChunk = exact.chunkIds[0];
+    const blockerChunk = blocker.chunkIds[0];
+    const competitorChunk = competitor.chunkIds[0];
+    if (exactChunk === undefined || blockerChunk === undefined || competitorChunk === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    // Keep the ADR chunk far from the fixed query vector in the dense lane so its fused score
+    // is driven by the lexical weight alone, not a dense-lane contribution.
+    setChunkVector(store, exact.capsuleId, exactChunk, vectorBlob(0, 1));
+    setChunkVector(store, blocker.capsuleId, blockerChunk, vectorBlob(1, 0));
+    setChunkVector(
+      store,
+      competitor.capsuleId,
+      competitorChunk,
+      vectorBlob(0.999, Math.sqrt(1 - 0.999 * 0.999)),
+    );
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [exact.capsuleId] },
+      "What is ADR-0036 reciprocal rank fusion and what is the torque calibration flurbedingung procedure?",
+      { topK: 1 },
+    );
+
+    // Confirms the query actually decomposed (original + 2 legs) and that leg 2 triggered the
+    // fallback — otherwise this test would not exercise the bug at all.
+    expect(outcome.diagnostics.queryVariantCount).toBeGreaterThan(1);
+    expect(outcome.diagnostics.lexicalOrFallbackUsed).toBe(true);
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.references[0]?.citation.documentId).toBe("doc-exact-leg");
+  });
+
   it("keeps hostile lexical input scoped and redacted in diagnostics", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, {
@@ -2315,6 +2410,50 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(new Set(outcome.references.map((ref) => String(ref.citation.documentId)))).toEqual(
       new Set(["doc-a", "doc-b"]),
     );
+  });
+
+  it("computes cosine scores bit-identically to the reference single-pass formula", async () => {
+    // Locks the cosine fast path (precomputed row norms, `denseRowScore`) to the same ordering
+    // as a textbook single-pass cosine formula. A future refactor that silently mis-groups the
+    // dot-product/norm terms would flip or tie this ranking and fail here.
+    const { store } = getFixture();
+    const angles = [1, 0.9, 0.7, 0.3, 0.1];
+    const docs = await Promise.all(
+      angles.map(async (cos, index) => {
+        const sin = Math.sqrt(Math.max(0, 1 - cos * cos));
+        const seeded = await seedCapsuleWithVectors(store, {
+          capsuleId: "cap-cosine",
+          sourceId: "src-cosine",
+          documentId: `doc-cosine-${String(index)}`,
+          safeDisplayName: `cosine-${String(index)}.md`,
+          text: `unrelated filler passage number ${String(index)} with no shared vocabulary`,
+          skipCapsule: index > 0,
+          skipSource: index > 0,
+          unitId: `unit-cosine-${String(index)}`,
+          contentHash: String(index).padStart(64, "0"),
+          chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+        });
+        const chunk = seeded.chunkIds[0];
+        if (chunk === undefined) throw new Error("expected seeded chunk");
+        setChunkVector(store, seeded.capsuleId, chunk, vectorBlob(cos, sin));
+        return { documentId: `doc-cosine-${String(index)}`, cos };
+      }),
+    );
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-cosine" as KnowledgeCapsuleId] },
+      "please retrieve the topmost matching entry",
+      { topK: docs.length, strategy: "broad" },
+    );
+
+    const expectedOrder = [...docs].sort((a, b) => b.cos - a.cos).map((doc) => doc.documentId);
+    expect(outcome.references.map((ref) => String(ref.citation.documentId))).toEqual(expectedOrder);
   });
 });
 

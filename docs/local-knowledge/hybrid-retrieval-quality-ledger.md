@@ -404,6 +404,75 @@ Repair disposition:
   (3 files, 54 tests), `npm run check:grounded-retrieval-quality`, and
   `npm run check:grounded-faithfulness`.
 
+Round-3 Post-Merge Audit Re-Verification (2026-07-07):
+
+A third independent post-merge audit re-checked Epic #1817 and children #1837-#1842 against
+`origin/dev` HEAD `1b59c0d2` (commit `perf(retrieval): optimize RAG pipeline and repo search for
+large repositories`, #2049). That commit is not tagged #1817, but it changed #1817-scoped
+behavior directly: a whole-lane FTS AND->OR lexical recall fallback (fused at half RRF weight,
+`LEXICAL_OR_FALLBACK_RRF_WEIGHT`), deterministic chained-question decomposition
+(`query-decomposition.ts`), and two new eval fixtures (`code-repository`, `chained-question`) —
+none of which this ledger had previously recorded. This section corrects that gap and reports the
+audit's one confirmed defect and its fix.
+
+- The counts recorded in the two 2026-07-06 sections above (16 fixtures, 3-4 regression probes, 97-99
+  targeted tests) are historical and no longer current — later epics (#1818 `multi-space`, #1855
+  `html-manual-structure`) and this commit (`code-repository`, `chained-question`) each added a
+  fixture and a matching non-tautology probe to the shared registry. Current reproduced counts:
+- `npm run check:retrieval-quality` — PASS; workspace retrieval cases: 15 (top1 100.0%, recall@5
+  100.0%, MRR 1.000, nDCG@5 1.000, line-hit 100.0%, generated leaks 0); Local Knowledge fixtures:
+  20 of 20 passed (recall, precision, MRR, nDCG, isolation, and no-evidence all 1.000), across seven
+  non-tautology regression probes (`multi-space`, `exact-technical`, `semantic-paraphrase`,
+  `multilingual-retrieval`, `html-manual-structure`, `code-repository`, `chained-question`) — all
+  seven correctly drop below the pass floors when their ground truth is repointed at a decoy chunk.
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/runner-strategy.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+  — PASS; 5 files, 108 tests (was 99; +7 from the html-manual-structure/code-repository/chained-question
+  fixtures and probes, +1 from the cross-leg regression test added by this audit, +1 net from other
+  interim coverage).
+- `npm run check:grounded-retrieval-quality` — PASS; baseline cases 10; `reranker-reversed` and
+  `embedding-flat` regression controls failed closed.
+- `npm run check:grounded-faithfulness` — PASS; fixtures 8; unsupported detection, citation
+  precision, and abstention-on-empty all 100.0%.
+
+Confirmed defect and fix (production retrieval ranking, not evidence-only): `mergeLexicalCollections`
+combined every chained-question leg's lexical candidates into one flat list and OR'd their
+`usedOrFallback` flags into a single boolean, which `fuseCandidates` then applied as one global RRF
+weight to the entire merged lexical lane. A leg whose strict AND query matched cleanly (no fallback
+needed) had its genuinely exact candidate discounted to `LEXICAL_OR_FALLBACK_RRF_WEIGHT` (0.5x)
+whenever a _different_ leg of the same chained question needed the OR fallback — directly
+contradicting the #1817 Target Outcome that "lexical retrieval is stronger for exact terms... [and]
+identifiers" and #1838's acceptance criterion that "exact technical-query fixtures improve or remain
+stable." Reproduced before the fix: a two-leg chained query ("What is ADR-0036 reciprocal rank fusion
+and what is the torque calibration flurbedingung procedure?") where leg 1 strict-matches an ADR
+identifier and leg 2 needs the fallback returned the fallback leg's weak match as the top-1 result,
+not the exact ADR match. Fix: `viaOrFallback` now lives on each `LexicalCandidate` (set once per
+collection pass, never re-derived from the merged multi-leg flag), `fuseCandidates` applies the 0.5x
+discount per-candidate, and `lexicalCandidateAsc`'s dedup ordering prefers a non-fallback candidate
+over a fallback one for the same chunk at equal priority — a genuine strict match is never discounted
+because of what happened on an unrelated leg. Added a proof-first regression test
+(`scoped-vector-search.test.ts` "does not discount a strict lexical match when a different
+chained-question leg needed the OR fallback") that fails against the pre-fix code (returns the wrong
+document as top-1) and passes after. Also surfaced `RetrievalDiagnostics.lexicalOrFallbackUsed` (a
+count/mode-only boolean, no raw content) so operators can see whether the fallback fired at all,
+closing the diagnostics gap this same audit round flagged against #1839's "diagnostics explain
+participation" criterion.
+
+No other confirmed defects. Independent audits of the AND->OR fallback's SQL/FTS safety (#1838), RRF
+weighting/ADR-0036 compliance and byte-budget preservation (#1839), chained-question strategy pinning
+and the commit's own ReDoS fix (#1840), and the new caching/concurrency surface — `boundedMemo.ts`,
+the WeakMap-scoped embedding/preflight/adapter caches, and the cosine fast path (all added by this
+same commit) — found no defects; all four are production-sound. Deferred, reviewed, non-blocking
+follow-ups from this round: `candidateBudgets()` is not leg-count-aware (fine at today's
+`MAX_CHAINED_PARTS=3`, revisit if that cap grows); the parallelized connector retrieval in
+`grounded-qa-hybrid.ts` is deterministic by construction (index-addressed `slots[]`, not
+append-on-completion) but has no test that exercises genuinely out-of-order async resolution; the
+cosine fast path's bit-identical claim was hand-verified (20,000 random-vector trials, 0 mismatches)
+but was not previously locked by a committed regression test — closed by this round's addition of
+`scoped-vector-search.test.ts` "computes cosine scores bit-identically to the reference single-pass
+formula". `docs/local-knowledge/knowledge-pod-retrieval-goldset-ledger.md` (Epic #1826's ledger, which
+also draws from the same shared fixture registry) independently drifted to a stale "17/17" count;
+that ledger belongs to a different epic and is out of scope for this correction.
+
 ## Release Evidence Summary
 
 - Exact technical behavior is covered by `exact-technical` and the low-level hostile-input lexical

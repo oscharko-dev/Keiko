@@ -121,6 +121,10 @@ export interface RetrievalDiagnostics {
   readonly lexicalCandidateBudget: number;
   readonly fusedCandidateBudget: number;
   readonly queryVariantCount: number;
+  // True when at least one query variant's lexical lane recovered candidates via the OR recall
+  // fallback (see `LEXICAL_OR_FALLBACK_RRF_WEIGHT`) rather than a strict AND/exact match. A
+  // count/mode-only signal — never which variant or which terms triggered it.
+  readonly lexicalOrFallbackUsed: boolean;
   readonly denseIndex: "available" | "guided" | "ann" | "missing" | "skipped-too-large";
   readonly lexicalIndex: "available" | "missing" | "query-error";
   readonly vectorIndex: RetrievalVectorIndexDiagnostics;

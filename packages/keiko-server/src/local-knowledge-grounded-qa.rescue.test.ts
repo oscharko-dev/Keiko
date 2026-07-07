@@ -237,6 +237,7 @@ function activityDiagnostics(mode: ActivityDiagnostics["mode"]): ActivityDiagnos
     lexicalCandidateBudget: 50,
     fusedCandidateBudget: 50,
     queryVariantCount: 1,
+    lexicalOrFallbackUsed: false,
     denseIndex: "available",
     lexicalIndex: "available",
     vectorIndex: { provider: "brute-force", status: "available" },
