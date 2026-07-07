@@ -28,8 +28,11 @@ import { createVoiceLiveDictationPlane } from "./voice-live-dictation.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
-export const DEFAULT_UI_PORT = 1983;
-export const UI_HOST = "127.0.0.1";
+// Canonical values live in the contracts leaf (GEN-PERF-CLI-001) so the CLI can
+// read them without loading this module graph; imported and re-exported here so
+// the keiko-server public surface is unchanged.
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_UI_PORT, UI_HOST };
 const CSP_CACHE_TTL_MS = 1000;
 const JSON_GZIP_MIN_BYTES = 1024;
 const cspCache = new WeakMap<

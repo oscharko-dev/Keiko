@@ -73,6 +73,7 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
 };
 
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
+  "gen-perf-cli-001-cli-heavy-graphs-load-lazily": 1,
   "adr-0019-trust-1-provider-sdk-isolation": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
   "adr-0019-trust-5-patch-routes-through-tools": 1,

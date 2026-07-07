@@ -14,10 +14,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
 import {
   buildAppShellCommands,
+  chromeWindowsSignatureOf,
   headerStatus,
   normalizeEditorWindowCfg,
   opensDirectlyFromPalette,
 } from "./AppShell";
+import type { AppWindow } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 function fakeApi(): WorkspaceApi {
@@ -586,5 +588,36 @@ describe("headerStatus — header status pill derivation (F008 C043/C118)", () =
       label: "Setup required",
       tone: "warn",
     });
+  });
+});
+
+describe("chromeWindowsSignatureOf (GEN-PERF-WORKSPACE-008)", () => {
+  const win = (patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): AppWindow => ({
+    x: 10,
+    y: 20,
+    w: 480,
+    h: 360,
+    z: 1,
+    cfg: {},
+    max: false,
+    ...patch,
+  });
+
+  it("is stable across geometry-only changes so chrome memos hold during drags", () => {
+    const before = [win({ id: "a", type: "chat" }), win({ id: "b", type: "files", z: 2 })];
+    const dragged = [{ ...before[0]!, x: 300, y: 150, w: 520, h: 400 }, before[1]!];
+    expect(chromeWindowsSignatureOf(dragged)).toBe(chromeWindowsSignatureOf(before));
+  });
+
+  it("changes when a field the chrome actually renders changes", () => {
+    const base = [win({ id: "a", type: "chat" }), win({ id: "b", type: "files", z: 2 })];
+    const signature = chromeWindowsSignatureOf(base);
+    expect(chromeWindowsSignatureOf([{ ...base[0]!, minimized: true }, base[1]!])).not.toBe(
+      signature,
+    );
+    expect(chromeWindowsSignatureOf([{ ...base[0]!, max: true }, base[1]!])).not.toBe(signature);
+    expect(chromeWindowsSignatureOf([{ ...base[0]!, z: 9 }, base[1]!])).not.toBe(signature);
+    expect(chromeWindowsSignatureOf([base[1]!, base[0]!])).not.toBe(signature);
+    expect(chromeWindowsSignatureOf(null)).toBe("");
   });
 });

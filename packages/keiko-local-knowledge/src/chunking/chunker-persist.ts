@@ -64,8 +64,24 @@ export interface ChunkInsertRow {
   readonly characterEnd: number;
 }
 
+// Cached per DatabaseSync handle (the vector-persist STATEMENTS pattern):
+// insertChunkRow runs once per chunk inside persistAllChunks' loop, and
+// re-preparing the same INSERT per row measured 2.7x slower (~1.8µs/row —
+// ~70ms of pure re-parse on a 40k-chunk manual ingest, GEN-PERF-LK-002).
+type PreparedStatement = ReturnType<DatabaseSync["prepare"]>;
+const INSERT_CHUNK_STATEMENTS = new WeakMap<DatabaseSync, PreparedStatement>();
+
+function insertChunkStatement(db: DatabaseSync): PreparedStatement {
+  let prepared = INSERT_CHUNK_STATEMENTS.get(db);
+  if (prepared === undefined) {
+    prepared = db.prepare(INSERT_CHUNK_SQL);
+    INSERT_CHUNK_STATEMENTS.set(db, prepared);
+  }
+  return prepared;
+}
+
 export function insertChunkRow(db: DatabaseSync, row: ChunkInsertRow): void {
-  db.prepare(INSERT_CHUNK_SQL).run({
+  insertChunkStatement(db).run({
     id: String(row.id),
     capsule_id: String(row.capsuleId),
     source_id: String(row.sourceId),

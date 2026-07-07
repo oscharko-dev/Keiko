@@ -8,26 +8,23 @@
 // Exit 0 on fix-applied/fix-proposed/investigation-only, 1 on
 // rejected/cancelled/failed/runtime, 2 on usage. Mirrors runGenTestsCli's structure.
 
-import {
-  Gateway,
-  type EnvSource,
-  ConfigInvalidError,
-  GatewayError,
-  assertConfiguredModel,
-  selectConfiguredModel,
-  redact,
-} from "@oscharko-dev/keiko-model-gateway";
-import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
-import {
-  detectWorkspace,
-  readWorkspaceFile,
-  WorkspaceError,
-  type WorkspaceInfo,
-} from "@oscharko-dev/keiko-workspace";
-import { investigateBug, renderBugMarkdownReport } from "@oscharko-dev/keiko-workflows";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { BugInvestigationReport, BugReportInput } from "@oscharko-dev/keiko-workflows";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
+// GEN-PERF-CLI-001 — heavy graphs load at dispatch; module scope stays type-only.
+import {
+  loadHarness,
+  loadModelGateway,
+  loadWorkflows,
+  loadWorkspaceModule,
+} from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+
+type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
+type HarnessModule = typeof import("@oscharko-dev/keiko-harness");
+type WorkspacePackage = typeof import("@oscharko-dev/keiko-workspace");
 
 const USAGE = `Usage:
   keiko investigate [--description TEXT] [--output TEXT | --output-file PATH]
@@ -160,27 +157,34 @@ function resolveReport(
   };
 }
 
-function workspaceEvidenceReader(workspace: WorkspaceInfo): (path: string) => string {
+function workspaceEvidenceReader(
+  workspace: WorkspaceInfo,
+  readWorkspaceFile: WorkspacePackage["readWorkspaceFile"],
+): (path: string) => string {
   return (path: string): string => readWorkspaceFile(workspace, path).text;
 }
 
-function buildModel(
+async function buildModel(
   parsed: InvestigateArgs,
   io: CliIo,
   env: EnvSource,
-): { port: ModelPort; modelId: string } | number {
+  gateway: GatewayModule,
+  harness: HarnessModule,
+): Promise<{ port: ModelPort; modelId: string } | number> {
   try {
     const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
     if (path === undefined) {
-      throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+      throw new gateway.ConfigInvalidError(
+        "no config source; pass --config PATH or set KEIKO_CONFIG_FILE",
+      );
     }
-    const config = loadGatewayConfigFromFile(path, env);
+    const config = await loadGatewayConfigFromFile(path, env);
     if (parsed.model !== undefined) {
-      assertConfiguredModel(config, parsed.model);
+      gateway.assertConfiguredModel(config, parsed.model);
     }
     const modelId =
       parsed.model ??
-      selectConfiguredModel(config, {
+      gateway.selectConfiguredModel(config, {
         kind: "chat",
         toolCalling: true,
         structuredOutput: true,
@@ -189,11 +193,11 @@ function buildModel(
       io.err("Error: no configured workflow-capable chat model is available.\n");
       return 1;
     }
-    return { port: new GatewayModelPort(new Gateway(config)), modelId };
+    return { port: new harness.GatewayModelPort(new gateway.Gateway(config)), modelId };
   } catch (error) {
-    if (error instanceof GatewayError) {
+    if (error instanceof gateway.GatewayError) {
       io.err(
-        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
           `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
       );
       return 1;
@@ -202,49 +206,59 @@ function buildModel(
   }
 }
 
-function resolveConfiguredModelId(parsed: InvestigateArgs, env: EnvSource): string | undefined {
+async function resolveConfiguredModelId(
+  parsed: InvestigateArgs,
+  env: EnvSource,
+  gateway: GatewayModule,
+): Promise<string | undefined> {
   const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
   if (path === undefined) {
     return parsed.model ?? "default";
   }
-  const config = loadGatewayConfigFromFile(path, env);
+  const config = await loadGatewayConfigFromFile(path, env);
   if (parsed.model !== undefined) {
-    assertConfiguredModel(config, parsed.model);
+    gateway.assertConfiguredModel(config, parsed.model);
     return parsed.model;
   }
-  return selectConfiguredModel(config, {
+  return gateway.selectConfiguredModel(config, {
     kind: "chat",
     toolCalling: true,
     structuredOutput: true,
   });
 }
 
-function resolveModel(
+async function resolveModel(
   parsed: InvestigateArgs,
   io: CliIo,
   env: EnvSource,
   deps: InvestigateDeps,
-): { port: ModelPort; modelId: string } | number {
+  gateway: GatewayModule,
+  harness: HarnessModule,
+): Promise<{ port: ModelPort; modelId: string } | number> {
   if (deps.model !== undefined) {
     try {
-      const modelId = resolveConfiguredModelId(parsed, env);
+      const modelId = await resolveConfiguredModelId(parsed, env, gateway);
       if (modelId === undefined) {
         io.err("Error: no configured workflow-capable chat model is available.\n");
         return 1;
       }
       return { port: deps.model, modelId };
     } catch (error) {
-      if (error instanceof GatewayError) {
-        io.err(`Error: model gateway configuration problem — ${redact(error.message)}\n`);
+      if (error instanceof gateway.GatewayError) {
+        io.err(`Error: model gateway configuration problem — ${gateway.redact(error.message)}\n`);
         return 1;
       }
       throw error;
     }
   }
-  return buildModel(parsed, io, env);
+  return buildModel(parsed, io, env, gateway, harness);
 }
 
-function printText(report: BugInvestigationReport, io: CliIo): void {
+function printText(
+  report: BugInvestigationReport,
+  io: CliIo,
+  renderBugMarkdownReport: (report: BugInvestigationReport) => string,
+): void {
   io.out(`${renderBugMarkdownReport(report)}\n`);
   if (report.dryRunPreview !== undefined) {
     io.out(`\n${report.dryRunPreview}\n`);
@@ -260,23 +274,33 @@ function exitCodeFor(status: BugInvestigationReport["status"]): number {
     : 1;
 }
 
-function emitReport(report: BugInvestigationReport, io: CliIo, json: boolean): number {
+function emitReport(
+  report: BugInvestigationReport,
+  io: CliIo,
+  json: boolean,
+  renderBugMarkdownReport: (report: BugInvestigationReport) => string,
+): number {
   if (json) {
     io.out(`${JSON.stringify(report, null, 2)}\n`);
   } else {
-    printText(report, io);
+    printText(report, io, renderBugMarkdownReport);
   }
   return exitCodeFor(report.status);
 }
 
 // Maps a boundary error to an exit code, or rethrows when it is not a recognised IO failure.
-function handleCliError(error: unknown, io: CliIo): number {
-  if (error instanceof WorkspaceError) {
+function handleCliError(
+  error: unknown,
+  io: CliIo,
+  gateway: GatewayModule,
+  workspaceModule: WorkspacePackage,
+): number {
+  if (error instanceof workspaceModule.WorkspaceError) {
     io.err(`Error [${error.code}]: ${error.message}\n`);
     return 1;
   }
   if (error instanceof Error && isFileReadError(error)) {
-    io.err(`Error: could not read an evidence file — ${redact(error.message)}\n`);
+    io.err(`Error: could not read an evidence file — ${gateway.redact(error.message)}\n`);
     return 1;
   }
   throw error;
@@ -299,14 +323,21 @@ export async function runInvestigateCli(
     io.err(USAGE);
     return 2;
   }
-  const model = resolveModel(parsed, io, env, deps);
+  const [gateway, harness, workflows, workspaceModule] = await Promise.all([
+    loadModelGateway(),
+    loadHarness(),
+    loadWorkflows(),
+    loadWorkspaceModule(),
+  ]);
+  const model = await resolveModel(parsed, io, env, deps, gateway, harness);
   if (typeof model === "number") {
     return model;
   }
   try {
-    const workspace = detectWorkspace(parsed.dirRoot);
-    const readFile = deps.readFile ?? workspaceEvidenceReader(workspace);
-    const report = await investigateBug(
+    const workspace = workspaceModule.detectWorkspace(parsed.dirRoot);
+    const readFile =
+      deps.readFile ?? workspaceEvidenceReader(workspace, workspaceModule.readWorkspaceFile);
+    const report = await workflows.investigateBug(
       {
         workspaceRoot: workspace.root,
         report: resolveReport(parsed, readFile),
@@ -315,9 +346,9 @@ export async function runInvestigateCli(
       },
       { model: model.port },
     );
-    return emitReport(report, io, parsed.json);
+    return emitReport(report, io, parsed.json, workflows.renderBugMarkdownReport);
   } catch (error) {
-    return handleCliError(error, io);
+    return handleCliError(error, io, gateway, workspaceModule);
   }
 }
 

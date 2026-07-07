@@ -7,35 +7,34 @@
 // layer builds + redacts + persists the manifest and the EvidenceReport is printed. Writing is on by
 // default; --no-evidence disables it, --evidence-dir relocates it. Tests inject an in-memory
 // EvidenceStore via deps so no write ever touches the repository tree.
+//
+// GEN-PERF-CLI-001 — the gateway/harness/evidence module graphs load once at dispatch inside
+// runAgentCli and are threaded into the helpers; module scope holds type imports only, so
+// evaluating this file (which the CLI barrel does on every `keiko` invocation) stays cheap.
 
-import {
-  ConfigInvalidError,
-  Gateway,
-  GatewayError,
-  assertConfiguredModel,
-  redact,
-  resolveCostClass,
-  selectConfiguredModel,
-  type EnvSource,
-} from "@oscharko-dev/keiko-model-gateway";
-import { DryRunToolPort, GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
-import { createSession, HARNESS_VERSION, type AgentConfig } from "@oscharko-dev/keiko-harness";
-import { CliEventSink, MemoryEventSink, type ManifestSeed } from "@oscharko-dev/keiko-harness";
-import type { EventSink } from "@oscharko-dev/keiko-harness";
-import type { HarnessEvent, RunResult, TaskInput, TaskType } from "@oscharko-dev/keiko-harness";
-import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
-import { persistEvidence } from "@oscharko-dev/keiko-evidence";
-import { renderEvidenceReport } from "@oscharko-dev/keiko-evidence";
-import {
-  createNodeToolResultArtifactStore,
-  createNodeEvidenceStore,
-  resolveEvidenceDir,
-  type EvidenceStore,
-} from "@oscharko-dev/keiko-evidence";
-import { AuditError } from "@oscharko-dev/keiko-evidence";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  AgentConfig,
+  EventSink,
+  HarnessEvent,
+  HarnessShaperPort,
+  ManifestSeed,
+  MemoryEventSink,
+  ModelPort,
+  RunResult,
+  TaskInput,
+  TaskType,
+} from "@oscharko-dev/keiko-harness";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
+import { loadEvidence, loadHarness, loadModelGateway } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { createHarnessToolShaper } from "./tool-shaper.js";
+
+type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
+type HarnessModule = typeof import("@oscharko-dev/keiko-harness");
+type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
+type RedactFn = GatewayModule["redact"];
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
   "generate-unit-tests",
@@ -124,11 +123,11 @@ function parseTask(taskType: CliTaskType, args: readonly string[]): TaskInput | 
 // Forwards each event to every wrapped sink. retainsRawContent is true so the harness emits raw
 // SENSITIVE fields — required for the MemoryEventSink's faithful replay manifest. The CliEventSink
 // summarisers never print those fields, and the audit layer redacts before anything is persisted.
-function teeSink(sinks: readonly EventSink[]): EventSink {
+function teeSink(sinks: readonly EventSink[], redact: RedactFn): EventSink {
   return {
     retainsRawContent: true,
     emit: (event: HarnessEvent): void => {
-      const redacted = redactEventForNonRetainingSink(event);
+      const redacted = redactEventForNonRetainingSink(event, redact);
       for (const sink of sinks) {
         sink.emit(sink.retainsRawContent === true ? event : redacted);
       }
@@ -136,15 +135,15 @@ function teeSink(sinks: readonly EventSink[]): EventSink {
   };
 }
 
-function redactEventForNonRetainingSink(event: HarnessEvent): HarnessEvent {
+function redactEventForNonRetainingSink(event: HarnessEvent, redact: RedactFn): HarnessEvent {
   if (event.type === "run:failed") {
-    return redactRunFailedEvent(event);
+    return redactRunFailedEvent(event, redact);
   }
   if (event.type === "run:completed") {
-    return redactRunCompletedEvent(event);
+    return redactRunCompletedEvent(event, redact);
   }
   if (event.type === "reasoning:trace") {
-    return redactReasoningTraceEvent(event);
+    return redactReasoningTraceEvent(event, redact);
   }
   if (event.type === "run:cancelled" && event.reason !== undefined) {
     return { ...event, reason: redact(event.reason) };
@@ -157,7 +156,10 @@ function redactEventForNonRetainingSink(event: HarnessEvent): HarnessEvent {
   return event;
 }
 
-function redactRunFailedEvent(event: Extract<HarnessEvent, { type: "run:failed" }>): HarnessEvent {
+function redactRunFailedEvent(
+  event: Extract<HarnessEvent, { type: "run:failed" }>,
+  redact: RedactFn,
+): HarnessEvent {
   return {
     ...event,
     failure: {
@@ -170,6 +172,7 @@ function redactRunFailedEvent(event: Extract<HarnessEvent, { type: "run:failed" 
 
 function redactRunCompletedEvent(
   event: Extract<HarnessEvent, { type: "run:completed" }>,
+  redact: RedactFn,
 ): HarnessEvent {
   return {
     ...event,
@@ -180,6 +183,7 @@ function redactRunCompletedEvent(
 
 function redactReasoningTraceEvent(
   event: Extract<HarnessEvent, { type: "reasoning:trace" }>,
+  redact: RedactFn,
 ): HarnessEvent {
   return {
     ...event,
@@ -188,14 +192,19 @@ function redactReasoningTraceEvent(
   };
 }
 
-function seedFor(task: TaskInput, result: RunResult, modelId: string): ManifestSeed {
+function seedFor(
+  task: TaskInput,
+  result: RunResult,
+  modelId: string,
+  harness: HarnessModule,
+): ManifestSeed {
   return {
     runId: result.runId,
     fingerprint: result.fingerprint,
-    harnessVersion: HARNESS_VERSION,
+    harnessVersion: harness.HARNESS_VERSION,
     taskType: task.taskType,
     taskInput: task,
-    limits: DEFAULT_LIMITS,
+    limits: harness.DEFAULT_LIMITS,
     modelId,
     workingDirectory: ".",
     dryRun: true,
@@ -207,6 +216,9 @@ interface EvidenceContext {
   readonly flags: EvidenceFlags;
   readonly env: EnvSource;
   readonly deps: RunDeps;
+  readonly gateway: GatewayModule;
+  readonly harness: HarnessModule;
+  readonly evidence: EvidenceModule;
 }
 
 // Persists the evidence manifest. This is a system boundary (filesystem write), so try/catch is
@@ -221,12 +233,15 @@ function writeEvidence(
   io: CliIo,
   modelId: string,
 ): number | undefined {
+  const { evidence, gateway, harness } = ctx;
   try {
-    const manifest = memory.collectManifest(seedFor(task, result, modelId));
+    const manifest = memory.collectManifest(seedFor(task, result, modelId, harness));
     const store =
       ctx.deps.store ??
-      createNodeEvidenceStore(resolveEvidenceDir(ctx.flags.evidenceDirFlag, ctx.env));
-    const out = persistEvidence(
+      evidence.createNodeEvidenceStore(
+        evidence.resolveEvidenceDir(ctx.flags.evidenceDirFlag, ctx.env),
+      );
+    const out = evidence.persistEvidence(
       {
         result,
         manifest,
@@ -235,53 +250,61 @@ function writeEvidence(
           includeDiff: ctx.flags.includeDiff,
         },
       },
-      { store, env: ctx.env, costClassResolver: resolveCostClass },
+      { store, env: ctx.env, costClassResolver: gateway.resolveCostClass },
     );
-    io.out(renderEvidenceReport(out.report));
+    io.out(evidence.renderEvidenceReport(out.report));
     return undefined;
   } catch (error) {
-    const detail = error instanceof AuditError ? error.message : redact(String(error));
+    const detail =
+      error instanceof evidence.AuditError ? error.message : ctx.gateway.redact(String(error));
     io.err(`keiko run: failed to write evidence: ${detail}\n`);
     return 1;
   }
 }
 
-function buildHarnessToolShaper(
+async function buildHarnessToolShaper(
   flags: EvidenceFlags,
   env: EnvSource,
-): ReturnType<typeof createHarnessToolShaper> {
+  evidence: EvidenceModule,
+): Promise<HarnessShaperPort> {
   if (!flags.write) {
     return createHarnessToolShaper();
   }
   return createHarnessToolShaper({
-    artifactWriter: createNodeToolResultArtifactStore(
-      resolveEvidenceDir(flags.evidenceDirFlag, env),
+    artifactWriter: evidence.createNodeToolResultArtifactStore(
+      evidence.resolveEvidenceDir(flags.evidenceDirFlag, env),
     ),
   });
 }
 
-function configuredModelId(flags: EvidenceFlags, env: EnvSource): string | undefined {
+async function configuredModelId(
+  flags: EvidenceFlags,
+  env: EnvSource,
+  gateway: GatewayModule,
+): Promise<string | undefined> {
   const path = flags.config ?? env.KEIKO_CONFIG_FILE;
   if (path === undefined) {
     return flags.model;
   }
-  const config = loadGatewayConfigFromFile(path, env);
+  const config = await loadGatewayConfigFromFile(path, env);
   if (flags.model !== undefined) {
-    assertConfiguredModel(config, flags.model);
+    gateway.assertConfiguredModel(config, flags.model);
     return flags.model;
   }
-  return selectConfiguredModel(config, { kind: "chat" });
+  return gateway.selectConfiguredModel(config, { kind: "chat" });
 }
 
-function resolveModel(
+async function resolveModel(
   flags: EvidenceFlags,
   io: CliIo,
   env: EnvSource,
   deps: RunDeps,
-): { port: ModelPort; modelId: string } | number {
+  gateway: GatewayModule,
+  harness: HarnessModule,
+): Promise<{ port: ModelPort; modelId: string } | number> {
   try {
     if (deps.model !== undefined) {
-      const modelId = configuredModelId(flags, env);
+      const modelId = await configuredModelId(flags, env, gateway);
       if (modelId === undefined) {
         io.err("Error: no model id available; pass --model MODEL_ID for injected test runs.\n");
         return 1;
@@ -290,22 +313,24 @@ function resolveModel(
     }
     const path = flags.config ?? env.KEIKO_CONFIG_FILE;
     if (path === undefined) {
-      throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+      throw new gateway.ConfigInvalidError(
+        "no config source; pass --config PATH or set KEIKO_CONFIG_FILE",
+      );
     }
-    const config = loadGatewayConfigFromFile(path, env);
+    const config = await loadGatewayConfigFromFile(path, env);
     if (flags.model !== undefined) {
-      assertConfiguredModel(config, flags.model);
+      gateway.assertConfiguredModel(config, flags.model);
     }
-    const modelId = flags.model ?? selectConfiguredModel(config, { kind: "chat" });
+    const modelId = flags.model ?? gateway.selectConfiguredModel(config, { kind: "chat" });
     if (modelId === undefined) {
       io.err("Error: no configured chat model is available.\n");
       return 1;
     }
-    return { port: new GatewayModelPort(new Gateway(config)), modelId };
+    return { port: new harness.GatewayModelPort(new gateway.Gateway(config)), modelId };
   } catch (error) {
-    if (error instanceof GatewayError) {
+    if (error instanceof gateway.GatewayError) {
       io.err(
-        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
           `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
       );
       return 1;
@@ -314,7 +339,7 @@ function resolveModel(
   }
 }
 
-function outcomeToExitCode(result: RunResult, io: CliIo): number {
+function outcomeToExitCode(result: RunResult, io: CliIo, redact: RedactFn): number {
   if (result.outcome === "completed") {
     io.out(`run ${result.runId} completed (fingerprint ${result.fingerprint})\n`);
     return 0;
@@ -346,17 +371,22 @@ export async function runAgentCli(
     return 2;
   }
   const flags = parseEvidenceFlags(args);
-  const model = resolveModel(flags, io, env, deps);
+  const [gateway, harness, evidence] = await Promise.all([
+    loadModelGateway(),
+    loadHarness(),
+    loadEvidence(),
+  ]);
+  const model = await resolveModel(flags, io, env, deps, gateway, harness);
   if (typeof model === "number") {
     return model;
   }
-  const memory = new MemoryEventSink();
+  const memory = new harness.MemoryEventSink();
   const config: AgentConfig = { model: model.modelId, workingDirectory: ".", dryRun: true };
-  const session = createSession(task, config, {
+  const session = harness.createSession(task, config, {
     model: model.port,
-    tools: new DryRunToolPort(),
-    sink: teeSink([memory, new CliEventSink(io)]),
-    shaperPort: buildHarnessToolShaper(flags, env),
+    tools: new harness.DryRunToolPort(),
+    sink: teeSink([memory, new harness.CliEventSink(io)], gateway.redact),
+    shaperPort: await buildHarnessToolShaper(flags, env, evidence),
   });
   const result = await session.result;
   if (flags.write) {
@@ -364,7 +394,7 @@ export async function runAgentCli(
       result,
       memory,
       task,
-      { flags, env, deps },
+      { flags, env, deps, gateway, harness, evidence },
       io,
       model.modelId,
     );
@@ -372,5 +402,5 @@ export async function runAgentCli(
       return evidenceFailure;
     }
   }
-  return outcomeToExitCode(result, io);
+  return outcomeToExitCode(result, io, gateway.redact);
 }
