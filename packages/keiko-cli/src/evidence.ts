@@ -6,20 +6,13 @@
 // 2 on usage (unknown or missing subcommand, invalid runId). Tests inject an in-memory store via deps
 // so no disk is touched.
 
-import {
-  buildEvidenceReport,
-  renderEvidenceReport,
-  listEvidence,
-  loadEvidence,
-  type EvidenceListEntry,
-  createNodeEvidenceStore,
-  resolveEvidenceDir,
-  type EvidenceStore,
-  AuditError,
-  InvalidRunIdError,
-} from "@oscharko-dev/keiko-evidence";
+import type { EvidenceListEntry, EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+// GEN-PERF-CLI-001 — the evidence graph loads at dispatch; module scope stays type-only.
+import { loadEvidence as loadEvidenceModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+
+type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
 
 const USAGE = `Usage:
   keiko evidence list [--evidence-dir PATH] [--json]
@@ -85,11 +78,15 @@ function invalidArgs(message: string): ParsedEvidenceArgs {
   return { ok: false, error: message };
 }
 
-function resolveStore(evidenceDir: string | undefined, deps: EvidenceCliDeps): EvidenceStore {
+function resolveStore(
+  evidenceDir: string | undefined,
+  deps: EvidenceCliDeps,
+  evidence: EvidenceModule,
+): EvidenceStore {
   if (deps.store !== undefined) {
     return deps.store;
   }
-  return createNodeEvidenceStore(resolveEvidenceDir(evidenceDir, deps.env));
+  return evidence.createNodeEvidenceStore(evidence.resolveEvidenceDir(evidenceDir, deps.env));
 }
 
 function parseEvidenceArgs(args: readonly string[]): ParsedEvidenceArgs {
@@ -135,14 +132,20 @@ function renderListText(entries: readonly EvidenceListEntry[]): string {
   return `${rows.join("\n")}\n`;
 }
 
-function runList(store: EvidenceStore, json: boolean, io: CliIo): number {
-  const entries = listEvidence(store);
+function runList(store: EvidenceStore, json: boolean, io: CliIo, evidence: EvidenceModule): number {
+  const entries = evidence.listEvidence(store);
   io.out(json ? `${JSON.stringify(entries, null, 2)}\n` : renderListText(entries));
   return 0;
 }
 
-function runShow(store: EvidenceStore, runId: string, json: boolean, io: CliIo): number {
-  const manifest = loadEvidence(store, runId);
+function runShow(
+  store: EvidenceStore,
+  runId: string,
+  json: boolean,
+  io: CliIo,
+  evidence: EvidenceModule,
+): number {
+  const manifest = evidence.loadEvidence(store, runId);
   if (manifest === undefined) {
     io.err(`keiko evidence: no manifest for runId: ${runId}\n`);
     return 1;
@@ -152,46 +155,59 @@ function runShow(store: EvidenceStore, runId: string, json: boolean, io: CliIo):
     return 0;
   }
   io.out(
-    renderEvidenceReport(buildEvidenceReport(manifest, store.location?.(runId) ?? `${runId}.json`)),
+    evidence.renderEvidenceReport(
+      evidence.buildEvidenceReport(manifest, store.location?.(runId) ?? `${runId}.json`),
+    ),
   );
   return 0;
 }
 
 // Maps a thrown AuditError to an exit code: an invalid runId is a usage error (2), any other
 // audit/read failure is a runtime error (1). Messages are already redacted at construction.
-function exitForAuditError(error: AuditError, io: CliIo): number {
+function exitForAuditError(
+  error: InstanceType<EvidenceModule["AuditError"]>,
+  io: CliIo,
+  evidence: EvidenceModule,
+): number {
   io.err(`keiko evidence: ${error.message}\n`);
-  return error instanceof InvalidRunIdError ? 2 : 1;
+  return error instanceof evidence.InvalidRunIdError ? 2 : 1;
 }
 
-export function runEvidenceCli(
+export async function runEvidenceCli(
   args: readonly string[],
   io: CliIo,
   deps: EvidenceCliDeps = {},
-): number {
+): Promise<number> {
   const parsed = parseEvidenceArgs(args);
   if (!parsed.ok || parsed.parsed === undefined) {
     io.err(parsed.error);
     return 2;
   }
 
+  const evidence = await loadEvidenceModule();
   try {
     if (parsed.parsed.subcommand === "list") {
-      return runList(resolveStore(parsed.parsed.evidenceDir, deps), parsed.parsed.json, io);
+      return runList(
+        resolveStore(parsed.parsed.evidenceDir, deps, evidence),
+        parsed.parsed.json,
+        io,
+        evidence,
+      );
     }
     if (parsed.parsed.runId === undefined) {
       io.err(`keiko evidence: show requires a <runId>.\n${USAGE}`);
       return 2;
     }
     return runShow(
-      resolveStore(parsed.parsed.evidenceDir, deps),
+      resolveStore(parsed.parsed.evidenceDir, deps, evidence),
       parsed.parsed.runId,
       parsed.parsed.json,
       io,
+      evidence,
     );
   } catch (error) {
-    if (error instanceof AuditError) {
-      return exitForAuditError(error, io);
+    if (error instanceof evidence.AuditError) {
+      return exitForAuditError(error, io, evidence);
     }
     throw error;
   }

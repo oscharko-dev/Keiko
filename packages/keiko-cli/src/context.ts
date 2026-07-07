@@ -3,16 +3,12 @@
 // given), and prints a human table or JSON. It NEVER constructs an agent session and NEVER
 // calls a model: there is no import of the harness/gateway run path in this file.
 
-import {
-  detectWorkspace,
-  discoverWithStats,
-  buildContextPackFromFiles,
-  buildWorkspaceSummary,
-  WorkspaceError,
-  DEFAULT_CONTEXT_REQUEST,
-  type WorkspaceSummary,
-} from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceSummary } from "@oscharko-dev/keiko-workspace";
+// GEN-PERF-CLI-001 — the workspace graph loads at dispatch; module scope stays type-only.
+import { loadWorkspaceModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+
+type WorkspacePackage = typeof import("@oscharko-dev/keiko-workspace");
 
 const USAGE = `Usage:
   keiko context [--dir PATH] [--task TEXT] [--budget BYTES] [--json]
@@ -56,23 +52,23 @@ function parseArgs(args: readonly string[]): ContextArgs | null {
   return { dir: dirRaw ?? ".", task: taskRaw, budget, json: args.includes("--json") };
 }
 
-function buildSummary(parsed: ContextArgs): WorkspaceSummary {
-  const workspace = detectWorkspace(parsed.dir);
-  const { files, stats } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
+function buildSummary(parsed: ContextArgs, ws: WorkspacePackage): WorkspaceSummary {
+  const workspace = ws.detectWorkspace(parsed.dir);
+  const { files, stats } = ws.discoverWithStats(workspace, ws.DEFAULT_CONTEXT_REQUEST.discovery);
   const wantsPack = parsed.task !== undefined || parsed.budget !== undefined;
   if (!wantsPack) {
-    return buildWorkspaceSummary(workspace, undefined, stats);
+    return ws.buildWorkspaceSummary(workspace, undefined, stats);
   }
-  const pack = buildContextPackFromFiles(
+  const pack = ws.buildContextPackFromFiles(
     workspace,
     {
-      ...DEFAULT_CONTEXT_REQUEST,
+      ...ws.DEFAULT_CONTEXT_REQUEST,
       task: parsed.task,
-      budgetBytes: parsed.budget ?? DEFAULT_CONTEXT_REQUEST.budgetBytes,
+      budgetBytes: parsed.budget ?? ws.DEFAULT_CONTEXT_REQUEST.budgetBytes,
     },
     files,
   );
-  return buildWorkspaceSummary(workspace, pack, stats);
+  return ws.buildWorkspaceSummary(workspace, pack, stats);
 }
 
 function renderContext(summary: WorkspaceSummary, io: CliIo): void {
@@ -105,7 +101,7 @@ function renderText(summary: WorkspaceSummary, io: CliIo): void {
   renderContext(summary, io);
 }
 
-export function runContextCli(args: readonly string[], io: CliIo): number {
+export async function runContextCli(args: readonly string[], io: CliIo): Promise<number> {
   // Issue #640: handle --help / -h before workflow-arg validation so help discovery exits 0
   // with usage on stdout, not 2 with a validation error on stderr.
   if (args.includes("--help") || args.includes("-h")) {
@@ -117,8 +113,9 @@ export function runContextCli(args: readonly string[], io: CliIo): number {
     io.err(USAGE);
     return 2;
   }
+  const ws = await loadWorkspaceModule();
   try {
-    const summary = buildSummary(parsed);
+    const summary = buildSummary(parsed, ws);
     if (parsed.json) {
       io.out(`${JSON.stringify(summary, null, 2)}\n`);
     } else {
@@ -126,7 +123,7 @@ export function runContextCli(args: readonly string[], io: CliIo): number {
     }
     return 0;
   } catch (error) {
-    if (error instanceof WorkspaceError) {
+    if (error instanceof ws.WorkspaceError) {
       io.err(`Error [${error.code}]: ${error.message}\n`);
       return 1;
     }

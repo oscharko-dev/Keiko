@@ -1292,6 +1292,8 @@ export {
   ALLOWED_DOCUMENT_MIME_PREFIXES,
   ALLOWED_DOCUMENT_MIME_LITERALS,
   classifyAttachmentMime,
+  UI_HOST,
+  DEFAULT_UI_PORT,
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──

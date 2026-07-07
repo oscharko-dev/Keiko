@@ -194,20 +194,24 @@ describe("Issue #12 docs drift", () => {
     const uiRunbook = readText("docs/ui-runbook.md");
     const uiCli = readText("packages/keiko-cli/src/ui.ts");
     const uiServer = readText("packages/keiko-server/src/server.ts");
+    // GEN-PERF-CLI-001 — the canonical constant lives in the contracts leaf so the
+    // CLI resolves it without the server module graph; the server re-exports it.
+    const wireContracts = readText("packages/keiko-contracts/src/bff-wire.ts");
     const hostContract = /validate a loopback host value.*server always binds `127\.0\.0\.1`/i;
 
     expect(readme).toMatch(hostContract);
     expect(uiRunbook).toMatch(hostContract);
     expect(uiCli).toContain('new Set(["127.0.0.1", "localhost"])');
-    expect(uiServer).toContain('export const UI_HOST = "127.0.0.1"');
+    expect(wireContracts).toContain('export const UI_HOST = "127.0.0.1"');
+    expect(uiServer).toContain("export { DEFAULT_UI_PORT, UI_HOST };");
   });
 
   it("keeps the shipped default UI port aligned", () => {
     const readme = readText("README.md");
     const uiRunbook = readText("docs/ui-runbook.md");
-    const uiServer = readText("packages/keiko-server/src/server.ts");
+    const wireContracts = readText("packages/keiko-contracts/src/bff-wire.ts");
 
-    expect(uiServer).toContain("export const DEFAULT_UI_PORT = 1983");
+    expect(wireContracts).toContain("export const DEFAULT_UI_PORT = 1983");
     expect(readme).toContain("Port to bind (default: 1983)");
     expect(uiRunbook).toContain("default port is `1983`");
   });

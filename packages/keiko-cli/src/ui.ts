@@ -18,18 +18,16 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
-import {
-  buildCspHeader,
-  createUiServer,
-  buildUiHandlerDeps,
-  DEFAULT_UI_PORT,
-  UI_HOST,
-  UiStoreError,
-  extractInlineScriptHashes,
-  type UiHandlerDeps,
-} from "@oscharko-dev/keiko-server";
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
+import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolvePreferredInstallLayout } from "./install-layout.js";
+// GEN-PERF-CLI-001 — the server module graph (routes, local-knowledge/sqlite wiring,
+// ws, …) loads on FIRST USE, not when this module is parsed. The CLI barrel evaluates
+// ui.ts on every `keiko` invocation, and this one eager import accounted for most of
+// the measured ~410ms per-command module-loading tax (`keiko --version` included).
+// Only type imports may reference the package at module scope here.
+import { loadServer as loadServerModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
@@ -129,6 +127,7 @@ function parseHashList(raw: string): readonly string[] {
 }
 
 async function loadCspMaterial(staticRoot: string, hashesFile: string): Promise<CspMaterial> {
+  const { buildCspHeader, extractInlineScriptHashes } = await loadServerModule();
   const htmlFiles = await collectHtmlFiles(staticRoot);
   const documents = await Promise.all(htmlFiles.map((file) => readFile(file, "utf8")));
   const runtimeHashes = extractInlineScriptHashes(documents);
@@ -320,19 +319,47 @@ async function listen(server: Server, port: number): Promise<void> {
   });
 }
 
+// `server.close()` only stops NEW connections — it waits forever for in-flight
+// responses, and the BFF holds long-lived SSE streams (chat tokens, run events)
+// that never end on their own. A SIGTERM with one chat tab open therefore hung
+// the process until SIGKILL. After signalling close, idle keep-alive sockets are
+// dropped immediately and any still-active connection (the SSE streams) is
+// force-terminated once a bounded grace window has passed, so shutdown always
+// completes; their `close` handlers still run, releasing subscriptions.
+const SHUTDOWN_FORCE_CLOSE_GRACE_MS = 3_000;
+
 // Keeps the real-CLI process alive until a shutdown signal or server close. Resolves cleanly so
 // the caller can return 0. Registered listeners are removed on resolve to prevent leaks.
-export function waitForShutdown(server: Server): Promise<void> {
+export function waitForShutdown(
+  server: Server,
+  forceCloseGraceMs = SHUTDOWN_FORCE_CLOSE_GRACE_MS,
+): Promise<void> {
   return new Promise<void>((resolve) => {
+    let forceTimer: ReturnType<typeof setTimeout> | null = null;
+    const settle = (): void => {
+      if (forceTimer !== null) {
+        clearTimeout(forceTimer);
+        forceTimer = null;
+      }
+      resolve();
+    };
     const onClose = (): void => {
       process.removeListener("SIGINT", onSignal);
       process.removeListener("SIGTERM", onSignal);
-      resolve();
+      settle();
     };
     const onSignal = (): void => {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
       server.removeListener("close", onClose);
+      server.closeIdleConnections();
+      forceTimer = setTimeout(() => {
+        server.closeAllConnections();
+      }, forceCloseGraceMs);
+      // The grace timer must never be what keeps the process alive.
+      forceTimer.unref();
       server.close(() => {
-        resolve();
+        settle();
       });
     };
     server.once("close", onClose);
@@ -386,9 +413,19 @@ async function reExecWithSqliteFlag(
   process.on("SIGINT", forwardSigint);
   process.on("SIGTERM", forwardSigterm);
   return new Promise<number>((res) => {
-    child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+    const removeForwarders = (): void => {
       process.removeListener("SIGINT", forwardSigint);
       process.removeListener("SIGTERM", forwardSigterm);
+    };
+    // Without this, an async spawn failure (EMFILE, revoked exec permission)
+    // throws the unlistened 'error' event and crashes the sqlite re-exec guard
+    // with a raw stack instead of a clean non-zero exit.
+    child.once("error", () => {
+      removeForwarders();
+      res(1);
+    });
+    child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+      removeForwarders();
       if (typeof code === "number") {
         res(code);
         return;
@@ -415,12 +452,13 @@ async function maybeReExecForSqlite(
   return reExecWithSqliteFlag(env, spawnFn, cwd);
 }
 
-function buildHandlerDepsOrReport(
+async function buildHandlerDepsOrReport(
   parsed: UiCliArgs,
   cwd: string,
   effectiveEnv: EnvSource,
   io: CliIo,
-): UiHandlerDeps | number {
+): Promise<UiHandlerDeps | number> {
+  const { buildUiHandlerDeps, UiStoreError } = await loadServerModule();
   try {
     return buildUiHandlerDeps({
       configPath: resolveUiConfigPath(parsed, effectiveEnv),
@@ -438,11 +476,12 @@ function buildHandlerDepsOrReport(
   }
 }
 
-function registerLaunchProjectOrReport(
+async function registerLaunchProjectOrReport(
   cwd: string,
   handlerDeps: UiHandlerDeps,
   io: CliIo,
-): number | null {
+): Promise<number | null> {
+  const { UiStoreError } = await loadServerModule();
   try {
     handlerDeps.store.createProject(cwd);
     return null;
@@ -491,7 +530,8 @@ async function startUiServer(
   io: CliIo,
   deps: UiCliDeps,
 ): Promise<void> {
-  const factory = deps.createServer ?? createUiServer;
+  // Injected-server tests must not force-load the real server module graph.
+  const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
   const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
@@ -544,6 +584,38 @@ export async function createLiveCspSource(
   };
 }
 
+// Builds the handler deps, registers the launch project, runs the server, and —
+// on EVERY exit path, early error returns included — releases the shared sqlite
+// handle on the real CLI path (mirrors maybeWaitForShutdown's injected-server
+// gate: tests keep the deps alive so they can assert against the store after
+// runUiCli returns). Closing explicitly checkpoints the WAL instead of relying
+// on process exit to drop the WAL/-shm files in an arbitrary state.
+async function launchUiFromDeps(
+  parsed: UiCliArgs,
+  staticRoot: string,
+  csp: string,
+  cwd: string,
+  effectiveEnv: EnvSource,
+  io: CliIo,
+  deps: UiCliDeps,
+): Promise<number> {
+  const handlerDeps = await buildHandlerDepsOrReport(
+    parsed,
+    cwd,
+    withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
+    io,
+  );
+  if (typeof handlerDeps === "number") return handlerDeps;
+  try {
+    const launchProjectResult = await registerLaunchProjectOrReport(cwd, handlerDeps, io);
+    if (launchProjectResult !== null) return launchProjectResult;
+    await startUiServer(staticRoot, csp, parsed, handlerDeps, io, deps);
+    return 0;
+  } finally {
+    if (deps.createServer === undefined) handlerDeps.dispose?.();
+  }
+}
+
 export async function runUiCli(
   args: readonly string[],
   io: CliIo,
@@ -565,18 +637,18 @@ export async function runUiCli(
     deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"),
     io,
   );
-  const handlerDeps = buildHandlerDepsOrReport(
-    parsed,
-    cwd,
-    withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
-    io,
-  );
-  if (typeof handlerDeps === "number") return handlerDeps;
-  const launchProjectResult = registerLaunchProjectOrReport(cwd, handlerDeps, io);
-  if (launchProjectResult !== null) return launchProjectResult;
+  // The finally now covers the deps-build error paths too: previously an early
+  // return there leaked the csp-hashes file watcher for the process lifetime.
   try {
-    await startUiServer(staticRoot, cspRuntime.csp(), parsed, handlerDeps, io, deps);
-    return 0;
+    return await launchUiFromDeps(
+      parsed,
+      staticRoot,
+      cspRuntime.csp(),
+      cwd,
+      effectiveEnv,
+      io,
+      deps,
+    );
   } finally {
     cspRuntime.dispose();
   }

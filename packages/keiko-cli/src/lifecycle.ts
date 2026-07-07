@@ -12,8 +12,12 @@ import { createServer as createNetServer } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-server";
+// From the contracts leaf, not the keiko-sdk fat barrel (GEN-PERF-CLI-001).
+import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts";
+// From the contracts leaf, NOT keiko-server: pulling the server module graph in
+// eagerly here cost every `keiko` invocation ~410ms of ESM loading
+// (GEN-PERF-CLI-001); lifecycle only needs the loopback endpoint constants.
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
 import { resolvePreferredInstallLayout } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
@@ -514,6 +518,14 @@ async function cmdStart(
     return 1;
   }
   const { child, logPath } = spawned;
+
+  // A detached spawn can fail ASYNCHRONOUSLY after returning (EMFILE, exec
+  // permission revoked, …). With no listener Node throws the 'error' event and
+  // crashes `keiko start` with a raw stack; with this listener the failure is
+  // surfaced cleanly and the health poll below reports the failed start.
+  child.once("error", (error: Error) => {
+    io.err(`keiko start: UI process failed to launch (${error.message}).\n`);
+  });
 
   if (child.pid === undefined) {
     io.err("keiko start: failed to spawn the UI process.\n");

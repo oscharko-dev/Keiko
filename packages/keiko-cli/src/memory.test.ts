@@ -86,34 +86,34 @@ function insert(
 }
 
 describe("runMemoryCli — usage and dispatch", () => {
-  it("prints usage and exits 2 with no subcommand", () => {
+  it("prints usage and exits 2 with no subcommand", async () => {
     const cap = capture();
-    expect(runMemoryCli([], cap.io, {})).toBe(2);
+    expect(await runMemoryCli([], cap.io, {})).toBe(2);
     expect(cap.out()).toContain("keiko memory maintain");
   });
 
-  it("prints usage and exits 0 for --help", () => {
+  it("prints usage and exits 0 for --help", async () => {
     const cap = capture();
-    expect(runMemoryCli(["--help"], cap.io, {})).toBe(0);
+    expect(await runMemoryCli(["--help"], cap.io, {})).toBe(0);
     expect(cap.out()).toContain("keiko memory stats");
     expect(cap.out()).toContain("keiko memory diagnostics");
   });
 
-  it("exits 2 on an unknown subcommand", () => {
+  it("exits 2 on an unknown subcommand", async () => {
     const cap = capture();
-    expect(runMemoryCli(["frobnicate"], cap.io, {})).toBe(2);
+    expect(await runMemoryCli(["frobnicate"], cap.io, {})).toBe(2);
     expect(cap.err()).toContain("unknown subcommand");
   });
 });
 
 describe("runMemoryCli stats", () => {
-  it("prints counts by status, scope, and total", () => {
+  it("prints counts by status, scope, and total", async () => {
     const vault = makeVault();
     insert(vault, { id: "a", status: "accepted" });
     insert(vault, { id: "b", status: "accepted" });
     insert(vault, { id: "c", status: "proposed" });
     const cap = capture();
-    expect(runMemoryCli(["stats"], cap.io, {}, { vault })).toBe(0);
+    expect(await runMemoryCli(["stats"], cap.io, {}, { vault })).toBe(0);
     const out = cap.out();
     expect(out).toContain("By status:");
     expect(out).toContain("accepted: 2");
@@ -122,23 +122,23 @@ describe("runMemoryCli stats", () => {
     expect(out).toContain("Total: 3");
   });
 
-  it("reports an empty vault cleanly", () => {
+  it("reports an empty vault cleanly", async () => {
     const vault = makeVault();
     const cap = capture();
-    expect(runMemoryCli(["stats"], cap.io, {}, { vault })).toBe(0);
+    expect(await runMemoryCli(["stats"], cap.io, {}, { vault })).toBe(0);
     expect(cap.out()).toContain("Total: 0");
   });
 });
 
 describe("runMemoryCli diagnostics", () => {
-  it("prints a redacted body-free diagnostics snapshot", () => {
+  it("prints a redacted body-free diagnostics snapshot", async () => {
     const vault = makeVault();
     const fingerprint = "CLI-DIAGNOSTICS-BODY-FINGERPRINT";
     insert(vault, { id: "diag-a", status: "accepted" });
     vault.updateMemory(mid("diag-a"), { body: fingerprint }, Date.now());
     const cap = capture();
     expect(
-      runMemoryCli(
+      await runMemoryCli(
         ["diagnostics", "--last", "5"],
         cap.io,
         {},
@@ -163,7 +163,7 @@ describe("runMemoryCli diagnostics", () => {
 });
 
 describe("runMemoryCli maintain", () => {
-  it("runs the in-process pass and prints the applied counts", () => {
+  it("runs the in-process pass and prints the applied counts", async () => {
     const vault = makeVault();
     // An expired non-accepted memory is forgotten; accepted memories require explicit review.
     insert(vault, {
@@ -173,14 +173,14 @@ describe("runMemoryCli maintain", () => {
       validUntil: Date.now() - 1,
     });
     const cap = capture();
-    expect(runMemoryCli(["maintain"], cap.io, {}, { vault })).toBe(0);
+    expect(await runMemoryCli(["maintain"], cap.io, {}, { vault })).toBe(0);
     const out = cap.out();
     expect(out).toContain("Memory maintenance complete.");
     expect(out).toContain("forgotten:         1");
     expect(vault.getMemory(mid("m"))).toBeUndefined();
   });
 
-  it("persists memory audit evidence for maintenance mutations", () => {
+  it("persists memory audit evidence for maintenance mutations", async () => {
     const vault = makeVault();
     const evidenceStore = createInMemoryEvidenceStore();
     insert(vault, {
@@ -190,7 +190,7 @@ describe("runMemoryCli maintain", () => {
       validUntil: Date.now() - 1,
     });
     const cap = capture();
-    expect(runMemoryCli(["maintain"], cap.io, {}, { vault, evidenceStore })).toBe(0);
+    expect(await runMemoryCli(["maintain"], cap.io, {}, { vault, evidenceStore })).toBe(0);
     const runIds = evidenceStore.list();
     expect(runIds).toHaveLength(1);
     const runId = runIds[0];
@@ -308,9 +308,9 @@ describe("runMemoryCli reembed", () => {
 });
 
 describe("runMemoryCli error handling", () => {
-  it("exits 1 and prints the message when the vault factory throws", () => {
+  it("exits 1 and prints the message when the vault factory throws", async () => {
     const cap = capture();
-    const code = runMemoryCli(
+    const code = await runMemoryCli(
       ["stats"],
       cap.io,
       {},
