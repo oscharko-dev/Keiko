@@ -451,18 +451,20 @@ describe("GroundedAnswer", () => {
     expect(screen.queryByRole("region", { name: "Knowledge Pod retrieval activity" })).toBeNull();
   });
 
-  it("renders degraded, denied, unavailable, and not-selected activity states", () => {
+  it("renders skipped, degraded, denied, unavailable, and not-selected activity states", () => {
     const pod = retrievalActivityPod();
     const activity = retrievalActivity({
       summary: {
         ...retrievalActivity().summary,
         searchedCount: 0,
+        skippedCount: 1,
         degradedCount: 1,
         deniedCount: 1,
         unavailableCount: 1,
         notSelectedCount: 1,
       },
       pods: [
+        { ...pod, podId: "cap-skipped" as typeof pod.podId, state: "skipped" },
         { ...pod, podId: "cap-degraded" as typeof pod.podId, state: "degraded" },
         {
           ...pod,
@@ -482,6 +484,7 @@ describe("GroundedAnswer", () => {
       />,
     );
 
+    expect(screen.getAllByText("Skipped").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Degraded").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Denied").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
@@ -496,6 +499,7 @@ describe("GroundedAnswer", () => {
     const activity = retrievalActivity({
       pods: [
         { ...pod, podId: "cap-searched" as typeof pod.podId, state: "searched" },
+        { ...pod, podId: "cap-skipped" as typeof pod.podId, state: "skipped" },
         { ...pod, podId: "cap-denied" as typeof pod.podId, state: "denied" },
         { ...pod, podId: "cap-degraded" as typeof pod.podId, state: "degraded" },
       ],
@@ -512,7 +516,7 @@ describe("GroundedAnswer", () => {
     // an aria-hidden subtree — so an icon-only/aria-hidden badge refactor would fail here rather
     // than silently drop the label from what a screen reader conveys.
     const details = screen.getByRole("list", { name: "Knowledge Pod activity details" });
-    for (const label of ["Searched", "Denied", "Degraded"]) {
+    for (const label of ["Searched", "Skipped", "Denied", "Degraded"]) {
       const badge = within(details).getByText(label);
       expect(badge.closest("[aria-hidden='true']")).toBeNull();
     }

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { OpenAiAdapter } from "./openai-adapter.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { OpenAiAdapter, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
 import {
   AuthenticationError,
   CancelledError,
@@ -12,6 +12,7 @@ import {
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { GatewayError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { OutboundHttpEgressError } from "./http.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
@@ -742,5 +743,92 @@ describe("OpenAiAdapter.callStream", () => {
     await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toBeInstanceOf(
       TransportError,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Idle-stream timeout + mid-stream partial-usage retention
+// ---------------------------------------------------------------------------
+
+function usageLine(prompt: number, completion: number): string {
+  return `data: ${JSON.stringify({
+    choices: [],
+    usage: { prompt_tokens: prompt, completion_tokens: completion },
+  })}\n`;
+}
+
+describe("OpenAiAdapter.callStream idle-stream timeout", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aborts a stream that stops producing chunks with a typed TimeoutError", async () => {
+    vi.useFakeTimers();
+    let cancelled = false;
+    // First delta arrives, then the stream goes silent forever (half-open socket).
+    const stalledStream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(new TextEncoder().encode(deltaLine("partial answer")));
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const adapter = adapterWith(() =>
+      Promise.resolve(new Response(stalledStream, { status: 200 })),
+    );
+    const consumed = collectStream(adapter.callStream(REQUEST, CONFIG));
+    const settled = expect(consumed).rejects.toBeInstanceOf(TimeoutError);
+    await vi.advanceTimersByTimeAsync(STREAM_IDLE_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settled;
+    // The stalled reader is closed so the fetch body cannot leak past the throw.
+    await vi.waitFor(() => {
+      expect(cancelled).toBe(true);
+    });
+  });
+
+  it("does not fire while chunks keep arriving within the idle window", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(sseResponse([deltaLine("a"), deltaLine("b"), "data: [DONE]\n"])),
+    );
+    const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
+    const done = chunks.at(-1);
+    expect(done?.type).toBe("done");
+  });
+});
+
+describe("OpenAiAdapter.callStream mid-stream usage retention", () => {
+  it("attaches the accumulated usage counts to a mid-stream failure", async () => {
+    // Usage chunk and one delta arrive, THEN the socket dies: the thrown error
+    // must carry the counts so cost accounting does not silently lose the turn.
+    // controller.error() inside start() would discard queued chunks, so the
+    // reads are staged through pull(): usage, then a delta, THEN the failure.
+    let step = 0;
+    const failingStream = new ReadableStream<Uint8Array>({
+      pull(controller): void {
+        const enc = new TextEncoder();
+        if (step === 0) controller.enqueue(enc.encode(usageLine(41, 7)));
+        else if (step === 1) controller.enqueue(enc.encode(deltaLine("partial")));
+        else controller.error(new Error("socket reset"));
+        step += 1;
+      },
+    });
+    const adapter = adapterWith(() =>
+      Promise.resolve(new Response(failingStream, { status: 200 })),
+    );
+    let thrown: unknown;
+    try {
+      await collectStream(adapter.callStream(REQUEST, CONFIG));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TransportError);
+    const gatewayError = thrown as GatewayError;
+    expect(gatewayError.partialUsage).toEqual({
+      promptTokens: 41,
+      completionTokens: 7,
+      streamedChars: "partial".length,
+    });
   });
 });

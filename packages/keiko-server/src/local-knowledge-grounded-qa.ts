@@ -1061,12 +1061,18 @@ function buildLocalKnowledgeContextPack(
   redactLabel: LabelRedactor | undefined,
   limits: ReturnType<typeof currentGroundingLimits>,
 ): LocalKnowledgeGroundedAnswer["contextPack"] {
-  const safeScopeLabel = citationLabelPart(selected.scopeLabel, redactLabel);
+  // citationLabelPart only whitespace-collapses and applies the audit/secret redactor — unlike
+  // retrievalActivity's pod names, it never ran through the evidence-safe-text gate, so a pod
+  // display name containing a filesystem path or PII (not a known secret shape) reached this
+  // client-facing field verbatim. buildNoEvidenceAnswer already gates its scopeLabel through
+  // activityDisplayName; align this, the happy-path builder, with that existing guard.
+  const compactScopeLabel = citationLabelPart(selected.scopeLabel, redactLabel);
+  const safeScopeLabel = activityDisplayName(compactScopeLabel);
   return {
     kind: "local-knowledge",
     scopeKind: selected.scopeKind,
-    scopeId: `lk-${hashString32(`${chat.id}|${safeScopeLabel}`)}`,
-    scopeLabel: citationLabelFallback(safeScopeLabel),
+    scopeId: `lk-${hashString32(`${chat.id}|${compactScopeLabel}`)}`,
+    scopeLabel: safeScopeLabel,
     capsuleCount: result.pack.scope.capsuleCount,
     sourceCount: result.pack.scope.sourceCount,
     citationCount: citations.length,
@@ -1695,7 +1701,7 @@ function activitySourceIds(
   );
 }
 
-function activityDisplayName(value: string): string {
+export function activityDisplayName(value: string): string {
   return isKnowledgePodRetrievalActivitySafeText(value) ? value : ACTIVITY_FALLBACK_DISPLAY_NAME;
 }
 

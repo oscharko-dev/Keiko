@@ -77,6 +77,7 @@ import {
 } from "./grounded-qa-multi-source.js";
 import {
   LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
+  activityDisplayName,
   buildSelectedScopeSourceLookup,
   createEmbeddingAdapter,
   openStoreForDeps,
@@ -862,11 +863,16 @@ function knowledgeSummary(
   const label = connectors.map((src) => src.label).join("+");
   const scopeKind = connectors.length === 1 ? connectors[0]?.selected.scopeKind : "capsule-set";
   const capsules = connectors.flatMap((src) => src.selected.capsules);
+  // Unlike the local-knowledge context pack, this joined multi-connector label previously reached
+  // the client-facing summary with no redaction or safe-text gate at all — a raw pod/pod-set
+  // display name containing a filesystem path or PII leaked verbatim. Gate each connector's label
+  // individually before joining, so one unsafe label falls back without discarding the others.
+  const safeLabel = connectors.map((src) => activityDisplayName(src.label)).join("+");
   return {
     kind: "local-knowledge",
     scopeKind: scopeKind ?? "capsule-set",
     scopeId: `lk-${hashString32(`${chat.id}|${label}`)}`,
-    scopeLabel: label,
+    scopeLabel: safeLabel,
     capsuleCount,
     sourceCount: connectorSourceCount(connectors),
     citationCount,

@@ -120,7 +120,7 @@ function resolveSingleCapsuleScope(
   }
   return {
     ok: true,
-    scope: { capsuleIds: [capsule.id] },
+    scope: { capsuleIds: [capsule.id], capsules: [capsule] },
     policy: capsule.answerGroundingPolicy,
   };
 }
@@ -139,10 +139,14 @@ function resolveCapsuleSetScope(store: KnowledgeStore, setId: CapsuleSetId): Res
     throw cause;
   }
   if (scope.capsuleIds.length === 0) return { ok: false, reason: "no-scope" };
-  const policy = strictestPolicy(store, scope.capsuleIds);
+  const policy = strictestPolicy(scope.capsules);
   return {
     ok: true,
-    scope: { capsuleIds: scope.capsuleIds, sourceFilter: scope.sourceIds },
+    scope: {
+      capsuleIds: scope.capsuleIds,
+      sourceFilter: scope.sourceIds,
+      capsules: scope.capsules,
+    },
     policy,
   };
 }
@@ -153,14 +157,11 @@ const POLICY_RANK: Readonly<Record<CapsuleAnswerGroundingPolicy, number>> = Obje
   "best-effort": 0,
 });
 
-function strictestPolicy(
-  store: KnowledgeStore,
-  capsuleIds: readonly KnowledgeCapsuleId[],
-): CapsuleAnswerGroundingPolicy {
+// Pure over the already-loaded member capsules (GEN-PERF-LK-001): re-fetching each
+// capsule by id here was one of the redundant metadata round-trips per query.
+function strictestPolicy(capsules: readonly KnowledgeCapsule[]): CapsuleAnswerGroundingPolicy {
   let strictest: CapsuleAnswerGroundingPolicy = "best-effort";
-  for (const id of capsuleIds) {
-    const capsule = getCapsule(store, id);
-    if (capsule === undefined) continue;
+  for (const capsule of capsules) {
     if (POLICY_RANK[capsule.answerGroundingPolicy] > POLICY_RANK[strictest]) {
       strictest = capsule.answerGroundingPolicy;
     }

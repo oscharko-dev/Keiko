@@ -1032,9 +1032,53 @@ function parseSseLine(rawLine: string): SseLineResult {
 // Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads.
 // Incomplete lines are buffered across reads; `data: [DONE]` terminates; cumulative
 // bytes are capped exactly like readJsonCapped. A null body yields nothing.
+// Raised when an SSE stream produces no chunk within the idle window. Deliberately
+// a plain transport-layer error: the provider adapter maps it onto the typed,
+// secret-redacting TimeoutError of the gateway error taxonomy.
+export class SseIdleTimeoutError extends Error {
+  constructor(idleTimeoutMs: number) {
+    super(`SSE stream produced no chunk for ${String(idleTimeoutMs)}ms`);
+    this.name = "SseIdleTimeoutError";
+  }
+}
+
+// Races one read against the idle window. On timeout the reader is CANCELLED
+// first — that settles the pending read and releases the underlying body — and
+// only then does the error surface, so a stalled provider stream can never leak
+// its fetch body past the throw.
+const IDLE_TIMEOUT_MARKER: unique symbol = Symbol("sse-idle-timeout");
+
+async function readWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleTimeoutMs: number | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (idleTimeoutMs === undefined) {
+    return reader.read();
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const idle = new Promise<typeof IDLE_TIMEOUT_MARKER>((resolveIdle) => {
+    timer = setTimeout(() => {
+      resolveIdle(IDLE_TIMEOUT_MARKER);
+    }, idleTimeoutMs);
+  });
+  try {
+    const result = await Promise.race([reader.read(), idle]);
+    if (result === IDLE_TIMEOUT_MARKER) {
+      // Cancelling settles the pending read and releases the underlying body,
+      // so a stalled provider stream can never leak its fetch body past the throw.
+      void reader.cancel().catch(() => undefined);
+      throw new SseIdleTimeoutError(idleTimeoutMs);
+    }
+    return result;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function* readSseStream(
   response: Response,
   maxBytes: number = MAX_RESPONSE_BYTES,
+  idleTimeoutMs?: number,
 ): AsyncGenerator {
   if (response.body === null) {
     return;
@@ -1044,7 +1088,7 @@ export async function* readSseStream(
   let buffer = "";
   let total = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    const { done, value } = await readWithIdleTimeout(reader, idleTimeoutMs);
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
