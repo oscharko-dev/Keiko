@@ -28,6 +28,10 @@ import type {
 export interface GatewayDeps {
   readonly adapter?: ProviderAdapter | undefined;
   readonly clock?: Clock | undefined;
+  // Randomness source for the retry backoff's equal jitter. Injectable so tests
+  // that pin exact sleep/budget arithmetic stay deterministic (same philosophy
+  // as the injectable Clock). Defaults to Math.random.
+  readonly random?: (() => number) | undefined;
 }
 
 // RB-6 (GEN-OBS-CORRELATION-503): tag a thrown GatewayError with the gateway's per-call request id
@@ -47,6 +51,7 @@ interface RoutedCall {
 
 export class Gateway {
   private readonly clock: Clock;
+  private readonly random: () => number;
   private readonly adapter: ProviderAdapter | undefined;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly breakers = new Map<string, CircuitBreaker>();
@@ -56,6 +61,7 @@ export class Gateway {
     deps: GatewayDeps = {},
   ) {
     this.clock = deps.clock ?? systemClock;
+    this.random = deps.random ?? Math.random;
     this.adapter = deps.adapter;
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
   }
@@ -78,6 +84,7 @@ export class Gateway {
         route.provider,
         this.clock,
         request.cancellationSignal,
+        this.random,
       );
     } catch (error) {
       // RB-6: stamp the gateway request id onto the thrown error so a FAILED buffered call is

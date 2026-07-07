@@ -32,6 +32,15 @@ export type GatewayEgressErrorCode =
   | typeof ERROR_CODES.PROXY_BLOCKED_BY_POLICY
   | typeof ERROR_CODES.TLS_CA_FAILURE;
 
+// Token usage a streaming call had already accumulated when it failed mid-stream.
+// Counts only — never content — so it can ride on redacted operator diagnostics
+// and keep cost accounting from silently losing the interrupted turn.
+export interface PartialStreamUsage {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly streamedChars: number;
+}
+
 export abstract class GatewayError extends RedactingError {
   abstract override readonly code: ErrorCode;
   abstract readonly retryable: boolean;
@@ -40,6 +49,10 @@ export abstract class GatewayError extends RedactingError {
   // gateway's record and to the server/UI correlation id. Optional so no constructor changes and no
   // existing GatewayError construction/test is affected.
   requestId?: string;
+  // Usage accumulated before a MID-STREAM failure (same attach-at-throw-site pattern
+  // as requestId above): optional so no constructor changes and no existing
+  // GatewayError construction/test is affected. Counts only, never content.
+  partialUsage?: PartialStreamUsage;
 }
 
 export class AuthenticationError extends GatewayError {
@@ -97,14 +110,23 @@ export class CircuitOpenError extends GatewayError {
   readonly retryable = false;
 }
 
+// Provider 5xx responses are transient by the providers' own contracts (both
+// OpenAI-compatible and Anthropic APIs document retry-with-backoff for
+// 500/502/503/529); everything else a ProviderError carries (4xx validation,
+// permission, not-found …) is terminal. Streaming calls never enter the retry
+// loop (Gateway.chatStream is deliberately not wrapped in executeWithRetry), so
+// this flag re-enables retries for idempotent, buffered calls only.
+const RETRYABLE_PROVIDER_HTTP_STATUS: ReadonlySet<number> = new Set([500, 502, 503, 529]);
+
 export class ProviderError extends GatewayError {
   readonly code = ERROR_CODES.PROVIDER_ERROR;
-  readonly retryable = false;
+  readonly retryable: boolean;
   readonly httpStatus: number;
 
   constructor(message: string, httpStatus: number, secrets: readonly string[] = []) {
     super(message, secrets);
     this.httpStatus = httpStatus;
+    this.retryable = RETRYABLE_PROVIDER_HTTP_STATUS.has(httpStatus);
   }
 }
 
