@@ -8,14 +8,14 @@ branch. It is a release-readiness artifact, not a new runtime subsystem.
 
 ## Current Integration State
 
-| Area               | Evidence                                                      | Result                                                                                |
-| ------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Program branch     | `epic/portable-product-delivery-v2`                           | Single integration branch for the full feature before any `dev` PR.                   |
-| Latest dev sync    | `origin/dev@ef5d867f` merged into #1961 branch via `e0835b42` | Final QA runs against current `dev`, not the older program base.                      |
-| Runtime/setup epic | #1942 closed                                                  | Portable artifacts, bundled Node runtime, first-run setup, and install records exist. |
-| Updater epic       | #1945 closed                                                  | Portable-managed one-click updates extend the governed updater.                       |
-| Final QA issue     | #1961 active                                                  | Owns ADR reconciliation, final gates, release-impact closeout, and final `dev` PR.    |
-| Dev merge policy   | #1944, #1961                                                  | No prerequisite implementation epic targets `dev` separately.                         |
+| Area               | Evidence                                                        | Result                                                                                |
+| ------------------ | --------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Program branch     | `epic/portable-product-delivery-v2`                             | Single integration branch for the full feature before any `dev` PR.                   |
+| Latest dev sync    | `origin/dev@d0da7ec1` merged into program branch via `6be9a1f5` | Final QA runs against current `dev`, not the older program base.                      |
+| Runtime/setup epic | #1942 closed                                                    | Portable artifacts, bundled Node runtime, first-run setup, and install records exist. |
+| Updater epic       | #1945 closed                                                    | Portable-managed one-click updates extend the governed updater.                       |
+| Final QA issue     | #1961 active                                                    | Owns ADR reconciliation, final gates, release-impact closeout, and final `dev` PR.    |
+| Dev merge policy   | #1944, #1961                                                    | No prerequisite implementation epic targets `dev` separately.                         |
 
 ## ADR Reconciliation
 
@@ -90,24 +90,23 @@ It records:
 
 ## Verification Ledger
 
-Commands already run after the current-dev sync:
+Commands already run after the latest current-dev sync:
 
-| Command                                                                                                               | Result                                |
-| --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `npm run check:adr-index`                                                                                             | Pass.                                 |
-| `npm run check:release-impact`                                                                                        | Pass.                                 |
-| `npm run check:portable-manifest`                                                                                     | Pass: 1 manifest.                     |
-| `npm run format:check`                                                                                                | Pass after formatting this QA ledger. |
-| `npx vitest run scripts/__tests__/release-impact-governance.test.mjs scripts/__tests__/release-impact-notes.test.mjs` | Pass: 2 files, 26 tests.              |
-| Portable runtime/release publish script suite                                                                         | Pass: 6 files, 90 tests.              |
-| Portable updater/server/CLI suite                                                                                     | Pass: 12 files, 129 tests.            |
-| Update UI API/window/startup notice unit suite                                                                        | Pass: 3 files, 97 tests.              |
-| `npm run test:e2e:update-ui-1696`                                                                                     | Pass: 2 Playwright tests.             |
-| `npm run smoke:portable-launch-setup`                                                                                 | Pass: 3 portable targets.             |
-| Clean package build, `build:ui`, editor evidence, pruning, and `check:package-surface`                                | Pass: 4,280 package files.            |
-| `npm run typecheck --workspace @oscharko-dev/keiko-ui`                                                                | Pass.                                 |
-| `npm run lint --workspace @oscharko-dev/keiko-ui`                                                                     | Pass.                                 |
-| `npm run test:coverage:ui`                                                                                            | Pass: 269 files, 4,399 tests.         |
+| Command                                                                                                                                                                                         | Result                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run check:adr-index`                                                                                                                                                                       | Pass: 87 unique ADR numbers, all indexed, no orphan links.                                                                                                                                      |
+| `npm run check:release-impact`                                                                                                                                                                  | Pass: current package version has reviewed update-impact metadata.                                                                                                                              |
+| `npm run check:portable-manifest`                                                                                                                                                               | Pass: 1 manifest.                                                                                                                                                                               |
+| `npm run check:version-consistency`                                                                                                                                                             | Pass: all workspace packages and exported constants report `0.2.14`.                                                                                                                            |
+| `npx vitest run packages/keiko-cli/src/memory.test.ts packages/keiko-server/src/update-portable-activation.test.ts`                                                                             | Pass: 2 files, 20 tests.                                                                                                                                                                        |
+| `npm run typecheck`                                                                                                                                                                             | Pass.                                                                                                                                                                                           |
+| `npm run lint`                                                                                                                                                                                  | Pass.                                                                                                                                                                                           |
+| `npm run format:check`                                                                                                                                                                          | Pass.                                                                                                                                                                                           |
+| `npm run arch:check`                                                                                                                                                                            | Pass: no dependency violations; import policy and contract boundary checks passed.                                                                                                              |
+| `npm run arch:check:negative`                                                                                                                                                                   | Pass: gate fired on 48 fixtures as expected.                                                                                                                                                    |
+| `npm test`                                                                                                                                                                                      | Pass: 1,011 files, 17,183 tests passed, 1 skipped.                                                                                                                                              |
+| `npm run clean && npm run build && npm run build:ui && npm run prepare:bin && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:package-surface` | Pass: editor bundle size check passed; package surface passed with 4,315 package files.                                                                                                         |
+| `npm run check:editor-release-evidence` on macOS                                                                                                                                                | Expected local platform mismatch: committed Linux fingerprint `8e39300...`; macOS measurement `b11bedda...`. Do not refresh this evidence from macOS; the Linux `ui` CI check is authoritative. |
 
 Final #1961 verification must run before the program PR is marked ready:
 
