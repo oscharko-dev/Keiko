@@ -17,7 +17,7 @@ import {
 
 describe("defaultTokenEstimator", () => {
   it("uses the WP4 chunking defaults and boundary strategy version", () => {
-    expect(CHUNKING_STRATEGY_VERSION).toBe("boundary-v4");
+    expect(CHUNKING_STRATEGY_VERSION).toBe("boundary-v5");
     expect(DEFAULT_MAX_TOKENS).toBe(512);
     expect(DEFAULT_OVERLAP_TOKENS).toBe(50);
   });

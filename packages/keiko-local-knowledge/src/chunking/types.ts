@@ -50,7 +50,12 @@ export const DEFAULT_OVERLAP_TOKENS = 50;
 export const DEFAULT_MAX_CHUNKS = 50_000;
 export const MAX_CHUNK_TOKENS = 2_048;
 export const MAX_OVERLAP_TOKENS = 1_024;
-export const CHUNKING_STRATEGY_VERSION = "boundary-v4" as const;
+// v5: chooseChunkEnd now checks the line/row boundary before the sentence boundary, so a
+// mid-line "digit-period-space" match (decimal literals, trailing-period code comments,
+// decimal table cells) no longer starves an available newline boundary. This changes chunk
+// output for previously-chunked technical content, so existing persisted chunks must be
+// treated as stale and re-chunked (post-merge fix, Epic #1855 / Issue #1887).
+export const CHUNKING_STRATEGY_VERSION = "boundary-v5" as const;
 export const DEFAULT_INDEXING_TEXT_STRATEGY_KEY = "indexed-text=raw-v1" as const;
 export const CONSERVATIVE_TOKENIZER_ID = "keiko-conservative-estimator-v2" as const;
 export const CUSTOM_TOKEN_ESTIMATOR_ID = "custom-token-estimator-v1" as const;

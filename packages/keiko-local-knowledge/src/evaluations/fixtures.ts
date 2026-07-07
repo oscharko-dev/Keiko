@@ -1377,16 +1377,34 @@ export const sealedPodFixture: RetrievalEvalFixture = {
 
 // Epic #1855 / Issue #1888. Technical HTML manual retrieval over `html-block` units. Each chunk's
 // text mirrors what the improved parser (#1886) writes into the normalized projection — a
-// header-attached table row, a "Term: definition" pair, an anchored section, and English evidence
-// for a multilingual question — so the scorecard rewards structure-preserving extraction and
-// regresses if a query can no longer recall its structural target. Distinct from `exact-technical`
-// (Markdown sections, no HTML structure), `multilingual-retrieval` (Markdown), and
-// `structured-files` (one generic html-block with no table/anchor/definition query). All bodies
-// synthetic and body-safe.
+// header-attached table row, a "Term: definition" pair, an anchored section — so the scorecard
+// rewards structure-preserving extraction and regresses if a query can no longer recall its
+// structural target. Distinct from `exact-technical` (Markdown sections, no HTML structure),
+// `multilingual-retrieval` (Markdown), and `structured-files` (one generic html-block with no
+// table/anchor/definition query). All bodies synthetic and body-safe.
+//
+// SCOPE NOTE (post-merge audit, #1888 finding 3): this fixture is pre-chunked, hand-authored
+// text that already looks like the post-#1886 parser output — it does NOT invoke
+// `html-parser.ts` or `chunker.ts`. It regresses the retrieval/citation-scoring layer over
+// already-correct synthetic text, not the parser/chunker themselves. A parser regression (e.g.
+// the old "Column N=value" table flattening, or broken `<dl>` pairing) will NOT be caught here;
+// that coverage lives in `html-parser.test.ts` / `chunker.test.ts`. See
+// docs/local-knowledge/technical-html-structure-ledger.md for the full disposition.
+//
+// QUERY AXIS NOTE (#1888 findings 4/5): every query below that carries a `topic` salt is, by
+// the harness's own design (see `runner-seed.ts`), guaranteed to recall its target chunk through
+// the scripted embedding adapter's dense topic-boost lane — that alone does not make an axis
+// "genuine" or distinct from any other fixture that also uses a `topic` salt. All four queries
+// below are additionally verified (locally, by temporarily stripping each query's/chunk's
+// `topic` field and re-running the harness) to still recall their target chunk on the strength
+// of real lexical/token overlap alone — `q-html-error-timeout` and `q-html-def-timeout` via
+// their original wording, `q-html-torque` and `q-html-retries` via an `exact`-strategy literal
+// phrase shared with the target chunk's text. None of the four is a dense-lane-only duplicate of
+// another fixture's query axis (e.g. `multilingual-retrieval`'s cross-language dense recall).
 export const htmlManualStructureFixture: RetrievalEvalFixture = {
   id: "html-manual-structure",
   description:
-    "Technical HTML manual: table-row identifier, anchored section, definition, and multilingual " +
+    "Technical HTML manual: table-row identifier, anchored section, definition, and retry-limit " +
     "question recall over html-block units.",
   capsules: [
     {
@@ -1505,10 +1523,14 @@ export const htmlManualStructureFixture: RetrievalEvalFixture = {
       topK: 1,
     },
     {
+      // #1888 finding 5: this axis must be genuinely lexically grounded, not just
+      // topic-boost-carried — the `exact` strategy plus a literal phrase shared with
+      // `c-html-torque`'s text ("mounting bracket bolt ... 12 Nm") is verified (locally, by
+      // temporarily stripping the `topic` salt) to still recall the target chunk on its own.
       id: "q-html-torque",
-      text: "What tightening force is specified for the mounting bracket bolts during installation?",
+      text: 'What does "tighten each mounting bracket bolt to 12 Nm" mean for installation?',
       topic: "mounting-torque",
-      strategy: "balanced",
+      strategy: "exact",
       scope: { kind: "capsule", capsuleId: capsuleId("cap-html-manual") },
       expectedChunkIds: [chunkId("c-html-torque")],
       topK: 1,
@@ -1523,10 +1545,17 @@ export const htmlManualStructureFixture: RetrievalEvalFixture = {
       topK: 1,
     },
     {
-      id: "q-html-retries-de",
-      text: "Wie oft wird eine fehlgeschlagene Anfrage automatisch wiederholt?",
+      // #1888 finding 4: a German query salted only by `topic` was mechanistically identical
+      // to `multilingual-retrieval`'s own query (zero lexical overlap, resolved purely via the
+      // scripted adapter's dense topic-boost lane) — that duplicates an existing cross-language
+      // regression risk instead of testing anything HTML-structure-specific. Replaced with an
+      // `exact`-strategy literal-phrase query against the retries `html-block` unit, verified
+      // (locally, by stripping the `topic` salt) to still recall the target chunk on its own —
+      // a genuine, non-duplicate axis over the html-block retry-limit sentence.
+      id: "q-html-retries",
+      text: 'What does "retries a failed request at most three times" mean for the controller?',
       topic: "retry-limit",
-      strategy: "broad",
+      strategy: "exact",
       scope: { kind: "capsule", capsuleId: capsuleId("cap-html-manual") },
       expectedChunkIds: [chunkId("c-html-retries")],
       topK: 1,

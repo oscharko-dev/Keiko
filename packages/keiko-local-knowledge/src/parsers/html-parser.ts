@@ -141,13 +141,48 @@ function skipSpecialMarker(text: string, after: number): number | null {
   return null;
 }
 
+// Quote-aware scan for a tag's terminating `>`. A single- or double-quoted attribute value may
+// contain a literal `>` (e.g. `title="Section > Details"`); a bare `indexOf(">", from)` would
+// mis-terminate the tag there, corrupting `tag.raw` and desynchronizing the scanner cursor for
+// every subsequent event. This stays a single-pass character scan (no regex) so the CodeQL
+// `js/bad-tag-filter` posture is preserved.
+function findQuotedTagEnd(text: string, from: number): number {
+  let quote = 0; // 0 = not in a quote, else the quote char code (0x22 `"` or 0x27 `'`)
+  for (let i = from; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (quote !== 0) {
+      if (code === quote) quote = 0;
+      continue;
+    }
+    if (code === 0x22 || code === 0x27) {
+      quote = code;
+      continue;
+    }
+    if (code === 0x3e /* > */) return i;
+  }
+  return -1;
+}
+
+// A stray, never-closed quote in an attribute value (malformed/truncated markup) would otherwise
+// leave the quote-aware scan tracking "inside a quote" all the way to end of document, so it never
+// finds an unquoted `>` and reports the tag as unterminated. `readTagAt` then treats the tag as
+// absent, and the top-level scanner falls back to emitting raw, un-stripped markup as literal text
+// for the REST OF THE DOCUMENT — an unbounded leak from a single malformed tag. Bound the damage to
+// just this one tag by falling back to a plain `>` search (ignoring quote state) so the scanner
+// re-synchronizes on the next tag boundary instead of corrupting everything that follows.
+function findTagEnd(text: string, from: number): number {
+  const quoted = findQuotedTagEnd(text, from);
+  if (quoted !== -1) return quoted;
+  return text.indexOf(">", from);
+}
+
 function readTagAt(text: string, lt: number): Tag | null {
   const after = lt + 1;
   const isClose = text.charCodeAt(after) === 0x2f; /* / */
   const nameStart = isClose ? after + 1 : after;
   if (!isAlpha(text.charCodeAt(nameStart))) return null;
   const { name, after: afterName } = readTagName(text, nameStart);
-  const gt = text.indexOf(">", afterName);
+  const gt = findTagEnd(text, afterName);
   if (gt === -1) return null;
   const selfClosing = !isClose && text.charCodeAt(gt - 1) === 0x2f;
   const kind: TagKind = isClose ? "close" : selfClosing ? "self-closing" : "open";
@@ -191,6 +226,69 @@ function skipRawText(text: string, textLower: string, tagName: string, from: num
 
 function skipElement(text: string, textLower: string, tagName: string, from: number): number {
   return skipRawText(text, textLower, tagName, from);
+}
+
+interface NestableElementEnd {
+  // Offset of the matching close tag's `<` — i.e. one past the element's inner content.
+  readonly contentEnd: number;
+  // Offset one past the matching close tag's `>` — i.e. one past the whole element.
+  readonly elementEnd: number;
+}
+
+// Depth-aware close for elements that legitimately nest same-named children — `<table>` (a cell
+// may contain a sub-table) and `<dl>` (a `<dd>` may contain a nested `<dl>`). A naive
+// `indexOf("</table>", from)` (what `skipElement` does) stops at the FIRST close tag, which for a
+// nested table/dl is the INNER element's close — truncating the outer element and silently
+// dropping every sibling that follows the nested one. Walks tags via `nextEvent`, counting depth,
+// so the returned offsets bracket the matching OUTER close tag. MUST also skip `<script>`/`<style>`/
+// `<noscript>` subtrees the same way `fragmentTextRaw`/`readDocumentTitle` do (GRD-003): otherwise a
+// raw-text body containing a literal `</table>`/`</dl>`-shaped substring (e.g. a JS string literal)
+// is mis-read as a real close tag, prematurely ending the depth-aware scan and leaking the rest of
+// the script/style body as ordinary text. `textLower` is the caller's already-lowercased view of
+// `text` (never recomputed per call here) so a large table with many rows stays O(n), not O(n²).
+// +1 for a matching open tag, -1 for a matching close tag, 0 otherwise. Split out of
+// `findNestableElementEnd` purely to keep that function's cyclomatic complexity within the
+// repo's limit.
+function nestableDepthDelta(tag: Tag, tagName: string): number {
+  if (tag.name !== tagName) return 0;
+  if (tag.kind === "open") return 1;
+  if (tag.kind === "close") return -1;
+  return 0;
+}
+
+function findNestableElementEnd(
+  text: string,
+  textLower: string,
+  tagName: string,
+  from: number,
+): NestableElementEnd {
+  let depth = 1;
+  let cursor = from;
+  while (cursor < text.length) {
+    const event = nextEvent(text, cursor);
+    if (event.kind === "eof") break;
+    if (event.kind !== "tag") {
+      cursor = event.next;
+      continue;
+    }
+    if (RAW_TEXT_TAGS.has(event.tag.name) && event.tag.kind === "open") {
+      cursor = skipRawText(text, textLower, event.tag.name, event.tag.end);
+      continue;
+    }
+    depth += nestableDepthDelta(event.tag, tagName);
+    if (depth === 0) return { contentEnd: event.tag.start, elementEnd: event.tag.end };
+    cursor = event.next;
+  }
+  return { contentEnd: text.length, elementEnd: text.length };
+}
+
+function skipNestableElement(
+  text: string,
+  textLower: string,
+  tagName: string,
+  from: number,
+): number {
+  return findNestableElementEnd(text, textLower, tagName, from).elementEnd;
 }
 
 function isBoilerplateTag(tag: Tag): boolean {
@@ -361,13 +459,27 @@ function pushVerbatimBlock(state: ScanState, text: string): void {
   pushRenderedBlock(state, text.slice(start, end));
 }
 
+// Shared by <pre>/<code> verbatim capture, <dl> definitions, <table> cells, and <title>: walks an
+// already-sliced element-HTML fragment and returns its visible text. MUST skip any nested
+// `<script>`/`<style>`/`<noscript>` subtree the same way the top-level body scanner does — a
+// script/style body must never survive tag-stripping into the persisted normalizedText (GRD-003),
+// regardless of which container element it happens to be nested inside.
 function fragmentTextRaw(fragment: string): string {
+  const fragmentLower = fragment.toLowerCase();
   let out = "";
   let cursor = 0;
   while (cursor < fragment.length) {
     const event = nextEvent(fragment, cursor);
     if (event.kind === "eof") break;
-    if (event.kind === "text") out += fragment.slice(event.start, event.end);
+    if (event.kind === "text") {
+      out += fragment.slice(event.start, event.end);
+      cursor = event.next;
+      continue;
+    }
+    if (event.kind === "tag" && RAW_TEXT_TAGS.has(event.tag.name) && event.tag.kind === "open") {
+      cursor = skipRawText(fragment, fragmentLower, event.tag.name, event.tag.end);
+      continue;
+    }
     cursor = event.next;
   }
   return decodeXmlEntities(out);
@@ -377,17 +489,52 @@ function htmlFragmentText(fragment: string): string {
   return fragmentTextRaw(fragment).trim();
 }
 
+interface ElementSpan {
+  readonly name: string;
+  readonly innerHtml: string;
+}
+
+// Extracts TOP-LEVEL `<name>...</name>` elements (any of `tagNames`) from an already-sliced
+// fragment of element HTML, depth-aware per tag name so a nested element of the SAME name (a
+// sub-table cell, a nested `<dl>`) does not truncate the outer element at its first inner close
+// tag — the same bug class `skipNestableElement` fixes for the top-level `<table>`/`<dl>` scan.
+// Elements nested inside one of the matched tags are NOT separately returned (e.g. a `<td>`
+// inside a `<td>` is invalid HTML and out of scope; a `<dt>`/`<dd>` inside a `<dd>` — from a
+// nested `<dl>` — is folded into the parent's innerHtml and flattened by `htmlFragmentText`).
+function extractElements(html: string, tagNames: ReadonlySet<string>): readonly ElementSpan[] {
+  // Lowercased once per call (not per matched tag) so a table with many rows/cells stays O(n)
+  // across the whole extraction instead of re-lowering the same fragment on every match.
+  const htmlLower = html.toLowerCase();
+  const spans: ElementSpan[] = [];
+  let cursor = 0;
+  while (cursor < html.length) {
+    const event = nextEvent(html, cursor);
+    if (event.kind === "eof") break;
+    if (event.kind !== "tag") {
+      cursor = event.next;
+      continue;
+    }
+    if (event.tag.kind === "open" && tagNames.has(event.tag.name)) {
+      const bounds = findNestableElementEnd(html, htmlLower, event.tag.name, event.tag.end);
+      spans.push({ name: event.tag.name, innerHtml: html.slice(event.tag.end, bounds.contentEnd) });
+      cursor = bounds.elementEnd;
+      continue;
+    }
+    cursor = event.next;
+  }
+  return spans;
+}
+
+const ROW_TAGS: ReadonlySet<string> = new Set(["tr"]);
+const CELL_TAGS: ReadonlySet<string> = new Set(["td", "th"]);
+
 function tableCells(
   rowHtml: string,
 ): readonly { readonly header: boolean; readonly text: string }[] {
-  const cells: { header: boolean; text: string }[] = [];
-  for (const match of rowHtml.matchAll(/<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
-    cells.push({
-      header: match[1]?.toLowerCase() === "th",
-      text: htmlFragmentText(match[2] ?? ""),
-    });
-  }
-  return cells;
+  return extractElements(rowHtml, CELL_TAGS).map((cell) => ({
+    header: cell.name === "th",
+    text: htmlFragmentText(cell.innerHtml),
+  }));
 }
 
 function normalizeHeaders(headers: readonly string[], count: number): readonly string[] {
@@ -401,10 +548,24 @@ function normalizeHeaders(headers: readonly string[], count: number): readonly s
   });
 }
 
+const CAPTION_TAGS: ReadonlySet<string> = new Set(["caption"]);
+
+// `<caption>` names the table (e.g. "Table 4-2: HTTP Status Codes") but lives inside the
+// `<table>` element the body scan otherwise skips wholesale via `skipNestableElement` — without
+// surfacing it separately here, the one span of text that LABELS the table is silently lost, even
+// though every other table cell is preserved. Emitted as its own block (not folded into a row) so
+// exact-match retrieval on the caption text is not diluted by cell data.
+function appendTableCaption(state: ScanState, tableHtml: string): void {
+  const caption = extractElements(tableHtml, CAPTION_TAGS)[0];
+  if (caption === undefined) return;
+  const text = htmlFragmentText(caption.innerHtml);
+  if (text.length === 0) return;
+  pushCleanedBlock(state, `Table caption: ${text}`);
+}
+
 function appendTableRows(state: ScanState, tableHtml: string): void {
-  const rows = Array.from(tableHtml.matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi)).map((match) =>
-    tableCells(match[0]),
-  );
+  appendTableCaption(state, tableHtml);
+  const rows = extractElements(tableHtml, ROW_TAGS).map((row) => tableCells(row.innerHtml));
   if (rows.length === 0) return;
   const first = rows[0] ?? [];
   const headerIsSchema =
@@ -429,16 +590,19 @@ function appendTableRows(state: ScanState, tableHtml: string): void {
 // ─── Definition lists ────────────────────────────────────────────────────────
 
 // Pair each `<dt>` term with its following `<dd>` definition(s). Mirrors the table extractor:
-// bounded `matchAll` over already-sliced element HTML, text flattened via `htmlFragmentText`.
+// Depth-aware TOP-LEVEL `<dt>`/`<dd>` walk via `extractElements` (not a non-greedy regex — a
+// `<dd>` containing its own nested `<dl>` would otherwise truncate at the INNER list's first
+// `</dd>`/`</dt>`, silently dropping every sibling term/definition that follows the nested list).
+const DEFINITION_TAGS: ReadonlySet<string> = new Set(["dt", "dd"]);
+
 function definitionEntries(
   dlHtml: string,
 ): readonly { readonly term: string; readonly definition: string }[] {
   const entries: { term: string; definition: string }[] = [];
   let term: string | undefined;
-  for (const match of dlHtml.matchAll(/<(dt|dd)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
-    const kind = match[1]?.toLowerCase();
-    const text = htmlFragmentText(match[2] ?? "");
-    if (kind === "dt") {
+  for (const element of extractElements(dlHtml, DEFINITION_TAGS)) {
+    const text = htmlFragmentText(element.innerHtml);
+    if (element.name === "dt") {
       term = text;
     } else if (term !== undefined && term.length > 0) {
       entries.push({ term, definition: text });
@@ -486,15 +650,33 @@ function appendPreformatted(state: ScanState, elementHtml: string, tag: Tag): vo
 
 // ─── Frameset navigation links ───────────────────────────────────────────────
 
+// True when `value` starts with a URI scheme (`letter [letter|digit|+|-|.]* ":"`) that is NOT
+// `http`/`https`. Catches `javascript:`, `data:`, `vbscript:`, etc. — schemes that carry an
+// executable or arbitrary-payload body and have no `://` to trip the old (bypassed) check.
+function hasUnsafeScheme(value: string): boolean {
+  const match = /^([a-z][a-z0-9+.-]*):/iu.exec(value);
+  if (match?.[1] === undefined) return false;
+  const scheme = match[1].toLowerCase();
+  return scheme !== "http" && scheme !== "https";
+}
+
 // Reduce a frame `src` to a body-safe navigation reference: drop query/fragment, and for an
-// absolute URL keep only the path so no host, credentials, or token can surface in evidence.
+// absolute URL keep only the path so no host, credentials, or token can surface in evidence. Any
+// non-http(s) scheme (javascript:, data:, vbscript:, …) is rejected outright rather than
+// forwarded verbatim — a scheme body may carry an arbitrary attacker-controlled payload. A
+// protocol-relative target (`//host/path`, valid and browser-resolvable HTML with no scheme and no
+// literal `://`) carries a host exactly like `scheme://host/path` does and must have it stripped
+// the same way — it has neither an unsafe scheme nor a `://` substring, so both of those checks
+// alone would fall through and forward the host verbatim.
 function redactFrameTarget(src: string): string | undefined {
   const base = src.split(/[?#]/u)[0] ?? "";
   const trimmed = base.trim();
   if (trimmed.length === 0 || trimmed.length > 256 || trimmed.includes("\0")) return undefined;
+  if (hasUnsafeScheme(trimmed)) return undefined;
   const schemeAt = trimmed.indexOf("://");
-  if (schemeAt < 0) return trimmed;
-  const afterHost = trimmed.slice(schemeAt + 3);
+  const hostStart = schemeAt >= 0 ? schemeAt + 3 : trimmed.startsWith("//") ? 2 : -1;
+  if (hostStart < 0) return trimmed;
+  const afterHost = trimmed.slice(hostStart);
   const slash = afterHost.indexOf("/");
   return slash < 0 ? "/" : afterHost.slice(slash);
 }
@@ -511,16 +693,35 @@ function appendFrameLink(state: ScanState, tag: Tag): void {
 
 // ─── Title + declared charset ────────────────────────────────────────────────
 
+// Finds the real `<title>` element by walking tags with the same event scanner the body uses,
+// skipping `<script>`/`<style>`/`<noscript>` subtrees along the way — NOT a raw `indexOf` over
+// undifferentiated document text. A raw substring search would accept a `<title>...</title>`-
+// shaped literal sitting inside an earlier `<script>` (e.g. a client-side widget building HTML
+// strings) as if it were the document's real title.
 function readDocumentTitle(rawText: string): string | undefined {
-  const lower = rawText.toLowerCase();
-  const open = lower.indexOf("<title");
-  if (open < 0) return undefined;
-  const gt = rawText.indexOf(">", open);
-  if (gt < 0) return undefined;
-  const close = lower.indexOf("</title", gt + 1);
-  if (close < 0) return undefined;
-  const title = htmlFragmentText(rawText.slice(gt + 1, close));
-  return title.length === 0 ? undefined : title;
+  const textLower = rawText.toLowerCase();
+  let cursor = 0;
+  while (cursor < rawText.length) {
+    const event = nextEvent(rawText, cursor);
+    if (event.kind === "eof") return undefined;
+    if (event.kind !== "tag") {
+      cursor = event.next;
+      continue;
+    }
+    const { tag } = event;
+    if (RAW_TEXT_TAGS.has(tag.name) && tag.kind === "open") {
+      cursor = skipRawText(rawText, textLower, tag.name, tag.end);
+      continue;
+    }
+    if (tag.name === "title" && tag.kind === "open") {
+      const close = textLower.indexOf("</title", tag.end);
+      if (close < 0) return undefined;
+      const title = htmlFragmentText(rawText.slice(tag.end, close));
+      return title.length === 0 ? undefined : title;
+    }
+    cursor = event.next;
+  }
+  return undefined;
 }
 
 function isCharsetLabelChar(code: number): boolean {
@@ -537,19 +738,50 @@ function skipToCharsetValue(head: string, from: number): number {
   return i;
 }
 
-// Read a declared `<meta charset>` / `http-equiv` charset from the head bytes using indexOf (no
-// tag-filter regex — preserves the CodeQL posture). Returns a lowercase label or undefined.
-function readMetaCharset(bytes: Uint8Array): string | undefined {
-  const head = new TextDecoder("utf-8", { fatal: false })
-    .decode(bytes.subarray(0, 2048))
-    .toLowerCase();
-  const at = head.indexOf("charset");
+// Real charset names (utf-8, windows-1252, shift_jis, iso-8859-1, …) are well under this length.
+// Capping here keeps the label bounded everywhere it is used downstream — including the
+// HTML_CHARSET_MISMATCH diagnostic message — instead of embedding an arbitrarily long,
+// document-controlled value (the head window is scanned up to 2048 bytes).
+const MAX_CHARSET_LABEL_LENGTH = 64;
+
+// Extract a charset label from a single `<meta ...>` tag's raw text (bounded input — never the
+// whole head window), so ordinary body prose containing the word "charset" cannot be mistaken for
+// a declaration.
+function charsetFromMetaTag(metaTagLower: string): string | undefined {
+  const at = metaTagLower.indexOf("charset");
   if (at < 0) return undefined;
-  const start = skipToCharsetValue(head, at + "charset".length);
+  const start = skipToCharsetValue(metaTagLower, at + "charset".length);
   let end = start;
-  while (end < head.length && isCharsetLabelChar(head.charCodeAt(end))) end += 1;
-  const label = head.slice(start, end);
+  while (
+    end < metaTagLower.length &&
+    end - start < MAX_CHARSET_LABEL_LENGTH &&
+    isCharsetLabelChar(metaTagLower.charCodeAt(end))
+  ) {
+    end += 1;
+  }
+  const label = metaTagLower.slice(start, end);
   return label.length === 0 ? undefined : label;
+}
+
+// Read a declared `<meta charset>` / `http-equiv` charset from the head bytes. Scoped to actual
+// `<meta ...>` tags (found via the same quote-aware `findTagEnd` the body scanner uses — no
+// tag-filter regex, preserving the CodeQL posture) instead of a bare `indexOf("charset")` over
+// undifferentiated text, so ordinary prose that happens to contain the word "charset" cannot
+// trigger a false HTML_CHARSET_MISMATCH diagnostic.
+function readMetaCharset(bytes: Uint8Array): string | undefined {
+  const head = new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, 2048));
+  const headLower = head.toLowerCase();
+  let cursor = 0;
+  while (cursor < head.length) {
+    const lt = headLower.indexOf("<meta", cursor);
+    if (lt < 0) return undefined;
+    const gt = findTagEnd(head, lt + 5);
+    if (gt < 0) return undefined;
+    const label = charsetFromMetaTag(headLower.slice(lt, gt + 1));
+    if (label !== undefined) return label;
+    cursor = gt + 1;
+  }
+  return undefined;
 }
 
 function normalizeCharset(label: string): string {
@@ -581,14 +813,35 @@ function charsetMismatchDiagnostic(
   );
 }
 
+// A fragment identifier is a safe slug — never a path, scheme, or quoted string (see the
+// `anchorId` contract comment in keiko-contracts/local-knowledge-records.ts). This is a positive
+// allowlist (letters, digits, `-`, `_`, `.`, `:`) rather than a negative blocklist so a
+// scheme-like prefix without `//` (e.g. `javascript:alert(1)`), a path (`../../etc/passwd`), or an
+// embedded quote cannot slip through as a "close enough" slug.
+function isAnchorSlugChar(code: number): boolean {
+  return (
+    isAlpha(code) ||
+    (code >= 0x30 && code <= 0x39) /* 0-9 */ ||
+    code === 0x2d /* - */ ||
+    code === 0x5f /* _ */ ||
+    code === 0x2e /* . */ ||
+    code === 0x3a /* : */
+  );
+}
+
+function isAnchorSlug(value: string): boolean {
+  if (value.length === 0 || value.length > 128) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    if (!isAnchorSlugChar(value.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
 function anchorFromTag(tag: Tag): string | undefined {
   const raw = readAttribute(tag.raw, "id") ?? readAttribute(tag.raw, "name");
   if (raw === undefined) return undefined;
   const value = raw.startsWith("#") ? raw.slice(1) : raw;
-  if (value.length === 0 || value.length > 128 || value.includes("://") || value.includes("\0")) {
-    return undefined;
-  }
-  return value;
+  return isAnchorSlug(value) ? value : undefined;
 }
 
 function openBlock(state: ScanState, at: number, hasText: boolean): void {
@@ -643,7 +896,12 @@ function handleStructuralTag(state: ScanState, tag: Tag): number | undefined {
   }
   if (tag.name === "table" || tag.name === "dl" || tag.name === "pre") {
     flushBlock(state, tag.start);
-    const end = skipElement(state.text, state.textLower, tag.name, tag.end);
+    // `<table>` and `<dl>` can legitimately nest same-named children (a cell with a sub-table, a
+    // `<dd>` with a nested `<dl>`); `<pre>` cannot, so the simpler raw-text-style skip is enough.
+    const end =
+      tag.name === "pre"
+        ? skipElement(state.text, state.textLower, tag.name, tag.end)
+        : skipNestableElement(state.text, state.textLower, tag.name, tag.end);
     const elementHtml = state.text.slice(tag.start, end);
     if (tag.name === "table") appendTableRows(state, elementHtml);
     else if (tag.name === "dl") appendDefinitionList(state, elementHtml);
