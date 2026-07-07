@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import type {
+  DocumentationManualScopeLimits,
   DocumentId,
   HtmlManualSource,
   HtmlManualSourceKind,
@@ -21,6 +22,18 @@ interface HtmlManualSourceMetadataRow {
   readonly entry_path: string | null;
   readonly origin: string | null;
   readonly path_prefix: string | null;
+  // Approved crawl limits (Epic #1856, Issue #1890) — persisted so an explicit refresh reproduces
+  // the exact bounded crawl without widening scope. Nullable for rows written before v27.
+  readonly max_pages: number | null;
+  readonly max_depth: number | null;
+  readonly max_bytes: number | null;
+  readonly max_link_sample: number | null;
+  readonly timeout_ms: number | null;
+  readonly follow_redirects: number | null;
+  readonly source_scope_version: number | null;
+  readonly last_refreshed_at: number | null;
+  readonly last_crawl_run_id: string | null;
+  readonly last_change_summary_json: string | null;
 }
 
 interface DocumentTargetRow {
@@ -37,6 +50,14 @@ export interface HtmlManualSourceMetadata {
   readonly entryPath?: string;
   readonly origin?: string;
   readonly pathPrefix?: string | null;
+  // Approved crawl limits, present once the row has been written at schema v27+. Absent for a
+  // legacy pre-v27 row (a refresh then falls back to the governed defaults). See #1890.
+  readonly limits?: DocumentationManualScopeLimits;
+  readonly sourceScopeVersion?: number;
+  // Additive refresh bookkeeping (#1856). Present only after at least one refresh has run.
+  readonly lastRefreshedAt?: number;
+  readonly lastCrawlRunId?: string;
+  readonly lastChangeSummaryJson?: string;
 }
 
 export type HtmlManualCitationTargetFailureReason =
@@ -73,6 +94,10 @@ export interface ResolveHtmlManualCitationTargetInput {
   readonly anchorId?: string;
 }
 
+// Persist the approved manual source at pod-create time. Additionally records the approved crawl
+// limits and an initial scope version (Epic #1856, Issue #1890) so a later refresh can reconstruct
+// and re-run the exact bounded crawl without widening scope. `INSERT OR REPLACE` resets the row to
+// its create-time shape; refresh bookkeeping is written separately via `updateHtmlManualRefreshState`.
 export function persistHtmlManualSourceMetadata(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -80,14 +105,17 @@ export function persistHtmlManualSourceMetadata(
   source: HtmlManualSource,
 ): void {
   const scope = source.scope;
+  const limits = source.limits;
   store._internal.db
     .prepare(
       [
         "INSERT OR REPLACE INTO html_manual_sources (",
         "  capsule_id, source_id, source_kind, source_fingerprint, root_path, entry_path,",
-        "  origin, path_prefix, created_at",
+        "  origin, path_prefix, created_at, max_pages, max_depth, max_bytes, max_link_sample,",
+        "  timeout_ms, follow_redirects, source_scope_version",
         ") VALUES (:capsule_id, :source_id, :source_kind, :source_fingerprint, :root_path,",
-        "  :entry_path, :origin, :path_prefix, :created_at)",
+        "  :entry_path, :origin, :path_prefix, :created_at, :max_pages, :max_depth, :max_bytes,",
+        "  :max_link_sample, :timeout_ms, :follow_redirects, :source_scope_version)",
       ].join(" "),
     )
     .run({
@@ -100,6 +128,48 @@ export function persistHtmlManualSourceMetadata(
       origin: scope.kind === "html-manual-http" ? scope.origin : null,
       path_prefix: scope.kind === "html-manual-http" ? scope.pathPrefix : null,
       created_at: store._internal.now(),
+      max_pages: limits.maxPages,
+      max_depth: limits.maxDepth,
+      max_bytes: limits.maxBytes,
+      max_link_sample: limits.maxLinkSample,
+      timeout_ms: limits.timeoutMs,
+      // The governed limits contract pins followRedirects to false; a manual crawl never follows
+      // redirects. Persist 0; the column exists for a possible future governed override.
+      follow_redirects: 0,
+      source_scope_version: 1,
+    });
+}
+
+// Record the outcome of an explicit refresh run. Only the additive bookkeeping columns are touched;
+// the approved scope, fingerprint, and limits are never mutated by a refresh (scope preservation).
+export interface HtmlManualRefreshState {
+  readonly lastRefreshedAt: number;
+  readonly lastCrawlRunId: string;
+  readonly changeSummaryJson: string;
+}
+
+export function updateHtmlManualRefreshState(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+  state: HtmlManualRefreshState,
+): void {
+  store._internal.db
+    .prepare(
+      [
+        "UPDATE html_manual_sources SET",
+        "  last_refreshed_at = :last_refreshed_at,",
+        "  last_crawl_run_id = :last_crawl_run_id,",
+        "  last_change_summary_json = :last_change_summary_json",
+        "WHERE capsule_id = :capsule_id AND source_id = :source_id",
+      ].join(" "),
+    )
+    .run({
+      capsule_id: capsuleId,
+      source_id: sourceId,
+      last_refreshed_at: state.lastRefreshedAt,
+      last_crawl_run_id: state.lastCrawlRunId,
+      last_change_summary_json: state.changeSummaryJson,
     });
 }
 
@@ -116,7 +186,35 @@ export function readHtmlManualSourceMetadata(
   return row === undefined ? undefined : rowToMetadata(row);
 }
 
+// Reconstruct the approved crawl limits from a persisted row. Returns undefined for a legacy
+// pre-v27 row (any limit column NULL) so the caller can fall back to the governed defaults.
+function limitsFromRow(
+  row: HtmlManualSourceMetadataRow,
+): DocumentationManualScopeLimits | undefined {
+  if (
+    row.max_pages === null ||
+    row.max_depth === null ||
+    row.max_bytes === null ||
+    row.max_link_sample === null ||
+    row.timeout_ms === null ||
+    row.follow_redirects === null
+  ) {
+    return undefined;
+  }
+  return {
+    maxPages: row.max_pages,
+    maxDepth: row.max_depth,
+    maxBytes: row.max_bytes,
+    maxLinkSample: row.max_link_sample,
+    timeoutMs: row.timeout_ms,
+    // The governed limits contract pins followRedirects to the literal `false`; a manual crawl never
+    // follows redirects. The 0/1 column exists only for a possible future governed override.
+    followRedirects: false,
+  };
+}
+
 function rowToMetadata(row: HtmlManualSourceMetadataRow): HtmlManualSourceMetadata {
+  const limits = limitsFromRow(row);
   return {
     capsuleId: row.capsule_id as KnowledgeCapsuleId,
     sourceId: row.source_id as KnowledgeSourceId,
@@ -126,6 +224,13 @@ function rowToMetadata(row: HtmlManualSourceMetadataRow): HtmlManualSourceMetada
     ...(row.entry_path !== null ? { entryPath: row.entry_path } : {}),
     ...(row.origin !== null ? { origin: row.origin } : {}),
     ...(row.path_prefix !== null ? { pathPrefix: row.path_prefix } : {}),
+    ...(limits !== undefined ? { limits } : {}),
+    ...(row.source_scope_version !== null ? { sourceScopeVersion: row.source_scope_version } : {}),
+    ...(row.last_refreshed_at !== null ? { lastRefreshedAt: row.last_refreshed_at } : {}),
+    ...(row.last_crawl_run_id !== null ? { lastCrawlRunId: row.last_crawl_run_id } : {}),
+    ...(row.last_change_summary_json !== null
+      ? { lastChangeSummaryJson: row.last_change_summary_json }
+      : {}),
   };
 }
 

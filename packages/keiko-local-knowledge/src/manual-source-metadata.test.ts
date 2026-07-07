@@ -29,6 +29,7 @@ import {
   persistHtmlManualSourceMetadata,
   readHtmlManualSourceMetadata,
   resolveHtmlManualCitationTarget,
+  updateHtmlManualRefreshState,
   type ResolveHtmlManualCitationTargetInput,
 } from "./manual-source-metadata.js";
 import { addSourceToCapsule } from "./source-lifecycle.js";
@@ -152,7 +153,52 @@ describe("manual-source-metadata", () => {
         sourceFingerprint: "fp-docs-internal",
         origin: "https://manual.internal:8443",
         pathPrefix: "/docs",
+        limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+        sourceScopeVersion: 1,
       });
+    });
+
+    it("persists and reads back the approved crawl limits so a refresh reproduces the exact scope", () => {
+      const narrowedLimits = {
+        maxPages: 12,
+        maxDepth: 2,
+        maxBytes: 5_000_000,
+        maxLinkSample: 16,
+        timeoutMs: 8_000,
+        followRedirects: false as const,
+      };
+      persistHtmlManualSourceMetadata(
+        fixture.store,
+        CAPSULE_ID,
+        SOURCE_ID,
+        localManualSource({ limits: narrowedLimits }),
+      );
+
+      const metadata = readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID);
+      expect(metadata?.limits).toStrictEqual(narrowedLimits);
+      expect(metadata?.sourceScopeVersion).toBe(1);
+      expect(metadata?.lastRefreshedAt).toBeUndefined();
+      expect(metadata?.lastCrawlRunId).toBeUndefined();
+    });
+
+    it("records refresh bookkeeping without mutating the approved scope, fingerprint, or limits", () => {
+      persistHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID, localManualSource());
+
+      updateHtmlManualRefreshState(fixture.store, CAPSULE_ID, SOURCE_ID, {
+        lastRefreshedAt: 4242,
+        lastCrawlRunId: "run-xyz",
+        changeSummaryJson: '{"outcome":"updated"}',
+      });
+
+      const metadata = readHtmlManualSourceMetadata(fixture.store, CAPSULE_ID, SOURCE_ID);
+      expect(metadata?.lastRefreshedAt).toBe(4242);
+      expect(metadata?.lastCrawlRunId).toBe("run-xyz");
+      expect(metadata?.lastChangeSummaryJson).toBe('{"outcome":"updated"}');
+      // Scope preservation: the approved fingerprint, kind, and limits are untouched by a refresh.
+      expect(metadata?.sourceFingerprint).toBe("fp-local-manual");
+      expect(metadata?.sourceKind).toBe("html-manual-local");
+      expect(metadata?.limits).toStrictEqual(DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS);
+      expect(metadata?.sourceScopeVersion).toBe(1);
     });
 
     it("omits rootPath/entryPath/origin/pathPrefix from the read result when unset for the persisted kind", () => {

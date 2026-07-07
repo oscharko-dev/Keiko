@@ -1184,3 +1184,175 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
     expect(results).toHaveNoViolations();
   });
 });
+
+describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue #1893)", () => {
+  function manualRefreshCapsule(
+    overrides: Partial<CapsuleListEntry["knowledgePod"]> = {},
+  ): CapsuleListEntry {
+    return makeCapsule({
+      id: makeCapsuleId("manual"),
+      displayName: "Operator Manual",
+      lifecycleState: "ready",
+      knowledgePod: {
+        readiness: "ready",
+        reindexRecommended: false,
+        queryEmbeddingAllowed: true,
+        ...overrides,
+      },
+    });
+  }
+
+  it("renders no panel when manualRefresh is absent", async () => {
+    const { container } = render(
+      <ConnectorGraph fetchCapsulesImpl={fetchWith([manualRefreshCapsule()])} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Operator Manual")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("Last refresh")).toBeNull();
+    expect(container.querySelector(".lkd-manual-refresh")).toBeNull();
+  });
+
+  it("renders an updated refresh with counts and no leaked path/origin", async () => {
+    const capsule = manualRefreshCapsule({
+      manualRefresh: {
+        schemaVersion: "1",
+        outcome: "updated",
+        sourceKind: "html-manual-http",
+        counts: {
+          addedPages: 3,
+          changedPages: 2,
+          removedPages: 1,
+          unchangedPages: 10,
+          failedPages: 0,
+          deniedLinks: 0,
+        },
+        removalDetection: "evaluated",
+        crawlRunFingerprint: "fp-abc123def456",
+        reasonCodes: ["pages-added", "pages-changed", "pages-removed"],
+        refreshedAt: 1_700_000_000_000,
+      },
+    });
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Last refresh")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Updated")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("New pages were discovered and indexed.")).toBeInTheDocument();
+    expect(screen.getByText("Existing pages changed and were re-indexed.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Pages that are no longer reachable were removed from the pod."),
+    ).toBeInTheDocument();
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("http");
+    expect(text).not.toContain("/keiko-html-manual");
+    expect(text).not.toContain("fp-abc123def456");
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("renders a partial refresh as a warning tone with failed/denied counts", async () => {
+    const capsule = manualRefreshCapsule({
+      manualRefresh: {
+        schemaVersion: "1",
+        outcome: "partial",
+        sourceKind: "html-manual-local",
+        counts: {
+          addedPages: 1,
+          changedPages: 0,
+          removedPages: 0,
+          unchangedPages: 5,
+          failedPages: 2,
+          deniedLinks: 1,
+        },
+        removalDetection: "evaluated",
+        crawlRunFingerprint: "fp-partial-1",
+        reasonCodes: ["pages-failed", "links-denied"],
+        refreshedAt: 1_700_000_100_000,
+      },
+    });
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Last refresh")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Partial")).toBeInTheDocument();
+    expect(
+      screen.getByText("Some pages could not be indexed and were left unchanged."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Some links were skipped because they fell outside the approved scope."),
+    ).toBeInTheDocument();
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("renders a failed refresh as an error tone", async () => {
+    const capsule = manualRefreshCapsule({
+      manualRefresh: {
+        schemaVersion: "1",
+        outcome: "failed",
+        sourceKind: "html-manual-http",
+        counts: {
+          addedPages: 0,
+          changedPages: 0,
+          removedPages: 0,
+          unchangedPages: 0,
+          failedPages: 0,
+          deniedLinks: 0,
+        },
+        removalDetection: "not-evaluated-page-limit",
+        crawlRunFingerprint: "fp-failed-1",
+        reasonCodes: ["index-failed"],
+        refreshedAt: 1_700_000_200_000,
+      },
+    });
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Last refresh")).toBeInTheDocument();
+    });
+    const panel = container.querySelector(".lkd-manual-refresh");
+    expect(panel).not.toBeNull();
+    expect(
+      within(panel as HTMLElement).getByText("Failed", { selector: ".lk-badge" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Indexing failed during refresh; the previous pod state is unchanged."),
+    ).toBeInTheDocument();
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("shows a removal-skipped note when the crawl reached its page limit", async () => {
+    const capsule = manualRefreshCapsule({
+      manualRefresh: {
+        schemaVersion: "1",
+        outcome: "unchanged",
+        sourceKind: "html-manual-http",
+        counts: {
+          addedPages: 0,
+          changedPages: 0,
+          removedPages: 0,
+          unchangedPages: 40,
+          failedPages: 0,
+          deniedLinks: 0,
+        },
+        removalDetection: "not-evaluated-page-limit",
+        crawlRunFingerprint: "fp-limit-1",
+        reasonCodes: ["scope-limit-reached", "removal-detection-skipped"],
+        refreshedAt: 1_700_000_300_000,
+      },
+    });
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Last refresh")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(
+        "Removed pages could not be detected this run (the crawl reached its page limit).",
+      ),
+    ).toBeInTheDocument();
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+});

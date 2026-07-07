@@ -1,0 +1,73 @@
+/* Epic #1856, Issue #1893 — read-only HTML manual refresh diagnostics panel.
+   Component-scoped (never globals.css, which is behind the SHA-pinned proof gate #1300). */
+
+.panelScope {
+  --manual-refresh-scope: 1;
+}
+
+.panelScope :global(.lkd-manual-refresh) {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.panelScope :global(.lkd-manual-refresh-heading) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.panelScope :global(.lkd-manual-refresh-title) {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.panelScope :global(.lkd-manual-refresh-counts) {
+  margin: 0;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--fg);
+  line-height: 1.6;
+}
+
+.panelScope :global(.lkd-manual-refresh-counts) dt {
+  display: inline;
+  color: var(--fg-muted);
+}
+
+.panelScope :global(.lkd-manual-refresh-counts) dt::after {
+  content: ": ";
+}
+
+.panelScope :global(.lkd-manual-refresh-counts) dd {
+  display: inline;
+  margin: 0 14px 0 0;
+  font-weight: 600;
+}
+
+.panelScope :global(.lkd-manual-refresh-note) {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.panelScope :global(.lkd-manual-refresh-guidance) {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}

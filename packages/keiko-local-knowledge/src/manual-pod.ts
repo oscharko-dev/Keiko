@@ -21,6 +21,8 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
+import { randomUUID } from "node:crypto";
+
 import { createCapsule, getCapsule } from "./capsule-lifecycle.js";
 import {
   crawlManual,
@@ -32,6 +34,10 @@ import {
 import { KnowledgeStoreError } from "./errors.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
+import {
+  computeManualPageFingerprint,
+  replaceManualPageFingerprints,
+} from "./manual-page-fingerprints.js";
 import { persistHtmlManualSourceMetadata } from "./manual-source-metadata.js";
 import {
   buildHtmlManualIndexingProgress,
@@ -135,6 +141,22 @@ function attachManualSource(
   return rootPath;
 }
 
+// Establish the per-page fingerprint baseline (Epic #1856) so a later explicit refresh can diff
+// added / changed / removed pages against exactly what was first indexed. Redaction-safe: only an
+// opaque content hash per page is stored, never a raw body.
+function persistInitialManualPageFingerprints(
+  deps: CreateHtmlManualPodDeps,
+  crawl: ManualCrawlResult,
+): void {
+  const pages = crawl.pages.map((page) => ({
+    relativePath: page.relativePath,
+    contentFingerprint: computeManualPageFingerprint(page.bytes),
+    byteLength: page.bytes.byteLength,
+  }));
+  const crawlRunId = deps.idSource?.() ?? randomUUID();
+  replaceManualPageFingerprints(deps.store, deps.capsuleId, deps.sourceId, pages, crawlRunId);
+}
+
 async function drainIndexing(
   events: AsyncIterable<IndexingEvent>,
   onEvent?: (event: IndexingEvent) => void,
@@ -193,6 +215,7 @@ export async function createHtmlManualPod(
   createManualCapsule(deps, source);
   const rootPath = attachManualSource(deps, source, crawl);
   const indexing = rootPath === null ? undefined : await runManualIndexing(deps, rootPath, crawl);
+  if (rootPath !== null) persistInitialManualPageFingerprints(deps, crawl);
   const capsule = getCapsule(deps.store, deps.capsuleId);
   if (capsule === undefined) {
     throw new KnowledgeStoreError("manual capsule vanished during indexing");

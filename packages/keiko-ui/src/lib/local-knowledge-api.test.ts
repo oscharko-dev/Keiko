@@ -10,6 +10,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgePodSummary,
   KnowledgeSourceScope,
+  ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
 import {
   capsulesForKnowledgePodUi,
@@ -55,6 +56,7 @@ function podSummary(
       | "counts"
       | "setReadiness"
       | "sourceKinds"
+      | "manualRefresh"
     >
   > = {},
 ): KnowledgePodSummary {
@@ -108,6 +110,30 @@ function podSummary(
     },
     updatedAt: 1,
     degradationReasons: [],
+    ...(overrides.manualRefresh !== undefined ? { manualRefresh: overrides.manualRefresh } : {}),
+  };
+}
+
+function manualRefreshSummary(
+  overrides: Partial<ManualRefreshChangeSummary> = {},
+): ManualRefreshChangeSummary {
+  return {
+    schemaVersion: "1",
+    outcome: "updated",
+    sourceKind: "html-manual-http",
+    counts: {
+      addedPages: 2,
+      changedPages: 1,
+      removedPages: 0,
+      unchangedPages: 8,
+      failedPages: 0,
+      deniedLinks: 0,
+    },
+    removalDetection: "evaluated",
+    crawlRunFingerprint: "fp-test-1",
+    reasonCodes: ["pages-added"],
+    refreshedAt: 1_700_000_000_000,
+    ...overrides,
   };
 }
 
@@ -256,6 +282,50 @@ describe("local knowledge BFF boundary helpers", () => {
     });
     expect(JSON.stringify(capsules)).not.toContain("https://docs.internal");
     expect(JSON.stringify(capsules)).not.toContain("/Users/alice");
+  });
+
+  it("threads manualRefresh (Epic #1856, Issue #1893) through to UI metadata unchanged", () => {
+    const manualId = "cap-manual-refresh" as KnowledgeCapsuleId;
+    const refresh = manualRefreshSummary({ outcome: "partial", reasonCodes: ["pages-failed"] });
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: manualId,
+          displayName: "Refreshed Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(manualId, "pod", "Refreshed Handbook", {
+          sourceKinds: ["html-manual-http"],
+          manualRefresh: refresh,
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.manualRefresh).toEqual(refresh);
+  });
+
+  it("omits manualRefresh from UI metadata when the pod has never been refreshed", () => {
+    const capsuleId = "cap-never-refreshed" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Fresh Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Fresh Handbook", { sourceKinds: ["html-manual-http"] }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.manualRefresh).toBeUndefined();
   });
 
   it("maps unavailable and incompatible Knowledge Pod guidance", () => {

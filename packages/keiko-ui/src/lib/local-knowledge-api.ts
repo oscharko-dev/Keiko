@@ -25,6 +25,7 @@ import type {
   KnowledgePodSetReadinessReasonCode,
   KnowledgePodModelUseOperation,
   KnowledgePodModelUsePolicy,
+  ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
@@ -59,6 +60,9 @@ export interface KnowledgePodUiMetadata {
   readonly reindexRecommended: boolean;
   readonly queryEmbeddingAllowed: boolean;
   readonly guidance?: KnowledgePodUiGuidance;
+  // Epic #1856, Issue #1893 — read-only diagnostics for the most recent explicit HTML manual
+  // refresh. Absent until the pod has been refreshed at least once, and for every non-manual pod.
+  readonly manualRefresh?: ManualRefreshChangeSummary;
 }
 
 export type CapsuleListEntry = CapsuleListEntryBase & {
@@ -327,6 +331,7 @@ function metadataForSummary(
     reindexRecommended: summary.retrieval.reindexRecommended === true,
     queryEmbeddingAllowed: summary.retrieval.queryEmbeddingAllowed === true,
     ...(selectedGuidance !== undefined ? { guidance: selectedGuidance } : {}),
+    ...(summary.manualRefresh !== undefined ? { manualRefresh: summary.manualRefresh } : {}),
   };
 }
 
