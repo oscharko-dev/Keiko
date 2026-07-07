@@ -487,6 +487,10 @@ export function AgentRunWidget({
   }, [modelId]);
 
   const usage = useMemo(() => aggregateUsage(sse.events, report), [sse.events, report]);
+  // GEN-PERF-WIDGET-005 — the newest-first 50-row log view copies/reverses the (≤500
+  // entry) buffer; inline in JSX it re-ran on every unrelated widget render. Memoized on
+  // the buffer identity it runs once per event batch.
+  const visibleLogEvents = useMemo(() => sse.events.slice().reverse().slice(0, 50), [sse.events]);
   const elapsedMs =
     report?.durationMs ??
     evidence?.run.durationMs ??
@@ -703,19 +707,15 @@ export function AgentRunWidget({
             </div>
           )
         ) : (
-          sse.events
-            .slice()
-            .reverse()
-            .slice(0, 50)
-            .map((event) => (
-              <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
-                <span className="arun-log-ico">
-                  <Icons.spark size={12} />
-                </span>
-                <span className="arun-log-text">{eventLabel(event)}</span>
-                <span className="arun-log-t mono">{eventTime(event)}</span>
-              </div>
-            ))
+          visibleLogEvents.map((event) => (
+            <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
+              <span className="arun-log-ico">
+                <Icons.spark size={12} />
+              </span>
+              <span className="arun-log-text">{eventLabel(event)}</span>
+              <span className="arun-log-t mono">{eventTime(event)}</span>
+            </div>
+          ))
         )}
       </div>
 

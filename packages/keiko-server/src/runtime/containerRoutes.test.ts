@@ -531,3 +531,30 @@ describe("openContainerSseStream backpressure", () => {
     expect(fake.writes.join("")).toContain("container:run-completed");
   });
 });
+
+// GEN-PERF-FANOUT-001 — with K windows subscribed to the same manager, one emitted event
+// must be redacted+serialized once, not once per subscriber. Fails on the pre-fix code
+// (writeContainerEvent ran the redactor per connection).
+describe("openContainerSseStream fan-out serialization", () => {
+  it("redacts one event once across two subscribed streams", () => {
+    const manager = new FakeContainerRunnerManager();
+    const calls = { count: 0 };
+    const redactor = (value: unknown): unknown => {
+      calls.count += 1;
+      return value;
+    };
+    const first = makeFakeSseRes();
+    const second = makeFakeSseRes();
+    openContainerSseStream(first.res, manager, redactor);
+    openContainerSseStream(second.res, manager, redactor);
+
+    manager.emitExternal({ kind: "run-started", runId: "run-shared", payload: { taskId: "t" } });
+
+    expect(calls.count).toBe(1);
+    expect(first.writes.join("")).toContain("container:run-started");
+    expect(second.writes.join("")).toContain("container:run-started");
+
+    manager.emitExternal({ kind: "run-completed", runId: "run-shared", payload: { note: "x" } });
+    expect(calls.count).toBe(2);
+  });
+});

@@ -30,6 +30,16 @@ type ChatSessionActionKeys =
 
 export type ChatSessionActions = Pick<ChatSessionApi, ChatSessionActionKeys>;
 export type ChatSessionState = Omit<ChatSessionApi, ChatSessionActionKeys>;
+// GEN-PERF-CHAT-014 — the streaming delta is the ONLY session field that changes on every
+// coalesced token flush (up to one commit per animation frame while a reply streams). It
+// lives in its own context slice so consumers that don't render the live bubble (composer,
+// headers, panels) can subscribe to the settled slice and skip those per-frame renders.
+export type ChatSessionStream = Pick<ChatSessionApi, "streamingAssistantMessage">;
+type ChatSessionSettledState = Omit<ChatSessionState, "streamingAssistantMessage">;
+// Everything a composer-side consumer may need: the full session API minus the per-frame
+// streaming delta. Reading THIS instead of useChatSessionContext() is what makes a
+// memo()'d component actually bail out during a stream.
+export type ChatSessionComposerApi = Omit<ChatSessionApi, "streamingAssistantMessage">;
 export type ChatSessionCatalog = Pick<
   ChatSessionApi,
   | "projects"
@@ -44,7 +54,8 @@ export type ChatSessionCatalog = Pick<
 >;
 export type ChatSessionActivity = Pick<ChatSessionApi, "sending" | "latestGrounded">;
 
-const ChatSessionStateContext = createContext<ChatSessionState | null>(null);
+const ChatSessionStateContext = createContext<ChatSessionSettledState | null>(null);
+const ChatSessionStreamContext = createContext<ChatSessionStream | null>(null);
 const ChatSessionActionsContext = createContext<ChatSessionActions | null>(null);
 const ChatSessionCatalogContext = createContext<ChatSessionCatalog | null>(null);
 const ChatSessionActivityContext = createContext<ChatSessionActivity | null>(null);
@@ -137,12 +148,15 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
     () => ({ sending: value.sending, latestGrounded: value.latestGrounded }),
     [value.sending, value.latestGrounded],
   );
-  const state = useMemo<ChatSessionState>(
+  const stream = useMemo<ChatSessionStream>(
+    () => ({ streamingAssistantMessage: value.streamingAssistantMessage }),
+    [value.streamingAssistantMessage],
+  );
+  const state = useMemo<ChatSessionSettledState>(
     () => ({
       projects: value.projects,
       chats: value.chats,
       messages: value.messages,
-      streamingAssistantMessage: value.streamingAssistantMessage,
       models: value.models,
       activeProject: value.activeProject,
       activeChat: value.activeChat,
@@ -165,7 +179,6 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.projects,
       value.chats,
       value.messages,
-      value.streamingAssistantMessage,
       value.models,
       value.activeProject,
       value.activeChat,
@@ -190,7 +203,9 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       <ChatSessionCatalogContext.Provider value={catalog}>
         <ChatSessionActivityContext.Provider value={activity}>
           <ChatSessionStateContext.Provider value={state}>
-            {children}
+            <ChatSessionStreamContext.Provider value={stream}>
+              {children}
+            </ChatSessionStreamContext.Provider>
           </ChatSessionStateContext.Provider>
         </ChatSessionActivityContext.Provider>
       </ChatSessionCatalogContext.Provider>
@@ -200,13 +215,35 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
 
 export function useChatSessionContext(): ChatSessionApi {
   const state = useContext(ChatSessionStateContext);
+  const stream = useContext(ChatSessionStreamContext);
   const actions = useContext(ChatSessionActionsContext);
   const combined = useMemo<ChatSessionApi | null>(
+    () =>
+      state === null || stream === null || actions === null
+        ? null
+        : { ...state, ...stream, ...actions },
+    [state, stream, actions],
+  );
+  if (combined === null) {
+    throw new Error("useChatSessionContext must be used inside ChatSessionProvider");
+  }
+  return combined;
+}
+
+// GEN-PERF-CHAT-014 — settled session slice for components that never render the live
+// streaming bubble (composer, scope header, panels). Unlike useChatSessionContext(), the
+// returned identity does NOT change on per-frame token flushes, so a memo()'d consumer
+// skips every stream-flush render and still re-renders on drafts, sends, and catalog
+// changes exactly as before.
+export function useChatSessionComposer(): ChatSessionComposerApi {
+  const state = useContext(ChatSessionStateContext);
+  const actions = useContext(ChatSessionActionsContext);
+  const combined = useMemo<ChatSessionComposerApi | null>(
     () => (state === null || actions === null ? null : { ...state, ...actions }),
     [state, actions],
   );
   if (combined === null) {
-    throw new Error("useChatSessionContext must be used inside ChatSessionProvider");
+    throw new Error("useChatSessionComposer must be used inside ChatSessionProvider");
   }
   return combined;
 }
@@ -232,10 +269,14 @@ export function useChatSessionActions(): ChatSessionActions {
 // is mounted; callers that need the session must use useChatSessionContext().
 export function useOptionalChatSessionContext(): ChatSessionApi | null {
   const state = useContext(ChatSessionStateContext);
+  const stream = useContext(ChatSessionStreamContext);
   const actions = useContext(ChatSessionActionsContext);
   return useMemo<ChatSessionApi | null>(
-    () => (state === null || actions === null ? null : { ...state, ...actions }),
-    [state, actions],
+    () =>
+      state === null || stream === null || actions === null
+        ? null
+        : { ...state, ...stream, ...actions },
+    [state, stream, actions],
   );
 }
 

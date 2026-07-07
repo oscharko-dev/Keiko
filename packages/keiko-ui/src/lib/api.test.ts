@@ -1813,17 +1813,77 @@ describe("pdf citation preview api helpers", () => {
       "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231/document",
       expect.objectContaining({
         cache: "no-store",
-        signal: controller.signal,
         headers: expect.objectContaining({
           Accept: "application/pdf",
         }),
       }),
     );
+    // GEN-RES-FETCH-001 — the caller signal is COMBINED with the default read deadline
+    // (AbortSignal.any), so the forwarded signal is a derived one that still follows
+    // the caller's abort.
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(init.signal?.aborted).toBe(true);
   });
 
   it("builds an encoded preview PDF document URL for PDF.js range loading", () => {
     expect(pdfCitationPreviewDocumentUrl("preview/session#1")).toBe(
       "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231/document",
     );
+  });
+});
+
+// GEN-RES-FETCH-001 — BFF reads carry a default abort deadline so a stalled BFF cannot
+// hang the UI behind the browser's minutes-long network timeout; mutations keep no
+// default deadline (long-running git/index operations are legitimate), and a caller
+// signal is combined with the deadline rather than replaced by it.
+describe("GEN-RES-FETCH-001 — default read deadline", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearProjectRequestForTests();
+  });
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  it("attaches a deadline signal to plain GET reads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ projects: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchProjects();
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(false);
+  });
+
+  it("leaves state-changing requests without a default deadline", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await deleteProject("/repo");
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal).toBeNull();
+  });
+
+  it("combines a caller signal with the deadline instead of replacing it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const caller = new AbortController();
+    await fetchPdfCitationPreviewDocument("session-1", caller.signal);
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(false);
+    // The combined signal must follow the CALLER abort (deadline alone is not enough).
+    caller.abort();
+    expect(init.signal?.aborted).toBe(true);
   });
 });

@@ -11,7 +11,15 @@
 // Server-side enforcement is deferred to issue #149.
 // NEVER store or display File.path / webkitRelativePath (AC #4).
 
-import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 import { Icons } from "./Icons";
 import { formatBytes } from "@/lib/format";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -358,7 +366,7 @@ interface SentDocumentsNoteProps {
   readonly documents: readonly SentDocumentDisclosure[];
 }
 
-export function SentDocumentsNote({ documents }: SentDocumentsNoteProps): ReactNode {
+function SentDocumentsNoteImpl({ documents }: SentDocumentsNoteProps): ReactNode {
   const t = useTranslate();
   if (documents.length === 0) return null;
   const anyTruncated = documents.some((doc) => doc.truncated);
@@ -385,3 +393,7 @@ export function SentDocumentsNote({ documents }: SentDocumentsNoteProps): ReactN
     </div>
   );
 }
+
+// GEN-PERF-CHAT-014 — the documents list keeps identity across chat stream flushes, so
+// the memo skips the per-frame re-render inside ChatWindow's log.
+export const SentDocumentsNote = memo(SentDocumentsNoteImpl);

@@ -35,6 +35,7 @@ import {
   subText,
 } from "./connectionUtils";
 import { CHAT_MINI_W, WIN_TYPES, type WindowCfgByType, type WindowType } from "./WindowsRegistry";
+import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 
@@ -1163,7 +1164,8 @@ function WindowFrameImpl({
             </div>
           </header>
           <div ref={bodyRef} className="win-body" data-mode={bodyMode} style={bodyStyle}>
-            {body}
+            {/* GEN-STAB-WINDOW-001 — a widget render throw degrades THIS body, not the canvas. */}
+            <WindowBodyBoundary windowType={win.type}>{body}</WindowBodyBoundary>
           </div>
         </div>
       </div>

@@ -73,6 +73,11 @@ import type {
 } from "./store/relationship-audit.js";
 import { UiStoreError } from "./store/errors.js";
 import { SSE_HEADERS } from "./sse.js";
+import { writeOrDestroy } from "./sse-write.js";
+import {
+  subscribeActivityBroadcast,
+  type ActivityFrame,
+} from "./relationship-activity-broadcast.js";
 
 // ─── Port shapes (#540-#542 will reuse these) ─────────────────────────────────
 export type RelationshipScopeResolver = (
@@ -234,7 +239,7 @@ const IDEMPOTENCY_MAX_ENTRIES = 1024;
 const idempotencyStore = new Map<string, IdempotencyRecord>();
 
 function idempotencyKey(workspaceId: string, route: string, key: string): string {
-  return `${workspaceId} ${route} ${key}`;
+  return `${workspaceId}\u0000${route}\u0000${key}`;
 }
 
 function pruneExpiredIdempotency(now: number): void {
@@ -273,6 +278,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 const ACTIVITY_WINDOW_MS = 60_000;
 const ACTIVITY_HIGH_THROUGHPUT_THRESHOLD = 50;
 const ACTIVITY_SSE_REFRESH_MS = 5_000;
+const ACTIVITY_SSE_PING_MS = 30_000;
 // EventSource reconnect backoff advertised in the initial `retry:` directive (SSE spec). Matches
 // the refresh cadence so a dropped stream re-establishes on roughly the same beat.
 const ACTIVITY_SSE_RETRY_MS = 5_000;
@@ -1938,25 +1944,28 @@ function handleEventsImpl(ctx: RouteContext, deps: UiHandlerDeps): RouteResult |
   // `retry:` reconnect directive plus an SSE comment (`:` lines are ignored by EventSource), so it
   // carries no relationship payload and never trips the activity allowlist.
   res.flushHeaders();
-  res.write(`retry: ${String(ACTIVITY_SSE_RETRY_MS)}\n: connected\n\n`);
-  let lastEmitted = new Map<string, string>();
-  const emitSnapshots = (): void => {
-    const next = new Map<string, string>();
-    for (const snapshot of collectActivitySnapshots(deps, relationship, workspaceId)) {
-      const key = JSON.stringify(snapshot);
-      next.set(snapshot.id, key);
-      if (lastEmitted.get(snapshot.id) !== key) {
-        res.write(activityEventLine(deps.redactor, snapshot));
-      }
-    }
-    lastEmitted = next;
-  };
-  emitSnapshots();
-  const ping = setInterval(() => res.write(`: ping\n\n`), 30_000);
-  const refresh = setInterval(emitSnapshots, ACTIVITY_SSE_REFRESH_MS);
+  // GEN-PERF-RELACT-001 — refresh/ping timers, snapshot sweeps, and frame serialization
+  // are shared per workspace via the broadcaster instead of duplicated per connection,
+  // and every write reacts to backpressure (writeOrDestroy) so a non-draining client is
+  // destroyed instead of growing the response buffer without bound.
+  const controller = new AbortController();
+  writeOrDestroy(res, `retry: ${String(ACTIVITY_SSE_RETRY_MS)}\n: connected\n\n`, controller);
+  const unsubscribe = subscribeActivityBroadcast(
+    deps,
+    workspaceId,
+    { res, controller },
+    {
+      collectFrames: (): readonly ActivityFrame[] =>
+        collectActivitySnapshots(deps, relationship, workspaceId).map((snapshot) => ({
+          id: snapshot.id,
+          frame: activityEventLine(deps.redactor, snapshot),
+        })),
+      refreshMs: ACTIVITY_SSE_REFRESH_MS,
+      pingMs: ACTIVITY_SSE_PING_MS,
+    },
+  );
   ctx.req.on("close", () => {
-    clearInterval(ping);
-    clearInterval(refresh);
+    unsubscribe();
     res.end();
   });
   return STREAMING;
