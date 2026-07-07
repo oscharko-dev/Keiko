@@ -101,6 +101,10 @@ describe("embedding profile compatibility", () => {
     const cases: readonly [EmbeddingProfileIdentity, string][] = [
       [hardenedProfile({ provider: "azure-openai" }), "provider-mismatch"],
       [hardenedProfile({ vectorMetric: "dot" }), "metric-mismatch"],
+      [
+        embeddingProfileFromModelIdentity(HARDENED_IDENTITY, { modelFamily: "other-family" }),
+        "model-family-mismatch",
+      ],
       [hardenedProfile({ normalization: "none" }), "normalization-mismatch"],
       [
         hardenedProfile({ instructionVersion: "keiko-embedding-input-v2" }),

@@ -358,6 +358,56 @@ describe("local knowledge BFF boundary helpers", () => {
     });
   });
 
+  it("prefers policy-denied guidance over an embedding mismatch on the same pod", () => {
+    // A pod can be simultaneously policy-denied (sealed) and embedding-incompatible (e.g. a
+    // sealed-local pod whose stored profile also drifted after a policy change). This pins the
+    // intentional precedence in `metadataForSummary` (`policyGuidance ?? guidance ?? ...`): the
+    // policy reason is surfaced and the embedding-mismatch reason is deliberately not shown
+    // alongside it, rather than leaving the choice unverified by any test.
+    const capsuleId = "cap-sealed-and-incompatible" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Sealed and mismatched",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Sealed and mismatched", {
+          readiness: "degraded",
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "incompatible",
+            embeddingCompatibilityReason: "provider-mismatch",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      sealed: true,
+      guidance: {
+        label: "Policy denied",
+        tone: "danger",
+      },
+    });
+  });
+
   it("uses Knowledge Pod Set copy for embedding guidance", () => {
     const setId = "set-embedding-guidance" as CapsuleSetId;
     const capsuleSet = capsuleSetsForKnowledgePodUi({
