@@ -3,6 +3,7 @@ import {
   AuthenticationError,
   CancelledError,
   CircuitOpenError,
+  ProviderError,
   RateLimitError,
   TimeoutError,
   TransportError,
@@ -61,6 +62,10 @@ describe("executeWithRetry", () => {
       },
       RETRY_CONFIG,
       clock,
+      undefined,
+      // Equal jitter scales each capped delay by [0.5, 1.0]; pin the top of the
+      // band so this test keeps asserting the exact exponential ladder.
+      () => 1,
     );
     expect(result).toBe("ok");
     expect(calls).toBe(3);
@@ -107,6 +112,8 @@ describe("executeWithRetry", () => {
         () => Promise.reject(new TransportError("x")),
         { maxRetries: 8, retryBaseDelayMs: 500 },
         clock,
+        undefined,
+        () => 1, // top of the jitter band exposes the raw 30s cap
       ),
     ).rejects.toBeInstanceOf(TransportError);
     expect(Math.max(...sleeps)).toBe(30_000);
@@ -342,5 +349,103 @@ describe("CircuitBreaker", () => {
     expect(() => {
       cb.assertAllowed();
     }).toThrow(CircuitOpenError);
+  });
+});
+
+describe("executeWithRetry — backoff jitter (thundering-herd)", () => {
+  it("scales each capped exponential delay into the equal-jitter band [0.5d, d]", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls < 3 ? Promise.reject(new TransportError("boom")) : Promise.resolve("ok");
+      },
+      { maxRetries: 3, retryBaseDelayMs: 500 },
+      clock,
+      undefined,
+      () => 0, // bottom of the band: exactly half of each unjittered delay
+    );
+    expect(sleeps).toEqual([250, 500]);
+  });
+
+  it("spreads concurrent retries: different randomness yields different delays", async () => {
+    const run = async (random: () => number): Promise<number[]> => {
+      const { clock, sleeps } = stubClock();
+      let calls = 0;
+      await executeWithRetry(
+        () => {
+          calls += 1;
+          return calls < 2 ? Promise.reject(new TransportError("boom")) : Promise.resolve("ok");
+        },
+        { maxRetries: 2, retryBaseDelayMs: 1_000 },
+        clock,
+        undefined,
+        random,
+      );
+      return sleeps;
+    };
+    const low = await run(() => 0.1);
+    const high = await run(() => 0.9);
+    expect(low).toEqual([550]); // 1000 * (0.5 + 0.05)
+    expect(high).toEqual([950]); // 1000 * (0.5 + 0.45)
+    expect(low[0]).not.toBe(high[0]);
+  });
+
+  it("keeps an explicit RateLimitError.retryAfterMs verbatim (no jitter applied)", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new RateLimitError("rl", 2_000))
+          : Promise.resolve("ok");
+      },
+      { maxRetries: 1, retryBaseDelayMs: 500 },
+      clock,
+      undefined,
+      () => 0, // would halve an exponential delay — must not touch retryAfterMs
+    );
+    expect(sleeps).toEqual([2_000]);
+  });
+});
+
+describe("executeWithRetry — provider 5xx classification (buffered path)", () => {
+  it("retries a ProviderError carrying a retryable 5xx status", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    const result = await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new ProviderError("upstream overloaded", 503))
+          : Promise.resolve("ok");
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500 },
+      clock,
+      undefined,
+      () => 1,
+    );
+    expect(result).toBe("ok");
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([500]);
+  });
+
+  it("still fails fast on a terminal 4xx ProviderError", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return Promise.reject(new ProviderError("bad request", 400));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500 },
+        clock,
+      ),
+    ).rejects.toBeInstanceOf(ProviderError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
   });
 });
