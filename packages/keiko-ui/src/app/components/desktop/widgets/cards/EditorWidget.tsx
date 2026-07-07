@@ -951,6 +951,39 @@ export function EditorWidget({
         dragging: false,
       };
       setHeldTab({ paneId, file: path });
+      // GEN-PERF-EDITOR-003 — raw pointermove fires at up to 120-240Hz; resolving the
+      // insertion target does a tab-node querySelectorAll plus one getBoundingClientRect
+      // per open tab plus an elementFromPoint (each a forced layout), and then three
+      // state commits. Buffer the latest pointer and run that work at most once per
+      // animation frame (last-event-wins), the same pattern as WindowFrame's drag and
+      // workspaceActions' connect gesture. The drag ACTIVATION (threshold crossing)
+      // stays synchronous so grab feedback is not delayed by a frame.
+      let lastMoveX = 0;
+      let lastMoveY = 0;
+      let moveFrame: number | null = null;
+      const applyMove = (): void => {
+        moveFrame = null;
+        const drag = pointerTabDragRef.current;
+        if (drag === null || !drag.dragging) return;
+        const insertTarget = tabInsertionTargetFromPoint(
+          drag,
+          lastMoveX,
+          lastMoveY,
+          layoutRef.current,
+        );
+        const targetPaneId = paneIdFromPoint(lastMoveX, lastMoveY);
+        setTabDragPosition({
+          x: lastMoveX - drag.offsetX,
+          y: lastMoveY - drag.offsetY,
+          width: drag.width,
+        });
+        setTabInsertTarget(insertTarget);
+        setTabDropTargetPaneId(
+          insertTarget === null && targetPaneId !== null && targetPaneId !== drag.paneId
+            ? targetPaneId
+            : null,
+        );
+      };
       const move = (moveEvent: globalThis.PointerEvent): void => {
         const drag = pointerTabDragRef.current;
         if (drag === null) return;
@@ -966,27 +999,16 @@ export function EditorWidget({
           onDragModeStart?.();
           setDraggedTab({ paneId: drag.paneId, file: drag.file });
         }
-        const insertTarget = tabInsertionTargetFromPoint(
-          drag,
-          moveEvent.clientX,
-          moveEvent.clientY,
-          layoutRef.current,
-        );
-        const targetPaneId = paneIdFromPoint(moveEvent.clientX, moveEvent.clientY);
-        setTabDragPosition({
-          x: moveEvent.clientX - drag.offsetX,
-          y: moveEvent.clientY - drag.offsetY,
-          width: drag.width,
-        });
-        setTabInsertTarget(insertTarget);
-        setTabDropTargetPaneId(
-          insertTarget === null && targetPaneId !== null && targetPaneId !== drag.paneId
-            ? targetPaneId
-            : null,
-        );
+        lastMoveX = moveEvent.clientX;
+        lastMoveY = moveEvent.clientY;
+        moveFrame ??= requestAnimationFrame(applyMove);
         moveEvent.preventDefault();
       };
       const cleanup = (): void => {
+        if (moveFrame !== null) {
+          cancelAnimationFrame(moveFrame);
+          moveFrame = null;
+        }
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
         window.removeEventListener("pointercancel", cancel);

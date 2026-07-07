@@ -159,6 +159,34 @@ describe("useSSE", () => {
     expect(FakeEventSource.instances).toEqual([]);
   });
 
+  // GEN-PERF-SSE-001 — an event burst must not cost one React commit per event. Each
+  // emit below runs in its own act() (own task), which is how real EventSource messages
+  // arrive; pre-batching this produced ~one commit per event (≥30), batched it is the
+  // leading commit plus one trailing frame flush.
+  it("coalesces an event burst into a leading commit plus one frame flush", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const renders = { count: 0 };
+    const view = renderHook(() => {
+      renders.count += 1;
+      return useSSE("run 1");
+    });
+    const source = FakeEventSource.instances[0];
+    act(() => {
+      source?.onopen?.(new Event("open"));
+    });
+    const before = renders.count;
+    for (let seq = 1; seq <= 30; seq++) {
+      // eslint-disable-next-line no-await-in-loop -- each event must be its own task to model real SSE delivery
+      await act(async () => {
+        source?.emit(event(seq, "run:started"));
+        await Promise.resolve();
+      });
+    }
+    await waitFor(() => expect(view.result.current.events).toHaveLength(30));
+    expect(renders.count - before).toBeLessThanOrEqual(6);
+    view.unmount();
+  });
+
   it("caps retained events so long-running streams do not grow unbounded", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
     const view = renderHook(() => useSSE("run 1"));
