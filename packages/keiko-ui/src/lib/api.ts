@@ -99,6 +99,8 @@ import type {
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
   GitCommitMessageViolationCode,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchSidecarGatewayResult,
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
   GitDeliveryApprovalClaim,
@@ -118,6 +120,7 @@ import {
   validateGitRepositorySummary,
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
+  validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -173,6 +176,11 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
     `BFF response for ${path} failed contract validation: ${reason}`,
     502,
   );
+}
+
+function validateCodexSubscriptionProfileResponse(value: unknown): GitRepositoryValidation {
+  const result = validateCodingWorkbenchCodexSubscriptionProfile(value);
+  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
 async function fetchJson<T>(
@@ -249,6 +257,22 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
 
 export async function fetchHealth(): Promise<{ status: "ok"; version: string }> {
   return fetchJson("/api/health");
+}
+
+// ---------------------------------------------------------------------------
+// Coding Workbench
+// ---------------------------------------------------------------------------
+
+export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+  return fetchJson("/api/coding-sidecar/gateway/profile", { cache: "no-store" });
+}
+
+export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {
+  return fetchJson(
+    "/api/coding-workbench/codex-subscription/profile",
+    { cache: "no-store" },
+    validateCodexSubscriptionProfileResponse,
+  );
 }
 
 // ---------------------------------------------------------------------------
