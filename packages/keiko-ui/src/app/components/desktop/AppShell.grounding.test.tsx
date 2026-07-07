@@ -223,6 +223,8 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(),
+    copySelectedWindows: vi.fn(() => false),
+    pasteCopiedWindows: vi.fn(() => false),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),

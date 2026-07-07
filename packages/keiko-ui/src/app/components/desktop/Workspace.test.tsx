@@ -55,6 +55,8 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(),
+    copySelectedWindows: vi.fn(() => false),
+    pasteCopiedWindows: vi.fn(() => false),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),
@@ -1263,6 +1265,50 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     fireEvent.pointerUp(window);
 
     expect(replaceSelection).toHaveBeenCalledWith([]);
+  });
+
+  it("routes workspace-owned copy and paste keyboard commands", () => {
+    const copySelectedWindows = vi.fn(() => true);
+    const pasteCopiedWindows = vi.fn(() => true);
+    render(
+      <Workspace
+        ws={workspace({ api: api({ copySelectedWindows, pasteCopiedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const copy = createEvent.keyDown(surface, { key: "c", ctrlKey: true });
+    const paste = createEvent.keyDown(surface, { key: "v", metaKey: true });
+
+    fireEvent(surface, copy);
+    fireEvent(surface, paste);
+
+    expect(copySelectedWindows).toHaveBeenCalledTimes(1);
+    expect(pasteCopiedWindows).toHaveBeenCalledTimes(1);
+    expect(copy.defaultPrevented).toBe(true);
+    expect(paste.defaultPrevented).toBe(true);
+  });
+
+  it("does not intercept copy and paste commands from embedded window surfaces", () => {
+    const copySelectedWindows = vi.fn(() => true);
+    const pasteCopiedWindows = vi.fn(() => true);
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: api({ copySelectedWindows, pasteCopiedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+
+    fireEvent.keyDown(windowEl as HTMLElement, { key: "c", ctrlKey: true });
+    fireEvent.keyDown(windowEl as HTMLElement, { key: "v", ctrlKey: true });
+
+    expect(copySelectedWindows).not.toHaveBeenCalled();
+    expect(pasteCopiedWindows).not.toHaveBeenCalled();
   });
 
   it("does not start marquee selection from embedded window surfaces", () => {

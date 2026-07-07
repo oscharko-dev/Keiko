@@ -544,6 +544,17 @@ export function Workspace({
   // focused window child are not captured here (those are handled by WindowFrame).
   const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.target !== event.currentTarget) return;
+    const key = event.key.toLowerCase();
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+      if (key === "c") {
+        if (api.copySelectedWindows()) event.preventDefault();
+        return;
+      }
+      if (key === "v") {
+        if (api.pasteCopiedWindows()) event.preventDefault();
+        return;
+      }
+    }
     const base = 48;
     const step = event.shiftKey ? base * 4 : base;
     switch (event.key) {

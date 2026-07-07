@@ -24,6 +24,11 @@ import {
   sanitizePersistedWindows,
 } from "./workspace-persistence";
 import {
+  WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX,
+  buildWorkspaceClipboardPayload,
+  duplicateWorkspaceClipboardWindows,
+} from "./workspaceClipboard";
+import {
   boundConnectorScopeOf,
   connectorChatBind,
   boundScopeOf,
@@ -1525,8 +1530,12 @@ export function useWorkspace(
 
   const winsRef = useRef<AppWindow[]>([]);
   winsRef.current = wins ?? [];
+  const winsReadyRef = useRef(false);
+  winsReadyRef.current = wins !== null;
   const selectionRef = useRef<WorkspaceUiSelectionState>(selection);
   selectionRef.current = selection;
+  const workspaceClipboardRef = useRef<string | null>(null);
+  const workspaceClipboardPasteCountRef = useRef(1);
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
   const winsById = useMemo<ReadonlyMap<string, AppWindow>>(
@@ -1822,6 +1831,36 @@ export function useWorkspace(
     },
     [selectionRef, setWins, worldVP],
   );
+  const copySelectedWindows = useCallback<WorkspaceApi["copySelectedWindows"]>(() => {
+    if (!winsReadyRef.current) return false;
+    const payload = buildWorkspaceClipboardPayload(
+      winsRef.current,
+      selectionRef.current.selectedWindowIds,
+    );
+    if (payload === null) return false;
+    workspaceClipboardRef.current = payload;
+    workspaceClipboardPasteCountRef.current = 1;
+    return true;
+  }, [selectionRef, winsReadyRef, winsRef]);
+  const pasteCopiedWindows = useCallback<WorkspaceApi["pasteCopiedWindows"]>(() => {
+    if (!winsReadyRef.current || workspaceClipboardRef.current === null) return false;
+    const vp = worldVP();
+    if (vp === null) return false;
+    const result = duplicateWorkspaceClipboardWindows({
+      wins: winsRef.current,
+      payload: workspaceClipboardRef.current,
+      viewport: vp,
+      zStart: zc.current,
+      nowMs: Date.now(),
+      pasteOffsetPx: WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX * workspaceClipboardPasteCountRef.current,
+    });
+    if (result === null) return false;
+    zc.current = result.nextZ;
+    workspaceClipboardPasteCountRef.current += 1;
+    setWins(result.wins as AppWindow[]);
+    setSelection(replaceWorkspaceSelection(result.wins, result.pastedWindowIds));
+    return true;
+  }, [setWins, winsReadyRef, winsRef, worldVP, zc]);
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -1850,6 +1889,8 @@ export function useWorkspace(
       toggleWindowSelection,
       clearSelection,
       moveSelectedWindowsBy,
+      copySelectedWindows,
+      pasteCopiedWindows,
       close: closeWithTeardown,
       minimize: mutations.minimize,
       restore: mutations.restore,
@@ -1894,6 +1935,8 @@ export function useWorkspace(
       toggleWindowSelection,
       clearSelection,
       moveSelectedWindowsBy,
+      copySelectedWindows,
+      pasteCopiedWindows,
       updateConnBoundScope,
       currentView,
       zoomTo,
