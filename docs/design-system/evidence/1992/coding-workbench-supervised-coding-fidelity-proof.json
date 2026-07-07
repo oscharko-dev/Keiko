@@ -1,0 +1,101 @@
+{
+  "issue": 1992,
+  "epic": 1982,
+  "verdict": "PASS",
+  "cssSha256": "3fb769ffc1447e71bf68a5b2be70b8090556a4015267272efdb1c0fc7643d92e",
+  "harness": "tests/e2e/config/playwright.issue-1992-supervised-coding.config.ts",
+  "route": "/",
+  "appPath": "packaged-cli-ui",
+  "generatedAt": "2026-07-08T00:30:00Z",
+  "captures": [
+    {
+      "file": "01-approval-required.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "supervised-approval-required"
+    },
+    {
+      "file": "02-approved.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "supervised-approved"
+    },
+    {
+      "file": "03-denied.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "supervised-denied"
+    },
+    {
+      "file": "04-stopped.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "supervised-stopped"
+    },
+    {
+      "file": "05-failed.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "supervised-failed"
+    },
+    {
+      "file": "06-approval-required-narrow.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 390,
+        "height": 860
+      },
+      "state": "supervised-approval-required"
+    }
+  ],
+  "assertions": {
+    "supervisedCodingSelected": true,
+    "approvalPromptVisible": true,
+    "pushActionMetadataVisible": true,
+    "riskHighVisible": true,
+    "policyReasonVisible": true,
+    "workspaceScopeVisible": true,
+    "stopSidecarEnabledDuringApproval": true,
+    "stopStatusRecorded": true,
+    "approvedDeniedStoppedFailedStatesAreDistinct": true,
+    "rawStdoutHidden": true,
+    "rawStderrHidden": true,
+    "rawDiffsHidden": true,
+    "privatePathsHidden": true,
+    "tokenBearingTextHidden": true,
+    "narrowViewportHasNoHorizontalOverflow": true,
+    "seriousOrCriticalAxeViolations": 0
+  },
+  "artifacts": [
+    "01-approval-required.png",
+    "02-approved.png",
+    "03-denied.png",
+    "04-stopped.png",
+    "05-failed.png",
+    "06-approval-required-narrow.png",
+    "coding-workbench-supervised-coding-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ]
+}

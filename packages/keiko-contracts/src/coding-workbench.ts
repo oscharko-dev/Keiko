@@ -127,6 +127,65 @@ export const CODING_WORKBENCH_PERMISSION_REQUEST_KINDS: readonly CodingWorkbench
     "delivery-substrate",
   ] as const satisfies readonly CodingWorkbenchPermissionRequestKind[]);
 
+export type CodingWorkbenchSupervisedActionKind =
+  | "file-edit"
+  | "verification-command"
+  | "commit"
+  | "push"
+  | "pull-request"
+  | "merge"
+  | "connector-write"
+  | "external-write"
+  | "system-mutation";
+
+export const CODING_WORKBENCH_SUPERVISED_ACTION_KINDS: readonly CodingWorkbenchSupervisedActionKind[] =
+  Object.freeze([
+    "file-edit",
+    "verification-command",
+    "commit",
+    "push",
+    "pull-request",
+    "merge",
+    "connector-write",
+    "external-write",
+    "system-mutation",
+  ] as const satisfies readonly CodingWorkbenchSupervisedActionKind[]);
+
+export type CodingWorkbenchApprovalRisk = "low" | "medium" | "high" | "critical";
+
+export const CODING_WORKBENCH_APPROVAL_RISKS: readonly CodingWorkbenchApprovalRisk[] =
+  Object.freeze(["low", "medium", "high", "critical"] as const);
+
+export type CodingWorkbenchSupervisedPolicyReason =
+  | "scoped-file-edit"
+  | "out-of-scope-file-edit"
+  | "allowlisted-verification-command"
+  | "unknown-command-denied"
+  | "mutating-command-denied"
+  | "approval-required"
+  | "approval-proof-missing"
+  | "approval-proof-stale"
+  | "approval-proof-accepted"
+  | "operator-denied"
+  | "operator-stopped"
+  | "redacted-failure";
+
+export const CODING_WORKBENCH_SUPERVISED_POLICY_REASONS: readonly CodingWorkbenchSupervisedPolicyReason[] =
+  Object.freeze([
+    "scoped-file-edit",
+    "out-of-scope-file-edit",
+    "allowlisted-verification-command",
+    "unknown-command-denied",
+    "mutating-command-denied",
+    "approval-required",
+    "approval-proof-missing",
+    "approval-proof-stale",
+    "approval-proof-accepted",
+    "operator-denied",
+    "operator-stopped",
+    "redacted-failure",
+  ] as const satisfies readonly CodingWorkbenchSupervisedPolicyReason[]);
+
 export type CodingWorkbenchRuntimeEventKind =
   | "runtime-started"
   | "runtime-stopped"
@@ -337,6 +396,10 @@ export interface CodingWorkbenchPermissionRequest {
   readonly kind: CodingWorkbenchPermissionRequestKind;
   readonly actionClass: CodingWorkbenchActionClass;
   readonly reasonCode: string;
+  readonly actionKind?: CodingWorkbenchSupervisedActionKind | undefined;
+  readonly scopeLabel?: string | undefined;
+  readonly risk?: CodingWorkbenchApprovalRisk | undefined;
+  readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
   readonly expiresAt: string;
@@ -443,6 +506,23 @@ export function isCodingWorkbenchActionAllowedForMode(
   connectorScopes: readonly CodingWorkbenchConnectorScope[] = [],
 ): boolean {
   return decideCodingWorkbenchActionForMode(mode, actionClass, connectorScopes).allowed;
+}
+
+export function permissionKindForSupervisedCodingAction(
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): CodingWorkbenchPermissionRequestKind {
+  if (actionKind === "file-edit") return "workspace-write";
+  if (actionKind === "verification-command") return "command-execution";
+  if (actionKind === "connector-write" || actionKind === "external-write") {
+    return "connector-access";
+  }
+  return "delivery-substrate";
+}
+
+export function supervisedCodingActionRequiresApproval(
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): boolean {
+  return actionKind !== "file-edit" && actionKind !== "verification-command";
 }
 
 function denyCodingWorkbenchAction(

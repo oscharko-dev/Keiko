@@ -12,6 +12,9 @@ export type CodingWorkbenchRunState =
   | "empty"
   | "running"
   | "approval-required"
+  | "approved"
+  | "denied"
+  | "stopped"
   | "blocked"
   | "governed-assist"
   | "governed-assist-blocked"
@@ -125,6 +128,24 @@ const AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   approvalProofDigest: "approval-proof-redacted",
 };
 
+const SUPERVISED_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
+  ...AUTHORITY,
+  runId: "cw-issue-1992",
+  taskRefs: ["github:issue/1992"],
+  branch: {
+    ...AUTHORITY.branch,
+    headRef: "issue/1992-supervised-coding-mode",
+  },
+  commandPolicy: {
+    mode: "allowlisted",
+    allow: ["typecheck", "lint", "test", "format-check", "arch-check"],
+    deny: ["unknown-command-denied", "mutating-command-denied"],
+    maxCommandTimeoutMs: 600_000,
+    requirePerCommandApproval: false,
+  },
+  approvalProofDigest: "f".repeat(64),
+};
+
 function event(
   sequence: number,
   kind: CodingWorkbenchRuntimeEvent["kind"],
@@ -168,18 +189,42 @@ const PERMISSION_REQUEST: CodingWorkbenchPermissionRequest = Object.freeze({
   kind: "workspace-write",
   actionClass: "workspace-write",
   reasonCode: "apply-redacted-ui-patch",
+  actionKind: "file-edit",
+  scopeLabel: "workspace-scope",
+  risk: "medium",
+  policyReason: "approval-required",
   commandLabel: "workspace patch",
   expiresAt: "2026-07-07T19:30:00.000Z",
 });
 
+const SUPERVISED_DELIVERY_PERMISSION_REQUEST: CodingWorkbenchPermissionRequest = Object.freeze({
+  requestId: "perm-1992-push",
+  kind: "delivery-substrate",
+  actionClass: "delivery-substrate",
+  reasonCode: "approval-required",
+  actionKind: "push",
+  scopeLabel: "workspace-scope",
+  risk: "high",
+  policyReason: "approval-required",
+  commandLabel: "push",
+  expiresAt: "2026-07-07T23:10:00.000Z",
+});
+
 function projection(
   patch: Omit<CodingWorkbenchProjection, "authority" | "modeOptions">,
+  authority: CodingWorkbenchAuthorityEnvelope = AUTHORITY,
 ): CodingWorkbenchProjection {
   return {
-    authority: AUTHORITY,
+    authority,
     modeOptions: MODE_OPTIONS,
     ...patch,
   };
+}
+
+function supervisedProjection(
+  patch: Omit<CodingWorkbenchProjection, "authority" | "modeOptions">,
+): CodingWorkbenchProjection {
+  return projection(patch, SUPERVISED_AUTHORITY);
 }
 
 export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
@@ -242,6 +287,151 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     timeline: [
       ...RUNNING_TIMELINE,
       event(5, "permission-requested", { permissionRequest: PERMISSION_REQUEST }),
+    ],
+  }),
+  supervisedApprovalRequired: supervisedProjection({
+    runState: "approval-required",
+    title: "Issue #1992 Supervised Coding approval",
+    taskRef: "github:issue/1992",
+    currentStep: "Waiting for approval before delivery.",
+    sidecarHealth: "busy",
+    progress: { completed: 4, total: 7, label: "Scoped checks complete" },
+    diff: { fileCount: 4, addedLines: 180, deletedLines: 12, label: "Scoped edit summary" },
+    verification: {
+      status: "passed",
+      label: "Allowlisted checks passed",
+      passedCount: 18,
+      failedCount: 0,
+      skippedCount: 0,
+    },
+    deliveryStatus: "Push requires one-time approval",
+    policyDenials: [],
+    permissionRequest: SUPERVISED_DELIVERY_PERMISSION_REQUEST,
+    timeline: [
+      ...RUNNING_TIMELINE,
+      event(5, "verification-summarized", {
+        verificationKind: "typecheck",
+        verificationStatus: "passed",
+        passedCount: 18,
+        failedCount: 0,
+        skippedCount: 0,
+      }),
+      event(6, "permission-requested", {
+        permissionRequest: SUPERVISED_DELIVERY_PERMISSION_REQUEST,
+      }),
+    ],
+  }),
+  supervisedApproved: supervisedProjection({
+    runState: "approved",
+    title: "Issue #1992 Supervised Coding approved",
+    taskRef: "github:issue/1992",
+    currentStep: "Approval accepted.",
+    sidecarHealth: "busy",
+    progress: { completed: 5, total: 7, label: "Approval accepted" },
+    diff: { fileCount: 4, addedLines: 180, deletedLines: 12, label: "Scoped edit summary" },
+    verification: {
+      status: "passed",
+      label: "Verification stayed green",
+      passedCount: 18,
+      failedCount: 0,
+      skippedCount: 0,
+    },
+    deliveryStatus: "Approved once for this scope",
+    policyDenials: [],
+    timeline: [
+      ...RUNNING_TIMELINE,
+      event(5, "artifact-produced", {
+        artifactKind: "approval",
+        artifactLabel: "approval-proof-accepted",
+        artifactDigest: "f".repeat(64),
+        artifactBytes: 0,
+      }),
+    ],
+  }),
+  supervisedDenied: supervisedProjection({
+    runState: "denied",
+    title: "Issue #1992 Supervised Coding denied",
+    taskRef: "github:issue/1992",
+    currentStep: "Operator denied delivery before execution.",
+    sidecarHealth: "ready",
+    progress: { completed: 4, total: 7, label: "Delivery action denied" },
+    diff: { fileCount: 4, addedLines: 180, deletedLines: 12, label: "Scoped edit summary" },
+    verification: {
+      status: "passed",
+      label: "Verification retained",
+      passedCount: 18,
+      failedCount: 0,
+      skippedCount: 0,
+    },
+    deliveryStatus: "Denied before mutation",
+    policyDenials: ["operator-denied"],
+    timeline: [
+      ...RUNNING_TIMELINE,
+      event(5, "failure-redacted", {
+        failureCode: "operator-denied",
+        failureSummary: "operator-denied",
+        retryable: false,
+      }),
+    ],
+  }),
+  supervisedStopped: supervisedProjection({
+    runState: "stopped",
+    title: "Issue #1992 Supervised Coding stopped",
+    taskRef: "github:issue/1992",
+    currentStep: "Operator stopped before approval.",
+    sidecarHealth: "stopped",
+    progress: { completed: 4, total: 7, label: "Run stopped" },
+    diff: { fileCount: 4, addedLines: 180, deletedLines: 12, label: "Scoped edit summary" },
+    verification: {
+      status: "partial",
+      label: "Checks stopped before closeout",
+      passedCount: 12,
+      failedCount: 0,
+      skippedCount: 1,
+    },
+    deliveryStatus: "Stopped before mutation",
+    policyDenials: ["operator-stopped"],
+    timeline: [
+      ...RUNNING_TIMELINE,
+      event(5, "runtime-stopped", {
+        runtimeSource: "codex-cli-adapter",
+        modelSource: "chatgpt-codex-subscription-profile",
+        health: "stopped",
+        effectiveMode: "supervised-coding",
+      }),
+    ],
+  }),
+  supervisedFailed: supervisedProjection({
+    runState: "failed",
+    title: "Issue #1992 Supervised Coding failed",
+    taskRef: "github:issue/1992",
+    currentStep: "Redacted verification failure stopped delivery.",
+    sidecarHealth: "degraded",
+    progress: { completed: 4, total: 7, label: "Failure recorded" },
+    diff: { fileCount: 4, addedLines: 180, deletedLines: 12, label: "Scoped edit summary" },
+    verification: {
+      status: "failed",
+      label: "Verification failed with redacted output",
+      passedCount: 17,
+      failedCount: 1,
+      skippedCount: 0,
+    },
+    deliveryStatus: "Delivery blocked by verification",
+    policyDenials: ["redacted-failure"],
+    timeline: [
+      ...RUNNING_TIMELINE,
+      event(5, "verification-summarized", {
+        verificationKind: "test",
+        verificationStatus: "failed",
+        passedCount: 17,
+        failedCount: 1,
+        skippedCount: 0,
+      }),
+      event(6, "failure-redacted", {
+        failureCode: "redacted-failure",
+        failureSummary: "redacted-failure",
+        retryable: true,
+      }),
     ],
   }),
   blocked: projection({
@@ -341,6 +531,13 @@ export function codingWorkbenchProjectionForState(
 ): CodingWorkbenchProjection {
   if (state === "running") return CODING_WORKBENCH_PROJECTIONS.running;
   if (state === "approval-required") return CODING_WORKBENCH_PROJECTIONS.approvalRequired;
+  if (state === "supervised-approval-required") {
+    return CODING_WORKBENCH_PROJECTIONS.supervisedApprovalRequired;
+  }
+  if (state === "supervised-approved") return CODING_WORKBENCH_PROJECTIONS.supervisedApproved;
+  if (state === "supervised-denied") return CODING_WORKBENCH_PROJECTIONS.supervisedDenied;
+  if (state === "supervised-stopped") return CODING_WORKBENCH_PROJECTIONS.supervisedStopped;
+  if (state === "supervised-failed") return CODING_WORKBENCH_PROJECTIONS.supervisedFailed;
   if (state === "blocked") return CODING_WORKBENCH_PROJECTIONS.blocked;
   if (state === "governed-assist") return CODING_WORKBENCH_PROJECTIONS.governedAssist;
   if (state === "governed-assist-blocked") {

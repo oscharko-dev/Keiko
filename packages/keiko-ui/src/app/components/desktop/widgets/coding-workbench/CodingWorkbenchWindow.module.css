@@ -267,6 +267,20 @@
   background: color-mix(in oklch, var(--feedback-warning-surface) 28%, var(--surface-primary));
 }
 
+.promptGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.promptGrid dd {
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+  font-size: var(--text-label);
+  overflow-wrap: anywhere;
+}
+
 .denials {
   display: flex;
   flex-direction: column;
@@ -318,6 +332,7 @@
   .header,
   .grid,
   .modeGrid,
+  .promptGrid,
   .authorityList {
     grid-template-columns: 1fr;
   }

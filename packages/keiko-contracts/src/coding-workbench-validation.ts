@@ -1,6 +1,7 @@
 import { isCodingWorkbenchEvidenceSafeText } from "./coding-workbench-evidence.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_APPROVAL_RISKS,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_GATES,
@@ -14,6 +15,9 @@ import {
   CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
+  CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
+  permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchAuthorityEnvelope,
   type CodingWorkbenchMode,
@@ -462,6 +466,40 @@ function validatePermissionRequestKindActionClassConsistency(
   }
 }
 
+function validatePermissionRequestSupervisedConsistency(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (!isOneOf(value.actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS)) return;
+  const expected = permissionKindForSupervisedCodingAction(value.actionKind);
+  if (value.kind !== expected || value.actionClass !== expected) {
+    errors.push(`${path}.actionKind must match ${path}.kind and ${path}.actionClass`);
+  }
+  validatePermissionRequestSupervisedConnectorScopes(value, path, errors);
+}
+
+function validatePermissionRequestSupervisedConnectorScopes(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  const connectorAction =
+    value.actionKind === "connector-write" || value.actionKind === "external-write";
+  if (!connectorAction) return;
+  if (!Array.isArray(value.connectorScopes) || value.connectorScopes.length === 0) {
+    errors.push(`${path}.connectorScopes is required for ${String(value.actionKind)}`);
+    return;
+  }
+  value.connectorScopes.forEach((scope, index) => {
+    if (typeof scope === "string" && !scope.endsWith(".write")) {
+      errors.push(
+        `${path}.connectorScopes[${String(index)}] must be write-capable for ${String(value.actionKind)}`,
+      );
+    }
+  });
+}
+
 function validatePermissionRequestConnectorScopes(
   value: Record<string, unknown>,
   path: string,
@@ -495,12 +533,38 @@ function validatePermissionRequestOptionalFields(
   errors: string[],
 ): void {
   validateSafeEvidenceText(value.reasonCode, `${path}.reasonCode`, errors);
+  validatePermissionRequestSupervisedFields(value, path, errors);
   validatePermissionRequestConnectorScopes(value, path, errors);
   if (value.commandLabel !== undefined) {
     validateSafeEvidenceText(value.commandLabel, `${path}.commandLabel`, errors);
   }
   if (!isIsoInstant(value.expiresAt)) {
     errors.push(`${path}.expiresAt must be an ISO-8601 UTC instant`);
+  }
+}
+
+function validatePermissionRequestSupervisedFields(
+  value: Record<string, unknown>,
+  path: string,
+  errors: string[],
+): void {
+  if (
+    value.actionKind !== undefined &&
+    !isOneOf(value.actionKind, CODING_WORKBENCH_SUPERVISED_ACTION_KINDS)
+  ) {
+    errors.push(`${path}.actionKind is invalid`);
+  }
+  if (value.scopeLabel !== undefined) {
+    validateSafeEvidenceText(value.scopeLabel, `${path}.scopeLabel`, errors);
+  }
+  if (value.risk !== undefined && !isOneOf(value.risk, CODING_WORKBENCH_APPROVAL_RISKS)) {
+    errors.push(`${path}.risk is invalid`);
+  }
+  if (
+    value.policyReason !== undefined &&
+    !isOneOf(value.policyReason, CODING_WORKBENCH_SUPERVISED_POLICY_REASONS)
+  ) {
+    errors.push(`${path}.policyReason is invalid`);
   }
 }
 
@@ -516,6 +580,10 @@ function validatePermissionRequestInternal(value: unknown, path: string, errors:
       "kind",
       "actionClass",
       "reasonCode",
+      "actionKind",
+      "scopeLabel",
+      "risk",
+      "policyReason",
       "connectorScopes",
       "commandLabel",
       "expiresAt",
@@ -535,6 +603,7 @@ function validatePermissionRequestInternal(value: unknown, path: string, errors:
     errors.push(`${path}.commandLabel is required`);
   }
   validatePermissionRequestKindActionClassConsistency(value, path, errors);
+  validatePermissionRequestSupervisedConsistency(value, path, errors);
 }
 
 function validateEventCommon(record: Record<string, unknown>, errors: string[]): void {

@@ -114,6 +114,10 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(screen.getByRole("heading", { name: "Just-in-time approval" })).toBeInTheDocument();
     expect(screen.getByText(/workspace write requested/iu)).toBeInTheDocument();
+    expect(screen.getByText("Action kind")).toBeInTheDocument();
+    expect(screen.getByText("file-edit")).toBeInTheDocument();
+    expect(screen.getByText("workspace-scope")).toBeInTheDocument();
+    expect(screen.getByText("approval-required")).toBeInTheDocument();
     expect(screen.queryByText(/diff --git|access token|refresh token/iu)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Approve once" }));
@@ -175,6 +179,68 @@ describe("CodingWorkbenchWindow", () => {
       screen.getByText(/connector-write denied; external systems stay read-only/iu),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+  });
+
+  it("renders the Supervised Coding approval lifecycle without raw evidence bodies", async () => {
+    const onStopRun = vi.fn();
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.supervisedApprovalRequired}
+        onStopRun={onStopRun}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Issue #1992 Supervised Coding approval" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Push requires one-time approval")).toBeInTheDocument();
+    expect(screen.getByText("push")).toBeInTheDocument();
+    expect(screen.getByText("high")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/stdout|stderr|diff --git|Bearer|\/Users\//u),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Stop sidecar" }));
+    expect(onStopRun).toHaveBeenCalledWith("cw-issue-1992");
+    expect(screen.getByRole("status")).toHaveTextContent("Stop requested");
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.supervisedApproved}
+      />,
+    );
+    expect(screen.getByText("Approved once for this scope")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("No operator override requested");
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.supervisedDenied}
+      />,
+    );
+    expect(screen.getByText("Denied before mutation")).toBeInTheDocument();
+    expect(screen.getAllByText("operator-denied").length).toBeGreaterThanOrEqual(1);
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.supervisedStopped}
+      />,
+    );
+    expect(screen.getByText("Stopped before mutation")).toBeInTheDocument();
+    expect(screen.getAllByText("operator-stopped").length).toBeGreaterThanOrEqual(1);
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.supervisedFailed}
+      />,
+    );
+    expect(screen.getByText("Verification failed with redacted output")).toBeInTheDocument();
+    expect(screen.getAllByText("redacted-failure").length).toBeGreaterThanOrEqual(1);
   });
 
   it("distinguishes managed gateway, OpenAI-through-gateway, and Codex subscription sources", async () => {

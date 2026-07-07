@@ -570,6 +570,7 @@ export {
 export type {
   CodingWorkbenchActionPolicyDecision,
   CodingWorkbenchActionClass,
+  CodingWorkbenchApprovalRisk,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchBudget,
   CodingWorkbenchBranchConstraints,
@@ -597,6 +598,8 @@ export type {
   CodingWorkbenchSidecarGatewayStatus,
   CodingWorkbenchSidecarGatewayUnavailable,
   CodingWorkbenchSidecarGatewayUnavailableReason,
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchSupervisedPolicyReason,
   CodingWorkbenchValidationFail,
   CodingWorkbenchValidationOk,
   CodingWorkbenchValidationResult,
@@ -604,6 +607,7 @@ export type {
 } from "./coding-workbench.js";
 export {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_APPROVAL_RISKS,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_GATES,
@@ -617,12 +621,16 @@ export {
   CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
+  CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
   decideCodingWorkbenchActionForMode,
   isCodingWorkbenchActionAllowedForMode,
   isCodingWorkbenchModelSource,
   isCodingWorkbenchMode,
   isCodingWorkbenchRuntimeSource,
+  permissionKindForSupervisedCodingAction,
   resolveEffectiveCodingWorkbenchMode,
+  supervisedCodingActionRequiresApproval,
 } from "./coding-workbench.js";
 export type {
   CodingWorkbenchEvidenceKind,
