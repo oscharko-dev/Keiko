@@ -7,6 +7,8 @@
 // Glob translation produces only linear regex pieces (`[^/]*`, `.*`) so there is no
 // catastrophic backtracking (no ReDoS).
 
+import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
+
 export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   // secrets
   ".env",
@@ -132,7 +134,15 @@ const EXAMPLE_ENV = ".env.example";
 // directory denies everything under it). `.env.example` is the single documented exception.
 // Matching is CASE-INSENSITIVE: on case-insensitive filesystems (macOS, Windows) `.ENV` and
 // `.env` name the same file, so a case-only variant must not bypass the deny list.
-export function isDenied(relPath: string): boolean {
+// Memoized: discovery, candidate gathering, and the scan loop each re-check the same relPath,
+// and every check runs the full deny-regex set over every path segment. The predicate is pure
+// in relPath, so caching cannot weaken the deny boundary.
+export const isDenied: (relPath: string) => boolean = memoizeByStringKey(
+  PATH_MEMO_MAX_ENTRIES,
+  isDeniedUncached,
+);
+
+function isDeniedUncached(relPath: string): boolean {
   for (const part of segments(relPath)) {
     const lower = part.toLowerCase();
     if (lower === EXAMPLE_ENV) {

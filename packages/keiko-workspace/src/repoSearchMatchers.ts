@@ -4,6 +4,7 @@
 
 import { createHash } from "node:crypto";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import { memoizeByStringKey } from "./boundedMemo.js";
 import {
   ecosystemTechnicalPhrases,
   ecosystemVersionDeclarationPatterns,
@@ -282,15 +283,29 @@ function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
 
+// Memoized: `shouldScoreContent` calls this once per scanned FILE (repoSearchScan.ts), and each
+// call re-tokenizes the query and re-tests every ecosystem routing regex in TECHNICAL_PHRASES —
+// measurably the hottest per-file cost on large scans. The derivation is pure in
+// (queryText, caseSensitive); the key marker char cannot collide with query text because the
+// query is the key SUFFIX after a fixed two-char prefix.
+const memoizedContentTerms: (key: string) => readonly string[] = memoizeByStringKey(
+  8,
+  (key: string): readonly string[] => {
+    const caseSensitive = key.startsWith("s");
+    const queryText = key.slice(2);
+    const rawTokens = expandedQueryTerms(queryText, caseSensitive);
+    return uniqueStrings([
+      ...naturalLanguageContentGroups([rawTokens], caseSensitive).flat(),
+      ...technicalPhraseTerms(queryText, caseSensitive),
+    ]);
+  },
+);
+
 export function naturalLanguageContentTerms(
   queryText: string,
   caseSensitive: boolean,
 ): readonly string[] {
-  const rawTokens = expandedQueryTerms(queryText, caseSensitive);
-  return uniqueStrings([
-    ...naturalLanguageContentGroups([rawTokens], caseSensitive).flat(),
-    ...technicalPhraseTerms(queryText, caseSensitive),
-  ]);
+  return memoizedContentTerms(`${caseSensitive ? "s" : "i"} ${queryText}`);
 }
 
 function isDefinitionIntentToken(token: string): boolean {

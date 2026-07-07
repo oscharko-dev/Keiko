@@ -11,6 +11,7 @@ import {
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
 } from "./ecosystems.js";
+import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
 import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
@@ -442,7 +443,14 @@ export function scoreContentForSearch(
   );
 }
 
-function bucketByPath(scopePath: string): CandidateBucket {
+// Memoized: bucketing runs for every discovered path on every search, and each call normalizes
+// the path and walks several classification tables. Pure in scopePath.
+const bucketByPath: (scopePath: string) => CandidateBucket = memoizeByStringKey(
+  PATH_MEMO_MAX_ENTRIES,
+  bucketByPathUncached,
+);
+
+function bucketByPathUncached(scopePath: string): CandidateBucket {
   const path = normalizedPath(scopePath);
   const name = basename(path);
   const ext = extension(path);

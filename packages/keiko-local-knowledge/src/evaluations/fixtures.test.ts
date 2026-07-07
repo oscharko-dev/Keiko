@@ -15,6 +15,8 @@ import {
   contextBudgetFixture,
   exactTechnicalFixture,
   htmlManualStructureFixture,
+  codeRepositoryFixture,
+  chainedQuestionFixture,
   mixedStrategyFixture,
   multiCapsuleFixture,
   multiPageFixture,
@@ -70,6 +72,8 @@ describe("fixtures — registry", () => {
       mixedStrategyFixture.id,
       sealedPodFixture.id,
       htmlManualStructureFixture.id,
+      codeRepositoryFixture.id,
+      chainedQuestionFixture.id,
     ]);
   });
 

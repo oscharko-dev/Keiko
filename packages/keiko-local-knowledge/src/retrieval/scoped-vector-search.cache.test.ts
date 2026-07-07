@@ -154,3 +154,83 @@ describe("scoped-vector-search decoded-vector cache (GEN-PERF-CHAT-004)", () => 
     expect(openVectorSpyB.mock.calls.length).toBeGreaterThan(0);
   });
 });
+
+// GEN-PERF-LK-002 regression: query-embedding + identity-preflight results must survive the
+// fresh-store-per-request boundary WHEN the same adapter instance is reused (the BFF holds one
+// adapter per live gateway config), and must NOT leak between adapter instances (scripted eval
+// adapters can answer the same (identity, query) differently).
+describe("scoped-vector-search query-embedding cache (GEN-PERF-LK-002)", () => {
+  async function runCountedSearch(
+    store: KnowledgeStore,
+    capsuleId: KnowledgeCapsuleId,
+    adapter: ReturnType<typeof scriptedAdapter>,
+  ): Promise<number> {
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [capsuleId] },
+      "query",
+      { topK: 10 },
+    );
+    return outcome.references.length;
+  }
+
+  function countingAdapter(): {
+    readonly adapter: ReturnType<typeof scriptedAdapter>;
+    readonly calls: () => number;
+  } {
+    let requestCalls = 0;
+    const inner = scriptedAdapter();
+    const adapter: ReturnType<typeof scriptedAdapter> = {
+      ...inner,
+      request: async (req) => {
+        requestCalls += 1;
+        return inner.request(req);
+      },
+    };
+    return { adapter, calls: (): number => requestCalls };
+  }
+
+  it("skips every embedding/preflight network call on a repeat ask with the same adapter", async () => {
+    const dbPath = freshDbPath();
+    const counted = countingAdapter();
+
+    const first = openEncryptedStore(dbPath);
+    const seeded = await seedCapsuleWithVectors(first.store, { capsuleId: "cap-embed-cache" });
+    const firstCount = await runCountedSearch(first.store, seeded.capsuleId, counted.adapter);
+    expect(firstCount).toBeGreaterThan(0);
+    const callsAfterFirst = counted.calls();
+    expect(callsAfterFirst).toBeGreaterThan(0);
+    first.close();
+    cleanups.splice(cleanups.indexOf(first.close), 1);
+
+    // Request 2: fresh store at the same dbPath, SAME adapter — the real per-request pattern.
+    const second = openEncryptedStore(dbPath);
+    const secondCount = await runCountedSearch(second.store, seeded.capsuleId, counted.adapter);
+
+    expect(secondCount).toBe(firstCount);
+    // Load-bearing: zero additional adapter calls — preflight comes from the TTL cache and the
+    // query embedding from the per-adapter LRU. Pre-fix both caches were request-local, so the
+    // second ask repeated every call.
+    expect(counted.calls()).toBe(callsAfterFirst);
+  });
+
+  it("keeps caches isolated per adapter instance (no cross-adapter reuse)", async () => {
+    const dbPath = freshDbPath();
+    const first = countingAdapter();
+
+    const opened = openEncryptedStore(dbPath);
+    const seeded = await seedCapsuleWithVectors(opened.store, { capsuleId: "cap-embed-iso" });
+    await runCountedSearch(opened.store, seeded.capsuleId, first.adapter);
+    const firstCalls = first.calls();
+    expect(firstCalls).toBeGreaterThan(0);
+
+    // A DIFFERENT adapter instance with the same identity/query must do its own network work:
+    // scripted adapters (and reconfigured gateways) can produce different vectors for the same
+    // inputs, so sharing would be a correctness bug, not an optimization.
+    const second = countingAdapter();
+    const count = await runCountedSearch(opened.store, seeded.capsuleId, second.adapter);
+    expect(count).toBeGreaterThan(0);
+    expect(second.calls()).toBe(firstCalls);
+  });
+});

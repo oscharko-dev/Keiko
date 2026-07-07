@@ -184,21 +184,40 @@ function buildRetrievalQuery(
   return { ...baseQuery, capsuleSetId: query.scope.capsuleSetId as CapsuleSetId };
 }
 
+// Prepends the query topic marker to the EMBEDDING input only. Inputs that already carry an
+// inline marker pass through unchanged — chained-question fixtures mark each decomposed part
+// in-text, and "first topic wins" must honour the part's own marker.
+function topicRoutingAdapter(
+  adapter: ReturnType<typeof createScriptedEmbeddingAdapter>,
+  topic: string,
+): ReturnType<typeof createScriptedEmbeddingAdapter> {
+  return {
+    ...adapter,
+    request: async (req) =>
+      adapter.request(
+        req.input.includes("[[topic:") ? req : { ...req, input: withTopicMarker(req.input, topic) },
+      ),
+  };
+}
+
 async function runOneQuery(
   store: KnowledgeStore,
   query: RetrievalEvalQuery,
   seeded: SeededFixture,
   now: () => number,
 ): Promise<QueryEvaluation> {
-  // Wrap the query text in the topic marker so the scripted adapter applies the same
-  // topic boost it used at seed time.
-  const queryText =
-    query.topic !== undefined ? withTopicMarker(query.text, query.topic) : query.text;
-  const adapter = createScriptedEmbeddingAdapter({
+  // Route the query embedding toward the declared topic WITHOUT putting the marker into the
+  // searchable query text: production queries never contain harness markers, so the lexical
+  // lane must not see them either (marker tokens like "topic"/the topic name are real FTS
+  // terms and can lexically self-match a same-named chunk topic). The marker is injected at
+  // the embedding boundary instead — the only place it has meaning.
+  const baseAdapter = createScriptedEmbeddingAdapter({
     identity: query.queryEmbeddingIdentity ?? seeded.identity,
     topicBoosts: seeded.topicBoosts,
   });
-  const retrievalQuery = buildRetrievalQuery(query, queryText);
+  const adapter =
+    query.topic === undefined ? baseAdapter : topicRoutingAdapter(baseAdapter, query.topic);
+  const retrievalQuery = buildRetrievalQuery(query, query.text);
   const start = now();
   const result = await runLocalKnowledgeRetrieval(
     { store, embeddingAdapter: adapter },

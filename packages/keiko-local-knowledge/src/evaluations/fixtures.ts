@@ -847,6 +847,12 @@ export const contextBudgetFixture: RetrievalEvalFixture = {
   ],
 };
 
+// Two queries pin the two designed stale-index behaviours: q-stale (no lexical overlap) proves
+// the identity governance still surfaces "incompatible-embedding-identity" instead of answering
+// from an incompatible dense space; q-stale-lexical-rescue proves the lexical lane still rescues
+// a matching chunk (mode "lexical-degraded") when the dense lane is unusable. The q-stale text
+// deliberately shares no index tokens with the chunk — with lexical overlap the OR recall
+// fallback correctly rescues the chunk, which is the second query's job to pin.
 export const staleIndexFixture: RetrievalEvalFixture = {
   id: "stale-index",
   description: "Vectors were seeded under the pinned identity but the query adapter moved.",
@@ -885,11 +891,20 @@ export const staleIndexFixture: RetrievalEvalFixture = {
   queries: [
     {
       id: "q-stale",
-      text: "retrieve stale body",
+      text: "recover archived payload",
       topic: "stale",
       scope: { kind: "capsule", capsuleId: capsuleId("cap-stale") },
       expectedNoEvidence: true,
       expectedNoEvidenceReason: "incompatible-embedding-identity",
+      queryEmbeddingIdentity: STALE_QUERY_EMBEDDING_IDENTITY,
+    },
+    {
+      id: "q-stale-lexical-rescue",
+      text: "retrieve stale body",
+      topic: "stale",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-stale") },
+      expectedChunkIds: [chunkId("c-stale")],
+      topK: 1,
       queryEmbeddingIdentity: STALE_QUERY_EMBEDDING_IDENTITY,
     },
   ],
@@ -1534,6 +1549,225 @@ export const htmlManualStructureFixture: RetrievalEvalFixture = {
   ],
 };
 
+// Code-repository retrieval: symbol definitions, cross-file mentions, and file-level questions
+// over source-code chunks. Repository question-answering is a primary product surface for the
+// coding agent, and until this fixture the eval set only exercised prose/manual content — a
+// ranking regression that hit code identifiers (camelCase symbols, paths, "defined vs merely
+// imported") was invisible to the gate.
+export const codeRepositoryFixture: RetrievalEvalFixture = {
+  id: "code-repository",
+  description:
+    "Source-code retrieval: symbol definition beats mere mention, semantic renewal question, and file-scoped gateway retry lookup.",
+  capsules: [
+    {
+      id: capsuleId("cap-code-repo"),
+      displayName: "Code Repository",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-code-repo"),
+          documents: [
+            {
+              id: documentId("doc-session-manager"),
+              safeDisplayName: "src/auth/sessionManager.ts",
+              parsedUnits: [
+                {
+                  id: "u-session-manager",
+                  unit: {
+                    kind: "page",
+                    pageNumber: 1,
+                    pageLabel: "1",
+                    characterStart: 0,
+                    characterEnd: 400,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-code-session-def"),
+                  text: "export class SessionManager { refreshToken(): Promise<Session> { return this.rotate(); } }",
+                  topic: "session-renewal",
+                },
+                {
+                  id: chunkId("c-code-session-expiry"),
+                  text: "expired sessions are renewed by rotating the refresh token before the access token lapses",
+                  topic: "session-renewal",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-gateway-retry"),
+              safeDisplayName: "src/gateway/retryPolicy.ts",
+              parsedUnits: [
+                {
+                  id: "u-gateway-retry",
+                  unit: {
+                    kind: "page",
+                    pageNumber: 1,
+                    pageLabel: "1",
+                    characterStart: 0,
+                    characterEnd: 400,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-code-retry-backoff"),
+                  text: "const GATEWAY_RETRY_BACKOFF_MS = [250, 500, 1000]; equal jitter applied per attempt",
+                  topic: "gateway-retry",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-http-client"),
+              safeDisplayName: "src/gateway/httpClient.ts",
+              parsedUnits: [
+                {
+                  id: "u-http-client",
+                  unit: {
+                    kind: "page",
+                    pageNumber: 1,
+                    pageLabel: "1",
+                    characterStart: 0,
+                    characterEnd: 400,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-code-client-noise"),
+                  text: "import { TokenStore } from ../auth/tokenStore; the client wires transport headers",
+                  topic: "http-client",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-code-symbol-definition",
+      text: "Where is the SessionManager class defined?",
+      topic: "session-renewal",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-code-repo") },
+      expectedChunkIds: [chunkId("c-code-session-def")],
+      topK: 1,
+    },
+    {
+      id: "q-code-semantic-renewal",
+      text: "how do expired sessions get renewed",
+      topic: "session-renewal",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-code-repo") },
+      expectedChunkIds: [chunkId("c-code-session-def"), chunkId("c-code-session-expiry")],
+      topK: 2,
+    },
+    {
+      id: "q-code-file-retry",
+      text: "which file defines the gateway retry backoff",
+      topic: "gateway-retry",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-code-repo") },
+      expectedChunkIds: [chunkId("c-code-retry-backoff")],
+      topK: 1,
+    },
+  ],
+};
+
+// Chained multi-part question: one ask whose two legs are answered by DIFFERENT documents.
+// The retrieval layer decomposes the chain into sub-query variants (query-decomposition.ts)
+// and fuses the legs; a single-embedding retrieval lands between the topics and misses one
+// leg. The second topic marker is embedded mid-text exactly where the second question starts,
+// so each decomposed part carries its own topic envelope through the scripted adapter.
+export const chainedQuestionFixture: RetrievalEvalFixture = {
+  id: "chained-question",
+  description:
+    "Multi-part chained question retrieves evidence for BOTH legs (mounting torque + error meaning) from different documents.",
+  capsules: [
+    {
+      id: capsuleId("cap-chained"),
+      displayName: "Chained Question Manual",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-chained"),
+          documents: [
+            {
+              id: documentId("doc-chained-mounting"),
+              safeDisplayName: "mounting-guide.txt",
+              parsedUnits: [
+                {
+                  id: "u-chained-mounting",
+                  unit: {
+                    kind: "page",
+                    pageNumber: 1,
+                    pageLabel: "1",
+                    characterStart: 0,
+                    characterEnd: 300,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-chained-torque"),
+                  text: "spindle bracket mounting requires a torque of twelve newton meters",
+                  topic: "chained-torque",
+                },
+                {
+                  id: chunkId("c-chained-noise-a"),
+                  text: "packaging checklist covers foam inserts and carton labels",
+                  topic: "chained-noise-a",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-chained-errors"),
+              safeDisplayName: "error-reference.txt",
+              parsedUnits: [
+                {
+                  id: "u-chained-errors",
+                  unit: {
+                    kind: "page",
+                    pageNumber: 1,
+                    pageLabel: "1",
+                    characterStart: 0,
+                    characterEnd: 300,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-chained-e410"),
+                  text: "error E410 signals a sensor timeout during calibration",
+                  topic: "chained-errors",
+                },
+                {
+                  id: chunkId("c-chained-noise-b"),
+                  text: "warranty coverage excludes consumable wear parts",
+                  topic: "chained-noise-b",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-chained-two-legs",
+      text: "What torque do the spindle brackets need? [[topic:chained-errors]]what does error E410 mean?",
+      topic: "chained-torque",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-chained") },
+      expectedChunkIds: [chunkId("c-chained-torque"), chunkId("c-chained-e410")],
+      topK: 2,
+    },
+  ],
+};
+
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
@@ -1553,4 +1787,6 @@ export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   mixedStrategyFixture,
   sealedPodFixture,
   htmlManualStructureFixture,
+  codeRepositoryFixture,
+  chainedQuestionFixture,
 ] as const;

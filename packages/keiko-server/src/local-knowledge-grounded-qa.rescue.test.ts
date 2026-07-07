@@ -90,28 +90,6 @@ function result(over: Partial<GroundedResult>): GroundedResult {
   };
 }
 
-function capsule(provider = "openai"): KnowledgeCapsule {
-  return {
-    id: "cap-1" as KnowledgeCapsuleId,
-    displayName: "Alpha Capsule",
-    tags: [],
-    sourceIds: [],
-    retrievalEffort: "default",
-    outputMode: "snippets",
-    answerGroundingPolicy: "require-citations",
-    embeddingModelIdentity: {
-      provider,
-      modelId: "text-embedding-3-small",
-      vectorDimensions: 1536,
-      vectorMetric: "cosine",
-    },
-    lifecycleState: "ready",
-    storageReference: "capsules/cap-1",
-    createdAt: 1,
-    updatedAt: 1,
-  };
-}
-
 function externalRerankingDeniedPolicy(): KnowledgePodModelUsePolicy {
   return {
     schemaVersion: KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
@@ -2412,7 +2390,7 @@ describe("local-knowledge embedding capability gate", () => {
       },
     } as unknown as UiHandlerDeps;
 
-    const adapter = createEmbeddingAdapter(deps, [capsule()]);
+    const adapter = createEmbeddingAdapter(deps);
 
     expect("status" in adapter).toBe(false);
     if ("status" in adapter) throw new Error("expected embedding adapter");
@@ -2455,7 +2433,7 @@ describe("local-knowledge embedding capability gate", () => {
       },
     } as unknown as UiHandlerDeps;
 
-    const adapter = createEmbeddingAdapter(deps, [capsule("openai-compatible:0000000000000000")]);
+    const adapter = createEmbeddingAdapter(deps);
 
     expect("status" in adapter).toBe(false);
     if ("status" in adapter) throw new Error("expected embedding adapter");
