@@ -627,6 +627,121 @@ describe("unknown API routes", () => {
     }
   });
 
+  it("returns an opaque sidecar failure without top-level raw-error diagnostics", async () => {
+    const hostilePath = "/Users/customer/private-repo/secret-tool";
+    const hostileMessage = `tool call '${hostilePath}' has non-JSON arguments`;
+    const records: ServerDiagnosticRecord[] = [];
+    const store = createInMemoryUiStore();
+    const handlerDeps: UiHandlerDeps = {
+      config: {
+        providers: [
+          {
+            modelId: "azure-coding-model",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "provider-secret",
+            apiKeyHeaderName: "api-key",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2024-06-01",
+            timeoutMs: 30_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: "azure-coding-model",
+            kind: "chat",
+            contextWindow: 128_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "coding-sidecar",
+            preferredUseCases: ["Coding"],
+            knownLimitations: [],
+          },
+        ],
+      } satisfies GatewayConfig,
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      diagnostics: { record: (record) => records.push(record) },
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      codingSidecarGatewayChatFactory: () => {
+        return async (): Promise<NormalizedResponse> => Promise.reject(new Error(hostileMessage));
+      },
+      codingWorkbenchEvidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      store,
+    };
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps,
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    try {
+      const response = await fetch(`${baseUrl()}/api/coding-sidecar/gateway/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: "continue" }],
+        }),
+      });
+      const responseText = await response.text();
+      const headerBlob = Array.from(response.headers.entries())
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("\n");
+
+      expect(response.status).toBe(503);
+      expect(JSON.parse(responseText)).toEqual({
+        error: {
+          code: "CODING_SIDECAR_UNAVAILABLE",
+          message: "Coding sidecar gateway is unavailable.",
+        },
+      });
+      expect(responseText).not.toContain(hostileMessage);
+      expect(responseText).not.toContain(hostilePath);
+      expect(headerBlob).not.toContain(hostileMessage);
+      expect(headerBlob).not.toContain(hostilePath);
+
+      expect(records).toHaveLength(1);
+      expect(records).toEqual([
+        expect.objectContaining({
+          source: "coding-sidecar-gateway.chat",
+          errorClass: "CodingSidecarGatewayFailure",
+          message: "sidecar-gateway-failed",
+        }),
+      ]);
+      expect(records.some((record) => record.source === "server.top-level-catch")).toBe(false);
+      const diagnosticsJson = JSON.stringify(records);
+      expect(diagnosticsJson).not.toContain(hostileMessage);
+      expect(diagnosticsJson).not.toContain(hostilePath);
+    } finally {
+      store.close();
+    }
+  });
+
   it("serves POST /api/editor/language through the live BFF dispatch path (#1198)", async () => {
     const workspaceRoot = join(staticRoot, "workspace");
     await mkdir(join(workspaceRoot, "src"), { recursive: true });

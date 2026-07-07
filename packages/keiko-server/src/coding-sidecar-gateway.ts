@@ -398,9 +398,10 @@ async function executeGatewayChat(
     persistRoutingEvidence(ctx, deps, "accepted", modelSource);
     return openAiResponse(modelAlias, response.content, response.usage);
   } catch (error) {
+    void error;
     persistRoutingEvidence(ctx, deps, "failed", modelSource);
     emitGatewayFailureDiagnostic(ctx, deps);
-    throw error;
+    return unavailableError();
   }
 }
 

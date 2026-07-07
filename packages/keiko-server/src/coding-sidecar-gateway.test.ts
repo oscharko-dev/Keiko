@@ -804,14 +804,22 @@ describe("coding-sidecar gateway", () => {
       },
     );
 
-    await expect(
-      handleCodingSidecarGatewayChatCompletions(
-        routeContext({
-          messages: [{ role: "user", content: "continue" }],
-        }),
-        deps,
-      ),
-    ).rejects.toThrow(hostileMessage);
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        messages: [{ role: "user", content: "continue" }],
+      }),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 503,
+      body: {
+        error: {
+          code: "CODING_SIDECAR_UNAVAILABLE",
+          message: "Coding sidecar gateway is unavailable.",
+        },
+      },
+    });
     expect(rootPut).not.toHaveBeenCalled();
     expect(codingPut).toHaveBeenCalledTimes(1);
     const evidenceJson = String(codingPut.mock.calls[0]?.[1]);
