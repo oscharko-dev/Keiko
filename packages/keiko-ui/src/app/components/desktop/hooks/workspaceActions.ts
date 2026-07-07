@@ -25,6 +25,7 @@ import type {
   KnowledgeCapsuleId,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  WorkspaceUiSelectionState,
 } from "@oscharko-dev/keiko-contracts";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 
@@ -514,6 +515,134 @@ export function makeMutations(args: MutateArgs): Mutations {
     openEditorFile: makeOpenEditorFile(args),
     toggleTool: makeToggleTool(args),
   };
+}
+
+export function isWorkspaceWindowSelectable(win: AppWindow): boolean {
+  return win.minimized !== true && win.max !== true;
+}
+
+function selectableWindowIds(wins: readonly AppWindow[]): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const win of wins) {
+    if (isWorkspaceWindowSelectable(win)) ids.add(win.id);
+  }
+  return ids;
+}
+
+export function normalizeWorkspaceSelection(
+  wins: readonly AppWindow[],
+  selection: WorkspaceUiSelectionState,
+): WorkspaceUiSelectionState {
+  const selectableIds = selectableWindowIds(wins);
+  const selectedWindowIds: string[] = [];
+  for (const id of selection.selectedWindowIds) {
+    if (selectableIds.has(id) && !selectedWindowIds.includes(id)) selectedWindowIds.push(id);
+  }
+  const focusedWindowId =
+    selection.focusedWindowId !== null && selectableIds.has(selection.focusedWindowId)
+      ? selection.focusedWindowId
+      : null;
+  if (
+    focusedWindowId === selection.focusedWindowId &&
+    selectedWindowIds.length === selection.selectedWindowIds.length &&
+    selectedWindowIds.every((id, index) => id === selection.selectedWindowIds[index])
+  ) {
+    return selection;
+  }
+  return { focusedWindowId, selectedWindowIds };
+}
+
+export function replaceWorkspaceSelection(
+  wins: readonly AppWindow[],
+  windowIds: readonly string[],
+): WorkspaceUiSelectionState {
+  return normalizeWorkspaceSelection(wins, {
+    focusedWindowId: windowIds[windowIds.length - 1] ?? null,
+    selectedWindowIds: windowIds,
+  });
+}
+
+export function toggleWorkspaceSelection(
+  wins: readonly AppWindow[],
+  selection: WorkspaceUiSelectionState,
+  windowId: string,
+): WorkspaceUiSelectionState {
+  const selectableIds = selectableWindowIds(wins);
+  if (!selectableIds.has(windowId)) return normalizeWorkspaceSelection(wins, selection);
+  const selected = selection.selectedWindowIds.includes(windowId)
+    ? selection.selectedWindowIds.filter((id) => id !== windowId)
+    : [...selection.selectedWindowIds, windowId];
+  return normalizeWorkspaceSelection(wins, {
+    focusedWindowId: windowId,
+    selectedWindowIds: selected,
+  });
+}
+
+function selectedMoveTargets(
+  wins: readonly AppWindow[],
+  selectedWindowIds: readonly string[],
+): readonly AppWindow[] {
+  const selected = new Set(selectedWindowIds);
+  return wins.filter((win) => selected.has(win.id) && isWorkspaceWindowSelectable(win));
+}
+
+function selectedWindowBounds(targets: readonly AppWindow[]): {
+  readonly minX: number;
+  readonly minY: number;
+  readonly maxX: number;
+  readonly maxY: number;
+} | null {
+  if (targets.length === 0) return null;
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const win of targets) {
+    minX = Math.min(minX, win.x);
+    minY = Math.min(minY, win.y);
+    maxX = Math.max(maxX, win.x + win.w);
+    maxY = Math.max(maxY, win.y + win.h);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+function clampSelectionDelta(
+  bounds: NonNullable<ReturnType<typeof selectedWindowBounds>>,
+  delta: { readonly dx: number; readonly dy: number },
+  viewport: ViewportWorld,
+): { readonly dx: number; readonly dy: number } {
+  const groupW = bounds.maxX - bounds.minX;
+  const nextX = bounds.minX + delta.dx;
+  const nextY = bounds.minY + delta.dy;
+  const clampedX = Math.max(
+    viewport.x - (groupW - 120),
+    Math.min(viewport.x + viewport.w - 120, nextX),
+  );
+  const clampedY = Math.max(viewport.y, Math.min(viewport.y + viewport.h - 38, nextY));
+  return { dx: clampedX - bounds.minX, dy: clampedY - bounds.minY };
+}
+
+export function moveSelectedWorkspaceWindows(
+  wins: readonly AppWindow[],
+  selectedWindowIds: readonly string[],
+  delta: { readonly dx: number; readonly dy: number },
+  viewport: ViewportWorld,
+): readonly AppWindow[] {
+  if (!Number.isFinite(delta.dx) || !Number.isFinite(delta.dy)) return wins;
+  if (delta.dx === 0 && delta.dy === 0) return wins;
+  const targets = selectedMoveTargets(wins, selectedWindowIds);
+  const bounds = selectedWindowBounds(targets);
+  if (bounds === null) return wins;
+  const clamped = clampSelectionDelta(bounds, delta, viewport);
+  if (clamped.dx === 0 && clamped.dy === 0) return wins;
+  const targetIds = new Set(targets.map((win) => win.id));
+  let changed = false;
+  const next = wins.map((win) => {
+    if (!targetIds.has(win.id)) return win;
+    changed = true;
+    return { ...win, x: win.x + clamped.dx, y: win.y + clamped.dy };
+  });
+  return changed ? next : wins;
 }
 
 interface LayoutArgs {

@@ -76,12 +76,12 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     vi.useRealTimers();
   });
 
-  it("debounces the windows write and flushes it on pagehide", () => {
+  it("debounces the windows write and flushes it on pagehide", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     const { getByTestId } = render(<Harness />);
     // Let hydrate's initial debounced write settle, then start from a known value.
-    act(() => {
-      vi.advanceTimersByTime(POLL_MS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
     });
     const baseline = window.localStorage.getItem(WS_LS);
     expect(baseline).not.toBeNull();
@@ -101,25 +101,29 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     expect(flushed).toContain('"minimized":true');
   });
 
-  it("coalesces a burst of mutations into a single debounced write", () => {
+  it("coalesces a burst of mutations into a single debounced write", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     const { getByTestId } = render(<Harness />);
-    act(() => {
-      vi.advanceTimersByTime(POLL_MS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
     });
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
 
     act(() => {
       getByTestId("minimize").click();
       getByTestId("minimize").click();
       getByTestId("minimize").click();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
     });
     const synchronousWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
     expect(synchronousWsWrites).toBe(0);
 
-    act(() => {
-      vi.advanceTimersByTime(400);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
     });
+    expect(window.localStorage.getItem(WS_LS)).toContain('"minimized":true');
     const debouncedWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
     expect(debouncedWsWrites).toBe(1);
     setItemSpy.mockRestore();
