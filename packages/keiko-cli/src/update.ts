@@ -1,4 +1,3 @@
-import { isAbsolute, resolve } from "node:path";
 import {
   type ReleaseImpactRemediation,
   type UpdatePreflightReport,
@@ -22,6 +21,7 @@ import {
   renderApplyTerminal,
   renderUpdateStatus,
 } from "./update-output.js";
+import { resolveStateDir as resolveRuntimeStateDir } from "./state-paths.js";
 
 type ServerModule = typeof import("@oscharko-dev/keiko-server");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
@@ -62,6 +62,7 @@ interface UpdateRuntime {
   readonly preflight: UpdateCliPreflight;
   readonly session: UpdateSessionManager;
   readonly remediation: UpdateRemediationManager;
+  readonly server?: ServerModule | undefined;
   readonly close: () => void;
 }
 
@@ -77,11 +78,6 @@ function processEnvFrom(env: EnvSource): NodeJS.ProcessEnv {
     if (value !== undefined) out[key] = value;
   }
   return out;
-}
-
-function resolveStateDir(cwd: string, env: EnvSource): string {
-  const requested = env.KEIKO_STATE_DIR ?? ".keiko";
-  return isAbsolute(requested) ? requested : resolve(cwd, requested);
 }
 
 function stringRedactor(env: EnvSource, server: ServerModule): (input: string) => string {
@@ -121,10 +117,28 @@ function createHandlerDeps(
   };
 }
 
+function injectedRuntime(deps: UpdateCliDeps): UpdateRuntime | undefined {
+  if (
+    deps.preflight === undefined ||
+    deps.session === undefined ||
+    deps.remediation === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    preflight: deps.preflight,
+    session: deps.session,
+    remediation: deps.remediation,
+    close: (): undefined => undefined,
+  };
+}
+
 async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<UpdateRuntime> {
+  const injected = injectedRuntime(deps);
+  if (injected !== undefined) return injected;
   const [server, evidence] = await Promise.all([loadServer(), loadEvidence()]);
   const handlerDeps = createHandlerDeps(env, deps.fetchImpl, server, evidence);
-  const stateDir = resolveStateDir(deps.cwd ?? process.cwd(), env);
+  const stateDir = resolveRuntimeStateDir(deps.cwd ?? process.cwd(), env);
   const localState = server.createUpdateLocalStateManager({ stateDir });
   const processEnv = processEnvFrom(env);
   const service = server.createUpdatePreflightService();
@@ -138,6 +152,7 @@ async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<Updat
         redactor: stringRedactor(env, server),
       }),
     remediation: deps.remediation ?? server.createUpdateRemediationManager({ localState }),
+    server,
     close: (): void => {
       handlerDeps.store.close();
     },
@@ -211,6 +226,15 @@ function releaseEligibilityApplyGuard(
   return undefined;
 }
 
+function portableCliApplyGuard(status: UpdateSessionStatus): string | undefined {
+  if (!isPortableManagedInstallMode(status.installMode)) return undefined;
+  return [
+    "Portable-managed one-click updates run through the Keiko update window.",
+    "Open Keiko and use Review updates to apply, retry, inspect remediation,",
+    "or download the latest release asset manually.",
+  ].join(" ");
+}
+
 function policyApplyGuard(status: UpdateSessionStatus): string | undefined {
   if (status.policy.enabled) return undefined;
   if (isPortableManagedInstallMode(status.installMode)) {
@@ -260,6 +284,7 @@ function applyGuard(
     policyApplyGuard(status) ??
     installModeApplyGuard(status) ??
     releaseEligibilityApplyGuard(report, status) ??
+    portableCliApplyGuard(status) ??
     remediationApplyGuard(remediation)
   );
 }
@@ -396,15 +421,13 @@ export async function runUpdateCli(
     return 2;
   }
   let runtime: UpdateRuntime | undefined;
-  let server: ServerModule | undefined;
   try {
-    server = await loadServer();
     runtime = await createRuntime(env, deps);
     if (subcommand === "status") return await runStatus(runtime, io);
     if (subcommand === "check") return await runCheck(runtime, io);
     return await runApply(runtime, io, deps);
   } catch (error) {
-    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, server)}\n`);
+    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, runtime?.server)}\n`);
     return 1;
   } finally {
     runtime?.close();

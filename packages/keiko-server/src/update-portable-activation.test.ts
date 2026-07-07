@@ -140,6 +140,84 @@ describe("portable update activation", () => {
     expect(audit).not.toContain(install.managedRoot);
   });
 
+  it("keeps the promoted install live but records failure when relaunch version is not verified", async () => {
+    const install = await makeInstall();
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    const activator = createPortableUpdateActivator({
+      env: {
+        KEIKO_STATE_DIR: install.stateDir,
+        APPDATA: join(install.home, "AppData", "Roaming"),
+        LOCALAPPDATA: join(install.home, "AppData", "Local"),
+      },
+      homedir: () => install.home,
+      localState,
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(false),
+    });
+
+    await expect(
+      activator.activate({
+        sessionId: "session-version-miss",
+        targetVersion: TARGET_VERSION,
+        stage: stageSummary(),
+        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-version-verification-failed" });
+    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(
+      TARGET_VERSION,
+    );
+    expect(existsSync(join(install.managedRoot, "active.txt"))).toBe(false);
+    expect(localState.readRuntimeState().portableActivation).toBeUndefined();
+    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
+    expect(audit).toContain("portable-activation-result");
+    expect(audit).toContain('"status":"failed"');
+    expect(audit).not.toContain("portable-relaunch-result");
+    expect(audit).not.toContain(install.managedRoot);
+  });
+
+  it("refreshes a quoted Windows shortcut when the managed launcher path contains spaces", async () => {
+    const base = await mkdtemp(join(tmpdir(), "keiko-portable-activation-"));
+    tempRoots.push(base);
+    const home = join(base, "User Profile");
+    const managedRoot = join(home, "AppData", "Local", "Programs", "Keiko App");
+    const packageRoot = join(managedRoot, "app");
+    const stageRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
+    const stateDir = join(home, ".keiko");
+    writeInstall(managedRoot, OLD_VERSION);
+    writeInstall(stageRoot, TARGET_VERSION);
+    const activator = createPortableUpdateActivator({
+      env: {
+        KEIKO_STATE_DIR: stateDir,
+        APPDATA: join(home, "AppData", "Roaming"),
+        LOCALAPPDATA: join(home, "AppData", "Local"),
+      },
+      homedir: () => home,
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(true),
+    });
+
+    await activator.activate({
+      sessionId: "session-spaced-shortcut",
+      targetVersion: TARGET_VERSION,
+      stage: stageSummary(),
+      runtimeFacts: { packageRoot, portableStateDir: stateDir },
+    });
+
+    const shortcutPath = join(
+      home,
+      "AppData",
+      "Roaming",
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.bat",
+    );
+    expect(readFileSync(shortcutPath, "utf8")).toBe(
+      `@start "" "${join(managedRoot, "Keiko.exe")}" start --open\r\n`,
+    );
+  });
+
   it("fails closed and preserves the active install when the staged candidate is incomplete", async () => {
     const install = await makeInstall();
     await rm(join(install.stageRoot, "Keiko.exe"), { force: true });

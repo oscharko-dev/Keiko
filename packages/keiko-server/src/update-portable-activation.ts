@@ -243,6 +243,8 @@ async function activatePortableUpdate(
     assertAbort(input.signal);
     const prepared = prepareActivation({ options, request: input, activationId });
     requestRelaunch(prepared.layout, options.spawnFn ?? spawn);
+    // Promotion is already committed here. A verify miss means "new install is live but
+    // unconfirmed", so Keiko surfaces a retryable failure instead of rolling back.
     await verifyRelaunch(options, input);
     const summary = buildSummary({
       activationId,

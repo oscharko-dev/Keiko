@@ -54,6 +54,18 @@ export interface PortableUpdateStageInput {
   readonly signal?: AbortSignal | undefined;
 }
 
+export interface PortablePlatformVerificationInput {
+  readonly target: UpdatePortableTarget;
+  readonly stagedRoot: string;
+  readonly launcherPath: string;
+  readonly appBundlePath?: string | undefined;
+  readonly currentLauncherPath?: string | undefined;
+  readonly currentAppBundlePath?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
+}
+
+export type PortablePlatformVerifier = (input: PortablePlatformVerificationInput) => Promise<void>;
+
 export interface PortableUpdateStager {
   readonly stage: (input: PortableUpdateStageInput) => Promise<UpdatePortableStagingSummary>;
 }
@@ -63,6 +75,7 @@ export interface PortableUpdateStagerOptions {
   readonly localState?: UpdateLocalStateManager | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly egress?: (() => GatewayEgressConfig | undefined) | undefined;
+  readonly platformVerifier?: PortablePlatformVerifier | undefined;
 }
 
 export class PortableUpdateStagingError extends Error {
