@@ -96,6 +96,39 @@ describe("mapChunkToCitation", () => {
     expect(citation?.safeDisplayName).toBe("sample.txt");
   });
 
+  // Issue #1854 audit: buildCitation must copy the chunk's parsed_unit_id onto the returned
+  // CitationReference, mirroring the sibling builder in retrieval/scoped-vector-search.ts (the
+  // production grounded-QA/retrieval path). Every chunk row has a non-null parsed_unit_id (it is
+  // the FK the chunker just wrote via seedParsedUnit + chunkDocument above), so this must always
+  // be present on the citation, not merely "sometimes populated".
+  it("copies the chunk's parsedUnitId onto the returned citation", () => {
+    const text = "Hello world.";
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "page",
+      documentId: "doc-1" as never,
+      pageNumber: 1,
+      characterStart: 0,
+      characterEnd: text.length,
+    });
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.capsuleId,
+      sourceId: "src-1" as never,
+      documentId: "doc-1" as never,
+      sourceText: text,
+    });
+    const chunkId = result.chunkIds[0] ?? ("" as never);
+
+    const chunkRow = fixture.store._internal.db
+      .prepare("SELECT parsed_unit_id FROM chunks WHERE id = :id")
+      .get({ id: String(chunkId) }) as { readonly parsed_unit_id: string } | undefined;
+    expect(chunkRow?.parsed_unit_id).toBe("u-1");
+
+    const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
+
+    expect(citation).not.toBeNull();
+    expect(citation?.parsedUnitId).toBe("u-1");
+  });
+
   it("returns the chunk span instead of the full parsed-unit span", () => {
     const text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
     seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {

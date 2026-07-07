@@ -721,6 +721,16 @@ The diagnostic record includes `correlationId`, `source`
 
 ---
 
+## HTML Manual Knowledge Pod refresh
+
+Common failures and operational guidance for explicit refresh of an indexed HTML manual
+Knowledge Pod are documented separately. Refer to the
+[HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) for scenarios
+including crawl limit exhaustion, embedding-model incompatibility, fail-closed refresh
+behaviour, and empty-crawl handling.
+
+---
+
 ## Related documentation
 
 - [README](../../README.md) — installation, daily use, and configuration.
@@ -728,5 +738,6 @@ The diagnostic record includes `correlationId`, `source`
 - [Security boundaries](../security-and-audit-boundaries.md) — trust boundaries that constrain resolutions in this guide.
 - [Local runtime state contract](../local-runtime-state-contract.md) — files written under `.keiko/` and `~/.keiko/`.
 - [Keiko Editor troubleshooting](../keiko-editor/troubleshooting.md) — Monaco workers, CSP, unsupported files, completion, and verification failures.
+- [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) — refresh-specific troubleshooting and operational guidance.
 
 For new entries, follow the [troubleshooting entry template](./_template.md).

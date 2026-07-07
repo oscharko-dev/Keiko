@@ -24,6 +24,10 @@ import {
 import { BrowserToolError } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import {
+  resolveHtmlManualCitationNavigationTarget,
+  type HtmlManualCitationNavigationResolution,
+} from "./html-manual-citation-navigation.js";
 
 // The request body is a small JSON object (target + optional port); 8 KB is generous and keeps a
 // pathological target string out of memory and logs. Independent of the transport-level cap.
@@ -161,6 +165,36 @@ function okResult(
   };
 }
 
+function manualCitationFailureReason(
+  resolution: Extract<HtmlManualCitationNavigationResolution, { readonly kind: "failed" }>,
+): DocumentationNavigationReason {
+  if (resolution.reason === "target-unsupported") return "unsupported-scheme";
+  if (resolution.reason === "target-credentialed") return "invalid-target";
+  return "local-file-scope-unavailable";
+}
+
+// Post-merge audit — the six distinct HtmlManualCitationOpenUnavailableReason values were all
+// collapsed into the same hardcoded originSummary, making the failure classes indistinguishable to
+// the UI/diagnostics. Each label stays short, English, and body-free (no raw paths/tokens).
+function manualCitationFailureSummary(
+  resolution: Extract<HtmlManualCitationNavigationResolution, { readonly kind: "failed" }>,
+): string {
+  switch (resolution.reason) {
+    case "source-metadata-unavailable":
+      return "Citation source unavailable";
+    case "citation-lineage-mismatch":
+      return "Citation lineage mismatch";
+    case "target-outside-approved-scope":
+      return "Outside approved scope";
+    case "target-unsupported":
+      return "Unsupported citation target";
+    case "target-credentialed":
+      return "Citation requires sign-in";
+    case "target-unavailable":
+      return "Citation target unavailable";
+  }
+}
+
 export async function handleDocsBrowserNavigate(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -173,7 +207,19 @@ export async function handleDocsBrowserNavigate(
     return { status: 400, body };
   }
   const backendAvailable = deps.browser !== undefined;
-  const classification = classifyDocumentationTarget(parsed.value.target);
+  const citationResolution = resolveHtmlManualCitationNavigationTarget(deps, parsed.value.target);
+  if (citationResolution.kind === "failed") {
+    return okResult(
+      "unsupported-scheme",
+      manualCitationFailureSummary(citationResolution),
+      null,
+      manualCitationFailureReason(citationResolution),
+      backendAvailable,
+    );
+  }
+  const target =
+    citationResolution.kind === "resolved" ? citationResolution.target : parsed.value.target;
+  const classification = classifyDocumentationTarget(target);
   if (!classification.ok) {
     const reason = classificationFailureReason(classification.reason);
     return okResult("unsupported-scheme", "unavailable", null, reason, backendAvailable);

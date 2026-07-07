@@ -25,6 +25,7 @@
 //     hand-authored `src/builder.ts` is not mistaken for a `build/` artifact.
 
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
 import type { WorkspaceFs } from "./fs.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { WorkspaceLanguage } from "./types.js";
@@ -1176,13 +1177,19 @@ function pathSegments(scopePath: string): readonly string[] {
 
 // True when the path is a canonical project/build/dependency manifest for any registered
 // ecosystem. Case-insensitive, anchored on the basename (exact name or registered suffix).
-export function isCanonicalMetadataFile(scopePath: string): boolean {
-  const name = basenameLc(scopePath);
-  if (CANONICAL_MANIFEST_NAMES_LC.has(name)) {
-    return true;
-  }
-  return CANONICAL_MANIFEST_SUFFIXES.some((suffix) => name.endsWith(suffix));
-}
+// Memoized for the same reason as `isGeneratedArtifactPath`: candidate scoring re-classifies
+// the same scopePath several times per search and the suffix scan is the per-path cost. Pure in
+// scopePath.
+export const isCanonicalMetadataFile: (scopePath: string) => boolean = memoizeByStringKey(
+  PATH_MEMO_MAX_ENTRIES,
+  (scopePath: string): boolean => {
+    const name = basenameLc(scopePath);
+    return (
+      CANONICAL_MANIFEST_NAMES_LC.has(name) ||
+      CANONICAL_MANIFEST_SUFFIXES.some((suffix) => name.endsWith(suffix))
+    );
+  },
+);
 
 // The ecosystem that classifies a path as canonical metadata, or undefined. For diagnostics only.
 export function canonicalMetadataEcosystem(scopePath: string): EcosystemId | undefined {
@@ -1291,7 +1298,15 @@ export function ecosystemStructureProfiles(
 
 // True for a generated/vendored artifact, detected by WHOLE path segment or ANCHORED basename
 // suffix. Never a bare substring, so `src/builder.ts` / `generator.go` are not affected.
-export function isGeneratedArtifactPath(scopePath: string): boolean {
+// Memoized: search classifies the same scopePath several times per query (candidate bucketing +
+// low-value policy + ranking), and the segment/suffix scans dominate the per-path cost on large
+// repositories. Pure in scopePath.
+export const isGeneratedArtifactPath: (scopePath: string) => boolean = memoizeByStringKey(
+  PATH_MEMO_MAX_ENTRIES,
+  isGeneratedArtifactPathUncached,
+);
+
+function isGeneratedArtifactPathUncached(scopePath: string): boolean {
   if (pathSegments(scopePath).some((segment) => GENERATED_SEGMENTS.has(segment))) {
     return true;
   }

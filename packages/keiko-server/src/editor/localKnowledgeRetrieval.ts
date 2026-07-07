@@ -61,7 +61,7 @@ export async function retrieveEditorLocalKnowledge(
   if (stateFailure !== undefined) {
     return { kind: "not-ready", reason: stateFailure.reason, message: stateFailure.message };
   }
-  const adapter = createEmbeddingAdapter(deps, selected.capsules);
+  const adapter = createEmbeddingAdapter(deps);
   if ("status" in adapter) {
     return { kind: "conflict", routeResult: adapter };
   }

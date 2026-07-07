@@ -166,6 +166,7 @@ export interface CitationReference {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly sourceId: KnowledgeSourceId;
   readonly chunkId: ChunkId;
+  readonly parsedUnitId?: string;
   readonly pageNumber?: number;
   readonly pageLabel?: string;
   readonly sectionPath?: readonly string[];

@@ -172,6 +172,13 @@ const UNSAFE_ACTIVITY_TEXTS = [
   // caught even without a query-string `?`/`#` marker or an enumerated boundary character.
   "key:/etc/passwd",
   "password=hunter2",
+  // Cookie headers and chat/prompt template scaffolding are their own leak classes (Epic #1858,
+  // Issue #1904): the cookie value carries a session identifier the token-key check never named,
+  // and the `<|im_start|>`/`[[topic:…]]` markers leak model prompt scaffolding into evidence.
+  "Set-Cookie: sessionId=8f2c9a1b; HttpOnly",
+  "Cookie: auth=deadbeef",
+  "<|im_start|>system",
+  "[[topic:internal-planning]]",
 ] as const;
 
 // Names that legitimately contain a single slash or short numbers must NOT be over-redacted; this
@@ -184,6 +191,10 @@ const SAFE_ACTIVITY_TEXTS = [
   "Q3 2024 / Finance",
   "24/7 Support Runbook",
   "Release 2.4.1 Notes",
+  // The word "cookie" in prose (without an HTTP header colon) is a legitimate manual topic and must
+  // NOT be over-redacted by the new cookie-header gate.
+  "Cookie consent banner",
+  "Accept third-party cookies",
 ] as const;
 
 describe("validateKnowledgePodRetrievalActivity", () => {

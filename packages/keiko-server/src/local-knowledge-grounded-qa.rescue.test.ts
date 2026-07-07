@@ -24,6 +24,7 @@ import {
   createCapsuleSet,
   getCapsule,
   openKnowledgeStore,
+  persistHtmlManualSourceMetadata,
   resolveKnowledgeStorePath,
   updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -87,28 +88,6 @@ function result(over: Partial<GroundedResult>): GroundedResult {
     pack: undefined as never,
     noEvidence: false,
     ...over,
-  };
-}
-
-function capsule(provider = "openai"): KnowledgeCapsule {
-  return {
-    id: "cap-1" as KnowledgeCapsuleId,
-    displayName: "Alpha Capsule",
-    tags: [],
-    sourceIds: [],
-    retrievalEffort: "default",
-    outputMode: "snippets",
-    answerGroundingPolicy: "require-citations",
-    embeddingModelIdentity: {
-      provider,
-      modelId: "text-embedding-3-small",
-      vectorDimensions: 1536,
-      vectorMetric: "cosine",
-    },
-    lifecycleState: "ready",
-    storageReference: "capsules/cap-1",
-    createdAt: 1,
-    updatedAt: 1,
   };
 }
 
@@ -258,6 +237,7 @@ function activityDiagnostics(mode: ActivityDiagnostics["mode"]): ActivityDiagnos
     lexicalCandidateBudget: 50,
     fusedCandidateBudget: 50,
     queryVariantCount: 1,
+    lexicalOrFallbackUsed: false,
     denseIndex: "available",
     lexicalIndex: "available",
     vectorIndex: { provider: "brute-force", status: "available" },
@@ -323,6 +303,93 @@ describe("local-knowledge citation rescue (#189)", () => {
     expect(citations[0]?.source).not.toContain(secret);
     expect(citations[0]?.label).toContain("[REDACTED]");
     expect(citations[0]?.lineage.chunkId).toBe("chunk-1");
+  });
+
+  it("projects HTML manual citation metadata as safe labels plus an opaque docs-browser target", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        capsuleId: "cap-manual-citation",
+        sourceId: "src-manual-citation",
+        documentId: "doc-manual-citation",
+        safeDisplayName: "device-handbook.html",
+        unit: {
+          kind: "html-block",
+          headingPath: ["Troubleshooting", "Timeouts"],
+          anchorId: "timeouts",
+          characterStart: 0,
+          characterEnd: 120,
+        },
+      });
+      persistHtmlManualSourceMetadata(knowledgeStore, seeded.capsuleId, seeded.sourceId, {
+        schemaVersion: "1",
+        scope: {
+          kind: "html-manual-http",
+          origin: "https://manual.internal",
+          pathPrefix: null,
+        },
+        limits: {
+          maxPages: 20,
+          maxDepth: 3,
+          maxBytes: 2_000_000,
+          maxLinkSample: 50,
+          timeoutMs: 30_000,
+          followRedirects: false,
+        },
+        sourceFingerprint: "fp-manual-citation",
+        proposedPodName: "Device Handbook",
+      });
+      const chunkId = seeded.chunkIds[0];
+      if (chunkId === undefined) throw new Error("seeded manual citation has no chunk");
+      const reference: RetrievalReference = {
+        chunkId,
+        capsuleId: seeded.capsuleId,
+        score: 0.99,
+        citation: {
+          documentId: seeded.documentId,
+          capsuleId: seeded.capsuleId,
+          sourceId: seeded.sourceId,
+          chunkId,
+          parsedUnitId: `unit-${String(seeded.capsuleId)}`,
+          safeDisplayName: "device-handbook.html",
+          sectionPath: ["Troubleshooting", "Timeouts"],
+          anchorId: "timeouts",
+        },
+      };
+
+      const citations = buildLocalKnowledgeCitations(
+        result({
+          references: [reference],
+          citations: [{ reference, marker: "[1]", index: 1, citation: reference.citation }],
+        }),
+        undefined,
+        () => "Device Handbook",
+        undefined,
+        knowledgeStore,
+      );
+
+      expect(citations[0]?.htmlManual).toMatchObject({
+        sourceKind: "html-manual-http",
+        pageTitle: "device-handbook.html",
+        sectionPath: ["Troubleshooting", "Timeouts"],
+        anchorId: "timeouts",
+        open: { state: "available" },
+      });
+      const target = citations[0]?.htmlManual?.open;
+      expect(target?.state === "available" ? target.target : "").toMatch(
+        /^keiko-html-manual-citation:/u,
+      );
+      const serialized = JSON.stringify(citations);
+      expect(serialized).not.toContain("https://manual.internal/private");
+      expect(serialized).not.toContain("session=");
+      expect(serialized).not.toContain("keiko-html-manual/");
+      expect(serialized).not.toContain("API_KEY");
+      expect(serialized).not.toContain("provider");
+    } finally {
+      knowledgeStore.close();
+    }
   });
 
   it("still returns no evidence for a genuinely empty retrieval", () => {
@@ -2412,7 +2479,7 @@ describe("local-knowledge embedding capability gate", () => {
       },
     } as unknown as UiHandlerDeps;
 
-    const adapter = createEmbeddingAdapter(deps, [capsule()]);
+    const adapter = createEmbeddingAdapter(deps);
 
     expect("status" in adapter).toBe(false);
     if ("status" in adapter) throw new Error("expected embedding adapter");
@@ -2455,7 +2522,7 @@ describe("local-knowledge embedding capability gate", () => {
       },
     } as unknown as UiHandlerDeps;
 
-    const adapter = createEmbeddingAdapter(deps, [capsule("openai-compatible:0000000000000000")]);
+    const adapter = createEmbeddingAdapter(deps);
 
     expect("status" in adapter).toBe(false);
     if ("status" in adapter) throw new Error("expected embedding adapter");

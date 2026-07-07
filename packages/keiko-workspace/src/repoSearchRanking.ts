@@ -1,3 +1,4 @@
+import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
 import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
 
@@ -68,15 +69,21 @@ function emptyPathSignals(): PathLexicalSignals {
   };
 }
 
-function pathContext(scopePath: string): LexicalPathContext {
-  const path = normalizedPath(scopePath);
-  return {
-    path,
-    name: basename(path),
-    segments: pathSegments(path),
-    pathTerms: new Set(expandedQueryTerms(scopePath, false)),
-  };
-}
+// Memoized: ranking derives this context once per (candidate × search), and the
+// `expandedQueryTerms` tokenization of the path is the dominant per-candidate cost on large
+// candidate sets. Pure in scopePath, so caching cannot change ranking results.
+const pathContext: (scopePath: string) => LexicalPathContext = memoizeByStringKey(
+  PATH_MEMO_MAX_ENTRIES,
+  (scopePath: string): LexicalPathContext => {
+    const path = normalizedPath(scopePath);
+    return {
+      path,
+      name: basename(path),
+      segments: pathSegments(path),
+      pathTerms: new Set(expandedQueryTerms(scopePath, false)),
+    };
+  },
+);
 
 function emptyMutableSignals(): MutablePathLexicalSignals {
   return {
@@ -121,6 +128,16 @@ export function queryRankingTerms(task: string | undefined): readonly string[] {
   return naturalLanguageContentTerms(task, false);
 }
 
+// Memoized per (queryTerms identity × scopePath). Candidate prioritization computes these
+// signals for EVERY discovered path on every search — O(paths × terms) string matching that
+// dominates large-repository latency. The queryTerms array comes from the memoized
+// `naturalLanguageContentTerms`, so an unchanged query yields the SAME array object and the
+// WeakMap keeps one bounded path-map per live query; a garbage-collected query drops its map.
+const PATH_SIGNALS_MEMO = new WeakMap<
+  readonly string[],
+  (scopePath: string) => PathLexicalSignals
+>();
+
 export function lexicalPathSignals(
   scopePath: string,
   queryTerms: readonly string[],
@@ -128,6 +145,20 @@ export function lexicalPathSignals(
   if (queryTerms.length === 0) {
     return emptyPathSignals();
   }
+  let memoized = PATH_SIGNALS_MEMO.get(queryTerms);
+  if (memoized === undefined) {
+    memoized = memoizeByStringKey(PATH_MEMO_MAX_ENTRIES, (path: string): PathLexicalSignals => {
+      return computeLexicalPathSignals(path, queryTerms);
+    });
+    PATH_SIGNALS_MEMO.set(queryTerms, memoized);
+  }
+  return memoized(scopePath);
+}
+
+function computeLexicalPathSignals(
+  scopePath: string,
+  queryTerms: readonly string[],
+): PathLexicalSignals {
   const context = pathContext(scopePath);
   const signals = emptyMutableSignals();
   for (const term of queryTerms) {

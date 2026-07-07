@@ -37,6 +37,7 @@ import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
 import { lexicalQueryTermGroups, type LexicalQueryTermGroup } from "./lexical-normalization.js";
+import { decomposeChainedQuery } from "./query-decomposition.js";
 import {
   RetrievalError,
   type RetrievalEmbeddingLaneDiagnostics,
@@ -183,6 +184,9 @@ interface VectorRow {
 
 interface DecodedVectorRow extends Omit<VectorRow, "embedding"> {
   readonly vector: Float32Array;
+  // Euclidean norm of `vector`, precomputed at decode time with the same ascending-index
+  // summation as `cosineSimilarity` so the cosine fast path divides by bit-identical factors.
+  readonly norm: number;
 }
 
 interface VectorCacheStampRow {
@@ -518,13 +522,9 @@ function readAnnIndexForCapsule(
   const cached = cache.get(key);
   if (cached !== undefined) return { kind: "ready", index: cached };
   const projections = annProjectionsFor(capsule.embeddingModelIdentity);
-  const rows = readVectorsForCapsule(store, capsule.id, sourceFilter, undefined).map((row) => ({
-    ...row,
-    vector: normalizeVectorForIdentity(
-      decodeEmbedding(row, store._internal.contentCipher),
-      capsule.embeddingModelIdentity,
-    ),
-  }));
+  const rows = readVectorsForCapsule(store, capsule.id, sourceFilter, undefined).map((row) =>
+    decodeVectorRowForIdentity(row, store._internal.contentCipher, capsule.embeddingModelIdentity),
+  );
   const mutableBuckets = new Map<number, number[]>();
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
@@ -634,13 +634,13 @@ function readDecodedVectorsForCapsule(
   const key = decodeCacheKey(capsule, stamp, sourceFilter, chunkFilter);
   let rows = cache.get(key);
   if (rows === undefined) {
-    rows = readVectorsForCapsule(store, capsule.id, sourceFilter, chunkFilter).map((row) => ({
-      ...row,
-      vector: normalizeVectorForIdentity(
-        decodeEmbedding(row, store._internal.contentCipher),
+    rows = readVectorsForCapsule(store, capsule.id, sourceFilter, chunkFilter).map((row) =>
+      decodeVectorRowForIdentity(
+        row,
+        store._internal.contentCipher,
         capsule.embeddingModelIdentity,
       ),
-    }));
+    );
     cache.set(key, rows);
     while (cache.size > MAX_DECODED_VECTOR_CACHE_ENTRIES) {
       const oldest = cache.keys().next().value;
@@ -664,6 +664,7 @@ interface CitationRow {
   readonly capsule_id: string;
   readonly source_id: string;
   readonly document_id: string;
+  readonly parsed_unit_id: string | null;
   readonly safe_display_name: string | null;
   readonly page_number: number | null;
   readonly page_label: string | null;
@@ -671,6 +672,7 @@ interface CitationRow {
   readonly json_pointer: string | null;
   readonly table_name: string | null;
   readonly row_index: number | null;
+  readonly anchor_id: string | null;
   readonly character_start: number | null;
   readonly character_end: number | null;
 }
@@ -683,7 +685,7 @@ function readCitationRows(
   if (chunkIds.length === 0) return [];
   const placeholders = chunkIds.map((_, i) => `:c${String(i)}`).join(", ");
   const sql = [
-    "SELECT c.id AS chunk_id, c.capsule_id, c.source_id, c.document_id,",
+    "SELECT c.id AS chunk_id, c.capsule_id, c.source_id, c.document_id, c.parsed_unit_id,",
     "  d.safe_display_name AS safe_display_name,",
     "  COALESCE(pu.page_number, (",
     "    SELECT p.page_number FROM pages p",
@@ -702,7 +704,7 @@ function readCitationRows(
     "    ORDER BY p.page_number ASC LIMIT 1",
     "  )) AS page_label,",
     "  COALESCE(pu.section_path_json, pu.heading_path_json) AS section_path_json,",
-    "  pu.json_pointer, pu.table_name, pu.row_index,",
+    "  pu.json_pointer, pu.table_name, pu.row_index, pu.anchor_id,",
     "  COALESCE(c.character_start, pu.character_start) AS character_start,",
     "  COALESCE(c.character_end, pu.character_end) AS character_end",
     "FROM chunks c",
@@ -745,6 +747,26 @@ function normalizeVectorForIdentity(
   identity: EmbeddingModelIdentity,
 ): Float32Array {
   return shouldL2Normalize(identity) ? l2NormalizeVector(vector) : new Float32Array(vector);
+}
+
+// Same ascending-index accumulation as the `na`/`nb` sums inside `cosineSimilarity`, so a
+// cosine computed as dot / (norm(a) * norm(b)) from precomputed norms is bit-identical to the
+// single-pass form (IEEE-754 float ops are deterministic for a fixed operation order).
+function vectorNorm(vector: Float32Array): number {
+  let sum = 0;
+  for (const value of vector) {
+    sum += value * value;
+  }
+  return Math.sqrt(sum);
+}
+
+function decodeVectorRowForIdentity(
+  row: VectorRow,
+  cipher: StoreContentCipher,
+  identity: EmbeddingModelIdentity,
+): DecodedVectorRow {
+  const vector = normalizeVectorForIdentity(decodeEmbedding(row, cipher), identity);
+  return { ...row, vector, norm: vectorNorm(vector) };
 }
 
 // `noUncheckedIndexedAccess` widens `Float32Array[i]` to `number | undefined`; the loop
@@ -830,6 +852,66 @@ function embeddingLaneId(identity: EmbeddingModelIdentity): string {
 
 function queryEmbeddingCacheKey(identity: EmbeddingModelIdentity, query: string): string {
   return `${identityKey(identity)}\u0000${query}`;
+}
+
+// ─── Cross-request embedding caches ─────────────────────────────────────────
+// GEN-PERF-LK-002: the grounded-ask path opens a fresh KnowledgeStore per request, and the
+// query-embedding + identity-preflight caches used to be request-local Maps — every ask paid
+// one preflight probe per identity plus one embedding call per (identity × query variant),
+// serially. These caches carry the network results across requests. In-memory only: nothing
+// here is persisted or emitted into evidence/diagnostics.
+//
+// Both caches are scoped PER ADAPTER INSTANCE via WeakMap. Correctness depends on it: two
+// adapters can answer the same (identity, query) differently (scripted eval adapters, or a
+// reconfigured gateway endpoint), so cache entries must never travel between adapters. Callers
+// that construct a fresh adapter per request simply get no cross-request reuse; the BFF holds
+// one adapter per live gateway config, so a config change rotates the adapter and drops every
+// cache scoped to it. `embedQueryFor` re-validates the response identity on every MISS, and the
+// preflight cache stores only STRUCTURAL outcomes ("ok" / "incompatible") under a TTL —
+// transient failures ("failed") are never cached, so a flaky adapter cannot poison later
+// requests.
+const QUERY_EMBEDDING_CACHES = new WeakMap<OpenAIEmbeddingAdapter, Map<string, EmbeddedQuery>>();
+const QUERY_EMBEDDING_LRU_MAX = 256;
+
+interface PreflightTtlEntry {
+  readonly result: "ok" | "incompatible";
+  readonly expiresAt: number;
+}
+
+const IDENTITY_PREFLIGHT_CACHES = new WeakMap<
+  OpenAIEmbeddingAdapter,
+  Map<string, PreflightTtlEntry>
+>();
+const IDENTITY_PREFLIGHT_TTL_MS = 10 * 60 * 1000;
+const IDENTITY_PREFLIGHT_TTL_CACHE_MAX = 64;
+
+function queryEmbeddingCacheFor(adapter: OpenAIEmbeddingAdapter): Map<string, EmbeddedQuery> {
+  const existing = QUERY_EMBEDDING_CACHES.get(adapter);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, EmbeddedQuery>();
+  QUERY_EMBEDDING_CACHES.set(adapter, created);
+  return created;
+}
+
+function preflightTtlCacheFor(adapter: OpenAIEmbeddingAdapter): Map<string, PreflightTtlEntry> {
+  const existing = IDENTITY_PREFLIGHT_CACHES.get(adapter);
+  if (existing !== undefined) return existing;
+  const created = new Map<string, PreflightTtlEntry>();
+  IDENTITY_PREFLIGHT_CACHES.set(adapter, created);
+  return created;
+}
+
+function lruTouchQueryEmbedding(
+  cache: Map<string, EmbeddedQuery>,
+  key: string,
+  value: EmbeddedQuery,
+): void {
+  cache.delete(key);
+  if (cache.size >= QUERY_EMBEDDING_LRU_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
 }
 
 function queryOutcomeIdentity(
@@ -920,8 +1002,39 @@ function parseSectionPath(
   }
 }
 
+function openOptionalText(value: string | null, cipher: StoreContentCipher): string | undefined {
+  if (value === null) return undefined;
+  const opened = cipher.openText(value);
+  return opened.trim().length === 0 ? undefined : opened;
+}
+
+function rowCitationPageMetadata(row: CitationRow): Partial<CitationReference> {
+  return {
+    ...(row.parsed_unit_id !== null ? { parsedUnitId: row.parsed_unit_id } : {}),
+    ...(row.page_number !== null ? { pageNumber: row.page_number } : {}),
+    ...(row.page_label !== null ? { pageLabel: row.page_label } : {}),
+    ...(row.json_pointer !== null ? { jsonPointer: row.json_pointer } : {}),
+  };
+}
+
+function rowCitationStructuredMetadata(
+  row: CitationRow,
+  sectionPath: readonly string[] | undefined,
+  anchorId: string | undefined,
+): Partial<CitationReference> {
+  return {
+    ...(sectionPath !== undefined ? { sectionPath } : {}),
+    ...(anchorId !== undefined ? { anchorId } : {}),
+    ...(row.table_name !== null ? { tableName: row.table_name } : {}),
+    ...(row.row_index !== null ? { rowIndex: row.row_index } : {}),
+    ...(row.character_start !== null ? { characterStart: row.character_start } : {}),
+    ...(row.character_end !== null ? { characterEnd: row.character_end } : {}),
+  };
+}
+
 function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationReference {
   const sectionPath = parseSectionPath(row.section_path_json, cipher);
+  const anchorId = openOptionalText(row.anchor_id, cipher);
   // Build the citation without `undefined` literals to keep `exactOptionalPropertyTypes`
   // happy. The contract permits omission of each optional field but rejects the explicit
   // `undefined` value.
@@ -931,14 +1044,8 @@ function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationRe
     sourceId: row.source_id as CitationReference["sourceId"],
     chunkId: row.chunk_id as CitationReference["chunkId"],
     safeDisplayName: row.safe_display_name ?? row.document_id,
-    ...(row.page_number !== null ? { pageNumber: row.page_number } : {}),
-    ...(row.page_label !== null ? { pageLabel: row.page_label } : {}),
-    ...(sectionPath !== undefined ? { sectionPath } : {}),
-    ...(row.json_pointer !== null ? { jsonPointer: row.json_pointer } : {}),
-    ...(row.table_name !== null ? { tableName: row.table_name } : {}),
-    ...(row.row_index !== null ? { rowIndex: row.row_index } : {}),
-    ...(row.character_start !== null ? { characterStart: row.character_start } : {}),
-    ...(row.character_end !== null ? { characterEnd: row.character_end } : {}),
+    ...rowCitationPageMetadata(row),
+    ...rowCitationStructuredMetadata(row, sectionPath, anchorId),
   };
 }
 
@@ -965,6 +1072,12 @@ interface LexicalCandidate {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly bm25Score: number;
   readonly lexicalPriority: number;
+  // True when THIS candidate came from the OR recall fallback rather than a strict AND/exact
+  // match. Set once per collection pass (see `collectLexicalCandidates`) and carried on the
+  // candidate itself — NOT derived from the merged multi-leg `LexicalCollection.usedOrFallback`
+  // flag — so a genuine strict match from one chained-question leg is never discounted just
+  // because a different leg needed the fallback.
+  readonly viaOrFallback: boolean;
 }
 
 interface FusedCandidate {
@@ -979,6 +1092,11 @@ interface FusedCandidate {
 }
 
 const RRF_K = 60;
+// OR-fallback lexical candidates fuse at half weight: a fallback hit may match only ONE query
+// term, and at full weight such a hit ties with (and can displace via tiebreak) a top dense
+// candidate. At any weight < 1 a candidate that ranks higher in the dense lane strictly beats
+// the mirrored fallback-favoured candidate: (1/(K+1) + w/(K+2)) > (w/(K+1) + 1/(K+2)) for w < 1.
+const LEXICAL_OR_FALLBACK_RRF_WEIGHT = 0.5;
 const LEXICAL_CANDIDATE_LIMIT = 100;
 const QUERY_TRANSFORM_MAX_VARIANTS = 4;
 const QUERY_TRANSFORM_TIMEOUT_MS = 750;
@@ -1018,6 +1136,17 @@ function identityFromVectorRow(row: DecodedVectorRow): EmbeddingModelIdentity | 
   };
 }
 
+function denseRowScore(
+  metric: EmbeddingVectorMetric,
+  queryVector: Float32Array,
+  queryNorm: number,
+  row: DecodedVectorRow,
+): number {
+  if (metric !== "cosine") return scoreFor(metric, queryVector, row.vector);
+  if (queryNorm === 0 || row.norm === 0) return 0;
+  return dotProduct(queryVector, row.vector) / (queryNorm * row.norm);
+}
+
 function scoreCapsuleVectors(
   rows: readonly DecodedVectorRow[],
   capsule: KnowledgeCapsule,
@@ -1028,6 +1157,11 @@ function scoreCapsuleVectors(
   minScore: number | undefined,
 ): CapsuleScoreResult {
   const metric = capsule.embeddingModelIdentity.vectorMetric;
+  // Cosine fast path: with the row norm precomputed at decode time and the query norm computed
+  // once per scan, cosine = dot / (queryNorm * rowNorm) skips two of the three per-lane
+  // accumulations inside the O(rows × dims) hot loop. Both norms use the same summation order
+  // as `cosineSimilarity`, so the resulting scores are bit-identical to the single-pass form.
+  const queryNorm = metric === "cosine" ? vectorNorm(queryVector) : 0;
   const scored: DenseCandidate[] = [];
   let sawDimensionCompatible = false;
   let sawIdentityIncompatible = false;
@@ -1045,7 +1179,7 @@ function scoreCapsuleVectors(
     }
     if (row.vector_dimensions !== queryVector.length) continue;
     sawDimensionCompatible = true;
-    const score = scoreFor(metric, queryVector, row.vector);
+    const score = denseRowScore(metric, queryVector, queryNorm, row);
     if (minScore !== undefined && score < minScore) continue;
     scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, laneId, laneKey, score });
   }
@@ -1165,6 +1299,23 @@ function buildFtsMatchQuery(profile: QueryProfile): string | undefined {
     .join(operator);
 }
 
+// Recall fallback for the AND-joined strategies: one query term that appears nowhere in the
+// index (a typo, a synonym, chit-chat wrapped around the real subject) zeroes out the entire
+// lexical lane even though the other terms match well. When the strict query returns no rows
+// and there are at least two term groups, one bounded OR retry recovers those candidates; BM25
+// ranking still rewards chunks matching more of the terms, and RRF fusion keeps the dense
+// lane's view unchanged. Never used for "broad" (already OR) or single-group queries
+// (AND === OR there).
+function buildFtsOrFallbackQuery(profile: QueryProfile): string | undefined {
+  if (profile.strategy === "broad") return undefined;
+  const groups = profile.lexicalRecallTerms.slice(0, LEXICAL_RECALL_MAX_TERMS);
+  if (groups.length < 2) return undefined;
+  return groups
+    .map(ftsGroupQuery)
+    .filter((term) => term.length > 0)
+    .join(" OR ");
+}
+
 function readFtsCandidatesForCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -1183,6 +1334,8 @@ function readFtsCandidatesForCapsule(
     capsuleId: row.capsule_id as KnowledgeCapsuleId,
     bm25Score: row.bm25_score,
     lexicalPriority: 0,
+    // Overwritten by `collectLexicalCandidatesPass` with the actual per-pass fallback status.
+    viaOrFallback: false,
   }));
 }
 
@@ -1276,6 +1429,8 @@ function readExactLexicalCandidatesForCapsule(
         capsuleId: row.capsule_id as KnowledgeCapsuleId,
         bm25Score: row.exact_text.length / 1_000_000,
         lexicalPriority: matchCount,
+        // Overwritten by `collectLexicalCandidatesPass` with the actual per-pass fallback status.
+        viaOrFallback: false,
       };
     })
     .filter((candidate): candidate is LexicalCandidate => candidate !== undefined)
@@ -1291,6 +1446,10 @@ interface LexicalCollection {
   // lexical lane (see `isRawContentReleaseAllowed`). Threaded through to `SearchState` so
   // `selectTopCandidates` reports `policy-denied` instead of a generic empty result.
   readonly policyDenied: boolean;
+  // True when the candidates came from the OR recall fallback rather than the strict
+  // strategy query. Fallback matches are weaker evidence (they can match a single term), so
+  // fusion discounts their reciprocal-rank contribution — see LEXICAL_OR_FALLBACK_RRF_WEIGHT.
+  readonly usedOrFallback: boolean;
 }
 
 function boundedCandidateBudget(topK: number, multiplier: number, extraCap: number): number {
@@ -1367,6 +1526,7 @@ function collectLexicalCandidatesForCapsule(
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
   profile: QueryProfile,
   limit: number,
+  matchQuery: string | undefined,
 ): LexicalCapsuleCollection {
   const indexedRowCount = countLexicalRowsForCapsuleScope(store, capsule.id, sourceFilter);
   if (indexedRowCount === 0) return { candidates: [], indexedRowCount, policyDenied: false };
@@ -1377,7 +1537,6 @@ function collectLexicalCandidatesForCapsule(
     return { candidates: [], indexedRowCount, policyDenied: true };
   }
   const byKey = new Map<string, LexicalCandidate>();
-  const matchQuery = buildFtsMatchQuery(profile);
   if (matchQuery !== undefined) {
     for (const candidate of readFtsCandidatesForCapsule(
       store,
@@ -1404,6 +1563,47 @@ function collectLexicalCandidates(
   profile: QueryProfile,
   topK: number,
 ): LexicalCollection {
+  const strict = collectLexicalCandidatesPass(
+    store,
+    capsules,
+    scope,
+    profile,
+    topK,
+    buildFtsMatchQuery(profile),
+  );
+  // Whole-lane OR fallback: only when the strict AND pass found NOTHING across every in-scope
+  // capsule (and nothing failed or was policy-denied) do we retry once with OR. Running the
+  // fallback per capsule instead would dilute ranking whenever a sibling capsule matches the
+  // strict query well.
+  if (strict.candidates.length > 0 || strict.queryError || strict.policyDenied) return strict;
+  const fallbackQuery = buildFtsOrFallbackQuery(profile);
+  if (fallbackQuery === undefined) return strict;
+  const fallback = collectLexicalCandidatesPass(
+    store,
+    capsules,
+    scope,
+    profile,
+    topK,
+    fallbackQuery,
+  );
+  return {
+    ...fallback,
+    // Tag every candidate from THIS pass as fallback-sourced. Fusion applies the discount
+    // per-candidate (see `fuseCandidates`), so this only ever affects this query variant's own
+    // lexical evidence — never a different chained-question leg's strict match merged in later.
+    candidates: fallback.candidates.map((candidate) => ({ ...candidate, viaOrFallback: true })),
+    usedOrFallback: fallback.candidates.length > 0,
+  };
+}
+
+function collectLexicalCandidatesPass(
+  store: KnowledgeStore,
+  capsules: readonly KnowledgeCapsule[],
+  scope: RetrievalScopeInput,
+  profile: QueryProfile,
+  topK: number,
+  matchQuery: string | undefined,
+): LexicalCollection {
   const limit = lexicalCandidateLimit(topK, profile);
   const out: LexicalCandidate[] = [];
   let indexedRowCount = 0;
@@ -1416,6 +1616,7 @@ function collectLexicalCandidates(
         sourceFilterForCapsule(scope.sourceFilter, capsule),
         profile,
         limit,
+        matchQuery,
       );
       indexedRowCount += collected.indexedRowCount;
       policyDenied ||= collected.policyDenied;
@@ -1423,13 +1624,20 @@ function collectLexicalCandidates(
       if (out.length >= limit) break;
     }
   } catch {
-    return { candidates: [], indexedRowCount, queryError: true, policyDenied };
+    return {
+      candidates: [],
+      indexedRowCount,
+      queryError: true,
+      policyDenied,
+      usedOrFallback: false,
+    };
   }
   return {
     candidates: out.sort(lexicalCandidateAsc).slice(0, limit),
     indexedRowCount,
     policyDenied,
     queryError: false,
+    usedOrFallback: false,
   };
 }
 
@@ -1450,6 +1658,12 @@ function scoreDesc(
 function lexicalCandidateAsc(a: LexicalCandidate, b: LexicalCandidate): number {
   const priority = b.lexicalPriority - a.lexicalPriority;
   if (priority !== 0) return priority;
+  // A strict-match candidate always outranks a same-priority fallback candidate for the same
+  // chunk — this only ever activates when merging multiple chained-question legs (a single
+  // query variant's candidates all share one `viaOrFallback` value), and it's what keeps
+  // `dedupeLexicalCandidates` picking the non-fallback copy when one leg strict-matched a chunk
+  // that another leg only recovered via the OR fallback.
+  if (a.viaOrFallback !== b.viaOrFallback) return a.viaOrFallback ? 1 : -1;
   if (a.bm25Score !== b.bm25Score) return a.bm25Score - b.bm25Score;
   return a.chunkId.localeCompare(b.chunkId);
 }
@@ -1499,6 +1713,10 @@ function upsertFusedCandidate(
   });
 }
 
+function lexicalFusionWeight(candidate: LexicalCandidate): number {
+  return candidate.viaOrFallback ? LEXICAL_OR_FALLBACK_RRF_WEIGHT : 1;
+}
+
 function fuseCandidates(
   denseCandidates: readonly DenseCandidate[],
   lexicalCandidates: readonly LexicalCandidate[],
@@ -1535,7 +1753,7 @@ function fuseCandidates(
         lexicalRank: rank,
         lexicalBm25Score: candidate.bm25Score,
       },
-      rrf(rank),
+      lexicalFusionWeight(candidate) * rrf(rank),
     );
   });
   return [...byKey.values()].sort(fusedScoreDesc).slice(0, limit);
@@ -1620,7 +1838,13 @@ async function searchQueriesFor(
   profile: QueryProfile,
   options: SearchOptions,
 ): Promise<readonly string[]> {
-  if (profile.strategy !== "broad" || options.queryTransformer === undefined) return [query];
+  // Chained multi-part questions are decomposed deterministically for EVERY strategy: each
+  // part retrieves its own evidence and RRF merges the legs. Single-part queries decompose to
+  // [] and behave exactly as before.
+  const baseQueries = uniqueQueries([query, ...decomposeChainedQuery(query)]);
+  if (profile.strategy !== "broad" || options.queryTransformer === undefined) {
+    return baseQueries.slice(0, QUERY_TRANSFORM_MAX_VARIANTS);
+  }
   const variants = await withQueryTransformTimeout(
     options.queryTransformer.rewrite({
       query,
@@ -1630,19 +1854,21 @@ async function searchQueriesFor(
     }),
     options.queryTransformTimeoutMs ?? QUERY_TRANSFORM_TIMEOUT_MS,
   );
-  if (variants === undefined) return [query];
-  return uniqueQueries([query, ...variants]).slice(0, QUERY_TRANSFORM_MAX_VARIANTS);
+  if (variants === undefined) return baseQueries.slice(0, QUERY_TRANSFORM_MAX_VARIANTS);
+  return uniqueQueries([...baseQueries, ...variants]).slice(0, QUERY_TRANSFORM_MAX_VARIANTS);
 }
 
 function mergeLexicalCollections(collections: readonly LexicalCollection[]): LexicalCollection {
   let indexedRowCount = 0;
   let queryError = false;
   let policyDenied = false;
+  let usedOrFallback = false;
   const candidates: LexicalCandidate[] = [];
   for (const collection of collections) {
     indexedRowCount = Math.max(indexedRowCount, collection.indexedRowCount);
     queryError ||= collection.queryError;
     policyDenied ||= collection.policyDenied;
+    usedOrFallback ||= collection.usedOrFallback;
     candidates.push(...collection.candidates);
   }
   return {
@@ -1650,6 +1876,7 @@ function mergeLexicalCollections(collections: readonly LexicalCollection[]): Lex
     indexedRowCount,
     queryError,
     policyDenied,
+    usedOrFallback,
   };
 }
 
@@ -1771,16 +1998,45 @@ function hasHardenedEmbeddingSpace(identity: EmbeddingModelIdentity): boolean {
   );
 }
 
-async function ensureIdentityPreflight(
+// Request-local `inFlight` dedupes concurrent probes (the prefetch fires per variant); the
+// module-level TTL cache carries STRUCTURAL outcomes across requests. "failed" is transient and
+// is only held for the current request via the shared in-flight promise.
+function ensureIdentityPreflight(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
   signal: AbortSignal | undefined,
-  cache: Map<string, IdentityPreflightResult>,
+  inFlight: Map<string, Promise<IdentityPreflightResult>>,
 ): Promise<IdentityPreflightResult> {
-  if (!hasHardenedEmbeddingSpace(identity)) return "incompatible";
+  if (!hasHardenedEmbeddingSpace(identity)) return Promise.resolve("incompatible");
   const key = identityKey(identity);
-  const cached = cache.get(key);
-  if (cached !== undefined) return cached;
+  const ttlCache = preflightTtlCacheFor(adapter);
+  const ttlCached = ttlCache.get(key);
+  if (ttlCached !== undefined && ttlCached.expiresAt > Date.now()) {
+    return Promise.resolve(ttlCached.result);
+  }
+  const pending = inFlight.get(key);
+  if (pending !== undefined) return pending;
+  const started = runIdentityPreflight(adapter, identity, signal).then((result) => {
+    if (result !== "failed") {
+      if (ttlCache.size >= IDENTITY_PREFLIGHT_TTL_CACHE_MAX) {
+        ttlCache.clear();
+      }
+      ttlCache.set(key, {
+        result,
+        expiresAt: Date.now() + IDENTITY_PREFLIGHT_TTL_MS,
+      });
+    }
+    return result;
+  });
+  inFlight.set(key, started);
+  return started;
+}
+
+async function runIdentityPreflight(
+  adapter: OpenAIEmbeddingAdapter,
+  identity: EmbeddingModelIdentity,
+  signal: AbortSignal | undefined,
+): Promise<IdentityPreflightResult> {
   const checked = await verifyEmbeddingCapability(adapter, {
     modelId: identity.modelId,
     provider: identity.provider,
@@ -1796,16 +2052,10 @@ async function ensureIdentityPreflight(
     includeSpaceFingerprint: true,
     ...(signal !== undefined ? { signal } : {}),
   });
-  let result: IdentityPreflightResult;
   if (!checked.ok) {
-    result = checked.reason === "dimension-mismatch" ? "incompatible" : "failed";
-  } else {
-    result = assertCompatibleEmbeddingIdentity(identity, checked.identity).ok
-      ? "ok"
-      : "incompatible";
+    return checked.reason === "dimension-mismatch" ? "incompatible" : "failed";
   }
-  cache.set(key, result);
-  return result;
+  return assertCompatibleEmbeddingIdentity(identity, checked.identity).ok ? "ok" : "incompatible";
 }
 
 type CapsuleQueryEmbeddingResult =
@@ -1818,8 +2068,8 @@ async function ensureCapsuleQueryEmbedding(
   capsule: KnowledgeCapsule,
   query: string,
   options: SearchOptions,
-  cache: Map<string, EmbeddedQuery>,
-  preflightCache: Map<string, IdentityPreflightResult>,
+  cache: Map<string, Promise<EmbeddedQuery | RetrievalError>>,
+  preflightCache: Map<string, Promise<IdentityPreflightResult>>,
 ): Promise<CapsuleQueryEmbeddingResult> {
   const preflight = await ensureIdentityPreflight(
     embeddingAdapter,
@@ -1845,7 +2095,6 @@ async function ensureCapsuleQueryEmbedding(
           : "embedding-failed",
     };
   }
-  if (embedded === undefined) return { kind: "embedding-failed" };
   if (embedded.dimensions !== capsule.embeddingModelIdentity.vectorDimensions) {
     return { kind: "identity-incompatible" };
   }
@@ -1985,8 +2234,8 @@ async function processCapsule(
   query: string,
   options: SearchOptions,
   profile: QueryProfile,
-  cache: Map<string, EmbeddedQuery>,
-  preflightCache: Map<string, IdentityPreflightResult>,
+  cache: Map<string, Promise<EmbeddedQuery | RetrievalError>>,
+  preflightCache: Map<string, Promise<IdentityPreflightResult>>,
   state: SearchState,
 ): Promise<void> {
   const lane = laneStateFor(state, capsule);
@@ -2083,20 +2332,79 @@ async function processCapsule(
   pushScoredCandidates(state, lane, scored);
 }
 
-async function ensureQueryEmbedded(
+// Request-local `inFlight` dedupes concurrent embeds of the same (identity × query); resolved
+// successes are promoted into the module-level LRU so later requests skip the network call.
+// RetrievalError outcomes stay request-local (shared via the in-flight promise) and are never
+// promoted, so a transient adapter failure cannot poison future requests.
+function ensureQueryEmbedded(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
   query: string,
   signal: AbortSignal | undefined,
-  cache: Map<string, EmbeddedQuery>,
-): Promise<EmbeddedQuery | RetrievalError | undefined> {
+  inFlight: Map<string, Promise<EmbeddedQuery | RetrievalError>>,
+): Promise<EmbeddedQuery | RetrievalError> {
   const key = queryEmbeddingCacheKey(identity, query);
-  const cached = cache.get(key);
-  if (cached !== undefined) return cached;
-  const result = await embedQueryFor(adapter, identity, query, signal);
-  if (result instanceof RetrievalError) return result;
-  cache.set(key, result);
-  return result;
+  const lru = queryEmbeddingCacheFor(adapter);
+  const cached = lru.get(key);
+  if (cached !== undefined) {
+    lruTouchQueryEmbedding(lru, key, cached);
+    return Promise.resolve(cached);
+  }
+  const pending = inFlight.get(key);
+  if (pending !== undefined) return pending;
+  const started = embedQueryFor(adapter, identity, query, signal).then((result) => {
+    if (!(result instanceof RetrievalError)) {
+      lruTouchQueryEmbedding(lru, key, result);
+    }
+    return result;
+  });
+  inFlight.set(key, started);
+  return started;
+}
+
+// Fires the (query variant × distinct in-scope embedding identity) preflight + embedding
+// network calls concurrently WITHOUT awaiting them, so the synchronous SQLite work of the
+// per-capsule loop overlaps with network latency instead of paying each call serially. The
+// loop re-awaits the SAME in-flight promises and applies the existing failure taxonomy; the
+// detached continuations here only suppress unhandled-rejection noise, never outcomes.
+function prefetchQueryEmbeddings(inputs: {
+  readonly store: KnowledgeStore;
+  readonly embeddingAdapter: OpenAIEmbeddingAdapter;
+  readonly capsules: readonly KnowledgeCapsule[];
+  readonly scope: RetrievalScopeInput;
+  readonly searchQueries: readonly string[];
+  readonly options: SearchOptions;
+  readonly cache: Map<string, Promise<EmbeddedQuery | RetrievalError>>;
+  readonly preflightCache: Map<string, Promise<IdentityPreflightResult>>;
+}): void {
+  const identities = new Map<string, EmbeddingModelIdentity>();
+  for (const capsule of inputs.capsules) {
+    if (!isExternalEmbeddingAllowed(capsule)) continue;
+    const sourceFilter = sourceFilterForCapsule(inputs.scope.sourceFilter, capsule);
+    if (vectorCacheStampForScope(inputs.store, capsule.id, sourceFilter).n === 0) continue;
+    identities.set(identityKey(capsule.embeddingModelIdentity), capsule.embeddingModelIdentity);
+  }
+  for (const identity of identities.values()) {
+    for (const query of inputs.searchQueries) {
+      const warmed = ensureIdentityPreflight(
+        inputs.embeddingAdapter,
+        identity,
+        inputs.options.signal,
+        inputs.preflightCache,
+      ).then((preflight) =>
+        preflight === "ok"
+          ? ensureQueryEmbedded(
+              inputs.embeddingAdapter,
+              identity,
+              query,
+              inputs.options.signal,
+              inputs.cache,
+            )
+          : undefined,
+      );
+      void warmed.catch(() => undefined);
+    }
+  }
 }
 
 // Closed enumeration of the failure surfaces produced by the search. Lifted to a type
@@ -2245,6 +2553,7 @@ function retrievalDiagnostics(
     lexicalCandidateBudget: budgets.lexicalCandidateBudget,
     fusedCandidateBudget: budgets.fusedCandidateBudget,
     queryVariantCount,
+    lexicalOrFallbackUsed: lexical.usedOrFallback,
     denseIndex: denseIndexState(state),
     lexicalIndex: lexicalIndexState(lexical),
     vectorIndex: vectorIndexDiagnostics(state.vectorIndexDiagnostics),
@@ -2278,6 +2587,7 @@ export async function searchVectorsForScope(
         lexicalCandidateBudget: budgets.lexicalCandidateBudget,
         fusedCandidateBudget: budgets.fusedCandidateBudget,
         queryVariantCount: 0,
+        lexicalOrFallbackUsed: false,
         denseIndex: "missing",
         lexicalIndex: "missing",
         vectorIndex: {
@@ -2294,8 +2604,18 @@ export async function searchVectorsForScope(
   const profile = profileQuery(query, options.strategy);
   const searchQueries = await searchQueriesFor(query, profile, options);
   const budgets = candidateBudgets(options.topK, profile);
-  const cache = new Map<string, EmbeddedQuery>();
-  const preflightCache = new Map<string, IdentityPreflightResult>();
+  const cache = new Map<string, Promise<EmbeddedQuery | RetrievalError>>();
+  const preflightCache = new Map<string, Promise<IdentityPreflightResult>>();
+  prefetchQueryEmbeddings({
+    store,
+    embeddingAdapter,
+    capsules,
+    scope,
+    searchQueries,
+    options,
+    cache,
+    preflightCache,
+  });
   const state = emptyState();
   const lexicalCollections: LexicalCollection[] = [];
   for (const searchQuery of searchQueries) {

@@ -4,6 +4,8 @@ import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
   validateKnowledgePodSummary,
+  htmlManualSourceFingerprintTag,
+  htmlManualSourceKindTag,
   type CapsuleSetId,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
@@ -49,6 +51,14 @@ const HARDENED_EMBEDDING_A = {
 const HARDENED_EMBEDDING_B = {
   ...HARDENED_EMBEDDING_A,
   embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
+} as const;
+
+// A genuinely different embedding space (different provider, not merely a fingerprint drift), so
+// the set-level decision must resolve to "incompatible" rather than the softer "unknown".
+const HARDENED_EMBEDDING_C = {
+  ...HARDENED_EMBEDDING_A,
+  provider: "azure-openai",
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:cccccccccccccccccccccccc",
 } as const;
 
 function seedIndexedDocument(
@@ -174,6 +184,46 @@ describe("Knowledge Pod compatibility projection", () => {
       });
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
       expect(JSON.stringify(summary)).not.toContain("/Users/alice");
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("projects HTML manual source metadata without widening the retrieval scope kind", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-manual-summary" as KnowledgeCapsuleId;
+      const sourceId = "src-manual-summary" as KnowledgeSourceId;
+      const capsule = createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: capsuleId,
+          displayName: "Device Handbook",
+          lifecycleState: "ready",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      addSourceToCapsule(env.store, capsuleId, {
+        ...sampleSourceInput(sourceId),
+        tags: [
+          htmlManualSourceKindTag("html-manual-http"),
+          htmlManualSourceFingerprintTag("fp-device-handbook"),
+        ],
+        scope: {
+          kind: "files",
+          rootPath: "/keiko-html-manual/cap-manual-summary",
+          files: ["index.html"],
+        },
+      });
+      seedIndexedDocument(env.store, capsuleId, sourceId, "manual-summary");
+
+      const summary = buildKnowledgePodSummary(env.store, capsule);
+
+      expect(summary.sourceKinds).toStrictEqual(["html-manual-http"]);
+      expect(summary.manualSourceFingerprint).toBe("fp-device-handbook");
+      expect(summary.compatibility.sourceIds).toStrictEqual([sourceId]);
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+      expect(JSON.stringify(summary)).not.toContain("keiko-html-manual");
     } finally {
       env.cleanup();
     }
@@ -396,6 +446,70 @@ describe("Knowledge Pod compatibility projection", () => {
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
       // The raw space fingerprints are the discriminator, but they must never reach the wire.
       expect(JSON.stringify(summary)).not.toContain("keiko-embedding-space-fingerprint-v1:");
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("marks a genuine cross-member provider mismatch incompatible instead of downgrading to unknown", () => {
+    // Unlike the fingerprint-only pair above, these members disagree on `provider` itself, so
+    // `compareEmbeddingProfiles` must resolve to "incompatible", not the softer "unknown" reserved
+    // for legacy/fingerprint-only drift. This guards `setEmbeddingDecision`'s pairwise comparison
+    // loop against a future refactor that collapses every cross-member mismatch to one status.
+    const env = freshStore();
+    try {
+      const aId = "cap-provider-a" as KnowledgeCapsuleId;
+      const bId = "cap-provider-b" as KnowledgeCapsuleId;
+      const aSourceId = "src-provider-a" as KnowledgeSourceId;
+      const bSourceId = "src-provider-b" as KnowledgeSourceId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: aId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_A,
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: bId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_C,
+          modelUsePolicy: standardPodModelUsePolicy(),
+          storageReference: "engineering/provider-b",
+        }),
+      );
+      addSourceToCapsule(env.store, aId, sampleSourceInput(aSourceId));
+      addSourceToCapsule(env.store, bId, sampleSourceInput(bSourceId));
+      seedIndexedDocument(env.store, aId, aSourceId, "provider-a");
+      seedIndexedDocument(env.store, bId, bSourceId, "provider-b");
+      const set = createCapsuleSet(env.store, {
+        id: "set-cross-provider" as CapsuleSetId,
+        displayName: "Cross Provider Set",
+        tags: [],
+        capsuleIds: [aId, bId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.retrieval).toMatchObject({
+        crossSpaceScoreMixing: false,
+        embeddingCompatibilityStatus: "incompatible",
+        embeddingCompatibilityReason: "provider-mismatch",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["embedding-incompatible"]),
+      );
+      expect(summary.degradationReasons).toEqual(
+        expect.arrayContaining([
+          "Embedding profile is incompatible with the current semantic retrieval space.",
+        ]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
     } finally {
       env.cleanup();
     }

@@ -554,6 +554,22 @@ describe("local-knowledge multi-source contract (#189)", () => {
         chunkId: "chunk-a" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
       },
       source: "Capsule A",
+      htmlManual: {
+        sourceKind: "html-manual-http",
+        pageTitle: "Device Handbook",
+        safePageId: "doc-a",
+        sectionPath: ["Troubleshooting", "Timeouts"],
+        anchorId: "timeouts",
+        parsedUnitId: "unit-a",
+        targetSummary: {
+          originSummary: "https://manual.internal",
+          pathSummary: "/…",
+        },
+        open: {
+          state: "available",
+          target: "keiko-html-manual-citation:cap-a.src-a.doc-a.chunk-a.timeouts",
+        },
+      },
     };
     const hybrid: HybridGroundedAnswer = {
       groundingKind: "hybrid",
@@ -599,6 +615,7 @@ describe("local-knowledge multi-source contract (#189)", () => {
     const answer: GroundedAnswer = hybrid;
     expect(answer.groundingKind).toBe("hybrid");
     expect(citation.source).toBe("Capsule A");
+    expect(citation.htmlManual?.open.state).toBe("available");
     expect(hybrid.contextPack.reranker?.status).toBe("applied");
   });
 });

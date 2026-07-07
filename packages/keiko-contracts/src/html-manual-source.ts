@@ -32,6 +32,9 @@ import { containsAbsolutePath, stripUnsafeFormatChars } from "./text-safety.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const HTML_MANUAL_SOURCE_SCHEMA_VERSION = "1" as const;
+export const HTML_MANUAL_SOURCE_KIND_TAG_PREFIX = "keiko-html-manual-source-kind:" as const;
+export const HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX =
+  "keiko-html-manual-source-fingerprint:" as const;
 
 // Include globs used when an HTML manual is indexed through the existing folder-scope
 // discovery path. Kept in sync with the parser registry's HTML extensions.
@@ -62,6 +65,11 @@ export type HtmlManualCrawlScope =
     };
 
 export type HtmlManualSourceKind = HtmlManualCrawlScope["kind"];
+
+export interface HtmlManualSourceTagMetadata {
+  readonly sourceKind?: HtmlManualSourceKind;
+  readonly sourceFingerprint?: string;
+}
 
 // A fully specified, bounded crawl input derived from an approved manual proposal. Internal
 // runtime state: it carries the raw root/origin and therefore never crosses a browser wire.
@@ -326,4 +334,32 @@ export function htmlManualReachableFilesScope(
     if (!isSafeStorageReference(file)) return null;
   }
   return { kind: "files", rootPath, files: [...files] };
+}
+
+export function htmlManualSourceKindTag(kind: HtmlManualSourceKind): string {
+  return `${HTML_MANUAL_SOURCE_KIND_TAG_PREFIX}${kind}`;
+}
+
+export function htmlManualSourceFingerprintTag(sourceFingerprint: string): string {
+  return `${HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX}${sourceFingerprint}`;
+}
+
+export function parseHtmlManualSourceTagMetadata(
+  tags: readonly string[],
+): HtmlManualSourceTagMetadata {
+  let sourceKind: HtmlManualSourceKind | undefined;
+  let sourceFingerprint: string | undefined;
+  for (const tag of tags) {
+    if (tag === htmlManualSourceKindTag("html-manual-local")) {
+      sourceKind = "html-manual-local";
+    } else if (tag === htmlManualSourceKindTag("html-manual-http")) {
+      sourceKind = "html-manual-http";
+    } else if (tag.startsWith(HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX)) {
+      sourceFingerprint = tag.slice(HTML_MANUAL_SOURCE_FINGERPRINT_TAG_PREFIX.length);
+    }
+  }
+  return {
+    ...(sourceKind !== undefined ? { sourceKind } : {}),
+    ...(sourceFingerprint !== undefined ? { sourceFingerprint } : {}),
+  };
 }

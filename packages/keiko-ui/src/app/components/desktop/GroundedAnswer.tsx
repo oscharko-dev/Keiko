@@ -22,7 +22,9 @@ import type {
   GroundedEvidenceCitation,
   GroundedRerankerDiagnostics,
   GroundedUncertainty,
+  HtmlManualCitationOpenUnavailableReason,
   HybridGroundedAnswerContextSummary,
+  HtmlManualCitationMetadata,
   KnowledgePodRetrievalActivity,
   KnowledgePodRetrievalActivityReasonCode,
   KnowledgePodRetrievalActivityState,
@@ -31,12 +33,18 @@ import type {
 } from "@/lib/types";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 
+// Opens the citation's target in the existing governed documentation browser widget (ADR-0113) so
+// that widget's own navigateDocumentation call renders the authoritative reason/severity outcome —
+// the chip never re-implements that classification. Returns whether a window was actually opened.
+type OpenDocumentationTarget = (target: string) => boolean;
+
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
   readonly busy: boolean;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
+  readonly openDocumentationTarget?: OpenDocumentationTarget | undefined;
 }
 
 type ConnectedGroundedAnswer = Extract<
@@ -561,13 +569,18 @@ function GroundedEvidenceDisclosure({
 function LocalKnowledgeCitationList({
   citations,
   citationPreview,
+  openDocumentationTarget,
 }: {
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
   readonly citationPreview: CitationPreviewController | undefined;
+  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
   function labelForCitation(citation: LocalKnowledgeEvidenceCitation): string {
+    if (citation.htmlManual !== undefined) {
+      return manualCitationLabel(citation);
+    }
     return citation.source === undefined
       ? `${citation.marker} ${citation.label}`
       : `${citation.marker} ${citation.source} · ${citation.label}`;
@@ -585,6 +598,7 @@ function LocalKnowledgeCitationList({
               citation={citation}
               citationPreview={citationPreview}
               label={labelForCitation(citation)}
+              openDocumentationTarget={openDocumentationTarget}
             />
           </li>
         ))}
@@ -601,20 +615,109 @@ function LocalKnowledgeCitationList({
 }
 
 function knowledgeCitationTitle(citation: LocalKnowledgeEvidenceCitation): string {
+  if (citation.htmlManual !== undefined) {
+    const section = citation.htmlManual.sectionPath?.join(" · ");
+    const suffix = section === undefined ? "" : ` · ${section}`;
+    return `${citation.htmlManual.pageTitle}${suffix} — HTML manual evidence, relevance ${citation.score.toFixed(2)}`;
+  }
   return citation.source === undefined
     ? `${citation.label} — relevance ${citation.score.toFixed(2)}`
     : `${citation.source} · ${citation.label} — relevance ${citation.score.toFixed(2)}`;
+}
+
+function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
+  const manual = citation.htmlManual;
+  if (manual === undefined) return `${citation.marker} ${citation.label}`;
+  const source = citation.source === undefined ? "HTML manual" : `${citation.source} · HTML manual`;
+  const section = manual.sectionPath?.join(" · ");
+  const sectionSuffix = section === undefined || section.length === 0 ? "" : ` · ${section}`;
+  return `${citation.marker} ${source} · ${manual.pageTitle}${sectionSuffix}`;
+}
+
+// Curated, short copy for every governed reason a manual citation cannot be reopened — mirrors the
+// tone of DocumentationBrowserWidget's REASON_COPY without exposing the raw wire enum token.
+const MANUAL_UNAVAILABLE_REASON_COPY: Readonly<
+  Record<HtmlManualCitationOpenUnavailableReason, string>
+> = {
+  "source-metadata-unavailable": "Source unavailable",
+  "citation-lineage-mismatch": "Citation mismatch",
+  "target-outside-approved-scope": "Outside approved scope",
+  "target-unsupported": "Unsupported target",
+  "target-credentialed": "Requires sign-in",
+  "target-unavailable": "Target unavailable",
+};
+
+function manualCitationActionLabel(manual: HtmlManualCitationMetadata): string {
+  if (manual.open.state === "available") return "Open manual";
+  if (manual.open.state === "page-level-only") return "Open page";
+  return MANUAL_UNAVAILABLE_REASON_COPY[manual.open.reason];
+}
+
+function ManualCitationChip({
+  citation,
+  label,
+  openDocumentationTarget,
+}: {
+  readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly label: string;
+  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+}): ReactNode {
+  const manual = citation.htmlManual;
+  const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
+  if (manual === undefined) return null;
+  const unavailable = manual.open.state === "unavailable";
+  const actionLabel =
+    state === "opened"
+      ? "Opened"
+      : state === "failed"
+        ? "Open failed"
+        : manualCitationActionLabel(manual);
+  const target = manual.open.state === "unavailable" ? undefined : manual.open.target;
+  const modifier = unavailable || state === "failed" ? " grounded-citation-action--blocked" : "";
+  return (
+    <button
+      type="button"
+      className={`grounded-citation grounded-citation-action${modifier}`}
+      aria-disabled={unavailable ? "true" : undefined}
+      aria-label={`${label} · ${actionLabel}`}
+      title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
+      onClick={() => {
+        if (target === undefined || unavailable || openDocumentationTarget === undefined) return;
+        // Opens the existing governed documentation browser widget (ADR-0113) with this target; the
+        // widget itself calls navigateDocumentation and renders the authoritative reason/severity —
+        // this chip never re-implements or discards that classification.
+        setState(openDocumentationTarget(target) ? "opened" : "failed");
+      }}
+    >
+      <span className="grounded-citation-range">{label}</span>
+      <span className="grounded-citation-action-label" aria-live="polite">
+        {actionLabel}
+      </span>
+      <CitationScore score={citation.score} />
+    </button>
+  );
 }
 
 function KnowledgeCitationChip({
   citation,
   citationPreview,
   label,
+  openDocumentationTarget,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly label: string;
+  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
 }): ReactNode {
+  if (citation.htmlManual !== undefined) {
+    return (
+      <ManualCitationChip
+        citation={citation}
+        label={label}
+        openDocumentationTarget={openDocumentationTarget}
+      />
+    );
+  }
   const affordance = citationPreview?.forCitation(citation);
   if (affordance === undefined) {
     return (
@@ -839,21 +942,20 @@ function HybridContextPackSummary({
   );
 }
 
-// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker silently degraded to fallback retrieval order.
+// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker genuinely failed and silently degraded to the
+// fallback retrieval order. A not-configured reranker is the default, fully-supported install
+// state — not a failure — and must never raise this banner; it mirrors the backend's
+// rerankerForRetrievalActivity suppressor in local-knowledge-grounded-qa.ts (Epic #1820 / #1922).
 const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
   "unavailable",
   "invalid-response",
-  "not-configured",
 ]);
 
 function rerankerDegradationNote(
   reranker: GroundedRerankerDiagnostics | undefined,
 ): string | undefined {
-  if (reranker === undefined) {
+  if (reranker === undefined || reranker.failureKind === "not-configured") {
     return undefined;
-  }
-  if (reranker.status === "not-configured" || reranker.failureKind === "not-configured") {
-    return "Ranking: no reranker configured — showing fused retrieval order.";
   }
   if (!DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
     return undefined;
@@ -922,6 +1024,7 @@ export function GroundedAnswer({
   repositoryRoots = [],
   openRepositoryReference,
   citationPreview,
+  openDocumentationTarget,
 }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
     // uiux-fix F012 C163 — the panel also serves capsule/connector-only chats where no
@@ -943,6 +1046,7 @@ export function GroundedAnswer({
           <LocalKnowledgeCitationList
             citations={answer.citations}
             citationPreview={citationPreview}
+            openDocumentationTarget={openDocumentationTarget}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
@@ -972,6 +1076,7 @@ export function GroundedAnswer({
           <LocalKnowledgeCitationList
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}
+            openDocumentationTarget={openDocumentationTarget}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />

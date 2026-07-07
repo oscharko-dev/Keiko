@@ -313,4 +313,51 @@ describe("chunkParsedUnit — pure", () => {
       expect(sourceText.charAt(chunk.characterEnd - 1)).toBe("\n");
     }
   });
+
+  // Epic #1855 / Issue #1887 (post-merge audit): the same content class the line-boundary
+  // probe was built to protect — code lines with inline decimal literals, and table rows
+  // with decimal cell values — also contains sentence-boundary-shaped punctuation (a period
+  // followed by whitespace) *mid-line*, not just at the line's end. Regression:
+  // SENTENCE_BOUNDARY_PATTERN was checked before LINE_BOUNDARY_PATTERN in chooseChunkEnd's
+  // priority ladder, so a mid-line "digit-period-space" match starved the line-boundary
+  // probe and produced a mid-line/mid-statement cut even though a newline boundary existed
+  // within budget. (A period immediately before the newline is not adversarial here — the
+  // sentence pattern's trailing `\s+` swallows the newline too, so it coincides with the
+  // line boundary; the period must sit *before* trailing content on the same line to expose
+  // the bug, which is what these fixtures do.)
+  it("prefers a line boundary over a mid-line sentence-shaped period in code content", () => {
+    const lines = ["a=1.5. b=2", "c=3.5. d=4", "e=5.5. f=6", "g=7.5. h=8"];
+    const sourceText = lines.join("\n");
+    const unit = pageUnit(0, sourceText.length);
+    const chunks = chunkParsedUnit(unit, sourceText, {
+      minTokens: 1,
+      maxTokens: 10,
+      overlapTokens: 0,
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      if (chunk.characterEnd >= sourceText.length) continue;
+      // Every non-final chunk boundary must land at a line start, never mid-line/mid-statement.
+      expect(sourceText.charAt(chunk.characterEnd - 1)).toBe("\n");
+    }
+  });
+
+  // Same class, table-row shape: a decimal cell value followed by more cells on the same
+  // row contains a sentence-boundary-shaped "digit-period-space" sequence mid-row, which
+  // must not out-rank an available row (line) boundary.
+  it("prefers a row boundary over a mid-row sentence-shaped period in table content", () => {
+    const rows = ["| Widget | 19.99. | ea |", "| Gadget | 4.50. | ea |", "| Gizmo | 8.00. | ea |"];
+    const sourceText = rows.join("\n");
+    const unit = pageUnit(0, sourceText.length);
+    const chunks = chunkParsedUnit(unit, sourceText, {
+      minTokens: 1,
+      maxTokens: 12,
+      overlapTokens: 0,
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      if (chunk.characterEnd >= sourceText.length) continue;
+      expect(sourceText.charAt(chunk.characterEnd - 1)).toBe("\n");
+    }
+  });
 });

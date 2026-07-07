@@ -265,6 +265,7 @@ function buildCitation(
     sourceId: document.source_id as KnowledgeSourceId,
     documentId: chunk.document_id as DocumentId,
     safeDisplayName: document.safe_display_name,
+    parsedUnitId: chunk.parsed_unit_id,
     ...(hop.pageNumber !== undefined ? { pageNumber: hop.pageNumber } : {}),
     ...(hop.pageLabel !== undefined ? { pageLabel: hop.pageLabel } : {}),
     ...(hop.sectionPath !== undefined ? { sectionPath: hop.sectionPath } : {}),

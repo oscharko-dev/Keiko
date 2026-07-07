@@ -12,6 +12,7 @@ import {
   type KnowledgePodSummary,
 } from "./local-knowledge-pods.js";
 import { resolveKnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
+import { HTML_MANUAL_REFRESH_SCHEMA_VERSION } from "./html-manual-refresh.js";
 
 function happySummary(): KnowledgePodSummary {
   return {
@@ -555,6 +556,15 @@ describe("validateKnowledgePodSummary", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts HTML manual source kinds without teaching them to KnowledgeSourceScope", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      sourceKinds: ["html-manual-local", "html-manual-http"],
+      manualSourceFingerprint: "fp-device-handbook",
+    });
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects a manual source fingerprint that leaks a raw path", () => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),
@@ -562,6 +572,62 @@ describe("validateKnowledgePodSummary", () => {
     });
     expect(invalidErrors(result)).toContain(
       "summary.manualSourceFingerprint must be an evidence-safe string when set",
+    );
+  });
+
+  function validManualRefresh(): NonNullable<KnowledgePodSummary["manualRefresh"]> {
+    return {
+      schemaVersion: HTML_MANUAL_REFRESH_SCHEMA_VERSION,
+      outcome: "updated",
+      sourceKind: "html-manual-http",
+      counts: {
+        addedPages: 1,
+        changedPages: 0,
+        removedPages: 0,
+        unchangedPages: 5,
+        failedPages: 0,
+        deniedLinks: 0,
+      },
+      removalDetection: "evaluated",
+      crawlRunFingerprint: "sha256:AbCdEf123-_9",
+      reasonCodes: ["pages-added"],
+      refreshedAt: 1_700_000_000_000,
+    };
+  }
+
+  it("accepts a Knowledge Pod summary carrying a redacted manual refresh change summary (Epic #1856)", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      manualRefresh: validManualRefresh(),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects an unexpected top-level field on the manual refresh change summary", () => {
+    // validateManualRefreshChangeSummary (html-manual-refresh.ts) checks required-field
+    // presence/type/enum membership but does not reject unknown keys itself; this summary-layer
+    // onlyKeys check is the only place that catches an accidentally-widened persisted record, the
+    // same protection every other nested field on KnowledgePodSummary already gets.
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      manualRefresh: {
+        ...validManualRefresh(),
+        rawPageUrl: "https://intranet.example.test/manual/page-7",
+      },
+    });
+    expect(invalidErrors(result)).toContain("summary.manualRefresh must not include rawPageUrl");
+  });
+
+  it("rejects an unexpected field nested inside manual refresh counts", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      manualRefresh: {
+        ...validManualRefresh(),
+        counts: { ...validManualRefresh().counts, skippedPages: 3 },
+      },
+    });
+    expect(invalidErrors(result)).toContain(
+      "summary.manualRefresh.counts must not include skippedPages",
     );
   });
 });

@@ -309,6 +309,8 @@ export type {
   GroundedUncertainty,
   GroundedAnswer,
   GroundedRerankerDiagnostics,
+  HtmlManualCitationMetadata,
+  HtmlManualCitationOpenUnavailableReason,
   LocalKnowledgeEvidenceCitation,
   GroundedAnswerContextPackSummary,
   GroundedAnswerContextSummary,
