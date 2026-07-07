@@ -130,6 +130,47 @@ describe("requestConfiguredRerank", () => {
     deps.store.close();
   });
 
+  it("reports a not-configured reranker via status: disabled + failureKind: not-configured, never status: not-configured", async () => {
+    const deps = depsWith({ ...gatewayConfig(), reranker: undefined }, () =>
+      Promise.resolve({ ok: true, value: { modelId: "unused", results: [] } }),
+    );
+
+    const attempt = await requestConfiguredRerank({
+      deps,
+      query: "alpha",
+      documents: ["alpha document"],
+      topN: 1,
+    });
+
+    expect(attempt.outcome).toBeUndefined();
+    expect(attempt.diagnostics.status).toBe("disabled");
+    expect(attempt.diagnostics.status).not.toBe("not-configured");
+    expect(attempt.diagnostics.failureKind).toBe("not-configured");
+    deps.store.close();
+  });
+
+  it("maps a thrown transport failure to cancelled when the caller signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const deps = depsWith(gatewayConfig(), () => Promise.reject(new Error("aborted mid-flight")));
+
+    const attempt = await requestConfiguredRerank({
+      deps,
+      query: "alpha",
+      documents: ["alpha document"],
+      topN: 1,
+      signal: controller.signal,
+    });
+
+    expect(attempt.outcome).toBeUndefined();
+    expect(attempt.diagnostics).toMatchObject({
+      status: "unavailable",
+      mode: "provider-backed",
+      failureKind: "cancelled",
+    });
+    deps.store.close();
+  });
+
   it.each(["rate-limited", "proxy-blocked-by-policy"] as const)(
     "maps %s outcomes to redacted unavailable diagnostics",
     async (kind) => {

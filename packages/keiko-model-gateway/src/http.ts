@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import { lookup as dnsLookup } from "node:dns/promises";
+import type { LookupAddress } from "node:dns";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect as netConnect, isIP } from "node:net";
-import type { Socket } from "node:net";
+import type { LookupFunction, Socket } from "node:net";
 import * as tls from "node:tls";
 import {
   normalizeHost,
@@ -14,6 +15,13 @@ import {
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type { OutboundHttpEgressConfig } from "./types.js";
+
+// Captured once at module load, before any test can monkey-patch `globalThis.fetch`. Used to
+// detect a caller-substituted global fetch (the established test convention in this codebase,
+// distinct from the explicit `fetchImpl` option) so DNS-resolution pinning (AUDIT-SEC-001) is
+// skipped in that case, exactly like the pre-existing `fetchImpl !== undefined` skip — a
+// substituted transport is not something we should independently DNS-resolve and pin around.
+const NATIVE_FETCH = globalThis.fetch;
 
 // Caps a single gateway response at 10 MB; real chat completions are far smaller.
 export const MAX_RESPONSE_BYTES = 10_000_000;
@@ -296,11 +304,39 @@ function composeSignal(
   return timeoutSignal;
 }
 
+// Builds a Node dns.lookup-compatible callback that always answers with the address set
+// `enforceOutboundTargetPolicy` already resolved and validated, ignoring whatever the
+// runtime's own resolver would return for `hostname`. Passing this as the `lookup` option to
+// `http(s).request` pins the actual TCP connect to the same address the policy checked,
+// closing the resolve-then-connect DNS-rebinding gap between the policy lookup and the real
+// connect (AUDIT-SEC-001): the socket can only ever reach an address this process itself
+// resolved and classified as allowed, never a second, independently (and possibly
+// differently) resolved address. Original hostname/Host header/SNI are untouched -- only the
+// address `net.connect` dials is pinned.
+function pinnedLookup(addresses: readonly LookupAddress[]): LookupFunction {
+  return (_hostname, options, callback) => {
+    if (options.all === true) {
+      callback(
+        null,
+        addresses.map((address) => ({ ...address })),
+      );
+      return;
+    }
+    const first = addresses[0];
+    if (first === undefined) {
+      callback(new Error("gateway egress: no policy-validated address available"), "", 0);
+      return;
+    }
+    callback(null, first.address, first.family);
+  };
+}
+
 async function fetchWithCaBundle(
   url: string,
   init: RequestInit,
   egress?: OutboundHttpEgressConfig,
   maxResponseBytes?: number,
+  lookup?: LookupFunction,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
@@ -312,6 +348,41 @@ async function fetchWithCaBundle(
         method: init.method ?? "GET",
         headers,
         ca: [...gatewayTrustedCaCertificates(egress?.caBundlePath)],
+        signal: init.signal ?? undefined,
+        lookup,
+      },
+      (res) => {
+        resolve(streamingResponseFromNode(res, () => req.destroy(), cap));
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+// Primary direct-fetch transport used whenever `gatewayFetch` itself resolved the target's DNS
+// (no forward proxy, no test-injected `fetchImpl`): connects via the exact address set the
+// policy check already validated instead of letting a second, independent resolution decide
+// where the socket lands (AUDIT-SEC-001). Mirrors `fetchWithCaBundle`'s Node-request shape but
+// without an explicit `ca` override, matching the default trust store `doFetch`/global `fetch`
+// would otherwise have used.
+async function fetchDirectPinned(
+  url: string,
+  init: RequestInit,
+  addresses: readonly LookupAddress[],
+  maxResponseBytes?: number,
+): Promise<Response> {
+  const body = await bodyToWire(init.body);
+  const headers = headersToRecord(init.headers);
+  const request = usesHttps(url) ? httpsRequest : httpRequest;
+  const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
+  return new Promise<Response>((resolve, reject) => {
+    const req = request(
+      url,
+      {
+        method: init.method ?? "GET",
+        headers,
+        lookup: pinnedLookup(addresses),
         signal: init.signal ?? undefined,
       },
       (res) => {
@@ -431,19 +502,24 @@ async function enforceRedirectTargetPolicy(
   return response;
 }
 
+// Resolves and validates the target's DNS records, returning the vetted address set so the
+// caller can pin the actual connect to it (AUDIT-SEC-001). Returns undefined when DNS
+// resolution was skipped (no resolution needed/allowed) -- callers must not pin a connect in
+// that case and instead fall back to the runtime's own resolution.
 async function enforceOutboundTargetPolicy(
   target: URL,
   egress: OutboundHttpEgressConfig | undefined,
   options: { readonly resolveDns: boolean },
-): Promise<void> {
+): Promise<readonly LookupAddress[] | undefined> {
   const literalReason = outboundTargetBlockedReason(target, egress);
   if (literalReason !== undefined) throw blockedTargetError(literalReason);
-  if (egress?.allowPrivateNetwork === true || !options.resolveDns) return;
+  if (egress?.allowPrivateNetwork === true || !options.resolveDns) return undefined;
   const addresses = await dnsLookup(target.hostname, { all: true, verbatim: true });
   for (const address of addresses) {
     const reason = outboundAddressBlockedReason(address.address, egress);
     if (reason !== undefined) throw blockedTargetError(`DNS resolved to ${reason}`);
   }
+  return addresses;
 }
 
 function proxyPort(proxy: URL): number {
@@ -865,6 +941,45 @@ function fetchViaProxy(
     : fetchHttpViaProxy(target, init, proxy, ca, maxResponseBytes);
 }
 
+// `pinnedAddresses` is set exactly when gatewayFetch itself resolved DNS for this target (no
+// proxy, no test-injected fetchImpl); when set, the connect reuses that vetted address set
+// instead of letting the transport re-resolve DNS independently (AUDIT-SEC-001).
+function attemptPrimaryFetch(
+  url: string,
+  init: RequestInit,
+  doFetch: typeof fetch,
+  maxResponseBytes: number | undefined,
+  pinnedAddresses: readonly LookupAddress[] | undefined,
+): Promise<Response> {
+  return pinnedAddresses !== undefined
+    ? fetchDirectPinned(url, init, pinnedAddresses, maxResponseBytes)
+    : doFetch(url, init);
+}
+
+// Extracted from fetchDirectWithCaFallback to keep its cyclomatic complexity within the limit.
+async function attemptCaBundleFallback(
+  url: string,
+  init: RequestInit,
+  egress: OutboundHttpEgressConfig | undefined,
+  maxResponseBytes: number | undefined,
+  pinnedAddresses: readonly LookupAddress[] | undefined,
+): Promise<Response> {
+  try {
+    return await fetchWithCaBundle(
+      url,
+      init,
+      egress,
+      maxResponseBytes,
+      pinnedAddresses !== undefined ? pinnedLookup(pinnedAddresses) : undefined,
+    );
+  } catch (fallbackError) {
+    if (isRecoverableTlsTrustError(fallbackError)) {
+      throw tlsCaFailureError();
+    }
+    throw fallbackError;
+  }
+}
+
 // Extracted from gatewayFetch to keep its cyclomatic complexity within the limit.
 async function fetchDirectWithCaFallback(
   url: string,
@@ -873,19 +988,13 @@ async function fetchDirectWithCaFallback(
   useCaFallback: boolean,
   egress: OutboundHttpEgressConfig | undefined,
   maxResponseBytes: number | undefined,
+  pinnedAddresses: readonly LookupAddress[] | undefined,
 ): Promise<Response> {
   try {
-    return await doFetch(url, init);
+    return await attemptPrimaryFetch(url, init, doFetch, maxResponseBytes, pinnedAddresses);
   } catch (error) {
     if (useCaFallback && usesHttps(url) && isRecoverableTlsTrustError(error)) {
-      try {
-        return await fetchWithCaBundle(url, init, egress, maxResponseBytes);
-      } catch (fallbackError) {
-        if (isRecoverableTlsTrustError(fallbackError)) {
-          throw tlsCaFailureError();
-        }
-        throw fallbackError;
-      }
+      return attemptCaBundleFallback(url, init, egress, maxResponseBytes, pinnedAddresses);
     }
     if (usesHttps(url) && isRecoverableTlsTrustError(error)) {
       throw tlsCaFailureError();
@@ -915,8 +1024,8 @@ export async function gatewayFetch(
   const doFetch = fetchImpl ?? globalThis.fetch;
   const target = new URL(url);
   const proxy = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
-  const resolveDns = fetchImpl === undefined && proxy === undefined;
-  await enforceOutboundTargetPolicy(target, egress, { resolveDns });
+  const resolveDns = fetchImpl === undefined && proxy === undefined && doFetch === NATIVE_FETCH;
+  const pinnedAddresses = await enforceOutboundTargetPolicy(target, egress, { resolveDns });
   const redirectPolicy = { resolveDns };
   if (proxy !== undefined) {
     const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
@@ -929,6 +1038,7 @@ export async function gatewayFetch(
     useCaFallback,
     egress,
     maxResponseBytes,
+    pinnedAddresses,
   );
   return enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
 }

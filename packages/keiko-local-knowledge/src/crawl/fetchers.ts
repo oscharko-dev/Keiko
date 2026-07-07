@@ -9,7 +9,11 @@
 //
 // The production HTTP reader is intentionally NOT here: network egress is forbidden in
 // keiko-local-knowledge (ADR-0019 trust-9). `keiko-server` supplies a `gatewayFetch`-backed fetcher
-// for real intranet manuals (ADR-0038 egress, DNS-rebinding-safe).
+// for real intranet manuals (ADR-0038 egress). `gatewayFetch`'s direct (non-proxied) path pins the
+// outbound connect to the DNS-validated address set from its own policy lookup, closing the
+// resolve-then-connect DNS-rebinding gap between the policy check and the real connect
+// (AUDIT-SEC-001) — that guarantee does not extend to requests routed through a configured
+// forward proxy, where DNS resolution happens on the proxy side.
 
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { isContained } from "../discovery/walk.js";
@@ -44,7 +48,11 @@ async function readLocalPage(
       return { ok: false, reason: "path-traversal" };
     }
     const truncated = deps.fs.stat(realPath).size > options.maxBytes;
-    const bytes = await readFileBytes(absolutePath, options.maxBytes);
+    // Read through the realpath-verified path, not the original absolutePath — a symlink
+    // swapped between the realPath()/stat() check above and this read would otherwise let
+    // bytes be read from outside the approved root despite the containment check passing
+    // (mirrors orchestrator.ts's readSourceText, which reads via `real` for the same reason).
+    const bytes = await readFileBytes(realPath, options.maxBytes);
     return { ok: true, bytes, contentType: "text/html", truncated };
   } catch {
     return { ok: false, reason: "fetch-failed" };

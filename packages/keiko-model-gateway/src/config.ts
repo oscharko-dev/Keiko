@@ -85,6 +85,13 @@ export type ProviderSecretResolver = (reference: string) => string | undefined;
 
 export interface ParseGatewayConfigOptions {
   readonly secretResolver?: ProviderSecretResolver | undefined;
+  // Narrow, explicit egress fields layered on top of whatever `raw.egress`/env resolves to.
+  // Deliberately NOT a generic env-var mapping (unlike the rest of `OutboundHttpEgressConfig`,
+  // which is resolved uniformly from `raw.egress` + well-known env vars for every caller): this
+  // exists solely so the model-gateway setup route can pass `allowLinkLocalAndMetadata: true`
+  // for one already-approved candidate baseUrl (AUDIT-SEC-002 follow-up) without widening the
+  // egress every other `parseGatewayConfig`/`resolveOutboundHttpEgressConfig` caller resolves.
+  readonly egressOverride?: Pick<OutboundHttpEgressConfig, "allowLinkLocalAndMetadata"> | undefined;
 }
 
 export interface SafeProviderConfig {
@@ -1493,7 +1500,11 @@ export function parseGatewayConfig(
   if (!isRecord(raw)) {
     throw new ConfigInvalidError("config root must be a JSON object");
   }
-  const egress = resolveOutboundHttpEgressConfig(raw.egress, env);
+  const resolvedEgress = resolveOutboundHttpEgressConfig(raw.egress, env);
+  const egress =
+    options.egressOverride === undefined
+      ? resolvedEgress
+      : { ...resolvedEgress, ...options.egressOverride };
   const providersRaw = raw.providers;
   if (!Array.isArray(providersRaw) || providersRaw.length === 0) {
     throw new ConfigInvalidError("providers must be a non-empty array");

@@ -204,6 +204,29 @@ describe("fixtures — goldset ledger taxonomy stays complete (#2008)", () => {
       expect(taxonomySection).toMatch(new RegExp(`\`${fixture.id}\``));
     }
   });
+
+  it("the gate-matrix scorecard fixture count is disclosed as a point-in-time snapshot", () => {
+    const docPath = fileURLToPath(
+      new URL(
+        "../../../../docs/local-knowledge/knowledge-pod-retrieval-goldset-ledger.md",
+        import.meta.url,
+      ),
+    );
+    const ledger = readFileSync(docPath, "utf8");
+    const gateMatrixSection = ledger.slice(
+      ledger.indexOf("## Gate matrix"),
+      ledger.indexOf("## Release evidence summary"),
+    );
+    const scorecardRow = gateMatrixSection
+      .split("\n")
+      .find((line) => line.includes("local scorecard fixtures="));
+    expect(scorecardRow).toBeDefined();
+    // A hardcoded fixture count in this row drifts every time a sibling epic grows the
+    // shared ALL_FIXTURES registry (currently ALL_FIXTURES.length !== the row's count).
+    // The row must disclose that it is a snapshot rather than implying it tracks the
+    // live registry size.
+    expect(scorecardRow).toMatch(/point-in-time snapshot/);
+  });
 });
 
 describe("fixtures — embedding lane dimensions are compatible", () => {

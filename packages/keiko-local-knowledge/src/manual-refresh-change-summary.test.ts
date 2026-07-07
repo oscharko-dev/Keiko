@@ -81,6 +81,7 @@ describe("computeManualRefreshChangeSummary", () => {
       addedPages: 1,
       changedPages: 1,
       removedPages: 1,
+      movedPages: 0,
       unchangedPages: 1,
       failedPages: 0,
       deniedLinks: 0,
@@ -93,6 +94,35 @@ describe("computeManualRefreshChangeSummary", () => {
       "pages-removed",
       "scope-preserved",
     ]);
+    expect(validateManualRefreshChangeSummary(summary).ok).toBe(true);
+  });
+
+  it("classifies a same-content, different-path pair as a single moved page, not remove+add", () => {
+    const prior = priorMap(page("old/path.html", "same"), page("guide.html", "c"));
+    const newPages = [page("new/path.html", "same"), page("guide.html", "c")];
+    const summary = computeManualRefreshChangeSummary({
+      priorFingerprints: prior,
+      newPages,
+      crawl: crawlResult("completed", newPages),
+      indexing: indexingResult(),
+      sourceKind: "html-manual-http",
+      applied: true,
+      refreshedAt: 1000,
+    });
+
+    expect(summary.counts).toStrictEqual({
+      addedPages: 0,
+      changedPages: 0,
+      removedPages: 0,
+      movedPages: 1,
+      unchangedPages: 1,
+      failedPages: 0,
+      deniedLinks: 0,
+    });
+    expect(summary.outcome).toBe("updated");
+    expect(summary.reasonCodes).toContain("pages-moved");
+    expect(summary.reasonCodes).not.toContain("pages-added");
+    expect(summary.reasonCodes).not.toContain("pages-removed");
     expect(validateManualRefreshChangeSummary(summary).ok).toBe(true);
   });
 
@@ -142,6 +172,7 @@ describe("computeManualRefreshChangeSummary", () => {
       addedPages: 0,
       changedPages: 0,
       removedPages: 0,
+      movedPages: 0,
       unchangedPages: 1,
       failedPages: 0,
       deniedLinks: 0,
@@ -231,6 +262,7 @@ describe("computeManualRefreshChangeSummary", () => {
       addedPages: 0,
       changedPages: 0,
       removedPages: 0,
+      movedPages: 0,
       unchangedPages: 0,
       failedPages: 0,
       deniedLinks: 0,
@@ -264,6 +296,7 @@ describe("computeManualRefreshChangeSummary", () => {
       addedPages: 0,
       changedPages: 0,
       removedPages: 0,
+      movedPages: 0,
       unchangedPages: 0,
       failedPages: 0,
       deniedLinks: 0,

@@ -109,6 +109,8 @@ describe("crawlManual — http link graph", () => {
     // index (0) + guide (1) + chapters (1); appendix (2) never enqueued.
     expect(result.pages.map((page) => page.relativePath)).not.toContain("appendix.html");
     expect(result.pages).toHaveLength(3);
+    expect(reasons(result).has("depth-limit")).toBe(true);
+    expect(result.status).toBe("limit-reached");
   });
 
   it("stops when the byte budget is exhausted", async () => {
@@ -260,6 +262,25 @@ describe("createWorkspaceFsManualFetcher", () => {
       { maxBytes: 1000 },
     );
     expect(result).toEqual({ ok: false, reason: "path-traversal" });
+  });
+
+  it("reads through the realpath-verified path even when it differs from the raw absolutePath (AUDIT-E1853-001 / AUDIT-SEC-005)", async () => {
+    // Simulates a symlink resolving to a different (but still contained) file: the
+    // containment check runs against realPath, but the read used to be issued against the
+    // original, unverified absolutePath. Keying the fixture's files ONLY by the resolved
+    // path means the pre-fix code (which reads absolutePath) gets ENOENT, while the fixed
+    // code (which reads realPath) succeeds — proving the read goes through the verified path.
+    const resolvedPath = "/ws/manuals/x/real-index.html";
+    const fs = fakeWorkspaceFs(
+      { [resolvedPath]: "<title>Real</title>" },
+      (): string => resolvedPath,
+    );
+    const fetcher = createWorkspaceFsManualFetcher({ fs, rootAbsolutePath: "/ws/manuals/x" });
+    const result = await fetcher.fetchManualPage(
+      { kind: "local", rootPath: "manuals/x", relativePath: "index.html" },
+      { maxBytes: 1000 },
+    );
+    expect(result.ok).toBe(true);
   });
 
   it("denies a page whose real size exceeds the per-page byte cap instead of silently truncating it", async () => {

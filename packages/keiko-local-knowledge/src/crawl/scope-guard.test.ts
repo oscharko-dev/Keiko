@@ -133,6 +133,27 @@ describe("evaluateManualCrawlLink — local scope", () => {
     });
   });
 
+  it("denies a percent-encoded traversal escape above the manual root", () => {
+    expect(localLink("%2e%2e/%2e%2e/etc/passwd", "index.html")).toMatchObject({
+      allow: false,
+      reason: "path-traversal",
+    });
+  });
+
+  it("denies a mixed percent-encoded traversal escape above the manual root", () => {
+    expect(localLink("..%2f..%2fetc%2fpasswd", "index.html")).toMatchObject({
+      allow: false,
+      reason: "path-traversal",
+    });
+  });
+
+  it("denies a doubly percent-encoded traversal escape above the manual root", () => {
+    expect(localLink("%252e%252e/%252e%252e/etc/passwd", "index.html")).toMatchObject({
+      allow: false,
+      reason: "path-traversal",
+    });
+  });
+
   it("denies hidden and credential files", () => {
     expect(localLink(".env")).toMatchObject({ allow: false, reason: "path-traversal" });
     expect(localLink(".git/config")).toMatchObject({ allow: false, reason: "path-traversal" });
