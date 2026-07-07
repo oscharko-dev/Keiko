@@ -1072,6 +1072,12 @@ interface LexicalCandidate {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly bm25Score: number;
   readonly lexicalPriority: number;
+  // True when THIS candidate came from the OR recall fallback rather than a strict AND/exact
+  // match. Set once per collection pass (see `collectLexicalCandidates`) and carried on the
+  // candidate itself — NOT derived from the merged multi-leg `LexicalCollection.usedOrFallback`
+  // flag — so a genuine strict match from one chained-question leg is never discounted just
+  // because a different leg needed the fallback.
+  readonly viaOrFallback: boolean;
 }
 
 interface FusedCandidate {
@@ -1328,6 +1334,8 @@ function readFtsCandidatesForCapsule(
     capsuleId: row.capsule_id as KnowledgeCapsuleId,
     bm25Score: row.bm25_score,
     lexicalPriority: 0,
+    // Overwritten by `collectLexicalCandidatesPass` with the actual per-pass fallback status.
+    viaOrFallback: false,
   }));
 }
 
@@ -1421,6 +1429,8 @@ function readExactLexicalCandidatesForCapsule(
         capsuleId: row.capsule_id as KnowledgeCapsuleId,
         bm25Score: row.exact_text.length / 1_000_000,
         lexicalPriority: matchCount,
+        // Overwritten by `collectLexicalCandidatesPass` with the actual per-pass fallback status.
+        viaOrFallback: false,
       };
     })
     .filter((candidate): candidate is LexicalCandidate => candidate !== undefined)
@@ -1576,7 +1586,14 @@ function collectLexicalCandidates(
     topK,
     fallbackQuery,
   );
-  return { ...fallback, usedOrFallback: fallback.candidates.length > 0 };
+  return {
+    ...fallback,
+    // Tag every candidate from THIS pass as fallback-sourced. Fusion applies the discount
+    // per-candidate (see `fuseCandidates`), so this only ever affects this query variant's own
+    // lexical evidence — never a different chained-question leg's strict match merged in later.
+    candidates: fallback.candidates.map((candidate) => ({ ...candidate, viaOrFallback: true })),
+    usedOrFallback: fallback.candidates.length > 0,
+  };
 }
 
 function collectLexicalCandidatesPass(
@@ -1641,6 +1658,12 @@ function scoreDesc(
 function lexicalCandidateAsc(a: LexicalCandidate, b: LexicalCandidate): number {
   const priority = b.lexicalPriority - a.lexicalPriority;
   if (priority !== 0) return priority;
+  // A strict-match candidate always outranks a same-priority fallback candidate for the same
+  // chunk — this only ever activates when merging multiple chained-question legs (a single
+  // query variant's candidates all share one `viaOrFallback` value), and it's what keeps
+  // `dedupeLexicalCandidates` picking the non-fallback copy when one leg strict-matched a chunk
+  // that another leg only recovered via the OR fallback.
+  if (a.viaOrFallback !== b.viaOrFallback) return a.viaOrFallback ? 1 : -1;
   if (a.bm25Score !== b.bm25Score) return a.bm25Score - b.bm25Score;
   return a.chunkId.localeCompare(b.chunkId);
 }
@@ -1690,11 +1713,14 @@ function upsertFusedCandidate(
   });
 }
 
+function lexicalFusionWeight(candidate: LexicalCandidate): number {
+  return candidate.viaOrFallback ? LEXICAL_OR_FALLBACK_RRF_WEIGHT : 1;
+}
+
 function fuseCandidates(
   denseCandidates: readonly DenseCandidate[],
   lexicalCandidates: readonly LexicalCandidate[],
   limit: number,
-  lexicalWeight: number,
 ): readonly FusedCandidate[] {
   const byKey = new Map<string, FusedCandidate>();
   for (const rankedDense of denseCandidateLanes(denseCandidates)) {
@@ -1727,7 +1753,7 @@ function fuseCandidates(
         lexicalRank: rank,
         lexicalBm25Score: candidate.bm25Score,
       },
-      lexicalWeight * rrf(rank),
+      lexicalFusionWeight(candidate) * rrf(rank),
     );
   });
   return [...byKey.values()].sort(fusedScoreDesc).slice(0, limit);
@@ -2527,6 +2553,7 @@ function retrievalDiagnostics(
     lexicalCandidateBudget: budgets.lexicalCandidateBudget,
     fusedCandidateBudget: budgets.fusedCandidateBudget,
     queryVariantCount,
+    lexicalOrFallbackUsed: lexical.usedOrFallback,
     denseIndex: denseIndexState(state),
     lexicalIndex: lexicalIndexState(lexical),
     vectorIndex: vectorIndexDiagnostics(state.vectorIndexDiagnostics),
@@ -2560,6 +2587,7 @@ export async function searchVectorsForScope(
         lexicalCandidateBudget: budgets.lexicalCandidateBudget,
         fusedCandidateBudget: budgets.fusedCandidateBudget,
         queryVariantCount: 0,
+        lexicalOrFallbackUsed: false,
         denseIndex: "missing",
         lexicalIndex: "missing",
         vectorIndex: {
@@ -2617,12 +2645,7 @@ export async function searchVectorsForScope(
     }
   }
   const lexical = mergeLexicalCollections(lexicalCollections);
-  const fused = fuseCandidates(
-    state.candidates,
-    lexical.candidates,
-    budgets.fusedCandidateBudget,
-    lexical.usedOrFallback ? LEXICAL_OR_FALLBACK_RRF_WEIGHT : 1,
-  );
+  const fused = fuseCandidates(state.candidates, lexical.candidates, budgets.fusedCandidateBudget);
   const diagnostics = retrievalDiagnostics(
     state,
     lexical,
