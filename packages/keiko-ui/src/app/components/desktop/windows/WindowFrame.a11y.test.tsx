@@ -89,4 +89,22 @@ describe("WindowFrame accessibility (GEN-UI-TEST-GAP-002)", () => {
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });
+
+  it("has no axe violations in the selected window state", async () => {
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        selected
+        selectedWindowCount={1}
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
 });

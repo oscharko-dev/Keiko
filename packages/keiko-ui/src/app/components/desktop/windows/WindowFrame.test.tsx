@@ -628,7 +628,7 @@ describe("WindowFrame content zoom controls", () => {
       expect(header).not.toBeNull();
       expect(section).not.toBeNull();
       expect(section).toHaveAttribute("data-selected", "true");
-      expect(section).toHaveAccessibleName("Agents");
+      expect(section).toHaveAccessibleName("Agents — selected");
 
       fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
       fireEvent.pointerMove(window, { clientX: 140, clientY: 120 });
@@ -651,6 +651,28 @@ describe("WindowFrame content zoom controls", () => {
     } finally {
       frames.restore();
     }
+  });
+
+  it("toggles selection from the keyboard-reachable window region", () => {
+    const toggleWindowSelection = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api({ toggleWindowSelection })}
+        wsRef={workspaceRef(domRect())}
+      />,
+    );
+
+    const section = container.querySelector<HTMLElement>(".window");
+    expect(section).not.toBeNull();
+    expect(section).toHaveAttribute("tabindex", "0");
+
+    fireEvent.keyDown(section as HTMLElement, { key: " ", code: "Space" });
+
+    expect(toggleWindowSelection).toHaveBeenCalledWith("agents-1");
   });
 
   it("flushes and cleans up selected group drag on pointer cancel", () => {

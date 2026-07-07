@@ -1032,6 +1032,11 @@ function WindowFrameImpl({
   const onSectionKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLElement>): void => {
       if (e.target !== e.currentTarget) return;
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        api.toggleWindowSelection(win.id);
+        return;
+      }
       if (connState !== "valid") return;
       if (e.key !== "Enter") return;
       api.confirmConnect(win.id, {
@@ -1043,6 +1048,8 @@ function WindowFrameImpl({
   );
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
+  const windowLabel = sub !== null ? `${def.title} — ${sub}` : def.title;
+  const accessibleWindowLabel = selected ? `${windowLabel} — selected` : windowLabel;
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
   // Issue #1580 — bound per-window layout/style recalc (item 8: `contain`) so a
   // scene-zoom relayout or an intra-window reflow does not cascade across all N
@@ -1085,17 +1092,16 @@ function WindowFrameImpl({
   );
 
   return (
-    // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this focusable (tabIndex=-1) named window
-    // region carries pointer AND keyboard connect-confirm handlers so a keyboard
-    // user has full parity with the pointer confirm path; the connection ports own
-    // Enter/Space when a port itself is focused.
+    // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this named window region is keyboard
+    // reachable for selection toggling and connect-confirm parity. The connection
+    // ports keep owning Enter/Space when a port itself is focused.
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.1 keyboard parity on the focusable window region
     <section
       className={selected ? `window ${selectionStyles.selectedWindow}` : "window"}
       // Audit C408 — a name turns the section into a named region, so AT users
       // can perceive window boundaries and jump between windows; C297 — the sub
       // (path/URL/title) disambiguates multiple windows of the same type.
-      aria-label={sub !== null ? `${def.title} — ${sub}` : def.title}
+      aria-label={accessibleWindowLabel}
       aria-roledescription="window"
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
@@ -1104,7 +1110,8 @@ function WindowFrameImpl({
       data-dragging={draggingWindow ? "true" : undefined}
       data-window-id={win.id}
       style={sectionStyle}
-      tabIndex={-1}
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- window regions are keyboard-reachable so Space can toggle multi-selection without a drag gesture
+      tabIndex={0}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
         focusWindowForTarget(e.target);

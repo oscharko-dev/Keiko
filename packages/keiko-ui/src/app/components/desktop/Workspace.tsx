@@ -932,6 +932,13 @@ export function Workspace({
 
   const empty = wins !== null && wins.length === 0;
   const hasMaximizedWindow = wins?.some((win) => win.max) ?? false;
+  const selectedWindowCount = selection.selectedWindowIds.length;
+  const selectionStatusText =
+    selectedWindowCount === 0
+      ? "No workspace windows selected"
+      : selectedWindowCount === 1
+        ? "1 workspace window selected"
+        : `${String(selectedWindowCount)} workspace windows selected`;
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
@@ -968,6 +975,15 @@ export function Workspace({
         />
       ) : null}
       <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
+      <p
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="workspace-selection-status"
+      >
+        {selectionStatusText}
+      </p>
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect
         // mode otherwise only signals via cursor/dimming, leaving the exits

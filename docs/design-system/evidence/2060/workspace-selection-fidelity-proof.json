@@ -1,0 +1,19 @@
+{
+  "issue": 2060,
+  "surface": "WindowFrame selected state",
+  "proofType": "design-system-state-contract",
+  "stateMatrix": "docs/design-system/state-matrix.md",
+  "fidelityMatrix": "docs/design-system/fidelity-matrix.md",
+  "component": "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx",
+  "style": "packages/keiko-ui/src/app/components/desktop/WorkspaceSelection.module.css",
+  "tokens": [
+    "--focus-ring",
+    "--accent",
+    "--accent-line",
+    "--selection-surface",
+    "--card-shadow-raised"
+  ],
+  "globalCssChanged": false,
+  "result": "passed",
+  "command": "npm test --workspace @oscharko-dev/keiko-ui -- src/app/components/desktop/windows/WindowFrame.a11y.test.tsx src/app/components/desktop/windows/WindowFrame.test.tsx src/app/components/desktop/Workspace.test.tsx src/app/components/desktop/hooks/workspaceClipboard.test.ts src/app/components/desktop/hooks/useWorkspace.keyboard.test.tsx --pool=forks"
+}

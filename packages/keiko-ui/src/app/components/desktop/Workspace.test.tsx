@@ -1290,6 +1290,31 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(paste.defaultPrevented).toBe(true);
   });
 
+  it("announces the current selected-window count through a live region", () => {
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents" }),
+      appWindow({ id: "files-1", type: "files", x: 420 }),
+    ];
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: {
+            focusedWindowId: "files-1",
+            selectedWindowIds: ["agents-1", "files-1"],
+          },
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const status = screen.getByTestId("workspace-selection-status");
+    expect(status).toHaveAttribute("role", "status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveTextContent("2 workspace windows selected");
+  });
+
   it("does not intercept copy and paste commands from embedded window surfaces", () => {
     const copySelectedWindows = vi.fn(() => true);
     const pasteCopiedWindows = vi.fn(() => true);
