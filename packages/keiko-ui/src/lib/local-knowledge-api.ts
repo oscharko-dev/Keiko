@@ -125,11 +125,12 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
   return undefined;
 }
 
+function isHtmlManualSourceKind(sourceKind: string): boolean {
+  return sourceKind === "html-manual-local" || sourceKind === "html-manual-http";
+}
+
 function isHtmlManualSummary(summary: KnowledgePodSummary): boolean {
-  return (
-    summary.sourceKinds.includes("html-manual-local") ||
-    summary.sourceKinds.includes("html-manual-http")
-  );
+  return summary.sourceKinds.length > 0 && summary.sourceKinds.every(isHtmlManualSourceKind);
 }
 
 function manualCountSummary(counts: KnowledgePodSummary["counts"]): string {
@@ -156,11 +157,21 @@ function guidanceForHtmlManual(summary: KnowledgePodSummary): KnowledgePodUiGuid
       tone: "warning",
     };
   }
+  if (
+    summary.readiness === "draft" ||
+    summary.readiness === "indexing" ||
+    summary.readiness === "stale"
+  ) {
+    return {
+      label: "Manual indexing",
+      description: `Manual retrieval is ${summary.readiness}; it is not yet ready to contribute evidence.`,
+      tone: "warning",
+    };
+  }
   return {
     label: "Manual unavailable",
     description: `Manual retrieval is ${summary.readiness}; it cannot contribute silently as empty evidence.`,
-    tone:
-      summary.readiness === "error" || summary.readiness === "unavailable" ? "danger" : "warning",
+    tone: "danger",
   };
 }
 

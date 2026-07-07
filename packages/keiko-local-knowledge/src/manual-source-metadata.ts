@@ -212,6 +212,13 @@ function httpTarget(
 ): TargetForMetadataResolution {
   if (metadata.origin === undefined) return { ok: false, reason: "target-unsupported" };
   const url = new URL(relativePath, `${metadata.origin}/`);
+  // Epic #1854 audit hardening — an upstream gate (relativePathForSource, scope.kind
+  // "files"/"folder" with a synthetic-root-prefix strip) already prevents an attacker-shaped
+  // absolute-URL relativePath from reaching this function in production, but this boundary must
+  // fail closed on its own rather than rely solely on that caller always sanitizing first.
+  if (url.origin !== new URL(`${metadata.origin}/`).origin) {
+    return { ok: false, reason: "target-outside-approved-scope" };
+  }
   if (!isWithinApprovedHttpPath(url.pathname, metadata.pathPrefix)) {
     return { ok: false, reason: "target-outside-approved-scope" };
   }

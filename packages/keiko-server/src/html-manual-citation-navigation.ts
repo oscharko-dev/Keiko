@@ -49,6 +49,9 @@ export function resolveHtmlManualCitationNavigationTarget(
   let env: ReturnType<typeof openKnowledgeStoreForDeps> | undefined;
   try {
     env = openKnowledgeStoreForDeps(deps);
+    if (!chunkBelongsToDocument(env.store, payload)) {
+      return { kind: "failed", reason: "citation-lineage-mismatch" };
+    }
     const resolved = resolveHtmlManualCitationTarget(env.store, payload);
     return resolved.ok
       ? { kind: "resolved", target: resolved.target }
@@ -58,6 +61,33 @@ export function resolveHtmlManualCitationNavigationTarget(
   } finally {
     env?.close();
   }
+}
+
+interface ChunkLineageRow {
+  readonly document_id: string;
+}
+
+// Epic #1854 post-merge audit — `chunkId` was accepted and type-checked but never verified to
+// actually belong to the resolved `documentId`, giving a false sense of chunk-level scope
+// enforcement. Reject a citation handle whose chunk does not resolve under the same capsule,
+// source, and document with the existing `citation-lineage-mismatch` reason rather than a new one.
+function chunkBelongsToDocument(
+  store: ReturnType<typeof openKnowledgeStoreForDeps>["store"],
+  payload: HtmlManualCitationTargetPayload,
+): boolean {
+  const row = store._internal.db
+    .prepare(
+      [
+        "SELECT document_id FROM chunks",
+        "WHERE capsule_id = :capsuleId AND source_id = :sourceId AND id = :chunkId",
+      ].join(" "),
+    )
+    .get({
+      capsuleId: String(payload.capsuleId),
+      sourceId: String(payload.sourceId),
+      chunkId: String(payload.chunkId),
+    }) as ChunkLineageRow | undefined;
+  return row?.document_id === String(payload.documentId);
 }
 
 function parseHtmlManualCitationNavigationTarget(

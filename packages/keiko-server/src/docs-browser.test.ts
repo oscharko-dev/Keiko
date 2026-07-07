@@ -87,6 +87,7 @@ interface Fixture {
   readonly port: number;
   readonly fakeBrowser: FakeBrowserSessionManager;
   readonly manualCitationTarget?: string;
+  readonly mismatchedChunkCitationTarget?: string;
   readonly close: () => Promise<void>;
 }
 
@@ -94,12 +95,17 @@ async function makeFixture(overrides?: {
   readonly omitBrowser?: boolean;
   readonly fakeOpts?: FakeOptions;
   readonly seedManualCitation?: boolean;
+  readonly seedMismatchedChunkCitation?: boolean;
 }): Promise<Fixture> {
   const staticRoot = await mkdtemp(join(tmpdir(), "keiko-docs-browser-"));
   await writeFile(join(staticRoot, "index.html"), "<html><body>docs</body></html>", "utf8");
   const uiDbPath = join(staticRoot, "ui.sqlite");
   const manualCitationTarget =
     overrides?.seedManualCitation === true ? await seedManualCitation(staticRoot) : undefined;
+  const mismatchedChunkCitationTarget =
+    overrides?.seedMismatchedChunkCitation === true
+      ? await seedMismatchedChunkCitation(staticRoot)
+      : undefined;
   const fakeBrowser = new FakeBrowserSessionManager(overrides?.fakeOpts);
   const baseDeps: UiHandlerDeps = {
     config: undefined,
@@ -133,6 +139,7 @@ async function makeFixture(overrides?: {
     port,
     fakeBrowser,
     ...(manualCitationTarget !== undefined ? { manualCitationTarget } : {}),
+    ...(mismatchedChunkCitationTarget !== undefined ? { mismatchedChunkCitationTarget } : {}),
     close: async (): Promise<void> => {
       await new Promise<void>((resolve) =>
         server.close(() => {
@@ -188,6 +195,66 @@ async function seedManualCitation(runtimeStateDir: string): Promise<string> {
       sourceId: seeded.sourceId,
       documentId: seeded.documentId,
       chunkId,
+      anchorId: "timeouts",
+    });
+  } finally {
+    store.close();
+  }
+}
+
+// Epic #1854 post-merge audit — `chunkId` is well-formed and belongs to a real chunk, but that
+// chunk resolves under a different capsule/source than the citation's own `documentId`, so it
+// cannot belong to that document. Proves the chunk lineage check rejects this with
+// `citation-lineage-mismatch` rather than silently ignoring the unverified `chunkId`.
+async function seedMismatchedChunkCitation(runtimeStateDir: string): Promise<string> {
+  const store = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir }),
+  });
+  try {
+    const target = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-docs-browser-mismatch-target",
+      sourceId: "src-docs-browser-mismatch-target",
+      documentId: "doc-docs-browser-mismatch-target",
+      safeDisplayName: "device-handbook.html",
+      unit: {
+        kind: "html-block",
+        headingPath: ["Troubleshooting"],
+        anchorId: "timeouts",
+        characterStart: 0,
+        characterEnd: 120,
+      },
+    });
+    persistHtmlManualSourceMetadata(store, target.capsuleId, target.sourceId, {
+      schemaVersion: "1",
+      scope: {
+        kind: "html-manual-http",
+        origin: "https://manual.internal",
+        pathPrefix: null,
+      },
+      limits: {
+        maxPages: 20,
+        maxDepth: 3,
+        maxBytes: 2_000_000,
+        maxLinkSample: 50,
+        timeoutMs: 30_000,
+        followRedirects: false,
+      },
+      sourceFingerprint: "fp-docs-browser-mismatch-target",
+      proposedPodName: "Device Handbook Mismatch Target",
+    });
+    const foreign = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-docs-browser-mismatch-foreign",
+      sourceId: "src-docs-browser-mismatch-foreign",
+      documentId: "doc-docs-browser-mismatch-foreign",
+      safeDisplayName: "unrelated-handbook.html",
+    });
+    const foreignChunkId = foreign.chunkIds[0];
+    if (foreignChunkId === undefined) throw new Error("mismatch seed has no foreign chunk");
+    return buildHtmlManualCitationNavigationTarget({
+      capsuleId: target.capsuleId,
+      sourceId: target.sourceId,
+      documentId: target.documentId,
+      chunkId: foreignChunkId,
       anchorId: "timeouts",
     });
   } finally {
@@ -290,9 +357,25 @@ describe("POST /api/docs-browser/navigate — classification", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as DocumentationNavigationResult;
     expect(body.targetClass).toBe("unsupported-scheme");
-    expect(body.originSummary).toBe("HTML manual citation");
+    expect(body.originSummary).toBe("Unsupported citation target");
     expect(body.reason).toBe("unsupported-scheme");
     expect(JSON.stringify(body)).not.toContain("not-json");
+  });
+
+  it("rejects a citation handle whose chunkId does not belong to its documentId", async () => {
+    const fx = await fixture({ seedMismatchedChunkCitation: true });
+    if (fx.mismatchedChunkCitationTarget === undefined) {
+      throw new Error("mismatched chunk citation target missing");
+    }
+    const res = await navigate(fx, { target: fx.mismatchedChunkCitationTarget });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as DocumentationNavigationResult;
+    expect(body.targetClass).toBe("unsupported-scheme");
+    expect(body.originSummary).toBe("Citation lineage mismatch");
+    expect(body.reason).toBe("local-file-scope-unavailable");
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("doc-docs-browser-mismatch");
+    expect(serialized).not.toContain("keiko-html-manual-citation");
   });
 });
 
