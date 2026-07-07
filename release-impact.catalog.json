@@ -267,7 +267,7 @@
         "runtimeEpic": 1942,
         "updaterEpic": 1945,
         "finalQaIssue": 1961,
-        "authorityAdr": "ADR-0114",
+        "authorityAdr": "ADR-0115",
         "targets": ["windows-x64", "macos-arm64", "macos-x64"],
         "primaryUserPath": "download-extract-open-setup-update-in-app",
         "promotedPackageManagerPath": false,
