@@ -191,6 +191,9 @@ async function stagePortableUpdate(
     targetVersion: release.targetVersion,
     stageId,
     sidecars,
+    ...(options.platformVerifier === undefined
+      ? {}
+      : { platformVerifier: options.platformVerifier }),
   });
   const summary = portableStageSummary({
     stageId,

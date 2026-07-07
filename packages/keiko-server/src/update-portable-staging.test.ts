@@ -6,6 +6,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdateInstallMode } from "@oscharko-dev/keiko-contracts";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
 import { createPortableUpdateStager } from "./update-portable-staging.js";
+import {
+  assertPortableArchiveEntryLimits,
+  type PortableArchiveLimitState,
+} from "./update-portable-staging-archive.js";
+import {
+  MAX_ARCHIVE_ENTRIES,
+  MAX_ENTRY_BYTES,
+  MAX_INFLATE_RATIO,
+  MAX_UNCOMPRESSED_BYTES,
+  PortableUpdateStagingError,
+} from "./update-portable-staging-shared.js";
 
 const ENC = new TextEncoder();
 const TARGET_VERSION = "0.2.11";
@@ -404,8 +415,42 @@ function makeManagedInstall(): {
   return { root: managedRoot, stateDir: join(root, ".keiko"), packageRoot };
 }
 
+async function verifyPlatform(): Promise<void> {
+  return Promise.resolve();
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("portable archive limit guards", () => {
+  function expectLimitFailure(
+    state: PortableArchiveLimitState,
+    entry: { readonly compressedSize: number; readonly uncompressedSize: number },
+  ): void {
+    expect(() => {
+      assertPortableArchiveEntryLimits(entry, state);
+    }).toThrow(PortableUpdateStagingError);
+  }
+
+  it("rejects entry count, total size, per-entry size, and inflate-ratio overages", () => {
+    expectLimitFailure(
+      { entries: MAX_ARCHIVE_ENTRIES, inflated: 0 },
+      { compressedSize: 0, uncompressedSize: 0 },
+    );
+    expectLimitFailure(
+      { entries: 0, inflated: MAX_UNCOMPRESSED_BYTES },
+      { compressedSize: 1, uncompressedSize: 1 },
+    );
+    expectLimitFailure(
+      { entries: 0, inflated: 0 },
+      { compressedSize: 1, uncompressedSize: MAX_ENTRY_BYTES + 1 },
+    );
+    expectLimitFailure(
+      { entries: 0, inflated: 0 },
+      { compressedSize: 1, uncompressedSize: MAX_INFLATE_RATIO + 1 },
+    );
+  });
 });
 
 describe("portable update staging", () => {
@@ -417,6 +462,7 @@ describe("portable update staging", () => {
       env: {},
       localState,
       fetchImpl: responseFor(archive),
+      platformVerifier: verifyPlatform,
     });
 
     const summary = await stager.stage({
@@ -450,6 +496,7 @@ describe("portable update staging", () => {
       env: {},
       localState,
       fetchImpl: responseFor(archive, portableManifest(archive, sha256(archive), [sidecar])),
+      platformVerifier: verifyPlatform,
     });
 
     const summary = await stager.stage({
@@ -487,6 +534,7 @@ describe("portable update staging", () => {
       env: {},
       localState,
       fetchImpl: responseFor(archive, portableManifest(archive, sha256(archive), [sidecar])),
+      platformVerifier: verifyPlatform,
     });
 
     await expect(
@@ -511,6 +559,7 @@ describe("portable update staging", () => {
       env: {},
       localState: createUpdateLocalStateManager({ stateDir: install.stateDir }),
       fetchImpl: responseFor(archive, portableManifest(archive, "b".repeat(64))),
+      platformVerifier: verifyPlatform,
     });
 
     await expect(
@@ -531,6 +580,7 @@ describe("portable update staging", () => {
       env: {},
       localState: createUpdateLocalStateManager({ stateDir: install.stateDir }),
       fetchImpl: responseFor(archive),
+      platformVerifier: verifyPlatform,
     });
 
     await expect(
@@ -543,5 +593,34 @@ describe("portable update staging", () => {
     ).rejects.toMatchObject({ reason: "portable-staging-failed" });
     expect(existsSync(join(dirname(dirname(install.root)), "evil.txt"))).toBe(false);
     expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
+  });
+
+  it("fails closed when local platform verification rejects the staged payload", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    const stager = createPortableUpdateStager({
+      env: {},
+      localState,
+      fetchImpl: responseFor(archive),
+      platformVerifier: () =>
+        Promise.reject(
+          new PortableUpdateStagingError(
+            "portable-verification-failed",
+            "local signature verification failed",
+          ),
+        ),
+    });
+
+    await expect(
+      stager.stage({
+        sessionId: "session-platform-fail",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+    expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
+    expect(localState.readRuntimeState().portableStage).toBeUndefined();
   });
 });
