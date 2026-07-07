@@ -2116,6 +2116,68 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(JSON.stringify(outcome.diagnostics)).not.toContain("treasury recovery checklist");
   });
 
+  it("retrieves evidence for BOTH legs of a chained question via deterministic decomposition", async () => {
+    const { store } = getFixture();
+    const torque = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-chain-a",
+      sourceId: "src-chain-a",
+      documentId: "doc-torque",
+      safeDisplayName: "mounting.md",
+      text: "spindle bracket mounting requires torque of twelve newton meters",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const errors = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-chain-b",
+      sourceId: "src-chain-b",
+      documentId: "doc-errors",
+      safeDisplayName: "errors.md",
+      text: "error E410 signals a sensor timeout during calibration",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [torque.capsuleId, errors.capsuleId] },
+      "What torque do the spindle brackets need? What does error E410 mean?",
+      { topK: 4 },
+    );
+
+    // The chain decomposes into two sub-queries plus the original (3 variants), and the fused
+    // result must carry evidence from BOTH documents — a single-embedding search lands between
+    // the topics and misses one leg.
+    expect(outcome.diagnostics.queryVariantCount).toBe(3);
+    const documents = new Set(outcome.references.map((ref) => String(ref.citation.documentId)));
+    expect(documents.has("doc-torque")).toBe(true);
+    expect(documents.has("doc-errors")).toBe(true);
+  });
+
+  it("recovers lexical recall via OR fallback when one query term is absent from the index", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-or-fallback",
+      text: "torque wrench calibration procedure for spindle mounts",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+
+    // Balanced strategy, three term groups; "flurbedingung" appears nowhere in the index, so
+    // the strict AND query returns zero FTS rows. Pre-fallback the whole lexical lane died on
+    // that single unmatched term (diagnostics.lexicalCandidateCount === 0); the bounded OR
+    // retry recovers the chunk that matches the other terms.
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seeded.capsuleId] },
+      "torque calibration flurbedingung",
+      { topK: 3 },
+    );
+
+    expect(outcome.diagnostics.strategy).toBe("balanced");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+    const seededChunkIds = new Set(seeded.chunkIds.map(String));
+    expect(outcome.references.some((ref) => seededChunkIds.has(String(ref.chunkId)))).toBe(true);
+  });
+
   it("keeps hostile lexical input scoped and redacted in diagnostics", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, {

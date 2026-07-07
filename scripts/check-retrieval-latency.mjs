@@ -65,72 +65,95 @@ function dirEntry(name, isDirectory) {
   return { name, isDirectory, isFile: !isDirectory, isSymbolicLink: false };
 }
 
-function childrenOf(keys, dirAbs) {
-  const prefix = dirAbs === MEM_ROOT ? `${MEM_ROOT}/` : `${dirAbs}/`;
-  const fileNames = new Set();
-  const dirNames = new Set();
-  for (const key of keys) {
-    const full = toAbs(key);
-    if (!full.startsWith(prefix)) {
-      continue;
-    }
-    const rest = full.slice(prefix.length);
-    const slash = rest.indexOf("/");
-    if (slash === -1) {
-      fileNames.add(rest);
-    } else {
-      dirNames.add(rest.slice(0, slash));
-    }
-  }
-  return [
-    ...[...dirNames].map((name) => dirEntry(name, true)),
-    ...[...fileNames].map((name) => dirEntry(name, false)),
-  ];
-}
-
 // Minimal in-memory WorkspaceFs (mirrors the test-only _memfs); inlined here because that helper is
 // internal to keiko-workspace and not part of the public surface.
+//
+// Lookups are O(1) over precomputed maps. The first version of this fixture resolved every path
+// with `keys.find(...)` — O(fileCount) per fs call — which made the measured p95 ~86% fixture
+// overhead: real algorithmic regressions in searchText would have hidden inside fixture noise,
+// and fixture-sensitive refactors would have looked like product regressions. The gate must
+// spend its time in keiko-workspace code, not in its own harness.
+function buildFixtureIndex(files) {
+  const contentByAbs = new Map();
+  const childrenByDir = new Map();
+  const ensureDir = (dirAbs) => {
+    let children = childrenByDir.get(dirAbs);
+    if (children === undefined) {
+      children = new Map();
+      childrenByDir.set(dirAbs, children);
+    }
+    return children;
+  };
+  ensureDir(MEM_ROOT);
+  for (const [rel, content] of Object.entries(files)) {
+    contentByAbs.set(toAbs(rel), content);
+    const parts = rel.split("/");
+    let parent = MEM_ROOT;
+    for (let i = 0; i < parts.length; i += 1) {
+      const isLast = i === parts.length - 1;
+      ensureDir(parent).set(parts[i], !isLast);
+      const childAbs = `${parent}/${parts[i]}`;
+      if (!isLast) {
+        ensureDir(childAbs);
+      }
+      parent = childAbs;
+    }
+  }
+  return { contentByAbs, childrenByDir };
+}
+
+function encodedContent(contentByAbs, encoder, abs) {
+  const content = contentByAbs.get(abs);
+  if (content === undefined) {
+    return undefined;
+  }
+  return encoder.encode(content);
+}
+
 function buildFixtureFs(files) {
-  const keys = Object.keys(files);
-  const findKey = (abs) => keys.find((key) => toAbs(key) === abs);
+  const { contentByAbs, childrenByDir } = buildFixtureIndex(files);
   const encoder = new TextEncoder();
   return {
     readFileUtf8: (abs) => {
-      const key = findKey(abs);
-      if (key === undefined) {
+      const content = contentByAbs.get(abs);
+      if (content === undefined) {
         throw new Error(`ENOENT: ${abs}`);
       }
-      return files[key];
+      return content;
     },
     stat: (abs) => {
-      const key = findKey(abs);
-      if (key === undefined) {
+      const content = contentByAbs.get(abs);
+      if (content === undefined) {
         return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
       }
       return {
-        size: Buffer.byteLength(files[key], "utf8"),
+        size: Buffer.byteLength(content, "utf8"),
         isFile: true,
         isDirectory: false,
         isSymbolicLink: false,
       };
     },
-    readDir: (abs) => childrenOf(keys, abs),
+    readDir: (abs) => {
+      const children = childrenByDir.get(abs);
+      if (children === undefined) {
+        return [];
+      }
+      return [...children.entries()].map(([name, isDirectory]) => dirEntry(name, isDirectory));
+    },
     realPath: (abs) => abs,
-    exists: (abs) => findKey(abs) !== undefined || abs === MEM_ROOT,
+    exists: (abs) => contentByAbs.has(abs) || childrenByDir.has(abs),
     readFileBytes: (abs, maxBytes) => {
-      const key = findKey(abs);
-      if (key === undefined) {
+      const encoded = encodedContent(contentByAbs, encoder, abs);
+      if (encoded === undefined) {
         return Promise.reject(new Error(`ENOENT: ${abs}`));
       }
-      const encoded = encoder.encode(files[key]);
       return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, Math.max(0, maxBytes))));
     },
     readFileRange: (abs, startByte, length) => {
-      const key = findKey(abs);
-      if (key === undefined) {
+      const encoded = encodedContent(contentByAbs, encoder, abs);
+      if (encoded === undefined) {
         return Promise.reject(new Error(`ENOENT: ${abs}`));
       }
-      const encoded = encoder.encode(files[key]);
       const start = Math.max(0, startByte);
       return Promise.resolve(encoded.subarray(start, Math.min(encoded.length, start + length)));
     },
