@@ -453,28 +453,9 @@ describe("keiko update CLI", () => {
     expect(output(c)).not.toContain("/Users/private");
   });
 
-  it("reports portable apply success without restart or version-check instructions", async () => {
+  it("refuses portable apply through the CLI and routes users back to the update window", async () => {
     const c = makeIo();
-    const terminal = updateSession({
-      phase: "succeeded",
-      packageManager: undefined,
-      installRoot: undefined,
-      commandPreview: undefined,
-      restartRequired: false,
-      message: "Portable update applied and verified.",
-      portableActivation: {
-        activationId: "activation-1",
-        status: "activated",
-        stageId: "stage-1",
-        target: "windows-x64",
-        packageVersion: "0.2.11",
-        registrationRefreshed: true,
-        shortcutRefreshed: true,
-        relaunchRequested: true,
-        versionVerified: true,
-      },
-    });
-    const session = fakeSessionManager(portableStatus(), terminal);
+    const session = fakeSessionManager(portableStatus());
     const code = await runUpdate(["apply"], c, {
       preflight: fakePreflight(baseReport({ installabilitySource: "github-release-asset" }))
         .preflight,
@@ -485,11 +466,14 @@ describe("keiko update CLI", () => {
       maxWaitMs: 1,
     });
 
-    expect(code).toBe(0);
-    expect(session.startedTargets()).toEqual(["0.2.11"]);
-    expect(c.out()).toContain("Update apply result: succeeded");
-    expect(c.out()).toContain("Next step: none. Keiko relaunched and verified the new version.");
-    expect(c.out()).not.toContain("restart Keiko, then run `keiko update status`");
+    expect(code).toBe(1);
+    expect(session.startedTargets()).toEqual([]);
+    expect(output(c)).toContain(
+      "Portable-managed one-click updates run through the Keiko update window.",
+    );
+    expect(output(c)).toContain("download the latest release asset manually");
+    expect(output(c)).not.toContain("Update session: started");
+    expect(output(c)).not.toContain("npm install");
   });
 
   it("reports failed apply without exposing stdout or stderr previews", async () => {

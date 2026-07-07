@@ -57,7 +57,7 @@ export interface PortablePromotionResult {
 }
 
 const REGISTRATION_FILE = "portable-install-state.json";
-const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@\-./\\:]+$/u;
+const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()\-./\\:]+$/u;
 
 export class PortableUpdateActivationError extends Error {
   public constructor(
@@ -358,7 +358,7 @@ export function refreshPortableShortcut(input: {
   if (!WINDOWS_SHORTCUT_SAFE_PATH.test(input.layout.launcherPath)) return false;
   const root = input.env.APPDATA ?? join(input.home, "AppData", "Roaming");
   const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
-  const content = `@start "" ${input.layout.launcherPath} start --open\r\n`;
+  const content = `@start "" "${input.layout.launcherPath}" start --open\r\n`;
   if (existsSync(path) && lstatSync(path).isSymbolicLink()) return false;
   if (existsSync(path) && statSync(path).isFile() && readFileSync(path, "utf8") !== content) {
     return false;

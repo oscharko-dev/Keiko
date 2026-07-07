@@ -35,6 +35,7 @@ const ARTIFACT_NAMES = [
   "09-settings-entrypoint.png",
   "10-responsive-manual-path.png",
   "11-progress-state.png",
+  "12-portable-managed-one-click.png",
   "update-experience-fidelity-proof.json",
   "a11y-proof.json",
   "manifest.json",
@@ -733,7 +734,7 @@ async function assertManualPath(updateWindow: Locator): Promise<void> {
   await expect(updateWindow.getByRole("button", { name: "Check again" })).toBeEnabled();
 }
 
-async function assertPortableOneClickPath(updateWindow: Locator): Promise<void> {
+async function assertPortableOneClickReady(updateWindow: Locator): Promise<void> {
   await expect(updateWindow.getByRole("heading", { name: "Update available" })).toBeFocused();
   await expect(
     updateWindow.getByText(
@@ -743,6 +744,10 @@ async function assertPortableOneClickPath(updateWindow: Locator): Promise<void> 
   await expect(updateWindow.getByRole("button", { name: "Update Keiko" })).toBeEnabled();
   await expect(updateWindow.getByText("Manual update path")).toHaveCount(0);
   await expect(updateWindow.getByText("npm", { exact: true })).toHaveCount(0);
+}
+
+async function assertPortableOneClickPath(updateWindow: Locator): Promise<void> {
+  await assertPortableOneClickReady(updateWindow);
   await updateWindow.getByRole("button", { name: "Update Keiko" }).click();
   await expect(updateWindow.getByLabel("Update progress")).toBeVisible();
 }
@@ -928,7 +933,7 @@ const MANUAL_MODE: ModeCaptureCase = {
 };
 
 const PORTABLE_MODE: ModeCaptureCase = {
-  file: "01-update-window-dark.png",
+  file: "12-portable-managed-one-click.png",
   mode: "dark",
   theme: "dark",
   media: { colorScheme: "dark" },
@@ -1091,6 +1096,29 @@ async function recordManualEvidence(browser: Browser, evidence: EvidenceState): 
   }
 }
 
+async function recordPortableEvidence(browser: Browser, evidence: EvidenceState): Promise<void> {
+  const { page, ledger } = await openModePage(browser, PORTABLE_MODE, {
+    report: portableReport(),
+    sessionStatus: portableSessionStatus(),
+    remediation: noRemediation(),
+  });
+  evidence.ledgers.push(ledger);
+  try {
+    const settings = await openSettingsGeneral(page);
+    const updateWindow = await openUpdateFromSettings(page, settings, /Update available/u);
+    await assertPortableOneClickReady(updateWindow);
+    await resetUpdateScroll(updateWindow);
+    await capture(updateWindow, PORTABLE_MODE.file);
+    evidence.captures.push(await captureContext(page, PORTABLE_MODE, "portable-managed-one-click"));
+    evidence.a11yCaptures.push({
+      file: PORTABLE_MODE.file,
+      violations: await runAxe(page, await updateContentSelector(updateWindow)),
+    });
+  } finally {
+    await closePage(page);
+  }
+}
+
 function seriousA11yFindings(a11yCaptures: readonly A11yCapture[]): JsonObject[] {
   return a11yCaptures.flatMap((entry) =>
     entry.violations
@@ -1222,6 +1250,7 @@ test("records Issue #1696 governed update UI design-system evidence", async ({ b
   }
   await recordStartupEvidence(browser, evidence);
   await recordManualEvidence(browser, evidence);
+  await recordPortableEvidence(browser, evidence);
   expect(seriousA11yFindings(evidence.a11yCaptures)).toEqual([]);
   expect(evidence.ledgers.some((ledger) => ledger.sessionStarts.length > 0)).toBe(true);
   writeEvidenceArtifacts(evidence);
