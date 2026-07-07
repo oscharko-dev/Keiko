@@ -535,6 +535,7 @@ describe("auditLocalState — per-class failure detection", () => {
     ["sections", "section_path_json"],
     ["parsed_units", "section_path_json"],
     ["parsed_units", "heading_path_json"],
+    ["parsed_units", "anchor_id"],
   ])("local-knowledge-encryption: detects plaintext %s.%s", (table, column) => {
     const stateDir = freshStateDir(`lk-${table}-${column}`);
     craftDb(join(stateDir, "local-knowledge", "default", "capsules.db"), [

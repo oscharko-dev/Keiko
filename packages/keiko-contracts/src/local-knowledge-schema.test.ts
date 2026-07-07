@@ -958,6 +958,48 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       db.close();
     }
   });
+
+  it("applies v25 on top of a v24 database and adds a nullable parsed_units.anchor_id column", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v25 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 25);
+      if (v25 === undefined) {
+        throw new Error("expected v25 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 25) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+
+      const beforeColumns = db.prepare("PRAGMA table_info('parsed_units')").all() as {
+        name?: string;
+      }[];
+      expect(beforeColumns.some((column) => column.name === "anchor_id")).toBe(false);
+
+      for (const stmt of v25.up) db.exec(stmt);
+
+      const afterColumns = db.prepare("PRAGMA table_info('parsed_units')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const anchorIdColumn = afterColumns.find((column) => column.name === "anchor_id");
+      expect(anchorIdColumn?.type).toBe("TEXT");
+      expect(anchorIdColumn?.notnull).toBe(0);
+
+      db.prepare("UPDATE parsed_units SET anchor_id = ? WHERE id = ?").run(
+        "section-2",
+        handles.parsedUnitId,
+      );
+      const row = db
+        .prepare("SELECT anchor_id FROM parsed_units WHERE id = ?")
+        .get(handles.parsedUnitId) as { readonly anchor_id: string | null } | undefined;
+      expect(row?.anchor_id).toBe("section-2");
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("redactPathInDiagnostic", () => {
