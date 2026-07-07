@@ -40,6 +40,7 @@ import {
   isSafeDisplaySummary,
   type LocalKnowledgeValidation,
 } from "./local-knowledge-validation.js";
+import type { HtmlManualSourceKind } from "./html-manual-source.js";
 
 export const KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION = "1" as const;
 
@@ -48,7 +49,13 @@ export type KnowledgePodBackingKind = "knowledge-capsule" | "capsule-set";
 export type KnowledgePodReadiness =
   "draft" | "indexing" | "ready" | "stale" | "degraded" | "unavailable" | "error";
 export type KnowledgePodSourceKind =
-  KnowledgeSourceScopeKind | "remote" | "federated" | "ephemeral" | "policy" | "unknown";
+  | KnowledgeSourceScopeKind
+  | HtmlManualSourceKind
+  | "remote"
+  | "federated"
+  | "ephemeral"
+  | "policy"
+  | "unknown";
 export type KnowledgePodEvidenceMode = "counts-hashes-and-status";
 export type KnowledgePodLocationKind = "local" | "remote" | "federated" | "ephemeral";
 export type KnowledgePodSealingPosture = "local-store-policy" | "sealed-pod-policy";
@@ -318,6 +325,8 @@ const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
   "folder",
   "repository",
   "files",
+  "html-manual-local",
+  "html-manual-http",
   "remote",
   "federated",
   "ephemeral",

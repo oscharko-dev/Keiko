@@ -142,6 +142,7 @@ const SELECT_AFFECTED_CAPSULE_SETS_SQL =
 const DELETE_VERIFICATION_TABLES = [
   "capsule_sources",
   "capsule_set_members",
+  "html_manual_sources",
   "documents",
   "document_blobs",
   "document_texts",

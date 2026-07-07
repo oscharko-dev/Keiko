@@ -1361,6 +1361,9 @@ export {
   summarizeHtmlManualSource,
   htmlManualLocalFolderScope,
   htmlManualReachableFilesScope,
+  htmlManualSourceKindTag,
+  htmlManualSourceFingerprintTag,
+  parseHtmlManualSourceTagMetadata,
 } from "./html-manual-source.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────

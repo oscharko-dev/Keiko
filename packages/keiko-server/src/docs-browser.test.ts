@@ -20,6 +20,13 @@ import {
 import type { DocumentationNavigationResult } from "@oscharko-dev/keiko-contracts";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
+import {
+  openKnowledgeStore,
+  persistHtmlManualSourceMetadata,
+  resolveKnowledgeStorePath,
+} from "@oscharko-dev/keiko-local-knowledge";
+import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
+import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 
@@ -79,15 +86,20 @@ class FakeBrowserSessionManager implements BrowserSessionManager {
 interface Fixture {
   readonly port: number;
   readonly fakeBrowser: FakeBrowserSessionManager;
+  readonly manualCitationTarget?: string;
   readonly close: () => Promise<void>;
 }
 
 async function makeFixture(overrides?: {
   readonly omitBrowser?: boolean;
   readonly fakeOpts?: FakeOptions;
+  readonly seedManualCitation?: boolean;
 }): Promise<Fixture> {
   const staticRoot = await mkdtemp(join(tmpdir(), "keiko-docs-browser-"));
   await writeFile(join(staticRoot, "index.html"), "<html><body>docs</body></html>", "utf8");
+  const uiDbPath = join(staticRoot, "ui.sqlite");
+  const manualCitationTarget =
+    overrides?.seedManualCitation === true ? await seedManualCitation(staticRoot) : undefined;
   const fakeBrowser = new FakeBrowserSessionManager(overrides?.fakeOpts);
   const baseDeps: UiHandlerDeps = {
     config: undefined,
@@ -103,6 +115,7 @@ async function makeFixture(overrides?: {
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
     store: createInMemoryUiStore(),
+    uiDbPath,
   };
   const deps: UiHandlerDeps =
     overrides?.omitBrowser === true ? baseDeps : { ...baseDeps, browser: fakeBrowser };
@@ -119,6 +132,7 @@ async function makeFixture(overrides?: {
   return {
     port,
     fakeBrowser,
+    ...(manualCitationTarget !== undefined ? { manualCitationTarget } : {}),
     close: async (): Promise<void> => {
       await new Promise<void>((resolve) =>
         server.close(() => {
@@ -129,6 +143,56 @@ async function makeFixture(overrides?: {
       await rm(staticRoot, { recursive: true, force: true });
     },
   };
+}
+
+async function seedManualCitation(runtimeStateDir: string): Promise<string> {
+  const store = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir }),
+  });
+  try {
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-docs-browser-manual",
+      sourceId: "src-docs-browser-manual",
+      documentId: "doc-docs-browser-manual",
+      safeDisplayName: "device-handbook.html",
+      unit: {
+        kind: "html-block",
+        headingPath: ["Troubleshooting"],
+        anchorId: "timeouts",
+        characterStart: 0,
+        characterEnd: 120,
+      },
+    });
+    persistHtmlManualSourceMetadata(store, seeded.capsuleId, seeded.sourceId, {
+      schemaVersion: "1",
+      scope: {
+        kind: "html-manual-http",
+        origin: "https://manual.internal",
+        pathPrefix: null,
+      },
+      limits: {
+        maxPages: 20,
+        maxDepth: 3,
+        maxBytes: 2_000_000,
+        maxLinkSample: 50,
+        timeoutMs: 30_000,
+        followRedirects: false,
+      },
+      sourceFingerprint: "fp-docs-browser-manual",
+      proposedPodName: "Device Handbook",
+    });
+    const chunkId = seeded.chunkIds[0];
+    if (chunkId === undefined) throw new Error("manual citation seed has no chunk");
+    return buildHtmlManualCitationNavigationTarget({
+      capsuleId: seeded.capsuleId,
+      sourceId: seeded.sourceId,
+      documentId: seeded.documentId,
+      chunkId,
+      anchorId: "timeouts",
+    });
+  } finally {
+    store.close();
+  }
 }
 
 let active: Fixture[] = [];
@@ -202,6 +266,33 @@ describe("POST /api/docs-browser/navigate — classification", () => {
     const body = (await res.json()) as DocumentationNavigationResult;
     expect(body.reason).toBe("invalid-target");
     expect(JSON.stringify(body)).not.toContain("hunter2");
+  });
+
+  it("resolves opaque HTML manual citation handles through the governed navigation route", async () => {
+    const fx = await fixture({ seedManualCitation: true });
+    if (fx.manualCitationTarget === undefined) throw new Error("manual citation target missing");
+    const res = await navigate(fx, { target: fx.manualCitationTarget });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as DocumentationNavigationResult;
+    expect(body.targetClass).toBe("intranet-http");
+    expect(body.reason).toBe("rendering-deferred");
+    expect(body.originSummary).toBe("https://manual.internal");
+    expect(body.pathSummary).toBe("/…");
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain("doc-docs-browser-manual");
+    expect(serialized).not.toContain("timeouts");
+    expect(serialized).not.toContain("keiko-html-manual-citation");
+  });
+
+  it("fails closed on malformed opaque HTML manual citation handles", async () => {
+    const fx = await fixture({ seedManualCitation: true });
+    const res = await navigate(fx, { target: "keiko-html-manual-citation:not-json" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as DocumentationNavigationResult;
+    expect(body.targetClass).toBe("unsupported-scheme");
+    expect(body.originSummary).toBe("HTML manual citation");
+    expect(body.reason).toBe("unsupported-scheme");
+    expect(JSON.stringify(body)).not.toContain("not-json");
   });
 });
 
