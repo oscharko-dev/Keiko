@@ -13,7 +13,7 @@ import {
   validateProjectPath,
   type Project,
 } from "./store/index.js";
-import { defaultGitNetworkProcessRunner } from "@oscharko-dev/keiko-git";
+import { defaultGitNetworkProcessRunner, isSafeGitPositional } from "@oscharko-dev/keiko-git";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -164,6 +164,10 @@ function repositoryHost(input: string): string | undefined {
 }
 
 function repositoryUrlAllowed(input: string): boolean {
+  // Reject option-like URLs (leading `-`) before anything else: a value git could re-read as an
+  // option (e.g. `--upload-pack=<cmd>`) must never reach the clone argv, independent of the `--`
+  // separator. Well-formed https/ssh/scp URLs never begin with `-`, so this rejects only abuse.
+  if (!isSafeGitPositional(input)) return false;
   const host = repositoryHost(input);
   if (typeof host !== "string" || host.length === 0) return false;
   const hostClass = classifyRepositoryHost(host);
@@ -214,6 +218,12 @@ const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
   repositoryUrl: string,
   destinationPath: string,
 ): Promise<RouteResult | null> {
+  // Fail closed at the spawn boundary: neither positional may be option-like, so a hostile URL or
+  // destination can never be re-read by git as `--upload-pack`/`--exec`/… even though `--` already
+  // separates them. This is the barrier the URL/destination validation upstream also enforces.
+  if (!isSafeGitPositional(repositoryUrl) || !isSafeGitPositional(destinationPath)) {
+    return invalid("The repository URL and destination must not be interpretable as git options.");
+  }
   const result = await defaultGitNetworkProcessRunner(
     ["clone", "--", repositoryUrl, destinationPath],
     { cwd: dirname(destinationPath), maxBytes: MAX_OUTPUT_BYTES, timeoutMs: CLONE_TIMEOUT_MS },

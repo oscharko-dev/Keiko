@@ -40,6 +40,17 @@ function trimTrailingSlash(value: string): string {
 }
 
 /**
+ * True when `value` is safe to pass to git as a POSITIONAL argument (a URL, a path). A value
+ * beginning with `-` can be re-read by git as an option — e.g. a clone "URL" of
+ * `--upload-pack=<cmd>` turns into remote command execution — even when a `--` separator precedes
+ * it in some code paths. Callers that hand external input to git as a positional must gate on this
+ * at the boundary; it fails closed (rejects) so a hostile value never reaches the spawn.
+ */
+export function isSafeGitPositional(value: string): boolean {
+  return value.length > 0 && !value.startsWith("-");
+}
+
+/**
  * Resolve which repository owns `directory` by asking git, in one bounded invocation. Succeeds
  * for the repository root, any subdirectory, linked worktrees, and submodule checkouts. Fails
  * with the raw process result (classify with `classifyGitFailure`) for non-repositories, unsafe

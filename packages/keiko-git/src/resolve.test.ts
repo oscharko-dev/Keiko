@@ -9,7 +9,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { classifyGitFailure } from "./classify.js";
-import { containsPath, resolveGitMembership } from "./resolve.js";
+import { containsPath, isSafeGitPositional, resolveGitMembership } from "./resolve.js";
 import { defaultGitProcessRunner } from "./runner.js";
 
 const TIMEOUT = { timeoutMs: 10_000 } as const;
@@ -120,5 +120,21 @@ describe("containsPath", () => {
     const expected = process.platform === "win32" || process.platform === "darwin";
     expect(containsPath(rootNfc, join(rootNfd, "child"))).toBe(expected);
     expect(containsPath(rootNfc, join(rootNfc, "child"))).toBe(true);
+  });
+});
+
+describe("isSafeGitPositional", () => {
+  it("accepts real URLs and paths that cannot be read as options", () => {
+    expect(isSafeGitPositional("https://github.com/acme/app.git")).toBe(true);
+    expect(isSafeGitPositional("git@github.com:acme/app.git")).toBe(true);
+    expect(isSafeGitPositional("/Users/me/projects/app")).toBe(true);
+  });
+
+  it("rejects option-like values git could re-read as flags, and the empty string", () => {
+    // These are the values a second-order command injection would smuggle through a URL field.
+    expect(isSafeGitPositional("--upload-pack=touch /tmp/x")).toBe(false);
+    expect(isSafeGitPositional("-oProxyCommand=evil")).toBe(false);
+    expect(isSafeGitPositional("--config=core.fsmonitor=evil")).toBe(false);
+    expect(isSafeGitPositional("")).toBe(false);
   });
 });

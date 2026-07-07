@@ -139,6 +139,21 @@ describe("git repository routes", () => {
   });
 
   it.each([
+    "--upload-pack=touch /tmp/pwned",
+    "-oProxyCommand=evil",
+    "--config=core.fsmonitor=evil",
+  ])("rejects an option-like repository URL that git could execute (%s)", async (repositoryUrl) => {
+    const cloneRunner = vi.fn(() => Promise.resolve(null));
+    const handler = createCloneRepositoryHandler(cloneRunner);
+
+    const result = await handler(ctx({ repositoryUrl, destinationPath: join(tmp, "app") }), deps());
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    expect(cloneRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([
     "https://169.254.169.254/acme/app.git",
     "https://10.0.0.5/acme/app.git",
     "ssh://git@192.168.1.10/acme/app.git",

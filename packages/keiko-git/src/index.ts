@@ -13,6 +13,7 @@ export {
 export type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "./types.js";
 export {
   containsPath,
+  isSafeGitPositional,
   resolveGitMembership,
   type GitMembershipFailure,
   type GitMembershipResolution,
