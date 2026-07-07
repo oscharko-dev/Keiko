@@ -76,11 +76,11 @@ const INSERT_SECTION_SQL = [
 const INSERT_PARSED_UNIT_SQL = [
   "INSERT INTO parsed_units (",
   "  id, capsule_id, document_id, kind, page_number, page_label, section_path_json,",
-  "  json_pointer, table_name, row_index, heading_path_json, unsupported_reason,",
+  "  json_pointer, table_name, row_index, heading_path_json, anchor_id, unsupported_reason,",
   "  character_start, character_end",
   ") VALUES (",
   "  :id, :capsule_id, :document_id, :kind, :page_number, :page_label, :section_path_json,",
-  "  :json_pointer, :table_name, :row_index, :heading_path_json, :unsupported_reason,",
+  "  :json_pointer, :table_name, :row_index, :heading_path_json, :anchor_id, :unsupported_reason,",
   "  :character_start, :character_end",
   ")",
 ].join(" ");
@@ -516,6 +516,7 @@ function parsedUnitParams(
     table_name: null,
     row_index: null,
     heading_path_json: null,
+    anchor_id: null,
     unsupported_reason: null,
     character_start: null,
     character_end: null,
@@ -563,15 +564,27 @@ function populateUnitFields(
     };
   }
   if (unit.kind === "html-block") {
-    return {
-      ...base,
-      heading_path_json:
-        unit.headingPath !== undefined ? cipher.sealText(JSON.stringify(unit.headingPath)) : null,
-      character_start: unit.characterStart,
-      character_end: unit.characterEnd,
-    };
+    return htmlBlockParams(base, unit, cipher);
   }
   return { ...base, unsupported_reason: unit.reason };
+}
+
+function htmlBlockParams(
+  base: ParsedUnitParams,
+  unit: Extract<ParsedUnit, { readonly kind: "html-block" }>,
+  cipher: StoreContentCipher,
+): ParsedUnitParams {
+  return {
+    ...base,
+    heading_path_json:
+      unit.headingPath !== undefined ? cipher.sealText(JSON.stringify(unit.headingPath)) : null,
+    // Sealed at rest like heading_path_json: an in-document anchor slug can echo manual content,
+    // so encrypted stores must never hold it as cleartext (#1855). NULL when the block carries
+    // no anchor keeps existing html-block rows unchanged.
+    anchor_id: unit.anchorId !== undefined ? cipher.sealText(unit.anchorId) : null,
+    character_start: unit.characterStart,
+    character_end: unit.characterEnd,
+  };
 }
 
 export function insertParsedUnitRow(

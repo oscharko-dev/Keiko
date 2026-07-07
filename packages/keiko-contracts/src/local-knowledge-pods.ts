@@ -344,16 +344,19 @@ const FUTURE_POD_REASON_BY_KIND: Record<
 
 // Redact filesystem paths wherever they appear, not only at a string boundary — an earlier
 // anchored form let `report=/Users/alice/secret.pdf`, `a/Users/…`, and non-ASCII-prefixed paths
-// leak. Matches Windows drive paths, UNC shares, home (`~/`), parent traversal (`../`), any
-// multi-segment POSIX path (`/seg/…`), and any single-segment absolute path (`/etc`, `/private`)
-// that follows a word boundary. The boundary check on the single-segment alternative is required
-// so a lone slash in benign prose (`UI/UX`, `TCP/IP`, `Q3 / Finance`) is not treated as a path —
-// it must stay boundary-sensitive rather than anchored to the start of the string, or single-
-// segment paths embedded mid-string (`"scan of /etc failed"`) silently stop being redacted.
+// leak, and a later fixed-boundary-character-set form still missed separators outside that set
+// (`path=/etc`, `key:/etc`, `a,/etc,b`, `flag-/etc`, `)/etc`). Matches Windows drive paths, UNC
+// shares, single-backslash paths, home (`~/`), parent traversal (`../`), any multi-segment POSIX
+// path (`/seg/…`), and any single-segment absolute path (`/etc`, `/private`) not immediately
+// preceded by a word character. The negative lookbehind — rather than an enumerated boundary-char
+// set — is what keeps a lone slash in benign prose (`UI/UX`, `TCP/IP`, `Q3 / Finance`) from being
+// treated as a path while still catching single-segment paths after ANY punctuation or start of
+// string, so this class of gap (three enumerations of "boundary characters" so far) cannot recur
+// by omitting one more separator.
 const FILESYSTEM_PATH_RE =
-  /[A-Za-z]:[\\/]|\\\\|~[\\/]|\.\.[\\/]|\/[^/\s]+\/|(?:^|[\s"'`<({[])\/[^/\s]+/u;
+  /[A-Za-z]:[\\/]|\\\\|\\[^\\\s]+|~[\\/]|\.\.[\\/]|\/[^/\s]+\/|(?<![A-Za-z0-9_])\/[^/\s]+/u;
 const SECRET_RE =
-  /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
+  /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|[Bb]earer\s+[A-Za-z0-9._~+/=-]{12,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
 const TOKEN_QUERY_KEYS = new Set([
   "access_token",
   "api_key",
@@ -407,7 +410,41 @@ function findUrlEnd(value: string, start: number): number {
 }
 
 function containsTokenParameterKey(value: string): boolean {
-  return containsTokenKeyAfter(value, "?") || containsTokenKeyAfter(value, "#");
+  return (
+    containsTokenKeyAfter(value, "?") ||
+    containsTokenKeyAfter(value, "#") ||
+    containsBareTokenAssignment(value)
+  );
+}
+
+// A sensitive key can appear as a bare `key=value` assignment outside any URL query string — for
+// example a config-dump or error-message fragment like `password=hunter2` or
+// `aws_secret_access_key=AKIA...` — which containsTokenKeyAfter never sees because it only scans
+// text following a literal `?` or `#`. This scans the whole value for identifier-like keys
+// immediately preceding `=` and reuses the same key-name check as the query-string path. Uses a
+// bounded backward character scan rather than a regex quantifier, so it stays linear instead of
+// polynomial on adversarial input (a long run of key-body characters with no `=`).
+function isKeyAssignmentBodyChar(char: string): boolean {
+  return isAsciiLetter(char) || isAsciiDigit(char) || char === "_" || char === "-";
+}
+
+function containsBareTokenAssignment(value: string): boolean {
+  let searchFrom = 0;
+  while (searchFrom < value.length) {
+    const equals = value.indexOf("=", searchFrom);
+    if (equals === -1) return false;
+    let start = equals;
+    while (start > 0 && isKeyAssignmentBodyChar(value.charAt(start - 1))) start -= 1;
+    if (
+      start < equals &&
+      isAsciiLetter(value.charAt(start)) &&
+      queryKeyContainsTokenName(value.slice(start, equals))
+    ) {
+      return true;
+    }
+    searchFrom = equals + 1;
+  }
+  return false;
 }
 
 function containsTokenKeyAfter(value: string, separator: "?" | "#"): boolean {

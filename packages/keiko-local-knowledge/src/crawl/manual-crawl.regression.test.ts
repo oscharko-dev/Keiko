@@ -56,6 +56,9 @@ describe("static HTML manual crawl regression (#1876)", () => {
       "reference/api.html",
     ]);
     expect(result.status).toBe("completed");
+    // reference/api.html links back to "../index.html" — a same-page link that must dedup against
+    // the "/" seed via a normalised canonical key, not spuriously re-fetch and fail (#1877).
+    expect(result.denied).toEqual([]);
   });
 
   it("follows frameset and iframe references in a legacy framed manual", async () => {

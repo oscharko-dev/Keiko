@@ -85,6 +85,7 @@ const PATH_TEXT_TARGETS: readonly TextTarget[] = [
   { table: "sections", column: "section_path_json" },
   { table: "parsed_units", column: "section_path_json" },
   { table: "parsed_units", column: "heading_path_json" },
+  { table: "parsed_units", column: "anchor_id" },
 ];
 
 const TEXT_TARGETS: readonly TextTarget[] = [...LEGACY_TEXT_TARGETS, ...PATH_TEXT_TARGETS];

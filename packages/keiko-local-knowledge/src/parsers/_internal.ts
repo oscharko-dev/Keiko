@@ -212,19 +212,84 @@ export function decodeXmlEntities(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
-export function decodeUtf8(bytes: Uint8Array): DecodedText {
-  const utf16 = decodeUtf16(bytes);
+// Full decode result that also reports which codec was used. An HTML adapter cross-checks the
+// declared `<meta charset>` against `codec` to emit a predictable mismatch diagnostic instead of
+// silently corrupting the manual (#1855). `codec` is a byte-shape decision, not document content.
+export interface DecodedBytes extends DecodedText {
+  readonly codec: string;
+}
+
+// A TextDecoder for `label`, or undefined when the runtime does not support the label (the
+// constructor throws on unknown encodings). Used so a declared charset can only ever replace the
+// last-resort fallback with an encoding that actually exists.
+function decoderFor(label: string): TextDecoder | undefined {
+  try {
+    return new TextDecoder(label, { fatal: false });
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeUtf16Bytes(bytes: Uint8Array): DecodedBytes | undefined {
+  const bomCodec = utf16CodecForBom(bytes);
+  if (bomCodec !== undefined) {
+    const utf16 = decodeUtf16(bytes);
+    if (utf16 !== undefined) return { ...utf16, codec: bomCodec };
+  }
+  const nulCodec = utf16CodecForNulPattern(bytes);
+  if (nulCodec !== undefined) {
+    const utf16 = decodeUtf16WithoutBom(bytes);
+    if (utf16 !== undefined) return { ...utf16, codec: nulCodec };
+  }
+  return undefined;
+}
+
+// Last-resort decode when strict UTF-8 fails: honor a supported declared charset, else windows-1252.
+function decodeFallbackBytes(bytes: Uint8Array, fallbackCharset?: string): DecodedBytes {
+  if (fallbackCharset !== undefined) {
+    const fallback = decoderFor(fallbackCharset);
+    if (fallback !== undefined) {
+      return { text: fallback.decode(bytes), bomBytes: 0, codec: fallbackCharset };
+    }
+  }
+  return {
+    text: new TextDecoder("windows-1252", { fatal: false }).decode(bytes),
+    bomBytes: 0,
+    codec: "windows-1252",
+  };
+}
+
+// Byte-shape-authoritative decode. BOM and strict UTF-8 always win (a valid-UTF-8 body is UTF-8
+// regardless of a mis-declared charset). `fallbackCharset` replaces the windows-1252 last resort
+// ONLY when strict UTF-8 fails and the label is one the runtime supports — so a genuine
+// windows-1252/shift_jis manual decodes with the declared codec instead of mojibake.
+export function decodeBytes(bytes: Uint8Array, fallbackCharset?: string): DecodedBytes {
+  const utf16 = decodeUtf16Bytes(bytes);
   if (utf16 !== undefined) return utf16;
-  const utf16WithoutBom = decodeUtf16WithoutBom(bytes);
-  if (utf16WithoutBom !== undefined) return utf16WithoutBom;
   try {
     const raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     if (raw.length > 0 && raw.charCodeAt(0) === 0xfeff) {
-      return { text: raw.slice(1), bomBytes: hasUtf8Bom(bytes) ? 3 : 0 };
+      return { text: raw.slice(1), bomBytes: hasUtf8Bom(bytes) ? 3 : 0, codec: "utf-8" };
     }
-    return { text: raw, bomBytes: 0 };
+    return { text: raw, bomBytes: 0, codec: "utf-8" };
   } catch {
-    const raw = new TextDecoder("windows-1252", { fatal: false }).decode(bytes);
-    return { text: raw, bomBytes: 0 };
+    return decodeFallbackBytes(bytes, fallbackCharset);
   }
+}
+
+export function decodeUtf8(bytes: Uint8Array): DecodedText {
+  const { text, bomBytes } = decodeBytes(bytes);
+  return { text, bomBytes };
+}
+
+// Read a double- or single-quoted attribute value from ONE tag literal (bounded input), decoding
+// entities. Operates on a single `<tag …>` string, never the whole document, so it does not
+// participate in tag filtering and preserves the parser's CodeQL `js/bad-tag-filter` posture. The
+// `name` argument is always a hard-coded literal at call sites, so the interpolation is safe.
+export function readAttribute(tagRaw: string, name: string): string | undefined {
+  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, "iu");
+  const match = pattern.exec(tagRaw);
+  if (match === null) return undefined;
+  const value = match[1] ?? match[2];
+  return value === undefined ? undefined : decodeXmlEntities(value);
 }

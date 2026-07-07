@@ -40,7 +40,7 @@ const COUNT_STALE_CHUNKS_FOR_DOCUMENT_SQL = [
 
 const SELECT_PARSED_UNITS_FOR_DOCUMENT_SQL = [
   "SELECT id, kind, page_number, page_label, section_path_json,",
-  "  json_pointer, table_name, row_index, heading_path_json,",
+  "  json_pointer, table_name, row_index, heading_path_json, anchor_id,",
   "  unsupported_reason, character_start, character_end",
   "FROM parsed_units",
   "WHERE capsule_id = :c AND document_id = :d",
@@ -160,6 +160,7 @@ export interface ParsedUnitRow {
   readonly table_name: string | null;
   readonly row_index: number | null;
   readonly heading_path_json: string | null;
+  readonly anchor_id: string | null;
   readonly unsupported_reason: string | null;
   readonly character_start: number | null;
   readonly character_end: number | null;

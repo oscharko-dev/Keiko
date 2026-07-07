@@ -82,6 +82,10 @@ describe("HTML Manual Knowledge Pod — end-to-end evidence (#1877)", () => {
     expect(pod.summary.counts.chunkCount).toBeGreaterThan(0);
     expect(pod.summary.counts.vectorCount).toBeGreaterThan(0);
     expect(pod.progress.phase).toBe("ready");
+    // Denied/skipped counts are part of the recorded closure evidence (#1877): a clean reference
+    // run crawls no out-of-scope or duplicate link, and indexes every discovered page.
+    expect(pod.progress.crawl.deniedCount).toBe(0);
+    expect(pod.progress.indexing?.skippedDocuments).toBe(0);
 
     // The pod is searchable through the existing retrieval path.
     const retrieval = await runLocalKnowledgeRetrieval(

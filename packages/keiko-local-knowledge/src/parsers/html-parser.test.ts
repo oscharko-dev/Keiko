@@ -249,3 +249,127 @@ describe("htmlParser — cleaned normalizedText (GRD-003)", () => {
     }
   });
 });
+
+// ─── Technical manual structure (Epic #1855, Issue #1886) ────────────────────
+
+function parseHtml(html: string): { readonly units: readonly ParsedUnit[]; readonly text: string } {
+  const result = htmlParser.parse(
+    selectionFromText(html, { extension: "html" }),
+    buildParserOptions({ now: () => 0 }),
+  );
+  return { units: result.units, text: (result as InternalParserResult).normalizedText ?? "" };
+}
+
+function blockTexts(html: string): readonly string[] {
+  const { units, text } = parseHtml(html);
+  return units.map((unit) => text.slice(asBlock(unit).span.start, asBlock(unit).span.end));
+}
+
+function expectEverySpanMarkupFree(html: string): void {
+  const { units, text } = parseHtml(html);
+  for (const unit of units) {
+    const span = text.slice(asBlock(unit).span.start, asBlock(unit).span.end);
+    expect(span).not.toContain("<");
+  }
+}
+
+describe("htmlParser — technical manual structure (#1855)", () => {
+  it("captures the document <title> as a searchable block even behind <main>", () => {
+    const texts = blockTexts(
+      "<!doctype html><html><head><title>Payment Gateway API</title></head>" +
+        "<body><main><h1>Overview</h1><p>Intro.</p></main></body></html>",
+    );
+    expect(texts[0]).toBe("Payment Gateway API");
+    expect(texts).toContain("Intro.");
+  });
+
+  it("does not double-emit the <title> when the document has no <main>", () => {
+    const texts = blockTexts(
+      "<html><head><title>Handbook</title></head><body><p>Body.</p></body></html>",
+    );
+    expect(texts.filter((t) => t === "Handbook")).toHaveLength(1);
+  });
+
+  it("keeps definition-list terms attached to their definitions", () => {
+    const texts = blockTexts(
+      "<html><body><dl><dt>Timeout</dt><dd>Seconds before the request is abandoned.</dd>" +
+        "<dt>Retries</dt><dd>Maximum retry count.</dd></dl></body></html>",
+    );
+    expect(texts).toContain("Timeout: Seconds before the request is abandoned.");
+    expect(texts).toContain("Retries: Maximum retry count.");
+  });
+
+  it("preserves <pre>/<code> whitespace, identifiers, and language hint", () => {
+    const html =
+      '<html><body><pre><code class="language-bash">export KEIKO_MODE=on\n' +
+      "  run --strict</code></pre></body></html>";
+    const { units, text } = parseHtml(html);
+    const codeUnit = units.find((unit) => {
+      const span = asBlock(unit).span;
+      return text.slice(span.start, span.end).includes("KEIKO_MODE");
+    });
+    expect(codeUnit).toBeDefined();
+    const code = text.slice(asBlock(codeUnit).span.start, asBlock(codeUnit).span.end);
+    expect(code).toContain("Code (bash):");
+    // Verbatim: the newline and the two-space indentation of the second line survive.
+    expect(code).toContain("export KEIKO_MODE=on\n  run --strict");
+    expectEverySpanMarkupFree(html);
+  });
+
+  it("stamps the nearest heading anchor id onto blocks in that section", () => {
+    const { units } = parseHtml(
+      '<html><body><h2 id="error-codes">Error Codes</h2><p>E_TIMEOUT means the call expired.</p>' +
+        "<h2>Untagged</h2><p>No anchor here.</p></body></html>",
+    );
+    const anchorFor = (heading: string): string | undefined => {
+      const unit = units.find(
+        (candidate) =>
+          candidate.kind === "html-block" && candidate.headingPath?.includes(heading) === true,
+      );
+      return unit?.kind === "html-block" ? unit.anchorId : undefined;
+    };
+    expect(anchorFor("Error Codes")).toBe("error-codes");
+    expect(anchorFor("Untagged")).toBeUndefined();
+  });
+
+  it("surfaces frameset navigation targets redacted of host and query tokens", () => {
+    const texts = blockTexts(
+      '<html><frameset cols="20%,80%"><frame src="toc.html">' +
+        '<frame src="https://manuals.example/private/intro.html?token=secret#frag">' +
+        "</frameset></html>",
+    );
+    expect(texts).toContain("Frame: toc.html");
+    expect(texts).toContain("Frame: /private/intro.html");
+    expect(texts.join(" ")).not.toContain("token=secret");
+    expect(texts.join(" ")).not.toContain("manuals.example");
+  });
+
+  it("warns when the declared <meta charset> disagrees with the decoded byte shape", () => {
+    const result = htmlParser.parse(
+      selectionFromText(
+        '<html><head><meta charset="shift_jis"></head><body><p>ASCII body.</p></body></html>',
+        { extension: "html" },
+      ),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const codes = result.diagnostics.map((d) => d.code);
+    expect(codes).toContain("HTML_CHARSET_MISMATCH");
+    // Degrades predictably: the body is still extracted rather than lost.
+    expect((result as InternalParserResult).normalizedText).toContain("ASCII body.");
+  });
+
+  it("uses the declared charset to decode legacy bytes that are not valid UTF-8", () => {
+    // 0xE9 is 'é' in windows-1252 but an invalid standalone UTF-8 lead byte.
+    const bytes = new Uint8Array([
+      ...encode('<html><head><meta charset="windows-1252"></head><body><p>caf'),
+      0xe9,
+      ...encode("</p></body></html>"),
+    ]);
+    const result = htmlParser.parse(
+      selectionFromBytes(bytes, { extension: "html" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect((result as InternalParserResult).normalizedText).toContain("café");
+    expect(result.diagnostics.map((d) => d.code)).not.toContain("HTML_CHARSET_MISMATCH");
+  });
+});
