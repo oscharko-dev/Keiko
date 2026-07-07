@@ -200,12 +200,19 @@ describe("createHtmlManualPod", () => {
     expect(result.progress.remediations.map((entry) => entry.reason)).toContain("page-limit");
   });
 
-  it("creates the capsule with a caller-supplied sealed policy override, not the standard default", async () => {
+  it("creates the capsule with a caller-supplied sealed policy override, not the standard default, and fails closed on indexing (#1920)", async () => {
     const result = await createHtmlManualPod(
       { ...podDeps(MANUAL_PAGES), modelUsePolicy: sealedLocalPodModelUsePolicy() },
       httpManualSource(),
     );
     expect(result.summary.modelUsePolicy.mode).toBe("sealed-local");
+    // The policy override is not just recorded — it actually blocks the embedding preflight
+    // (orchestrator.ts `modelUsePolicyPreflightFailure`), so no vector is ever persisted.
+    expect(result.indexing?.status).toBe("failed");
+    expect(result.indexing?.lastError).toMatchObject({ code: "POLICY_DENIED" });
+    expect(result.progress.phase).toBe("degraded");
+    expect(result.progress.remediations.map((entry) => entry.reason)).toContain("POLICY_DENIED");
+    expect(result.summary.counts.vectorCount).toBe(0);
   });
 
   it("reports a real embedding-adapter failure as a degraded pod with remediation guidance", async () => {
