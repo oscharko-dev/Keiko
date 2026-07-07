@@ -6,9 +6,17 @@ import {
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimeHealth,
 } from "@oscharko-dev/keiko-contracts";
+import { GOVERNED_ASSIST_PROJECTIONS } from "./codingWorkbenchGovernedAssistProjection";
 
 export type CodingWorkbenchRunState =
-  "empty" | "running" | "approval-required" | "blocked" | "failed" | "completed";
+  | "empty"
+  | "running"
+  | "approval-required"
+  | "blocked"
+  | "governed-assist"
+  | "governed-assist-blocked"
+  | "failed"
+  | "completed";
 
 export interface CodingWorkbenchModeOption {
   readonly mode: CodingWorkbenchMode;
@@ -262,6 +270,8 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
       }),
     ],
   }),
+  governedAssist: GOVERNED_ASSIST_PROJECTIONS.proposed,
+  governedAssistBlocked: GOVERNED_ASSIST_PROJECTIONS.blocked,
   failed: projection({
     runState: "failed",
     title: "Issue #1990 Coding Workbench UI",
@@ -332,6 +342,10 @@ export function codingWorkbenchProjectionForState(
   if (state === "running") return CODING_WORKBENCH_PROJECTIONS.running;
   if (state === "approval-required") return CODING_WORKBENCH_PROJECTIONS.approvalRequired;
   if (state === "blocked") return CODING_WORKBENCH_PROJECTIONS.blocked;
+  if (state === "governed-assist") return CODING_WORKBENCH_PROJECTIONS.governedAssist;
+  if (state === "governed-assist-blocked") {
+    return CODING_WORKBENCH_PROJECTIONS.governedAssistBlocked;
+  }
   if (state === "failed") return CODING_WORKBENCH_PROJECTIONS.failed;
   if (state === "completed") return CODING_WORKBENCH_PROJECTIONS.completed;
   return CODING_WORKBENCH_PROJECTIONS.empty;

@@ -5,6 +5,11 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchPermissionRequestKind,
+} from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 
 import {
@@ -107,6 +112,20 @@ function launchRequest(
   };
 }
 
+function governedAssistRequest(
+  workspaceRoot: string,
+  managedRoot: string,
+  executablePath: string,
+): CodingRuntimeLaunchRequest {
+  return {
+    ...launchRequest(workspaceRoot, managedRoot, executablePath),
+    runId: "run-1991",
+    taskRef: "issue-1991",
+    requestedMode: "governed-assist",
+    effectiveMode: "governed-assist",
+  };
+}
+
 function createManagedFixture(): {
   readonly workspaceRoot: string;
   readonly managedRoot: string;
@@ -145,6 +164,23 @@ function createSpawnHarness(): {
 
 async function settle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+interface PermissionLineInput {
+  readonly requestId: string;
+  readonly kind: CodingWorkbenchPermissionRequestKind;
+  readonly actionClass: CodingWorkbenchActionClass;
+  readonly reasonCode: string;
+  readonly commandLabel?: string | undefined;
+  readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
+}
+
+function permissionLine(input: PermissionLineInput): string {
+  return `${JSON.stringify({
+    type: "permission-request",
+    expiresAt: "2026-07-07T13:05:00.000Z",
+    ...input,
+  })}\n`;
 }
 
 describe("coding runtime manager", () => {
@@ -370,6 +406,139 @@ describe("coding runtime manager", () => {
     });
     expect(validateCodingWorkbenchRuntimeEvent(permissionEvent).ok).toBe(true);
     expect(JSON.stringify(permissionEvent)).not.toContain(fixture.workspaceRoot);
+  });
+
+  it.each([
+    {
+      kind: "workspace-write",
+      actionClass: "workspace-write",
+      reasonCode: "workspace-write-denied",
+    },
+    {
+      kind: "command-execution",
+      actionClass: "command-execution",
+      reasonCode: "command-execution-denied",
+      commandLabel: "npm",
+    },
+    {
+      kind: "network-egress",
+      actionClass: "network-egress",
+      reasonCode: "network-denied",
+    },
+    {
+      kind: "delivery-substrate",
+      actionClass: "delivery-substrate",
+      reasonCode: "delivery-denied",
+    },
+  ] as const)(
+    "denies governed-assist $actionClass sidecar permission attempts before approval",
+    async ({ kind, actionClass, reasonCode, commandLabel }) => {
+      const fixture = createManagedFixture();
+      const harness = createSpawnHarness();
+      const events: CodingWorkbenchRuntimeEvent[] = [];
+      const manager = createCodingRuntimeManager({
+        spawn: harness.spawn,
+        processEnv: {},
+        onRuntimeEvent: (event) => {
+          events.push(event);
+        },
+        nowIso: () => "2026-07-07T13:00:00.000Z",
+      });
+
+      manager.start(
+        governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+      harness.children[0]?.stdout.write(
+        permissionLine({
+          requestId: "perm-1991-policy",
+          kind,
+          actionClass,
+          reasonCode: "permission-requested",
+          commandLabel,
+        }),
+      );
+      await settle();
+
+      const deniedEvent = events.find((event) => event.failureCode === reasonCode);
+      expect(deniedEvent).toMatchObject({
+        schemaVersion: "1",
+        runId: "run-1991",
+        kind: "failure-redacted",
+        failureCode: reasonCode,
+        failureSummary: reasonCode,
+        retryable: false,
+      });
+      expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+      expect(validateCodingWorkbenchRuntimeEvent(deniedEvent).ok).toBe(true);
+      expect(JSON.stringify(deniedEvent)).not.toContain(fixture.workspaceRoot);
+    },
+  );
+
+  it("keeps governed-assist connector reads approvable but denies write-capable or malformed scopes", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      governedAssistRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1991-connector-read",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "connector-access-requested",
+        connectorScopes: ["issue-tracker.read"],
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1991-connector-write",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "connector-access-requested",
+        connectorScopes: ["source-control.write"],
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      `${JSON.stringify({
+        type: "permission-request",
+        requestId: "perm-1991-connector-malformed",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "connector-access-requested",
+        expiresAt: "2026-07-07T13:05:00.000Z",
+        connectorScopes: ["source-control.write", "unexpected.write"],
+      })}\n`,
+    );
+    await settle();
+
+    const permissionEvents = events.filter((event) => event.kind === "permission-requested");
+    expect(permissionEvents).toHaveLength(1);
+    expect(permissionEvents[0]).toMatchObject({
+      permissionRequest: {
+        requestId: "perm-1991-connector-read",
+        connectorScopes: ["issue-tracker.read"],
+      },
+    });
+    expect(events.find((event) => event.failureCode === "connector-write-denied")).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "connector-write-denied",
+      retryable: false,
+    });
+    expect(events.find((event) => event.failureSummary === "sidecar-event-denied")).toMatchObject({
+      kind: "failure-redacted",
+      failureCode: "failure-redacted",
+      retryable: false,
+    });
   });
 
   it("escalates stop to SIGKILL when the sidecar misses the shutdown deadline", async () => {

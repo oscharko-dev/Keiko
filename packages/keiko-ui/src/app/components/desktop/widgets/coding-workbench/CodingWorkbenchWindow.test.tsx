@@ -140,6 +140,43 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByText("Ready for issue PR handoff")).toBeInTheDocument();
   });
 
+  it("renders Governed Assist proposed diffs as review-only and blocked actions distinctly", () => {
+    const { rerender } = render(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.governedAssist}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Issue #1991 Governed Assist proposal" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Governed Assist/u })).toBeDisabled();
+    expect(screen.getByText("Proposed diff only")).toBeInTheDocument();
+    expect(screen.getByText("120 added, 14 deleted")).toBeInTheDocument();
+    expect(
+      screen.getByText("No file, Git, PR, merge, or external write authority"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.governedAssistBlocked}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Issue #1991 Governed Assist blocked action" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Governance holds")).toBeInTheDocument();
+    expect(screen.getByText(/workspace-write denied in Governed Assist/iu)).toBeInTheDocument();
+    expect(
+      screen.getByText(/connector-write denied; external systems stay read-only/iu),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve once" })).not.toBeInTheDocument();
+  });
+
   it("distinguishes managed gateway, OpenAI-through-gateway, and Codex subscription sources", async () => {
     render(<CodingWorkbenchWindow api={api()} projection={CODING_WORKBENCH_PROJECTIONS.running} />);
 

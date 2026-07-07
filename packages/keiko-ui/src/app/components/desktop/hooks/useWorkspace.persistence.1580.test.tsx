@@ -63,6 +63,14 @@ function setHidden(hidden: boolean): void {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
 }
 
+async function flushAsyncEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe("Issue #1580 — debounced workspace persistence", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -101,13 +109,13 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     expect(flushed).toContain('"minimized":true');
   });
 
-  it("coalesces a burst of mutations into a single debounced write", () => {
+  it("coalesces a burst of mutations into a single debounced write", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     const { getByTestId } = render(<Harness />);
     act(() => {
       vi.advanceTimersByTime(POLL_MS);
     });
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
 
     act(() => {
       getByTestId("minimize").click();
@@ -116,9 +124,10 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     });
     const synchronousWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
     expect(synchronousWsWrites).toBe(0);
+    await flushAsyncEffects();
 
-    act(() => {
-      vi.advanceTimersByTime(400);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
     });
     const debouncedWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
     expect(debouncedWsWrites).toBe(1);
@@ -141,7 +150,7 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     });
     const baseline = window.localStorage.getItem(VIEW_LS);
     expect(JSON.parse(baseline ?? "null")).toEqual({ zoom: 1, x: 0, y: 0 });
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
 
     act(() => {
       getByTestId("pan").click();
@@ -220,14 +229,6 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     return fetchMock.mock.calls.filter(
       ([, init]) => (init as RequestInit | undefined)?.method === "PUT",
     ) as [unknown, RequestInit | undefined][];
-  }
-
-  async function flushAsyncEffects(): Promise<void> {
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
   }
 
   it("stops polling while hidden and catches up on return to visible", async () => {

@@ -160,6 +160,23 @@ export interface CodingWorkbenchModePolicy {
   readonly allowsDeliverySubstrate: boolean;
 }
 
+export type CodingWorkbenchPolicyDenialReason =
+  | "workspace-read-denied"
+  | "workspace-write-denied"
+  | "command-execution-denied"
+  | "verification-denied"
+  | "connector-access-denied"
+  | "connector-write-denied"
+  | "network-denied"
+  | "delivery-denied";
+
+export type CodingWorkbenchActionPolicyDecision =
+  | { readonly allowed: true }
+  | {
+      readonly allowed: false;
+      readonly reasonCode: CodingWorkbenchPolicyDenialReason;
+    };
+
 export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   Record<CodingWorkbenchMode, CodingWorkbenchModePolicy>
 > = Object.freeze({
@@ -194,6 +211,25 @@ const CODING_WORKBENCH_MODE_ORDER: Readonly<Record<CodingWorkbenchMode, number>>
   "supervised-coding": 1,
   "autonomous-delivery": 2,
 } as const satisfies Readonly<Record<CodingWorkbenchMode, number>>);
+
+const CODING_WORKBENCH_ACTION_DENIAL_REASONS: Readonly<
+  Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyDenialReason>
+> = Object.freeze({
+  "workspace-read": "workspace-read-denied",
+  "workspace-write": "workspace-write-denied",
+  "command-execution": "command-execution-denied",
+  verification: "verification-denied",
+  "connector-access": "connector-access-denied",
+  "network-egress": "network-denied",
+  "delivery-substrate": "delivery-denied",
+} as const satisfies Readonly<
+  Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyDenialReason>
+>);
+
+const CODING_WORKBENCH_WRITE_CAPABLE_CONNECTOR_SCOPES = new Set<CodingWorkbenchConnectorScope>([
+  "source-control.write",
+  "issue-tracker.write",
+]);
 
 export interface CodingWorkbenchWorkspaceIdentity {
   readonly workspaceId: string;
@@ -380,4 +416,43 @@ export function resolveEffectiveCodingWorkbenchMode(
   return CODING_WORKBENCH_MODE_ORDER[requested] <= CODING_WORKBENCH_MODE_ORDER[ceiling]
     ? requested
     : ceiling;
+}
+
+export function decideCodingWorkbenchActionForMode(
+  mode: CodingWorkbenchMode,
+  actionClass: CodingWorkbenchActionClass,
+  connectorScopes: readonly CodingWorkbenchConnectorScope[] = [],
+): CodingWorkbenchActionPolicyDecision {
+  const policy = CODING_WORKBENCH_MODE_POLICIES[mode];
+  if (!policy.allowedActionClasses.includes(actionClass)) {
+    return denyCodingWorkbenchAction(actionClass);
+  }
+  if (
+    mode === "governed-assist" &&
+    actionClass === "connector-access" &&
+    hasWriteCapableCodingWorkbenchConnectorScope(connectorScopes)
+  ) {
+    return { allowed: false, reasonCode: "connector-write-denied" };
+  }
+  return { allowed: true };
+}
+
+export function isCodingWorkbenchActionAllowedForMode(
+  mode: CodingWorkbenchMode,
+  actionClass: CodingWorkbenchActionClass,
+  connectorScopes: readonly CodingWorkbenchConnectorScope[] = [],
+): boolean {
+  return decideCodingWorkbenchActionForMode(mode, actionClass, connectorScopes).allowed;
+}
+
+function denyCodingWorkbenchAction(
+  actionClass: CodingWorkbenchActionClass,
+): CodingWorkbenchActionPolicyDecision {
+  return { allowed: false, reasonCode: CODING_WORKBENCH_ACTION_DENIAL_REASONS[actionClass] };
+}
+
+function hasWriteCapableCodingWorkbenchConnectorScope(
+  scopes: readonly CodingWorkbenchConnectorScope[],
+): boolean {
+  return scopes.some((scope) => CODING_WORKBENCH_WRITE_CAPABLE_CONNECTOR_SCOPES.has(scope));
 }

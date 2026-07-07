@@ -6,13 +6,17 @@ import { Readable } from "node:stream";
 
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_PERMISSION_REQUEST_KINDS,
+  decideCodingWorkbenchActionForMode,
+  validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchActionClass,
+  CodingWorkbenchConnectorScope,
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
   CodingWorkbenchPermissionRequest,
@@ -189,6 +193,7 @@ interface SidecarPermissionEvent {
   readonly actionClass: CodingWorkbenchActionClass;
   readonly reasonCode: string;
   readonly expiresAt: string;
+  readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
 }
 
@@ -723,8 +728,25 @@ function sidecarRuntimeEvent(
   if (event.type === "health") {
     return runtimeEvent(active, sequence, "runtime-health", { health: event.health });
   }
+  const request = permissionRequest(event);
+  const validation = validateCodingWorkbenchPermissionRequest(request);
+  if (!validation.ok) {
+    return runtimeEvent(active, sequence, "failure-redacted", invalidSidecarEventDetails());
+  }
+  const decision = decideCodingWorkbenchActionForMode(
+    active.context.effectiveMode,
+    request.actionClass,
+    request.connectorScopes ?? [],
+  );
+  if (!decision.allowed) {
+    return runtimeEvent(active, sequence, "failure-redacted", {
+      failureCode: decision.reasonCode,
+      failureSummary: decision.reasonCode,
+      retryable: false,
+    });
+  }
   return runtimeEvent(active, sequence, "permission-requested", {
-    permissionRequest: permissionRequest(event),
+    permissionRequest: request,
   });
 }
 
@@ -757,8 +779,10 @@ function permissionEvent(record: Record<string, unknown>): SidecarPermissionEven
   const actionClass = actionClassValue(record.actionClass);
   const reasonCode = stringField(record, "reasonCode");
   const expiresAt = stringField(record, "expiresAt");
+  const connectorScopes = optionalConnectorScopes(record);
   if (requestId === undefined || kind === undefined || actionClass === undefined) return undefined;
   if (reasonCode === undefined || expiresAt === undefined) return undefined;
+  if (connectorScopes === undefined) return undefined;
   return {
     type: "permission-request",
     requestId,
@@ -766,8 +790,19 @@ function permissionEvent(record: Record<string, unknown>): SidecarPermissionEven
     actionClass,
     reasonCode,
     expiresAt,
+    ...connectorScopes,
     ...optionalCommandLabel(record),
   };
+}
+
+function optionalConnectorScopes(record: Record<string, unknown>):
+  | {
+      readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[];
+    }
+  | undefined {
+  if (!Object.prototype.hasOwnProperty.call(record, "connectorScopes")) return {};
+  const connectorScopes = connectorScopeArray(record.connectorScopes);
+  return connectorScopes === undefined ? undefined : { connectorScopes };
 }
 
 function optionalCommandLabel(record: Record<string, unknown>): { readonly commandLabel?: string } {
@@ -782,6 +817,7 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     actionClass: event.actionClass,
     reasonCode: event.reasonCode,
     expiresAt: event.expiresAt,
+    ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
   };
 }
@@ -815,6 +851,21 @@ function actionClassValue(value: unknown): CodingWorkbenchActionClass | undefine
     (CODING_WORKBENCH_ACTION_CLASSES as readonly string[]).includes(value)
     ? (value as CodingWorkbenchActionClass)
     : undefined;
+}
+
+function connectorScopeArray(value: unknown): readonly CodingWorkbenchConnectorScope[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const scopes = value.filter((entry): entry is CodingWorkbenchConnectorScope =>
+    connectorScopeValue(entry),
+  );
+  return scopes.length === value.length ? scopes : undefined;
+}
+
+function connectorScopeValue(value: unknown): value is CodingWorkbenchConnectorScope {
+  return (
+    typeof value === "string" &&
+    (CODING_WORKBENCH_CONNECTOR_SCOPES as readonly string[]).includes(value)
+  );
 }
 
 function isRuntimeHealth(value: string): value is CodingWorkbenchRuntimeHealth {
