@@ -415,6 +415,17 @@ const TOKEN_QUERY_KEYS = new Set([
   "token",
 ]);
 
+// Cookie headers and chat/prompt template scaffolding never belong in body-free evidence, yet
+// neither was caught by the path/secret/token/endpoint gates above (Epic #1858, Issue #1904). A
+// `Set-Cookie: sessionId=…` header slips the token-key check because `sessionId` is not a known
+// token key, and a ChatML/harness `[[topic:…]]` marker matches no other pattern. Both are matched
+// by shape here. The cookie form requires the header colon and a negative lookbehind so benign
+// prose ("cookie consent banner", "third-party cookies accepted") is not over-redacted; the prompt
+// form matches only unambiguous template delimiters that cannot occur in a real manual summary.
+const COOKIE_HEADER_RE = /(?<![A-Za-z0-9_])(?:set-)?cookie\s*:/iu;
+const PROMPT_SCAFFOLD_RE =
+  /<\|(?:im_(?:start|end)|system|user|assistant|endoftext)\|>|\[\[topic:|\[\/?INST\]|<<\/?SYS>>/iu;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -709,7 +720,9 @@ function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
     !FILESYSTEM_PATH_RE.test(value) &&
     !SECRET_RE.test(value) &&
     !containsTokenParameterKey(value) &&
-    !containsEndpointLikeText(value)
+    !containsEndpointLikeText(value) &&
+    !COOKIE_HEADER_RE.test(value) &&
+    !PROMPT_SCAFFOLD_RE.test(value)
   );
 }
 

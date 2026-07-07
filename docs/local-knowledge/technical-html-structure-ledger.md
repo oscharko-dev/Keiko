@@ -85,8 +85,9 @@ Linux-authoritative.
   natural-language questions over technical HTML manuals — proven by the deterministic
   `html-manual-structure` scorecard (Recall / MRR / nDCG / citation quality = 1.000) and the
   parser/chunker/citation regression tests above. Cross-language retrieval over technical HTML
-  manuals is not a claim of this fixture; multilingual coverage is owned by the pre-existing
-  `multilingual-retrieval` fixture.
+  manuals is not a claim of this `html-manual-structure` fixture; HTML-manual-scoped multilingual
+  coverage is owned by the `html-manual-multilingual` fixture (Epic #1858), and generic
+  multilingual coverage by the pre-existing `multilingual-retrieval` fixture.
 - **Compatibility:** additive. Existing Local Knowledge stores keep working. The new
   `parsed_units.anchor_id` column is applied by forward-only migration v25; the chunking strategy
   version bump (`boundary-v5`) marks previously chunked documents stale so a refresh/reindex adopts

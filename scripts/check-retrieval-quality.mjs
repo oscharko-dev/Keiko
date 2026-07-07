@@ -651,6 +651,17 @@ export const REGRESSION_PROBE_FIXTURE_IDS = [
   // question axes are non-tautological the same way — repointed expectations must fail.
   "code-repository",
   "chained-question",
+  // #1858 HTML manual goldset extensions (#1902/#1903): each new manual query class must be
+  // non-tautological too — repointing every ground-truth expectation at a decoy chunk must drop
+  // recall below the floors. No-evidence queries carry no expectedChunkIds and are skipped by the
+  // probe, so each of these fixtures is probed through its ground-truth retrieval queries.
+  "html-manual-table-row",
+  "html-manual-frameset",
+  "html-manual-code-block",
+  "html-manual-malformed",
+  "html-manual-denied-link",
+  "html-manual-index-page",
+  "html-manual-multilingual",
 ];
 
 const ABSENT_CHUNK_SENTINEL = "__keiko_regression_absent_chunk__";

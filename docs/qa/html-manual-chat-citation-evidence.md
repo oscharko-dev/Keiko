@@ -164,4 +164,6 @@ Commands re-run locally in this worktree after the fixes listed above, against `
 - Browser-rendered documentation capture (as opposed to the current classify-and-link governed
   navigation) is tracked in Epic #1857, not this epic.
 - Retrieval evaluation and pilot release gates beyond the fixture-based regression coverage added
-  here are tracked in Epic #1858, not this epic.
+  here are delivered by Epic #1858: HTML-manual goldset fixtures scored in `check:retrieval-quality`,
+  cookie/prompt evidence-leakage gates, and a private pilot runbook. See
+  `docs/qa/html-manual-retrieval-evaluation-evidence.md` for the closure evidence.
