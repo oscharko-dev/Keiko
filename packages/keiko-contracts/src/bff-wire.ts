@@ -724,8 +724,12 @@ export interface GroundedUncertainty {
   readonly claim: string;
 }
 
+// "not-configured" is intentionally not a member here: a not-configured reranker is the default,
+// fully-supported install state and always carries status "disabled" with
+// failureKind: "not-configured" (see grounded-model-reranker.ts disabledDiagnostics and
+// local-knowledge-grounded-qa.ts). Branch on failureKind, not status, to detect it.
 export type GroundedRerankerStatus =
-  "disabled" | "denied" | "not-configured" | "unavailable" | "invalid-response" | "applied";
+  "disabled" | "denied" | "unavailable" | "invalid-response" | "applied";
 
 export type GroundedRerankerMode = "none" | "local-only" | "provider-backed";
 

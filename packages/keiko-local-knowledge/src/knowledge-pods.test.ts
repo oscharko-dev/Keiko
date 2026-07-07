@@ -515,6 +515,155 @@ describe("Knowledge Pod compatibility projection", () => {
     }
   });
 
+  it("does not mask a genuine cross-member embedding mismatch behind an unrelated legacy member's own status", () => {
+    // AUDIT-E1818-001: setEmbeddingDecision() used to return the FIRST member whose own
+    // self-compare status was not "same" (here, the legacy member's soft "unknown"/
+    // legacy-unverified-profile status) without ever pairwise-comparing the other two, genuinely
+    // incompatible, hardened members against each other. A real incompatibility must never be
+    // under-reported as the softer status of an unrelated legacy member.
+    const env = freshStore();
+    try {
+      const legacyId = "cap-mask-legacy" as KnowledgeCapsuleId;
+      const aId = "cap-mask-hardened-a" as KnowledgeCapsuleId;
+      const cId = "cap-mask-hardened-c" as KnowledgeCapsuleId;
+      const legacySourceId = "src-mask-legacy" as KnowledgeSourceId;
+      const aSourceId = "src-mask-hardened-a" as KnowledgeSourceId;
+      const cSourceId = "src-mask-hardened-c" as KnowledgeSourceId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: legacyId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: LEGACY_EMBEDDING,
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: aId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_A,
+          modelUsePolicy: standardPodModelUsePolicy(),
+          storageReference: "engineering/mask-a",
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: cId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_C,
+          modelUsePolicy: standardPodModelUsePolicy(),
+          storageReference: "engineering/mask-c",
+        }),
+      );
+      addSourceToCapsule(env.store, legacyId, sampleSourceInput(legacySourceId));
+      addSourceToCapsule(env.store, aId, sampleSourceInput(aSourceId));
+      addSourceToCapsule(env.store, cId, sampleSourceInput(cSourceId));
+      seedIndexedDocument(env.store, legacyId, legacySourceId, "mask-legacy");
+      seedIndexedDocument(env.store, aId, aSourceId, "mask-a");
+      seedIndexedDocument(env.store, cId, cSourceId, "mask-c");
+      const set = createCapsuleSet(env.store, {
+        id: "set-mask-legacy" as CapsuleSetId,
+        displayName: "Legacy Masking Set",
+        tags: [],
+        capsuleIds: [legacyId, aId, cId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.retrieval.embeddingCompatibilityStatus).toBe("incompatible");
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["embedding-incompatible"]),
+      );
+      expect(summary.setReadiness?.reasonCodes).not.toEqual(
+        expect.arrayContaining(["embedding-unknown"]),
+      );
+      expect(summary.degradationReasons).toEqual(
+        expect.arrayContaining([
+          "Embedding profile is incompatible with the current semantic retrieval space.",
+        ]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("does not mask a genuine cross-member embedding mismatch behind an unrelated policy-denied member's own status", () => {
+    // Companion case for the "unavailable" branch: a policy-denied member's own self-compare
+    // status ("unavailable") must not short-circuit past a genuine incompatibility between two
+    // other, policy-allowed members.
+    const env = freshStore();
+    try {
+      const deniedId = "cap-mask-denied" as KnowledgeCapsuleId;
+      const aId = "cap-mask-denied-a" as KnowledgeCapsuleId;
+      const cId = "cap-mask-denied-c" as KnowledgeCapsuleId;
+      const deniedSourceId = "src-mask-denied" as KnowledgeSourceId;
+      const aSourceId = "src-mask-denied-a" as KnowledgeSourceId;
+      const cSourceId = "src-mask-denied-c" as KnowledgeSourceId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: deniedId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_A,
+          modelUsePolicy: sealedLocalPodModelUsePolicy(),
+          storageReference: "engineering/mask-denied",
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: aId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_A,
+          modelUsePolicy: standardPodModelUsePolicy(),
+          storageReference: "engineering/mask-denied-a",
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: cId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_C,
+          modelUsePolicy: standardPodModelUsePolicy(),
+          storageReference: "engineering/mask-denied-c",
+        }),
+      );
+      addSourceToCapsule(env.store, deniedId, sampleSourceInput(deniedSourceId));
+      addSourceToCapsule(env.store, aId, sampleSourceInput(aSourceId));
+      addSourceToCapsule(env.store, cId, sampleSourceInput(cSourceId));
+      seedIndexedDocument(env.store, deniedId, deniedSourceId, "mask-denied");
+      seedIndexedDocument(env.store, aId, aSourceId, "mask-denied-a");
+      seedIndexedDocument(env.store, cId, cSourceId, "mask-denied-c");
+      const set = createCapsuleSet(env.store, {
+        id: "set-mask-denied" as CapsuleSetId,
+        displayName: "Policy Denied Masking Set",
+        tags: [],
+        capsuleIds: [deniedId, aId, cId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.retrieval).toMatchObject({
+        embeddingCompatibilityStatus: "incompatible",
+        embeddingCompatibilityReason: "provider-mismatch",
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["embedding-incompatible"]),
+      );
+      expect(summary.setReadiness?.reasonCodes).not.toEqual(
+        expect.arrayContaining(["embedding-unavailable"]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
   it("projects explicit standard model-use policy without sealed posture", () => {
     const env = freshStore();
     try {
@@ -647,6 +796,60 @@ describe("Knowledge Pod compatibility projection", () => {
       expect(summary.setReadiness?.reasonCodes).toEqual(
         expect.arrayContaining(["member-indexing", "policy-denied", "no-sources"]),
       );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("marks a pod-set unavailable when a member is mid-delete, not draft", () => {
+    // AUDIT-E1815-001: capsuleReadiness() maps lifecycleState "deleting" to "unavailable", but
+    // setReadiness() re-derives its own branches over the same enum and used to fall through to a
+    // hardcoded "draft" for any lifecycle state it did not explicitly recognize, including
+    // "deleting". Guard the two functions against drifting back out of sync.
+    const env = freshStore();
+    try {
+      const readyId = "cap-deleting-ready" as KnowledgeCapsuleId;
+      const deletingId = "cap-deleting-member" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: readyId, lifecycleState: "ready" }));
+      createCapsule(env.store, sampleCapsuleInput({ id: deletingId, lifecycleState: "deleting" }));
+      const set = createCapsuleSet(env.store, {
+        id: "set-deleting-member" as CapsuleSetId,
+        displayName: "Deleting Member Set",
+        tags: [],
+        capsuleIds: [readyId, deletingId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.readiness).toBe("unavailable");
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("locks in the draft fallback for a mixed ready+draft pod-set membership", () => {
+    // AUDIT-E1815-002: setReadiness() falls through to "draft" whenever no member is
+    // indexing/error/stale and not every member is ready. This composition (an existing ready pod
+    // plus a freshly created default-lifecycle draft pod) was reachable but untested; lock in the
+    // exact current behavior so a future refactor cannot silently change it without a failing test.
+    const env = freshStore();
+    try {
+      const readyId = "cap-mixed-ready" as KnowledgeCapsuleId;
+      const draftId = "cap-mixed-draft" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: readyId, lifecycleState: "ready" }));
+      createCapsule(env.store, sampleCapsuleInput({ id: draftId }));
+      const set = createCapsuleSet(env.store, {
+        id: "set-mixed-ready-draft" as CapsuleSetId,
+        displayName: "Mixed Ready Draft Set",
+        tags: [],
+        capsuleIds: [readyId, draftId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.readiness).toBe("draft");
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
     } finally {
       env.cleanup();

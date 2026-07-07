@@ -124,7 +124,11 @@ function enqueueLinks(
   page: CrawledManualPage,
   source: HtmlManualSource,
 ): void {
-  if (page.depth >= source.limits.maxDepth) return;
+  if (page.depth >= source.limits.maxDepth) {
+    tallyDeny(state, deps, "depth-limit");
+    state.limitReached = true;
+    return;
+  }
   const links = extractManualLinks(page.bytes, source.limits.maxLinkSample);
   state.discovered += links.length;
   for (const rawLink of links) {

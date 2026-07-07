@@ -71,7 +71,12 @@ export interface CrawledManualPage {
   readonly title: string | null;
 }
 
-// Body-free tally of refused links/pages, grouped by reason code.
+// Body-free tally of refused links/pages, grouped by reason code. For the per-link reasons
+// (cross-origin, path-traversal, non-html, redirect, ...) `count` is one entry per refused
+// link/page. For the crawl-wide budget reasons ("page-limit", "depth-limit", "byte-budget",
+// "time-limit") `count` is one entry per boundary-crossing event, not one per page that was
+// consequently never crawled — a manual truncated deep past the limit still tallies a single
+// entry for that reason.
 export interface ManualCrawlDeniedTally {
   readonly reason: ManualCrawlDenyReason;
   readonly count: number;

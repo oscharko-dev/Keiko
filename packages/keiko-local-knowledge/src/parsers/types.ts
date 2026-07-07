@@ -129,6 +129,7 @@ export type ParserErrorCode =
   | "OBJECT_LIMIT_REACHED"
   | "MALFORMED_INPUT"
   | "HTML_CHARSET_MISMATCH"
+  | "HTML_TABLE_SPAN_UNSUPPORTED"
   | "UNSUPPORTED_FORMAT";
 
 export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
@@ -140,6 +141,7 @@ export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
   "OBJECT_LIMIT_REACHED",
   "MALFORMED_INPUT",
   "HTML_CHARSET_MISMATCH",
+  "HTML_TABLE_SPAN_UNSUPPORTED",
   "UNSUPPORTED_FORMAT",
 ] as const;
 

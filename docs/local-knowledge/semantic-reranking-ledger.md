@@ -88,6 +88,16 @@ Post-merge audit note on 2026-07-06:
    lifecycle summary now emits deterministic opaque IDs for unsafe legacy capsule identifiers. Regression
    coverage now asserts the full grounded answer payload excludes email-shaped values, private paths, provider
    endpoints, and token-shaped labels on this path.
+5. **[fixed — user-visible, 2026-07-07] False "Needs review" banner for a not-configured reranker
+   (`GroundedAnswer.tsx` summary line).** `DEGRADED_RERANKER_STATUSES` and `rerankerDegradationNote` still
+   treated `failureKind: "not-configured"` as a degradation on the UI summary line, rendering a "Ranking: no
+   reranker configured — showing fused retrieval order." banner that read as a needs-review warning even
+   though a not-configured reranker is the default, fully-supported install state (see item 1 above, which
+   fixed the equivalent backend `retrievalActivity` projection but left this UI-side check in place). Fix:
+   `rerankerDegradationNote` now returns `undefined` whenever `reranker.failureKind === "not-configured"`,
+   and `not-configured` was removed from `DEGRADED_RERANKER_STATUSES`, mirroring the backend
+   `rerankerForRetrievalActivity` suppressor. Regression coverage added in `GroundedAnswer.test.tsx` and
+   `grounded-qa-hybrid.test.ts` asserting no degradation banner renders for a not-configured reranker.
 
 ## Verification log
 

@@ -44,7 +44,7 @@ function diagnosticFailureKind(kind: RerankErrorKind): GroundedRerankerFailureKi
 
 function disabledDiagnostics(
   input: ConfiguredRerankInput,
-  status: "disabled" | "not-configured",
+  status: "disabled",
   failureKind?: GroundedRerankerFailureKind,
 ): GroundedRerankerDiagnostics {
   return {

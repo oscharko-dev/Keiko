@@ -15,6 +15,7 @@ import {
   createOcrAdapterFromEnv,
   createProgressivePdfExtractor,
   deleteCapsule,
+  deleteCapsuleSet,
   discoverExtractionCapabilities,
   getCapsule,
   listCapsuleSets,
@@ -40,6 +41,7 @@ import type {
   CapsuleEmbeddingCompatibility,
   CapsuleLargeDocumentHealth,
   CapsuleReindexMode,
+  CapsuleSetId,
   DocumentId,
   EmbeddingModelIdentity,
   ExtractionCapabilityAvailability,
@@ -2237,6 +2239,33 @@ export async function handleCreateLocalKnowledgeCapsuleSet(
         return badRequest("INVALID_REQUEST", error.message);
       }
       throw error;
+    } finally {
+      env.close();
+    }
+  });
+}
+
+function parseCapsuleSetId(ctx: RouteContext): CapsuleSetId {
+  const capsuleSetId = ctx.params.capsuleSetId;
+  if (capsuleSetId === undefined) {
+    throw new InvalidRequest("Route parameter capsuleSetId is required.");
+  }
+  return capsuleSetId as CapsuleSetId;
+}
+
+// ─── Delete a capsule set (#1929 audit fix) — membership-only deletion; never touches the
+// member capsules themselves, only the set's metadata row and membership rows. ────────────
+
+export async function handleDeleteLocalKnowledgeCapsuleSet(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(() => {
+    const capsuleSetId = parseCapsuleSetId(ctx);
+    const env = openStoreForDeps(deps);
+    try {
+      deleteCapsuleSet(env.store, capsuleSetId);
+      return { status: 200, body: { ok: true, capsuleSetId } };
     } finally {
       env.close();
     }

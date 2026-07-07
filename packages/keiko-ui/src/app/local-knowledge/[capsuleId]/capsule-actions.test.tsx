@@ -8,7 +8,7 @@ import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CapsuleActions } from "./capsule-actions";
 import type { CapsuleActionsProps } from "./capsule-actions";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type {
   CapsuleActionResponse,
   CapsuleDetail,
@@ -628,6 +628,38 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     });
     expect(onActionComplete).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("AUDIT-E1821-001: warns before navigating away when delete affects Knowledge Pod Sets", async () => {
+    const user = userEvent.setup();
+    const response: CapsuleActionResponse = {
+      ok: true,
+      capsuleId: DEFAULT_ID,
+      affectedCapsuleSetIds: ["set-y" as CapsuleSetId],
+      cleanupVerified: true,
+    };
+    const deleteCapsuleImpl = vi.fn().mockResolvedValue(response);
+    const onDeleted = vi.fn();
+    render(<CapsuleActions {...defaultProps({ deleteCapsuleImpl, onDeleted })} />);
+
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
+
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox"), DEFAULT_NAME);
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    const notice = await screen.findByRole("alertdialog");
+    expect(notice.textContent).toContain("removed from 1 Knowledge Pod Set");
+    // onDeleted must not fire until the notice is acknowledged — otherwise the
+    // caller navigates away before the user ever sees the warning.
+    expect(onDeleted).not.toHaveBeenCalled();
+
+    await user.click(within(notice).getByRole("button", { name: /continue/i }));
+
+    await waitFor(() => {
+      expect(onDeleted).toHaveBeenCalledWith(response);
+    });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("shows an error banner and keeps the modal open when deleteCapsule rejects", async () => {

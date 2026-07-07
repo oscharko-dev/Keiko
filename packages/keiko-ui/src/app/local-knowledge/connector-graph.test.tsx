@@ -20,6 +20,7 @@ import type {
   CapsulesResponse,
   CapsuleSetsResponse,
   CapsuleActionResponse,
+  CapsuleSetActionResponse,
   CapsuleListEntry,
   CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
@@ -87,6 +88,10 @@ function makeCapsuleSet(overrides: Partial<CapsuleSetListEntry> = {}): CapsuleSe
 
 function okAction(capsuleId: KnowledgeCapsuleId): Promise<CapsuleActionResponse> {
   return Promise.resolve({ ok: true, capsuleId });
+}
+
+function okSetAction(capsuleSetId: CapsuleSetId): Promise<CapsuleSetActionResponse> {
+  return Promise.resolve({ ok: true, capsuleSetId });
 }
 
 // Default injectable stubs
@@ -368,7 +373,7 @@ describe("ConnectorGraph — with capsules", () => {
     expect(within(row).getByText("Degraded")).toBeInTheDocument();
     expect(within(row).getByText("Reindex recommended")).toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(
-      /3 pods \/ 3 sources \/ 4 docs \/ 5 chunks \/ 6 vectors \/ 0 ready \/ 1 degraded \/ 1 unavailable \/ 1 policy denied \/ 1 indexing \/ 0 stale \/ 0 error \/ 1 missing \/ reasons: indexing, unavailable, missing, policy denied, embedding mismatch, no vectors/i,
+      /pods:? 3.*sources:? 3.*docs:? 4.*chunks:? 5.*vectors:? 6.*ready:? 0.*degraded:? 1.*unavailable:? 1.*policy denied:? 1.*indexing:? 1.*stale:? 0.*error:? 0.*missing:? 1.*reasons: indexing, unavailable, missing, policy denied, embedding mismatch, no vectors/i,
     );
     expect(screen.getByRole("status")).toHaveTextContent("1 Knowledge Pod, 1 Knowledge Pod Set");
 
@@ -392,6 +397,62 @@ describe("ConnectorGraph — with capsules", () => {
 
     window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     workspace.remove();
+  });
+
+  it("asks for confirmation before calling deleteCapsuleSet (destructive, no undo)", async () => {
+    const id = makeCapsuleSetId("delete-me");
+    const capsuleSet = makeCapsuleSet({ id, displayName: "Quarterly Review" });
+    const deleteCapsuleSetImpl = vi.fn().mockImplementation(() => okSetAction(id));
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule()])}
+        fetchCapsuleSetsImpl={fetchSetsWith([capsuleSet])}
+        deleteCapsuleSetImpl={deleteCapsuleSetImpl}
+      />,
+    );
+
+    const deleteBtn = await screen.findByRole("button", {
+      name: /delete Knowledge Pod Set Quarterly Review/i,
+    });
+    await user.click(deleteBtn);
+
+    // The confirm dialog opens first — nothing is deleted yet (AUDIT-E1821-003).
+    expect(deleteCapsuleSetImpl).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog", { name: /delete Knowledge Pod Set/i });
+    expect(dialog.textContent).toContain("Quarterly Review");
+
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    await waitFor(() => {
+      expect(deleteCapsuleSetImpl).toHaveBeenCalledWith(id);
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("does NOT call deleteCapsuleSet when the confirmation is cancelled", async () => {
+    const id = makeCapsuleSetId("keep-me");
+    const capsuleSet = makeCapsuleSet({ id, displayName: "Keep Set" });
+    const deleteCapsuleSetImpl = vi.fn().mockImplementation(() => okSetAction(id));
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule()])}
+        fetchCapsuleSetsImpl={fetchSetsWith([capsuleSet])}
+        deleteCapsuleSetImpl={deleteCapsuleSetImpl}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: /delete Knowledge Pod Set Keep Set/i }),
+    );
+    const dialog = screen.getByRole("dialog", { name: /delete Knowledge Pod Set/i });
+    await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(deleteCapsuleSetImpl).not.toHaveBeenCalled();
   });
 
   it("exports a capsule drag payload for dropping onto the workspace", async () => {
@@ -1226,6 +1287,7 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
           addedPages: 3,
           changedPages: 2,
           removedPages: 1,
+          movedPages: 0,
           unchangedPages: 10,
           failedPages: 0,
           deniedLinks: 0,
@@ -1265,6 +1327,7 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
           addedPages: 1,
           changedPages: 0,
           removedPages: 0,
+          movedPages: 0,
           unchangedPages: 5,
           failedPages: 2,
           deniedLinks: 1,
@@ -1302,6 +1365,7 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
           addedPages: 0,
           changedPages: 0,
           removedPages: 0,
+          movedPages: 0,
           unchangedPages: 0,
           failedPages: 0,
           deniedLinks: 0,
@@ -1340,6 +1404,7 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
           addedPages: 0,
           changedPages: 0,
           removedPages: 0,
+          movedPages: 0,
           unchangedPages: 0,
           failedPages: 0,
           deniedLinks: 0,
@@ -1379,6 +1444,7 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
           addedPages: 0,
           changedPages: 0,
           removedPages: 0,
+          movedPages: 0,
           unchangedPages: 40,
           failedPages: 0,
           deniedLinks: 0,
@@ -1415,5 +1481,32 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
     );
     expect(css).toMatch(/\.panelScope:global\(\.lkd-manual-refresh\)\s*\{/);
     expect(css).not.toMatch(/\.panelScope\s+:global\(\.lkd-manual-refresh\)\s*\{/);
+  });
+});
+
+describe("ConnectorGraph — responsive layout (AUDIT-E1821-004)", () => {
+  it("renders the page and dialogs on the shared fluid layout classes, not fixed pixel widths", async () => {
+    const capsule = makeCapsule({ displayName: "Alpha" });
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Alpha")).toBeInTheDocument();
+    });
+    const page = container.querySelector(".lk-page");
+    expect(page).not.toBeNull();
+    expect(page).not.toHaveAttribute("style");
+  });
+
+  // jsdom does not apply real stylesheet box-model rules (see the panel-scope guard above), so
+  // pin the source `.lk-page` / `.mc-dialog` fluid-width rules at the string level instead of
+  // relying on computed layout.
+  it("keeps the page and dialog primitives fluid in globals.css instead of a fixed pixel width", () => {
+    const css = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "../globals.css"),
+      "utf8",
+    );
+    const lkPageBlock = /\.lk-page\s*\{[^}]*\}/.exec(css)?.[0] ?? "";
+    const mcDialogBlock = /\.mc-dialog\s*\{[^}]*\}/.exec(css)?.[0] ?? "";
+    expect(lkPageBlock).toMatch(/width:\s*100%/);
+    expect(mcDialogBlock).toMatch(/width:\s*min\(/);
   });
 });

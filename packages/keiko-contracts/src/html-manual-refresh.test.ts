@@ -17,6 +17,7 @@ function validSummary(): ManualRefreshChangeSummary {
       addedPages: 2,
       changedPages: 1,
       removedPages: 0,
+      movedPages: 0,
       unchangedPages: 5,
       failedPages: 0,
       deniedLinks: 3,

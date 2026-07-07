@@ -32,6 +32,7 @@ import type {
   LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import activityBadgeStyles from "./GroundedAnswer.module.css";
 
 // Opens the citation's target in the existing governed documentation browser widget (ADR-0113) so
 // that widget's own navigateDocumentation call renders the authoritative reason/severity outcome —
@@ -498,7 +499,10 @@ function KnowledgePodRetrievalActivityPanel({
   const { summary } = activity;
   const visiblePods = expanded ? activity.pods : activity.pods.slice(0, ACTIVITY_POD_DISPLAY_CAP);
   return (
-    <section className="grounded-context-pack" aria-label="Knowledge Pod retrieval activity">
+    <section
+      className={`grounded-context-pack ${activityBadgeStyles.scope}`}
+      aria-label="Knowledge Pod retrieval activity"
+    >
       <div className="grounded-context-pack-headline">Knowledge Pod activity</div>
       <dl className="grounded-context-pack-dl">
         <MetricRow label="Searched" value={formatCount(summary.searchedCount)} />
@@ -519,7 +523,7 @@ function KnowledgePodRetrievalActivityPanel({
       <ul className="grounded-uncertainty-list" aria-label="Knowledge Pod activity details">
         {visiblePods.map((pod) => (
           <li key={`${pod.podKind}-${pod.podId}`}>
-            <span className="grounded-evidence-summary-badge">
+            <span className="grounded-evidence-summary-badge" data-activity-state={pod.state}>
               {ACTIVITY_STATE_LABELS[pod.state]}
             </span>{" "}
             {activityPodLine(pod)}

@@ -27,8 +27,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   applyModelRerankResults,
+  invalidRerankMappingDiagnostics,
   rerankAndSelect,
   selectTopPromptCandidates,
+  withKeptCount,
   type RerankInput,
   type SelectedCandidate,
 } from "./grounded-rerank.js";
@@ -347,25 +349,6 @@ function hydrateConnectorSelections(
 interface HybridRerankedSelection {
   readonly selected: readonly SelectedCandidate<HybridPayload>[];
   readonly diagnostics: GroundedRerankerDiagnostics;
-}
-
-function withKeptCount(
-  diagnostics: GroundedRerankerDiagnostics,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return { ...diagnostics, keptCount };
-}
-
-function invalidRerankMappingDiagnostics(
-  diagnostics: GroundedRerankerDiagnostics,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return {
-    ...diagnostics,
-    status: "invalid-response",
-    failureKind: "invalid-response",
-    keptCount,
-  };
 }
 
 function policyDeniedRerankDiagnostics(
@@ -805,6 +788,7 @@ function buildHybridRetrievalActivity(
   skipped: readonly SkippedConnector[],
   knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[],
   reranker: GroundedRerankerDiagnostics,
+  diagnostics: UiHandlerDeps["diagnostics"],
 ): HybridGroundedAnswer["retrievalActivity"] {
   return tryBuildKnowledgePodRetrievalActivity({
     store,
@@ -817,6 +801,7 @@ function buildHybridRetrievalActivity(
       ),
     })),
     skipped: selectedConnectorSkips(skipped),
+    diagnostics,
   });
 }
 
@@ -1276,6 +1261,7 @@ function assembleHybridAnswer(
     sources.skipped,
     knowledgeCitations,
     reranker,
+    ctx.deps.diagnostics,
   );
   const { firstRunId: evidenceRunId, runIds: evidenceRunIds } = persistFolderEvidence(
     ctx,

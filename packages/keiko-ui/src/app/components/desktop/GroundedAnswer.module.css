@@ -1,0 +1,34 @@
+/* AUDIT-E1816-006 — per-state accent color for Knowledge Pod retrieval-activity badges, so a
+   sighted user scanning a long expanded pod list gets a color cue in addition to the text label
+   (component-scoped, never globals.css, which is behind the SHA-pinned proof gate #1300). Text
+   remains the only accessible-name signal for screen readers. */
+
+.scope :global(.grounded-evidence-summary-badge)[data-activity-state="denied"] {
+  border-color: var(--feedback-danger);
+  color: var(--feedback-danger);
+}
+
+.scope :global(.grounded-evidence-summary-badge)[data-activity-state="degraded"] {
+  border-color: var(--feedback-warning);
+  color: var(--feedback-warning);
+}
+
+.scope :global(.grounded-evidence-summary-badge)[data-activity-state="unavailable"] {
+  border-color: var(--feedback-danger);
+  color: var(--feedback-danger);
+}
+
+.scope :global(.grounded-evidence-summary-badge)[data-activity-state="skipped"] {
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.scope :global(.grounded-evidence-summary-badge)[data-activity-state="not-selected"] {
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.scope :global(.grounded-evidence-summary-badge)[data-activity-state="searched"] {
+  border-color: var(--feedback-success);
+  color: var(--feedback-success);
+}
