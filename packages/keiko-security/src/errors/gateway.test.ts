@@ -50,7 +50,7 @@ describe("error subclasses", () => {
     [new TimeoutError("a"), ERROR_CODES.TIMEOUT, true],
     [new CancelledError("a"), ERROR_CODES.CANCELLED, false],
     [new CircuitOpenError("a"), ERROR_CODES.CIRCUIT_OPEN, false],
-    [new ProviderError("a", 500), ERROR_CODES.PROVIDER_ERROR, false],
+    [new ProviderError("a", 400), ERROR_CODES.PROVIDER_ERROR, false],
     [new ConfigInvalidError("a"), ERROR_CODES.CONFIG_INVALID, false],
     [new UnknownModelError("a"), ERROR_CODES.UNKNOWN_MODEL, false],
     [
@@ -109,5 +109,25 @@ describe("error subclasses", () => {
     expect(err.message).not.toContain(providerUrl);
     expect(err.message).not.toContain("internal.corp.example");
     expect(err.message).toContain("[REDACTED]");
+  });
+});
+
+describe("ProviderError retry classification by HTTP status", () => {
+  // Provider 5xx responses are transient by the providers' own contracts and must
+  // re-enter the bounded retry loop on the buffered path; every other status a
+  // ProviderError carries stays terminal. (Streaming never enters the retry loop.)
+  it.each([
+    [500, true],
+    [502, true],
+    [503, true],
+    [529, true],
+    [400, false],
+    [401, false],
+    [404, false],
+    [422, false],
+    [504, false],
+  ] as const)("status %d → retryable %s", (status, retryable) => {
+    expect(new ProviderError("upstream", status).retryable).toBe(retryable);
+    expect(new ProviderError("upstream", status).httpStatus).toBe(status);
   });
 });
