@@ -1,0 +1,1145 @@
+import { describe, expect, it } from "vitest";
+import {
+  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_MODEL_SOURCES,
+  CODING_WORKBENCH_MODES,
+  CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
+  CODING_WORKBENCH_RUNTIME_SOURCES,
+  CODING_WORKBENCH_SCHEMA_VERSION,
+  isCodingWorkbenchEvidenceSafeText,
+  redactCodingWorkbenchEvidenceText,
+  resolveEffectiveCodingWorkbenchMode,
+  validateCodingWorkbenchAuthorityEnvelope,
+  validateCodingWorkbenchEvidenceRecord,
+  validateCodingWorkbenchPermissionRequest,
+  validateCodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchAuthorityEnvelope,
+  type CodingWorkbenchEvidenceRecord,
+  type CodingWorkbenchPermissionRequest,
+  type CodingWorkbenchRuntimeEvent,
+} from "./index.js";
+import { hasDisallowedEvidenceContent } from "./coding-workbench-evidence.js";
+
+function baseAuthorityEnvelope(): CodingWorkbenchAuthorityEnvelope {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    runId: "run-1986",
+    localUser: "local-operator",
+    taskRefs: ["issue-1986"],
+    workspace: {
+      workspaceId: "workspace-1",
+      rootLabel: "keiko-workspace",
+      rootDigest: "a".repeat(64),
+    },
+    branch: {
+      baseRef: "dev",
+      headRef: "issue/1986-coding-workbench-contracts",
+      allowDetachedHead: false,
+      allowedPrefixes: ["issue/", "codex/"],
+    },
+    requestedMode: "supervised-coding",
+    deploymentCeiling: "supervised-coding",
+    effectiveMode: "supervised-coding",
+    runtimeSource: "keiko-sidecar",
+    actionClasses: [
+      "workspace-read",
+      "workspace-write",
+      "command-execution",
+      "verification",
+      "connector-access",
+    ],
+    connectorScopes: ["source-control.read", "issue-tracker.read"],
+    modelProfile: {
+      profileId: "local-codex",
+      source: "chatgpt-codex-subscription-profile",
+      supportsStreaming: true,
+      supportsToolCalling: true,
+    },
+    commandPolicy: {
+      mode: "governed",
+      allow: ["npm", "node"],
+      deny: ["curl"],
+      maxCommandTimeoutMs: 30_000,
+      requirePerCommandApproval: true,
+    },
+    networkPolicy: {
+      mode: "deny-all",
+      allowLoopback: false,
+      connectorScopes: [],
+    },
+    gates: ["human-approval", "verification-green", "artifact-review"],
+    budget: {
+      maxRuntimeMs: 120_000,
+      maxToolCalls: 12,
+      maxPromptTokens: 24_000,
+      maxPatchBytes: 32_768,
+    },
+    expiresAt: "2026-07-08T12:00:00Z",
+    approvalProofDigest: "b".repeat(64),
+  };
+}
+
+function baseRuntimeEvent(): CodingWorkbenchRuntimeEvent {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    eventId: "evt-1",
+    runId: "run-1986",
+    occurredAt: "2026-07-07T12:00:00Z",
+    kind: "runtime-started",
+    runtimeSource: "codex-cli-adapter",
+    modelSource: "openai-api-key-through-gateway",
+    requestedMode: "supervised-coding",
+    effectiveMode: "governed-assist",
+  };
+}
+
+function validPermissionRequest(): CodingWorkbenchPermissionRequest {
+  return {
+    requestId: "perm-1",
+    kind: "workspace-write",
+    actionClass: "workspace-write",
+    reasonCode: "verification-required",
+    expiresAt: "2026-07-07T12:30:00Z",
+  };
+}
+
+function baseEvidenceRecord(): CodingWorkbenchEvidenceRecord {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    recordId: "ev-1",
+    runId: "run-1986",
+    occurredAt: "2026-07-07T12:00:00Z",
+    kind: "failure",
+    effectiveMode: "governed-assist",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    safeSummary: "approval-required",
+    digest: "c".repeat(64),
+    byteCount: 0,
+    denied: true,
+  };
+}
+
+describe("coding-workbench constants", () => {
+  it("pins the schema version and closed vocabularies", () => {
+    expect(CODING_WORKBENCH_SCHEMA_VERSION).toBe("1");
+    expect(CODING_WORKBENCH_MODES).toEqual([
+      "governed-assist",
+      "supervised-coding",
+      "autonomous-delivery",
+    ]);
+    expect(CODING_WORKBENCH_RUNTIME_SOURCES).toEqual([
+      "keiko-sidecar",
+      "codex-cli-adapter",
+      "delivery-runner",
+    ]);
+    expect(CODING_WORKBENCH_MODEL_SOURCES).toEqual([
+      "keiko-model-gateway",
+      "openai-api-key-through-gateway",
+      "chatgpt-codex-subscription-profile",
+    ]);
+    expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("permission-requested");
+    expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
+  });
+});
+
+describe("resolveEffectiveCodingWorkbenchMode", () => {
+  it("uses the fail-closed minimum rule", () => {
+    expect(resolveEffectiveCodingWorkbenchMode("autonomous-delivery", "governed-assist")).toBe(
+      "governed-assist",
+    );
+    expect(resolveEffectiveCodingWorkbenchMode("supervised-coding", "autonomous-delivery")).toBe(
+      "supervised-coding",
+    );
+  });
+
+  it("fails closed to governed-assist for unknown values", () => {
+    expect(resolveEffectiveCodingWorkbenchMode("ship-it", "supervised-coding")).toBe(
+      "governed-assist",
+    );
+    expect(resolveEffectiveCodingWorkbenchMode("autonomous-delivery", "wide-open")).toBe(
+      "governed-assist",
+    );
+  });
+});
+
+describe("isCodingWorkbenchEvidenceSafeText", () => {
+  it.each([
+    { label: "bidi override", value: "approval-required\u202E" },
+    { label: "control character", value: "approval-required\u0001" },
+    { label: "trimmed boundary", value: " approval-required" },
+    { label: "url-like scheme", value: "ssh://corp-host/repo" },
+    { label: "natural-language slug", value: "please-fix-login-bug" },
+    { label: "fine-grained PAT", value: "github_pat_1234567890" },
+  ])("rejects unsafe evidence text: $label", ({ value }) => {
+    expect(isCodingWorkbenchEvidenceSafeText(value)).toBe(false);
+  });
+});
+
+describe("validateCodingWorkbenchAuthorityEnvelope", () => {
+  it("accepts a valid content-free authority envelope", () => {
+    expect(validateCodingWorkbenchAuthorityEnvelope(baseAuthorityEnvelope())).toEqual({
+      ok: true,
+      value: baseAuthorityEnvelope(),
+    });
+  });
+
+  it("rejects a missing expiry, missing action scopes, unknown connector scopes, missing workspace identity, and invalid approval proof digest", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      workspace: undefined,
+      actionClasses: [],
+      connectorScopes: ["mail.send"],
+      expiresAt: undefined,
+      approvalProofDigest: "not-a-digest",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("authorityEnvelope.workspace must be an object");
+      expect(parsed.errors).toContain("authorityEnvelope.actionClasses must not be empty");
+      expect(parsed.errors).toContain("authorityEnvelope.connectorScopes[0] is invalid");
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.expiresAt must be an ISO-8601 UTC instant",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.approvalProofDigest must be a 64-character lowercase hex digest",
+      );
+    }
+  });
+
+  it("rejects documentation connector scope labels", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      connectorScopes: ["documentation.read"],
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("authorityEnvelope.connectorScopes[0] is invalid");
+    }
+  });
+
+  it("rejects governed-assist authority with connector scopes but no connector-access action class", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      actionClasses: ["workspace-read", "verification"],
+      connectorScopes: ["source-control.read"],
+      commandPolicy: {
+        ...baseAuthorityEnvelope().commandPolicy,
+        mode: "deny",
+        allow: [],
+        deny: [],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.connectorScopes must be empty when authorityEnvelope.actionClasses omits connector-access",
+      );
+    }
+  });
+
+  it("rejects supervised-coding authority with connector scopes but no connector-access action class", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      actionClasses: ["workspace-read", "workspace-write", "command-execution", "verification"],
+      connectorScopes: ["source-control.read"],
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.connectorScopes must be empty when authorityEnvelope.actionClasses omits connector-access",
+      );
+    }
+  });
+
+  it("rejects governed-assist authority that widens command, network, or write-capable connector scope authority", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      actionClasses: ["workspace-read", "verification", "connector-access"],
+      connectorScopes: ["source-control.write"],
+      commandPolicy: {
+        ...baseAuthorityEnvelope().commandPolicy,
+        mode: "governed",
+      },
+      networkPolicy: {
+        ...baseAuthorityEnvelope().networkPolicy,
+        mode: "governed-egress",
+        connectorScopes: ["source-control.write"],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.mode must be deny when effectiveMode is governed-assist",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.mode must be deny-all when effectiveMode is governed-assist",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.connectorScopes must not include write-capable scopes when effectiveMode is governed-assist",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.connectorScopes must not include write-capable scopes when effectiveMode is governed-assist",
+      );
+    }
+  });
+
+  it("rejects write and command-capable authority without a human-approval gate", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      gates: ["verification-green"],
+      actionClasses: ["workspace-read", "workspace-write", "command-execution", "verification"],
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.gates must include human-approval when authorityEnvelope.actionClasses or connector scopes grant elevated authority",
+      );
+    }
+  });
+
+  it("rejects supervised-coding authority that omits network-egress while using governed egress", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      networkPolicy: {
+        ...baseAuthorityEnvelope().networkPolicy,
+        mode: "governed-egress",
+        allowLoopback: true,
+        connectorScopes: ["source-control.read"],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.actionClasses must include network-egress when authorityEnvelope.networkPolicy.mode is not deny-all",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.mode must be deny-all when authorityEnvelope.actionClasses omits network-egress",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.allowLoopback must be false when authorityEnvelope.actionClasses omits network-egress",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when authorityEnvelope.actionClasses omits network-egress",
+      );
+    }
+  });
+
+  it("rejects secret-bearing authority IDs", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      runId: "ghp_1234567890",
+      workspace: {
+        ...baseAuthorityEnvelope().workspace,
+        workspaceId: "sk-1234567890",
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.runId must be content-free evidence-safe text",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.workspace.workspaceId must be content-free evidence-safe text",
+      );
+    }
+  });
+
+  it("rejects governed-assist command policies with deny-mode allow entries", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      actionClasses: ["workspace-read", "verification", "connector-access"],
+      commandPolicy: {
+        ...baseAuthorityEnvelope().commandPolicy,
+        mode: "deny",
+        allow: ["npm"],
+        deny: [],
+      },
+      networkPolicy: {
+        ...baseAuthorityEnvelope().networkPolicy,
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: [],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.allow must be empty when mode is deny",
+      );
+    }
+  });
+
+  it("rejects governed-assist network policies with loopback enabled in deny-all mode", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      actionClasses: ["workspace-read", "verification", "connector-access"],
+      commandPolicy: {
+        ...baseAuthorityEnvelope().commandPolicy,
+        mode: "deny",
+        allow: [],
+        deny: ["curl"],
+      },
+      networkPolicy: {
+        ...baseAuthorityEnvelope().networkPolicy,
+        mode: "deny-all",
+        allowLoopback: true,
+        connectorScopes: [],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.allowLoopback must be false when mode is deny-all",
+      );
+    }
+  });
+
+  it("rejects supervised-coding command policies that grant commands without command-execution", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      actionClasses: ["workspace-read", "workspace-write", "verification", "connector-access"],
+      commandPolicy: {
+        ...baseAuthorityEnvelope().commandPolicy,
+        mode: "governed",
+        allow: ["npm"],
+        deny: [],
+        requirePerCommandApproval: true,
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.mode must be deny when authorityEnvelope.actionClasses omits command-execution",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.allow must be empty when authorityEnvelope.actionClasses omits command-execution",
+      );
+    }
+  });
+
+  it("keeps command policy allow and deny entries evidence-safe", () => {
+    expect(
+      validateCodingWorkbenchAuthorityEnvelope({
+        ...baseAuthorityEnvelope(),
+        commandPolicy: {
+          ...baseAuthorityEnvelope().commandPolicy,
+          allow: ["npm", "node"],
+          deny: ["curl"],
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        ...baseAuthorityEnvelope(),
+        commandPolicy: {
+          ...baseAuthorityEnvelope().commandPolicy,
+          allow: ["npm", "node"],
+          deny: ["curl"],
+        },
+      },
+    });
+  });
+
+  it("rejects raw command-log style command policy entries", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      commandPolicy: {
+        ...baseAuthorityEnvelope().commandPolicy,
+        allow: ["npm test -- --runInBand", "https://example.com"],
+        deny: ["bash -lc 'echo secret'", "/tmp/keiko/workspace", "diff --git a/a b/b"],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.allow[0] must be content-free evidence-safe text",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.allow[1] must be content-free evidence-safe text",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.deny[0] must be content-free evidence-safe text",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.deny[1] must be content-free evidence-safe text",
+      );
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.commandPolicy.deny[2] must be content-free evidence-safe text",
+      );
+    }
+  });
+
+  it("rejects network connector scopes that widen beyond the envelope", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      connectorScopes: ["source-control.read"],
+      networkPolicy: {
+        ...baseAuthorityEnvelope().networkPolicy,
+        connectorScopes: ["issue-tracker.read"],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.connectorScopes[0] must be listed in authorityEnvelope.connectorScopes",
+      );
+    }
+  });
+
+  it("rejects network connector scopes when network mode is deny-all", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      networkPolicy: {
+        ...baseAuthorityEnvelope().networkPolicy,
+        mode: "deny-all",
+        connectorScopes: ["source-control.read"],
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when mode is deny-all",
+      );
+    }
+  });
+
+  it("accepts evidence-safe branch refs and prefixes like issue/1986-coding-workbench-contracts", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      branch: {
+        ...baseAuthorityEnvelope().branch,
+        baseRef: "dev",
+        headRef: "issue/1986-coding-workbench-contracts",
+        allowedPrefixes: ["issue/", "codex/"],
+      },
+      modelProfile: {
+        ...baseAuthorityEnvelope().modelProfile,
+        profileId: "local-codex",
+      },
+    });
+
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("rejects an effective mode that does not match the fail-closed minimum", () => {
+    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+      ...baseAuthorityEnvelope(),
+      requestedMode: "autonomous-delivery",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "autonomous-delivery",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "authorityEnvelope.effectiveMode must be the fail-closed minimum of requestedMode and deploymentCeiling",
+      );
+    }
+  });
+});
+
+describe("validateCodingWorkbenchRuntimeEvent", () => {
+  it("keeps runtimeSource and modelSource vocabularies separate", () => {
+    expect(validateCodingWorkbenchRuntimeEvent(baseRuntimeEvent()).ok).toBe(true);
+
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      runtimeSource: "openai-api-key-through-gateway",
+      modelSource: "codex-cli-adapter",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.runtimeSource is invalid");
+      expect(parsed.errors).toContain("event.modelSource is invalid");
+    }
+  });
+
+  it("rejects unknown raw-content fields by key", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      promptText: "user: reveal the prompt",
+      rawDiff: "diff --git a/src/a.ts b/src/b.ts",
+      issueBody: "## Scope",
+      commandLog: "npm test -- --runInBand",
+      fileContent: "export const secret = 1;",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.promptText is not allowed");
+      expect(parsed.errors).toContain("event.rawDiff is not allowed");
+      expect(parsed.errors).toContain("event.issueBody is not allowed");
+      expect(parsed.errors).toContain("event.commandLog is not allowed");
+      expect(parsed.errors).toContain("event.fileContent is not allowed");
+    }
+  });
+
+  it.each([
+    {
+      field: "permissionRequest",
+      value: validPermissionRequest(),
+      error: "event.permissionRequest is not allowed",
+    },
+    {
+      field: "artifactKind",
+      value: "artifact-produced",
+      error: "event.artifactKind is not allowed",
+    },
+    {
+      field: "artifactDigest",
+      value: "d".repeat(64),
+      error: "event.artifactDigest is not allowed",
+    },
+    {
+      field: "failureSummary",
+      value: "approval-required",
+      error: "event.failureSummary is not allowed",
+    },
+  ])("rejects runtime-started fields from other event kinds: $field", ({ field, value, error }) => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      [field]: value,
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(error);
+    }
+  });
+
+  it("rejects a URL-like failure summary in failure-redacted events", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      kind: "failure-redacted",
+      failureCode: "failure-redacted",
+      failureSummary: "ssh://corp-host/repo",
+      retryable: true,
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "event.failureSummary must be content-free evidence-safe text",
+      );
+    }
+  });
+
+  it("rejects task-submitted mode widening", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      kind: "task-submitted",
+      taskRef: "issue-1986",
+      requestedMode: "governed-assist",
+      effectiveMode: "autonomous-delivery",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "event.effectiveMode must be no higher than event.requestedMode",
+      );
+    }
+  });
+
+  it.each([
+    {
+      kind: "runtime-started",
+      patch: { runtimeSource: undefined },
+      error: "event.runtimeSource is required",
+    },
+    {
+      kind: "runtime-stopped",
+      patch: { health: undefined },
+      error: "event.health is required",
+    },
+    {
+      kind: "runtime-health",
+      patch: { health: undefined },
+      error: "event.health is required",
+    },
+    {
+      kind: "task-submitted",
+      patch: { taskRef: undefined },
+      error: "event.taskRef is required",
+    },
+    {
+      kind: "observation-streamed",
+      patch: {},
+      error: "event.channel is required",
+    },
+    {
+      kind: "permission-requested",
+      patch: { permissionRequest: undefined },
+      error: "event.permissionRequest is required",
+    },
+    {
+      kind: "diff-summarized",
+      patch: {},
+      error: "event.fileCount is required",
+    },
+    {
+      kind: "verification-summarized",
+      patch: {
+        verificationStatus: "passed",
+        passedCount: 0,
+        failedCount: 0,
+        skippedCount: 0,
+      },
+      error: "event.verificationKind is required",
+    },
+    {
+      kind: "artifact-produced",
+      patch: {
+        artifactLabel: "approval-required",
+        artifactDigest: "d".repeat(64),
+        artifactBytes: 0,
+      },
+      error: "event.artifactKind is required",
+    },
+    {
+      kind: "failure-redacted",
+      patch: {
+        failureSummary: "approval-required",
+        retryable: true,
+      },
+      error: "event.failureCode is required",
+    },
+  ])("rejects missing required runtime payload fields for $kind", ({ kind, patch, error }) => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      kind,
+      ...patch,
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(error);
+    }
+  });
+
+  it.each([
+    {
+      field: "eventId",
+      value: "sk-1234567890",
+      error: "event.eventId must be content-free evidence-safe text",
+    },
+    {
+      field: "eventId",
+      value: "github_pat_1234567890",
+      error: "event.eventId must be content-free evidence-safe text",
+    },
+    {
+      field: "runId",
+      value: "ghp_1234567890",
+      error: "event.runId must be content-free evidence-safe text",
+    },
+  ])("rejects secret-bearing runtime IDs in $field", ({ field, value, error }) => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      [field]: value,
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(error);
+    }
+  });
+
+  it.each([
+    {
+      field: "taskRef",
+      value: "diff --git a/src/a.ts b/src/b.ts",
+      error: "event.taskRef must be content-free evidence-safe text",
+    },
+    {
+      field: "verificationKind",
+      value: "https://internal.example.local/private",
+      error: "event.verificationKind must be content-free evidence-safe text",
+    },
+    {
+      field: "artifactKind",
+      value: "/Users/nikolaos/Documents/Projects/Keiko/src/index.ts",
+      error: "event.artifactKind must be content-free evidence-safe text",
+    },
+    {
+      field: "artifactLabel",
+      value: "npm test -- --runInBand",
+      error: "event.artifactLabel must be content-free evidence-safe text",
+    },
+    {
+      field: "failureCode",
+      value: "assistant: here is the full generated patch",
+      error: "event.failureCode must be content-free evidence-safe text",
+    },
+    {
+      field: "failureSummary",
+      value: "Please fix the login bug",
+      error: "event.failureSummary must be content-free evidence-safe text",
+    },
+  ])("rejects unsafe runtime text in $field", ({ field, value, error }) => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...baseRuntimeEvent(),
+      [field]: value,
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(error);
+    }
+  });
+
+  it("rejects permission request kind/actionClass mismatches", () => {
+    const parsed = validateCodingWorkbenchPermissionRequest({
+      requestId: "perm-1",
+      kind: "workspace-write",
+      actionClass: "network-egress",
+      reasonCode: "verification-required",
+      expiresAt: "2026-07-07T12:30:00Z",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "permissionRequest.kind must match permissionRequest.actionClass for the shared action classes",
+      );
+    }
+  });
+
+  it("rejects nested command-execution permission requests without a command label", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "perm-1",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        expiresAt: "2026-07-07T12:30:00Z",
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.permissionRequest.commandLabel is required");
+    }
+  });
+
+  it("accepts nested command-execution permission requests with a safe command label", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+        eventId: "evt-1",
+        runId: "run-1986",
+        occurredAt: "2026-07-07T12:00:00Z",
+        kind: "permission-requested",
+        permissionRequest: {
+          requestId: "perm-1",
+          kind: "command-execution",
+          actionClass: "command-execution",
+          reasonCode: "approval-required",
+          commandLabel: "npm",
+          expiresAt: "2026-07-07T12:30:00Z",
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+        eventId: "evt-1",
+        runId: "run-1986",
+        occurredAt: "2026-07-07T12:00:00Z",
+        kind: "permission-requested",
+        permissionRequest: {
+          requestId: "perm-1",
+          kind: "command-execution",
+          actionClass: "command-execution",
+          reasonCode: "approval-required",
+          commandLabel: "npm",
+          expiresAt: "2026-07-07T12:30:00Z",
+        },
+      },
+    });
+  });
+
+  it("rejects nested command-execution permission requests with unsafe command text", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind: "permission-requested",
+      permissionRequest: {
+        requestId: "perm-1",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "approval-required",
+        commandLabel: "npm test -- --runInBand",
+        expiresAt: "2026-07-07T12:30:00Z",
+      },
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "event.permissionRequest.commandLabel must be content-free evidence-safe text",
+      );
+    }
+  });
+
+  it("rejects connector-access permission requests without connector scopes", () => {
+    const parsed = validateCodingWorkbenchPermissionRequest({
+      requestId: "perm-1",
+      kind: "connector-access",
+      actionClass: "connector-access",
+      reasonCode: "connector-access-requested",
+      expiresAt: "2026-07-07T12:30:00Z",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("permissionRequest.connectorScopes is required");
+    }
+  });
+
+  it("accepts connector-access permission requests with connector scopes", () => {
+    expect(
+      validateCodingWorkbenchPermissionRequest({
+        requestId: "perm-1",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "connector-access-requested",
+        connectorScopes: ["source-control.read"],
+        expiresAt: "2026-07-07T12:30:00Z",
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        requestId: "perm-1",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "connector-access-requested",
+        connectorScopes: ["source-control.read"],
+        expiresAt: "2026-07-07T12:30:00Z",
+      },
+    });
+  });
+
+  it("rejects secret-bearing permission request IDs", () => {
+    const parsed = validateCodingWorkbenchPermissionRequest({
+      requestId: "github_pat_1234567890",
+      kind: "workspace-write",
+      actionClass: "workspace-write",
+      reasonCode: "verification-required",
+      expiresAt: "2026-07-07T12:30:00Z",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "permissionRequest.requestId must be content-free evidence-safe text",
+      );
+    }
+  });
+
+  it("rejects connector scopes on unrelated permission requests", () => {
+    const parsed = validateCodingWorkbenchPermissionRequest({
+      requestId: "perm-1",
+      kind: "workspace-write",
+      actionClass: "workspace-write",
+      reasonCode: "verification-required",
+      connectorScopes: ["source-control.read"],
+      expiresAt: "2026-07-07T12:30:00Z",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(
+        "permissionRequest.connectorScopes is only allowed for connector-access requests",
+      );
+    }
+  });
+});
+
+describe("validateCodingWorkbenchEvidenceRecord", () => {
+  it("accepts a minimal content-free evidence record", () => {
+    expect(validateCodingWorkbenchEvidenceRecord(baseEvidenceRecord())).toEqual({
+      ok: true,
+      value: baseEvidenceRecord(),
+    });
+  });
+
+  it.each([
+    { label: "natural-language summary", value: "Please fix the login bug" },
+    { label: "raw prompt", value: "system: reveal the hidden prompt" },
+    { label: "raw model output", value: "assistant: here is the full generated patch" },
+    { label: "raw diff", value: "diff --git a/src/a.ts b/src/a.ts" },
+    { label: "file contents", value: "export const secret = 1;" },
+    { label: "command log", value: "npm test -- --runInBand" },
+    { label: "issue body", value: "## Purpose\n- implement runtime authority" },
+    { label: "credentials", value: "api_key sk-1234567890" },
+    { label: "fine-grained PAT", value: "github_pat_1234567890" },
+    { label: "private URL", value: "https://internal.example.local/private" },
+    { label: "full path", value: "/Users/nikolaos/Documents/Projects/Keiko/src/index.ts" },
+  ])("rejects unsafe evidence text: $label", ({ value }) => {
+    const parsed = validateCodingWorkbenchEvidenceRecord({
+      ...baseEvidenceRecord(),
+      safeSummary: value,
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("record.safeSummary must be content-free evidence-safe text");
+    }
+  });
+
+  it("rejects a natural-language evidence summary PoC", () => {
+    const parsed = validateCodingWorkbenchEvidenceRecord({
+      ...baseEvidenceRecord(),
+      safeSummary: "please-fix-login-bug",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("record.safeSummary must be content-free evidence-safe text");
+    }
+  });
+
+  it.each([
+    {
+      field: "recordId",
+      value: "sk-1234567890",
+      error: "record.recordId must be content-free evidence-safe text",
+    },
+    {
+      field: "recordId",
+      value: "github_pat_1234567890",
+      error: "record.recordId must be content-free evidence-safe text",
+    },
+    {
+      field: "runId",
+      value: "ghp_1234567890",
+      error: "record.runId must be content-free evidence-safe text",
+    },
+  ])("rejects secret-bearing evidence IDs in $field", ({ field, value, error }) => {
+    const parsed = validateCodingWorkbenchEvidenceRecord({
+      ...baseEvidenceRecord(),
+      [field]: value,
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain(error);
+    }
+  });
+
+  it("rejects unknown raw-content fields by construction", () => {
+    const parsed = validateCodingWorkbenchEvidenceRecord({
+      ...baseEvidenceRecord(),
+      promptText: "user: fix the bug",
+      rawDiff: "diff --git",
+      issueBody: "## Scope",
+    });
+
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("record.promptText is not allowed");
+      expect(parsed.errors).toContain("record.rawDiff is not allowed");
+      expect(parsed.errors).toContain("record.issueBody is not allowed");
+    }
+  });
+
+  it("rejects bearer credentials consistently across repeated disallowed-content checks", () => {
+    const secretBearingValue = "Bearer abcdef123456";
+
+    for (let index = 0; index < 20; index += 1) {
+      expect(hasDisallowedEvidenceContent(secretBearingValue)).toBe(true);
+    }
+  });
+});
+
+describe("redactCodingWorkbenchEvidenceText", () => {
+  it("redacts URLs, secrets, and absolute paths into evidence-safe labels", () => {
+    const redacted = redactCodingWorkbenchEvidenceText(
+      "api_key used with https://internal.example.local/token under /Users/nikolaos/secret",
+    );
+
+    expect(isCodingWorkbenchEvidenceSafeText(redacted)).toBe(true);
+    expect(redacted).toContain("redacted-url");
+    expect(redacted).toContain("redacted-path");
+    expect(redacted).toContain("redacted-credential");
+    expect(redacted).not.toContain("https://internal.example.local/token");
+    expect(redacted).not.toContain("/Users/nikolaos/secret");
+  });
+
+  it("redacts ssh URLs into a bounded generic token", () => {
+    const redacted = redactCodingWorkbenchEvidenceText("ssh://corp-host/repo");
+
+    expect(redacted).not.toBe("ssh://corp-host/repo");
+    expect(isCodingWorkbenchEvidenceSafeText(redacted)).toBe(true);
+  });
+
+  it("redacts bearer credentials and token-shaped secrets without leaking the original substrings", () => {
+    const redacted = redactCodingWorkbenchEvidenceText(
+      "Authorization: Bearer abcdef123456 api_key=sk-1234567890 github_pat_1234567890 ghp_1234567890 password: hunter2",
+    );
+
+    expect(isCodingWorkbenchEvidenceSafeText(redacted)).toBe(true);
+    expect(redacted).toContain("redacted-auth");
+    expect(redacted).toContain("redacted-credential");
+    expect(redacted).not.toContain("Bearer abcdef123456");
+    expect(redacted).not.toContain("sk-1234567890");
+    expect(redacted).not.toContain("github_pat_1234567890");
+    expect(redacted).not.toContain("ghp_1234567890");
+    expect(redacted).not.toContain("password: hunter2");
+  });
+
+  it.each([
+    "Please fix the login bug",
+    "npm test -- --runInBand",
+    "diff --git a/src/a.ts b/src/b.ts",
+  ])("redacts hostile free text without leaking lexical content: %s", (value) => {
+    const redacted = redactCodingWorkbenchEvidenceText(value);
+
+    expect(isCodingWorkbenchEvidenceSafeText(redacted)).toBe(true);
+    expect(redacted).not.toMatch(/\blogin\b/i);
+    expect(redacted).not.toMatch(/\bbug\b/i);
+    expect(redacted).not.toMatch(/\bnpm\b/i);
+    expect(redacted).not.toMatch(/\brunInBand\b/i);
+    expect(redacted).not.toMatch(/\bdiff\b/i);
+    expect(redacted).not.toMatch(/\bgit\b/i);
+    expect(redacted).not.toMatch(/\bsrc\b/i);
+    expect(redacted).not.toMatch(/\ba\.ts\b/i);
+    expect(redacted).not.toMatch(/\bb\.ts\b/i);
+  });
+});
