@@ -4,6 +4,8 @@ import {
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
   validateKnowledgePodSummary,
+  htmlManualSourceFingerprintTag,
+  htmlManualSourceKindTag,
   type CapsuleSetId,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
@@ -174,6 +176,46 @@ describe("Knowledge Pod compatibility projection", () => {
       });
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
       expect(JSON.stringify(summary)).not.toContain("/Users/alice");
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("projects HTML manual source metadata without widening the retrieval scope kind", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-manual-summary" as KnowledgeCapsuleId;
+      const sourceId = "src-manual-summary" as KnowledgeSourceId;
+      const capsule = createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: capsuleId,
+          displayName: "Device Handbook",
+          lifecycleState: "ready",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      addSourceToCapsule(env.store, capsuleId, {
+        ...sampleSourceInput(sourceId),
+        tags: [
+          htmlManualSourceKindTag("html-manual-http"),
+          htmlManualSourceFingerprintTag("fp-device-handbook"),
+        ],
+        scope: {
+          kind: "files",
+          rootPath: "/keiko-html-manual/cap-manual-summary",
+          files: ["index.html"],
+        },
+      });
+      seedIndexedDocument(env.store, capsuleId, sourceId, "manual-summary");
+
+      const summary = buildKnowledgePodSummary(env.store, capsule);
+
+      expect(summary.sourceKinds).toStrictEqual(["html-manual-http"]);
+      expect(summary.manualSourceFingerprint).toBe("fp-device-handbook");
+      expect(summary.compatibility.sourceIds).toStrictEqual([sourceId]);
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+      expect(JSON.stringify(summary)).not.toContain("keiko-html-manual");
     } finally {
       env.cleanup();
     }

@@ -10,6 +10,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";
 import { createInMemoryManualFetcher, type InMemoryManualPage } from "./crawl/index.js";
 import { createHtmlManualPod, type CreateHtmlManualPodDeps } from "./manual-pod.js";
+import {
+  persistHtmlManualSourceMetadata,
+  readHtmlManualSourceMetadata,
+  resolveHtmlManualCitationTarget,
+} from "./manual-source-metadata.js";
 import { createDefaultParserRegistry } from "./parsers/index.js";
 import type { KnowledgeStore } from "./store.js";
 import { scriptedAdapter } from "./testing.js";
@@ -74,8 +79,76 @@ describe("createHtmlManualPod", () => {
     expect(result.summary.counts.documentCount).toBe(3);
     expect(result.summary.counts.chunkCount).toBeGreaterThan(0);
     expect(result.summary.counts.vectorCount).toBeGreaterThan(0);
-    expect(result.summary.sourceKinds).toContain("files");
+    expect(result.summary.sourceKinds).toStrictEqual(["html-manual-http"]);
+    expect(result.summary.manualSourceFingerprint).toBe("fp-docs-internal");
     expect(result.summary.displayName).toBe("Product Handbook");
+    expect(readHtmlManualSourceMetadata(store, result.capsuleId, result.sourceId)).toMatchObject({
+      sourceKind: "html-manual-http",
+      sourceFingerprint: "fp-docs-internal",
+      origin: "https://docs.internal",
+    });
+  });
+
+  it("resolves a manual citation target from persisted approved source metadata", async () => {
+    const result = await createHtmlManualPod(podDeps(MANUAL_PAGES), httpManualSource());
+    const row = store._internal.db
+      .prepare(
+        "SELECT id FROM documents WHERE capsule_id = :capsuleId AND source_id = :sourceId AND safe_display_name = 'guide.html'",
+      )
+      .get({ capsuleId: result.capsuleId, sourceId: result.sourceId }) as
+      { readonly id: string } | undefined;
+    if (row === undefined) throw new Error("guide document was not indexed");
+
+    const target = resolveHtmlManualCitationTarget(store, {
+      capsuleId: result.capsuleId,
+      sourceId: result.sourceId,
+      documentId: row.id as Parameters<typeof resolveHtmlManualCitationTarget>[1]["documentId"],
+      anchorId: "steps",
+    });
+
+    expect(target).toMatchObject({
+      ok: true,
+      sourceKind: "html-manual-http",
+      pageTitle: "guide.html",
+      relativePath: "guide.html",
+    });
+    expect(target.ok ? target.target : "").toBe("https://docs.internal/guide.html#steps");
+  });
+
+  it("refuses a citation target that escapes the approved manual path prefix", async () => {
+    const result = await createHtmlManualPod(podDeps(MANUAL_PAGES), httpManualSource());
+    persistHtmlManualSourceMetadata(store, result.capsuleId, result.sourceId, {
+      ...httpManualSource(),
+      scope: {
+        kind: "html-manual-http",
+        origin: "https://docs.internal",
+        pathPrefix: "/manual",
+      },
+    });
+    const outside = store._internal.db
+      .prepare(
+        [
+          "UPDATE documents SET document_path = :documentPath",
+          "WHERE capsule_id = :capsuleId AND source_id = :sourceId",
+          "RETURNING id",
+        ].join(" "),
+      )
+      .get({
+        capsuleId: result.capsuleId,
+        sourceId: result.sourceId,
+        documentPath: "keiko-html-manual/cap-manual-1/src-manual-1/manualsibling.html",
+      }) as { readonly id: string } | undefined;
+    if (outside === undefined) throw new Error("manual document was not indexed");
+
+    expect(
+      resolveHtmlManualCitationTarget(store, {
+        capsuleId: result.capsuleId,
+        sourceId: result.sourceId,
+        documentId: outside.id as Parameters<
+          typeof resolveHtmlManualCitationTarget
+        >[1]["documentId"],
+      }),
+    ).toStrictEqual({ ok: false, reason: "target-outside-approved-scope" });
   });
 
   it("redacts an endpoint-bearing proposed pod name to the safe fallback", async () => {
@@ -91,6 +164,7 @@ describe("createHtmlManualPod", () => {
     const result = await createHtmlManualPod(podDeps(MANUAL_PAGES), httpManualSource());
     const serialized = JSON.stringify(result.summary);
     expect(serialized).not.toContain("keiko-html-manual");
+    expect(serialized).not.toContain("https://docs.internal");
     expect(serialized).not.toContain("content paragraph");
     expect(serialized).not.toContain("<h1>");
     expect(result.summary.privacy.rawContentExposed).toBe(false);

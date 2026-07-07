@@ -192,6 +192,72 @@ describe("local knowledge BFF boundary helpers", () => {
     });
   });
 
+  it("surfaces HTML manual source kind and readiness through existing pod metadata", () => {
+    const readyId = "cap-manual-ready" as KnowledgeCapsuleId;
+    const degradedId = "cap-manual-degraded" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: readyId,
+          displayName: "Device Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: degradedId,
+          displayName: "Service Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(readyId, "pod", "Device Handbook", {
+          sourceKinds: ["html-manual-http"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 1,
+            documentCount: 3,
+            chunkCount: 8,
+            vectorCount: 8,
+          },
+        }),
+        podSummary(degradedId, "pod", "Service Handbook", {
+          readiness: "degraded",
+          sourceKinds: ["html-manual-local"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 1,
+            documentCount: 1,
+            chunkCount: 2,
+            vectorCount: 0,
+          },
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod).toMatchObject({
+      sourceKinds: ["html-manual-http"],
+      guidance: {
+        label: "HTML manual",
+        description: expect.stringContaining("3 docs · 8 chunks · 8 vectors"),
+        tone: "muted",
+      },
+    });
+    expect(capsules[1]?.knowledgePod).toMatchObject({
+      readiness: "degraded",
+      sourceKinds: ["html-manual-local"],
+      guidance: {
+        label: "Manual degraded",
+        description: expect.stringContaining("1 docs · 2 chunks · 0 vectors"),
+        tone: "warning",
+      },
+    });
+    expect(JSON.stringify(capsules)).not.toContain("https://docs.internal");
+    expect(JSON.stringify(capsules)).not.toContain("/Users/alice");
+  });
+
   it("maps unavailable and incompatible Knowledge Pod guidance", () => {
     const unavailableId = "cap-unavailable" as KnowledgeCapsuleId;
     const incompatibleId = "cap-incompatible" as KnowledgeCapsuleId;

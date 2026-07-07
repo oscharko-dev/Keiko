@@ -28,6 +28,7 @@ import {
   type KnowledgePodSummaryKind,
   type KnowledgeSource,
   isKnowledgePodEvidenceSafeText,
+  parseHtmlManualSourceTagMetadata,
   resolveKnowledgePodModelUsePolicy,
   validateKnowledgePodSummary,
 } from "@oscharko-dev/keiko-contracts";
@@ -227,6 +228,7 @@ function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
     },
     updatedAt: input.capsule.updatedAt,
     degradationReasons: input.degradationReasons,
+    ...manualSourceFingerprint(input.sources),
   };
 }
 
@@ -518,9 +520,26 @@ function embeddingDegradationReasons(
 }
 
 function uniqueSourceKinds(sources: readonly KnowledgeSource[]): readonly KnowledgePodSourceKind[] {
-  return uniqueStrings(
-    sources.map((source) => source.scope.kind),
-  ) as readonly KnowledgePodSourceKind[];
+  return uniqueStrings(sources.map(sourceKindForSummary)) as readonly KnowledgePodSourceKind[];
+}
+
+function sourceKindForSummary(source: KnowledgeSource): KnowledgePodSourceKind {
+  return parseHtmlManualSourceTagMetadata(source.tags).sourceKind ?? source.scope.kind;
+}
+
+function manualSourceFingerprint(sources: readonly KnowledgeSource[]): {
+  readonly manualSourceFingerprint?: string;
+} {
+  const fingerprints = uniqueStrings(
+    sources
+      .map((source) => parseHtmlManualSourceTagMetadata(source.tags).sourceFingerprint)
+      .filter(
+        (fingerprint): fingerprint is string =>
+          fingerprint !== undefined && isKnowledgePodEvidenceSafeText(fingerprint),
+      ),
+  );
+  const fingerprint = fingerprints.length === 1 ? fingerprints[0] : undefined;
+  return fingerprint === undefined ? {} : { manualSourceFingerprint: fingerprint };
 }
 
 function uniqueSourceIds(

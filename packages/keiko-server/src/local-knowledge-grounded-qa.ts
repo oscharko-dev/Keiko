@@ -5,7 +5,9 @@ import {
   getCapsule,
   getCapsuleSet,
   listCapsuleSources,
+  readHtmlManualSourceMetadata,
   readCitationExcerpt,
+  resolveHtmlManualCitationTarget,
   resolveScopeModelUsePolicy,
   runGroundedAnswer,
   type AnswerGenerator,
@@ -26,6 +28,9 @@ import type {
   GroundedRerankerDiagnostics,
   GroundedAnswer,
   GroundedUncertainty,
+  HtmlManualCitationMetadata,
+  HtmlManualCitationOpenEligibility,
+  HtmlManualCitationOpenUnavailableReason,
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -41,6 +46,7 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  classifyDocumentationTarget,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
   isKnowledgePodRetrievalActivitySafeText,
@@ -67,6 +73,7 @@ import { errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -405,14 +412,105 @@ export function buildSelectedScopeSourceLookup(
   };
 }
 
+function manualOpenUnavailable(
+  reason: HtmlManualCitationOpenUnavailableReason,
+): HtmlManualCitationOpenEligibility {
+  return { state: "unavailable", reason };
+}
+
+function manualOpenReasonForClassification(
+  reason: "invalid-target" | "unsupported-scheme" | "credentials-in-target",
+): HtmlManualCitationOpenUnavailableReason {
+  if (reason === "credentials-in-target") return "target-credentialed";
+  if (reason === "unsupported-scheme") return "target-unsupported";
+  return "target-unavailable";
+}
+
+function classifiedManualOpen(
+  reference: RetrievalReference,
+  rawTarget: string,
+): Pick<HtmlManualCitationMetadata, "targetSummary" | "open"> {
+  const classification = classifyDocumentationTarget(rawTarget);
+  if (!classification.ok) {
+    return {
+      open: manualOpenUnavailable(manualOpenReasonForClassification(classification.reason)),
+    };
+  }
+  if (classification.targetClass === "external-http") {
+    return { open: manualOpenUnavailable("target-outside-approved-scope") };
+  }
+  const target = buildHtmlManualCitationNavigationTarget({
+    capsuleId: reference.capsuleId,
+    sourceId: reference.citation.sourceId,
+    documentId: reference.citation.documentId,
+    chunkId: reference.chunkId,
+    ...(reference.citation.anchorId !== undefined ? { anchorId: reference.citation.anchorId } : {}),
+  });
+  return {
+    targetSummary: {
+      originSummary: classification.originSummary,
+      pathSummary: classification.pathSummary,
+    },
+    open:
+      reference.citation.anchorId === undefined
+        ? { state: "page-level-only", target, reason: "missing-anchor" }
+        : { state: "available", target },
+  };
+}
+
+function projectHtmlManualCitationMetadata(
+  store: KnowledgeStore | undefined,
+  reference: RetrievalReference,
+  redactLabel: LabelRedactor | undefined,
+): HtmlManualCitationMetadata | undefined {
+  if (store === undefined) return undefined;
+  const metadata = readHtmlManualSourceMetadata(
+    store,
+    reference.capsuleId,
+    reference.citation.sourceId,
+  );
+  if (metadata === undefined) return undefined;
+  const resolved = resolveHtmlManualCitationTarget(store, {
+    capsuleId: reference.capsuleId,
+    sourceId: reference.citation.sourceId,
+    documentId: reference.citation.documentId,
+    ...(reference.citation.anchorId !== undefined ? { anchorId: reference.citation.anchorId } : {}),
+  });
+  const base = {
+    sourceKind: metadata.sourceKind,
+    pageTitle: citationLabelFallback(
+      citationLabelPart(reference.citation.safeDisplayName, redactLabel),
+    ),
+    safePageId: citationLabelFallback(
+      citationLabelPart(String(reference.citation.documentId), redactLabel),
+    ),
+    ...(reference.citation.sectionPath !== undefined
+      ? {
+          sectionPath: reference.citation.sectionPath.map((part) =>
+            citationLabelPart(part, redactLabel),
+          ),
+        }
+      : {}),
+    ...(reference.citation.anchorId !== undefined ? { anchorId: reference.citation.anchorId } : {}),
+    ...(reference.citation.parsedUnitId !== undefined
+      ? { parsedUnitId: reference.citation.parsedUnitId }
+      : {}),
+  };
+  return resolved.ok
+    ? { ...base, ...classifiedManualOpen(reference, resolved.target) }
+    : { ...base, open: manualOpenUnavailable(resolved.reason) };
+}
+
 export function projectLocalKnowledgeCitation(
   reference: RetrievalReference,
   marker: string,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
   redactLabel?: LabelRedactor,
+  store?: KnowledgeStore,
 ): LocalKnowledgeEvidenceCitation {
   const source = sourceLookup?.(reference);
   const safeSource = source === undefined ? undefined : citationLabelPart(source, redactLabel);
+  const htmlManual = projectHtmlManualCitationMetadata(store, reference, redactLabel);
   return {
     stableId: citationStableId(reference, marker),
     marker,
@@ -425,6 +523,7 @@ export function projectLocalKnowledgeCitation(
       chunkId: reference.chunkId,
     },
     ...(safeSource !== undefined && safeSource.length > 0 ? { source: safeSource } : {}),
+    ...(htmlManual !== undefined ? { htmlManual } : {}),
   };
 }
 
@@ -923,12 +1022,19 @@ export function buildLocalKnowledgeCitations(
   noEvidenceReason: string | undefined,
   sourceLookup?: LocalKnowledgeCitationSourceLookup,
   redactLabel?: LabelRedactor,
+  store?: KnowledgeStore,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   if (noEvidenceReason !== undefined) return [];
   // When the model emitted [n] markers, honour exactly what it cited.
   if (result.citations.length > 0) {
     return result.citations.map((entry) =>
-      projectLocalKnowledgeCitation(entry.reference, entry.marker, sourceLookup, redactLabel),
+      projectLocalKnowledgeCitation(
+        entry.reference,
+        entry.marker,
+        sourceLookup,
+        redactLabel,
+        store,
+      ),
     );
   }
   return [];
@@ -996,6 +1102,7 @@ function buildLocalKnowledgeAnswer(
     noEvidenceReason,
     sourceLookup ?? buildSelectedScopeSourceLookup(store, selected),
     redactLabel,
+    store,
   );
   const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
     store,
