@@ -284,6 +284,21 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
+  it("includes the coding-workbench Codex subscription profile and setup routes", () => {
+    expect(
+      API_ROUTES.find(
+        (r) =>
+          r.method === "GET" && r.pattern === "/api/coding-workbench/codex-subscription/profile",
+      ),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) =>
+          r.method === "POST" && r.pattern === "/api/coding-workbench/codex-subscription/setup",
+      ),
+    ).toBeDefined();
+  });
+
   it("includes the update preflight routes (#1692)", () => {
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/update/preflight"),

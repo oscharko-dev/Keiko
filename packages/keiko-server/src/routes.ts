@@ -87,6 +87,10 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
+import {
+  handleCodingCodexSubscriptionProfile,
+  handleCodingCodexSubscriptionSetup,
+} from "./coding-codex-subscription.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -351,6 +355,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-sidecar/gateway/chat/completions",
     handler: handleCodingSidecarGatewayChatCompletions,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/codex-subscription/profile",
+    handler: handleCodingCodexSubscriptionProfile,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/codex-subscription/setup",
+    handler: handleCodingCodexSubscriptionSetup,
   },
   { method: "GET", pattern: "/api/update/preflight", handler: handleGetUpdatePreflight },
   {
