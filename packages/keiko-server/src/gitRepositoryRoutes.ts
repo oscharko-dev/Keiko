@@ -220,9 +220,14 @@ const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
 ): Promise<RouteResult | null> {
   // Fail closed at the spawn boundary: neither positional may be option-like, so a hostile URL or
   // destination can never be re-read by git as `--upload-pack`/`--exec`/… even though `--` already
-  // separates them. This is the barrier the URL/destination validation upstream also enforces.
-  if (!isSafeGitPositional(repositoryUrl) || !isSafeGitPositional(destinationPath)) {
+  // separates them. The dash checks are written inline (not only via isSafeGitPositional, which
+  // guards the upstream URL allow-list) so the barrier sits directly on the dataflow into the
+  // spawn — a leading-dash value cannot reach the git argv below.
+  if (repositoryUrl.startsWith("-") || destinationPath.startsWith("-")) {
     return invalid("The repository URL and destination must not be interpretable as git options.");
+  }
+  if (!isSafeGitPositional(repositoryUrl) || !isSafeGitPositional(destinationPath)) {
+    return invalid("The repository URL and destination must be non-empty.");
   }
   const result = await defaultGitNetworkProcessRunner(
     ["clone", "--", repositoryUrl, destinationPath],
