@@ -10,6 +10,7 @@ import type {
   ReactNode,
   RefObject,
 } from "react";
+import { useTranslate } from "@/lib/i18n";
 import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import {
@@ -403,6 +404,7 @@ export function Workspace({
   palette,
   children,
 }: WorkspaceProps): ReactNode {
+  const t = useTranslate();
   const { wins, view, snapPrev, conns, connecting, selection, api } = ws;
   // GEN-PERF-WORKSPACE-003 — the four drop-handler add*Node callbacks read the live
   // `view` for drop-point→world conversion. Closing over `view` forced it into their
@@ -935,10 +937,10 @@ export function Workspace({
   const selectedWindowCount = selection.selectedWindowIds.length;
   const selectionStatusText =
     selectedWindowCount === 0
-      ? "No workspace windows selected"
+      ? t("workspace.selection.none")
       : selectedWindowCount === 1
-        ? "1 workspace window selected"
-        : `${String(selectedWindowCount)} workspace windows selected`;
+        ? t("workspace.selection.one")
+        : t("workspace.selection.many", { count: selectedWindowCount });
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (

@@ -19,6 +19,7 @@ import type {
   QualityIntelligenceImageSource,
   WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import { Icons, type IconName } from "../Icons";
 import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import {
@@ -607,6 +608,7 @@ function WindowFrameImpl({
   selectedWindowCount = 0,
   linkRevision,
 }: WindowFrameProps): ReactNode {
+  const t = useTranslate();
   const def = WIN_TYPES[win.type];
   const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
@@ -1049,7 +1051,9 @@ function WindowFrameImpl({
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
   const windowLabel = sub !== null ? `${def.title} — ${sub}` : def.title;
-  const accessibleWindowLabel = selected ? `${windowLabel} — selected` : windowLabel;
+  const accessibleWindowLabel = selected
+    ? t("workspace.window.selectedLabel", { label: windowLabel })
+    : windowLabel;
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
   // Issue #1580 — bound per-window layout/style recalc (item 8: `contain`) so a
   // scene-zoom relayout or an intra-window reflow does not cascade across all N

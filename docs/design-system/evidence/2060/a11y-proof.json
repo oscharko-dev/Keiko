@@ -1,16 +1,79 @@
 {
   "issue": 2060,
-  "surface": "workspace multi-window selection",
-  "proofType": "jest-axe",
-  "tests": [
-    "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.a11y.test.tsx"
+  "epic": 2055,
+  "verdict": "PASS",
+  "proofType": "browser-capture-plus-jest-axe",
+  "globalsCssSha256": "3fb769ffc1447e71bf68a5b2be70b8090556a4015267272efdb1c0fc7643d92e",
+  "workspaceSelectionCssSha256": "32f4e25876e01d5e5ff9d5f14e59075a36638788069a9762bae5cb179c5461b8",
+  "gate": "selected window regions expose selected state through accessible names and live count",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "02-light.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "03-dark-hc.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "04-light-hc.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "05-prefers-contrast.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "06-forced-colors.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "07-reduced-motion.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    }
   ],
-  "states": ["default", "selected"],
-  "result": "passed",
-  "command": "npm test --workspace @oscharko-dev/keiko-ui -- src/app/components/desktop/windows/WindowFrame.a11y.test.tsx src/app/components/desktop/windows/WindowFrame.test.tsx src/app/components/desktop/Workspace.test.tsx src/app/components/desktop/hooks/workspaceClipboard.test.ts src/app/components/desktop/hooks/useWorkspace.keyboard.test.tsx --pool=forks",
-  "notes": [
-    "Selected state is exposed through the accessible window name.",
-    "Workspace selected-window count is exposed through a polite live region.",
-    "Window regions are keyboard-reachable and Space toggles selection."
+  "structuralTests": [
+    "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.a11y.test.tsx",
+    "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.test.tsx",
+    "packages/keiko-ui/src/app/components/desktop/Workspace.test.tsx"
   ]
 }
