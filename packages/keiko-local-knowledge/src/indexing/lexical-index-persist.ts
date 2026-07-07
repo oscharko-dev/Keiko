@@ -135,8 +135,12 @@ export function replaceLexicalRowsForDocument(
 
 export function upsertLexicalRows(db: DatabaseSync, rows: readonly LexicalChunkIndexRow[]): void {
   runInSavepoint(db, "upsert_chunk_lexical_rows", () => {
+    // Hoisted out of the loop like replaceLexicalRowsForDocument above: re-preparing
+    // the same INSERT per row measured 2.7x slower on the bounded-indexing path,
+    // which feeds thousands of rows per oversized document (GEN-PERF-LK-003).
+    const insert = db.prepare(INSERT_LEXICAL_SQL);
     for (const row of rows) {
-      db.prepare(INSERT_LEXICAL_SQL).run({
+      insert.run({
         capsule_id: String(row.capsuleId),
         source_id: String(row.sourceId),
         document_id: String(row.documentId),

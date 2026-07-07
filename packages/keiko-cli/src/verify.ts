@@ -5,17 +5,9 @@
 // occurred; 2 on a usage error. Mirrors runContextCli's structure (flag parsing, --json, typed
 // error catch at the boundary).
 
-import { detectWorkspace, WorkspaceError } from "@oscharko-dev/keiko-workspace";
-import {
-  buildVerificationPlan,
-  buildVerificationSummary,
-  detectScripts,
-  EmptyPlanError,
-  runVerification,
-  VerificationError,
-  type VerificationKind,
-  type VerificationReport,
-} from "@oscharko-dev/keiko-verification";
+import type { VerificationKind, VerificationReport } from "@oscharko-dev/keiko-verification";
+// GEN-PERF-CLI-001 — workspace/verification graphs load on dispatch, not CLI parse.
+import { loadVerification, loadWorkspaceModule } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 
 const VALID_KINDS: ReadonlySet<string> = new Set<VerificationKind>([
@@ -76,19 +68,29 @@ function parseArgs(args: readonly string[]): VerifyArgs | null {
 }
 
 async function runPlan(parsed: VerifyArgs): Promise<VerificationReport> {
+  const [{ detectWorkspace }, verification] = await Promise.all([
+    loadWorkspaceModule(),
+    loadVerification(),
+  ]);
   const workspace = detectWorkspace(parsed.dir);
-  const catalog = detectScripts(workspace);
-  const plan = buildVerificationPlan(workspace, catalog, {
+  const catalog = verification.detectScripts(workspace);
+  const plan = verification.buildVerificationPlan(workspace, catalog, {
     only: parsed.only,
     changedFiles: parsed.changed,
   });
   if (plan.steps.length === 0) {
-    throw new EmptyPlanError("verification plan contains no runnable or skipped steps");
+    throw new verification.EmptyPlanError(
+      "verification plan contains no runnable or skipped steps",
+    );
   }
-  return runVerification(plan, { workspace, networkEnforcement: "enforce-or-degrade" });
+  return verification.runVerification(plan, {
+    workspace,
+    networkEnforcement: "enforce-or-degrade",
+  });
 }
 
-function renderText(report: VerificationReport, io: CliIo): void {
+async function renderText(report: VerificationReport, io: CliIo): Promise<void> {
+  const { buildVerificationSummary } = await loadVerification();
   const summary = buildVerificationSummary(report);
   io.out(`Verification: ${summary.overallStatus} (${String(summary.durationMs)}ms)\n`);
   io.out("KIND\tSTATUS\tEXIT\tMS\tCOMMAND\tDETAIL\n");
@@ -112,12 +114,16 @@ export async function runVerifyCli(args: readonly string[], io: CliIo): Promise<
     io.err(USAGE);
     return 2;
   }
+  const [{ WorkspaceError }, { buildVerificationSummary, VerificationError }] = await Promise.all([
+    loadWorkspaceModule(),
+    loadVerification(),
+  ]);
   try {
     const report = await runPlan(parsed);
     if (parsed.json) {
       io.out(`${JSON.stringify(buildVerificationSummary(report), null, 2)}\n`);
     } else {
-      renderText(report, io);
+      await renderText(report, io);
     }
     return report.overallStatus === "passed" ? 0 : 1;
   } catch (error) {

@@ -7,34 +7,23 @@
 // error; 2 on usage error (unknown flag, mutual exclusion, unknown suite/fixture name).
 
 import { writeFileSync } from "node:fs";
-import {
-  ConfigInvalidError,
-  GatewayError,
-  assertConfiguredModel,
-  findConfiguredCapability,
-  listConfiguredCapabilities,
-  redact,
-  type EnvSource,
-  type GatewayConfig,
-  type ModelCapability,
-} from "@oscharko-dev/keiko-model-gateway";
-import { createAuditRedactor, deepRedactStrings } from "@oscharko-dev/keiko-evidence";
+import type { EnvSource, GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
-import { parseRunRequest } from "@oscharko-dev/keiko-server";
-import {
-  fixtureByName,
-  fixturesForSuite,
-  isSuiteName,
-  renderEvalSummary,
-  runEvaluationSuite,
-  type EvalRunnerDeps,
-  type EvalScorecard,
-  type EvaluationFixture,
+import type {
+  EvalRunnerDeps,
+  EvalScorecard,
+  EvaluationFixture,
 } from "@oscharko-dev/keiko-evaluations";
 import { runGenTestsCli } from "./gen-tests.js";
-import { loadGatewayConfigFromFile } from "./gateway-config.js";
+import { gatewayConfigFileLoader } from "./gateway-config.js";
 import { runInvestigateCli } from "./investigate.js";
+// GEN-PERF-CLI-001 — gateway/evidence/server/evaluations graphs load at dispatch.
+import { loadEvaluations, loadEvidence, loadModelGateway, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+
+type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
+type EvaluationsModule = typeof import("@oscharko-dev/keiko-evaluations");
+type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
 
 const USAGE = `Usage:
   keiko evaluate [--suite <unit-tests|bug-investigation|all>] [--fixture <name>]
@@ -134,40 +123,54 @@ type Selection =
   { readonly fixtures: readonly EvaluationFixture[] } | { readonly usageError: string };
 
 // Resolves the fixture set from --suite / --fixture, enforcing mutual exclusion and name validity.
-function selectFixtures(parsed: EvaluateArgs): Selection {
+function selectFixtures(parsed: EvaluateArgs, evaluations: EvaluationsModule): Selection {
   if (parsed.suite !== undefined && parsed.fixture !== undefined) {
     return { usageError: "Error: --suite and --fixture are mutually exclusive.\n" };
   }
   if (parsed.fixture !== undefined) {
-    const fixture = fixtureByName(parsed.fixture);
+    const fixture = evaluations.fixtureByName(parsed.fixture);
     return fixture === undefined
       ? { usageError: `Error: unknown fixture "${parsed.fixture}".\n` }
       : { fixtures: [fixture] };
   }
   const suite = parsed.suite ?? "all";
-  if (!isSuiteName(suite)) {
+  if (!evaluations.isSuiteName(suite)) {
     return { usageError: `Error: unknown suite "${suite}".\n` };
   }
-  return { fixtures: fixturesForSuite(suite) };
+  return { fixtures: evaluations.fixturesForSuite(suite) };
 }
 
 // In live mode, deep-redact the scorecard before serialization so that any model content that
 // leaked into workflow report fields (e.g. fixture reasons) is scrubbed by the same audit
 // redactor applied at evidence-persist time. Offline scorecard is static harness text — safe as-is.
-function redactedScorecard(scorecard: EvalScorecard, live: boolean, env: EnvSource): unknown {
+function redactedScorecard(
+  scorecard: EvalScorecard,
+  live: boolean,
+  env: EnvSource,
+  evidence: EvidenceModule,
+): unknown {
   if (!live) {
     return scorecard;
   }
-  const redactFn = createAuditRedactor({ additionalSecrets: keikoApiKeySecretValues(env) }, env);
-  return deepRedactStrings(scorecard, redactFn);
+  const redactFn = evidence.createAuditRedactor(
+    { additionalSecrets: keikoApiKeySecretValues(env) },
+    env,
+  );
+  return evidence.deepRedactStrings(scorecard, redactFn);
 }
 
 function writeScorecard(path: string, output: unknown): void {
   writeFileSync(path, `${JSON.stringify(output, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
 }
 
-function emit(scorecard: EvalScorecard, parsed: EvaluateArgs, io: CliIo, env: EnvSource): void {
-  const output = redactedScorecard(scorecard, parsed.live, env);
+function emit(
+  scorecard: EvalScorecard,
+  parsed: EvaluateArgs,
+  io: CliIo,
+  env: EnvSource,
+  modules: { readonly evaluations: EvaluationsModule; readonly evidence: EvidenceModule },
+): void {
+  const output = redactedScorecard(scorecard, parsed.live, env, modules.evidence);
   // Emit --json to stdout BEFORE attempting the file write so that a file-already-exists
   // error (EEXIST from writeScorecard) does not silently suppress the JSON output.
   if (parsed.json) {
@@ -177,7 +180,7 @@ function emit(scorecard: EvalScorecard, parsed: EvaluateArgs, io: CliIo, env: En
     writeScorecard(parsed.output, output);
   }
   if (!parsed.json) {
-    io.out(`${renderEvalSummary(scorecard)}\n`);
+    io.out(`${modules.evaluations.renderEvalSummary(scorecard)}\n`);
   }
 }
 
@@ -209,12 +212,33 @@ export async function runEvaluateCli(
     io.err(USAGE);
     return 2;
   }
-  const selection = selectFixtures(parsed);
+  const [gateway, evaluations, evidence, { parseRunRequest }, configLoader] = await Promise.all([
+    loadModelGateway(),
+    loadEvaluations(),
+    loadEvidence(),
+    loadServer(),
+    gatewayConfigFileLoader(),
+  ]);
+  const selection = selectFixtures(parsed, evaluations);
   if ("usageError" in selection) {
     io.err(selection.usageError);
     return 2;
   }
-  return runSuite(parsed, selection.fixtures, io, env, deps);
+  return runSuite(parsed, selection.fixtures, io, env, deps, {
+    gateway,
+    evaluations,
+    evidence,
+    parseRunRequest,
+    configLoader,
+  });
+}
+
+interface EvaluateRuntime {
+  readonly gateway: GatewayModule;
+  readonly evaluations: EvaluationsModule;
+  readonly evidence: EvidenceModule;
+  readonly parseRunRequest: (typeof import("@oscharko-dev/keiko-server"))["parseRunRequest"];
+  readonly configLoader: (path: string, env: EnvSource) => GatewayConfig;
 }
 
 async function runSuite(
@@ -223,13 +247,14 @@ async function runSuite(
   io: CliIo,
   env: EnvSource,
   deps: EvaluateDeps,
+  runtime: EvaluateRuntime,
 ): Promise<number> {
   try {
-    const liveModelId = resolveLiveModelId(parsed, io, env);
+    const liveModelId = resolveLiveModelId(parsed, io, env, runtime);
     if (typeof liveModelId === "number") {
       return liveModelId;
     }
-    const scorecard = await runEvaluationSuite(
+    const scorecard = await runtime.evaluations.runEvaluationSuite(
       {
         mode: parsed.live ? "live" : "offline",
         fixtures,
@@ -241,23 +266,23 @@ async function runSuite(
       {
         env,
         now: Date.now,
-        configLoader: loadGatewayConfigFromFile,
+        configLoader: runtime.configLoader,
         surfaceParity: {
           runGenTestsCli,
           runInvestigateCli,
-          parseRunRequest,
+          parseRunRequest: runtime.parseRunRequest,
         },
         ...deps.runner,
       },
     );
-    emit(scorecard, parsed, io, env);
+    emit(scorecard, parsed, io, env, runtime);
     return exitCodeFor(scorecard);
   } catch (error) {
     if (isOutputAlreadyExistsError(error)) {
       io.err(`Error: output file already exists: ${parsed.output ?? "<unknown>"}\n`);
       return 1;
     }
-    return handleRunError(error, parsed, io);
+    return handleRunError(error, parsed, io, runtime.gateway);
   }
 }
 
@@ -265,30 +290,34 @@ function resolveLiveModelId(
   parsed: EvaluateArgs,
   io: CliIo,
   env: EnvSource,
+  runtime: EvaluateRuntime,
 ): string | undefined | number {
   if (!parsed.live) {
     return parsed.model;
   }
+  const { gateway, configLoader } = runtime;
   try {
     const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
     if (path === undefined) {
-      throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+      throw new gateway.ConfigInvalidError(
+        "no config source; pass --config PATH or set KEIKO_CONFIG_FILE",
+      );
     }
-    const config = loadGatewayConfigFromFile(path, env);
+    const config = configLoader(path, env);
     if (parsed.model !== undefined) {
-      assertLiveEvaluationModel(config, parsed.model);
+      assertLiveEvaluationModel(config, parsed.model, gateway);
       return parsed.model;
     }
-    const modelId = selectLiveEvaluationModel(config);
+    const modelId = selectLiveEvaluationModel(config, gateway);
     if (modelId === undefined) {
       io.err("Error: no configured workflow-capable chat model is available.\n");
       return 1;
     }
     return modelId;
   } catch (error) {
-    if (error instanceof GatewayError) {
+    if (error instanceof gateway.GatewayError) {
       io.err(
-        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
           `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
       );
       return 1;
@@ -308,9 +337,12 @@ function isLiveEvaluationCapable(capability: ModelCapability | undefined): boole
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 
-function selectLiveEvaluationModel(config: GatewayConfig): string | undefined {
+function selectLiveEvaluationModel(
+  config: GatewayConfig,
+  gateway: GatewayModule,
+): string | undefined {
   let best: ModelCapability | undefined;
-  for (const capability of listConfiguredCapabilities(config)) {
+  for (const capability of gateway.listConfiguredCapabilities(config)) {
     if (!isLiveEvaluationCapable(capability)) {
       continue;
     }
@@ -321,10 +353,14 @@ function selectLiveEvaluationModel(config: GatewayConfig): string | undefined {
   return best?.id;
 }
 
-function assertLiveEvaluationModel(config: GatewayConfig, modelId: string): void {
-  assertConfiguredModel(config, modelId);
-  if (!isLiveEvaluationCapable(findConfiguredCapability(config, modelId))) {
-    throw new ConfigInvalidError(
+function assertLiveEvaluationModel(
+  config: GatewayConfig,
+  modelId: string,
+  gateway: GatewayModule,
+): void {
+  gateway.assertConfiguredModel(config, modelId);
+  if (!isLiveEvaluationCapable(gateway.findConfiguredCapability(config, modelId))) {
+    throw new gateway.ConfigInvalidError(
       `model '${modelId}' is not workflow-capable; live evaluation requires chat + tool-calling + structured-output`,
     );
   }
@@ -341,10 +377,15 @@ function isOutputAlreadyExistsError(error: unknown): boolean {
 
 // Live-mode fail-closed: a GatewayError (incl. ConfigInvalidError) means no resolvable config or
 // credentials. Name the required env vars and exit 1 — never fall back to offline silently.
-function handleRunError(error: unknown, parsed: EvaluateArgs, io: CliIo): number {
-  if (error instanceof GatewayError) {
+function handleRunError(
+  error: unknown,
+  parsed: EvaluateArgs,
+  io: CliIo,
+  gateway: GatewayModule,
+): number {
+  if (error instanceof gateway.GatewayError) {
     io.err(
-      `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+      `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
         (parsed.live
           ? "Live evaluation requires a configured provider. Pass --config PATH or set " +
             "KEIKO_CONFIG_FILE.\n"

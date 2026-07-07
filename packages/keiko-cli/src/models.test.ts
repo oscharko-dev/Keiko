@@ -72,24 +72,24 @@ function writeReferenceOnlyConfig(dir: string): string {
 }
 
 describe("runModelsCli list", () => {
-  it("lists only the header when no built-in models are shipped", () => {
+  it("lists only the header when no built-in models are shipped", async () => {
     const c = makeIo();
-    const code = runModelsCli(["list"], c.io, {});
+    const code = await runModelsCli(["list"], c.io, {});
     expect(code).toBe(0);
     expect(c.out().trim()).toBe("ID\tKIND\tCOST\tLATENCY\tTOOLS\tSTRUCT\tUSE-CASES");
   });
 
-  it("emits no credential-like value in the list output", () => {
+  it("emits no credential-like value in the list output", async () => {
     const c = makeIo();
-    runModelsCli(["list"], c.io, {});
+    await runModelsCli(["list"], c.io, {});
     for (const line of c.out().split("\n")) {
       expect(API_KEY_PATTERN.test(line)).toBe(false);
     }
   });
 
-  it("includes a header with capability columns", () => {
+  it("includes a header with capability columns", async () => {
     const c = makeIo();
-    runModelsCli(["list"], c.io, {});
+    await runModelsCli(["list"], c.io, {});
     expect(c.out()).toContain("ID");
     expect(c.out()).toContain("COST");
     expect(c.out()).toContain("TOOLS");
@@ -105,20 +105,20 @@ describe("runModelsCli validate", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("reports a valid config and exits 0", () => {
+  it("reports a valid config and exits 0", async () => {
     const path = join(dir, "ok.json");
     writeFileSync(path, validConfig(), "utf8");
     const c = makeIo();
-    const code = runModelsCli(["validate", "--config", path], c.io, {});
+    const code = await runModelsCli(["validate", "--config", path], c.io, {});
     expect(code).toBe(0);
     expect(c.out()).toContain("valid");
     expect(c.out()).toContain("1");
   });
 
-  it("validates a migrated reference-only config by resolving the local credential vault", () => {
+  it("validates a migrated reference-only config by resolving the local credential vault", async () => {
     const path = writeReferenceOnlyConfig(dir);
     const c = makeIo();
-    const code = runModelsCli(["validate", "--config", path], c.io, {
+    const code = await runModelsCli(["validate", "--config", path], c.io, {
       KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY,
     });
     expect(code).toBe(0);
@@ -126,16 +126,16 @@ describe("runModelsCli validate", () => {
     expect(c.out() + c.err()).not.toContain("example-test-token-1234567890");
   });
 
-  it("reports an invalid config on stderr with the error code and exits 1", () => {
+  it("reports an invalid config on stderr with the error code and exits 1", async () => {
     const path = join(dir, "bad.json");
     writeFileSync(path, JSON.stringify({ providers: [] }), "utf8");
     const c = makeIo();
-    const code = runModelsCli(["validate", "--config", path], c.io, {});
+    const code = await runModelsCli(["validate", "--config", path], c.io, {});
     expect(code).toBe(1);
     expect(c.err()).toContain("GATEWAY_CONFIG_INVALID");
   });
 
-  it("accepts a config whose modelId is absent from the built-in capability registry", () => {
+  it("accepts a config whose modelId is absent from the built-in capability registry", async () => {
     const path = join(dir, "unknown-model.json");
     const parsed = JSON.parse(validConfig()) as {
       providers: { modelId: string }[];
@@ -147,12 +147,12 @@ describe("runModelsCli validate", () => {
     provider.modelId = "not-in-registry";
     writeFileSync(path, JSON.stringify(parsed), "utf8");
     const c = makeIo();
-    const code = runModelsCli(["validate", "--config", path], c.io, {});
+    const code = await runModelsCli(["validate", "--config", path], c.io, {});
     expect(code).toBe(0);
     expect(c.out()).toContain("valid");
   });
 
-  it("accepts a config whose unregistered modelId declares local capability metadata", () => {
+  it("accepts a config whose unregistered modelId declares local capability metadata", async () => {
     const path = join(dir, "custom-model.json");
     const parsed = JSON.parse(validConfig()) as {
       providers: Record<string, unknown>[];
@@ -171,12 +171,12 @@ describe("runModelsCli validate", () => {
     };
     writeFileSync(path, JSON.stringify(parsed), "utf8");
     const c = makeIo();
-    const code = runModelsCli(["validate", "--config", path], c.io, {});
+    const code = await runModelsCli(["validate", "--config", path], c.io, {});
     expect(code).toBe(0);
     expect(c.out()).toContain("valid");
   });
 
-  it("never prints a credential value when reporting a validation error", () => {
+  it("never prints a credential value when reporting a validation error", async () => {
     const path = join(dir, "leak.json");
     const apiKey = ["sk-", "leaky-1234567890abcdef"].join("");
     writeFileSync(
@@ -195,44 +195,44 @@ describe("runModelsCli validate", () => {
       "utf8",
     );
     const c = makeIo();
-    const code = runModelsCli(["validate", "--config", path], c.io, {});
+    const code = await runModelsCli(["validate", "--config", path], c.io, {});
     expect(code).toBe(1);
     expect(c.out() + c.err()).not.toContain(apiKey);
   });
 
-  it("exits 1 when no config source is available", () => {
+  it("exits 1 when no config source is available", async () => {
     const c = makeIo();
-    const code = runModelsCli(["validate"], c.io, {});
+    const code = await runModelsCli(["validate"], c.io, {});
     expect(code).toBe(1);
     expect(c.err()).toContain("GATEWAY_CONFIG_INVALID");
   });
 
-  it("reads the config path from KEIKO_CONFIG_FILE when no flag is given", () => {
+  it("reads the config path from KEIKO_CONFIG_FILE when no flag is given", async () => {
     const path = join(dir, "env.json");
     writeFileSync(path, validConfig(), "utf8");
     const c = makeIo();
-    const code = runModelsCli(["validate"], c.io, { KEIKO_CONFIG_FILE: path });
+    const code = await runModelsCli(["validate"], c.io, { KEIKO_CONFIG_FILE: path });
     expect(code).toBe(0);
     expect(c.out()).toContain("valid");
   });
 
-  it("exits 2 for an unknown sub-command", () => {
+  it("exits 2 for an unknown sub-command", async () => {
     const c = makeIo();
-    const code = runModelsCli(["frobnicate"], c.io, {});
+    const code = await runModelsCli(["frobnicate"], c.io, {});
     expect(code).toBe(2);
     expect(c.err().length).toBeGreaterThan(0);
   });
 
-  it("exits 2 when no sub-command is given", () => {
+  it("exits 2 when no sub-command is given", async () => {
     const c = makeIo();
-    const code = runModelsCli([], c.io, {});
+    const code = await runModelsCli([], c.io, {});
     expect(code).toBe(2);
     expect(c.err()).toContain("Usage");
   });
 
-  it("exits 2 when --config is supplied without a value", () => {
+  it("exits 2 when --config is supplied without a value", async () => {
     const c = makeIo();
-    const code = runModelsCli(["validate", "--config"], c.io, {});
+    const code = await runModelsCli(["validate", "--config"], c.io, {});
     expect(code).toBe(2);
   });
 });
