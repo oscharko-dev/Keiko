@@ -68,4 +68,18 @@ describe("decomposeChainedQuery", () => {
       "And how does check:package-surface verify exports",
     ]);
   });
+
+  it("does not catastrophically backtrack on a long whitespace run (no ReDoS)", () => {
+    // Regression for js/polynomial-redos (CodeQL, high severity): the conjunction-split pattern
+    // used to run TWO unbounded `\s+` quantifiers around an alternation. `query` is raw,
+    // attacker-controlled chat text with no length limit enforced upstream, so a long run of a
+    // single whitespace character with no matching conjunction word used to cost O(n^2) — the
+    // unbounded form measured ~800ms at 40,000 pathological characters and grows quadratically
+    // from there. Non-whitespace characters bookend the run so `.trim()` cannot strip it away
+    // before it ever reaches the vulnerable pattern.
+    const pathological = `a${"\t".repeat(200_000)}b`;
+    const start = Date.now();
+    decomposeChainedQuery(pathological);
+    expect(Date.now() - start).toBeLessThan(1_000);
+  });
 });

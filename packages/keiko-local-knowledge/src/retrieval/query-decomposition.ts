@@ -18,9 +18,21 @@ const MIN_PART_TOKENS = 3;
 
 // Conjunction followed by an interrogative — the only conjunction form that safely marks a new
 // question ("… und wie …", "… and what …"). Case-insensitive; the interrogative is kept with
-// the second part via the capture group.
+// the second part via the lookahead (not a capture group — `.split()` would otherwise splice
+// the captured text into its result array).
+//
+// Both whitespace runs are BOUNDED (`{1,20}`), not `\s+`: `query` is raw, attacker-controlled
+// chat text, and an unbounded quantifier immediately followed by an alternation that can fail,
+// itself followed by another unbounded quantifier, is the textbook `js/polynomial-redos` shape.
+// `.split()` retries the pattern at every start position in the string; for a long run of a
+// single whitespace character with no matching conjunction ever found, the first `\s+` at each
+// of the O(n) start positions backtracks one character at a time before failing, i.e. O(n) work
+// per position over O(n) positions = O(n^2) — confirmed at ~766ms for a 40,000-character input
+// with the unbounded form, scaling quadratically from there. A bounded run makes the per-position
+// backtrack cost a constant, restoring linear-time matching; no legitimate query has 20+
+// consecutive whitespace characters between words.
 const CONJUNCTION_SPLIT_PATTERN =
-  /\s+(?:und|sowie|and|plus)\s+(?=(?:wie|was|wo|wann|warum|wieso|weshalb|welche[rsnm]?|how|what|where|when|why|which|who|whom|whose)\b)/giu;
+  /\s{1,20}(?:und|sowie|and|plus)\s{1,20}(?=(?:wie|was|wo|wann|warum|wieso|weshalb|welche[rsnm]?|how|what|where|when|why|which|who|whom|whose)\b)/giu;
 
 const QUESTION_MARK_SPLIT_PATTERN = /\?+/u;
 const SEMICOLON_SPLIT_PATTERN = /;+/u;
