@@ -1303,6 +1303,63 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(replaceChat).toHaveBeenCalled();
   });
 
+  it("surfaces degraded and unavailable HTML manual pod readiness in grounding options", async () => {
+    const user = userEvent.setup();
+    const degradedId = makeCapsuleId("cap-manual-degraded");
+    const unavailableId = makeCapsuleId("cap-manual-unavailable");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: degradedId,
+          displayName: "https://docs.internal/degraded?token=secret",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: unavailableId,
+          displayName: "https://docs.internal/unavailable?token=secret",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        {
+          ...knowledgePodSummary(degradedId, "pod", "Degraded Handbook"),
+          readiness: "degraded",
+          sourceKinds: ["html-manual-http"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 1,
+            documentCount: 1,
+            chunkCount: 2,
+            vectorCount: 0,
+          },
+        },
+        {
+          ...knowledgePodSummary(unavailableId, "pod", "Unavailable Handbook"),
+          readiness: "unavailable",
+          sourceKinds: ["html-manual-http"],
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await openCombobox(user, "Grounding mode");
+
+    expect(screen.getByRole("option", { name: /Knowledge Pod: Degraded Handbook/u })).toBeVisible();
+    expect(screen.getByText("Manual degraded")).toBeVisible();
+    expect(
+      screen.getByRole("option", { name: /Knowledge Pod: Unavailable Handbook/u }),
+    ).toBeVisible();
+    expect(screen.getByText("Manual unavailable")).toBeVisible();
+    expect(screen.queryByText(/docs\.internal/u)).toBeNull();
+    expect(screen.queryByText(/token=secret/u)).toBeNull();
+  });
+
   it("distinguishes a sealed-local warning from a policy-denied pod in grounding options", async () => {
     const user = userEvent.setup();
     const capsuleId = makeCapsuleId("cap-sealed-local");

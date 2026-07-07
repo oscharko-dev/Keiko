@@ -417,6 +417,17 @@ function manualOpenReasonForClassification(
   return "target-unavailable";
 }
 
+// Epic #1854 (#1879) — anchorId is a parser-derived HTML id (from html-parser.ts's anchorFromTag,
+// which only bounds length/rejects "://"/NUL) and, unlike pageTitle/safePageId/sectionPath, was
+// spread onto the wire and into the navigation target's URL fragment without the same
+// stripUnsafeFormatChars pass every other citation label field receives. An empty result after
+// stripping is treated as "no real anchor", matching the existing missing-anchor fallback.
+function safeAnchorId(anchorId: string | undefined): string | undefined {
+  if (anchorId === undefined) return undefined;
+  const stripped = stripUnsafeFormatChars(anchorId);
+  return stripped.length > 0 ? stripped : undefined;
+}
+
 function classifiedManualOpen(
   reference: RetrievalReference,
   rawTarget: string,
@@ -430,12 +441,13 @@ function classifiedManualOpen(
   if (classification.targetClass === "external-http") {
     return { open: manualOpenUnavailable("target-outside-approved-scope") };
   }
+  const anchorId = safeAnchorId(reference.citation.anchorId);
   const target = buildHtmlManualCitationNavigationTarget({
     capsuleId: reference.capsuleId,
     sourceId: reference.citation.sourceId,
     documentId: reference.citation.documentId,
     chunkId: reference.chunkId,
-    ...(reference.citation.anchorId !== undefined ? { anchorId: reference.citation.anchorId } : {}),
+    ...(anchorId !== undefined ? { anchorId } : {}),
   });
   return {
     targetSummary: {
@@ -443,7 +455,7 @@ function classifiedManualOpen(
       pathSummary: classification.pathSummary,
     },
     open:
-      reference.citation.anchorId === undefined
+      anchorId === undefined
         ? { state: "page-level-only", target, reason: "missing-anchor" }
         : { state: "available", target },
   };
@@ -461,11 +473,12 @@ function projectHtmlManualCitationMetadata(
     reference.citation.sourceId,
   );
   if (metadata === undefined) return undefined;
+  const anchorId = safeAnchorId(reference.citation.anchorId);
   const resolved = resolveHtmlManualCitationTarget(store, {
     capsuleId: reference.capsuleId,
     sourceId: reference.citation.sourceId,
     documentId: reference.citation.documentId,
-    ...(reference.citation.anchorId !== undefined ? { anchorId: reference.citation.anchorId } : {}),
+    ...(anchorId !== undefined ? { anchorId } : {}),
   });
   const base = {
     sourceKind: metadata.sourceKind,
@@ -482,7 +495,7 @@ function projectHtmlManualCitationMetadata(
           ),
         }
       : {}),
-    ...(reference.citation.anchorId !== undefined ? { anchorId: reference.citation.anchorId } : {}),
+    ...(anchorId !== undefined ? { anchorId } : {}),
     ...(reference.citation.parsedUnitId !== undefined
       ? { parsedUnitId: reference.citation.parsedUnitId }
       : {}),

@@ -1,10 +1,9 @@
 // Issue #185 — unit tests for the grounded Q&A presentation component. Extended in #187
 // with ContextPackSummary coverage and an axe-based a11y smoke.
 
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
-import { navigateDocumentation } from "@/lib/docs-browser-api";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type {
   GroundedAnswer as GroundedAnswerType,
@@ -14,14 +13,6 @@ import type {
   KnowledgePodRetrievalActivity,
   LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
-
-vi.mock("@/lib/docs-browser-api", () => ({
-  navigateDocumentation: vi.fn(),
-}));
-
-afterEach(() => {
-  vi.mocked(navigateDocumentation).mockReset();
-});
 
 function citation(overrides: Partial<GroundedEvidenceCitation> = {}): GroundedEvidenceCitation {
   return {
@@ -1092,20 +1083,11 @@ describe("GroundedAnswer", () => {
     expect(citationPreview.openCitation).not.toHaveBeenCalled();
   });
 
-  it("opens an eligible HTML manual citation through the documentation browser API", async () => {
-    vi.mocked(navigateDocumentation).mockResolvedValueOnce({
-      schemaVersion: "1",
-      targetClass: "intranet-http",
-      originSummary: "https://manual.internal",
-      pathSummary: "/…",
-      reason: "rendering-deferred",
-      severity: "limitation",
-      capability: {
-        backendAvailable: true,
-        previewAvailable: false,
-        indexingProposalAvailable: false,
-      },
-    });
+  it("opens an eligible HTML manual citation in the existing documentation browser widget", () => {
+    // Epic #1854 (#1879/#1881) regression: the citation chip must hand the opaque target to the
+    // existing governed docs-browser widget (which alone calls navigateDocumentation and renders
+    // the real reason/severity) instead of resolving/discarding the outcome itself.
+    const openDocumentationTarget = vi.fn().mockReturnValue(true);
     const manualCitation = knowledgeCitation({
       source: "Device Handbook",
       htmlManual: {
@@ -1126,23 +1108,93 @@ describe("GroundedAnswer", () => {
       },
     });
     const { container } = render(
-      <GroundedAnswer answer={localKnowledgeAnswer([manualCitation])} busy={false} />,
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: "[1] Device Handbook · HTML manual · device-handbook.html · Troubleshooting · Timeouts · Open manual",
+    });
+    expect(chip).not.toHaveClass("grounded-citation-action--blocked");
+    fireEvent.click(chip);
+
+    expect(openDocumentationTarget).toHaveBeenCalledWith("keiko-html-manual-citation:opaque");
+    expect(screen.getByText("Opened")).toBeInTheDocument();
+  });
+
+  it("opens a page-level-only HTML manual citation (missing anchor) in the documentation browser widget", () => {
+    const openDocumentationTarget = vi.fn().mockReturnValue(true);
+    const manualCitation = knowledgeCitation({
+      htmlManual: {
+        sourceKind: "html-manual-local",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        open: {
+          state: "page-level-only",
+          target: "keiko-html-manual-citation:opaque-page",
+          reason: "missing-anchor",
+        },
+      },
+    });
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: "[1] HTML manual · device-handbook.html · Open page",
+    });
+    expect(chip).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(chip);
+
+    expect(openDocumentationTarget).toHaveBeenCalledWith("keiko-html-manual-citation:opaque-page");
+    expect(screen.getByText("Opened")).toBeInTheDocument();
+  });
+
+  it("shows a failed state when the documentation browser widget could not be opened", () => {
+    const openDocumentationTarget = vi.fn().mockReturnValue(false);
+    const manualCitation = knowledgeCitation({
+      htmlManual: {
+        sourceKind: "html-manual-local",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        open: {
+          state: "available",
+          target: "keiko-html-manual-citation:opaque",
+        },
+      },
+    });
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
     );
 
     openEvidenceDisclosure(container);
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "[1] Device Handbook · HTML manual · device-handbook.html · Troubleshooting · Timeouts · Open manual",
-      }),
+      screen.getByRole("button", { name: "[1] HTML manual · device-handbook.html · Open manual" }),
     );
 
-    await waitFor(() => {
-      expect(navigateDocumentation).toHaveBeenCalledWith("keiko-html-manual-citation:opaque");
+    expect(openDocumentationTarget).toHaveBeenCalledWith("keiko-html-manual-citation:opaque");
+    const chip = screen.getByRole("button", {
+      name: "[1] HTML manual · device-handbook.html · Open failed",
     });
-    expect(await screen.findByText("Opened")).toBeInTheDocument();
+    expect(screen.getByText("Open failed")).toBeInTheDocument();
+    expect(chip).toHaveClass("grounded-citation-action--blocked");
   });
 
-  it("renders unavailable HTML manual citation targets without calling documentation navigation", () => {
+  it("renders unavailable HTML manual citation targets without opening the documentation browser", () => {
+    const openDocumentationTarget = vi.fn();
     const manualCitation = knowledgeCitation({
       htmlManual: {
         sourceKind: "html-manual-http",
@@ -1156,17 +1208,22 @@ describe("GroundedAnswer", () => {
       },
     });
     const { container } = render(
-      <GroundedAnswer answer={localKnowledgeAnswer([manualCitation])} busy={false} />,
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([manualCitation])}
+        busy={false}
+        openDocumentationTarget={openDocumentationTarget}
+      />,
     );
 
     openEvidenceDisclosure(container);
     const chip = screen.getByRole("button", {
-      name: "[1] HTML manual · device-handbook.html · Troubleshooting · source metadata unavailable",
+      name: "[1] HTML manual · device-handbook.html · Troubleshooting · Source unavailable",
     });
     expect(chip).toHaveAttribute("aria-disabled", "true");
+    expect(chip).toHaveClass("grounded-citation-action--blocked");
     fireEvent.click(chip);
 
-    expect(navigateDocumentation).not.toHaveBeenCalled();
+    expect(openDocumentationTarget).not.toHaveBeenCalled();
   });
 
   it("never renders answer.content into the panel — neither as text nor as markup", () => {

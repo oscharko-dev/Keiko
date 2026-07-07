@@ -310,6 +310,7 @@ export type {
   GroundedAnswer,
   GroundedRerankerDiagnostics,
   HtmlManualCitationMetadata,
+  HtmlManualCitationOpenUnavailableReason,
   LocalKnowledgeEvidenceCitation,
   GroundedAnswerContextPackSummary,
   GroundedAnswerContextSummary,

@@ -547,6 +547,124 @@ describe("local knowledge BFF boundary helpers", () => {
     });
   });
 
+  it("maps unavailable and incompatible Knowledge Pod guidance for HTML manual capsules", () => {
+    const capsuleId = "cap-manual-unavailable" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Retired Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Retired Handbook", {
+          readiness: "unavailable",
+          sourceKinds: ["html-manual-http"],
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "unavailable",
+            embeddingCompatibilityReason: "policy-denied",
+            reindexRecommended: false,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding unavailable",
+      tone: "danger",
+    });
+  });
+
+  it("distinguishes in-progress HTML manual readiness from a hard-failure readiness", () => {
+    const indexingId = "cap-manual-indexing" as KnowledgeCapsuleId;
+    const staleId = "cap-manual-stale" as KnowledgeCapsuleId;
+    const errorId = "cap-manual-error" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: indexingId,
+          displayName: "Indexing Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: staleId,
+          displayName: "Stale Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: errorId,
+          displayName: "Broken Handbook",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(indexingId, "pod", "Indexing Handbook", {
+          readiness: "indexing",
+          sourceKinds: ["html-manual-local"],
+        }),
+        podSummary(staleId, "pod", "Stale Handbook", {
+          readiness: "stale",
+          sourceKinds: ["html-manual-local"],
+        }),
+        podSummary(errorId, "pod", "Broken Handbook", {
+          readiness: "error",
+          sourceKinds: ["html-manual-local"],
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.guidance).toMatchObject({
+      label: "Manual indexing",
+      tone: "warning",
+      description: expect.stringContaining("not yet ready to contribute evidence"),
+    });
+    expect(capsules[1]?.knowledgePod?.guidance).toMatchObject({
+      label: "Manual indexing",
+      tone: "warning",
+    });
+    expect(capsules[2]?.knowledgePod?.guidance).toMatchObject({
+      label: "Manual unavailable",
+      tone: "danger",
+      description: expect.stringContaining("cannot contribute silently as empty evidence"),
+    });
+  });
+
+  it("does not label a mixed HTML-manual and ordinary Knowledge Pod Set as an HTML manual", () => {
+    const setId = "set-mixed-manual" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Mixed set",
+          capsuleCount: 2,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Mixed set", {
+          sourceKinds: ["html-manual-http", "folder"],
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.sourceKinds).toEqual(["html-manual-http", "folder"]);
+    expect(capsuleSet?.knowledgePod?.guidance).toBeUndefined();
+  });
+
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(jsonResponse({ ok: true, capsule: { id: "cap 1" } })),

@@ -173,6 +173,28 @@ function manualCitationFailureReason(
   return "local-file-scope-unavailable";
 }
 
+// Post-merge audit — the six distinct HtmlManualCitationOpenUnavailableReason values were all
+// collapsed into the same hardcoded originSummary, making the failure classes indistinguishable to
+// the UI/diagnostics. Each label stays short, English, and body-free (no raw paths/tokens).
+function manualCitationFailureSummary(
+  resolution: Extract<HtmlManualCitationNavigationResolution, { readonly kind: "failed" }>,
+): string {
+  switch (resolution.reason) {
+    case "source-metadata-unavailable":
+      return "Citation source unavailable";
+    case "citation-lineage-mismatch":
+      return "Citation lineage mismatch";
+    case "target-outside-approved-scope":
+      return "Outside approved scope";
+    case "target-unsupported":
+      return "Unsupported citation target";
+    case "target-credentialed":
+      return "Citation requires sign-in";
+    case "target-unavailable":
+      return "Citation target unavailable";
+  }
+}
+
 export async function handleDocsBrowserNavigate(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -189,7 +211,7 @@ export async function handleDocsBrowserNavigate(
   if (citationResolution.kind === "failed") {
     return okResult(
       "unsupported-scheme",
-      "HTML manual citation",
+      manualCitationFailureSummary(citationResolution),
       null,
       manualCitationFailureReason(citationResolution),
       backendAvailable,

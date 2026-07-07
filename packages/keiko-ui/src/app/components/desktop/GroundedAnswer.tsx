@@ -10,7 +10,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { formatBytes, formatMs } from "@/lib/format";
-import { navigateDocumentation } from "@/lib/docs-browser-api";
 import {
   RepositoryReferenceInline,
   type OpenRepositoryReference,
@@ -23,6 +22,7 @@ import type {
   GroundedEvidenceCitation,
   GroundedRerankerDiagnostics,
   GroundedUncertainty,
+  HtmlManualCitationOpenUnavailableReason,
   HybridGroundedAnswerContextSummary,
   HtmlManualCitationMetadata,
   KnowledgePodRetrievalActivity,
@@ -33,12 +33,18 @@ import type {
 } from "@/lib/types";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 
+// Opens the citation's target in the existing governed documentation browser widget (ADR-0113) so
+// that widget's own navigateDocumentation call renders the authoritative reason/severity outcome —
+// the chip never re-implements that classification. Returns whether a window was actually opened.
+type OpenDocumentationTarget = (target: string) => boolean;
+
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
   readonly busy: boolean;
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
+  readonly openDocumentationTarget?: OpenDocumentationTarget | undefined;
 }
 
 type ConnectedGroundedAnswer = Extract<
@@ -563,9 +569,11 @@ function GroundedEvidenceDisclosure({
 function LocalKnowledgeCitationList({
   citations,
   citationPreview,
+  openDocumentationTarget,
 }: {
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
   readonly citationPreview: CitationPreviewController | undefined;
+  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
 }): ReactNode {
   const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
@@ -590,6 +598,7 @@ function LocalKnowledgeCitationList({
               citation={citation}
               citationPreview={citationPreview}
               label={labelForCitation(citation)}
+              openDocumentationTarget={openDocumentationTarget}
             />
           </li>
         ))}
@@ -625,24 +634,38 @@ function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation): string {
   return `${citation.marker} ${source} · ${manual.pageTitle}${sectionSuffix}`;
 }
 
+// Curated, short copy for every governed reason a manual citation cannot be reopened — mirrors the
+// tone of DocumentationBrowserWidget's REASON_COPY without exposing the raw wire enum token.
+const MANUAL_UNAVAILABLE_REASON_COPY: Readonly<
+  Record<HtmlManualCitationOpenUnavailableReason, string>
+> = {
+  "source-metadata-unavailable": "Source unavailable",
+  "citation-lineage-mismatch": "Citation mismatch",
+  "target-outside-approved-scope": "Outside approved scope",
+  "target-unsupported": "Unsupported target",
+  "target-credentialed": "Requires sign-in",
+  "target-unavailable": "Target unavailable",
+};
+
 function manualCitationActionLabel(manual: HtmlManualCitationMetadata): string {
   if (manual.open.state === "available") return "Open manual";
   if (manual.open.state === "page-level-only") return "Open page";
-  return humanizeToken(manual.open.reason);
+  return MANUAL_UNAVAILABLE_REASON_COPY[manual.open.reason];
 }
 
 function ManualCitationChip({
   citation,
   label,
+  openDocumentationTarget,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly label: string;
+  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
 }): ReactNode {
   const manual = citation.htmlManual;
-  const [state, setState] = useState<"idle" | "opening" | "opened" | "failed">("idle");
+  const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
   if (manual === undefined) return null;
   const unavailable = manual.open.state === "unavailable";
-  const opening = state === "opening";
   const actionLabel =
     state === "opened"
       ? "Opened"
@@ -650,28 +673,26 @@ function ManualCitationChip({
         ? "Open failed"
         : manualCitationActionLabel(manual);
   const target = manual.open.state === "unavailable" ? undefined : manual.open.target;
+  const modifier = unavailable || state === "failed" ? " grounded-citation-action--blocked" : "";
   return (
     <button
       type="button"
-      className="grounded-citation grounded-citation-action"
-      aria-disabled={unavailable || opening ? "true" : undefined}
+      className={`grounded-citation grounded-citation-action${modifier}`}
+      aria-disabled={unavailable ? "true" : undefined}
       aria-label={`${label} · ${actionLabel}`}
       title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
       onClick={() => {
-        if (target === undefined || unavailable || opening) return;
-        setState("opening");
-        void navigateDocumentation(target).then(
-          () => {
-            setState("opened");
-          },
-          () => {
-            setState("failed");
-          },
-        );
+        if (target === undefined || unavailable || openDocumentationTarget === undefined) return;
+        // Opens the existing governed documentation browser widget (ADR-0113) with this target; the
+        // widget itself calls navigateDocumentation and renders the authoritative reason/severity —
+        // this chip never re-implements or discards that classification.
+        setState(openDocumentationTarget(target) ? "opened" : "failed");
       }}
     >
       <span className="grounded-citation-range">{label}</span>
-      <span className="grounded-citation-action-label">{actionLabel}</span>
+      <span className="grounded-citation-action-label" aria-live="polite">
+        {actionLabel}
+      </span>
       <CitationScore score={citation.score} />
     </button>
   );
@@ -681,13 +702,21 @@ function KnowledgeCitationChip({
   citation,
   citationPreview,
   label,
+  openDocumentationTarget,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly label: string;
+  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
 }): ReactNode {
   if (citation.htmlManual !== undefined) {
-    return <ManualCitationChip citation={citation} label={label} />;
+    return (
+      <ManualCitationChip
+        citation={citation}
+        label={label}
+        openDocumentationTarget={openDocumentationTarget}
+      />
+    );
   }
   const affordance = citationPreview?.forCitation(citation);
   if (affordance === undefined) {
@@ -996,6 +1025,7 @@ export function GroundedAnswer({
   repositoryRoots = [],
   openRepositoryReference,
   citationPreview,
+  openDocumentationTarget,
 }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
     // uiux-fix F012 C163 — the panel also serves capsule/connector-only chats where no
@@ -1017,6 +1047,7 @@ export function GroundedAnswer({
           <LocalKnowledgeCitationList
             citations={answer.citations}
             citationPreview={citationPreview}
+            openDocumentationTarget={openDocumentationTarget}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
@@ -1046,6 +1077,7 @@ export function GroundedAnswer({
           <LocalKnowledgeCitationList
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}
+            openDocumentationTarget={openDocumentationTarget}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />

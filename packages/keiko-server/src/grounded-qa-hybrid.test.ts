@@ -36,6 +36,7 @@ import {
 
 import {
   openKnowledgeStore,
+  persistHtmlManualSourceMetadata,
   resolveKnowledgeStorePath,
   updateCapsuleState,
   type RetrievalResult,
@@ -153,6 +154,65 @@ async function seedReadyCapsule(
   updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
   knowledgeStore.close();
   return { capsuleId: seeded.capsuleId, label: displayName };
+}
+
+// Seeds a ready capsule whose single source is tagged as an `html-manual-http` source (mirrors
+// the single-connector manual fixture in local-knowledge-grounded-qa.rescue.test.ts). Returns the
+// seeded chunk/document ids so the caller can build a RetrievalReference whose citation carries
+// the anchor/section metadata `projectHtmlManualCitationMetadata` projects.
+async function seedReadyManualCapsule(displayName: string): Promise<{
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
+  readonly documentId: DocumentId;
+  readonly chunkId: ChunkId;
+  readonly label: string;
+}> {
+  const knowledgeStore = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+  });
+  const { capsuleId, sourceId } = seedIds(displayName);
+  const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+    displayName,
+    capsuleId,
+    sourceId,
+    safeDisplayName: "device-handbook.html",
+    unit: {
+      kind: "html-block",
+      headingPath: ["Troubleshooting", "Timeouts"],
+      anchorId: "timeouts",
+      characterStart: 0,
+      characterEnd: 120,
+    },
+  });
+  persistHtmlManualSourceMetadata(knowledgeStore, seeded.capsuleId, seeded.sourceId, {
+    schemaVersion: "1",
+    scope: {
+      kind: "html-manual-http",
+      origin: "https://manual.internal",
+      pathPrefix: null,
+    },
+    limits: {
+      maxPages: 20,
+      maxDepth: 3,
+      maxBytes: 2_000_000,
+      maxLinkSample: 50,
+      timeoutMs: 30_000,
+      followRedirects: false,
+    },
+    sourceFingerprint: `fp-${capsuleId}`,
+    proposedPodName: displayName,
+  });
+  updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+  knowledgeStore.close();
+  const chunkId = seeded.chunkIds[0];
+  if (chunkId === undefined) throw new Error(`seeded manual capsule ${capsuleId} has no chunk`);
+  return {
+    capsuleId: seeded.capsuleId,
+    sourceId: seeded.sourceId,
+    documentId: seeded.documentId,
+    chunkId,
+    label: displayName,
+  };
 }
 
 function modelUsePolicyDenying(
@@ -335,6 +395,40 @@ function singleConnectorRetrieve(capsuleId: KnowledgeCapsuleId): ConnectorRetrie
   return (_store, _scope): Promise<RetrievalResult> =>
     Promise.resolve({
       references: [connectorReference(capsuleId, 1, `doc-from-${String(capsuleId)}`)],
+      noEvidence: false,
+    });
+}
+
+// Builds a RetrievalReference that matches a seeded HTML-manual capsule's actual lineage
+// (chunk/document/source ids), carrying the section/anchor metadata that
+// projectHtmlManualCitationMetadata reads. Unlike connectorReference, the ids must line up with a
+// real seeded row so resolveHtmlManualCitationTarget's lineage lookup succeeds.
+function manualConnectorReference(
+  seeded: Awaited<ReturnType<typeof seedReadyManualCapsule>>,
+): RetrievalReference {
+  return {
+    chunkId: seeded.chunkId,
+    capsuleId: seeded.capsuleId,
+    score: 0.93,
+    citation: {
+      documentId: seeded.documentId,
+      capsuleId: seeded.capsuleId,
+      sourceId: seeded.sourceId,
+      chunkId: seeded.chunkId,
+      safeDisplayName: "device-handbook.html",
+      sectionPath: ["Troubleshooting", "Timeouts"],
+      anchorId: "timeouts",
+    },
+  };
+}
+
+// ConnectorRetrieve returning exactly the manual capsule's own reference.
+function singleManualConnectorRetrieve(
+  seeded: Awaited<ReturnType<typeof seedReadyManualCapsule>>,
+): ConnectorRetrieve {
+  return (_store, _scope): Promise<RetrievalResult> =>
+    Promise.resolve({
+      references: [manualConnectorReference(seeded)],
       noEvidence: false,
     });
 }
@@ -659,6 +753,85 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       .listMessages(chatId)
       .find((message) => message.id === answer.assistantMessageId);
     expect(assistant?.content).toBe("Hybrid grounded answer.");
+  });
+});
+
+// ─── Case 1b: HTML-manual-tagged connector projects htmlManual metadata (Epic #1854) ──
+//
+// grounded-qa-hybrid.ts threads a `store` parameter through selectedConnectorCitations so that
+// projectLocalKnowledgeCitation can call projectHtmlManualCitationMetadata for connector citations
+// selected on the HYBRID (multi-connector) path, not just the single-connector local-knowledge
+// path. Before that threading, selectedConnectorCitations called projectLocalKnowledgeCitation
+// without a store, so `htmlManual` was always undefined here even for a manual-tagged capsule.
+
+describe("hybrid grounded ask — HTML-manual citation metadata projection", () => {
+  it("populates knowledgeCitations[].htmlManual for a manual-tagged connector merged with a folder", async () => {
+    // Arrange: one folder + one HTML-manual-tagged connector, mirroring Case 1's 1-folder +
+    // 1-connector hybrid shape so the citation flows through the SAME rerank/select/assemble path
+    // as every other hybrid citation.
+    const manualCapsule = await seedReadyManualCapsule("Device Handbook");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/handbook.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("handbook-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: manualCapsule.capsuleId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      ["src/handbook.ts", folderPack("src/handbook.ts", 0.7, "handbook-atom")],
+    ]);
+    const hybrid: HybridSeam = {
+      folderRetriever: folderRetrieverFor(packMap),
+      connectorRetrieve: singleManualConnectorRetrieve(manualCapsule),
+      answer: sentinelAnswerer(),
+    };
+
+    // Act
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "How do I fix a timeout?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    // Assert
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
+    const manualCitation = answer.knowledgeCitations.find((kc) =>
+      kc.source?.startsWith(`${manualCapsule.label} / `),
+    );
+    expect(manualCitation).toBeDefined();
+
+    // htmlManual must be POPULATED, not undefined — this is the exact field the `store` threading
+    // through selectedConnectorCitations exists to project on the hybrid path.
+    // mutation: reverting the `store` parameter (calling projectLocalKnowledgeCitation without it)
+    // makes projectHtmlManualCitationMetadata short-circuit on `store === undefined` → htmlManual
+    // stays undefined and this assertion fails.
+    expect(manualCitation?.htmlManual).toBeDefined();
+    expect(manualCitation?.htmlManual).toMatchObject({
+      sourceKind: "html-manual-http",
+      pageTitle: "device-handbook.html",
+      sectionPath: ["Troubleshooting", "Timeouts"],
+      anchorId: "timeouts",
+      open: { state: "available" },
+    });
+
+    // The opaque `open.target` handle is a base64 lineage-id token — it must never embed the raw
+    // manual origin/path in plaintext, unlike `targetSummary.originSummary`, which is a SEPARATE,
+    // intentionally safe field that legitimately carries the bare origin for citation-label display
+    // (see docs-browser.test.ts:346, where the same origin string is an expected wire value).
+    // mutation: dropping the classification/redaction step would leak the raw origin into `target`.
+    const open = manualCitation?.htmlManual?.open;
+    const target = open?.state === "available" ? open.target : "";
+    expect(target).toMatch(/^keiko-html-manual-citation:/u);
+    expect(target).not.toContain("https://manual.internal");
   });
 });
 
