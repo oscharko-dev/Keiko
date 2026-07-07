@@ -65,32 +65,61 @@ function diffNameOnly(repoRoot, range) {
   });
 
   if (result.status !== 0) {
-    return [];
+    return {
+      ok: false,
+      error:
+        (result.error instanceof Error ? result.error.message : "") ||
+        String(result.stderr ?? "").trim() ||
+        `git diff exited with status ${result.status ?? "unknown"}`,
+      files: [],
+    };
   }
 
-  return result.stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return {
+    ok: true,
+    error: "",
+    files: result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  };
 }
 
-function changedFilesFromGit(repoRoot) {
-  const baseRef = process.env.GITHUB_BASE_REF;
-  const ranges = [
-    ...(baseRef ? [`origin/${baseRef}...HEAD`, `${baseRef}...HEAD`] : []),
-    "origin/dev...HEAD",
-    "origin/dev",
-    "HEAD^1...HEAD",
-  ];
+function isZeroSha(value) {
+  return /^0{40}$/.test(value);
+}
 
-  for (const range of ranges) {
-    const files = diffNameOnly(repoRoot, range);
-    if (files.length > 0) {
-      return files;
-    }
+function diffRangesFromEnv(env) {
+  const baseRef = env.KEIKO_I18N_GUARD_BASE_REF ?? env.GITHUB_BASE_REF;
+  const baseSha = env.KEIKO_I18N_GUARD_BASE_SHA ?? env.GITHUB_EVENT_BEFORE;
+  const ranges = [];
+
+  if (baseSha && !isZeroSha(baseSha)) {
+    ranges.push(`${baseSha}..HEAD`, `${baseSha}...HEAD`);
   }
 
-  return [];
+  if (baseRef) {
+    ranges.push(`origin/${baseRef}...HEAD`, `${baseRef}...HEAD`);
+  }
+
+  return ranges;
+}
+
+export function changedFilesFromGit(repoRoot, diffNameOnlyFn = diffNameOnly, env = process.env) {
+  const ranges = [...diffRangesFromEnv(env), "origin/dev...HEAD", "origin/dev", "HEAD^1..HEAD"];
+  const errors = [];
+
+  for (const range of ranges) {
+    const result = diffNameOnlyFn(repoRoot, range);
+    if (result.ok) {
+      return result.files;
+    }
+    errors.push(`${range}: ${result.error}`);
+  }
+
+  throw new Error(
+    `check:ui-i18n could not determine changed files from git. Tried ranges: ${errors.join("; ")}`,
+  );
 }
 
 function changedFilesFromInput(repoRoot) {
@@ -166,7 +195,16 @@ export function checkUiI18nGuard({
 }
 
 function main() {
-  const result = checkUiI18nGuard();
+  let result;
+  try {
+    result = checkUiI18nGuard();
+  } catch (error) {
+    console.error("check:ui-i18n FAIL");
+    console.error("");
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    return;
+  }
 
   if (result.ok) {
     console.log(
@@ -189,6 +227,6 @@ function main() {
   process.exitCode = 1;
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }

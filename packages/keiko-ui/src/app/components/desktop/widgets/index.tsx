@@ -90,6 +90,10 @@ const DocumentationBrowserWidget = dynamic(
   () => import("./cards/DocumentationBrowserWidget").then((mod) => mod.DocumentationBrowserWidget),
   { ssr: false, loading: windowChunkFallback },
 );
+const FeedbackWidget = dynamic(
+  () => import("./cards/FeedbackWidget").then((mod) => mod.FeedbackWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
 const TerminalWidget = dynamic(
   () => import("./cards/TerminalWidget").then((mod) => mod.TerminalWidget),
   { ssr: false, loading: windowChunkFallback },
@@ -386,6 +390,7 @@ registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", (_cfg, ctx) => (
   <SettingsPanel openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })} />
 ));
+registerWindowRender("feedback", () => <FeedbackWidget />);
 registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (

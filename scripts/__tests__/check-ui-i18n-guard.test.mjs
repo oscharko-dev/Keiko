@@ -7,6 +7,7 @@ import { test } from "vitest";
 import {
   DE_CATALOG,
   EN_CATALOG,
+  changedFilesFromGit,
   checkUiI18nGuard,
   isUiProductionSource,
 } from "../check-ui-i18n-guard.mjs";
@@ -59,6 +60,36 @@ test("passes when changed files are outside UI production source", async () => {
     assert.equal(result.ok, true);
     assert.deepEqual(result.problems, []);
   });
+});
+
+test("detects changed files from the push event before SHA", () => {
+  const calls = [];
+  const files = changedFilesFromGit(
+    "repo",
+    (_repoRoot, range) => {
+      calls.push(range);
+      return range === "abc123..HEAD"
+        ? { ok: true, error: "", files: [UI_FILE, EN_CATALOG, DE_CATALOG] }
+        : { ok: false, error: "missing range", files: [] };
+    },
+    {
+      GITHUB_EVENT_NAME: "push",
+      KEIKO_I18N_GUARD_BASE_SHA: "abc123",
+    },
+  );
+
+  assert.deepEqual(files, [UI_FILE, EN_CATALOG, DE_CATALOG]);
+  assert.equal(calls[0], "abc123..HEAD");
+});
+
+test("fails closed when changed files cannot be determined from git", () => {
+  assert.throws(
+    () =>
+      changedFilesFromGit("repo", () => ({ ok: false, error: "missing range", files: [] }), {
+        GITHUB_EVENT_NAME: "push",
+      }),
+    /could not determine changed files/,
+  );
 });
 
 test("fails UI source changes that do not update both catalogs", async () => {

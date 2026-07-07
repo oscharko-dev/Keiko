@@ -15,7 +15,7 @@
 
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ADR_FILE = /^ADR-(\d{4})-.*\.md$/;
 
@@ -99,6 +99,6 @@ function main() {
 }
 
 // Run as a CLI unless imported by a test.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }

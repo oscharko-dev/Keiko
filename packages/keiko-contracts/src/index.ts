@@ -223,6 +223,43 @@ export {
   UPDATE_REMEDIATION_SCHEMA_VERSION,
 } from "./update-remediation.js";
 
+// Governed feedback intake (Epic #2070).
+export type {
+  FeedbackAttachmentSummary,
+  FeedbackDiagnostics,
+  FeedbackGithubIssueDraft,
+  FeedbackGithubIssueRef,
+  FeedbackIntakeItem,
+  FeedbackIntakeReceipt,
+  FeedbackIntakeRejectionReason,
+  FeedbackIntakeStatus,
+  FeedbackRedactionProvenance,
+  FeedbackReportCategory,
+  FeedbackReportDraft,
+  FeedbackReportParse,
+  FeedbackReportParseFail,
+  FeedbackReportParseOk,
+  FeedbackReportPreview,
+  FeedbackReportSeverity,
+  FeedbackReviewAction,
+  FeedbackReviewEvent,
+  FeedbackReviewState,
+} from "./feedback-intake.js";
+export {
+  buildFeedbackGithubIssueDraft,
+  buildFeedbackReportPreview,
+  containsRedactedSentinel,
+  feedbackPreviewHasRedactionProvenance,
+  feedbackReviewStatusAfter,
+  FEEDBACK_INTAKE_REJECTION_REASONS,
+  FEEDBACK_INTAKE_SCHEMA_VERSION,
+  FEEDBACK_INTAKE_STATUSES,
+  FEEDBACK_REPORT_CATEGORIES,
+  FEEDBACK_REPORT_SEVERITIES,
+  FEEDBACK_REVIEW_ACTIONS,
+  parseFeedbackReportDraft,
+} from "./feedback-intake.js";
+
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,

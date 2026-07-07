@@ -27,6 +27,7 @@ import { createVoiceControlPlane } from "./voice-realtime.js";
 import { createVoiceLiveDictationPlane } from "./voice-live-dictation.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { createInMemoryFeedbackIntakeService } from "./feedback-intake.js";
 
 // Canonical values live in the contracts leaf (GEN-PERF-CLI-001) so the CLI can
 // read them without loading this module graph; imported and re-exported here so
@@ -131,6 +132,7 @@ function fallbackDeps(): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
+    feedbackIntake: createInMemoryFeedbackIntakeService(),
   };
 }
 

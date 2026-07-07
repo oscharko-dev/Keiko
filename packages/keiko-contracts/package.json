@@ -86,6 +86,10 @@
     "./release-impact": {
       "types": "./dist/release-impact.d.ts",
       "import": "./dist/release-impact.js"
+    },
+    "./feedback-intake": {
+      "types": "./dist/feedback-intake.d.ts",
+      "import": "./dist/feedback-intake.js"
     }
   },
   "scripts": {

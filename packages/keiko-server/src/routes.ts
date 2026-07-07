@@ -272,6 +272,7 @@ import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
+import { FEEDBACK_INTAKE_ROUTE_GROUP } from "./feedback-intake-routes.js";
 
 export interface ApiError {
   readonly error: {
@@ -379,6 +380,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/runs/:runId/apply", handler: handleApplyRun },
   { method: "GET", pattern: "/api/evidence", handler: handleEvidenceList },
   { method: "GET", pattern: "/api/evidence/:runId", handler: handleEvidenceDetail },
+  // Epic #2070 — governed in-app feedback. The preview route returns the exact redacted payload that
+  // submit stores; maintainer review gates optional GitHub Issue creation.
+  ...FEEDBACK_INTAKE_ROUTE_GROUP,
   { method: "GET", pattern: "/api/workspace", handler: handleWorkspace },
   { method: "GET", pattern: "/api/workspace/state", handler: handleGetWorkspaceState },
   { method: "PUT", pattern: "/api/workspace/state", handler: handlePutWorkspaceState },

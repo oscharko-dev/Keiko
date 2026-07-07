@@ -152,6 +152,11 @@ import {
   createServerWorkspaceIndexProvider,
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
+import {
+  createInMemoryFeedbackIntakeService,
+  type FeedbackGithubIssueCreator,
+  type FeedbackIntakeService,
+} from "./feedback-intake.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -390,6 +395,10 @@ export interface UiHandlerDeps {
   // Issue #1736 — file-backed, runtime-state workspace index provider for production repository
   // search paths. Tests may omit it; search falls back to the existing live scan.
   readonly workspaceIndexForRoot?: WorkspaceIndexProvider | undefined;
+  // Epic #2070 — governed feedback intake. The service stores redacted report previews and review
+  // state only; GitHub Issue creation remains behind the separate optional adapter.
+  readonly feedbackIntake?: FeedbackIntakeService | undefined;
+  readonly feedbackGithubIssueCreator?: FeedbackGithubIssueCreator | undefined;
   // Issue #494 (Epic #491) — voice speech-to-text dictation seam (ADR-0100 D4). Lets the BFF
   // dictation route call the provider-neutral STT adapter without touching global fetch in tests.
   // Production leaves this undefined and uses requestSpeechToText, so the audio is forwarded once to
@@ -486,6 +495,8 @@ export interface BuildHandlerDepsOptions {
   // undefined (default no-op sink + wall-clock). See qualityIntelligence/retentionEnforcement.ts.
   readonly qiRetentionAuditSink?: QiRetentionAuditSink | undefined;
   readonly qiRetentionNow?: (() => number) | undefined;
+  readonly feedbackIntake?: FeedbackIntakeService | undefined;
+  readonly feedbackGithubIssueCreator?: FeedbackGithubIssueCreator | undefined;
 }
 
 function envModelToken(modelId: string): string {
@@ -1711,6 +1722,10 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       runtimeStateDir: dirname(args.resolvedUiDbPath),
       env: args.options.env,
     }),
+    feedbackIntake: args.options.feedbackIntake ?? createInMemoryFeedbackIntakeService(),
+    ...(args.options.feedbackGithubIssueCreator === undefined
+      ? {}
+      : { feedbackGithubIssueCreator: args.options.feedbackGithubIssueCreator }),
     ...buildPeripherals({
       options: args.options,
       uiStore: args.bundle.uiStore,

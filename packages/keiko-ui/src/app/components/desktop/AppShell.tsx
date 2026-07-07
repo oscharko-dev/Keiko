@@ -280,6 +280,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   "activity",
   "notifications",
   "resources",
+  "feedback",
   "localKnowledge",
   "governedGit",
   "figma",

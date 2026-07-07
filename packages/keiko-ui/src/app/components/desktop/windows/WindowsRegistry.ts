@@ -29,6 +29,7 @@ export type WindowType =
   | "integ"
   | "keiko"
   | "settings"
+  | "feedback"
   // Issue #1696 — governed package-update window. Opened only from Settings/startup notification,
   // not from the rail or command palette.
   | "updates"
@@ -485,6 +486,18 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  feedback: {
+    title: "Feedback",
+    icon: "info",
+    accent: true,
+    desc: "Send a redacted feedback report",
+    w: 640,
+    h: 680,
+    min: { w: 420, h: 440 },
+    tiny: { w: 320, h: 260 },
+    tool: true,
+    singleton: true,
+  },
   updates: {
     title: "Updates",
     icon: "activity",
@@ -850,5 +863,6 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "activity",
   "notifications",
   "resources",
+  "feedback",
   "settings",
 ];

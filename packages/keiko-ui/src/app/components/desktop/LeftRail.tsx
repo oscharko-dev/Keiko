@@ -163,6 +163,18 @@ function LeftRailImpl({
         >
           <Icons.layers size={19} />
         </button>
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("feedback") ? "true" : "false"}
+          aria-label={t("rail.feedback")}
+          aria-pressed={openTools.has("feedback")}
+          data-tip={t("rail.feedback")}
+          onClick={() => onTool("feedback")}
+        >
+          <Icons.info size={19} />
+        </button>
       </div>
       <div className="rail-div" />
       {/* SH-01: aria-pressed reflects current state (true = light theme is active);

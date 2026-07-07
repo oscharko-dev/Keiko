@@ -293,6 +293,9 @@ describe("Workspace shell accessibility", () => {
     await tabTo(screen.getByRole("button", { name: "Git" }));
     await tabTo(screen.getByRole("button", { name: "Local Knowledge" }));
     await tabTo(screen.getByRole("button", { name: "Figma Snapshot" }));
+    await tabTo(screen.getByRole("button", { name: "Feedback" }));
+    await user.keyboard("{Enter}");
+    expect(onTool).toHaveBeenCalledWith("feedback");
 
     await tabTo(screen.getByRole("button", { name: "Light mode" }));
     await user.keyboard("{Enter}");

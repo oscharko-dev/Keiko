@@ -97,6 +97,11 @@ import type {
   WorkflowsResponse,
 } from "./types";
 import type {
+  FeedbackIntakeReceipt,
+  FeedbackIntakeItem,
+  FeedbackReportDraft,
+  FeedbackReportPreview,
+  FeedbackReviewAction,
   GitCommitChangeSummary,
   GitCommitIntentAnalysis,
   GitCommitMessageValidation,
@@ -682,6 +687,58 @@ export async function fetchEvidenceManifest(
   runId: string,
 ): Promise<{ manifest: EvidenceManifest }> {
   return fetchJson(`/api/evidence/${encodeURIComponent(runId)}`);
+}
+
+// Epic #2070 - governed in-app feedback intake. The UI submits only a server-built redacted
+// preview envelope; raw local drafts are used solely for preview generation.
+export async function previewFeedbackReport(
+  draft: FeedbackReportDraft,
+): Promise<FeedbackReportPreview> {
+  return fetchJson<FeedbackReportPreview>("/api/feedback/preview", {
+    method: "POST",
+    body: JSON.stringify(draft),
+    cache: "no-store",
+  });
+}
+
+export async function submitFeedbackPreview(preview: FeedbackReportPreview): Promise<{
+  readonly receipt: FeedbackIntakeReceipt;
+  readonly status: FeedbackIntakeReceipt["status"];
+}> {
+  return fetchJson("/api/feedback/submit", {
+    method: "POST",
+    body: JSON.stringify({ preview }),
+    cache: "no-store",
+  });
+}
+
+export async function fetchFeedbackIntakeQueue(): Promise<{
+  readonly items: readonly FeedbackIntakeItem[];
+}> {
+  return fetchJson("/api/feedback/intake", { cache: "no-store" });
+}
+
+export async function reviewFeedbackIntakeItem(input: {
+  readonly intakeId: string;
+  readonly action: FeedbackReviewAction;
+  readonly actor?: string | undefined;
+  readonly reason?: string | undefined;
+  readonly duplicateOf?: string | undefined;
+}): Promise<FeedbackIntakeItem> {
+  const { intakeId, ...body } = input;
+  return fetchJson(`/api/feedback/intake/${encodeURIComponent(intakeId)}/review`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+}
+
+export async function createFeedbackGithubIssue(intakeId: string): Promise<FeedbackIntakeItem> {
+  return fetchJson(`/api/feedback/intake/${encodeURIComponent(intakeId)}/github-issue`, {
+    method: "POST",
+    body: JSON.stringify({ confirm: true }),
+    cache: "no-store",
+  });
 }
 
 // ---------------------------------------------------------------------------
