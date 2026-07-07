@@ -235,7 +235,11 @@ function sidecarPolicyDisabled(deps: UiHandlerDeps): boolean {
 }
 
 function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {
-  return deps.codingSidecarGatewayModelSource ?? "keiko-model-gateway";
+  return (
+    deps.codingSidecarGatewayModelSourceResolver?.() ??
+    deps.codingSidecarGatewayModelSource ??
+    "keiko-model-gateway"
+  );
 }
 
 function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
@@ -293,12 +297,26 @@ function validatedRoutingEvidence(
 }
 
 function persistRoutingEvidence(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   decision: RoutingDecision,
   modelSource: CodingWorkbenchModelSource,
 ): void {
   const record = validatedRoutingEvidence(decision, modelSource);
-  deps.evidenceStore.put(record.runId, JSON.stringify(record));
+  const summary = routingSummaryFor(decision);
+  const store = deps.codingWorkbenchEvidenceStore;
+  if (store !== undefined) {
+    store.put(record.runId, JSON.stringify(record));
+    return;
+  }
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: ctx.correlationId ?? "unknown",
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.routing",
+    errorClass: "RoutingDecision",
+    message: `${summary}:${record.modelSource}`,
+  });
 }
 
 function samplingValidationMessage(
@@ -383,10 +401,10 @@ async function executeGatewayChat(
   try {
     const chat = chatFactoryFor(deps)(config, modelAlias);
     const response = await chat(buildChatRequest(parsed, modelAlias));
-    persistRoutingEvidence(deps, "accepted", modelSource);
+    persistRoutingEvidence(ctx, deps, "accepted", modelSource);
     return openAiResponse(modelAlias, response.content, response.usage);
   } catch (error) {
-    persistRoutingEvidence(deps, "failed", modelSource);
+    persistRoutingEvidence(ctx, deps, "failed", modelSource);
     emitGatewayFailureDiagnostic(ctx, deps, error);
     throw error;
   }
@@ -396,13 +414,7 @@ export function handleCodingSidecarGatewayProfile(
   _ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  const resolved = resolveGatewayProfile(deps);
-  persistRoutingEvidence(
-    deps,
-    resolved.result.status === "available" ? "accepted" : "blocked",
-    resolved.modelSource,
-  );
-  return { status: 200, body: resolved.result };
+  return { status: 200, body: resolveGatewayProfile(deps).result };
 }
 
 export async function handleCodingSidecarGatewayChatCompletions(
@@ -411,11 +423,11 @@ export async function handleCodingSidecarGatewayChatCompletions(
 ): Promise<RouteResult> {
   const resolved = resolveGatewayProfile(deps);
   if (resolved.result.status === "unavailable") {
-    persistRoutingEvidence(deps, "blocked", resolved.modelSource);
+    persistRoutingEvidence(ctx, deps, "blocked", resolved.modelSource);
     return unavailableError();
   }
   if (resolved.config === undefined) {
-    persistRoutingEvidence(deps, "blocked", resolved.modelSource);
+    persistRoutingEvidence(ctx, deps, "blocked", resolved.modelSource);
     return unavailableError();
   }
   const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);

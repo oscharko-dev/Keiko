@@ -12,10 +12,12 @@ import {
   loadConfigFromFile,
   loadEgressConfigFromFile,
   parseGatewayConfig,
+  resolveCodingSafeSidecarGatewayProfile,
   resolveOutboundHttpEgressConfig,
   selectConfiguredModel,
   type EnvSource,
   type GatewayConfig,
+  type ModelProviderConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import { GatewayError, Gateway } from "@oscharko-dev/keiko-model-gateway";
 import { GatewayModelPort } from "@oscharko-dev/keiko-harness";
@@ -207,6 +209,7 @@ export interface GatewayDiscoveredModels {
 
 export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredModels;
 export type ContextProfileResolver = (modelId: string) => ContextProfile;
+export type CodingSidecarGatewayModelSourceResolver = () => CodingWorkbenchModelSource;
 
 export interface UiHandlerDeps {
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -236,6 +239,13 @@ export interface UiHandlerDeps {
   // even on live routes, so handlers thread this source into the projection helper instead of
   // silently defaulting every request to keiko-model-gateway semantics.
   readonly codingSidecarGatewayModelSource?: CodingWorkbenchModelSource | undefined;
+  // Production resolver for the coding-sidecar model source. This keeps the routing seam live when
+  // the runtime gateway config changes after first-run setup instead of freezing a test-only value.
+  readonly codingSidecarGatewayModelSourceResolver?:
+    CodingSidecarGatewayModelSourceResolver | undefined;
+  // Optional dedicated evidence store for coding-workbench records. When absent, coding-sidecar
+  // routes keep the root evidence store clean and fall back to diagnostics-only observability.
+  readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
@@ -441,6 +451,13 @@ export interface BuildHandlerDepsOptions {
   readonly registry?: RunRegistry | undefined;
   // Optional injected ModelPort factory (tests); the GatewayModelPort builder is used otherwise.
   readonly modelPortFactory?: ModelPortFactory | undefined;
+  // Optional coding-sidecar model-source override. Production defaults to deriving the source from
+  // the selected coding-safe provider profile; tests and future config surfaces may override it.
+  readonly codingSidecarGatewayModelSource?: CodingWorkbenchModelSource | undefined;
+  // Optional dedicated evidence store for content-free Coding Workbench routing records. Production
+  // otherwise creates an isolated default store under <evidenceDir>/coding-workbench so /api/evidence
+  // stays clean while sidecar routing evidence still persists.
+  readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
   // UI-local SQLite DB path (`keiko ui --ui-db`); resolved via UI-store precedence (explicit →
   // KEIKO_UI_DATA_DIR → homedir/.keiko/keiko-ui.db). Mirrors evidenceDir's shape.
   readonly uiDbPath?: string | undefined;
@@ -670,6 +687,42 @@ function defaultContextProfile(
   }
   const modelId = selectConfiguredModel(config, { kind: "chat" });
   return modelId === undefined ? DEFAULT_CONTEXT_PROFILE : resolveProfile(modelId);
+}
+
+function codingSafeSidecarProvider(config: GatewayConfig): ModelProviderConfig | undefined {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(config);
+  if (resolved.status !== "available") {
+    return undefined;
+  }
+  return config.providers.find((provider) => provider.modelId === resolved.modelAlias);
+}
+
+function isOpenAiPlatformGatewayProvider(provider: ModelProviderConfig): boolean {
+  try {
+    const url = new URL(provider.baseUrl);
+    return url.protocol === "https:" && url.hostname === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+function deriveCodingSidecarGatewayModelSource(
+  currentConfig: () => GatewayConfig | undefined,
+  explicit: CodingWorkbenchModelSource | undefined,
+): CodingSidecarGatewayModelSourceResolver {
+  return (): CodingWorkbenchModelSource => {
+    if (explicit !== undefined) {
+      return explicit;
+    }
+    const config = currentConfig();
+    if (config === undefined) {
+      return "keiko-model-gateway";
+    }
+    const provider = codingSafeSidecarProvider(config);
+    return provider !== undefined && isOpenAiPlatformGatewayProvider(provider)
+      ? "openai-api-key-through-gateway"
+      : "keiko-model-gateway";
+  };
 }
 
 export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
@@ -1715,11 +1768,30 @@ interface UiHandlerDepsAssemblyArgs {
   readonly runtimeConfig: RuntimeGatewayConfig;
   readonly egress: GatewayEgressConfig | undefined;
   readonly evidenceStore: EvidenceStore;
+  readonly codingWorkbenchEvidenceStore: EvidenceStore;
   readonly redactString: (value: string) => string;
   readonly liveRedactor: Redactor;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
+}
+
+function codingSidecarGatewayModelSourceFields(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<
+  UiHandlerDeps,
+  "codingSidecarGatewayModelSourceResolver" | "codingSidecarGatewayModelSource"
+> {
+  const codingSidecarGatewayModelSourceResolver = deriveCodingSidecarGatewayModelSource(
+    () => args.runtimeConfig.current(),
+    args.options.codingSidecarGatewayModelSource,
+  );
+  return {
+    codingSidecarGatewayModelSourceResolver,
+    ...(args.options.codingSidecarGatewayModelSource === undefined
+      ? {}
+      : { codingSidecarGatewayModelSource: args.options.codingSidecarGatewayModelSource }),
+  };
 }
 
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
@@ -1732,6 +1804,8 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     redactor: args.liveRedactor,
     registry: args.options.registry ?? createRunRegistry(),
     modelPortFactory: args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
+    ...codingSidecarGatewayModelSourceFields(args),
+    codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
@@ -1777,6 +1851,9 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
   const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath);
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
+  const codingWorkbenchEvidenceStore =
+    options.codingWorkbenchEvidenceStore ??
+    createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({ env: options.env });
@@ -1792,6 +1869,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     runtimeConfig,
     egress,
     evidenceStore,
+    codingWorkbenchEvidenceStore,
     redactString,
     liveRedactor,
     localKnowledgeKeyProvider,

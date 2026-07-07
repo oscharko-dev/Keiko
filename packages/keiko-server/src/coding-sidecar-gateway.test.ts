@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayConfig,
@@ -11,7 +14,7 @@ import {
   validateCodingWorkbenchEvidenceRecord,
   type CodingWorkbenchEvidenceRecord,
 } from "@oscharko-dev/keiko-contracts";
-import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { buildRedactor, buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
@@ -20,6 +23,20 @@ import { mockRequest, mockResponse } from "./_support.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext } from "./routes.js";
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
   return {
@@ -81,6 +98,7 @@ function depsValue(
   options: {
     readonly diagnostics?: UiHandlerDeps["diagnostics"];
     readonly modelSource?: UiHandlerDeps["codingSidecarGatewayModelSource"];
+    readonly codingWorkbenchEvidenceStore?: UiHandlerDeps["codingWorkbenchEvidenceStore"];
   } = {},
 ): UiHandlerDeps {
   return {
@@ -97,6 +115,9 @@ function depsValue(
     ...(options.modelSource === undefined
       ? {}
       : { codingSidecarGatewayModelSource: options.modelSource }),
+    ...(options.codingWorkbenchEvidenceStore === undefined
+      ? {}
+      : { codingWorkbenchEvidenceStore: options.codingWorkbenchEvidenceStore }),
   };
 }
 
@@ -159,13 +180,21 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("surfaces the same content-free projection through the profile route", () => {
+    const put = vi.fn((_runId: string, _json: string): string => "");
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
       res: mockResponse().res,
       params: {},
       url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
     } satisfies RouteContext;
-    const deps = depsValue(configValue(provider(), capability()));
+    const deps = depsValue(configValue(provider(), capability()), undefined, {}, undefined, {
+      codingWorkbenchEvidenceStore: {
+        put,
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+    });
     const result = handleCodingSidecarGatewayProfile(context, deps);
 
     expect(result.status).toBe(200);
@@ -176,6 +205,7 @@ describe("coding-sidecar gateway", () => {
     });
     expect(JSON.stringify(result.body)).not.toContain("baseUrl");
     expect(JSON.stringify(result.body)).not.toContain("apiKey");
+    expect(put).not.toHaveBeenCalled();
   });
 
   it("fails closed through the profile route when the injected model source is subscription-backed", () => {
@@ -518,7 +548,8 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("writes content-free accepted routing evidence after a successful chat completion", async () => {
-    const put = vi.fn((_runId: string, _json: string): string => "");
+    const rootPut = vi.fn((_runId: string, _json: string): string => "");
+    const codingPut = vi.fn((_runId: string, _json: string): string => "");
     const deps = depsValue(
       configValue(provider(), capability()),
       (
@@ -532,10 +563,18 @@ describe("coding-sidecar gateway", () => {
       },
       {},
       {
-        put,
+        put: rootPut,
         list: () => [],
         get: () => undefined,
         delete: () => undefined,
+      },
+      {
+        codingWorkbenchEvidenceStore: {
+          put: codingPut,
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
       },
     );
 
@@ -548,8 +587,9 @@ describe("coding-sidecar gateway", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(put).toHaveBeenCalledTimes(1);
-    const evidenceJson = put.mock.calls[0]?.[1];
+    expect(rootPut).not.toHaveBeenCalled();
+    expect(codingPut).toHaveBeenCalledTimes(1);
+    const evidenceJson = codingPut.mock.calls[0]?.[1];
     expect(typeof evidenceJson).toBe("string");
     const record = parseEvidenceRecord(String(evidenceJson));
     expect(record).toMatchObject({
@@ -565,6 +605,93 @@ describe("coding-sidecar gateway", () => {
     expect(String(evidenceJson)).not.toContain("provider-secret");
     expect(String(evidenceJson)).not.toContain("api-key");
     expect(String(evidenceJson)).not.toContain("https://provider.example/v1");
+  });
+
+  it("emits a content-free routing diagnostic instead of writing to the root evidence store when no dedicated coding store is configured", async () => {
+    const rootPut = vi.fn((_runId: string, _json: string): string => "");
+    const diagnostics = { record: vi.fn() };
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          void request;
+          return Promise.resolve(assistantResponse(modelId));
+        };
+      },
+      {},
+      {
+        put: rootPut,
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      { diagnostics },
+    );
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "continue" }],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(rootPut).not.toHaveBeenCalled();
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "coding-sidecar-gateway.routing",
+        errorClass: "RoutingDecision",
+        message: "sidecar-gateway-ready:keiko-model-gateway",
+      }),
+    );
+  });
+
+  it("uses the default production coding-workbench evidence store instead of the root evidence store", async () => {
+    const evidenceDir = tempDir("keiko-sidecar-evidence-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(configPath, JSON.stringify(configValue(provider(), capability())), "utf8");
+    const built = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const deps: UiHandlerDeps = {
+      ...built,
+      codingSidecarGatewayChatFactory:
+        (_config: GatewayConfig, modelId: string) =>
+        (_request: GatewayRequest): Promise<NormalizedResponse> =>
+          Promise.resolve(assistantResponse(modelId)),
+    };
+    const rootEntriesBefore = deps.evidenceStore.list();
+    const codingEntriesBefore = deps.codingWorkbenchEvidenceStore?.list() ?? [];
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      routeContext({
+        model: "azure-coding-model",
+        messages: [{ role: "user", content: "continue" }],
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(deps.evidenceStore.list()).toEqual(rootEntriesBefore);
+    expect(deps.codingWorkbenchEvidenceStore).toBeDefined();
+    expect(deps.codingWorkbenchEvidenceStore?.list()).toHaveLength(codingEntriesBefore.length + 1);
+    const runId = deps.codingWorkbenchEvidenceStore?.list().at(-1);
+    expect(runId).toBeDefined();
+    const record = parseEvidenceRecord(
+      String(deps.codingWorkbenchEvidenceStore?.get(String(runId))),
+    );
+    expect(record).toMatchObject({
+      kind: "run",
+      modelSource: "keiko-model-gateway",
+      safeSummary: "sidecar-gateway-ready",
+    });
   });
 
   it("returns a content-free unavailable error when deployment policy disables the gateway", async () => {
@@ -589,18 +716,27 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("returns a content-free unavailable error for the injected subscription-backed model source", async () => {
-    const put = vi.fn((_runId: string, _json: string): string => "");
+    const rootPut = vi.fn((_runId: string, _json: string): string => "");
+    const codingPut = vi.fn((_runId: string, _json: string): string => "");
     const deps = depsValue(
       configValue(provider(), capability()),
       undefined,
       {},
       {
-        put,
+        put: rootPut,
         list: () => [],
         get: () => undefined,
         delete: () => undefined,
       },
-      { modelSource: "chatgpt-codex-subscription-profile" },
+      {
+        modelSource: "chatgpt-codex-subscription-profile",
+        codingWorkbenchEvidenceStore: {
+          put: codingPut,
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+      },
     );
 
     const result = await handleCodingSidecarGatewayChatCompletions(
@@ -619,8 +755,9 @@ describe("coding-sidecar gateway", () => {
         },
       },
     });
-    expect(put).toHaveBeenCalledTimes(1);
-    const record = parseEvidenceRecord(String(put.mock.calls[0]?.[1]));
+    expect(rootPut).not.toHaveBeenCalled();
+    expect(codingPut).toHaveBeenCalledTimes(1);
+    const record = parseEvidenceRecord(String(codingPut.mock.calls[0]?.[1]));
     expect(record).toMatchObject({
       kind: "failure",
       modelSource: "chatgpt-codex-subscription-profile",
@@ -630,7 +767,8 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("writes failed routing evidence and emits a diagnostic when the gateway call throws", async () => {
-    const put = vi.fn((_runId: string, _json: string): string => "");
+    const rootPut = vi.fn((_runId: string, _json: string): string => "");
+    const codingPut = vi.fn((_runId: string, _json: string): string => "");
     const diagnostics = { record: vi.fn() };
     const deps = depsValue(
       configValue(provider(), capability()),
@@ -642,12 +780,20 @@ describe("coding-sidecar gateway", () => {
       },
       {},
       {
-        put,
+        put: rootPut,
         list: () => [],
         get: () => undefined,
         delete: () => undefined,
       },
-      { diagnostics },
+      {
+        diagnostics,
+        codingWorkbenchEvidenceStore: {
+          put: codingPut,
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+      },
     );
 
     await expect(
@@ -658,8 +804,9 @@ describe("coding-sidecar gateway", () => {
         deps,
       ),
     ).rejects.toThrow("gateway-failure");
-    expect(put).toHaveBeenCalledTimes(1);
-    const evidenceJson = String(put.mock.calls[0]?.[1]);
+    expect(rootPut).not.toHaveBeenCalled();
+    expect(codingPut).toHaveBeenCalledTimes(1);
+    const evidenceJson = String(codingPut.mock.calls[0]?.[1]);
     const record = parseEvidenceRecord(evidenceJson);
     expect(record).toMatchObject({
       kind: "failure",
