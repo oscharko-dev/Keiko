@@ -184,6 +184,13 @@ function pruneDirectoryCache(
   return toEvict === keys.length - DIRECTORY_CACHE_MAX ? directories : next;
 }
 
+export const filesWidgetTestInternals = {
+  DIRECTORY_CACHE_MAX,
+  DIRECTORY_RENDER_BATCH_SIZE,
+  pinnedDirectoryPaths,
+  pruneDirectoryCache,
+} as const;
+
 // Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.
 function entryParent(path: string): string | null {
   const idx = path.lastIndexOf("/");
