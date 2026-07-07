@@ -1284,7 +1284,10 @@ describe("GroundedAnswer", () => {
     expect(warning?.textContent?.toLowerCase()).toContain("reranker unavailable");
   });
 
-  it("describes configured no-op reranking without exposing provider details", () => {
+  it("RB-4 (GEN-AI-RETRIEVAL-001): does not surface a Needs review banner for a not-configured reranker (default, safe install state)", () => {
+    // Regression for Epic #1820 / #1922: a reranker that was simply never configured is the
+    // default, fully-supported state, not a degradation — the summary banner must stay silent
+    // even though the redacted diagnostics still carry failureKind "not-configured".
     const base = localKnowledgeAnswer();
     const a = {
       ...base,
@@ -1301,9 +1304,6 @@ describe("GroundedAnswer", () => {
       },
     } as GroundedAnswerType;
     const { container } = render(<GroundedAnswer answer={a} busy={false} />);
-    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
-    expect(warning?.textContent).toContain("no reranker configured");
-    expect(warning?.textContent).toContain("fused retrieval order");
-    expect(warning?.textContent).not.toContain("http");
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
   });
 });

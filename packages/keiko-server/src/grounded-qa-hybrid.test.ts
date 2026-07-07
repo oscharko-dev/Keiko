@@ -612,6 +612,16 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       failureKind: "not-configured",
     });
     expect(answer.contextPack.knowledge.reranker?.status).toBe("disabled");
+    // Regression for Epic #1820 / #1922: a not-configured reranker is the default, fully-supported
+    // install state on the hybrid path too — it must not degrade the connector's activity row (this
+    // mirrors the single-scope assertion in local-knowledge-grounded-qa.rescue.test.ts).
+    expect(answer.retrievalActivity?.summary.degradedCount).toBe(0);
+    expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).not.toContain("degraded");
+    expect(
+      answer.retrievalActivity?.pods.some((pod) =>
+        pod.reasonCodes.includes("reranker-unavailable"),
+      ),
+    ).toBe(false);
 
     // Messages persisted in the UiStore
     const messages = store.listMessages(chatId);

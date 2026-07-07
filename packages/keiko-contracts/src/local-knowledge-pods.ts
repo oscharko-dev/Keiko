@@ -303,6 +303,29 @@ const COMPATIBILITY_KEYS = [
   "migrationRequired",
   "persistedStateRenamed",
 ] as const;
+// Mirrors ManualRefreshChangeSummary (packages/keiko-contracts/src/html-manual-refresh.ts). That
+// leaf validator checks required-field presence/type/enum membership but — unlike every other
+// nested object on KnowledgePodSummary — does not reject unknown/extra keys. Enforce the same
+// onlyKeys defense-in-depth here, at the summary layer, so a corrupted or accidentally-widened
+// persisted record cannot ride an unexpected field through to the UI/evidence surface.
+const MANUAL_REFRESH_KEYS = [
+  "schemaVersion",
+  "outcome",
+  "sourceKind",
+  "counts",
+  "removalDetection",
+  "crawlRunFingerprint",
+  "reasonCodes",
+  "refreshedAt",
+] as const;
+const MANUAL_REFRESH_COUNT_KEYS = [
+  "addedPages",
+  "changedPages",
+  "removedPages",
+  "unchangedPages",
+  "failedPages",
+  "deniedLinks",
+] as const;
 
 const READINESS: readonly KnowledgePodReadiness[] = [
   "draft",
@@ -1081,6 +1104,14 @@ function validateSummaryScalars(input: Record<string, unknown>, errors: string[]
 
 function validateOptionalManualRefresh(value: unknown, errors: string[]): void {
   if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("summary.manualRefresh must be an object");
+    return;
+  }
+  onlyKeys(value, MANUAL_REFRESH_KEYS, "summary.manualRefresh", errors);
+  if (isRecord(value.counts)) {
+    onlyKeys(value.counts, MANUAL_REFRESH_COUNT_KEYS, "summary.manualRefresh.counts", errors);
+  }
   const result = validateManualRefreshChangeSummary(value);
   if (!result.ok) {
     errors.push(...result.errors.map((error) => `summary.manualRefresh: ${error}`));

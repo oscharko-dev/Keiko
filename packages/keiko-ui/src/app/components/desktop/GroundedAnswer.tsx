@@ -942,21 +942,20 @@ function HybridContextPackSummary({
   );
 }
 
-// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker silently degraded to fallback retrieval order.
+// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker genuinely failed and silently degraded to the
+// fallback retrieval order. A not-configured reranker is the default, fully-supported install
+// state — not a failure — and must never raise this banner; it mirrors the backend's
+// rerankerForRetrievalActivity suppressor in local-knowledge-grounded-qa.ts (Epic #1820 / #1922).
 const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
   "unavailable",
   "invalid-response",
-  "not-configured",
 ]);
 
 function rerankerDegradationNote(
   reranker: GroundedRerankerDiagnostics | undefined,
 ): string | undefined {
-  if (reranker === undefined) {
+  if (reranker === undefined || reranker.failureKind === "not-configured") {
     return undefined;
-  }
-  if (reranker.status === "not-configured" || reranker.failureKind === "not-configured") {
-    return "Ranking: no reranker configured — showing fused retrieval order.";
   }
   if (!DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
     return undefined;

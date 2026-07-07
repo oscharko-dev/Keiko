@@ -133,8 +133,12 @@ const HOSTILE = [
   { target: "file:///home/alice/private-secret/manual.html", leaks: ["alice", "private-secret"] },
   { target: "javascript:alert('xss')", leaks: ["alert", "xss"] },
   {
-    target: "https://intranet/login?redirect=/admin&session=abc",
-    leaks: ["admin", "session", "abc"],
+    // "abcxyz" (not "abc"): a pure-hex canary can coincidentally collide with the response's
+    // randomUUID()-derived correlationId (lowercase hex + hyphens), which legitimately appears in
+    // every error body and is not itself a leak. "xyz" guarantees the canary can never be a
+    // substring of a hex-only string, eliminating a probabilistic (~1-in-140-run) test flake.
+    target: "https://intranet/login?redirect=/admin&session=abcxyz",
+    leaks: ["admin", "session", "abcxyz"],
   },
   { target: `https://intranet/docs/${"deep/".repeat(2000)}index.html`, leaks: ["deep"] },
 ] as const;

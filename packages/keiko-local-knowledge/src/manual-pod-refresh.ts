@@ -145,13 +145,27 @@ function pagesToFingerprints(crawl: ManualCrawlResult): readonly ManualPageFinge
   }));
 }
 
+interface DrainedRefreshIndexing {
+  readonly result: IndexingResult | undefined;
+  // Relative paths of documents that hit a `document-failed` event during this run. Tracked
+  // separately from `result` because `IndexingResult.status` only reports "failed" when EVERY
+  // document in the run failed (see orchestrator.ts `resolveJobStatus`) — a run where some
+  // documents succeed and others fail is still reported "succeeded", which would otherwise hide
+  // the failed pages from the fingerprint-baseline bookkeeping below.
+  readonly failedRelativePaths: ReadonlySet<string>;
+}
+
 async function drainRefreshIndexing(
   events: AsyncIterable<IndexingEvent>,
   onEvent?: (event: IndexingEvent) => void,
-): Promise<IndexingResult | undefined> {
+): Promise<DrainedRefreshIndexing> {
   let result: IndexingResult | undefined;
+  const failedRelativePaths = new Set<string>();
   for await (const event of events) {
     onEvent?.(event);
+    if (event.kind === "document-failed" && event.relativePath !== undefined) {
+      failedRelativePaths.add(event.relativePath);
+    }
     if (
       event.kind === "job-completed" ||
       event.kind === "job-failed" ||
@@ -160,14 +174,14 @@ async function drainRefreshIndexing(
       result = event.result;
     }
   }
-  return result;
+  return { result, failedRelativePaths };
 }
 
 function runRefreshIndexing(
   deps: RefreshHtmlManualPodDeps,
   rootPath: string,
   crawl: ManualCrawlResult,
-): Promise<IndexingResult | undefined> {
+): Promise<DrainedRefreshIndexing> {
   const workspaceFs = createManualPageWorkspaceFs(rootPath, crawl.pages);
   const events = runIndexingJob({
     capsuleId: deps.capsuleId,
@@ -213,6 +227,20 @@ interface AppliedRefresh {
   readonly newPages: readonly ManualPageFingerprint[];
 }
 
+// A job only reports "failed" when EVERY document in the run failed (orchestrator.ts
+// `resolveJobStatus`); a run where some documents succeed and others fail is still reported
+// "succeeded". Exclude any page whose document hit a `document-failed` event from the pages we
+// commit to the fingerprint baseline, so that specific page keeps no verified baseline entry —
+// otherwise a later refresh would see its unindexed content as "unchanged" and never retry it,
+// silently hiding the failure behind an apparently caught-up pod.
+function pagesToCommitToBaseline(
+  newPages: readonly ManualPageFingerprint[],
+  failedRelativePaths: ReadonlySet<string>,
+): readonly ManualPageFingerprint[] {
+  if (failedRelativePaths.size === 0) return newPages;
+  return newPages.filter((page) => !failedRelativePaths.has(page.relativePath));
+}
+
 // Apply a completed crawl to the pod: update the source scope to the new page set (which prunes
 // removed pages and includes added ones), re-index incrementally, and — only on a clean success —
 // advance the persisted per-page fingerprint baseline. A failed or cancelled index keeps the prior
@@ -232,11 +260,20 @@ async function applyRefresh(
     throw new KnowledgeStoreError("refreshed manual produced an unsafe indexing scope");
   }
   updateSourceScopeInCapsule(deps.store, deps.capsuleId, deps.sourceId, newScope);
-  const indexing = await runRefreshIndexing(deps, rootPath, crawl);
+  const { result: indexing, failedRelativePaths } = await runRefreshIndexing(deps, rootPath, crawl);
   // Advance the persisted fingerprint baseline only on a clean success; a failed or cancelled index
-  // keeps the prior baseline so a retry re-diffs against the last good state.
+  // keeps the prior baseline so a retry re-diffs against the last good state. Within a "succeeded"
+  // run, still withhold the baseline entry for any page whose own document failed (see
+  // `pagesToCommitToBaseline`).
   if (indexing?.status === "succeeded") {
-    replaceManualPageFingerprints(deps.store, deps.capsuleId, deps.sourceId, newPages, crawlRunId);
+    const committedPages = pagesToCommitToBaseline(newPages, failedRelativePaths);
+    replaceManualPageFingerprints(
+      deps.store,
+      deps.capsuleId,
+      deps.sourceId,
+      committedPages,
+      crawlRunId,
+    );
   }
   return { indexing, newPages };
 }

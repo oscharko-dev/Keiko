@@ -5,6 +5,9 @@
 import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorGraph } from "./connector-graph";
@@ -1278,7 +1281,9 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
     });
     expect(screen.getByText("Partial")).toBeInTheDocument();
     expect(
-      screen.getByText("Some pages could not be indexed and were left unchanged."),
+      screen.getByText(
+        "Some pages could not be re-indexed and may be temporarily unsearchable; a future successful refresh will retry them.",
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByText("Some links were skipped because they fell outside the approved scope."),
@@ -1317,7 +1322,48 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
       within(panel as HTMLElement).getByText("Failed", { selector: ".lk-badge" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Indexing failed during refresh; the previous pod state is unchanged."),
+      screen.getByText(
+        "Indexing failed during refresh. Pages that were being re-indexed at the time of failure may be temporarily unsearchable until a future successful refresh repairs them.",
+      ),
+    ).toBeInTheDocument();
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("renders a cancelled refresh as a draft-tone badge with cancellation guidance", async () => {
+    const capsule = manualRefreshCapsule({
+      manualRefresh: {
+        schemaVersion: "1",
+        outcome: "cancelled",
+        sourceKind: "html-manual-http",
+        counts: {
+          addedPages: 0,
+          changedPages: 0,
+          removedPages: 0,
+          unchangedPages: 0,
+          failedPages: 0,
+          deniedLinks: 0,
+        },
+        removalDetection: "not-evaluated-page-limit",
+        crawlRunFingerprint: "fp-cancelled-1",
+        reasonCodes: ["crawl-cancelled"],
+        refreshedAt: 1_700_000_400_000,
+      },
+    });
+    const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Last refresh")).toBeInTheDocument();
+    });
+    const panel = container.querySelector(".lkd-manual-refresh");
+    expect(panel).not.toBeNull();
+    expect(
+      within(panel as HTMLElement).getByText("Cancelled", { selector: ".lk-badge" }),
+    ).toBeInTheDocument();
+    expect(within(panel as HTMLElement).getByText("Cancelled").dataset["state"]).toBe("draft");
+    expect(
+      screen.getByText(
+        "The refresh was cancelled. Pages not yet reached are unaffected; a page already being re-indexed at that moment may be temporarily unsearchable until a future successful refresh.",
+      ),
     ).toBeInTheDocument();
     const results = await axe(container);
     expect(results).toHaveNoViolations();
@@ -1354,5 +1400,20 @@ describe("ConnectorGraph — manual refresh diagnostics panel (Epic #1856, Issue
     ).toBeInTheDocument();
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+
+  // The <section> in connector-graph.tsx carries BOTH `lkd-manual-refresh` and the `panelScope`
+  // CSS-module class on the SAME element (see the ManualRefreshPanel className above). jsdom does
+  // not apply real stylesheet box-model rules, so a descendant-combinator ("scope .lkd-manual-refresh")
+  // root rule would silently never match without failing any DOM/a11y assertion above. Guard the
+  // source selector at the string level, as PdfCitationPreviewWindow.test.tsx does for the same class
+  // of jsdom gap.
+  it("scopes the panel root rule with a compound selector, not a descendant combinator", () => {
+    const css = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "manual-refresh-panel.module.css"),
+      "utf8",
+    );
+    expect(css).toMatch(/\.panelScope:global\(\.lkd-manual-refresh\)\s*\{/);
+    expect(css).not.toMatch(/\.panelScope\s+:global\(\.lkd-manual-refresh\)\s*\{/);
   });
 });
