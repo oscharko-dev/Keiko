@@ -43,6 +43,30 @@ function sseMessage(message: DesktopChatStreamEvent): string {
   return `event: ${message.event}\ndata: ${JSON.stringify(message.data)}\n\n`;
 }
 
+// GEN-PERF-CHATSTREAM-001 — bulkhead for concurrent chat SSE streams, mirroring the caps every
+// sibling stream type already has (agent runs 16, QI runs 2, voice sessions 64). Without it, N
+// open windows could fan out N unbounded upstream gateway streams. The rejection is a JSON 429
+// BEFORE any SSE header, which the client maps to StreamingUnavailableError and transparently
+// degrades to the buffered /api/desktop/chat path — no user-facing failure, no held SSE socket.
+export const MAX_ACTIVE_CHAT_STREAMS_ENV = "KEIKO_CHAT_MAX_ACTIVE_STREAMS";
+const DEFAULT_MAX_ACTIVE_CHAT_STREAMS = 16;
+const HARD_MAX_ACTIVE_CHAT_STREAMS = 64;
+let activeChatStreams = 0;
+
+function maxActiveChatStreams(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[MAX_ACTIVE_CHAT_STREAMS_ENV];
+  if (raw === undefined || raw.trim().length === 0) return DEFAULT_MAX_ACTIVE_CHAT_STREAMS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_ACTIVE_CHAT_STREAMS;
+  return Math.min(parsed, HARD_MAX_ACTIVE_CHAT_STREAMS);
+}
+
+// Test seam: not exported via index.ts. The counter is module state; parallel test files
+// each get their own module instance, so a reset keeps cases order-independent.
+export function _resetActiveChatStreamsForTests(): void {
+  activeChatStreams = 0;
+}
+
 interface StreamedTurn {
   readonly response: import("@oscharko-dev/keiko-model-gateway").NormalizedResponse;
 }
@@ -240,6 +264,26 @@ async function streamAndPersist(
 }
 
 export async function handleSendDesktopChatStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<HandlerOutcome> {
+  // GEN-PERF-CHATSTREAM-001 — reject before any work (and before any SSE header) so the
+  // client degrades to the buffered path instead of stacking an unbounded upstream fan-out.
+  if (activeChatStreams >= maxActiveChatStreams()) {
+    return {
+      status: 429,
+      body: errorBody("TOO_MANY_STREAMS", "Too many concurrent chat streams; retry buffered."),
+    };
+  }
+  activeChatStreams += 1;
+  try {
+    return await runDesktopChatStream(ctx, deps);
+  } finally {
+    activeChatStreams -= 1;
+  }
+}
+
+async function runDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {

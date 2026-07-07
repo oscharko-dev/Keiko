@@ -807,20 +807,38 @@ function CapsuleRow({
   const startDragOut = (startX: number, startY: number): void => {
     dragActiveRef.current = true;
     let dragging = false;
+    // GEN-PERF-LK-DRAG-001 — raw pointermove fires at up to 120-240Hz; committing the
+    // ghost position per event meant one React render per event. Buffer the latest
+    // pointer and commit at most once per animation frame (last-event-wins), the same
+    // pattern as workspaceActions' connect gesture.
+    let lastGhostX = 0;
+    let lastGhostY = 0;
+    let ghostFrame: number | null = null;
+    const applyGhost = (): void => {
+      ghostFrame = null;
+      if (!dragging) return;
+      setDragGhost({
+        x: lastGhostX,
+        y: lastGhostY,
+        label: capsule.displayName,
+        state: capsule.lifecycleState,
+      });
+    };
     const move = (moveEvent: PointerEvent | MouseEvent): void => {
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;
       if (!dragging && Math.hypot(dx, dy) < 6) return;
       dragging = true;
       document.body.style.cursor = "grabbing";
-      setDragGhost({
-        x: moveEvent.clientX,
-        y: moveEvent.clientY,
-        label: capsule.displayName,
-        state: capsule.lifecycleState,
-      });
+      lastGhostX = moveEvent.clientX;
+      lastGhostY = moveEvent.clientY;
+      ghostFrame ??= requestAnimationFrame(applyGhost);
     };
     const teardown = (): void => {
+      if (ghostFrame !== null) {
+        cancelAnimationFrame(ghostFrame);
+        ghostFrame = null;
+      }
       if (pointerEventsSupported) {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);

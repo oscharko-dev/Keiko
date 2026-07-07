@@ -2319,6 +2319,10 @@ describe("ChatWindow message copy", () => {
     expect(prompt?.querySelector('[data-role="user"][data-layout="turn"]')).not.toBeNull();
     expect(answer?.querySelector('[data-role="assistant"][data-layout="turn"]')).not.toBeNull();
     expect(turn?.querySelector('[role="separator"]')).toBeNull();
+    // GEN-PERF-CHAT-015 — off-screen turns must carry rendering containment so a long
+    // conversation below the windowing threshold does not pay layout/paint for every turn.
+    expect(turn?.style.contentVisibility).toBe("auto");
+    expect(turn?.style.containIntrinsicSize).toBe("auto 132px");
   });
 
   it("renders a left-side question map and jumps to the selected prompt", () => {

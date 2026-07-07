@@ -21,13 +21,19 @@ interface ChatHistoryPanelProps {
 
 type HistoryView = "active" | "deleted";
 
+// GEN-PERF-PANEL-001 — one shared formatter: constructing an Intl.DateTimeFormat builds
+// a locale collator each time, and this ran once PER ROW PER RENDER (every search
+// keystroke re-renders every visible row). Module-scope reuse is the documented Intl
+// pattern; the locale/options never change at runtime.
+const CHAT_HISTORY_DATE_FORMAT = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 function formatDate(ms: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(ms));
+  return CHAT_HISTORY_DATE_FORMAT.format(new Date(ms));
 }
 
 function sourceCount(chat: Chat): number {

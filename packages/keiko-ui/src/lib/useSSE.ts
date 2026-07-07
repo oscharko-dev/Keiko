@@ -12,7 +12,6 @@ import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types
 const MAX_VISIBLE_SSE_EVENTS = 500;
 const RECONNECT_INITIAL_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 30000;
-const RECONNECT_JITTER_MS = 500;
 const RUN_EVENTS_URL = "/api/runs/events";
 
 export interface UseSSEResult {
@@ -79,7 +78,11 @@ function reconnectDelay(): number {
     RECONNECT_INITIAL_DELAY_MS * 2 ** reconnectAttempts,
   );
   reconnectAttempts += 1;
-  return base + Math.floor(Math.random() * RECONNECT_JITTER_MS);
+  // Equal-jitter ([base/2, base]) — same policy as the model-gateway retry backoff. The
+  // previous fixed 0–500ms additive jitter clustered every stream consumer (all windows,
+  // all tabs) into the same half-second wave after a BFF restart; spreading by half the
+  // backoff keeps the herd apart at every attempt depth.
+  return Math.floor(base / 2 + Math.random() * (base / 2));
 }
 
 function scheduleReconnect(): void {
@@ -199,7 +202,42 @@ export function useSSE(runId: string | null): UseSSEResult {
     lastSeqRef.current = -1;
     terminalRef.current = false;
 
-    return subscribeRunEvents(runId, {
+    // GEN-PERF-SSE-001 — coalesce event bursts, mirroring the chat token path
+    // (GEN-PERF-CHAT-007). A verbose run emits reasoning/tool events in tight bursts;
+    // one setEvents per event meant one React commit plus one O(length) array copy PER
+    // EVENT, uncapped by frame rate — multiplied across every concurrently open run
+    // window. Leading-edge flush: the first event of an idle window commits immediately
+    // (single-event latency is unchanged), follow-up events arriving within the same
+    // animation frame are batched into one trailing commit. Terminal events always
+    // flush synchronously so the status transition keeps its pre-batching timing.
+    const canRaf = typeof requestAnimationFrame === "function";
+    let pending: HarnessEvent[] = [];
+    let sawTerminal = false;
+    let rafHandle: number | null = null;
+    const flush = (): void => {
+      if (pending.length > 0) {
+        const batch = pending;
+        pending = [];
+        setEvents((prev) => {
+          const merged = [...prev, ...batch];
+          return merged.length > MAX_VISIBLE_SSE_EVENTS
+            ? merged.slice(merged.length - MAX_VISIBLE_SSE_EVENTS)
+            : merged;
+        });
+      }
+      if (sawTerminal && !terminalRef.current) {
+        // FIX E: TERMINAL_EVENT_TYPES now includes workflow:completed/failed and
+        // bug:completed/failed so workflow and bug runs reach terminal state properly.
+        terminalRef.current = true;
+        setStatus("terminal");
+        setError(null);
+      }
+    };
+    const closeBatchWindow = (): void => {
+      rafHandle = null;
+      flush();
+    };
+    const unsubscribe = subscribeRunEvents(runId, {
       onStatus: (nextStatus, nextError): void => {
         if (terminalRef.current) return;
         setStatus(nextStatus);
@@ -208,21 +246,29 @@ export function useSSE(runId: string | null): UseSSEResult {
       onEvent: (parsed): void => {
         if (parsed.seq <= lastSeqRef.current) return;
         lastSeqRef.current = parsed.seq;
-        setEvents((prev) => {
-          const next = prev.length >= MAX_VISIBLE_SSE_EVENTS ? prev.slice(1) : prev.slice();
-          next.push(parsed);
-          return next;
-        });
-
-        // FIX E: TERMINAL_EVENT_TYPES now includes workflow:completed/failed and
-        // bug:completed/failed so workflow and bug runs reach terminal state properly.
-        if (TERMINAL_EVENT_TYPES.has(parsed.type)) {
-          terminalRef.current = true;
-          setStatus("terminal");
-          setError(null);
+        pending.push(parsed);
+        if (TERMINAL_EVENT_TYPES.has(parsed.type)) sawTerminal = true;
+        if (!canRaf || sawTerminal) {
+          if (rafHandle !== null) {
+            cancelAnimationFrame(rafHandle);
+            rafHandle = null;
+          }
+          flush();
+          return;
+        }
+        if (rafHandle === null) {
+          // Idle window: commit this event now, then hold a one-frame window that
+          // collects any burst arriving behind it.
+          flush();
+          rafHandle = requestAnimationFrame(closeBatchWindow);
         }
       },
     });
+    return (): void => {
+      // A pending frame must not flush into the next run's state (or after unmount).
+      if (rafHandle !== null && canRaf) cancelAnimationFrame(rafHandle);
+      unsubscribe();
+    };
   }, [runId]);
 
   return { events, status, error };

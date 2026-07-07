@@ -159,6 +159,18 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         }
       });
     }
+    // GEN-RES-BROWSER-001 — EventSource auto-reconnects on transient network errors, but
+    // a FATAL failure (readyState CLOSED — e.g. the BFF restarted and no longer knows
+    // this session, answering non-200) previously died silently: the event log just
+    // stopped with no signal. Surface it through the widget's existing error state so
+    // the user knows the live feed is gone; reopening the session restores it.
+    source.onerror = (): void => {
+      if (source.readyState !== EventSource.CLOSED) return;
+      setError({
+        code: "EVENT_STREAM_CLOSED",
+        message: "Live browser events disconnected. Reopen the session to resume the feed.",
+      });
+    };
     eventSourceRef.current = source;
     return (): void => {
       source.close();

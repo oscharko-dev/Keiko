@@ -31,9 +31,14 @@ vi.mock("../../../../../lib/browser-api", () => ({
 type EsListener = (ev: MessageEvent<string>) => void;
 
 class FakeEventSource {
+  public static readonly CONNECTING = 0;
+  public static readonly OPEN = 1;
+  public static readonly CLOSED = 2;
   public readonly url: string;
   public readonly listeners = new Map<string, EsListener[]>();
   public closed = false;
+  public onerror: ((ev: Event) => void) | null = null;
+  public readyState = FakeEventSource.OPEN;
   public static last: FakeEventSource | null = null;
 
   public constructor(url: string) {
@@ -147,6 +152,46 @@ describe("BrowserWidget", () => {
     await waitFor(() => {
       expect(screen.getByText("http://127.0.0.1:5173")).toBeInTheDocument();
     });
+  });
+
+  // GEN-RES-BROWSER-001 — a FATAL stream failure (readyState CLOSED, e.g. the BFF
+  // restarted and no longer knows the session) previously died silently: the event log
+  // just stopped. It must surface through the widget's error alert; a TRANSIENT error
+  // (EventSource reconnects on its own) must stay quiet.
+  it("surfaces a fatally closed event stream via role=alert", async () => {
+    vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
+    render(<BrowserWidget />);
+    await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
+    await waitFor(() => {
+      expect(FakeEventSource.last).not.toBeNull();
+    });
+    act(() => {
+      const source = FakeEventSource.last;
+      if (source !== null) {
+        source.readyState = FakeEventSource.CLOSED;
+        source.onerror?.(new Event("error"));
+      }
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/Live browser events disconnected/);
+    });
+  });
+
+  it("stays quiet on transient event-stream errors (EventSource reconnects itself)", async () => {
+    vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
+    render(<BrowserWidget />);
+    await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
+    await waitFor(() => {
+      expect(FakeEventSource.last).not.toBeNull();
+    });
+    act(() => {
+      const source = FakeEventSource.last;
+      if (source !== null) {
+        source.readyState = FakeEventSource.CONNECTING;
+        source.onerror?.(new Event("error"));
+      }
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("surfaces ORIGIN_NOT_ALLOWED via role=alert", async () => {
