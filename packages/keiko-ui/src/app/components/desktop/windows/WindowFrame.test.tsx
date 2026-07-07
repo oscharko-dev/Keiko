@@ -51,7 +51,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     replaceSelection: vi.fn(),
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
-    moveSelectedWindowsBy: vi.fn(),
+    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
     copySelectedWindows: vi.fn(() => false),
     pasteCopiedWindows: vi.fn(() => false),
     close: vi.fn(),
@@ -600,7 +600,7 @@ describe("WindowFrame content zoom controls", () => {
     const update = vi.fn();
     const setSnap = vi.fn();
     const commitSnap = vi.fn();
-    const moveSelectedWindowsBy = vi.fn();
+    const moveSelectedWindowsBy = vi.fn((dx: number, dy: number) => ({ dx, dy }));
     const frames = installAnimationFrameQueue();
     try {
       const { container } = render(
@@ -653,6 +653,43 @@ describe("WindowFrame content zoom controls", () => {
     }
   });
 
+  it("advances selected group drag baseline only by the applied clamped delta", () => {
+    const moveSelectedWindowsBy = vi
+      .fn<WorkspaceApi["moveSelectedWindowsBy"]>()
+      .mockReturnValueOnce({ dx: 120, dy: 0 })
+      .mockReturnValueOnce({ dx: 0, dy: 0 });
+    const frames = installAnimationFrameQueue();
+    try {
+      const { container } = render(
+        <WindowFrame
+          win={appWindow()}
+          top
+          connState={null}
+          selected
+          selectedWindowCount={2}
+          linkRevision={0}
+          api={api({ moveSelectedWindowsBy })}
+          wsRef={workspaceRef(domRect())}
+        />,
+      );
+
+      const header = container.querySelector<HTMLElement>(".win-head");
+      expect(header).not.toBeNull();
+
+      fireEvent.pointerDown(header as HTMLElement, { button: 0, clientX: 100, clientY: 90 });
+      fireEvent.pointerMove(window, { clientX: 900, clientY: 90 });
+      frames.flushNextFrame();
+      fireEvent.pointerMove(window, { clientX: 880, clientY: 90 });
+      frames.flushNextFrame();
+      fireEvent.pointerUp(window);
+
+      expect(moveSelectedWindowsBy).toHaveBeenNthCalledWith(1, 800, 0);
+      expect(moveSelectedWindowsBy).toHaveBeenNthCalledWith(2, 660, 0);
+    } finally {
+      frames.restore();
+    }
+  });
+
   it("toggles selection from the keyboard-reachable window region", () => {
     const toggleWindowSelection = vi.fn();
     const { container } = render(
@@ -676,7 +713,7 @@ describe("WindowFrame content zoom controls", () => {
   });
 
   it("flushes and cleans up selected group drag on pointer cancel", () => {
-    const moveSelectedWindowsBy = vi.fn();
+    const moveSelectedWindowsBy = vi.fn((dx: number, dy: number) => ({ dx, dy }));
     const frames = installAnimationFrameQueue();
     try {
       const { container } = render(

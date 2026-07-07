@@ -12,7 +12,7 @@ function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-
 }
 
 describe("workspace clipboard duplication (Issue #2059)", () => {
-  it("copies selected eligible window descriptors and strips unsafe config fields", () => {
+  it("copies eligible layout descriptors without serializing config paths or secrets", () => {
     const payload = buildWorkspaceClipboardPayload(
       [
         win("files", {
@@ -25,6 +25,8 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     );
 
     expect(payload).not.toBeNull();
+    expect(payload).not.toContain("/repo");
+    expect(payload).not.toContain("ghp_");
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: [],
       payload: payload ?? "",
@@ -40,17 +42,17 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
       type: "files",
       x: 72,
       y: 82,
-      cfg: { resolvedRoot: "/repo" },
+      cfg: {},
     });
     expect(duplicated?.wins[0]?.cfg["apiToken"]).toBeUndefined();
   });
 
-  it("pastes duplicated windows with fresh ids, offset geometry, and raised z-order", () => {
+  it("pastes duplicated windows with fresh ids, offset geometry, and preserved stacking order", () => {
     const source = [
-      { ...win("files", { resolvedRoot: "/repo" }, "files-1"), x: 40, y: 50, z: 2 },
       { ...win("editor", { root: "/repo", file: "README.md" }, "editor-1"), x: 280, y: 90, z: 3 },
+      { ...win("files", { resolvedRoot: "/repo" }, "files-1"), x: 40, y: 50, z: 9 },
     ];
-    const payload = buildWorkspaceClipboardPayload(source, ["files-1", "editor-1"]);
+    const payload = buildWorkspaceClipboardPayload(source, ["editor-1", "files-1"]);
     const duplicated = duplicateWorkspaceClipboardWindows({
       wins: source,
       payload: payload ?? "",
@@ -64,9 +66,32 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     expect(duplicated?.wins).toHaveLength(4);
     expect(duplicated?.pastedWindowIds).toHaveLength(2);
     expect(duplicated?.pastedWindowIds).not.toContain("files-1");
-    expect(duplicated?.wins[2]).toMatchObject({ type: "files", x: 72, y: 82, z: 21 });
-    expect(duplicated?.wins[3]).toMatchObject({ type: "editor", x: 312, y: 122, z: 22 });
+    expect(duplicated?.wins[2]).toMatchObject({ type: "editor", x: 312, y: 122, z: 21 });
+    expect(duplicated?.wins[3]).toMatchObject({ type: "files", x: 72, y: 82, z: 22 });
     expect(duplicated?.nextZ).toBe(22);
+  });
+
+  it("skips singleton and keyed windows that the workspace normally dedupes", () => {
+    const payload = buildWorkspaceClipboardPayload(
+      [
+        win("chat", { chatId: "chat-1", title: "Hidden" }, "chat-1"),
+        win("qiRun", { runId: "run-1" }, "run-1"),
+        win("files", { resolvedRoot: "/repo" }, "files-1"),
+      ],
+      ["chat-1", "run-1", "files-1"],
+    );
+
+    const duplicated = duplicateWorkspaceClipboardWindows({
+      wins: [],
+      payload: payload ?? "",
+      viewport,
+      zStart: 10,
+      nowMs: 4_000,
+      pasteOffsetPx: 32,
+    });
+
+    expect(duplicated?.pastedWindowIds).toHaveLength(1);
+    expect(duplicated?.wins[0]).toMatchObject({ type: "files", cfg: {} });
   });
 
   it("returns no payload for empty, stale, minimized, or maximized selections", () => {
@@ -81,7 +106,7 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
   });
 
   it("fails closed for malformed, foreign, or secret-bearing payloads", () => {
-    const secretPayload = JSON.stringify({
+    const privilegedPayload = JSON.stringify({
       kind: "keiko.workspace.windows",
       version: 1,
       windows: [
@@ -91,7 +116,7 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
           y: 0,
           w: 200,
           h: 140,
-          cfg: { apiToken: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" },
+          cfg: { resolvedRoot: "/repo" },
         },
       ],
     });
@@ -119,7 +144,7 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
     expect(
       duplicateWorkspaceClipboardWindows({
         wins: [],
-        payload: secretPayload,
+        payload: privilegedPayload,
         viewport,
         zStart: 0,
         nowMs: 1,

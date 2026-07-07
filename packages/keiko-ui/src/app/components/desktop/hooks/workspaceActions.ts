@@ -622,19 +622,28 @@ function clampSelectionDelta(
   return { dx: clampedX - bounds.minX, dy: clampedY - bounds.minY };
 }
 
+export interface MoveSelectedWorkspaceWindowsResult {
+  readonly wins: readonly AppWindow[];
+  readonly appliedDelta: { readonly dx: number; readonly dy: number };
+}
+
+function unchangedSelectionMove(wins: readonly AppWindow[]): MoveSelectedWorkspaceWindowsResult {
+  return { wins, appliedDelta: { dx: 0, dy: 0 } };
+}
+
 export function moveSelectedWorkspaceWindows(
   wins: readonly AppWindow[],
   selectedWindowIds: readonly string[],
   delta: { readonly dx: number; readonly dy: number },
   viewport: ViewportWorld,
-): readonly AppWindow[] {
-  if (!Number.isFinite(delta.dx) || !Number.isFinite(delta.dy)) return wins;
-  if (delta.dx === 0 && delta.dy === 0) return wins;
+): MoveSelectedWorkspaceWindowsResult {
+  if (!Number.isFinite(delta.dx) || !Number.isFinite(delta.dy)) return unchangedSelectionMove(wins);
+  if (delta.dx === 0 && delta.dy === 0) return unchangedSelectionMove(wins);
   const targets = selectedMoveTargets(wins, selectedWindowIds);
   const bounds = selectedWindowBounds(targets);
-  if (bounds === null) return wins;
+  if (bounds === null) return unchangedSelectionMove(wins);
   const clamped = clampSelectionDelta(bounds, delta, viewport);
-  if (clamped.dx === 0 && clamped.dy === 0) return wins;
+  if (clamped.dx === 0 && clamped.dy === 0) return unchangedSelectionMove(wins);
   const targetIds = new Set(targets.map((win) => win.id));
   let changed = false;
   const next = wins.map((win) => {
@@ -642,7 +651,7 @@ export function moveSelectedWorkspaceWindows(
     changed = true;
     return { ...win, x: win.x + clamped.dx, y: win.y + clamped.dy };
   });
-  return changed ? next : wins;
+  return changed ? { wins: next, appliedDelta: clamped } : unchangedSelectionMove(wins);
 }
 
 interface LayoutArgs {

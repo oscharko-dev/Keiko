@@ -1817,19 +1817,20 @@ export function useWorkspace(
   const moveSelectedWindowsBy = useCallback<WorkspaceApi["moveSelectedWindowsBy"]>(
     (dx, dy) => {
       const vp = worldVP();
-      if (vp === null) return;
-      setWins((ws) =>
-        ws === null
-          ? ws
-          : (moveSelectedWorkspaceWindows(
-              ws,
-              selectionRef.current.selectedWindowIds,
-              { dx, dy },
-              vp,
-            ) as AppWindow[] | null),
+      if (vp === null) return { dx: 0, dy: 0 };
+      const result = moveSelectedWorkspaceWindows(
+        winsRef.current,
+        selectionRef.current.selectedWindowIds,
+        { dx, dy },
+        vp,
       );
+      if (result.wins !== winsRef.current) {
+        winsRef.current = result.wins as AppWindow[];
+        setWins(result.wins as AppWindow[]);
+      }
+      return result.appliedDelta;
     },
-    [selectionRef, setWins, worldVP],
+    [selectionRef, setWins, winsRef, worldVP],
   );
   const copySelectedWindows = useCallback<WorkspaceApi["copySelectedWindows"]>(() => {
     if (!winsReadyRef.current) return false;

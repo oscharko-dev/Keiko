@@ -4,12 +4,10 @@ import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, WindowCfgValue } from "../windows/types";
 import type { ViewportWorld } from "./useWorkspace.types";
 import { sanitizePersistedWindows } from "./workspace-persistence";
-import { looksLikeSecretShape } from "@oscharko-dev/keiko-contracts";
 
 const WORKSPACE_CLIPBOARD_KIND = "keiko.workspace.windows";
 const WORKSPACE_CLIPBOARD_VERSION = 1;
 const MAX_CLIPBOARD_WINDOWS = 32;
-const REDACTED_WORKSPACE_CONFIG_VALUE = "[REDACTED]";
 export const WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX = 32;
 
 interface WorkspaceClipboardWindowDescriptor {
@@ -51,34 +49,9 @@ function hasWindowType(value: unknown): value is WindowType {
   return typeof value === "string" && value in WIN_TYPES;
 }
 
-function isSafeArrayValue(value: readonly unknown[]): value is readonly string[] {
-  return value.every(
-    (item) =>
-      typeof item === "string" &&
-      item !== REDACTED_WORKSPACE_CONFIG_VALUE &&
-      !looksLikeSecretShape(item),
-  );
-}
-
-function safeCfgValue(value: unknown): WindowCfgValue | null {
-  if (value === undefined) return undefined;
-  if (value === REDACTED_WORKSPACE_CONFIG_VALUE) return null;
-  if (typeof value === "string") return looksLikeSecretShape(value) ? null : value;
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (Array.isArray(value) && isSafeArrayValue(value)) return value;
-  return null;
-}
-
-function safeCfgRecord(value: unknown): Record<string, WindowCfgValue> | null {
+function contentFreeCfgRecord(value: unknown): Record<string, WindowCfgValue> | null {
   if (!isRecord(value)) return null;
-  const cfg: Record<string, WindowCfgValue> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    const safe = safeCfgValue(raw);
-    if (safe === null) return null;
-    if (safe !== undefined) cfg[key] = safe;
-  }
-  return cfg;
+  return Object.keys(value).length === 0 ? {} : null;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -91,7 +64,7 @@ function descriptorFromRecord(value: unknown): WorkspaceClipboardWindowDescripto
   const y = finiteNumber(value["y"]);
   const w = finiteNumber(value["w"]);
   const h = finiteNumber(value["h"]);
-  const cfg = safeCfgRecord(value["cfg"]);
+  const cfg = contentFreeCfgRecord(value["cfg"]);
   const zoom = value["zoom"] === undefined ? undefined : finiteNumber(value["zoom"]);
   if (x === null || y === null || w === null || h === null || cfg === null) return null;
   if (w <= 0 || h <= 0 || zoom === null) return null;
@@ -143,16 +116,25 @@ function selectableClipboardWindows(
   return wins.filter((win) => selected.has(win.id) && win.minimized !== true && win.max !== true);
 }
 
+function isKeyedWindowDescriptor(win: AppWindow): boolean {
+  if (win.type === "chat") return typeof win.cfg["chatId"] === "string";
+  return win.type === "qiRun" && typeof win.cfg["runId"] === "string";
+}
+
+function isWorkspaceClipboardWindowEligible(win: AppWindow): boolean {
+  if (WIN_TYPES[win.type].singleton === true) return false;
+  return !isKeyedWindowDescriptor(win);
+}
+
 function descriptorFromWindow(win: AppWindow): WorkspaceClipboardWindowDescriptor | null {
-  const cfg = safeCfgRecord(win.cfg);
-  if (cfg === null) return null;
+  if (!isWorkspaceClipboardWindowEligible(win)) return null;
   return {
     type: win.type,
     x: win.x,
     y: win.y,
     w: win.w,
     h: win.h,
-    cfg,
+    cfg: {},
     ...(typeof win.zoom === "number" && Number.isFinite(win.zoom) ? { zoom: win.zoom } : {}),
   };
 }
@@ -163,7 +145,10 @@ export function buildWorkspaceClipboardPayload(
 ): string | null {
   const selected = selectableClipboardWindows(wins, selectedWindowIds);
   if (selected.length === 0) return null;
-  const sanitized = sanitizePersistedWindows(selected).slice(0, MAX_CLIPBOARD_WINDOWS);
+  const sanitized = sanitizePersistedWindows(selected)
+    .filter(isWorkspaceClipboardWindowEligible)
+    .sort((a, b) => a.z - b.z)
+    .slice(0, MAX_CLIPBOARD_WINDOWS);
   const descriptors: WorkspaceClipboardWindowDescriptor[] = [];
   for (const win of sanitized) {
     const descriptor = descriptorFromWindow(win);

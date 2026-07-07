@@ -414,9 +414,9 @@ function attachGroupDragListeners(
     const dx = pendingX - lastX;
     const dy = pendingY - lastY;
     if (dx !== 0 || dy !== 0) {
-      lastX = pendingX;
-      lastY = pendingY;
-      api.moveSelectedWindowsBy(dx, dy);
+      const applied = api.moveSelectedWindowsBy(dx, dy);
+      lastX += applied.dx;
+      lastY += applied.dy;
     }
   };
   const schedule = (): void => {

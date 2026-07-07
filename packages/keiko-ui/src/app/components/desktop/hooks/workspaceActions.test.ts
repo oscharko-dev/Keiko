@@ -539,11 +539,12 @@ describe("workspace window selection helpers (Issue #2057)", () => {
       layoutViewport,
     );
 
-    expect(moved).not.toBe(wins);
-    expect(moved[0]).toMatchObject({ id: "files-1", x: 65, y: 80 });
-    expect(moved[1]).toMatchObject({ id: "chat-1", x: 305, y: 120 });
-    expect(moved[2]).toBe(wins[2]);
-    expect(moved[0]?.cfg).toBe(filesCfg);
+    expect(moved.wins).not.toBe(wins);
+    expect(moved.appliedDelta).toEqual({ dx: 25, dy: 30 });
+    expect(moved.wins[0]).toMatchObject({ id: "files-1", x: 65, y: 80 });
+    expect(moved.wins[1]).toMatchObject({ id: "chat-1", x: 305, y: 120 });
+    expect(moved.wins[2]).toBe(wins[2]);
+    expect(moved.wins[0]?.cfg).toBe(filesCfg);
   });
 
   it("clamps grouped moves to the shared title-bar recovery bounds", () => {
@@ -559,23 +560,23 @@ describe("workspace window selection helpers (Issue #2057)", () => {
       layoutViewport,
     );
 
-    expect(moved[0]).toMatchObject({ x: -350, y: 20 });
-    expect(moved[1]).toMatchObject({ x: -130, y: 50 });
+    expect(moved.appliedDelta).toEqual({ dx: -390, dy: -30 });
+    expect(moved.wins[0]).toMatchObject({ x: -350, y: 20 });
+    expect(moved.wins[1]).toMatchObject({ x: -130, y: 50 });
   });
 
   it("returns the same window list for empty, stale, ineligible, or zero-delta moves", () => {
     const wins = [win("files", {}, "files-1"), { ...win("chat", {}, "chat-1"), minimized: true }];
 
-    expect(moveSelectedWorkspaceWindows(wins, [], { dx: 1, dy: 1 }, layoutViewport)).toBe(wins);
-    expect(moveSelectedWorkspaceWindows(wins, ["missing"], { dx: 1, dy: 1 }, layoutViewport)).toBe(
-      wins,
-    );
-    expect(moveSelectedWorkspaceWindows(wins, ["chat-1"], { dx: 1, dy: 1 }, layoutViewport)).toBe(
-      wins,
-    );
-    expect(moveSelectedWorkspaceWindows(wins, ["files-1"], { dx: 0, dy: 0 }, layoutViewport)).toBe(
-      wins,
-    );
+    for (const result of [
+      moveSelectedWorkspaceWindows(wins, [], { dx: 1, dy: 1 }, layoutViewport),
+      moveSelectedWorkspaceWindows(wins, ["missing"], { dx: 1, dy: 1 }, layoutViewport),
+      moveSelectedWorkspaceWindows(wins, ["chat-1"], { dx: 1, dy: 1 }, layoutViewport),
+      moveSelectedWorkspaceWindows(wins, ["files-1"], { dx: 0, dy: 0 }, layoutViewport),
+    ]) {
+      expect(result.wins).toBe(wins);
+      expect(result.appliedDelta).toEqual({ dx: 0, dy: 0 });
+    }
   });
 });
 

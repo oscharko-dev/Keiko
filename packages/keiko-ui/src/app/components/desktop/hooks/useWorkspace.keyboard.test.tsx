@@ -290,7 +290,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       type: "files",
       x: 72,
       y: 72,
-      cfg: { resolvedRoot: "/repo" },
+      cfg: {},
       max: false,
     });
     expect(pasted?.id).not.toBe("files-1");

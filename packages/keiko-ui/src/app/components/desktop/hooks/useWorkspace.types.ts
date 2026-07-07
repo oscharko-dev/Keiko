@@ -42,7 +42,10 @@ export interface WorkspaceApi {
   readonly replaceSelection: (windowIds: readonly string[]) => void;
   readonly toggleWindowSelection: (windowId: string) => void;
   readonly clearSelection: () => void;
-  readonly moveSelectedWindowsBy: (dx: number, dy: number) => void;
+  readonly moveSelectedWindowsBy: (
+    dx: number,
+    dy: number,
+  ) => { readonly dx: number; readonly dy: number };
   readonly copySelectedWindows: () => boolean;
   readonly pasteCopiedWindows: () => boolean;
   readonly close: (id: string) => void;

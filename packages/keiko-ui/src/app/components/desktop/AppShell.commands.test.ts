@@ -32,7 +32,7 @@ function fakeApi(): WorkspaceApi {
     replaceSelection: vi.fn(),
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
-    moveSelectedWindowsBy: vi.fn(),
+    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
     copySelectedWindows: vi.fn(() => false),
     pasteCopiedWindows: vi.fn(() => false),
     close: vi.fn(),
