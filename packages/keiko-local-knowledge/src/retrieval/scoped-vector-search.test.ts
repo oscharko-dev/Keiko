@@ -25,6 +25,7 @@ import type {
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 
+import type { ComposedRetrievalScope } from "../composition.js";
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import {
   searchVectorsForScope,
@@ -2537,15 +2538,19 @@ describe("toScopeInput — single capsule sugar", () => {
     expect(input.capsuleIds).toEqual(["cap-a"]);
   });
 
-  it("preserves composed source filters", () => {
+  it("preserves composed source filters and threads the loaded capsules", () => {
+    const threadedCapsules: ComposedRetrievalScope["capsules"] = [];
     const input = toScopeInput({
       capsuleSetId: "set-a" as CapsuleSetId,
       capsuleIds: ["cap-a" as KnowledgeCapsuleId],
+      capsules: threadedCapsules,
       sourceIds: ["src-a" as KnowledgeSourceId],
       alwaysQueryCapsuleIds: [],
       sourceRoutingByCapsule: new Map(),
     });
     expect(input.capsuleIds).toEqual(["cap-a"]);
     expect(input.sourceFilter).toEqual(["src-a"]);
+    // GEN-PERF-LK-001 — the pre-loaded member metadata rides along by identity.
+    expect(input.capsules).toBe(threadedCapsules);
   });
 });

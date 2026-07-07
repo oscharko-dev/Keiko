@@ -65,6 +65,11 @@ export class CompositionError extends Error {
 export interface ComposedRetrievalScope {
   readonly capsuleSetId: CapsuleSetId;
   readonly capsuleIds: readonly KnowledgeCapsuleId[];
+  // The member capsules composeScopeFromSet already loaded (existing members only,
+  // in capsuleIds order). Threaded through to the retrieval pipeline so policy
+  // resolution and the vector search never re-fetch the same capsule metadata —
+  // previously ≈7 SQL round-trips per capsule per query (GEN-PERF-LK-001).
+  readonly capsules: readonly KnowledgeCapsule[];
   readonly sourceIds: readonly KnowledgeSourceId[];
   readonly alwaysQueryCapsuleIds: readonly KnowledgeCapsuleId[];
   readonly sourceRoutingByCapsule: ReadonlyMap<KnowledgeCapsuleId, string>;
@@ -140,6 +145,7 @@ function composeScopeFromSet(store: KnowledgeStore, set: CapsuleSet): ComposedRe
   return {
     capsuleSetId: set.id,
     capsuleIds: set.capsuleIds,
+    capsules,
     sourceIds,
     alwaysQueryCapsuleIds,
     sourceRoutingByCapsule: routingMap,
