@@ -428,7 +428,7 @@ function releaseImpactCatalogForPublishTest() {
               approvalReference: "github-pr-review:oscharko-dev/Keiko#999#888",
             },
           }
-      : entry,
+        : entry,
     ),
   };
 }

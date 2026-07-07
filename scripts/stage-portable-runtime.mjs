@@ -46,6 +46,8 @@ const NODE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SIDECAR_RUNTIME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const STAGING_ASSET_ID_UNAVAILABLE = 0;
+const MAC_APP_ICON_FILE = "Keiko.icns";
+const MAC_APP_ICON_SOURCE = join(repoRoot, "native", "portable-launcher", "keiko.icns");
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
   "dist/index.js",
@@ -891,10 +893,23 @@ function stageLauncher(target, stageRoot, resourceRoot, options, hooks) {
   (hooks.buildPrimaryLauncher ?? buildNativeLauncher)(target, path, options);
   chmodLauncher(path);
   if (target.nodePlatform === "darwin") {
-    writeFileSync(join(stageRoot, "Keiko.app", "Contents", "Info.plist"), macInfoPlist(target));
+    stageMacAppMetadata(target, stageRoot, resourceRoot);
   }
   stageSetupManifest(target, resourceRoot);
   stageSupportLauncher(target, stageRoot);
+}
+
+function stageMacAppMetadata(target, stageRoot, resourceRoot) {
+  requireMacAppIconSource();
+  mkdirSync(resourceRoot, { recursive: true });
+  writeFileSync(join(stageRoot, "Keiko.app", "Contents", "Info.plist"), macInfoPlist(target));
+  copyFileSync(MAC_APP_ICON_SOURCE, join(resourceRoot, MAC_APP_ICON_FILE));
+}
+
+function requireMacAppIconSource() {
+  if (!existsSync(MAC_APP_ICON_SOURCE) || !statSync(MAC_APP_ICON_SOURCE).isFile()) {
+    fail("portable macOS app icon is required");
+  }
 }
 
 function buildNativeLauncher(target, destination, options) {
@@ -1022,6 +1037,8 @@ function macInfoPlist(target) {
     "  <string>Keiko</string>",
     "  <key>CFBundleIdentifier</key>",
     `  <string>dev.oscharko.keiko.${target.platformTarget}</string>`,
+    "  <key>CFBundleIconFile</key>",
+    `  <string>${MAC_APP_ICON_FILE}</string>`,
     "  <key>CFBundleName</key>",
     "  <string>Keiko</string>",
     "  <key>CFBundlePackageType</key>",

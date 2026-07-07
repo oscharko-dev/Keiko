@@ -499,6 +499,7 @@ async function cmdStart(
       io.out(
         `Keiko UI already running on ${lifecycleBaseUrl(options)} (pid ${String(running)}).\n`,
       );
+      maybeOpenBrowser(options, io, deps.openExternal);
       return 0;
     }
     io.out(
