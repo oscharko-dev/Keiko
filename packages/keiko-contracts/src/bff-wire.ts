@@ -34,6 +34,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "./local-knowledge.js";
+import type { HtmlManualSourceKind } from "./html-manual-source.js";
 import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
@@ -972,6 +973,43 @@ export interface LocalKnowledgeEvidenceCitation {
   // (the capsule/capsule-set displayName). Absent for legacy single-connector answers, which carry
   // no per-source attribution (mirrors GroundedEvidenceCitation.source for folder evidence).
   readonly source?: string;
+  readonly htmlManual?: HtmlManualCitationMetadata;
+}
+
+export type HtmlManualCitationOpenUnavailableReason =
+  | "source-metadata-unavailable"
+  | "citation-lineage-mismatch"
+  | "target-outside-approved-scope"
+  | "target-unsupported"
+  | "target-credentialed"
+  | "target-unavailable";
+
+export type HtmlManualCitationOpenEligibility =
+  | { readonly state: "available"; readonly target: string }
+  | {
+      readonly state: "page-level-only";
+      readonly target: string;
+      readonly reason: "missing-anchor";
+    }
+  | {
+      readonly state: "unavailable";
+      readonly reason: HtmlManualCitationOpenUnavailableReason;
+    };
+
+export interface HtmlManualCitationTargetSummary {
+  readonly originSummary: string;
+  readonly pathSummary: string | null;
+}
+
+export interface HtmlManualCitationMetadata {
+  readonly sourceKind: HtmlManualSourceKind;
+  readonly pageTitle: string;
+  readonly safePageId: string;
+  readonly sectionPath?: readonly string[];
+  readonly anchorId?: string;
+  readonly parsedUnitId?: string;
+  readonly targetSummary?: HtmlManualCitationTargetSummary;
+  readonly open: HtmlManualCitationOpenEligibility;
 }
 
 export interface LocalKnowledgeGroundedAnswer {

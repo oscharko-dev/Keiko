@@ -247,6 +247,15 @@ export {
   type CreateHtmlManualPodResult,
 } from "./manual-pod.js";
 export {
+  persistHtmlManualSourceMetadata,
+  readHtmlManualSourceMetadata,
+  resolveHtmlManualCitationTarget,
+  type HtmlManualCitationTargetFailureReason,
+  type HtmlManualCitationTargetResolution,
+  type HtmlManualSourceMetadata,
+  type ResolveHtmlManualCitationTargetInput,
+} from "./manual-source-metadata.js";
+export {
   buildHtmlManualIndexingProgress,
   type HtmlManualIndexingProgress,
   type ManualCrawlProgress,

@@ -24,6 +24,10 @@ import {
 import { BrowserToolError } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import {
+  resolveHtmlManualCitationNavigationTarget,
+  type HtmlManualCitationNavigationResolution,
+} from "./html-manual-citation-navigation.js";
 
 // The request body is a small JSON object (target + optional port); 8 KB is generous and keeps a
 // pathological target string out of memory and logs. Independent of the transport-level cap.
@@ -161,6 +165,14 @@ function okResult(
   };
 }
 
+function manualCitationFailureReason(
+  resolution: Extract<HtmlManualCitationNavigationResolution, { readonly kind: "failed" }>,
+): DocumentationNavigationReason {
+  if (resolution.reason === "target-unsupported") return "unsupported-scheme";
+  if (resolution.reason === "target-credentialed") return "invalid-target";
+  return "local-file-scope-unavailable";
+}
+
 export async function handleDocsBrowserNavigate(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -173,7 +185,19 @@ export async function handleDocsBrowserNavigate(
     return { status: 400, body };
   }
   const backendAvailable = deps.browser !== undefined;
-  const classification = classifyDocumentationTarget(parsed.value.target);
+  const citationResolution = resolveHtmlManualCitationNavigationTarget(deps, parsed.value.target);
+  if (citationResolution.kind === "failed") {
+    return okResult(
+      "unsupported-scheme",
+      "HTML manual citation",
+      null,
+      manualCitationFailureReason(citationResolution),
+      backendAvailable,
+    );
+  }
+  const target =
+    citationResolution.kind === "resolved" ? citationResolution.target : parsed.value.target;
+  const classification = classifyDocumentationTarget(target);
   if (!classification.ok) {
     const reason = classificationFailureReason(classification.reason);
     return okResult("unsupported-scheme", "unavailable", null, reason, backendAvailable);

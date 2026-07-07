@@ -8,6 +8,8 @@
 // retrieval path. Byte retrieval is injected (`ManualCrawlFetcher`, ADR-0019 trust-9).
 
 import {
+  htmlManualSourceFingerprintTag,
+  htmlManualSourceKindTag,
   htmlManualReachableFilesScope,
   standardPodModelUsePolicy,
   type EmbeddingModelIdentity,
@@ -30,6 +32,7 @@ import {
 import { KnowledgeStoreError } from "./errors.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
+import { persistHtmlManualSourceMetadata } from "./manual-source-metadata.js";
 import {
   buildHtmlManualIndexingProgress,
   type HtmlManualIndexingProgress,
@@ -117,9 +120,18 @@ function attachManualSource(
   addSourceToCapsule(
     deps.store,
     deps.capsuleId,
-    { id: deps.sourceId, displayName: source.proposedPodName, tags: [], scope },
+    {
+      id: deps.sourceId,
+      displayName: source.proposedPodName,
+      tags: [
+        htmlManualSourceKindTag(source.scope.kind),
+        htmlManualSourceFingerprintTag(source.sourceFingerprint),
+      ],
+      scope,
+    },
     deps.auditSink,
   );
+  persistHtmlManualSourceMetadata(deps.store, deps.capsuleId, deps.sourceId, source);
   return rootPath;
 }
 

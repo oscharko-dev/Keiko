@@ -678,6 +678,7 @@ function selectedFolderCitations(
 }
 
 function selectedConnectorCitations(
+  store: KnowledgeStore,
   selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
 ): readonly LocalKnowledgeEvidenceCitation[] {
@@ -689,6 +690,7 @@ function selectedConnectorCitations(
         `[${String(s.marker)}]`,
         s.payload.lookup,
         (value) => redactString(redactor, value),
+        store,
       ),
     );
 }
@@ -1202,7 +1204,7 @@ function assembleHybridAnswer(
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
   const citations = selectedFolderCitations(selected, redactor);
-  const knowledgeCitations = selectedConnectorCitations(selected, redactor);
+  const knowledgeCitations = selectedConnectorCitations(store, selected, redactor);
   const retrievalActivity = buildHybridRetrievalActivity(
     store,
     sources.connectors,
