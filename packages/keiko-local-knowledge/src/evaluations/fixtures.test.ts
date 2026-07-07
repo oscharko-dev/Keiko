@@ -15,6 +15,13 @@ import {
   contextBudgetFixture,
   exactTechnicalFixture,
   htmlManualStructureFixture,
+  htmlManualTableRowFixture,
+  htmlManualFramesetFixture,
+  htmlManualCodeBlockFixture,
+  htmlManualMalformedFixture,
+  htmlManualDeniedLinkFixture,
+  htmlManualIndexPageFixture,
+  htmlManualMultilingualFixture,
   codeRepositoryFixture,
   chainedQuestionFixture,
   mixedStrategyFixture,
@@ -74,6 +81,13 @@ describe("fixtures — registry", () => {
       htmlManualStructureFixture.id,
       codeRepositoryFixture.id,
       chainedQuestionFixture.id,
+      htmlManualTableRowFixture.id,
+      htmlManualFramesetFixture.id,
+      htmlManualCodeBlockFixture.id,
+      htmlManualMalformedFixture.id,
+      htmlManualDeniedLinkFixture.id,
+      htmlManualIndexPageFixture.id,
+      htmlManualMultilingualFixture.id,
     ]);
   });
 

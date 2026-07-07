@@ -48,6 +48,13 @@ inside an aggregate relevance score.
 | Technical HTML structure    | Structure-preserving HTML manual extraction (table rows, anchors, definitions, retry-limit phrasing) stops being recallable | `html-manual-structure` (`check:retrieval-quality`, Epic #1855)           | relevance / evidence-shape |
 | Code-repository retrieval   | Wrong chunk for source-code questions: symbol definition loses to a mere mention, file-scoped lookups drift                 | `code-repository` (`check:retrieval-quality`)                             | relevance                  |
 | Chained multi-part question | One leg of a chained question loses its evidence because a single embedding lands between the topics                        | `chained-question` (`check:retrieval-quality`)                            | relevance                  |
+| HTML manual table row       | A settings-table row loses to a sibling row for a row-scoped lookup (real `<table>` parsing was unscored)                   | `html-manual-table-row` (`check:retrieval-quality`, Epic #1858)           | relevance / evidence-shape |
+| HTML frameset navigation    | A frameset question resolves to the wrong content frame document                                                            | `html-manual-frameset` (`check:retrieval-quality`, Epic #1858)            | relevance                  |
+| HTML manual code block      | A named `<pre><code>` example loses to a sibling snippet or surrounding prose                                               | `html-manual-code-block` (`check:retrieval-quality`, Epic #1858)          | relevance                  |
+| Malformed HTML page         | Salvaged blocks stop being recallable, or content dropped by broken markup answers confidently instead of abstaining        | `html-manual-malformed` (`check:retrieval-quality`, Epic #1858)           | relevance / evidence-shape |
+| Denied link / citation-open | Content behind a denied out-of-scope link surfaces, or an in-scope block loses its openable citation                        | `html-manual-denied-link` (`check:retrieval-quality`, Epic #1858)         | policy / evidence-shape    |
+| HTML manual index page      | A "where is X documented" index lookup returns a sibling index entry                                                        | `html-manual-index-page` (`check:retrieval-quality`, Epic #1858)          | relevance                  |
+| HTML manual multilingual    | A per-language manual section is missed in one language direction                                                           | `html-manual-multilingual` (`check:retrieval-quality`, Epic #1858)        | relevance                  |
 
 ### Fixture safety rules
 

@@ -1797,6 +1797,647 @@ export const chainedQuestionFixture: RetrievalEvalFixture = {
   ],
 };
 
+// ─── HTML Manual goldset extensions (Epic #1858, Issue #1902) ─────────────────
+// The `html-manual-structure` fixture (Epic #1855) already scores exact-identifier,
+// error-code, section/anchor, and definition lookups over `html-block` units. The fixtures
+// below close the remaining HTML-manual query classes the goldset ledger flagged as gaps —
+// table-row lookup, frameset navigation, code-block, malformed-page salvage, denied-link vs
+// citation-open, index-page, and an HTML-manual-scoped multilingual case. They are additive
+// siblings of `htmlManualStructureFixture`, not a parallel harness: each reuses the existing
+// `RetrievalEvalFixture` shape, the `html-block` unit kind (so citations carry a section path),
+// unique topic salts (so the ground-truth chunk is deterministically top-ranked), and the
+// existing `below-min-score` no-evidence contract. All content is hand-authored synthetic
+// device-handbook text — no customer manual, path, URL, secret, or endpoint appears.
+
+// HTML table-row lookup. Real `<table>` parsing exists (`appendTableRows` in html-parser.ts)
+// but was never scored in the retrieval goldset: a ranking regression that confused one
+// settings row for another was invisible. Each row is its own chunk with a distinct topic.
+export const htmlManualTableRowFixture: RetrievalEvalFixture = {
+  id: "html-manual-table-row",
+  description:
+    "HTML manual table rows: a specific settings-table row (default + range) beats sibling rows for a row-scoped question.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-table"),
+      displayName: "HTML Manual Table Rows",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-table"),
+          documents: [
+            {
+              id: documentId("doc-html-table"),
+              safeDisplayName: "serial-reference.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-htbl-serial",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Reference", "Serial Settings"],
+                    anchorId: "serial-settings",
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+                {
+                  id: "u-htbl-power",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Reference", "Power Ratings"],
+                    anchorId: "power-ratings",
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-htbl-baud"),
+                  text: "Setting: baud_rate | Default: 9600 | Range: 1200 to 115200 | Unit: bit per second.",
+                  topic: "table-baud",
+                  parsedUnitId: "u-htbl-serial",
+                },
+                {
+                  id: chunkId("c-htbl-parity"),
+                  text: "Setting: parity | Default: none | Allowed: none, even, odd.",
+                  topic: "table-parity",
+                  parsedUnitId: "u-htbl-serial",
+                },
+                {
+                  id: chunkId("c-htbl-voltage"),
+                  text: "Rating: input_voltage | Default: 24 | Range: 12 to 48 | Unit: volt.",
+                  topic: "table-voltage",
+                  parsedUnitId: "u-htbl-power",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-htbl-baud",
+      text: "What default and range does the baud_rate row list in the serial settings table?",
+      topic: "table-baud",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-table") },
+      expectedChunkIds: [chunkId("c-htbl-baud")],
+      topK: 1,
+    },
+    {
+      id: "q-htbl-parity",
+      text: "Which values are allowed for the parity row in the serial settings table?",
+      topic: "table-parity",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-table") },
+      expectedChunkIds: [chunkId("c-htbl-parity")],
+      topK: 1,
+    },
+  ],
+};
+
+// Frameset navigation. A frameset manual splits content across sibling frame documents; a
+// question must land on the correct frame document, not merely the right capsule. Each frame is
+// a separate document with its own topic so a mis-routed frame drops recall.
+export const htmlManualFramesetFixture: RetrievalEvalFixture = {
+  id: "html-manual-frameset",
+  description:
+    "HTML frameset manual: a question resolves to the correct content frame (calibration vs maintenance) within one capsule.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-frameset"),
+      displayName: "HTML Manual Frameset",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-frameset"),
+          documents: [
+            {
+              id: documentId("doc-frameset-nav"),
+              safeDisplayName: "nav.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-frame-nav",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Navigation"],
+                    anchorId: "nav",
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-frame-nav"),
+                  text: "Frameset index links to the setup, calibration, and maintenance frames of the handbook.",
+                  topic: "frame-nav",
+                  parsedUnitId: "u-frame-nav",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-frameset-calibration"),
+              safeDisplayName: "calibration.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-frame-calibration",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Calibration", "Procedure"],
+                    anchorId: "calibration",
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-frame-calibration"),
+                  text: "Calibration procedure: run the reference cycle three times and record the median offset.",
+                  topic: "frame-calibration",
+                  parsedUnitId: "u-frame-calibration",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-frameset-maintenance"),
+              safeDisplayName: "maintenance.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-frame-maintenance",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Maintenance", "Filter"],
+                    anchorId: "maintenance",
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-frame-maintenance"),
+                  text: "Maintenance frame: replace the intake filter after every 500 operating hours.",
+                  topic: "frame-maintenance",
+                  parsedUnitId: "u-frame-maintenance",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-frame-calibration",
+      text: "Which frame documents the calibration procedure and its reference cycle?",
+      topic: "frame-calibration",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-frameset") },
+      expectedChunkIds: [chunkId("c-frame-calibration")],
+      topK: 1,
+    },
+    {
+      id: "q-frame-maintenance",
+      text: "Which frame explains when to replace the intake filter?",
+      topic: "frame-maintenance",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-frameset") },
+      expectedChunkIds: [chunkId("c-frame-maintenance")],
+      topK: 1,
+    },
+  ],
+};
+
+// Code-block query. HTML manuals embed `<pre><code>` snippets; unlike the source-file
+// `code-repository` fixture, these live inside `html-block` manual units. A question about a
+// named example must beat sibling snippets and surrounding prose.
+export const htmlManualCodeBlockFixture: RetrievalEvalFixture = {
+  id: "html-manual-code-block",
+  description:
+    "HTML manual code block: a named code example (resetDevice) is recalled over a config snippet and surrounding prose.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-codeblock"),
+      displayName: "HTML Manual Code Blocks",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-codeblock"),
+          documents: [
+            {
+              id: documentId("doc-html-codeblock"),
+              safeDisplayName: "api-guide.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-cb-examples",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["API", "Examples"],
+                    anchorId: "examples",
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-cb-reset"),
+                  text: "Code example resetDevice() issues a factory reset command to the controller.",
+                  topic: "codeblock-reset",
+                  parsedUnitId: "u-cb-examples",
+                },
+                {
+                  id: chunkId("c-cb-config"),
+                  text: "Configuration block sets controller retries to three and backoff to 250 milliseconds.",
+                  topic: "codeblock-config",
+                  parsedUnitId: "u-cb-examples",
+                },
+                {
+                  id: chunkId("c-cb-prose"),
+                  text: "The examples section demonstrates common device operations for integrators.",
+                  topic: "codeblock-prose",
+                  parsedUnitId: "u-cb-examples",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-cb-reset",
+      text: "Which code example shows the resetDevice function issuing a factory reset?",
+      topic: "codeblock-reset",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-codeblock") },
+      expectedChunkIds: [chunkId("c-cb-reset")],
+      topK: 1,
+    },
+    {
+      id: "q-cb-config",
+      text: "Which configuration block sets the controller retries and backoff values?",
+      topic: "codeblock-config",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-codeblock") },
+      expectedChunkIds: [chunkId("c-cb-config")],
+      topK: 1,
+    },
+  ],
+};
+
+// Malformed-page handling. Broken markup still yields salvaged blocks; those must stay
+// recallable, while content that the malformed markup dropped must honestly return no evidence
+// rather than a confident wrong answer. The no-evidence query shares no content tokens with any
+// salvaged chunk, so `minScore` filtering fires deterministically (`below-min-score`).
+export const htmlManualMalformedFixture: RetrievalEvalFixture = {
+  id: "html-manual-malformed",
+  description:
+    "Malformed HTML page: salvaged safety block stays recallable; content dropped by broken markup returns no evidence.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-malformed"),
+      displayName: "HTML Manual Malformed Page",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-malformed"),
+          documents: [
+            {
+              id: documentId("doc-html-malformed"),
+              safeDisplayName: "broken-handbook.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-mal-safety",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Recovered", "Safety Notice"],
+                    anchorId: "safety",
+                    characterStart: 0,
+                    characterEnd: 140,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-mal-salvage"),
+                  text: "Recovered safety notice: disconnect the power lead before removing the access panel.",
+                  topic: "malformed-salvage",
+                  parsedUnitId: "u-mal-safety",
+                },
+                {
+                  id: chunkId("c-mal-noise"),
+                  text: "Recovered header fragment names the product family without further detail.",
+                  topic: "malformed-noise",
+                  parsedUnitId: "u-mal-safety",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-mal-salvage",
+      text: "What recovered safety notice covers disconnecting the power lead before removing the panel?",
+      topic: "malformed-salvage",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-malformed") },
+      expectedChunkIds: [chunkId("c-mal-salvage")],
+      topK: 1,
+    },
+    {
+      // No-evidence query: content the malformed markup dropped is not indexed. Kept lexically
+      // disjoint from every salvaged chunk (no shared token, stopwords included) so the min-score
+      // floor — not an accidental lexical match — is what makes retrieval abstain.
+      id: "q-mal-dropped",
+      text: "Which torque values were tabulated in a corrupted appendix grid?",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-malformed") },
+      expectedNoEvidence: true,
+      expectedNoEvidenceReason: "below-min-score",
+    },
+  ],
+};
+
+// Denied-link vs citation-open. A citation-open question resolves to an indexed block whose
+// `html-block` citation carries an openable anchor. A denied-link question asks about content
+// behind a link that stayed outside the approved crawl scope; that content was never indexed,
+// so retrieval must return no evidence rather than surface a lexically-adjacent in-scope note.
+export const htmlManualDeniedLinkFixture: RetrievalEvalFixture = {
+  id: "html-manual-denied-link",
+  description:
+    "HTML manual denied link vs citation-open: an in-scope overview block cites openly; content behind a denied link returns no evidence.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-denied"),
+      displayName: "HTML Manual Denied Link",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-denied"),
+          documents: [
+            {
+              id: documentId("doc-html-denied"),
+              safeDisplayName: "handbook-overview.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-denied-overview",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Overview"],
+                    anchorId: "overview",
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-denied-overview"),
+                  text: "This handbook covers on-device configuration and daily operation of the controller.",
+                  topic: "denied-overview",
+                  parsedUnitId: "u-denied-overview",
+                },
+                {
+                  id: chunkId("c-denied-scope-note"),
+                  text: "The overview notes that one linked partner section stayed outside the approved crawl scope.",
+                  topic: "denied-scope",
+                  parsedUnitId: "u-denied-overview",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-denied-citation-open",
+      text: "What does the handbook overview cover about on-device configuration?",
+      topic: "denied-overview",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-denied") },
+      expectedChunkIds: [chunkId("c-denied-overview")],
+      topK: 1,
+    },
+    {
+      // No-evidence query: the denied out-of-scope link was never crawled, so its content is not
+      // indexed. Kept lexically disjoint from both in-scope chunks (no shared token, stopwords
+      // included) AND verified (via the scripted adapter) to sit well below the 0.99 min-score
+      // floor (cosine ~= -0.70), so retrieval abstains on the floor rather than surfacing the
+      // adjacent in-scope scope-note. Doubles as a credential-shaped query that must return nothing.
+      id: "q-denied-link",
+      text: "Which firmware signing keys sit behind an excluded vendor extranet reachable only externally?",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-denied") },
+      expectedNoEvidence: true,
+      expectedNoEvidenceReason: "below-min-score",
+    },
+  ],
+};
+
+// Index-page lookup. A manual index/TOC page points at where a topic is documented; a
+// "where is X documented" question must return the matching index entry, not a sibling entry.
+export const htmlManualIndexPageFixture: RetrievalEvalFixture = {
+  id: "html-manual-index-page",
+  description:
+    "HTML manual index page: a 'where is X documented' question returns the matching index entry over sibling entries.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-index"),
+      displayName: "HTML Manual Index Page",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-index"),
+          documents: [
+            {
+              id: documentId("doc-html-index"),
+              safeDisplayName: "handbook-index.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-index",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Index"],
+                    anchorId: "index",
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-index-errors"),
+                  text: "Index entry: the error code reference is documented in section seven, diagnostics.",
+                  topic: "index-errors",
+                  parsedUnitId: "u-index",
+                },
+                {
+                  id: chunkId("c-index-torque"),
+                  text: "Index entry: mounting torque specifications are documented in section four, installation.",
+                  topic: "index-torque",
+                  parsedUnitId: "u-index",
+                },
+                {
+                  id: chunkId("c-index-preface"),
+                  text: "Index entry: document conventions and the preface appear in the front matter.",
+                  topic: "index-preface",
+                  parsedUnitId: "u-index",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-index-errors",
+      text: "Which section does the index list for the error code reference?",
+      topic: "index-errors",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-index") },
+      expectedChunkIds: [chunkId("c-index-errors")],
+      topK: 1,
+    },
+    {
+      id: "q-index-torque",
+      text: "Which section does the index list for mounting torque specifications?",
+      topic: "index-torque",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-index") },
+      expectedChunkIds: [chunkId("c-index-torque")],
+      topK: 1,
+    },
+  ],
+};
+
+// HTML-manual-scoped multilingual. The generic `multilingual-retrieval` fixture uses `section`
+// units over finance prose; this one is HTML-manual-specific: parallel English/German safety
+// blocks are `html-block` units with manual heading paths and anchors, and it exercises BOTH
+// directions (a German question recalls the German block, an English question the English
+// block) so a language-routing regression in either direction drops recall.
+export const htmlManualMultilingualFixture: RetrievalEvalFixture = {
+  id: "html-manual-multilingual",
+  description:
+    "HTML manual multilingual: parallel English/German safety html-blocks; each language question recalls its own block.",
+  capsules: [
+    {
+      id: capsuleId("cap-html-mlmanual"),
+      displayName: "HTML Manual Multilingual",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-html-mlmanual"),
+          documents: [
+            {
+              id: documentId("doc-html-mlmanual"),
+              safeDisplayName: "geraetehandbuch.html",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-ml-en-power",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Safety", "Power"],
+                    anchorId: "safety-power",
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+                {
+                  id: "u-ml-de-power",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Sicherheit", "Netzspannung"],
+                    anchorId: "sicherheit-netzspannung",
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-mlh-en-power"),
+                  text: "Safety: switch off the mains supply before opening the housing.",
+                  topic: "mlh-power-en",
+                  parsedUnitId: "u-ml-en-power",
+                },
+                {
+                  id: chunkId("c-mlh-de-power"),
+                  text: "Sicherheit: Schalten Sie die Netzspannung aus, bevor Sie das Gehaeuse oeffnen.",
+                  topic: "mlh-power-de",
+                  parsedUnitId: "u-ml-de-power",
+                },
+                {
+                  id: chunkId("c-mlh-noise"),
+                  text: "Maintenance: wipe the exterior enclosure with a dry cloth.",
+                  topic: "mlh-noise",
+                  parsedUnitId: "u-ml-en-power",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-mlh-de",
+      text: "Was sagt der Sicherheitsabschnitt ueber die Netzspannung vor dem Oeffnen des Gehaeuses?",
+      topic: "mlh-power-de",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-mlmanual") },
+      expectedChunkIds: [chunkId("c-mlh-de-power")],
+      topK: 1,
+    },
+    {
+      id: "q-mlh-en",
+      text: "What does the safety section say about the mains supply before opening the housing?",
+      topic: "mlh-power-en",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-html-mlmanual") },
+      expectedChunkIds: [chunkId("c-mlh-en-power")],
+      topK: 1,
+    },
+  ],
+};
+
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
@@ -1818,4 +2459,11 @@ export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   htmlManualStructureFixture,
   codeRepositoryFixture,
   chainedQuestionFixture,
+  htmlManualTableRowFixture,
+  htmlManualFramesetFixture,
+  htmlManualCodeBlockFixture,
+  htmlManualMalformedFixture,
+  htmlManualDeniedLinkFixture,
+  htmlManualIndexPageFixture,
+  htmlManualMultilingualFixture,
 ] as const;
