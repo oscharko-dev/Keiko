@@ -439,6 +439,82 @@ describe("searchVectorsForScope — composed capsule set", () => {
     expect(queryRequest?.egress).toBe(egress);
   });
 
+  it("reuses a cached query embedding on a repeated request instead of re-embedding", async () => {
+    // GEN-PERF-LK-002 added a cross-request LRU keyed by (identity, query). A cache hit must
+    // skip both the capability-probe preflight and the actual embedding call on the second
+    // identical request against the same adapter instance.
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-embed-cache",
+      sourceId: "src-embed-cache",
+      documentId: "doc-embed-cache",
+      text: "alpha beta gamma delta",
+      modelUsePolicy: standardPodModelUsePolicy(),
+    });
+    const requests: OpenAIEmbeddingRequest[] = [];
+    const base = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, deterministicVector(req.input, 1536)),
+    });
+    const adapter: OpenAIEmbeddingAdapter = {
+      ...base,
+      request: async (req): Promise<OpenAIEmbeddingOutcome> => {
+        requests.push(req);
+        return base.request(req);
+      },
+    };
+    const scope = { capsuleIds: ["cap-embed-cache" as KnowledgeCapsuleId] };
+
+    await searchVectorsForScope(store, adapter, scope, "repeated cache query", { topK: 1 });
+    const afterFirstCall = requests.length;
+    await searchVectorsForScope(store, adapter, scope, "repeated cache query", { topK: 1 });
+
+    expect(userEmbeddingInputs(requests.map((req) => req.input))).toHaveLength(1);
+    // The second call must hit both the preflight TTL cache and the query-embedding LRU — no
+    // new adapter calls of any kind (probe or embedding) beyond what the first call already made.
+    expect(requests).toHaveLength(afterFirstCall);
+  });
+
+  it("keeps query-embedding caches isolated per adapter instance", async () => {
+    // The LRU and preflight-TTL caches are scoped via WeakMap<adapter, ...>. Two distinct
+    // adapter instances sharing the same embedding identity and query text must not leak a
+    // cache entry between them — each probes and embeds independently.
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-embed-isolation",
+      sourceId: "src-embed-isolation",
+      documentId: "doc-embed-isolation",
+      text: "alpha beta gamma delta",
+      modelUsePolicy: standardPodModelUsePolicy(),
+    });
+    const scope = { capsuleIds: ["cap-embed-isolation" as KnowledgeCapsuleId] };
+    const requestsA: OpenAIEmbeddingRequest[] = [];
+    const requestsB: OpenAIEmbeddingRequest[] = [];
+    function trackedAdapter(sink: OpenAIEmbeddingRequest[]): OpenAIEmbeddingAdapter {
+      const base = scriptedAdapter({
+        responder: (req): OpenAIEmbeddingOutcome =>
+          fixedQueryVectorOutcome(req, deterministicVector(req.input, 1536)),
+      });
+      return {
+        ...base,
+        request: async (req): Promise<OpenAIEmbeddingOutcome> => {
+          sink.push(req);
+          return base.request(req);
+        },
+      };
+    }
+
+    await searchVectorsForScope(store, trackedAdapter(requestsA), scope, "shared isolation query", {
+      topK: 1,
+    });
+    await searchVectorsForScope(store, trackedAdapter(requestsB), scope, "shared isolation query", {
+      topK: 1,
+    });
+
+    expect(userEmbeddingInputs(requestsA.map((req) => req.input))).toHaveLength(1);
+    expect(userEmbeddingInputs(requestsB.map((req) => req.input))).toHaveLength(1);
+  });
+
   it("uses lane-local dense ranks before fusing incompatible raw score spaces", async () => {
     const { store } = getFixture();
     const identityA: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-a" };
