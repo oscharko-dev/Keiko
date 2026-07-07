@@ -215,6 +215,44 @@ export interface CodingWorkbenchModelProfile {
   readonly supportsToolCalling: boolean;
 }
 
+export type CodingWorkbenchSidecarGatewayStatus = "available" | "unavailable";
+
+export type CodingWorkbenchSidecarGatewayUnavailableReason =
+  | "missing-config"
+  | "missing-provider"
+  | "missing-credentials"
+  | "non-chat"
+  | "no-tool-calling"
+  | "non-workflow-eligible"
+  | "non-coding-capable"
+  | "deployment-policy-disabled"
+  | "subscription-source";
+
+export interface CodingWorkbenchSidecarGatewayRunMetadata {
+  readonly maxPromptTokens: number;
+  readonly maxOutputTokens: number;
+  readonly maxInputMessages: number;
+  readonly maxRequestBytes: number;
+}
+
+export interface CodingWorkbenchSidecarGatewayProjection {
+  readonly status: "available";
+  readonly profileId: string;
+  readonly modelAlias: string;
+  readonly localEndpointPath: string;
+  readonly supportsStreaming: boolean;
+  readonly supportsToolCalling: boolean;
+  readonly runMetadata: CodingWorkbenchSidecarGatewayRunMetadata;
+}
+
+export interface CodingWorkbenchSidecarGatewayUnavailable {
+  readonly status: "unavailable";
+  readonly reason: CodingWorkbenchSidecarGatewayUnavailableReason;
+}
+
+export type CodingWorkbenchSidecarGatewayResult =
+  CodingWorkbenchSidecarGatewayProjection | CodingWorkbenchSidecarGatewayUnavailable;
+
 export interface CodingWorkbenchCommandPolicy {
   readonly mode: CodingWorkbenchCommandPolicyMode;
   readonly allow: readonly string[];

@@ -147,6 +147,7 @@ import type {
   KnowledgeStoreKeyProvider,
   OcrAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
+import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 import {
   enforceQiRetentionAtStartup,
@@ -167,6 +168,10 @@ export type Redactor = (value: unknown) => unknown;
 // model can be built so the run route maps it to a 400 NO_MODEL — the BFF never calls a model
 // directly, only through the harness/workflow entry points the port feeds.
 export type ModelPortFactory = (modelId: string) => ModelPort | undefined;
+export type CodingSidecarGatewayChatFactory = (
+  config: GatewayConfig,
+  modelId: string,
+) => (request: GatewayRequest) => Promise<NormalizedResponse>;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 
 export interface MemoryAuthorizationContext {
@@ -224,6 +229,8 @@ export interface UiHandlerDeps {
   readonly registry: RunRegistry;
   // Builds the ModelPort a run uses. Default = GatewayModelPort from config; tests inject a fake.
   readonly modelPortFactory: ModelPortFactory;
+  // Injectable OpenAI-compatible chat seam for the coding-sidecar gateway route.
+  readonly codingSidecarGatewayChatFactory?: CodingSidecarGatewayChatFactory | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
