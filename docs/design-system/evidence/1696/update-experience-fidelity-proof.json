@@ -147,6 +147,20 @@
       "forcedColors": "none",
       "reducedMotion": "no-preference",
       "state": "responsive-manual-path"
+    },
+    {
+      "file": "12-portable-managed-one-click.png",
+      "mode": "dark",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "portable-managed-one-click"
     }
   ],
   "assertions": {
@@ -175,6 +189,7 @@
     "09-settings-entrypoint.png",
     "10-responsive-manual-path.png",
     "11-progress-state.png",
+    "12-portable-managed-one-click.png",
     "update-experience-fidelity-proof.json",
     "a11y-proof.json",
     "manifest.json"
