@@ -1,23 +1,16 @@
-// Production HarnessShaperPort wiring (ADR-0055 D4, PR4-W3). keiko-cli already depends on BOTH
-// keiko-harness (the port type) AND keiko-workflows (the pure shapers), so it is the correct tier
-// to inject the shaper without adding a keiko-harness -> keiko-workflows package edge. The harness
-// stays decoupled: it calls the injected port and attaches whatever observation it returns.
-//
-// The returned port is pure from the harness perspective and total — it never throws. When the
-// production caller supplies an artifactWriter, truncated command outputs are persisted by the
-// injected evidence-layer writer; without one the observation honestly carries notPersistedReason.
-// It shapes only `run_command` results (the only shapeable tool type the harness emits today); for
-// every other tool it returns undefined, leaving the ToolCallResult untouched. The CommandResult is
-// reconstructed from the summarizeCommand JSON that keiko-tools writes to ToolCallResult.output.
-// The harness still prefers raw output and renders the shaped observation only when raw output would
-// exceed the live context budget.
+// Bridges harness tool results to the #1387 command observation shaper. The run_command tool's
+// summarizeCommand output is a JSON envelope (exit/signal/stdout/stderr/truncation); this port
+// parses it back into a CommandResult and lets shapeCommandObservation build the structured,
+// redacted observation (with optional overflow artifact persistence). Any non-command tool or
+// unparsable payload yields undefined so the harness falls back to the raw output — shaping is
+// an enhancement, never a gate.
 
 import type { CommandResult } from "@oscharko-dev/keiko-contracts";
 import type { HarnessShaperInput, HarnessShaperPort } from "@oscharko-dev/keiko-harness";
-import {
-  shapeCommandObservation,
-  type ToolResultArtifactWriter,
-} from "@oscharko-dev/keiko-workflows";
+import type { ToolResultArtifactWriter } from "@oscharko-dev/keiko-workflows";
+// GEN-PERF-CLI-001 — keiko-workflows loads when a shaper is actually constructed
+// (dispatch time), not when the CLI barrel evaluates this module.
+import { loadWorkflows } from "./lazy-modules.js";
 
 const COMMAND_TOOL = "run_command";
 
@@ -80,9 +73,13 @@ export interface HarnessToolShaperOptions {
   readonly artifactWriter?: ToolResultArtifactWriter | undefined;
 }
 
-// The injected production shaper. Dispatches run_command results to the command shaper; every other
-// tool type yields undefined (no shape).
-export function createHarnessToolShaper(options: HarnessToolShaperOptions = {}): HarnessShaperPort {
+// The injected production shaper. Dispatches run_command results to the command shaper; every
+// other tool type yields undefined (no shape). Async because it loads keiko-workflows on first
+// construction (GEN-PERF-CLI-001) — the returned port itself stays synchronous.
+export async function createHarnessToolShaper(
+  options: HarnessToolShaperOptions = {},
+): Promise<HarnessShaperPort> {
+  const { shapeCommandObservation } = await loadWorkflows();
   return (input: HarnessShaperInput) => {
     if (input.toolName !== COMMAND_TOOL || input.result.metadata?.kind !== "command") {
       return undefined;
@@ -101,5 +98,3 @@ export function createHarnessToolShaper(options: HarnessToolShaperOptions = {}):
     });
   };
 }
-
-export const harnessToolShaper: HarnessShaperPort = createHarnessToolShaper();

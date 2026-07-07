@@ -456,10 +456,25 @@ const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("de
 if (invokedDirectly) {
   // PREFLIGHT: fail fast if next dev is already running on the configured port.
   const nextLockPath = join(uiDir, ".next", "lock");
-  const [portFree, lockInfo] = await Promise.all([
+  const [portFree, publicPortFree, lockInfo] = await Promise.all([
     checkNextPortFree(host, nextPort),
+    // The public port had NO bind-time check: dev-start's probe runs before the
+    // (long) build, so two concurrent `dev:start`s could both pass it and the
+    // loser only failed ~60s later with an opaque health timeout. Checking here,
+    // immediately before listen(), turns that into a fast explicit error.
+    checkNextPortFree(host, publicPort),
     readNextLockInfo(nextLockPath),
   ]);
+  if (!publicPortFree) {
+    console.error(`[dev] PREFLIGHT FAILED: public port ${String(publicPort)} is already in use.`);
+    console.error(
+      "[dev] Another dev runner (or the packaged Keiko UI) is already listening on it.",
+    );
+    console.error(
+      `[dev] Stop it with: npm run dev:stop — or: lsof -ti tcp:${String(publicPort)} | xargs kill`,
+    );
+    process.exit(1);
+  }
   if (!portFree) {
     const pidHint =
       lockInfo !== undefined ? ` (PID ${String(lockInfo.pid)}, ${lockInfo.appUrl})` : "";
@@ -510,6 +525,20 @@ if (invokedDirectly) {
     proxyUpgrade(req, socket, head, targetPortFor(url.pathname));
   });
 
+  // The preflight closes the common race, but a competitor can still take the
+  // port between check and bind — surface that as a clear one-liner instead of
+  // an uncaught EADDRINUSE stack.
+  server.once("error", (error) => {
+    if (error !== null && typeof error === "object" && error.code === "EADDRINUSE") {
+      console.error(
+        `[dev] public port ${String(publicPort)} was taken between preflight and bind; ` +
+          "run `npm run dev:stop` (or free the port) and retry.",
+      );
+      shutdown(1);
+      return;
+    }
+    throw error;
+  });
   server.listen(publicPort, host, () => {
     writeState({ ready: false, starting: "waiting for API and UI" });
     console.log(`[dev] listening on ${publicBrowserUrl(publicPort)} (warming up)`);

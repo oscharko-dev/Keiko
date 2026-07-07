@@ -5,39 +5,28 @@
 // output is redacted (AC4); `--evidence` emits a redact-by-construction audit manifest reusing the
 // #1313 keiko-evidence promptEnhancement store.
 
-import {
-  ConfigInvalidError,
-  GatewayError,
-  Gateway,
-  loadConfigFromFile,
-  redact,
-  type EnvSource,
-  type GatewayConfig,
-} from "@oscharko-dev/keiko-model-gateway";
-import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
-import {
-  PromptEnhancementInputError,
-  buildPromptEnhancementRecordInput,
-  promptEnhancementGatewayRoutingConfig,
-  runPromptEnhancement,
-} from "@oscharko-dev/keiko-workflows";
+import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   validatePromptEnhancementWireRequest,
   type PromptEnhancementWireRequest,
   type PromptEnhancementWireResponse,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  buildPromptEnhancementEvidenceManifest,
-  createAuditRedactor,
-  deepRedactStrings,
-} from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
+// GEN-PERF-CLI-001 — gateway/harness/workflows/evidence load at dispatch; the
+// contracts + security leaves above are cheap and stay static.
+import { loadEvidence, loadHarness, loadModelGateway, loadWorkflows } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+
+type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
+type HarnessModule = typeof import("@oscharko-dev/keiko-harness");
+type WorkflowsModule = typeof import("@oscharko-dev/keiko-workflows");
+type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
 
 // Test seams: production wires the real keiko-server orchestrator and config loader; tests inject
 // deterministic fakes so the command is exercised without disk or a real gateway.
 export interface PromptEnhancerCliDeps {
-  readonly run?: typeof runPromptEnhancement;
+  readonly run?: WorkflowsModule["runPromptEnhancement"];
   readonly loadConfig?: (path: string, env: EnvSource) => GatewayConfig;
   readonly modelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
 }
@@ -148,6 +137,7 @@ function resolveGatewayConfig(
   env: EnvSource,
   io: CliIo,
   deps: PromptEnhancerCliDeps,
+  gateway: GatewayModule,
 ): { ok: true; config: GatewayConfig | undefined } | { ok: false; code: number } {
   // A model is only used for refinement when --model is given. Without it, enhancement is fully
   // deterministic and needs no config.
@@ -162,12 +152,12 @@ function resolveGatewayConfig(
     return { ok: false, code: 1 };
   }
   try {
-    const load = deps.loadConfig ?? loadConfigFromFile;
+    const load = deps.loadConfig ?? gateway.loadConfigFromFile;
     return { ok: true, config: load(path, env) };
   } catch (error) {
-    if (error instanceof GatewayError || error instanceof ConfigInvalidError) {
+    if (error instanceof gateway.GatewayError || error instanceof gateway.ConfigInvalidError) {
       io.err(
-        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
           "Provide a valid gateway config with --config PATH or KEIKO_CONFIG_FILE.\n",
       );
       return { ok: false, code: 1 };
@@ -181,8 +171,10 @@ function buildEvidenceManifest(
   result: PromptEnhancementWireResponse,
   env: EnvSource,
   config: GatewayConfig | undefined,
+  workflows: WorkflowsModule,
+  evidence: EvidenceModule,
 ): unknown {
-  const record = buildPromptEnhancementRecordInput({
+  const record = workflows.buildPromptEnhancementRecordInput({
     rawInput,
     result,
     recordedAt: new Date().toISOString(),
@@ -190,7 +182,7 @@ function buildEvidenceManifest(
   // The builder fingerprints + redacts by construction, so the returned manifest carries no raw secret.
   // Topology values are literal-redacted; configured credentials only trigger full string redaction so
   // the raw credential values never approach the evidence hashing boundary.
-  return buildPromptEnhancementEvidenceManifest(record, {
+  return evidence.buildPromptEnhancementEvidenceManifest(record, {
     additionalSecrets: promptEnhancerTopologyRedactionSecrets(config),
     redactAllStrings: promptEnhancerHasOpaqueRedactionSecret(env, config),
   }).manifest;
@@ -311,6 +303,7 @@ function preparePromptEnhancerCliRun(
   io: CliIo,
   env: EnvSource,
   deps: PromptEnhancerCliDeps,
+  gateway: GatewayModule,
 ): PromptEnhancerCliPreparation {
   const parsed = parseArgs(args);
   if (!parsed.ok) {
@@ -331,7 +324,7 @@ function preparePromptEnhancerCliRun(
     io.err(`Error: invalid request:\n  - ${wire.errors.join("\n  - ")}\n`);
     return { ok: false, code: 2 };
   }
-  const config = resolveGatewayConfig(parsed.flags, env, io, deps);
+  const config = resolveGatewayConfig(parsed.flags, env, io, deps, gateway);
   if (!config.ok) return { ok: false, code: config.code };
   return {
     ok: true,
@@ -352,33 +345,45 @@ export async function runPromptEnhancerCli(
   env: EnvSource,
   deps: PromptEnhancerCliDeps = {},
 ): Promise<number> {
-  const prepared = preparePromptEnhancerCliRun(args, io, env, deps);
+  const [gateway, harness, workflows, evidence] = await Promise.all([
+    loadModelGateway(),
+    loadHarness(),
+    loadWorkflows(),
+    loadEvidence(),
+  ]);
+  const prepared = preparePromptEnhancerCliRun(args, io, env, deps, gateway);
   if (!prepared.ok) return prepared.code;
-  const run = deps.run ?? runPromptEnhancement;
+  const run = deps.run ?? workflows.runPromptEnhancement;
   let result: PromptEnhancementWireResponse;
   try {
     result = await run(prepared.request, {
-      gatewayRoutingConfig: promptEnhancementGatewayRoutingConfig(prepared.config),
-      modelPortFactory: deps.modelPortFactory ?? promptEnhancerModelPortFactory(prepared.config),
+      gatewayRoutingConfig: workflows.promptEnhancementGatewayRoutingConfig(prepared.config),
+      modelPortFactory:
+        deps.modelPortFactory ?? promptEnhancerModelPortFactory(prepared.config, gateway, harness),
     });
   } catch (error) {
-    if (error instanceof PromptEnhancementInputError) {
+    if (error instanceof workflows.PromptEnhancementInputError) {
       io.err(`Error: enhancement rejected the request:\n  - ${error.errors.join("\n  - ")}\n`);
       return 1;
     }
     throw error;
   }
 
-  emitResult(prepared.flags, result, prepared.rawInput, env, prepared.config, io);
+  emitResult(prepared.flags, result, prepared.rawInput, env, prepared.config, io, {
+    workflows,
+    evidence,
+  });
   return 0;
 }
 
 function promptEnhancerModelPortFactory(
   config: GatewayConfig | undefined,
+  gatewayModule: GatewayModule,
+  harness: HarnessModule,
 ): ((modelId: string) => ModelPort | undefined) | undefined {
   if (config === undefined) return undefined;
-  const gateway = new Gateway(config);
-  const port = new GatewayModelPort(gateway);
+  const gateway = new gatewayModule.Gateway(config);
+  const port = new harness.GatewayModelPort(gateway);
   return (modelId: string): ModelPort | undefined =>
     config.providers.some((provider) => provider.modelId === modelId) ? port : undefined;
 }
@@ -394,19 +399,30 @@ function emitResult(
   env: EnvSource,
   config: GatewayConfig | undefined,
   io: CliIo,
+  modules: { readonly workflows: WorkflowsModule; readonly evidence: EvidenceModule },
 ): void {
-  const redactFn = createAuditRedactor(
+  const redactFn = modules.evidence.createAuditRedactor(
     { additionalSecrets: promptEnhancerRedactionSecrets(env, config) },
     env,
   );
-  const redactedResult = deepRedactStrings(result, redactFn) as PromptEnhancementWireResponse;
+  const redactedResult = modules.evidence.deepRedactStrings(
+    result,
+    redactFn,
+  ) as PromptEnhancementWireResponse;
   if (flags.json) {
     io.out(`${JSON.stringify(redactedResult, null, 2)}\n`);
   } else {
     renderHuman(redactedResult, io);
   }
   if (flags.evidence) {
-    const manifest = buildEvidenceManifest(rawInput, result, env, config);
+    const manifest = buildEvidenceManifest(
+      rawInput,
+      result,
+      env,
+      config,
+      modules.workflows,
+      modules.evidence,
+    );
     io.out(`\n--- Redacted evidence manifest ---\n${JSON.stringify(manifest, null, 2)}\n`);
   }
 }

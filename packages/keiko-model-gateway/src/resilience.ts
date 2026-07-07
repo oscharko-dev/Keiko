@@ -38,20 +38,56 @@ export interface RetryConfig {
   readonly timeoutMs?: number | undefined;
 }
 
-function backoffDelayMs(attempt: number, base: number): number {
-  return Math.min(base * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+// Equal jitter over the capped exponential ladder: half the delay is fixed, half
+// is random, so concurrent callers hitting a recovering provider spread across
+// [0.5·d, d] instead of retrying in lockstep (thundering herd) while never
+// collapsing to a zero delay. Randomness is injected for deterministic tests.
+function backoffDelayMs(attempt: number, base: number, random: () => number): number {
+  const capped = Math.min(base * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+  return capped * (0.5 + 0.5 * random());
 }
 
-// A RateLimitError with an explicit retryAfterMs is honoured; otherwise the error's
-// own `retryable` flag decides. Non-GatewayErrors are never retried.
-function retryDelayMs(error: unknown, attempt: number, base: number): number | null {
+// A RateLimitError with an explicit retryAfterMs is honoured VERBATIM (the server
+// told us when to come back — jitter would only delay recovery); otherwise the
+// error's own `retryable` flag decides. Non-GatewayErrors are never retried.
+function retryDelayMs(
+  error: unknown,
+  attempt: number,
+  base: number,
+  random: () => number,
+): number | null {
   if (!(error instanceof GatewayError) || !error.retryable) {
     return null;
   }
   if (error instanceof RateLimitError && error.retryAfterMs !== null && error.retryAfterMs > 0) {
     return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
   }
-  return backoffDelayMs(attempt, base);
+  return backoffDelayMs(attempt, base, random);
+}
+
+// Resolves the next backoff sleep for a failed attempt, bounded by the remaining
+// end-to-end budget — or null when the error is terminal, retries are exhausted,
+// or no budget remains (the caller then rethrows the last error).
+function boundedRetrySleepMs(
+  lastError: Error,
+  attempt: number,
+  config: RetryConfig,
+  clock: Clock,
+  start: number,
+  random: () => number,
+): number | null {
+  const delay =
+    attempt <= config.maxRetries
+      ? retryDelayMs(lastError, attempt, config.retryBaseDelayMs, random)
+      : null;
+  if (delay === null) {
+    return null;
+  }
+  const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
+  if (remaining <= 0) {
+    return null;
+  }
+  return Math.min(delay, remaining);
 }
 
 function assertNotAborted(signal?: AbortSignal): void {
@@ -96,6 +132,7 @@ export async function executeWithRetry<T>(
   config: RetryConfig,
   clock: Clock,
   signal?: AbortSignal,
+  random: () => number = Math.random,
 ): Promise<T> {
   let lastError: Error | undefined;
   const start = clock.now();
@@ -114,18 +151,11 @@ export async function executeWithRetry<T>(
       );
     } catch (error) {
       lastError = asError(error);
-      const delay =
-        attempt <= config.maxRetries
-          ? retryDelayMs(lastError, attempt, config.retryBaseDelayMs)
-          : null;
-      if (delay === null) {
+      const sleepMs = boundedRetrySleepMs(lastError, attempt, config, clock, start, random);
+      if (sleepMs === null) {
         throw lastError;
       }
-      const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
-      if (remaining <= 0) {
-        throw lastError;
-      }
-      await sleepWithCancellation(clock, Math.min(delay, remaining), signal);
+      await sleepWithCancellation(clock, sleepMs, signal);
     }
   }
   throw lastError ?? new CancelledError("request timeout budget exhausted after retries");

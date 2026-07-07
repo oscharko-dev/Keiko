@@ -18,7 +18,12 @@ import { runRepairCli } from "./repair.js";
 import { runUpdateCli } from "./update.js";
 import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+// The version constant comes from the contracts LEAF, not the keiko-sdk barrel:
+// the sdk package eagerly re-exports harness/workflows/evidence/gateway/
+// evaluations, so importing SDK_VERSION from it loaded the entire product graph
+// on every `keiko` invocation — the single largest slice of the measured ~410ms
+// startup tax (GEN-PERF-CLI-001). SDK_VERSION is defined as exactly this alias.
+import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts";
 
 // Pure CLI core: returns an exit code and writes through the injected IO so it is
 // testable without touching process.* (the thin process shim lives in index.ts).

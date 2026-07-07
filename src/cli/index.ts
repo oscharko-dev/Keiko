@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runCli } from "@oscharko-dev/keiko-cli";
+import { installProcessGuards, runCli } from "@oscharko-dev/keiko-cli";
 
 if (process.platform === "win32") {
   process.title = "Keiko";
@@ -23,6 +23,11 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIST = resolve(HERE, "..");
 process.env.KEIKO_CLI_BIN_PATH ??= resolve(HERE, "index.js");
 process.env.KEIKO_UI_STATIC_ROOT ??= resolve(ROOT_DIST, "ui", "static");
+
+// Process-level catch-alls: a stray async error outside any request must exit
+// with one clean, redacted line instead of a raw stack. The logic lives in
+// keiko-cli (unit-tested); the facade only installs it.
+installProcessGuards();
 
 // runCli returns a number for synchronous commands and a Promise<number> for
 // the async `run` command; Promise.resolve normalises both before exiting.
