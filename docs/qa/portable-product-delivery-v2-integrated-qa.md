@@ -57,6 +57,51 @@ the same product importance and the same signing/notarization expectation.
 | `macos-arm64` | `keiko-macos-arm64.zip` | `Keiko.app`       | First-class, release-blocking. |
 | `macos-x64`   | `keiko-macos-x64.zip`   | `Keiko.app`       | First-class, release-blocking. |
 
+## Local Manual UX Review Harness
+
+Final human review uses a disposable fake-release harness instead of waiting for a newer public
+release. The harness is test-only repo tooling; production updater code still requires real GitHub
+release assets, checksums, release-impact binding, signing/notarization evidence, CSRF, staging,
+activation, relaunch, and version verification.
+
+Run:
+
+```sh
+npm run portable:manual-review
+```
+
+The command builds the packages and static UI, then writes `.portable-runtime/manual-review-*` with:
+
+- `README.md` for the human click-through instructions.
+- `manual-review-plan.json` describing all targets and scenarios.
+- `scripts/start-<target>-<scenario>.sh` and `.cmd` launchers for quick UX review.
+- `artifacts/current/<target>/` slots for the current fresh-install ZIP artifacts when they exist
+  locally.
+
+Each scenario launcher starts a local Keiko review server with an isolated HOME, state directory,
+managed install root, UI database, evidence directory, and fake GitHub release asset set. The
+scenario runtime root is outside the repository in the OS temp directory so the normal Keiko
+workspace database guard stays active. Mutating update scenarios overwrite only that scenario's
+disposable managed install root. They do not touch the operator's normal Keiko install.
+
+The generated matrix covers:
+
+| Area                 | Scenario coverage                                                                     |
+| -------------------- | ------------------------------------------------------------------------------------- |
+| Current release      | `current-release`                                                                     |
+| Fresh install        | `fresh-install` plus copied current artifacts under `artifacts/current/<target>/`     |
+| Happy path update    | `happy-update` for `windows-x64`, `macos-arm64`, and `macos-x64`                      |
+| Negative artifacts   | `bad-checksum`, `bad-manifest`, `missing-asset`, `missing-signing`, `hostile-archive` |
+| Remediation          | `remediation-required`                                                                |
+| Sidecar variants     | `sidecar-absent`, `sidecar-present`, `sidecar-failure`                                |
+| Install-mode blocks  | `policy-disabled`, `unmanaged-bootstrap`, `system-managed`                            |
+| Compatibility paths  | `legacy-package-manager`                                                              |
+| Release fetch errors | `network-failure`                                                                     |
+
+Minimum final manual smoke remains one full happy-path update for each first-class target, one fresh
+install/open check for each first-class artifact, one remediation-required flow, and one negative
+artifact flow proving the active install stays intact.
+
 ## Security, Accessibility, And UX Settlement
 
 - Public portable update metadata is resolved through the local server boundary; browser UI does not
@@ -114,7 +159,9 @@ Final #1961 verification must run before the program PR is marked ready:
 npm run check:adr-index
 npm run check:release-impact
 npm run check:portable-manifest
+npm run portable:manual-review
 npm run smoke:portable-launch-setup
+npx vitest run scripts/__tests__/portable-manual-review.test.mjs
 npx vitest run scripts/__tests__/portable-runtime.test.mjs scripts/__tests__/release-portable-assets-workflow.test.mjs scripts/__tests__/release-publish-pipeline.test.mjs scripts/__tests__/portable-launch-setup-smoke.test.mjs scripts/__tests__/release-impact-governance.test.mjs scripts/__tests__/release-impact-notes.test.mjs
 npx vitest run packages/keiko-contracts/src/update-session.test.ts packages/keiko-server/src/update-install-mode.test.ts packages/keiko-server/src/update-preflight.test.ts packages/keiko-server/src/update-portable-staging.test.ts packages/keiko-server/src/update-portable-activation.test.ts packages/keiko-server/src/update-session.test.ts packages/keiko-server/src/update-session-routes.test.ts packages/keiko-server/src/update-integration.test.ts packages/keiko-server/src/update-local-state.test.ts packages/keiko-server/src/update-remediation.test.ts packages/keiko-server/src/update-remediation-routes.test.ts packages/keiko-cli/src/update.test.ts
 npm --workspace @oscharko-dev/keiko-ui run test -- src/lib/api.test.ts src/app/components/desktop/update/UpdateWindow.test.tsx src/app/components/desktop/update/UpdateStartupNotice.test.tsx

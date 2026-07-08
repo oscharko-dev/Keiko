@@ -106,6 +106,7 @@
     "check:portable-manifest": "node scripts/check-portable-runtime-manifest.mjs --contract-example docs/release/portable-runtime-artifact-contract.md",
     "portable:stage": "node scripts/stage-portable-runtime.mjs",
     "portable:verify-signing": "node scripts/verify-portable-runtime-signing.mjs",
+    "portable:manual-review": "npm run build:packages && npm run build:ui && node --disable-warning=ExperimentalWarning scripts/portable-manual-review.mjs",
     "smoke:portable-launch-setup": "npm run build:packages && node --disable-warning=ExperimentalWarning scripts/portable-launch-setup-smoke.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",
     "smoke:install:optional": "node scripts/installable-package-smoke.mjs --include-optional",
