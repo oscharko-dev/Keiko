@@ -24,6 +24,8 @@ const RELEASE_ID = 987_654_321;
 const ASSET_ID = 42;
 const TARGET = "windows-x64";
 const ASSET_NAME = "keiko-windows-x64.zip";
+const MACOS_ARM64_ASSET_NAME = "keiko-macos-arm64.zip";
+const MACOS_X64_ASSET_NAME = "keiko-macos-x64.zip";
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
 const tempRoots: string[] = [];
 
@@ -289,6 +291,18 @@ function release(sizeBytes: number): Record<string, unknown> {
         browser_download_url: assetUrl(ASSET_NAME),
       },
       {
+        id: 201,
+        name: MACOS_ARM64_ASSET_NAME,
+        size: 128_001,
+        browser_download_url: assetUrl(MACOS_ARM64_ASSET_NAME),
+      },
+      {
+        id: 202,
+        name: MACOS_X64_ASSET_NAME,
+        size: 128_002,
+        browser_download_url: assetUrl(MACOS_X64_ASSET_NAME),
+      },
+      {
         id: 101,
         name: `${TARGET}-portable-manifest.json`,
         size: 2048,
@@ -375,13 +389,13 @@ function portableManifest(
 function responseFor(
   archiveBytes: Uint8Array,
   manifestText = portableManifest(archiveBytes),
+  releaseRecord: Record<string, unknown> = release(archiveBytes.length),
 ): typeof fetch {
   return vi.fn<typeof fetch>((input) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const parsed = new URL(url);
-    if (url.endsWith("/releases/latest"))
-      return Promise.resolve(Response.json(release(archiveBytes.length)));
+    if (url.endsWith("/releases/latest")) return Promise.resolve(Response.json(releaseRecord));
     if (parsed.hostname === "github.com") {
       const name = parsed.pathname.split("/").at(-1);
       return Promise.resolve(
@@ -399,6 +413,16 @@ function responseFor(
     if (url.endsWith(ASSET_NAME)) return Promise.resolve(new Response(Buffer.from(archiveBytes)));
     return Promise.resolve(new Response("not found", { status: 404 }));
   });
+}
+
+function releaseWithout(assetName: string, archiveBytes: Uint8Array): Record<string, unknown> {
+  const base = release(archiveBytes.length);
+  return {
+    ...base,
+    assets: (base.assets as readonly Record<string, unknown>[]).filter(
+      (asset) => asset.name !== assetName,
+    ),
+  };
 }
 
 function makeManagedInstall(): {
@@ -484,6 +508,36 @@ describe("portable update staging", () => {
     expect(audit).toContain("portable-staging-result");
     expect(audit).not.toContain(install.root);
     expect(audit).not.toContain("https://github.com");
+  });
+
+  it("fails closed when the release is missing a required first-class portable archive", async () => {
+    const archive = portableArchive();
+    const install = makeManagedInstall();
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    const stager = createPortableUpdateStager({
+      env: {},
+      localState,
+      fetchImpl: responseFor(
+        archive,
+        portableManifest(archive),
+        releaseWithout(MACOS_ARM64_ASSET_NAME, archive),
+      ),
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        sessionId: "session-missing-non-target-archive",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+
+    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
+    expect(audit).toContain("portable-staging-result");
+    expect(audit).toContain('"status":"failed"');
+    expect(audit).not.toContain("portable-download-result");
   });
 
   it("verifies bundled sidecar payloads and records content-free sidecar evidence", async () => {

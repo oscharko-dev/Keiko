@@ -548,7 +548,7 @@ function sidecarFiles(target) {
 
 function treeDigest(files) {
   const hash = createHash("sha256");
-  for (const file of [...files].sort((left, right) => left.path.localeCompare(right.path))) {
+  for (const file of [...files].sort((left, right) => (left.path < right.path ? -1 : 1))) {
     hash.update(`${file.path}\0${createHash("sha256").update(file.bytes).digest("hex")}\0`);
   }
   return hash.digest("hex");
@@ -1070,11 +1070,12 @@ function commandSuccess() {
 
 function updateSession(server, stager, activator, input) {
   const portable = input.mode.installKind === "portable-managed";
+  const runningVersion = { value: CURRENT_VERSION };
   return server.createUpdateSessionManager({
     processEnv: input.env,
     detector: () => input.mode,
     facts: () => input.facts,
-    currentVersion: () => CURRENT_VERSION,
+    currentVersion: () => runningVersion.value,
     idFactory: () => `manual-review-${input.scenario}-${input.target}`,
     now: () => Date.parse(FIXED_NOW),
     runCommandImpl: commandSuccess,
@@ -1092,7 +1093,11 @@ function updateSession(server, stager, activator, input) {
           localState: input.localState,
           homedir: () => input.env.HOME,
           spawnFn: () => fakeChild(),
-          versionVerifier: () => Promise.resolve(input.scenario !== "hostile-archive"),
+          versionVerifier: () => {
+            const verified = input.scenario !== "hostile-archive";
+            if (verified) runningVersion.value = TARGET_VERSION;
+            return Promise.resolve(verified);
+          },
         })
       : undefined,
     portableCompletionGate: () => input.remediation.updateCanComplete(TARGET_VERSION),

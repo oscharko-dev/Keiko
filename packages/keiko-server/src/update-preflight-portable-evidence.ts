@@ -11,6 +11,7 @@ import { currentGatewayEgressConfig } from "./deps.js";
 import {
   type GitHubAsset,
   type PortableRelease,
+  firstClassArchiveSetComplete,
   portableBlocker,
   requiredAssetName,
 } from "./update-preflight-portable-shared.js";
@@ -25,12 +26,6 @@ const MAX_CHECKSUM_BYTES = 32_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
-const REQUIRED_TARGETS: readonly UpdatePortableTarget[] = [
-  "windows-x64",
-  "macos-arm64",
-  "macos-x64",
-];
-
 interface TextAsset {
   readonly text: string;
   readonly sha256: string;
@@ -57,14 +52,6 @@ function checksumAssetName(target: UpdatePortableTarget): string {
 
 function assetByName(assets: readonly GitHubAsset[], name: string): GitHubAsset | undefined {
   return assets.find((asset) => asset.name === name);
-}
-
-function firstClassArchiveSetComplete(assets: readonly GitHubAsset[]): boolean {
-  const expected = new Set(REQUIRED_TARGETS.map(requiredAssetName));
-  const archiveNames = assets
-    .map((asset) => asset.name)
-    .filter((name) => /^keiko-[a-z0-9-]+\.zip$/u.test(name));
-  return archiveNames.length === expected.size && archiveNames.every((name) => expected.has(name));
 }
 
 async function fetchTextAsset(

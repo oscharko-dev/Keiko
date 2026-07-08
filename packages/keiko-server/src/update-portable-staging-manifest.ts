@@ -7,6 +7,7 @@ import {
   UPDATE_PORTABLE_TARGET_ASSET_NAMES,
   type UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { firstClassArchiveSetComplete } from "./update-preflight-portable-shared.js";
 import {
   type PortableSidecarRuntimeVerification,
   verifyPortableManifestSidecars,
@@ -103,6 +104,15 @@ function assetByName(release: PortableRelease, name: string): GitHubAsset {
     throw new PortableUpdateStagingError("portable-verification-failed", "required asset missing");
   }
   return asset;
+}
+
+function assertFirstClassArchiveSetComplete(release: PortableRelease): void {
+  if (!firstClassArchiveSetComplete(release.assets)) {
+    throw new PortableUpdateStagingError(
+      "portable-verification-failed",
+      "portable release asset set is incomplete",
+    );
+  }
 }
 
 function manifestName(target: UpdatePortableTarget): string {
@@ -372,6 +382,7 @@ export async function resolvePortableStageAssets(
   target: UpdatePortableTarget,
 ): Promise<PortableStageAssets> {
   const release = await fetchRelease(options, input);
+  assertFirstClassArchiveSetComplete(release);
   const archive = assetByName(release, UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]);
   const manifest = await fetchTextAsset(
     options,
