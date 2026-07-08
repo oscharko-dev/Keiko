@@ -291,6 +291,7 @@ describe("Workspace shell accessibility", () => {
     await tabTo(screen.getByRole("button", { name: "Quality Intelligence" }));
     await tabTo(screen.getByRole("button", { name: "Prompt Enhancer" }));
     await tabTo(screen.getByRole("button", { name: "Git" }));
+    await tabTo(screen.getByRole("button", { name: "Editor" }));
     await tabTo(screen.getByRole("button", { name: "Local Knowledge" }));
     await tabTo(screen.getByRole("button", { name: "Figma Snapshot" }));
 
