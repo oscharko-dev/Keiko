@@ -1,4 +1,4 @@
-# ADR-0119: Portable-first Browser Install Suppression
+# ADR-0120: Portable-first Browser Install Suppression
 
 ## Status
 
@@ -23,7 +23,7 @@ it installs a browser-managed shortcut for the current local URL, but it does no
 bundled Keiko payload, does not create the managed install root, and does not participate in
 portable updater v2.
 
-ADR-0099 already separates PWA/service-worker refresh from product package mutation. ADR-0118 defines GitHub Release Assets and managed portable installs as the portable install/update
+ADR-0099 already separates PWA/service-worker refresh from product package mutation. ADR-0119 defines GitHub Release Assets and managed portable installs as the portable install/update
 authority. This ADR resolves the remaining UX conflict between the historical browser PWA
 surface and the new portable-first product delivery path.
 
@@ -102,6 +102,6 @@ automatic desktop/browser mutation.
 
 - ADR-0024: Installable Keiko PWA Architecture
 - ADR-0099: Governed in-app updates and release-impact contract
-- ADR-0118: Portable managed install and release-asset update authority
+- ADR-0119: Portable managed install and release-asset update authority
 - Issue #1944: Epic: Portable product delivery v2
 - Issue #2084: Suppress browser PWA install prompt for portable-first delivery

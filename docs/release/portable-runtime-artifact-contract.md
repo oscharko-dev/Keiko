@@ -6,7 +6,7 @@ It does not publish assets or change updater execution logic.
 
 Governing decisions:
 
-- [ADR-0118: Portable managed install and release-asset update authority](../adr/ADR-0118-portable-managed-install-and-release-asset-update-authority.md)
+- [ADR-0119: Portable managed install and release-asset update authority](../adr/ADR-0119-portable-managed-install-and-release-asset-update-authority.md)
 - [ADR-0021: Publish Strategy - Bundled Monorepo Product](../adr/ADR-0021-publish-strategy-bundled-monorepo-product.md)
 - [ADR-0099: Governed in-app updates and release-impact contract](../adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)
 - [Local runtime state contract](../local-runtime-state-contract.md)
@@ -516,7 +516,7 @@ Validation rules:
   targets.
 - macOS targets require Developer ID signature and notarization verification. Windows requires
   Authenticode publisher-chain verification.
-- The release-impact entry must bind the full reviewed ADR-0118 tuple for the same artifact:
+- The release-impact entry must bind the full reviewed ADR-0119 tuple for the same artifact:
   release id/tag, asset id/name/size, package version, runtime identity, archive digest, build
   provenance, SBOM/license/checksum evidence, platform target, signing/notarization status, and any
   included `sidecarRuntimes[]` entries.
