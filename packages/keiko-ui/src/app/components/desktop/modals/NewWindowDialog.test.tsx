@@ -1,17 +1,18 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
-import { isAgentWorkflowModel, directoryPickerError, NewWindowDialog } from "./NewWindowDialog";
+import { isAgentWorkflowModel, NewWindowDialog } from "./NewWindowDialog";
 import {
   ApiError,
   createProject,
-  fetchFilesDirectories,
-  fetchFilesTree,
   fetchModels,
+  fetchNativeFileDialogCapability,
   fetchProjects,
+  openNativeFileDialog,
   startRun,
 } from "@/lib/api";
+import { resetNativeFileDialogCapabilityCacheForTests } from "@/lib/native-file-dialog";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 vi.mock("@/lib/api", () => ({
@@ -29,9 +30,18 @@ vi.mock("@/lib/api", () => ({
   startRun: vi.fn(),
   createProject: vi.fn(),
   updateProject: vi.fn(),
-  fetchFilesDirectories: vi.fn(async () => ({ entries: [] })),
-  fetchFilesTree: vi.fn(async () => ({ root: "/repo", path: "", entries: [], truncated: false })),
+  fetchNativeFileDialogCapability: vi.fn(async () => ({ supported: true })),
+  openNativeFileDialog: vi.fn(async () => ({ cancelled: true, selections: [] })),
 }));
+
+beforeEach(() => {
+  // The capability answer is memoized module state; reset it so each test's mock takes effect.
+  resetNativeFileDialogCapabilityCacheForTests();
+  // clearAllMocks() keeps implementations, so persistent mockResolvedValue overrides from one
+  // test would leak into the next — pin the defaults here instead.
+  vi.mocked(fetchNativeFileDialogCapability).mockResolvedValue({ supported: true });
+  vi.mocked(openNativeFileDialog).mockResolvedValue({ cancelled: true, selections: [] });
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -70,12 +80,6 @@ function mockAgentDependencies(): void {
     projects: [project()],
   });
   vi.mocked(startRun).mockResolvedValue({ runId: "run 1", fingerprint: "fp 1" });
-  vi.mocked(fetchFilesTree).mockResolvedValue({
-    root: "/repo",
-    path: "",
-    entries: [],
-    truncated: false,
-  });
 }
 
 async function chooseComboboxOption(
@@ -270,57 +274,26 @@ describe("NewWindowDialog agents: start-run contract", () => {
     );
   });
 
-  it("lets the Unit Test Agent source file be selected from the repository file picker", async () => {
+  it("picks the unit-test source file natively and normalizes it repo-relative", async () => {
     const user = userEvent.setup();
     await renderAgentDialog(vi.fn(), { id: "files-1", root: "/repo" });
-    vi.mocked(fetchFilesTree)
-      .mockResolvedValueOnce({
-        root: "/repo",
-        path: "",
-        truncated: false,
-        entries: [
-          {
-            name: "src",
-            path: "src",
-            kind: "directory",
-            sizeBytes: 0,
-            modifiedAt: 1,
-            extension: null,
-            symlink: false,
-            readable: true,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        root: "/repo",
-        path: "src",
-        truncated: false,
-        entries: [
-          {
-            name: "app.ts",
-            path: "src/app.ts",
-            kind: "file",
-            sizeBytes: 42,
-            modifiedAt: 2,
-            extension: "ts",
-            symlink: false,
-            readable: true,
-          },
-        ],
-      });
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
+      cancelled: false,
+      selections: [{ path: "/repo/src/app.ts", kind: "file" }],
+    });
 
-    await user.click(screen.getByRole("button", { name: "Browse source file" }));
+    const sourceBrowse = screen.getByRole("button", { name: "Browse source file" });
+    await waitFor(() => expect(sourceBrowse).not.toBeDisabled());
+    await user.click(sourceBrowse);
 
-    const picker = await screen.findByRole("group", { name: "File picker" });
-    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
-
-    await user.click(within(picker).getByRole("button", { name: "src" }));
-    await waitFor(() => expect(fetchFilesTree).toHaveBeenLastCalledWith("/repo", "src"));
-
-    await user.click(await within(picker).findByRole("button", { name: /app\.ts/i }));
-    await user.click(within(picker).getByRole("button", { name: "Use file" }));
-
-    expect(screen.getByLabelText("Source file")).toHaveValue("src/app.ts");
+    await waitFor(() =>
+      expect(openNativeFileDialog).toHaveBeenCalledWith({
+        mode: "open-file",
+        title: "Select source file",
+        defaultPath: "/repo",
+      }),
+    );
+    await waitFor(() => expect(screen.getByLabelText("Source file")).toHaveValue("src/app.ts"));
 
     fireEvent.click(screen.getByRole("button", { name: "Start Unit Test Agent" }));
     await waitFor(() =>
@@ -335,7 +308,26 @@ describe("NewWindowDialog agents: start-run contract", () => {
     );
   });
 
-  it("keeps Repository Browse disabled without a seed while manual repository entry remains available", async () => {
+  it("refuses a natively picked source file outside the repository", async () => {
+    const user = userEvent.setup();
+    await renderAgentDialog(vi.fn(), { id: "files-1", root: "/repo" });
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
+      cancelled: false,
+      selections: [{ path: "/elsewhere/main.ts", kind: "file" }],
+    });
+
+    const sourceBrowse = screen.getByRole("button", { name: "Browse source file" });
+    await waitFor(() => expect(sourceBrowse).not.toBeDisabled());
+    await user.click(sourceBrowse);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Choose a file inside the selected repository.",
+    );
+    expect(screen.getByLabelText("Source file")).toHaveValue("");
+  });
+
+  it("keeps Repository Browse disabled on unsupported platforms while manual entry works", async () => {
+    vi.mocked(fetchNativeFileDialogCapability).mockResolvedValue({ supported: false });
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "example-chat-model" })],
     });
@@ -358,16 +350,19 @@ describe("NewWindowDialog agents: start-run contract", () => {
     expect(repositoryBrowse).toBeDisabled();
     expect(repositoryBrowse).toHaveAttribute("aria-describedby", "agent-repository-browse-help");
     expect(
-      screen.getByText("Enter an absolute repository path to enable Browse."),
-    ).toBeInTheDocument();
+      screen.getAllByText(
+        "Native dialogs are unavailable on this platform. Enter the path manually.",
+      ).length,
+    ).toBeGreaterThan(0);
 
     fireEvent.click(repositoryBrowse);
 
-    expect(fetchFilesDirectories).not.toHaveBeenCalled();
-    expect(screen.queryByRole("group", { name: "Directory picker" })).toBeNull();
+    expect(openNativeFileDialog).not.toHaveBeenCalled();
+    fireEvent.change(repositoryInput, { target: { value: "/manual/repo" } });
+    expect(repositoryInput).toHaveValue("/manual/repo");
   });
 
-  it("seeds Repository Browse from the first online registered project when no Files context is connected", async () => {
+  it("seeds the native repository dialog from the first online registered project", async () => {
     const user = userEvent.setup();
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "example-chat-model" })],
@@ -375,11 +370,9 @@ describe("NewWindowDialog agents: start-run contract", () => {
     vi.mocked(fetchProjects).mockResolvedValue({
       projects: [project("/offline", "Offline", false), project("/repo", "Repo", true)],
     });
-    vi.mocked(fetchFilesDirectories).mockResolvedValueOnce({
-      path: "/repo",
-      parent: null,
-      roots: [],
-      entries: [],
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
+      cancelled: false,
+      selections: [{ path: "/repo/nested", kind: "directory" }],
     });
 
     render(
@@ -396,26 +389,27 @@ describe("NewWindowDialog agents: start-run contract", () => {
     await waitFor(() => expect(repositoryBrowse).not.toBeDisabled());
     await user.click(repositoryBrowse);
 
-    expect(screen.getByPlaceholderText("/absolute/repository/path")).toHaveValue("/repo");
-    expect(await screen.findByRole("group", { name: "Directory picker" })).toBeInTheDocument();
-    expect(fetchFilesDirectories).toHaveBeenCalledWith("/repo", "/repo");
+    await waitFor(() =>
+      expect(openNativeFileDialog).toHaveBeenCalledWith({
+        mode: "open-directory",
+        title: "Select repository folder",
+        defaultPath: "/repo",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("/absolute/repository/path")).toHaveValue("/repo/nested"),
+    );
   });
 
-  it("disables Source file Browse until the repository path is selected and registered", async () => {
+  it("disables Source file Browse until a repository path exists", async () => {
     const user = userEvent.setup();
     await renderAgentDialog(vi.fn(), null);
-    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
-      root: "/repo",
-      path: "",
-      truncated: false,
-      entries: [],
-    });
 
     const sourceBrowse = screen.getByRole("button", { name: "Browse source file" });
     expect(sourceBrowse).toBeDisabled();
     expect(sourceBrowse).toHaveAttribute("aria-describedby", "agent-source-file-browse-help");
     expect(
-      screen.getByText("Select a registered repository before browsing source files."),
+      await screen.findByText("Select a repository before browsing source files."),
     ).toBeInTheDocument();
 
     fireEvent.change(screen.getByPlaceholderText("/absolute/repository/path"), {
@@ -423,10 +417,16 @@ describe("NewWindowDialog agents: start-run contract", () => {
     });
 
     await waitFor(() => expect(sourceBrowse).not.toBeDisabled());
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({ cancelled: true, selections: [] });
     await user.click(sourceBrowse);
 
-    expect(await screen.findByRole("group", { name: "File picker" })).toBeInTheDocument();
-    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
+    await waitFor(() =>
+      expect(openNativeFileDialog).toHaveBeenCalledWith({
+        mode: "open-file",
+        title: "Select source file",
+        defaultPath: "/repo",
+      }),
+    );
   });
 
   it("renders Bugfix Agent Cancel and Start actions together without the outer footer", async () => {
@@ -604,16 +604,15 @@ describe("NewWindowDialog agents: start-run contract", () => {
   });
 });
 
-describe("NewWindowDialog directory picker", () => {
-  it("loads registered projects for Files windows and selects a browsed root", async () => {
+describe("NewWindowDialog native directory browse", () => {
+  it("browses the Files root natively and confirms the picked folder", async () => {
+    const user = userEvent.setup();
     vi.mocked(fetchProjects).mockResolvedValue({
       projects: [project(), project("/offline", "Offline", false)],
     });
-    vi.mocked(fetchFilesDirectories).mockResolvedValueOnce({
-      path: "/repo",
-      parent: "/Users",
-      roots: [{ label: "Workspace", path: "/repo-root" }],
-      entries: [{ name: "src", path: "/repo/src" }],
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({
+      cancelled: false,
+      selections: [{ path: "/repo-root", kind: "directory" }],
     });
     const onConfirm = vi.fn();
 
@@ -622,46 +621,65 @@ describe("NewWindowDialog directory picker", () => {
     );
 
     const rootInput = await screen.findByDisplayValue("/repo");
+    // Clicking the text input must NOT open a dialog: the input is the manual fallback.
     fireEvent.click(rootInput);
+    expect(openNativeFileDialog).not.toHaveBeenCalled();
 
-    const picker = await screen.findByRole("group", { name: "Directory picker" });
-    expect(fetchFilesDirectories).toHaveBeenCalledWith("/repo", "/repo");
-    expect(within(picker).getByText("Parent directory")).toBeInTheDocument();
-    expect(within(picker).getByText("src")).toBeInTheDocument();
+    const browse = screen.getByRole("button", { name: "Browse" });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
 
-    fireEvent.click(within(picker).getByRole("button", { name: "Use directory" }));
-    expect(rootInput).toHaveValue("/repo-root");
+    await waitFor(() =>
+      expect(openNativeFileDialog).toHaveBeenCalledWith({
+        mode: "open-directory",
+        title: "Select folder",
+        defaultPath: "/repo",
+      }),
+    );
+    await waitFor(() => expect(rootInput).toHaveValue("/repo-root"));
 
     fireEvent.click(screen.getByRole("button", { name: "Open Files" }));
     expect(onConfirm).toHaveBeenCalledWith({ root: "/repo-root" });
   });
 
-  it("keeps Enter local to the directory picker and shows mapped browse errors", async () => {
-    vi.mocked(fetchProjects).mockResolvedValue({ projects: [] });
-    vi.mocked(fetchFilesDirectories)
-      .mockRejectedValueOnce(new ApiError("BAD_ROOT", "relative", 400))
-      .mockResolvedValueOnce({ path: "/tmp", parent: null, roots: [], entries: [] });
-    const onConfirm = vi.fn();
+  it("treats native cancellation as a non-event", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+    vi.mocked(openNativeFileDialog).mockResolvedValueOnce({ cancelled: true, selections: [] });
 
     render(
-      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={onConfirm} onClose={vi.fn()} />,
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
     );
 
-    const rootInput = screen.getByPlaceholderText("Folder");
-    fireEvent.change(rootInput, { target: { value: "/tmp" } });
-    fireEvent.click(rootInput);
+    const rootInput = await screen.findByDisplayValue("/repo");
+    const browse = screen.getByRole("button", { name: "Browse" });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
 
-    const picker = await screen.findByRole("group", { name: "Directory picker" });
-    await screen.findByRole("alert");
-    expect(screen.getByRole("alert")).toHaveTextContent("Enter an absolute folder path.");
+    await waitFor(() => expect(openNativeFileDialog).toHaveBeenCalled());
+    expect(rootInput).toHaveValue("/repo");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 
-    const pickerInput = within(picker).getByLabelText("Folder path");
-    fireEvent.change(pickerInput, { target: { value: "/tmp" } });
-    fireEvent.keyDown(pickerInput, { key: "Enter" });
+  it("surfaces a calm message when another native dialog is already open", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project()] });
+    vi.mocked(openNativeFileDialog).mockRejectedValueOnce(
+      new ApiError("NATIVE_DIALOG_ALREADY_OPEN", "busy", 409),
+    );
 
-    await waitFor(() => expect(fetchFilesDirectories).toHaveBeenLastCalledWith("/tmp", "/tmp"));
-    expect(onConfirm).not.toHaveBeenCalled();
-    expect(within(picker).getByText("No child directories.")).toBeInTheDocument();
+    render(
+      <NewWindowDialog type="files" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    await screen.findByDisplayValue("/repo");
+    const browse = screen.getByRole("button", { name: "Browse" });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A native dialog is already open. Close it first.",
+    );
   });
 });
 
@@ -741,32 +759,5 @@ describe("NewWindowDialog dialog controls and Files defaults", () => {
     openButton.focus();
     fireEvent.keyDown(dialog, { key: "Tab" });
     expect(document.activeElement).toBe(closeButton);
-  });
-});
-
-// M2 (#532) — arbitrary-folder browse error mapping
-describe("directoryPickerError", () => {
-  it("returns an absolute-path prompt for a 400 BAD_ROOT error", () => {
-    const err = new ApiError("BAD_ROOT", "relative path", 400);
-    expect(directoryPickerError(err)).toBe("Enter an absolute folder path.");
-  });
-
-  it("returns an exclusion message for a 403 DENIED error", () => {
-    const err = new ApiError("DENIED", "excluded", 403);
-    expect(directoryPickerError(err)).toBe("That location is excluded.");
-  });
-
-  it("passes through the raw message for other ApiErrors", () => {
-    const err = new ApiError("INTERNAL_ERROR", "something went wrong", 500);
-    expect(directoryPickerError(err)).toBe("something went wrong");
-  });
-
-  it("passes through the message for plain Error objects", () => {
-    expect(directoryPickerError(new Error("network timeout"))).toBe("network timeout");
-  });
-
-  it("returns a generic fallback for non-Error values", () => {
-    expect(directoryPickerError("string error")).toBe("Unable to read directories.");
-    expect(directoryPickerError(null)).toBe("Unable to read directories.");
   });
 });

@@ -15,24 +15,21 @@ import type {
   CapsuleDetailResponse,
 } from "@/lib/local-knowledge-api";
 
-vi.mock("@/lib/api", () => ({
-  ApiError: class ApiError extends Error {
-    constructor(
-      public readonly code: string,
-      message: string,
-      public readonly status: number,
-    ) {
-      super(message);
-    }
-  },
-  fetchProjects: vi.fn(),
-  fetchFilesTree: vi.fn(),
-}));
+// Epic #1941 — Browse opens the native OS dialog through the shared client. The capability hook
+// and the pick call are mocked; the path-mapping helper stays REAL so the root/relative-files
+// folding is exercised.
+vi.mock("@/lib/native-file-dialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/native-file-dialog")>();
+  return {
+    ...actual,
+    nativeFileDialogSupported: vi.fn(async () => true),
+    pickWithNativeDialog: vi.fn(async () => ({ kind: "cancelled" }) as const),
+  };
+});
 
-import { fetchFilesTree, fetchProjects } from "@/lib/api";
+import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 
-const mockFetchProjects = vi.mocked(fetchProjects);
-const mockFetchFilesTree = vi.mocked(fetchFilesTree);
+const mockPickWithNativeDialog = vi.mocked(pickWithNativeDialog);
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -112,15 +109,9 @@ function progressDetail(overrides: Partial<CapsuleDetail> = {}): CapsuleDetail {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockFetchProjects.mockResolvedValue({ projects: [] });
-  mockFetchFilesTree.mockImplementation((root: string, path = "") =>
-    Promise.resolve({
-      root,
-      path,
-      entries: [],
-      truncated: false,
-    }),
-  );
+  // clearAllMocks keeps implementations; pin the default pick outcome so a persistent override
+  // from one test can never leak into the next.
+  mockPickWithNativeDialog.mockResolvedValue({ kind: "cancelled" });
 });
 
 function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActionsProps {
@@ -222,55 +213,23 @@ describe("CapsuleActions — connect source", () => {
     });
   });
 
-  it("lets the user browse and select a folder instead of typing the path manually", async () => {
+  it("lets the user browse a folder natively instead of typing the path manually", async () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
-    mockFetchProjects.mockResolvedValue({
-      projects: [
-        {
-          path: "/repo",
-          name: "Repo",
-          available: true,
-          favorite: false,
-          createdAt: 1,
-          lastOpenedAt: 1,
-        },
-      ],
-    });
-    mockFetchFilesTree.mockImplementation((root: string, path = "") =>
-      Promise.resolve({
-        root,
-        path,
-        entries:
-          path.length === 0
-            ? [
-                {
-                  name: "docs",
-                  path: "docs",
-                  kind: "directory",
-                  sizeBytes: 0,
-                  modifiedAt: 1,
-                  extension: "",
-                  readable: true,
-                  symlink: false,
-                },
-              ]
-            : [],
-        truncated: false,
-      }),
-    );
+    mockPickWithNativeDialog.mockResolvedValueOnce({ kind: "picked", paths: ["/repo/docs"] });
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await user.click(screen.getByRole("button", { name: /^browse$/i }));
-    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
-    await user.click(within(dialog).getByRole("button", { name: "Repo" }));
-    await waitFor(() => {
-      expect(within(dialog).getByRole("button", { name: /docs/i })).toBeInTheDocument();
-    });
-    await user.click(within(dialog).getByRole("button", { name: /docs/i }));
-    await user.click(within(dialog).getByRole("button", { name: /use selection/i }));
+    const browse = screen.getByRole("button", { name: /^browse$/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
 
+    await waitFor(() =>
+      expect(mockPickWithNativeDialog).toHaveBeenCalledWith({
+        mode: "open-directory",
+        title: "Choose a folder for this pod",
+      }),
+    );
     expect(screen.getByLabelText(/absolute folder path to connect/i)).toHaveValue("/repo/docs");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
@@ -283,197 +242,99 @@ describe("CapsuleActions — connect source", () => {
     });
   });
 
-  it("lets the user browse and select files while preserving the root-relative file list", async () => {
+  it("folds natively picked files into a shared root and relative file list", async () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
-    mockFetchProjects.mockResolvedValue({
-      projects: [
-        {
-          path: "/repo",
-          name: "Repo",
-          available: true,
-          favorite: false,
-          createdAt: 1,
-          lastOpenedAt: 1,
-        },
-      ],
+    mockPickWithNativeDialog.mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/repo/README.md", "/repo/CHANGELOG.md"],
     });
-    mockFetchFilesTree.mockImplementation((root: string, path = "") =>
-      Promise.resolve({
-        root,
-        path,
-        entries:
-          path.length === 0
-            ? [
-                {
-                  name: "README.md",
-                  path: "README.md",
-                  kind: "file",
-                  sizeBytes: 12,
-                  modifiedAt: 1,
-                  extension: ".md",
-                  readable: true,
-                  symlink: false,
-                },
-              ]
-            : [],
-        truncated: false,
-      }),
-    );
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
     await chooseConnectSource(user, "Files");
-    await user.click(screen.getByRole("button", { name: /^browse$/i }));
-    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
-    await user.click(within(dialog).getByRole("button", { name: "Repo" }));
-    await waitFor(() => {
-      expect(within(dialog).getByLabelText(/README.md/i)).toBeInTheDocument();
-    });
-    await user.click(within(dialog).getByLabelText(/README.md/i));
-    await user.click(within(dialog).getByRole("button", { name: /use selection/i }));
+    const browse = screen.getByRole("button", { name: /^browse$/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
 
+    await waitFor(() =>
+      expect(mockPickWithNativeDialog).toHaveBeenCalledWith({
+        mode: "open-files",
+        title: "Choose files for this pod",
+      }),
+    );
     expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
       "/repo",
     );
-    expect(screen.getByLabelText(/relative files to connect/i)).toHaveValue("README.md");
+    expect(screen.getByLabelText(/relative files to connect/i)).toHaveValue(
+      "README.md\nCHANGELOG.md",
+    );
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     await waitFor(() => {
       expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
         kind: "files",
         rootPath: "/repo",
-        files: ["README.md"],
+        files: ["README.md", "CHANGELOG.md"],
       });
     });
   });
 
-  it("lets the user pick a single file from the folder browser and converts it to a files scope", async () => {
+  it("uses the picked file's parent folder as the shared root for the files scope", async () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
-    mockFetchProjects.mockResolvedValue({
-      projects: [
-        {
-          path: "/home/user",
-          name: "Home",
-          available: true,
-          favorite: false,
-          createdAt: 1,
-          lastOpenedAt: 1,
-        },
-      ],
+    mockPickWithNativeDialog.mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/home/user/Desktop/Inside Agentic AI.pdf"],
     });
-    mockFetchFilesTree.mockImplementation((root: string, path = "") =>
-      Promise.resolve({
-        root,
-        path,
-        entries:
-          path.length === 0
-            ? [
-                {
-                  name: "Desktop",
-                  path: "Desktop",
-                  kind: "directory",
-                  sizeBytes: 0,
-                  modifiedAt: 1,
-                  extension: "",
-                  readable: true,
-                  symlink: false,
-                },
-              ]
-            : [
-                {
-                  name: "Inside Agentic AI.pdf",
-                  path: "Desktop/Inside Agentic AI.pdf",
-                  kind: "file",
-                  sizeBytes: 1024,
-                  modifiedAt: 1,
-                  extension: ".pdf",
-                  readable: true,
-                  symlink: false,
-                },
-              ],
-        truncated: false,
-      }),
-    );
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    expect(screen.getByRole("combobox", { name: /connect source/i })).toHaveTextContent("Folder");
-    await user.click(screen.getByRole("button", { name: /^browse$/i }));
-    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
-    await user.click(within(dialog).getByRole("button", { name: "Home" }));
-    await waitFor(() => {
-      expect(within(dialog).getByRole("button", { name: /Desktop/i })).toBeInTheDocument();
-    });
-    await user.click(within(dialog).getByRole("button", { name: /Desktop/i }));
-    const fileCheckbox = await within(dialog).findByLabelText(/Inside Agentic AI.pdf/i);
-    expect(fileCheckbox).toBeEnabled();
-    await user.click(fileCheckbox);
-    await user.click(within(dialog).getByRole("button", { name: /use selection/i }));
+    await chooseConnectSource(user, "Files");
+    const browse = screen.getByRole("button", { name: /^browse$/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
 
-    expect(screen.getByRole("combobox", { name: /connect source/i })).toHaveTextContent("Files");
-    expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
-      "/home/user",
+    await waitFor(() =>
+      expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
+        "/home/user/Desktop",
+      ),
     );
     expect(screen.getByLabelText(/relative files to connect/i)).toHaveValue(
-      "Desktop/Inside Agentic AI.pdf",
+      "Inside Agentic AI.pdf",
     );
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     await waitFor(() => {
       expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
         kind: "files",
-        rootPath: "/home/user",
-        files: ["Desktop/Inside Agentic AI.pdf"],
+        rootPath: "/home/user/Desktop",
+        files: ["Inside Agentic AI.pdf"],
       });
     });
   });
 
-  it("shows local knowledge limits and blocks oversized files in the folder browser", async () => {
+  it("shows the local knowledge limits next to the connect form", () => {
+    render(<CapsuleActions {...defaultProps()} />);
+    expect(screen.getByText(/Maximum single file size: 1.0 GB/i)).toBeInTheDocument();
+  });
+
+  it("surfaces a calm message when the native dialog fails and keeps manual entry usable", async () => {
     const user = userEvent.setup();
-    mockFetchProjects.mockResolvedValue({
-      projects: [
-        {
-          path: "/home/user",
-          name: "Home",
-          available: true,
-          favorite: false,
-          createdAt: 1,
-          lastOpenedAt: 1,
-        },
-      ],
-    });
-    mockFetchFilesTree.mockResolvedValue({
-      root: "/home/user",
-      path: "",
-      entries: [
-        {
-          name: "too-large.pdf",
-          path: "too-large.pdf",
-          kind: "file",
-          sizeBytes: 1536 * 1024 * 1024,
-          modifiedAt: 1,
-          extension: ".pdf",
-          readable: true,
-          symlink: false,
-        },
-      ],
-      truncated: false,
-    });
+    mockPickWithNativeDialog.mockResolvedValueOnce({ kind: "busy" });
 
     render(<CapsuleActions {...defaultProps()} />);
 
-    expect(screen.getByText(/Maximum single file size: 1.0 GB/i)).toBeInTheDocument();
-    await chooseConnectSource(user, "Files");
-    await user.click(screen.getByRole("button", { name: /^browse$/i }));
-    const dialog = await screen.findByRole("dialog", { name: /choose local source/i });
-    await user.click(within(dialog).getByRole("button", { name: "Home" }));
+    const browse = screen.getByRole("button", { name: /^browse$/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
 
-    const checkbox = await within(dialog).findByLabelText(/too-large.pdf/i);
-    expect(within(dialog).getByText(/1.5 GB · too large/i)).toBeInTheDocument();
-    expect(checkbox).toBeDisabled();
-    expect(within(dialog).getByRole("button", { name: /use selection/i })).toBeDisabled();
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "A native dialog is already open. Close it first.",
+    );
+    const manualInput = screen.getByLabelText(/absolute folder path to connect/i);
+    await user.type(manualInput, "/manual/path");
+    expect(manualInput).toHaveValue("/manual/path");
   });
 });
 

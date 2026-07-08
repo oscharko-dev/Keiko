@@ -26,7 +26,6 @@ import {
   extname,
   isAbsolute,
   join,
-  parse as parsePath,
   posix as pathPosix,
   relative,
   resolve,
@@ -66,23 +65,6 @@ type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
   typeof value === "string" ? redact(value) : value;
-
-export interface FilesDirectoryRoot {
-  readonly label: string;
-  readonly path: string;
-}
-
-export interface FilesDirectoryEntry {
-  readonly name: string;
-  readonly path: string;
-}
-
-export interface FilesDirectoryListing {
-  readonly path: string;
-  readonly parent: string | null;
-  readonly entries: readonly FilesDirectoryEntry[];
-  readonly roots: readonly FilesDirectoryRoot[];
-}
 
 export type FilesEntryKind = "directory" | "file" | "symlink";
 
@@ -257,7 +239,10 @@ function assertMetadataSafe(value: string, redactor: FilesMetadataRedactor): voi
   }
 }
 
-function metadataIsSafe(value: string, redactor: FilesMetadataRedactor): boolean {
+// Exported so callers outside this module (e.g. the native-file-dialog route, which mirrors
+// `resolveArbitraryRoot`'s chain for FILE targets) reuse the exact same "no-op redaction = safe"
+// invariant instead of re-deriving it.
+export function metadataIsSafe(value: string, redactor: FilesMetadataRedactor): boolean {
   const redacted = redactor(value);
   return typeof redacted !== "string" || redacted === value;
 }
@@ -318,16 +303,6 @@ export async function resolveRoot(
     : resolveRegisteredRoot(project, redactor);
 }
 
-function directoryRoots(projectRoot: string): readonly FilesDirectoryRoot[] {
-  return [{ label: "Project root", path: projectRoot }];
-}
-
-function parentPath(pathValue: string, projectRoot: string): string | null {
-  if (pathValue === projectRoot) return null;
-  const parsed = parsePath(pathValue);
-  return pathValue === parsed.root ? null : dirname(pathValue);
-}
-
 export function normalizeRelativePath(pathInput: string | null): string {
   const raw = pathInput ?? "";
   if (raw.includes("\0") || isAbsolute(raw)) {
@@ -364,44 +339,6 @@ function sameFileIdentity(a: Stats, b: Stats): boolean {
 
 function stalePathError(): FilesError {
   return new FilesError(409, "STALE_PATH", "The file changed before the operation could complete.");
-}
-
-function normalizeDirectoryPath(
-  pathInput: string | undefined,
-  registeredRoot: string,
-  realRoot: string,
-): string {
-  const raw = pathInput?.trim();
-  if (raw === undefined || raw.length === 0) return realRoot;
-  if (raw.includes("\0")) {
-    throw new FilesError(400, "BAD_PATH", "The path must stay inside the selected project.");
-  }
-  const candidate = isAbsolute(raw) ? resolve(raw) : resolve(realRoot, raw);
-  if (!isContained(realRoot, candidate) && !isContained(registeredRoot, candidate)) {
-    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected project.");
-  }
-  return candidate;
-}
-
-async function resolveDirectoryInsideRoot(
-  store: UiStore,
-  rootInput: string | null,
-  pathInput: string | undefined,
-  redactor: FilesMetadataRedactor,
-): Promise<ResolvedProjectRoot & { readonly path: string; readonly relativePath: string }> {
-  const root = await resolveRoot(store, rootInput, redactor);
-  const candidate = normalizeDirectoryPath(pathInput, root.root, root.realRoot);
-  const pathValue = await resolveDirectory(candidate);
-  assertMetadataSafe(pathValue, redactor);
-  if (!isContained(root.realRoot, pathValue)) {
-    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected project.");
-  }
-  const relativePath = rootRelativePosixPath(root.realRoot, pathValue);
-  assertMetadataSafe(relativePath, redactor);
-  if (pathIsDenied(relativePath)) {
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
-  return { ...root, path: pathValue, relativePath };
 }
 
 async function resolveInsideRoot(
@@ -443,43 +380,6 @@ async function resolveInsideRoot(
     path: target,
     stats: targetStats,
     symlink: linkStats.isSymbolicLink(),
-  };
-}
-
-async function directoryEntries(
-  root: string,
-  pathValue: string,
-  redactor: FilesMetadataRedactor,
-): Promise<readonly FilesDirectoryEntry[]> {
-  const entries: FilesDirectoryEntry[] = [];
-  const dir = await opendir(pathValue);
-  try {
-    for await (const entry of dir) {
-      if (!entry.isDirectory()) continue;
-      const entryPath = join(pathValue, entry.name);
-      const relativePath = rootRelativePosixPath(root, entryPath);
-      if (!metadataIsSafe(relativePath, redactor)) continue;
-      if (pathIsDenied(relativePath)) continue;
-      entries.push({ name: entry.name, path: entryPath });
-    }
-  } finally {
-    await dir.close().catch(() => undefined);
-  }
-  return entries.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-export async function listFilesDirectories(
-  store: UiStore,
-  rootInput: string | null,
-  pathInput?: string,
-  redactor: FilesMetadataRedactor = staticFilesMetadataRedactor,
-): Promise<FilesDirectoryListing> {
-  const target = await resolveDirectoryInsideRoot(store, rootInput, pathInput, redactor);
-  return {
-    path: target.path,
-    parent: parentPath(target.path, target.realRoot),
-    entries: await directoryEntries(target.realRoot, target.path, redactor),
-    roots: directoryRoots(target.root),
   };
 }
 
@@ -2182,20 +2082,6 @@ export async function readFilesPreview(
     return textPreview(target, base, redactor);
   }
   return { ...base, kind: "binary", reason: "unsupported" };
-}
-
-export async function handleFilesDirectories(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  return runFilesHandler(async () => {
-    const requestedRoot = ctx.url.searchParams.get("root");
-    const requestedPath = ctx.url.searchParams.get("path") ?? undefined;
-    return {
-      status: 200,
-      body: await listFilesDirectories(deps.store, requestedRoot, requestedPath, deps.redactor),
-    };
-  });
 }
 
 export async function handleFilesTree(

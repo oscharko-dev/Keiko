@@ -142,7 +142,6 @@ import {
   handleFilesCopy,
   handleFilesCreate,
   handleFilesDelete,
-  handleFilesDirectories,
   handleFilesPreview,
   handleFilesPreviewImage,
   handleFilesRename,
@@ -150,6 +149,10 @@ import {
   handleFilesTree,
 } from "./files.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import {
+  handleNativeFileDialogCapability,
+  handleNativeFileDialogOpen,
+} from "./native-file-dialog/route.js";
 import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
 import {
   handleEditorLanguage,
@@ -602,8 +605,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/containers/runs/:runId",
     handler: handleDeleteContainerRun,
   },
+  // Epic #1941 — native OS file/folder dialog (ADR-0118). The POST opens ONE dialog at a time
+  // (409 on concurrency) and validates every returned path through the Files policy before it
+  // reaches the browser; the GET reports whether the BFF host platform has an adapter.
+  {
+    method: "GET",
+    pattern: "/api/native-file-dialog/capability",
+    handler: handleNativeFileDialogCapability,
+  },
+  { method: "POST", pattern: "/api/native-file-dialog/open", handler: handleNativeFileDialogOpen },
   // Desktop files — selected-root browser, preview, and editor control plane.
-  { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/search", handler: handleFilesSearch },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },

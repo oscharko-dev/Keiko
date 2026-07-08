@@ -91,14 +91,13 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 > `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`) stay with **#1295** (shadow/scrim
 > tokenisation is a Light visual change).
 
-| Surface                                          | Key files                                                   | Primary states                                           |
-| ------------------------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------- |
-| Command palette                                  | `components/desktop/modals/CommandPalette.tsx`              | open / filter / no-results                               |
-| Gateway setup dialog                             | `modals/GatewaySetupDialog.tsx`                             | idle / pending / success / error                         |
-| New window dialog (entry point for every window) | `modals/NewWindowDialog.tsx`                                | per-type config form / directory-note·error / validation |
-| Create picker (non-modal)                        | `modals/Palette.tsx`                                        | non-modal create picker (background stays interactive)   |
-| Permission control                               | `modals/PermControl.tsx`                                    | permission grant states                                  |
-| Local file browser                               | `components/desktop/local-files/LocalFileBrowserDialog.tsx` | loading / error / list / dialog                          |
+| Surface                                          | Key files                                      | Primary states                                           |
+| ------------------------------------------------ | ---------------------------------------------- | -------------------------------------------------------- |
+| Command palette                                  | `components/desktop/modals/CommandPalette.tsx` | open / filter / no-results                               |
+| Gateway setup dialog                             | `modals/GatewaySetupDialog.tsx`                | idle / pending / success / error                         |
+| New window dialog (entry point for every window) | `modals/NewWindowDialog.tsx`                   | per-type config form / directory-note·error / validation |
+| Create picker (non-modal)                        | `modals/Palette.tsx`                           | non-modal create picker (background stays interactive)   |
+| Permission control                               | `modals/PermControl.tsx`                       | permission grant states                                  |
 
 ## 5. Shared controls / input atoms — owner #1294 · **shipped**
 
