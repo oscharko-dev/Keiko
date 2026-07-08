@@ -359,6 +359,8 @@ export const DE_MESSAGES = {
   "memoria.consolidation.summary.configuredWithUpdates":
     "Modellgestuetzte Zusammenfassungen haben {count} vorgeschlagen{suffix}",
   "memoria.consolidation.summary.fallbackSuffix": "; {count} haben Quelltext erhalten.",
+  "memoria.consolidation.advisory.label": "KI-generierter Vorschlag:",
+  "memoria.consolidation.advisory.keep": "Behalten:",
   "memoria.healthScan": "Health-Scan",
   "memoria.healthScan.region": "Ergebnisse des Erinnerungs-Health-Scans",
   "memoria.healthScan.loading": "Health-Scan-Ergebnisse werden geladen...",
