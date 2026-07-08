@@ -37,10 +37,12 @@
 //     provenance stays intact and every run is idempotent.
 
 import { clampUnit } from "@oscharko-dev/keiko-contracts";
+import { decayHalfLifeMultiplierForType } from "@oscharko-dev/keiko-contracts/memory";
 import type {
   MemoryForgetReason,
   MemoryId,
   MemoryRecord,
+  MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 
 // Structural subset of the vault's MemoryAccessStat so this leaf package does not depend on the
@@ -64,6 +66,13 @@ export interface MemoryMaintenancePolicy {
   readonly forgetProposedMaxStrength: number;
   readonly forgetProposedMinAgeMs: number;
   readonly maxForgetPerRun: number;
+  // Type-aware decay (systems consolidation / semanticization). Per-type MULTIPLIERS on the base
+  // disuse half-life: episodic fades faster (< 1), semantic/procedural/preference persist longer
+  // (> 1). When ABSENT, every type uses the flat `halfLifeMs` — byte-identical to the pre-
+  // semanticization curve (the strict opt-in convention). A caller may pass a partial map to tune
+  // one type; untuned types then fall back to the recommended preset
+  // (`MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS` in keiko-contracts), never to 1.
+  readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
 }
 
 const DAY_MS = 864e5;
@@ -88,6 +97,19 @@ export interface MemoryMaintenancePlan {
 export interface PlanMaintenanceOptions {
   readonly nowMs: number;
   readonly policy?: Partial<MemoryMaintenancePolicy>;
+}
+
+// The disuse half-life this record decays at. Without a per-type multiplier map this is exactly the
+// flat `halfLifeMs` (byte-identical to the pre-semanticization model). With one, the base half-life
+// is scaled by the record's type multiplier: an episodic memory (multiplier < 1) reaches the
+// archive/forget thresholds sooner; a semantic fact or skill (multiplier > 1) resists disuse longer.
+function typeHalfLifeMs(
+  record: MemoryRecord,
+  halfLifeMs: number,
+  multiplierByType: Partial<Record<MemoryType, number>> | undefined,
+): number {
+  if (multiplierByType === undefined) return halfLifeMs;
+  return halfLifeMs * decayHalfLifeMultiplierForType(record.type, multiplierByType);
 }
 
 function recencyFactorOf(
@@ -119,11 +141,17 @@ export function effectiveStrength(
   stat: MemoryAccessStatLike | undefined,
   nowMs: number,
   halfLifeMs: number = MEMORY_MAINTENANCE_DEFAULTS.halfLifeMs,
+  multiplierByType?: Partial<Record<MemoryType, number>>,
 ): number {
   if (record.pinned) return 1;
   const base = record.provenance.confidence;
   const freqBoost = 1 + 0.15 * Math.log1p(stat?.accessCount ?? 0);
-  const recencyFactor = recencyFactorOf(record, stat, nowMs, halfLifeMs);
+  const recencyFactor = recencyFactorOf(
+    record,
+    stat,
+    nowMs,
+    typeHalfLifeMs(record, halfLifeMs, multiplierByType),
+  );
   return clampUnit(base * freqBoost * recencyFactor * utilityFactor(stat));
 }
 
@@ -207,7 +235,13 @@ function buildContext(
   return {
     record,
     stat,
-    strength: effectiveStrength(record, stat, nowMs, policy.halfLifeMs),
+    strength: effectiveStrength(
+      record,
+      stat,
+      nowMs,
+      policy.halfLifeMs,
+      policy.decayHalfLifeMultiplierByType,
+    ),
     ageMs: nowMs - record.createdAt,
     accessCount: stat?.accessCount ?? 0,
   };

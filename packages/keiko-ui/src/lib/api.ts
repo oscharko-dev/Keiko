@@ -1051,6 +1051,35 @@ export async function runRealtimeGroundedTool(
   });
 }
 
+export interface RealtimeMemoryToolInput {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly callId: string;
+  readonly query: string;
+  readonly budgetTokens?: number | undefined;
+}
+
+export interface RealtimeMemoryToolOutput {
+  readonly status: "ok";
+  readonly memoryCount: number;
+  readonly memoryContext: string;
+  readonly instruction: string;
+}
+
+// Mid-session MemoriaViva recall for the realtime `recall_keiko_memory` tool. Unlike the grounded
+// tool this persists nothing to the chat — the response is handed back to the realtime provider as
+// the function-call output and exists only for the current spoken turn.
+export async function runRealtimeMemoryTool(
+  input: RealtimeMemoryToolInput,
+  signal?: AbortSignal,
+): Promise<RealtimeMemoryToolOutput> {
+  return fetchJson<RealtimeMemoryToolOutput>("/api/voice/realtime/memory-tool", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: signal ?? null,
+  });
+}
+
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can
 // cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
 // null` under exactOptionalPropertyTypes; convert at the boundary so callers

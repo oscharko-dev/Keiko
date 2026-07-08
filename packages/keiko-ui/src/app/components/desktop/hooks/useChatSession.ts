@@ -21,9 +21,11 @@ import {
   sendDesktopChat,
   sendDesktopChatStream,
   runRealtimeGroundedTool as postRealtimeGroundedTool,
+  runRealtimeMemoryTool as postRealtimeMemoryTool,
   updateChat,
   type AppendDesktopChatVoiceTurnMessage,
   type RealtimeGroundedToolOutput,
+  type RealtimeMemoryToolOutput,
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
@@ -390,6 +392,11 @@ export interface RealtimeGroundedToolCallInput {
   readonly userTranscript?: string | undefined;
 }
 
+export interface RealtimeMemoryToolCallInput {
+  readonly callId: string;
+  readonly query: string;
+}
+
 export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
@@ -440,6 +447,13 @@ export interface UseChatSessionResult {
     input: RealtimeGroundedToolCallInput,
     signal?: AbortSignal,
   ) => Promise<RealtimeGroundedToolOutput>;
+  // Realtime voice memory recall bridge (`recall_keiko_memory`). Retrieves MemoriaViva context for
+  // the provider-supplied cue mid-session and returns the compact tool output the Realtime provider
+  // folds into its spoken reply. Persists nothing to the chat.
+  runRealtimeMemoryTool?: (
+    input: RealtimeMemoryToolCallInput,
+    signal?: AbortSignal,
+  ) => Promise<RealtimeMemoryToolOutput>;
   // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
   // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
   // preserves the user message so the user can retry without retyping.
@@ -2106,6 +2120,30 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     [buildMemoryRequest, state.activeChat, state.activeProject, state.models, state.selectedModel],
   );
 
+  const runRealtimeMemoryTool = useCallback(
+    async (
+      input: RealtimeMemoryToolCallInput,
+      signal?: AbortSignal,
+    ): Promise<RealtimeMemoryToolOutput> => {
+      const chat = state.activeChat;
+      if (chat === undefined) {
+        throw new Error("No active chat is available for memory recall.");
+      }
+      const project = state.activeProject ?? { path: chat.projectPath };
+      return postRealtimeMemoryTool(
+        {
+          chatId: chat.id,
+          projectPath: project.path,
+          callId: input.callId,
+          query: input.query,
+          budgetTokens: memoryBudgetTokens,
+        },
+        signal,
+      );
+    },
+    [memoryBudgetTokens, state.activeChat, state.activeProject],
+  );
+
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
   // existing sort order so the pill flip is non-disruptive. activeChat is rewritten when its
@@ -2153,6 +2191,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       regenerateMessage,
       appendVoiceTurn,
       runRealtimeGroundedTool,
+      runRealtimeMemoryTool,
       cancelSend,
       replaceChat,
       latestGrounded,
@@ -2198,6 +2237,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       regenerateMessage,
       appendVoiceTurn,
       runRealtimeGroundedTool,
+      runRealtimeMemoryTool,
       cancelSend,
       replaceChat,
       latestGrounded,
