@@ -11,12 +11,15 @@ import {
   CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   decideCodingWorkbenchActionForMode,
   isCodingWorkbenchActionAllowedForMode,
   isCodingWorkbenchEvidenceSafeText,
+  permissionKindForSupervisedCodingAction,
   redactCodingWorkbenchEvidenceText,
   resolveEffectiveCodingWorkbenchMode,
   selectCodingWorkbenchRuntimeProfile,
+  supervisedCodingActionRequiresApproval,
   validateCodingWorkbenchAuthorityEnvelope,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
@@ -168,6 +171,17 @@ describe("coding-workbench constants", () => {
     ]);
     expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("permission-requested");
     expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
+    expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
+      "file-edit",
+      "verification-command",
+      "commit",
+      "push",
+      "pull-request",
+      "merge",
+      "connector-write",
+      "external-write",
+      "system-mutation",
+    ]);
   });
 });
 
@@ -381,6 +395,99 @@ describe("decideCodingWorkbenchActionForMode", () => {
     expect(decideCodingWorkbenchActionForMode("supervised-coding", "delivery-substrate")).toEqual({
       allowed: false,
       reasonCode: "delivery-denied",
+    });
+  });
+});
+
+describe("supervised coding action authority", () => {
+  it("requires approval only for delivery, connector, external, and system mutations", () => {
+    expect(supervisedCodingActionRequiresApproval("file-edit")).toBe(false);
+    expect(supervisedCodingActionRequiresApproval("verification-command")).toBe(false);
+    expect(supervisedCodingActionRequiresApproval("commit")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("push")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("pull-request")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("merge")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("connector-write")).toBe(true);
+    expect(supervisedCodingActionRequiresApproval("external-write")).toBe(true);
+  });
+
+  it("maps supervised actions to the existing permission classes", () => {
+    expect(permissionKindForSupervisedCodingAction("file-edit")).toBe("workspace-write");
+    expect(permissionKindForSupervisedCodingAction("verification-command")).toBe(
+      "command-execution",
+    );
+    expect(permissionKindForSupervisedCodingAction("connector-write")).toBe("connector-access");
+    expect(permissionKindForSupervisedCodingAction("external-write")).toBe("connector-access");
+    expect(permissionKindForSupervisedCodingAction("commit")).toBe("delivery-substrate");
+  });
+
+  it("validates prompt metadata without accepting raw scope or policy strings", () => {
+    const request: CodingWorkbenchPermissionRequest = {
+      ...validPermissionRequest(),
+      kind: "delivery-substrate",
+      actionClass: "delivery-substrate",
+      actionKind: "push",
+      scopeLabel: "workspace-scope",
+      risk: "high",
+      policyReason: "approval-required",
+    };
+
+    expect(validateCodingWorkbenchPermissionRequest(request)).toEqual({ ok: true, value: request });
+    expect(
+      validateCodingWorkbenchPermissionRequest({
+        ...request,
+        scopeLabel: "/Users/alice/repo",
+        policyReason: "ship-it",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: [
+        "permissionRequest.scopeLabel must be content-free evidence-safe text",
+        "permissionRequest.policyReason is invalid",
+      ],
+    });
+  });
+
+  it("rejects supervised prompt metadata when action kind and permission class disagree", () => {
+    expect(
+      validateCodingWorkbenchPermissionRequest({
+        ...validPermissionRequest(),
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        actionKind: "push",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: [
+        "permissionRequest.actionKind must match permissionRequest.kind and permissionRequest.actionClass",
+      ],
+    });
+  });
+
+  it("requires write-capable connector scopes for supervised connector mutations", () => {
+    const request: CodingWorkbenchPermissionRequest = {
+      ...validPermissionRequest(),
+      kind: "connector-access",
+      actionClass: "connector-access",
+      actionKind: "external-write",
+      connectorScopes: ["issue-tracker.write"],
+      scopeLabel: "workspace-scope",
+      risk: "high",
+      policyReason: "approval-required",
+    };
+
+    expect(validateCodingWorkbenchPermissionRequest(request)).toEqual({ ok: true, value: request });
+    expect(
+      validateCodingWorkbenchPermissionRequest({
+        ...request,
+        connectorScopes: ["issue-tracker.read"],
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: ["permissionRequest.connectorScopes[0] must be write-capable for external-write"],
     });
   });
 });

@@ -6,16 +6,20 @@ import { Readable } from "node:stream";
 
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_APPROVAL_RISKS,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_PERMISSION_REQUEST_KINDS,
+  CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
+  CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
   decideCodingWorkbenchActionForMode,
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchActionClass,
+  CodingWorkbenchApprovalRisk,
   CodingWorkbenchConnectorScope,
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
@@ -24,11 +28,28 @@ import type {
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeHealth,
   CodingWorkbenchRuntimeSource,
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchSupervisedPolicyReason,
 } from "@oscharko-dev/keiko-contracts";
 import { buildSandboxEnv, collectSensitiveEnvValues } from "@oscharko-dev/keiko-tools";
 
 import { createDeadlineCancellation, isCancellation } from "../editor/languageCancellation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
+import {
+  decideSupervisedFileEdit,
+  decideSupervisedMutation,
+  decideSupervisedVerificationCommand,
+  type SupervisedCodingDecision,
+} from "./supervisedCodingPolicy.js";
+import {
+  createInMemorySupervisedCodingApprovalStore,
+  parseSupervisedCodingApprovalClaim,
+  supervisedCodingApprovalScopeDigest,
+  type SupervisedCodingApprovalBinding,
+  type SupervisedCodingApprovalClaim,
+  type SupervisedCodingApprovalStore,
+  type SupervisedCodingConsumedApproval,
+} from "./supervisedCodingApprovalStore.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -100,6 +121,28 @@ export type CodingRuntimeStopResult =
       readonly retryable: false;
     };
 
+export interface CodingRuntimeApprovalIssueRequest {
+  readonly runId: string;
+  readonly requestId: string;
+  readonly actionKind: CodingWorkbenchSupervisedActionKind;
+  readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
+  readonly approvedByUserId: string;
+  readonly ttlMs?: number | undefined;
+}
+
+export type CodingRuntimeApprovalIssueResult =
+  | {
+      readonly ok: true;
+      readonly approval: SupervisedCodingApprovalClaim;
+      readonly approvalDigest: string;
+      readonly expiresAtMs: number;
+    }
+  | {
+      readonly ok: false;
+      readonly failureCode: "runtime-run-mismatch" | "runtime-stopped";
+      readonly retryable: false;
+    };
+
 export interface CodingRuntimeSpawnHandle {
   readonly stdout: Readable;
   readonly stderr: Readable;
@@ -126,6 +169,7 @@ export interface CodingRuntimeManagerDeps {
   readonly now?: (() => number) | undefined;
   readonly nowIso?: (() => string) | undefined;
   readonly killScheduler?: CodingRuntimeKillScheduler | undefined;
+  readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
 }
 
@@ -145,11 +189,13 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly now: () => number;
   readonly nowIso: () => string;
   readonly killScheduler: CodingRuntimeKillScheduler;
+  readonly approvalStore: SupervisedCodingApprovalStore;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
 }
 
 export interface CodingRuntimeManager {
   start(request: CodingRuntimeLaunchRequest): CodingRuntimeStartResult;
+  issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
   stop(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
 }
@@ -168,6 +214,7 @@ interface FailureResult {
 interface RuntimeEventContext {
   readonly runId: string;
   readonly taskRef: string;
+  readonly workspaceRoot: string;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly modelSource: CodingWorkbenchModelSource;
   readonly requestedMode: CodingWorkbenchMode;
@@ -179,9 +226,12 @@ interface ActiveRuntime {
   readonly child: CodingRuntimeSpawnHandle;
   readonly shutdownTimeoutMs: number;
   readonly exitWaiters: (() => void)[];
+  readonly approvalStore: SupervisedCodingApprovalStore;
+  readonly nowMs: () => number;
   readonly nowIso: () => string;
   stdoutBuffer: string;
   exited: boolean;
+  stopRequested: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
 }
@@ -193,13 +243,39 @@ interface SidecarPermissionEvent {
   readonly actionClass: CodingWorkbenchActionClass;
   readonly reasonCode: string;
   readonly expiresAt: string;
+  readonly actionKind?: CodingWorkbenchSupervisedActionKind | undefined;
+  readonly scopeLabel?: string | undefined;
+  readonly risk?: CodingWorkbenchApprovalRisk | undefined;
+  readonly policyReason?: CodingWorkbenchSupervisedPolicyReason | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
   readonly commandLabel?: string | undefined;
+  readonly targetPath?: string | undefined;
+  readonly allowedRelativePaths?: readonly string[] | undefined;
+  readonly fileCount?: number | undefined;
+  readonly addedLines?: number | undefined;
+  readonly deletedLines?: number | undefined;
+  readonly executable?: string | undefined;
+  readonly args?: readonly string[] | undefined;
+  readonly passedCount?: number | undefined;
+  readonly failedCount?: number | undefined;
+  readonly skippedCount?: number | undefined;
+  readonly approvalToken?: SupervisedCodingApprovalClaim | undefined;
+  readonly approvalTokenMalformed?: boolean | undefined;
+  readonly operatorStopped?: boolean | undefined;
 }
 
 interface SidecarHealthEvent {
   readonly type: "health";
   readonly health: CodingWorkbenchRuntimeHealth;
+}
+
+interface SupervisedRuntimeEvidenceContext {
+  readonly recordId: string;
+  readonly runId: string;
+  readonly occurredAt: string;
+  readonly effectiveMode: CodingWorkbenchMode;
+  readonly runtimeSource: CodingWorkbenchRuntimeSource;
+  readonly modelSource: CodingWorkbenchModelSource;
 }
 
 const MAX_SIDECAR_EVENT_LINE_BYTES = 8192;
@@ -254,6 +330,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     now: deps.now ?? Date.now,
     nowIso: deps.nowIso ?? ((): string => new Date().toISOString()),
     killScheduler: deps.killScheduler ?? defaultKillScheduler,
+    approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
   };
 }
@@ -284,6 +361,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (active.context.runId !== runId) {
       return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
     }
+    active.stopRequested = true;
     active.status = "stopping";
     await escalateRuntimeKill(active, this.deps.killScheduler);
     active.status = "stopped";
@@ -292,6 +370,31 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
     );
     return { ok: true, status: "stopped" };
+  }
+
+  public issueApproval(
+    request: CodingRuntimeApprovalIssueRequest,
+  ): CodingRuntimeApprovalIssueResult {
+    const active = this.active;
+    if (active?.context.runId !== request.runId) {
+      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+    }
+    if (active.stopRequested || active.status !== "ready") {
+      return { ok: false, failureCode: "runtime-stopped", retryable: false };
+    }
+    const binding = approvalBindingForIssue(active, request);
+    const issued = this.deps.approvalStore.issue({
+      binding,
+      approvedByUserId: request.approvedByUserId,
+      nowMs: this.deps.now(),
+      ttlMs: request.ttlMs,
+    });
+    return {
+      ok: true,
+      approval: issued.approval,
+      approvalDigest: issued.approvalDigest,
+      expiresAtMs: issued.expiresAtMs,
+    };
   }
 
   public health(): CodingRuntimeHealthReport {
@@ -314,7 +417,13 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   ): CodingRuntimeStartResult {
     try {
       const child = this.deps.spawn(executablePath, request.args, env, request.workspaceRoot);
-      const active = createActiveRuntime(request, child, this.deps.nowIso);
+      const active = createActiveRuntime(
+        request,
+        child,
+        this.deps.approvalStore,
+        this.deps.now,
+        this.deps.nowIso,
+      );
       this.active = active;
       this.attachRuntime(active);
       this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
@@ -348,6 +457,10 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   }
 
   private handleStdout(active: ActiveRuntime, chunk: string): void {
+    if (active.stopRequested) {
+      active.stdoutBuffer = "";
+      return;
+    }
     active.stdoutBuffer += chunk;
     if (active.stdoutBuffer.length > MAX_SIDECAR_EVENT_LINE_BYTES) {
       active.stdoutBuffer = "";
@@ -381,7 +494,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     request: CodingRuntimeLaunchRequest,
     result: FailureResult,
   ): FailureResult {
-    const active = createInactiveRuntime(request, this.deps.nowIso);
+    const active = createInactiveRuntime(
+      request,
+      this.deps.approvalStore,
+      this.deps.now,
+      this.deps.nowIso,
+    );
     this.emit(
       runtimeEvent(active, this.nextSequence(active), "failure-redacted", {
         failureCode: "failure-redacted",
@@ -473,6 +591,8 @@ function validateAdapterSelection(
 function createActiveRuntime(
   request: CodingRuntimeLaunchRequest,
   child: CodingRuntimeSpawnHandle,
+  approvalStore: SupervisedCodingApprovalStore,
+  nowMs: () => number,
   nowIso: () => string,
 ): ActiveRuntime {
   return {
@@ -480,9 +600,12 @@ function createActiveRuntime(
     child,
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     exitWaiters: [],
+    approvalStore,
+    nowMs,
     nowIso,
     stdoutBuffer: "",
     exited: false,
+    stopRequested: false,
     status: "ready",
     sequence: 0,
   };
@@ -490,6 +613,8 @@ function createActiveRuntime(
 
 function createInactiveRuntime(
   request: CodingRuntimeLaunchRequest,
+  approvalStore: SupervisedCodingApprovalStore,
+  nowMs: () => number,
   nowIso: () => string,
 ): ActiveRuntime {
   return {
@@ -497,9 +622,12 @@ function createInactiveRuntime(
     child: inertChild(),
     shutdownTimeoutMs: request.shutdownTimeoutMs,
     exitWaiters: [],
+    approvalStore,
+    nowMs,
     nowIso,
     stdoutBuffer: "",
     exited: true,
+    stopRequested: false,
     status: "stopped",
     sequence: 0,
   };
@@ -509,6 +637,7 @@ function eventContext(request: CodingRuntimeLaunchRequest): RuntimeEventContext 
   return {
     runId: request.runId,
     taskRef: request.taskRef,
+    workspaceRoot: request.workspaceRoot,
     runtimeSource: request.runtimeSource,
     modelSource: request.modelSource,
     requestedMode: request.requestedMode,
@@ -733,6 +862,8 @@ function sidecarRuntimeEvent(
   if (!validation.ok) {
     return runtimeEvent(active, sequence, "failure-redacted", invalidSidecarEventDetails());
   }
+  const supervised = supervisedCodingRuntimeEvent(active, sequence, event, request);
+  if (supervised !== undefined) return supervised;
   const decision = decideCodingWorkbenchActionForMode(
     active.context.effectiveMode,
     request.actionClass,
@@ -748,6 +879,219 @@ function sidecarRuntimeEvent(
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
   });
+}
+
+function supervisedCodingRuntimeEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+  request: CodingWorkbenchPermissionRequest,
+): CodingWorkbenchRuntimeEvent | undefined {
+  if (active.context.effectiveMode !== "supervised-coding" || request.actionKind === undefined) {
+    return undefined;
+  }
+  if (request.actionKind === "file-edit") return supervisedFileEditEvent(active, sequence, event);
+  if (request.actionKind === "verification-command") {
+    return supervisedVerificationEvent(active, sequence, event);
+  }
+  return supervisedMutationEvent(active, sequence, event, request.actionKind);
+}
+
+function supervisedFileEditEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimeEvent {
+  const decision = decideSupervisedFileEdit({
+    ...supervisedEvidenceContext(active, "file-edit"),
+    workspaceRoot: active.context.workspaceRoot,
+    targetPath: event.targetPath ?? "",
+    allowedRelativePaths: event.allowedRelativePaths ?? [".."],
+    fileCount: event.fileCount ?? 0,
+    addedLines: event.addedLines ?? 0,
+    deletedLines: event.deletedLines ?? 0,
+  });
+  if (decision.status !== "allowed") return supervisedFailureEvent(active, sequence, decision);
+  return runtimeEvent(active, sequence, "diff-summarized", {
+    fileCount: decision.evidence.fileCount ?? 0,
+    addedLines: decision.evidence.addedLines ?? 0,
+    deletedLines: decision.evidence.deletedLines ?? 0,
+  });
+}
+
+function supervisedVerificationEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+): CodingWorkbenchRuntimeEvent {
+  const decision = decideSupervisedVerificationCommand({
+    ...supervisedEvidenceContext(active, "verification-command"),
+    executable: event.executable ?? "",
+    args: event.args ?? [],
+    passedCount: event.passedCount ?? 0,
+    failedCount: event.failedCount ?? 0,
+    skippedCount: event.skippedCount ?? 0,
+  });
+  if (decision.status !== "allowed") return supervisedFailureEvent(active, sequence, decision);
+  return runtimeEvent(active, sequence, "verification-summarized", {
+    verificationKind: "verification-command",
+    verificationStatus: verificationStatus(decision),
+    passedCount: decision.evidence.passedCount ?? 0,
+    failedCount: decision.evidence.failedCount ?? 0,
+    skippedCount: decision.evidence.skippedCount ?? 0,
+  });
+}
+
+function supervisedMutationEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): CodingWorkbenchRuntimeEvent {
+  if (active.stopRequested || event.operatorStopped === true) {
+    return supervisedPolicyFailureEvent(active, sequence, "operator-stopped");
+  }
+  if (event.approvalTokenMalformed === true) {
+    return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
+  }
+  const binding = approvalBindingForEvent(active, event, actionKind);
+  const approval = consumePresentedApproval(active, event, binding);
+  if (event.approvalToken !== undefined && approval === undefined) {
+    return supervisedPolicyFailureEvent(active, sequence, "approval-proof-stale");
+  }
+  const decision = decideSupervisedMutation({
+    ...supervisedEvidenceContext(active, actionKind),
+    actionKind,
+    requestId: event.requestId,
+    scopeDigest: binding.scopeDigest,
+    expiresAt: event.expiresAt,
+    approval,
+    connectorScopes: binding.connectorScopes,
+    nowIso: active.nowIso(),
+    operatorStopped: false,
+  });
+  if (decision.status === "approval-required" && decision.permissionRequest !== undefined) {
+    return runtimeEvent(active, sequence, "permission-requested", {
+      permissionRequest: decision.permissionRequest,
+    });
+  }
+  if (decision.status === "allowed")
+    return supervisedApprovalAcceptedEvent(active, sequence, decision);
+  return supervisedFailureEvent(active, sequence, decision);
+}
+
+function approvalBindingForIssue(
+  active: ActiveRuntime,
+  request: CodingRuntimeApprovalIssueRequest,
+): SupervisedCodingApprovalBinding {
+  return approvalBinding({
+    runId: active.context.runId,
+    requestId: request.requestId,
+    actionKind: request.actionKind,
+    connectorScopes: request.connectorScopes,
+  });
+}
+
+function approvalBindingForEvent(
+  active: ActiveRuntime,
+  event: SidecarPermissionEvent,
+  actionKind: CodingWorkbenchSupervisedActionKind,
+): SupervisedCodingApprovalBinding {
+  return approvalBinding({
+    runId: active.context.runId,
+    requestId: event.requestId,
+    actionKind,
+    connectorScopes: event.connectorScopes,
+  });
+}
+
+function approvalBinding(input: {
+  readonly runId: string;
+  readonly requestId: string;
+  readonly actionKind: CodingWorkbenchSupervisedActionKind;
+  readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
+}): SupervisedCodingApprovalBinding {
+  const connectorScopes = normalizedConnectorScopes(input.connectorScopes);
+  const scopeDigest = supervisedCodingApprovalScopeDigest({ ...input, connectorScopes });
+  return {
+    runId: input.runId,
+    requestId: input.requestId,
+    actionKind: input.actionKind,
+    scopeDigest,
+    connectorScopes,
+  };
+}
+
+function consumePresentedApproval(
+  active: ActiveRuntime,
+  event: SidecarPermissionEvent,
+  binding: SupervisedCodingApprovalBinding,
+): SupervisedCodingConsumedApproval | undefined {
+  if (event.approvalToken === undefined) return undefined;
+  return active.approvalStore.consume({
+    approval: event.approvalToken,
+    binding,
+    nowMs: active.nowMs(),
+  });
+}
+
+function normalizedConnectorScopes(
+  scopes: readonly CodingWorkbenchConnectorScope[] | undefined,
+): readonly CodingWorkbenchConnectorScope[] {
+  return [...new Set(scopes ?? [])].sort();
+}
+
+function supervisedEvidenceContext(
+  active: ActiveRuntime,
+  label: CodingWorkbenchSupervisedActionKind,
+): SupervisedRuntimeEvidenceContext {
+  return {
+    recordId: `coding-runtime-${active.context.runId}-${label}`,
+    runId: active.context.runId,
+    occurredAt: active.nowIso(),
+    effectiveMode: active.context.effectiveMode,
+    runtimeSource: active.context.runtimeSource,
+    modelSource: active.context.modelSource,
+  } as const;
+}
+
+function supervisedApprovalAcceptedEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  decision: SupervisedCodingDecision,
+): CodingWorkbenchRuntimeEvent {
+  return runtimeEvent(active, sequence, "artifact-produced", {
+    artifactKind: "approval",
+    artifactLabel: decision.reason,
+    artifactDigest: decision.evidence.digest,
+    artifactBytes: 0,
+  });
+}
+
+function supervisedFailureEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  decision: SupervisedCodingDecision,
+): CodingWorkbenchRuntimeEvent {
+  return supervisedPolicyFailureEvent(active, sequence, decision.reason);
+}
+
+function supervisedPolicyFailureEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  reason: CodingWorkbenchSupervisedPolicyReason,
+): CodingWorkbenchRuntimeEvent {
+  return runtimeEvent(active, sequence, "failure-redacted", {
+    failureCode: reason,
+    failureSummary: reason,
+    retryable: false,
+  });
+}
+
+function verificationStatus(decision: SupervisedCodingDecision): "passed" | "failed" | "partial" {
+  if ((decision.evidence.failedCount ?? 0) > 0) return "failed";
+  if ((decision.evidence.skippedCount ?? 0) > 0) return "partial";
+  return "passed";
 }
 
 function invalidSidecarEventDetails(): Partial<CodingWorkbenchRuntimeEvent> {
@@ -790,8 +1134,23 @@ function permissionEvent(record: Record<string, unknown>): SidecarPermissionEven
     actionClass,
     reasonCode,
     expiresAt,
+    ...optionalSupervisedPromptMetadata(record),
     ...connectorScopes,
     ...optionalCommandLabel(record),
+    ...optionalFileEditMetadata(record),
+    ...optionalVerificationMetadata(record),
+    ...optionalMutationMetadata(record),
+  };
+}
+
+function optionalSupervisedPromptMetadata(
+  record: Record<string, unknown>,
+): Partial<SidecarPermissionEvent> {
+  return {
+    ...optionalActionKind(record),
+    ...optionalScopeLabel(record),
+    ...optionalRisk(record),
+    ...optionalPolicyReason(record),
   };
 }
 
@@ -810,6 +1169,107 @@ function optionalCommandLabel(record: Record<string, unknown>): { readonly comma
   return commandLabel === undefined ? {} : { commandLabel };
 }
 
+function optionalFileEditMetadata(
+  record: Record<string, unknown>,
+): Partial<SidecarPermissionEvent> {
+  return {
+    ...optionalStringField(record, "targetPath"),
+    ...optionalStringArrayField(record, "allowedRelativePaths"),
+    ...optionalIntegerField(record, "fileCount"),
+    ...optionalIntegerField(record, "addedLines"),
+    ...optionalIntegerField(record, "deletedLines"),
+  };
+}
+
+function optionalVerificationMetadata(
+  record: Record<string, unknown>,
+): Partial<SidecarPermissionEvent> {
+  return {
+    ...optionalStringField(record, "executable"),
+    ...optionalStringArrayField(record, "args"),
+    ...optionalIntegerField(record, "passedCount"),
+    ...optionalIntegerField(record, "failedCount"),
+    ...optionalIntegerField(record, "skippedCount"),
+  };
+}
+
+function optionalMutationMetadata(
+  record: Record<string, unknown>,
+): Partial<SidecarPermissionEvent> {
+  return {
+    ...optionalApprovalToken(record),
+    ...optionalBooleanField(record, "operatorStopped"),
+  };
+}
+
+function optionalActionKind(record: Record<string, unknown>): {
+  readonly actionKind?: CodingWorkbenchSupervisedActionKind;
+} {
+  const actionKind = supervisedActionKind(record.actionKind);
+  return actionKind === undefined ? {} : { actionKind };
+}
+
+function optionalScopeLabel(record: Record<string, unknown>): { readonly scopeLabel?: string } {
+  const scopeLabel = stringField(record, "scopeLabel");
+  return scopeLabel === undefined ? {} : { scopeLabel };
+}
+
+function optionalRisk(record: Record<string, unknown>): {
+  readonly risk?: CodingWorkbenchApprovalRisk;
+} {
+  const risk = approvalRisk(record.risk);
+  return risk === undefined ? {} : { risk };
+}
+
+function optionalPolicyReason(record: Record<string, unknown>): {
+  readonly policyReason?: CodingWorkbenchSupervisedPolicyReason;
+} {
+  const policyReason = supervisedPolicyReason(record.policyReason);
+  return policyReason === undefined ? {} : { policyReason };
+}
+
+function optionalStringField(
+  record: Record<string, unknown>,
+  key: keyof SidecarPermissionEvent,
+): Partial<SidecarPermissionEvent> {
+  const value = stringField(record, key);
+  return value === undefined ? {} : { [key]: value };
+}
+
+function optionalStringArrayField(
+  record: Record<string, unknown>,
+  key: keyof SidecarPermissionEvent,
+): Partial<SidecarPermissionEvent> {
+  const value = stringArray(record[key]);
+  return value === undefined ? {} : { [key]: value };
+}
+
+function optionalIntegerField(
+  record: Record<string, unknown>,
+  key: keyof SidecarPermissionEvent,
+): Partial<SidecarPermissionEvent> {
+  const value = nonNegativeInteger(record[key]);
+  return value === undefined ? {} : { [key]: value };
+}
+
+function optionalBooleanField(
+  record: Record<string, unknown>,
+  key: keyof SidecarPermissionEvent,
+): Partial<SidecarPermissionEvent> {
+  const value = record[key];
+  return typeof value === "boolean" ? { [key]: value } : {};
+}
+
+function optionalApprovalToken(
+  record: Record<string, unknown>,
+): Pick<SidecarPermissionEvent, "approvalToken" | "approvalTokenMalformed"> {
+  if (!Object.prototype.hasOwnProperty.call(record, "approvalToken")) return {};
+  const token = approvalToken(record.approvalToken);
+  return token === undefined
+    ? { approvalTokenMalformed: true }
+    : { approvalToken: token, approvalTokenMalformed: false };
+}
+
 function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermissionRequest {
   return {
     requestId: event.requestId,
@@ -817,6 +1277,10 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
     actionClass: event.actionClass,
     reasonCode: event.reasonCode,
     expiresAt: event.expiresAt,
+    ...(event.actionKind === undefined ? {} : { actionKind: event.actionKind }),
+    ...(event.scopeLabel === undefined ? {} : { scopeLabel: event.scopeLabel }),
+    ...(event.risk === undefined ? {} : { risk: event.risk }),
+    ...(event.policyReason === undefined ? {} : { policyReason: event.policyReason }),
     ...(event.connectorScopes === undefined ? {} : { connectorScopes: event.connectorScopes }),
     ...(event.commandLabel === undefined ? {} : { commandLabel: event.commandLabel }),
   };
@@ -837,6 +1301,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function stringField(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function stringArray(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.every((entry) => typeof entry === "string") ? value : undefined;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function permissionKind(value: unknown): CodingWorkbenchPermissionRequestKind | undefined {
@@ -866,6 +1339,31 @@ function connectorScopeValue(value: unknown): value is CodingWorkbenchConnectorS
     typeof value === "string" &&
     (CODING_WORKBENCH_CONNECTOR_SCOPES as readonly string[]).includes(value)
   );
+}
+
+function supervisedActionKind(value: unknown): CodingWorkbenchSupervisedActionKind | undefined {
+  return typeof value === "string" &&
+    (CODING_WORKBENCH_SUPERVISED_ACTION_KINDS as readonly string[]).includes(value)
+    ? (value as CodingWorkbenchSupervisedActionKind)
+    : undefined;
+}
+
+function approvalRisk(value: unknown): CodingWorkbenchApprovalRisk | undefined {
+  return typeof value === "string" &&
+    (CODING_WORKBENCH_APPROVAL_RISKS as readonly string[]).includes(value)
+    ? (value as CodingWorkbenchApprovalRisk)
+    : undefined;
+}
+
+function supervisedPolicyReason(value: unknown): CodingWorkbenchSupervisedPolicyReason | undefined {
+  return typeof value === "string" &&
+    (CODING_WORKBENCH_SUPERVISED_POLICY_REASONS as readonly string[]).includes(value)
+    ? (value as CodingWorkbenchSupervisedPolicyReason)
+    : undefined;
+}
+
+function approvalToken(value: unknown): SupervisedCodingApprovalClaim | undefined {
+  return parseSupervisedCodingApprovalClaim(value);
 }
 
 function isRuntimeHealth(value: string): value is CodingWorkbenchRuntimeHealth {

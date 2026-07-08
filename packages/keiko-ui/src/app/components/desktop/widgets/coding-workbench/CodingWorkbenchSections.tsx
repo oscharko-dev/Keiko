@@ -220,8 +220,14 @@ export function PermissionPrompt({
       </PanelTitle>
       <p className={styles.summary}>
         {permissionLabel(request.kind)} requested for {request.reasonCode}. Raw commands, prompts,
-        diffs, and customer content are not shown in this approval surface.
+        diffs, and customer content stay hidden.
       </p>
+      <dl className={styles.promptGrid}>
+        <PromptItem label="Action kind" value={request.actionKind ?? request.kind} />
+        <PromptItem label="Scope" value={request.scopeLabel ?? "redacted-scope"} />
+        <PromptItem label="Risk" value={request.risk ?? "medium"} />
+        <PromptItem label="Policy reason" value={request.policyReason ?? request.reasonCode} />
+      </dl>
       <div className={styles.controls}>
         <button
           className={cx(styles.button, styles.buttonPrimary)}
@@ -235,6 +241,21 @@ export function PermissionPrompt({
         </button>
       </div>
     </section>
+  );
+}
+
+function PromptItem({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string;
+}): ReactNode {
+  return (
+    <div>
+      <dt className={styles.metaLabel}>{label}</dt>
+      <dd>{value}</dd>
+    </div>
   );
 }
 

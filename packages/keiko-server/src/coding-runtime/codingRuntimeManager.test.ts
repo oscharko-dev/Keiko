@@ -171,8 +171,30 @@ interface PermissionLineInput {
   readonly kind: CodingWorkbenchPermissionRequestKind;
   readonly actionClass: CodingWorkbenchActionClass;
   readonly reasonCode: string;
+  readonly actionKind?: string | undefined;
+  readonly scopeLabel?: string | undefined;
+  readonly risk?: string | undefined;
+  readonly policyReason?: string | undefined;
   readonly commandLabel?: string | undefined;
   readonly connectorScopes?: readonly CodingWorkbenchConnectorScope[] | undefined;
+  readonly targetPath?: string | undefined;
+  readonly allowedRelativePaths?: readonly string[] | undefined;
+  readonly fileCount?: number | undefined;
+  readonly addedLines?: number | undefined;
+  readonly deletedLines?: number | undefined;
+  readonly executable?: string | undefined;
+  readonly args?: readonly string[] | undefined;
+  readonly passedCount?: number | undefined;
+  readonly failedCount?: number | undefined;
+  readonly skippedCount?: number | undefined;
+  readonly scopeDigest?: string | undefined;
+  readonly approvalToken?: ApprovalClaimInput | undefined;
+  readonly operatorStopped?: boolean | undefined;
+}
+
+interface ApprovalClaimInput {
+  readonly approvalId: string;
+  readonly approvalToken: string;
 }
 
 function permissionLine(input: PermissionLineInput): string {
@@ -181,6 +203,26 @@ function permissionLine(input: PermissionLineInput): string {
     expiresAt: "2026-07-07T13:05:00.000Z",
     ...input,
   })}\n`;
+}
+
+function pushPermissionLine(
+  requestId: string,
+  approvalToken?: ApprovalClaimInput,
+  operatorStopped?: boolean,
+): string {
+  return permissionLine({
+    requestId,
+    kind: "delivery-substrate",
+    actionClass: "delivery-substrate",
+    reasonCode: "approval-required",
+    actionKind: "push",
+    scopeLabel: "workspace-scope",
+    risk: "high",
+    policyReason: "approval-required",
+    commandLabel: "push",
+    ...(approvalToken === undefined ? {} : { approvalToken }),
+    ...(operatorStopped === undefined ? {} : { operatorStopped }),
+  });
 }
 
 describe("coding runtime manager", () => {
@@ -406,6 +448,428 @@ describe("coding runtime manager", () => {
     });
     expect(validateCodingWorkbenchRuntimeEvent(permissionEvent).ok).toBe(true);
     expect(JSON.stringify(permissionEvent)).not.toContain(fixture.workspaceRoot);
+  });
+
+  it("carries Supervised Coding prompt metadata through permission events", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-push",
+        kind: "delivery-substrate",
+        actionClass: "delivery-substrate",
+        reasonCode: "approval-required",
+        actionKind: "push",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+        scopeDigest: "a".repeat(64),
+      }),
+    );
+    await settle();
+
+    const permissionEvent = events.find((event) => event.kind === "permission-requested");
+    expect(permissionEvent).toMatchObject({
+      permissionRequest: {
+        requestId: "perm-1992-push",
+        actionKind: "push",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+      },
+    });
+    expect(validateCodingWorkbenchRuntimeEvent(permissionEvent).ok).toBe(true);
+    expect(JSON.stringify(permissionEvent)).not.toMatch(/diff --git|stdout|stderr|\/tmp/u);
+  });
+
+  it("enforces supervised file-edit scope before emitting a runtime event", async () => {
+    const fixture = createManagedFixture();
+    mkdirSync(join(fixture.workspaceRoot, "src"), { recursive: true });
+    writeFileSync(join(fixture.workspaceRoot, "src", "allowed.ts"), "export const ok = true;\n");
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-file-accepted",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "src/allowed.ts",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 2,
+        deletedLines: 0,
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-file-denied",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "scoped-file-edit",
+        actionKind: "file-edit",
+        scopeLabel: "workspace-scope",
+        risk: "medium",
+        policyReason: "scoped-file-edit",
+        targetPath: "../escape.ts",
+        allowedRelativePaths: ["src"],
+        fileCount: 1,
+        addedLines: 2,
+        deletedLines: 0,
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "diff-summarized")).toMatchObject({
+      fileCount: 1,
+      addedLines: 2,
+      deletedLines: 0,
+    });
+    expect(events.find((event) => event.failureCode === "out-of-scope-file-edit")).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "out-of-scope-file-edit",
+      retryable: false,
+    });
+    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain(fixture.workspaceRoot);
+  });
+
+  it("enforces supervised verification command allowlist before emitting summaries", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-verification-command-accepted",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "allowlisted-verification-command",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "low",
+        policyReason: "allowlisted-verification-command",
+        commandLabel: "verification-command",
+        executable: "npm",
+        args: ["run", "typecheck"],
+        passedCount: 12,
+        failedCount: 0,
+        skippedCount: 0,
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-verification-command-denied",
+        kind: "command-execution",
+        actionClass: "command-execution",
+        reasonCode: "allowlisted-verification-command",
+        actionKind: "verification-command",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "allowlisted-verification-command",
+        commandLabel: "commit",
+        executable: "git",
+        args: ["commit"],
+      }),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "verification-summarized")).toMatchObject({
+      verificationKind: "verification-command",
+      verificationStatus: "passed",
+      passedCount: 12,
+      failedCount: 0,
+      skippedCount: 0,
+    });
+    expect(events.find((event) => event.failureCode === "mutating-command-denied")).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "mutating-command-denied",
+      retryable: false,
+    });
+    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
+    expect(JSON.stringify(events)).not.toMatch(/stdout|stderr|npm run typecheck/u);
+  });
+
+  it("enforces supervised delivery approval provenance before allowing mutations", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      now: () => 1_000,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const issued = manager.issueApproval({
+      runId: "run-1988",
+      requestId: "perm-1992-push-accepted",
+      actionKind: "push",
+      approvedByUserId: "operator",
+    });
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) throw new Error("expected approval issue to succeed");
+    const forged = {
+      approvalId: "sca_forgedapproval000000000000000000",
+      approvalToken: "f".repeat(64),
+    };
+
+    harness.children[0]?.stdout.write(pushPermissionLine("perm-1992-push-missing"));
+    harness.children[0]?.stdout.write(pushPermissionLine("perm-1992-push-stale", forged));
+    harness.children[0]?.stdout.write(
+      pushPermissionLine("perm-1992-push-stopped", undefined, true),
+    );
+    harness.children[0]?.stdout.write(
+      pushPermissionLine("perm-1992-push-accepted", issued.approval),
+    );
+    harness.children[0]?.stdout.write(
+      pushPermissionLine("perm-1992-push-accepted", issued.approval),
+    );
+    await settle();
+
+    expect(events.find((event) => event.kind === "permission-requested")).toMatchObject({
+      permissionRequest: {
+        requestId: "perm-1992-push-missing",
+        actionKind: "push",
+        policyReason: "approval-required",
+      },
+    });
+    const staleFailures = events.filter((event) => event.failureCode === "approval-proof-stale");
+    expect(staleFailures).toHaveLength(2);
+    expect(events.find((event) => event.failureCode === "operator-stopped")).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "operator-stopped",
+      retryable: false,
+    });
+    expect(events.find((event) => event.kind === "artifact-produced")).toMatchObject({
+      artifactKind: "approval",
+      artifactLabel: "approval-proof-accepted",
+      artifactDigest: issued.approvalDigest,
+      artifactBytes: 0,
+    });
+    expect(JSON.stringify(events)).not.toContain(issued.approval.approvalToken);
+  });
+
+  it("binds supervised approvals to manager-computed action and connector scope", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      now: () => 1_000,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const pushApproval = manager.issueApproval({
+      runId: "run-1988",
+      requestId: "perm-1992-push-merge",
+      actionKind: "push",
+      approvedByUserId: "operator",
+    });
+    const externalApproval = manager.issueApproval({
+      runId: "run-1988",
+      requestId: "perm-1992-external-write-source-control",
+      actionKind: "external-write",
+      connectorScopes: ["issue-tracker.write"],
+      approvedByUserId: "operator",
+    });
+    expect(pushApproval.ok).toBe(true);
+    expect(externalApproval.ok).toBe(true);
+    if (!pushApproval.ok || !externalApproval.ok) throw new Error("expected approvals");
+
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-push-merge",
+        kind: "delivery-substrate",
+        actionClass: "delivery-substrate",
+        reasonCode: "approval-required",
+        actionKind: "merge",
+        scopeLabel: "workspace-scope",
+        risk: "critical",
+        policyReason: "approval-required",
+        commandLabel: "merge",
+        approvalToken: pushApproval.approval,
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-external-write-source-control",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "approval-required",
+        actionKind: "external-write",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+        commandLabel: "external-write",
+        connectorScopes: ["source-control.write"],
+        approvalToken: externalApproval.approval,
+      }),
+    );
+    await settle();
+
+    const staleFailures = events.filter((event) => event.failureCode === "approval-proof-stale");
+    expect(staleFailures).toHaveLength(2);
+    expect(events.some((event) => event.kind === "artifact-produced")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain(pushApproval.approval.approvalToken);
+    expect(JSON.stringify(events)).not.toContain(externalApproval.approval.approvalToken);
+  });
+
+  it("suppresses post-stop sidecar mutation events from manager-owned stop state", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const timers: (() => void)[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      now: () => 1_000,
+      killScheduler: {
+        setTimer: (callback): unknown => {
+          timers.push(callback);
+          return undefined;
+        },
+      },
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const issued = manager.issueApproval({
+      runId: "run-1988",
+      requestId: "perm-1992-push-stopped",
+      actionKind: "push",
+      approvedByUserId: "operator",
+    });
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) throw new Error("expected approval issue to succeed");
+
+    const stopping = manager.stop("run-1988");
+    expect(
+      manager.issueApproval({
+        runId: "run-1988",
+        requestId: "perm-1992-push-stopped",
+        actionKind: "push",
+        approvedByUserId: "operator",
+      }),
+    ).toEqual({ ok: false, failureCode: "runtime-stopped", retryable: false });
+    harness.children[0]?.stdout.write(
+      pushPermissionLine("perm-1992-push-stopped", issued.approval),
+    );
+    await settle();
+
+    expect(events.some((event) => event.kind === "artifact-produced")).toBe(false);
+    expect(events.some((event) => event.failureCode === "approval-proof-accepted")).toBe(false);
+    timers[0]?.();
+    await stopping;
+    expect(harness.children[0]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
+  });
+
+  it("fails closed for mismatched supervised sidecar permission metadata", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-push-workspace-write",
+        kind: "workspace-write",
+        actionClass: "workspace-write",
+        reasonCode: "approval-required",
+        actionKind: "push",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+        scopeDigest: "a".repeat(64),
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1992-external-write-connector-read-scope",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "approval-required",
+        actionKind: "external-write",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+        connectorScopes: ["issue-tracker.read"],
+        scopeDigest: "a".repeat(64),
+      }),
+    );
+    await settle();
+
+    const failures = events.filter((event) => event.failureSummary === "sidecar-event-denied");
+    expect(failures).toHaveLength(2);
+    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
   });
 
   it.each([

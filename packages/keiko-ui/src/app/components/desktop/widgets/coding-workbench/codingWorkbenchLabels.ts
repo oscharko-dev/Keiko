@@ -15,6 +15,7 @@ export function isActiveRunState(state: CodingWorkbenchRunState): boolean {
   return (
     state === "running" ||
     state === "approval-required" ||
+    state === "approved" ||
     state === "blocked" ||
     state === "governed-assist" ||
     state === "governed-assist-blocked"
@@ -54,6 +55,9 @@ export function runStateLabel(state: CodingWorkbenchRunState): string {
     empty: "Ready",
     running: "Running",
     "approval-required": "Approval required",
+    approved: "Approved",
+    denied: "Denied",
+    stopped: "Stopped",
     blocked: "Blocked",
     "governed-assist": "Assist proposal",
     "governed-assist-blocked": "Assist blocked",

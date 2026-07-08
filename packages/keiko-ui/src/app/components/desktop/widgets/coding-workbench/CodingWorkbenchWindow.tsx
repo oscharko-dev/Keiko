@@ -70,6 +70,7 @@ export function CodingWorkbenchWindow({
   const [requestState, setRequestState] = useState<CodingWorkbenchRequestState>("idle");
 
   useEffect(() => setSelectedMode(projection.authority.requestedMode), [projection]);
+  useEffect(() => setRequestState("idle"), [projection.authority.runId, projection.runState]);
   useProfiles(api, setProfiles);
 
   const stopRun = (): void => {
