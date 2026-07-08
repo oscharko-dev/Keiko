@@ -175,7 +175,7 @@ function planTarget(target) {
     launcher: target.primaryLauncher,
     scripts: SCENARIOS.map((scenario) => ({
       scenario,
-      shell: `scripts/${scriptName(target.platformTarget, scenario, ".sh")}`,
+      posix: `scripts/${scriptName(target.platformTarget, scenario, ".sh")}`,
       windows: `scripts/${scriptName(target.platformTarget, scenario, ".cmd")}`,
     })),
   };
