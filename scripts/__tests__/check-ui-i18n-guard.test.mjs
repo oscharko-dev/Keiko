@@ -162,7 +162,7 @@ test("fails UI source changes that only import the i18n module", async () => {
     {
       ...matchingCatalogs,
       [UI_FILE]:
-        'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() { return <p>Hard-coded text</p>; }\n',
+        'import type { I18nTranslate } from "@/lib/i18n";\nexport function NewFeature() { return <p>Hard-coded text</p>; }\n',
     },
     (repoRoot) => {
       const result = checkUiI18nGuard({
@@ -171,7 +171,33 @@ test("fails UI source changes that only import the i18n module", async () => {
       });
 
       assert.equal(result.ok, false);
-      assert.match(result.problems.join("\n"), /no changed UI file uses the i18n API/);
+      assert.match(result.problems.join("\n"), /do not use the i18n API/);
+    },
+  );
+});
+
+test("fails mixed UI diffs when one file hard-codes text", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]:
+        'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() { const t = useTranslate(); return <p>{t("feature.title")}</p>; }\n',
+      "packages/keiko-ui/src/app/components/AnotherFeature.tsx":
+        'export function AnotherFeature() { return <p>Hard-coded text</p>; }\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [
+          UI_FILE,
+          "packages/keiko-ui/src/app/components/AnotherFeature.tsx",
+          EN_CATALOG,
+          DE_CATALOG,
+        ],
+      });
+
+      assert.equal(result.ok, false);
+      assert.match(result.problems.join("\n"), /AnotherFeature\.tsx/);
     },
   );
 });
@@ -190,7 +216,7 @@ test("fails UI source changes that only contain raw translate syntax", async () 
       });
 
       assert.equal(result.ok, false);
-      assert.match(result.problems.join("\n"), /no changed UI file uses the i18n API/);
+      assert.match(result.problems.join("\n"), /do not use the i18n API/);
     },
   );
 });

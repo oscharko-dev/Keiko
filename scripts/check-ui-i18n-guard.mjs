@@ -8,7 +8,7 @@ export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
-const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /\bI18nTranslate\b/];
+const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
 
 function normalizePath(file) {
   return file.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -48,6 +48,10 @@ function readText(repoRoot, file) {
 function hasI18nUsage(repoRoot, file) {
   const source = readText(repoRoot, file);
   return I18N_USAGE_PATTERNS.some((pattern) => pattern.test(source));
+}
+
+function nonCompliantUiFiles(repoRoot, uiFiles) {
+  return uiFiles.filter((file) => !hasI18nUsage(repoRoot, file));
 }
 
 function isSafeGitSha(value) {
@@ -196,9 +200,11 @@ export function checkUiI18nGuard({
     }
   }
 
-  if (!uiFiles.some((file) => hasI18nUsage(repoRoot, file))) {
+  const nonCompliantFiles = nonCompliantUiFiles(repoRoot, uiFiles);
+
+  if (nonCompliantFiles.length > 0) {
     problems.push(
-      "UI source changed, but no changed UI file uses the i18n API. Use useTranslate, I18nTranslate, or another existing i18n helper for user-facing text.",
+      `UI source changed, but these changed UI files do not use the i18n API: ${nonCompliantFiles.join(", ")}. Use useTranslate, <I18nTranslate />, or another existing i18n helper for user-facing text.`,
     );
   }
 
