@@ -10,7 +10,11 @@ import type { CommandRunnerManager, CommandRunInput } from "../command-runner.js
 import type { GitProcessRunner } from "../gitRoutes.js";
 import { matchRoute, type RouteContext } from "../routes.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
-import type { AutonomousDeliveryConnectorExecutor } from "./autonomousDeliveryPolicy.js";
+import type {
+  AutonomousDeliveryConnectorExecutor,
+  AutonomousDeliveryConnectorOperationRequest,
+  AutonomousDeliveryConnectorOperationResult,
+} from "./autonomousDeliveryPolicy.js";
 import { handleAutonomousDeliveryExecute } from "./autonomousDeliveryRoutes.js";
 
 let root: string;
@@ -40,14 +44,24 @@ function deps(
   };
 }
 
-function connectorExecutor(routeStatus = 200): AutonomousDeliveryConnectorExecutor {
+interface ConnectorHarness {
+  readonly connector: AutonomousDeliveryConnectorExecutor;
+  readonly calls: AutonomousDeliveryConnectorOperationRequest[];
+}
+
+function connectorExecutor(routeStatus = 200): ConnectorHarness {
+  const calls: AutonomousDeliveryConnectorOperationRequest[] = [];
   return {
-    execute: vi.fn((request) =>
-      Promise.resolve({
-        status: request.dryRun === true ? "previewed" : "applied",
-        routeStatus,
-      }),
-    ),
+    calls,
+    connector: {
+      execute: (request): Promise<AutonomousDeliveryConnectorOperationResult> => {
+        calls.push(request);
+        return Promise.resolve({
+          status: request.dryRun === true ? "previewed" : "applied",
+          routeStatus,
+        } satisfies AutonomousDeliveryConnectorOperationResult);
+      },
+    },
   };
 }
 
@@ -335,7 +349,7 @@ describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
   });
 
   it("delegates bounded connector writes through the injected governed connector executor", async () => {
-    const connector = connectorExecutor();
+    const harness = connectorExecutor();
     const request = body({
       authorityEnvelope: envelope({
         connectorScopes: ["source-control.read", "source-control.write", "issue-tracker.write"],
@@ -364,7 +378,7 @@ describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
 
     const result = await handleAutonomousDeliveryExecute(
       ctx(request),
-      deps(undefined, undefined, connector),
+      deps(undefined, undefined, harness.connector),
     );
 
     expect(result.body).toMatchObject({
@@ -378,15 +392,17 @@ describe("POST /api/coding-workbench/autonomous-delivery/execute", () => {
         },
       ],
     });
-    expect(connector.execute).toHaveBeenCalledWith({
-      provider: "github",
-      objectKind: "issue",
-      action: "comment",
-      targetRef: "issue-1993",
-      idempotencyKey: "issue-comment-1",
-      commentKind: "progress",
-      dryRun: true,
-    });
+    expect(harness.calls).toEqual([
+      {
+        provider: "github",
+        objectKind: "issue",
+        action: "comment",
+        targetRef: "issue-1993",
+        idempotencyKey: "issue-comment-1",
+        commentKind: "progress",
+        dryRun: true,
+      },
+    ]);
     expect(JSON.stringify(result.body)).not.toContain("body");
   });
 

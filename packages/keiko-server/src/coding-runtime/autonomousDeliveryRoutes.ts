@@ -112,11 +112,26 @@ const CONNECTOR_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "dryRun",
 ]);
 const MAX_AUTONOMOUS_OPERATIONS = 32;
-const CONNECTOR_PROVIDERS = ["github", "jira"] as const;
-const CONNECTOR_OBJECT_KINDS = ["issue", "pull-request"] as const;
-const CONNECTOR_ACTIONS = ["status-update", "comment"] as const;
-const CONNECTOR_STATUSES = ["in-progress", "ready-for-human-review", "blocked", "done"] as const;
-const CONNECTOR_COMMENT_KINDS = ["progress", "handoff", "closure"] as const;
+const CONNECTOR_PROVIDERS: readonly AutonomousDeliveryConnectorProvider[] = ["github", "jira"];
+const CONNECTOR_OBJECT_KINDS: readonly AutonomousDeliveryConnectorObjectKind[] = [
+  "issue",
+  "pull-request",
+];
+const CONNECTOR_ACTIONS: readonly AutonomousDeliveryConnectorAction[] = [
+  "status-update",
+  "comment",
+];
+const CONNECTOR_STATUSES: readonly AutonomousDeliveryConnectorStatus[] = [
+  "in-progress",
+  "ready-for-human-review",
+  "blocked",
+  "done",
+];
+const CONNECTOR_COMMENT_KINDS: readonly AutonomousDeliveryConnectorCommentKind[] = [
+  "progress",
+  "handoff",
+  "closure",
+];
 
 const errResult = (status: number, code: AutonomousDeliveryErrorCode): RouteResult => ({
   status,
