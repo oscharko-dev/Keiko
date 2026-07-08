@@ -22,7 +22,7 @@ import {
 } from "./CodingWorkbenchSections";
 import { ModelRuntimeStatus } from "./CodingWorkbenchModelCards";
 import {
-  CODING_WORKBENCH_PROJECTIONS,
+  codingWorkbenchProjectionForState,
   type CodingWorkbenchProjection,
 } from "./codingWorkbenchProjection";
 import { isActiveRunState } from "./codingWorkbenchLabels";
@@ -47,6 +47,7 @@ export type CodingWorkbenchRequestState =
 
 interface CodingWorkbenchWindowProps {
   readonly projection?: CodingWorkbenchProjection;
+  readonly state?: string | undefined;
   readonly api?: CodingWorkbenchWindowApi;
   readonly onStopRun?: ((runId: string) => void) | undefined;
   readonly onTakeOver?: ((runId: string) => void) | undefined;
@@ -58,11 +59,13 @@ const DEFAULT_API: CodingWorkbenchWindowApi = {
 };
 
 export function CodingWorkbenchWindow({
-  projection = CODING_WORKBENCH_PROJECTIONS.empty,
+  projection: providedProjection,
+  state,
   api = DEFAULT_API,
   onStopRun,
   onTakeOver,
 }: CodingWorkbenchWindowProps): ReactNode {
+  const projection = providedProjection ?? codingWorkbenchProjectionForState(state);
   const [selectedMode, setSelectedMode] = useState<CodingWorkbenchMode>(
     projection.authority.requestedMode,
   );
