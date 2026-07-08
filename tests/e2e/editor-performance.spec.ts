@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { writePaddedFixtureFiles } from "./support/editorWorkspace.js";
 
 // Number of cold-start samples: kept at 3 for the manual/release-evidence smoke, raised (>=10) in the
 // scheduled/CI perf job via KEIKO_PERF_RUNS so p50/p95 are stable rather than the max of 3 noisy
@@ -46,6 +47,15 @@ function resolveCommit(): string {
  */
 
 const RELATIVE_PATH = "packages/keiko-cli/src/run.ts";
+const HELPER_PATH = "packages/keiko-cli/src/helper.ts";
+const RUN_TEXT = `import { helper } from "./helper.js";
+
+export const e2eFixture = helper();
+`;
+const HELPER_TEXT = `export function helper(): boolean {
+  return true;
+}
+`;
 const EVIDENCE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -60,6 +70,7 @@ interface TypingMetrics {
   readonly longTasks: number[];
   readonly events: number[];
   readonly interactionDurations: number[];
+  readonly keystrokeMainThreadWork: number[];
   observerInstalled?: boolean;
   landed?: boolean;
   activeElement?: string;
@@ -73,13 +84,183 @@ interface MemoryMetrics {
   cycles: number;
 }
 
+interface NavigationOperationMetrics {
+  readonly samples: readonly number[];
+  readonly resultCounts: readonly number[];
+}
+
+interface NavigationMetrics {
+  readonly definition: NavigationOperationMetrics;
+  readonly references: NavigationOperationMetrics;
+}
+
+// Realistic multi-file TS program (audit defect #2): a genuine cross-file type dependency chain plus
+// a fan-in aggregate, so the project-aware diagnostics pass this harness measures actually builds and
+// semantically checks a non-trivial program instead of two three-line files. `FIXTURE_MODULE_DIR`
+// sits under the fixture's tsconfig `include` glob, so every generated file becomes a program root
+// file the TypeScript service must read and check, whether or not run.ts/helper.ts import it.
+const FIXTURE_MODULE_DIR = "packages/keiko-cli/src/fixtures";
+const CHAIN_MODULE_COUNT = 24;
+
+function moduleBaseName(index: number): string {
+  return `module${String(index).padStart(2, "0")}`;
+}
+
+function firstChainModuleContent(): string {
+  return `export interface FixtureRecord {
+  readonly id: string;
+  readonly value: number;
+}
+
+export function makeFixtureRecord(id: string, value: number): FixtureRecord {
+  return { id, value };
+}
+`;
+}
+
+function chainModuleContent(index: number): string {
+  const previous = moduleBaseName(index - 1);
+  return `import type { FixtureRecord } from "./${previous}.js";
+import { makeFixtureRecord } from "./${previous}.js";
+
+export function transform${String(index).padStart(2, "0")}(input: FixtureRecord): FixtureRecord {
+  return makeFixtureRecord(input.id, input.value + 1);
+}
+`;
+}
+
+function aggregateImportLine(index: number): string {
+  const name = moduleBaseName(index);
+  return index === 0
+    ? `import { makeFixtureRecord } from "./${name}.js";`
+    : `import { transform${String(index).padStart(2, "0")} } from "./${name}.js";`;
+}
+
+function aggregateModuleContent(count: number): string {
+  const imports = Array.from({ length: count }, (_, index) => aggregateImportLine(index)).join(
+    "\n",
+  );
+  const calls = Array.from(
+    { length: count - 1 },
+    (_, offset) => `transform${String(offset + 1).padStart(2, "0")}`,
+  );
+  return `${imports}
+
+// Fan-in aggregate: exercises every chained module in one semantic pass (breadth, not just depth).
+export const fixtureTransforms = [${calls.join(", ")}] as const;
+export const fixtureSeed = makeFixtureRecord("seed", 0);
+`;
+}
+
+/** Write a CHAIN_MODULE_COUNT-deep real import chain plus a fan-in aggregate under the project root. */
+function writeFixtureModuleChain(root: string): void {
+  const dir = join(root, FIXTURE_MODULE_DIR);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${moduleBaseName(0)}.ts`), firstChainModuleContent(), "utf8");
+  for (let index = 1; index < CHAIN_MODULE_COUNT; index += 1) {
+    writeFileSync(join(dir, `${moduleBaseName(index)}.ts`), chainModuleContent(index), "utf8");
+  }
+  writeFileSync(join(dir, "aggregate.ts"), aggregateModuleContent(CHAIN_MODULE_COUNT), "utf8");
+}
+
 function createProjectFixture(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-perf-"));
   tempProjects.push(root);
   mkdirSync(join(root, "packages", "keiko-cli", "src"), { recursive: true });
   writeFileSync(join(root, "README.md"), "# Keiko perf fixture\n", "utf8");
-  writeFileSync(join(root, RELATIVE_PATH), "export const e2eFixture = true;\n", "utf8");
+  writeFileSync(
+    join(root, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        target: "ES2022",
+      },
+      include: ["packages/**/*.ts"],
+    }),
+    "utf8",
+  );
+  writeFileSync(join(root, RELATIVE_PATH), RUN_TEXT, "utf8");
+  writeFileSync(join(root, HELPER_PATH), HELPER_TEXT, "utf8");
+  writeFixtureModuleChain(root);
   return root;
+}
+
+// Adversarial near-cap workspace (audit defect #2): total padding bytes exceed
+// LanguageServiceLimits.maxWorkspaceReadBytes (4_000_000; packages/keiko-contracts/src/
+// language-service.ts DEFAULT_LANGUAGE_SERVICE_LIMITS) while every individual padding file stays
+// under maxWorkspaceReadFileBytes (1_000_000), so only the AGGREGATE workspace-read budget trips —
+// proving the project-aware diagnostics pass degrades gracefully (truncates) instead of reading the
+// whole tree unbounded or failing outright.
+const ADVERSARIAL_PADDING_FILE_COUNT = 5;
+const ADVERSARIAL_PADDING_FILE_BYTES = 900_000;
+const WORKSPACE_READ_BYTES_BUDGET = 4_000_000;
+
+function createAdversarialWorkspaceFixture(): string {
+  const root = createProjectFixture();
+  writePaddedFixtureFiles(
+    root,
+    "packages/keiko-cli/src/padding",
+    ADVERSARIAL_PADDING_FILE_COUNT,
+    ADVERSARIAL_PADDING_FILE_BYTES,
+  );
+  return root;
+}
+
+interface WorkspaceCapDegradationEvidence {
+  readonly attempted: boolean;
+  readonly ok: boolean;
+  readonly truncated: boolean;
+  readonly durationMs: number;
+  readonly paddingFileCount: number;
+  readonly paddingBytesPerFile: number;
+  readonly workspaceReadBytesBudget: number;
+}
+
+const UNMEASURED_WORKSPACE_CAP_DEGRADATION: WorkspaceCapDegradationEvidence = {
+  attempted: false,
+  ok: false,
+  truncated: false,
+  durationMs: 0,
+  paddingFileCount: ADVERSARIAL_PADDING_FILE_COUNT,
+  paddingBytesPerFile: ADVERSARIAL_PADDING_FILE_BYTES,
+  workspaceReadBytesBudget: WORKSPACE_READ_BYTES_BUDGET,
+};
+
+/**
+ * Probe diagnostics for the primary fixture file against the ADVERSARIAL near-cap workspace: proves
+ * the project-aware TS service degrades gracefully (`result.truncated === true`, a healthy HTTP
+ * response) once the workspace-read budget is exhausted, rather than hanging or erroring out.
+ */
+async function measureWorkspaceCapDegradation(
+  page: Page,
+  root: string,
+): Promise<WorkspaceCapDegradationEvidence> {
+  const probe = await page.evaluate(
+    async ({ fixtureRoot, text }) => {
+      const started = performance.now();
+      const response = await fetch("/api/editor/language", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: JSON.stringify({
+          operation: "diagnostics",
+          root: fixtureRoot,
+          document: { path: "packages/keiko-cli/src/run.ts", languageId: "typescript", text },
+        }),
+      });
+      const durationMs = Math.round(performance.now() - started);
+      if (!response.ok) {
+        return { ok: false, truncated: false, durationMs };
+      }
+      const envelope = (await response.json()) as {
+        readonly result?: { readonly truncated?: boolean };
+      };
+      return { ok: true, truncated: envelope.result?.truncated === true, durationMs };
+    },
+    { fixtureRoot: root, text: RUN_TEXT },
+  );
+  return { ...UNMEASURED_WORKSPACE_CAP_DEGRADATION, attempted: true, ...probe };
 }
 
 async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
@@ -162,7 +343,9 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
     await filesWindow.getByRole("button", { name: "Open in editor" }).click();
     const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
     await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-    await expect(editorWindow.locator(".view-line").first()).toContainText("e2eFixture");
+    await expect(
+      editorWindow.locator(".view-line").filter({ hasText: "e2eFixture" }),
+    ).toBeVisible();
     if (run >= warmups) {
       samples.push(Date.now() - start);
     }
@@ -177,7 +360,12 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
 /** Install long-task + Event Timing observers in the page (best-effort; unsupported types no-op). */
 async function installPerfObservers(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const store: TypingMetrics = { longTasks: [], events: [], interactionDurations: [] };
+    const store: TypingMetrics = {
+      longTasks: [],
+      events: [],
+      interactionDurations: [],
+      keystrokeMainThreadWork: [],
+    };
     (window as unknown as { __keikoPerf: TypingMetrics }).__keikoPerf = store;
     let observerInstalled = false;
     try {
@@ -222,19 +410,59 @@ async function awaitNextPaint(page: Page): Promise<void> {
   );
 }
 
-const TYPING_CHUNKS = ["export const greeting = ", "'keiko editor ", "performance evidence';"];
+const TYPING_CHUNKS = Array.from("export const greeting = 'keiko editor performance evidence';");
+const FINAL_TYPING_TEXT = TYPING_CHUNKS.join("");
+
+/**
+ * Match the `/api/editor/language` response for the diagnostics recompute the burst's LAST keystroke
+ * triggers, identified by the request's `document.text` equalling the burst's final buffer content.
+ * Matching on the exact final text (not merely `operation === "diagnostics"`) is deliberate: the
+ * diagnostics bridge debounces re-analysis (`DEFAULT_DIAGNOSTICS_DEBOUNCE_MS`, 400ms;
+ * diagnostics-bridge.ts) and cancels/reschedules on every content change, so on a slow runner an
+ * earlier, now-stale request from mid-burst could still resolve after this wait is registered — this
+ * predicate ignores it and only resolves on the response for the buffer actually under test.
+ */
+function isFinalDiagnosticsResponse(response: Response): boolean {
+  if (!response.url().includes("/api/editor/language")) return false;
+  const raw = response.request().postData();
+  if (raw === null) return false;
+  try {
+    const body = JSON.parse(raw) as {
+      readonly operation?: unknown;
+      readonly document?: { readonly text?: unknown };
+    };
+    return body.operation === "diagnostics" && body.document?.text === FINAL_TYPING_TEXT;
+  } catch {
+    return false;
+  }
+}
+
+function waitForFinalDiagnosticsRecompute(page: Page): Promise<Response> {
+  return page.waitForResponse(isFinalDiagnosticsResponse);
+}
 
 async function insertMeasuredChunks(page: Page): Promise<void> {
   for (const chunk of TYPING_CHUNKS) {
+    const longTaskStart = await page.evaluate(
+      () =>
+        (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf?.longTasks.length ?? 0,
+    );
     const start = Date.now();
     await page.keyboard.insertText(chunk);
     await awaitNextPaint(page);
     const duration = Date.now() - start;
-    await page.evaluate((value) => {
-      (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf?.interactionDurations.push(
-        value,
-      );
-    }, duration);
+    await page.evaluate(
+      ({ value, startIndex }) => {
+        const store = (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf;
+        if (store === undefined) return;
+        const newLongTasks = store.longTasks.slice(startIndex);
+        store.keystrokeMainThreadWork.push(Math.round(Math.max(0, ...newLongTasks)));
+        (
+          window as unknown as { __keikoPerf?: TypingMetrics }
+        ).__keikoPerf?.interactionDurations.push(value);
+      },
+      { value: duration, startIndex: longTaskStart },
+    );
   }
 }
 
@@ -250,8 +478,13 @@ async function replaceEditorText(
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyA");
   await page.keyboard.up(modifier);
+  const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page);
   await insertMeasuredChunks(page);
-  await page.waitForTimeout(250);
+  // B5 must capture the debounced diagnostics recompute (the project-aware TS service call + marker
+  // apply on the main thread), not just the synchronous keydown handling. A fixed 250ms sleep (less
+  // than the 400ms debounce) read metrics BEFORE that cost ever ran; waiting for the real response
+  // instead makes this budget capable of observing a violation at all.
+  await diagnosticsRecomputed;
   return observerInstalled;
 }
 
@@ -263,6 +496,64 @@ async function hasTypedTextLanded(editorWindow: ReturnType<Page["getByRole"]>): 
     .isVisible({ timeout: 5_000 });
 }
 
+async function measureLanguageOperation(
+  page: Page,
+  root: string,
+  operation: "definition" | "references",
+): Promise<{ readonly durationMs: number; readonly resultCount: number }> {
+  return page.evaluate(
+    async ({ fixtureRoot, languageOperation, text }) => {
+      const started = performance.now();
+      const response = await fetch("/api/editor/language", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: JSON.stringify({
+          operation: languageOperation,
+          root: fixtureRoot,
+          document: {
+            path: "packages/keiko-cli/src/run.ts",
+            languageId: "typescript",
+            text,
+          },
+          position: { line: 2, character: 26 },
+        }),
+      });
+      const durationMs = Math.round(performance.now() - started);
+      if (!response.ok) {
+        throw new Error(`language ${languageOperation} failed with ${String(response.status)}`);
+      }
+      const envelope = (await response.json()) as {
+        readonly result?: { readonly locations?: readonly unknown[] };
+      };
+      return { durationMs, resultCount: envelope.result?.locations?.length ?? 0 };
+    },
+    { fixtureRoot: root, languageOperation: operation, text: RUN_TEXT },
+  );
+}
+
+async function measureNavigationRoundTrips(
+  page: Page,
+  root: string,
+  runs: number,
+): Promise<NavigationMetrics> {
+  const definitionSamples: number[] = [];
+  const definitionCounts: number[] = [];
+  const referenceSamples: number[] = [];
+  const referenceCounts: number[] = [];
+  for (let index = 0; index < runs; index += 1) {
+    const definition = await measureLanguageOperation(page, root, "definition");
+    definitionSamples.push(definition.durationMs);
+    definitionCounts.push(definition.resultCount);
+    const references = await measureLanguageOperation(page, root, "references");
+    referenceSamples.push(references.durationMs);
+    referenceCounts.push(references.resultCount);
+  }
+  return {
+    definition: { samples: definitionSamples, resultCounts: definitionCounts },
+    references: { samples: referenceSamples, resultCounts: referenceCounts },
+  };
+}
+
 async function readTypingMetrics(page: Page): Promise<TypingMetrics | undefined> {
   return page.evaluate(() => (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf);
 }
@@ -272,6 +563,35 @@ async function readActiveElement(page: Page): Promise<string> {
     const el = document.activeElement;
     return el ? `${el.tagName.toLowerCase()}.${el.className}`.slice(0, 80) : "none";
   });
+}
+
+function completeTypingMetrics(input: {
+  readonly metrics: TypingMetrics | undefined;
+  readonly observerInstalled: boolean;
+  readonly landed: boolean;
+  readonly activeElement: string;
+}): TypingMetrics {
+  const metrics = input.metrics;
+  if (metrics === undefined) {
+    return {
+      longTasks: [],
+      events: [],
+      interactionDurations: [],
+      keystrokeMainThreadWork: [],
+      observerInstalled: input.observerInstalled,
+      landed: input.landed,
+      activeElement: input.activeElement,
+    };
+  }
+  return {
+    longTasks: metrics.longTasks,
+    events: metrics.events,
+    interactionDurations: metrics.interactionDurations,
+    keystrokeMainThreadWork: metrics.keystrokeMainThreadWork,
+    observerInstalled: metrics.observerInstalled ?? input.observerInstalled,
+    landed: input.landed,
+    activeElement: input.activeElement,
+  };
 }
 
 /**
@@ -292,14 +612,7 @@ async function measureTyping(
   }
   const metrics = await readTypingMetrics(page);
   const activeElement = await readActiveElement(page);
-  return {
-    longTasks: metrics?.longTasks ?? [],
-    events: metrics?.events ?? [],
-    interactionDurations: metrics?.interactionDurations ?? [],
-    observerInstalled: metrics?.observerInstalled ?? observerInstalled,
-    landed,
-    activeElement,
-  };
+  return completeTypingMetrics({ metrics, observerInstalled, landed, activeElement });
 }
 
 /** B11: per-cycle baseline (no editor) -> peak (editor open) -> residual (editor closed) heap. */
@@ -485,9 +798,13 @@ function buildWorkerLoadCapture(workerRequests: readonly WorkerRequest[]): Recor
 }
 
 function buildB5Evidence(typing: TypingMetrics): Record<string, unknown> {
+  const samples = typing.keystrokeMainThreadWork;
   return {
     budgetMax: 50,
-    captured: typing.landed === true && typing.observerInstalled === true,
+    captured: typing.landed === true && typing.observerInstalled === true && samples.length > 0,
+    samples,
+    p50: percentile(samples, 50),
+    p95: percentile(samples, 95),
     activeElement: typing.activeElement ?? "unknown",
     longTaskCount: typing.longTasks.length,
     maxLongTaskMs: Math.round(Math.max(0, ...typing.longTasks)),
@@ -508,11 +825,24 @@ function buildB6Evidence(typing: TypingMetrics): Record<string, unknown> {
   };
 }
 
+function buildNavigationOperationEvidence(
+  metrics: NavigationOperationMetrics,
+): Record<string, unknown> {
+  return {
+    samples: metrics.samples,
+    resultCounts: metrics.resultCounts,
+    p50: percentile(metrics.samples, 50),
+    p95: percentile(metrics.samples, 95),
+  };
+}
+
 function buildEvidence(
   coldStartsMs: number[],
   typing: TypingMetrics,
   memory: MemoryMetrics,
+  navigation: NavigationMetrics,
   workerRequests: readonly WorkerRequest[],
+  workspaceCapDegradation: WorkspaceCapDegradationEvidence,
 ): Record<string, unknown> {
   return {
     measuredAtIso: new Date().toISOString(),
@@ -528,8 +858,13 @@ function buildEvidence(
     },
     b5KeystrokeMs: buildB5Evidence(typing),
     b6InteractionMs: buildB6Evidence(typing),
+    navigationRoundTripMs: {
+      definition: buildNavigationOperationEvidence(navigation.definition),
+      references: buildNavigationOperationEvidence(navigation.references),
+    },
     b11Memory: memory,
     workerLoadCapture: buildWorkerLoadCapture(workerRequests),
+    workspaceReadCapDegradation: workspaceCapDegradation,
   };
 }
 
@@ -543,12 +878,25 @@ async function writeEvidence(
   coldStartsMs: number[],
   typing: TypingMetrics,
   memory: MemoryMetrics,
+  navigation: NavigationMetrics,
   capture: WorkerCapture,
+  workspaceCapDegradation: WorkspaceCapDegradationEvidence,
 ): Promise<void> {
   await capture.settleWorkerCaptures();
   writeFileSync(
     EVIDENCE_PATH,
-    `${JSON.stringify(buildEvidence(coldStartsMs, typing, memory, capture.workerRequests), null, 2)}\n`,
+    `${JSON.stringify(
+      buildEvidence(
+        coldStartsMs,
+        typing,
+        memory,
+        navigation,
+        capture.workerRequests,
+        workspaceCapDegradation,
+      ),
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
 }
@@ -571,31 +919,57 @@ interface EvidenceMeasurements {
   readonly coldStartsMs: number[];
   readonly typing: TypingMetrics;
   readonly memory: MemoryMetrics;
+  readonly navigation: NavigationMetrics;
 }
 
 async function collectEvidenceMeasurements(
   page: Page,
   capture: WorkerCapture,
+  projectPath: string,
 ): Promise<EvidenceMeasurements> {
   const measuredRuns = resolveMeasuredRuns();
+  await page.goto("/");
+  const navigation = await measureNavigationRoundTrips(page, projectPath, measuredRuns);
   const coldStartsMs = await measureColdStarts(page, 1, measuredRuns);
   let typing: TypingMetrics = {
     longTasks: [],
     events: [],
     interactionDurations: [],
+    keystrokeMainThreadWork: [],
     landed: false,
   };
   let memory = await measureMemoryBestEffort(page);
-  await writeEvidence(coldStartsMs, typing, memory, capture);
+  await writeEvidence(
+    coldStartsMs,
+    typing,
+    memory,
+    navigation,
+    capture,
+    UNMEASURED_WORKSPACE_CAP_DEGRADATION,
+  );
 
   await page.goto("/");
   const editorWindow = await openEditorCard(page);
   typing = await measureTyping(page, editorWindow);
-  await writeEvidence(coldStartsMs, typing, memory, capture);
+  await writeEvidence(
+    coldStartsMs,
+    typing,
+    memory,
+    navigation,
+    capture,
+    UNMEASURED_WORKSPACE_CAP_DEGRADATION,
+  );
 
   memory = await measureMemoryBestEffort(page);
-  await writeEvidence(coldStartsMs, typing, memory, capture);
-  return { coldStartsMs, typing, memory };
+  await writeEvidence(
+    coldStartsMs,
+    typing,
+    memory,
+    navigation,
+    capture,
+    UNMEASURED_WORKSPACE_CAP_DEGRADATION,
+  );
+  return { coldStartsMs, typing, memory, navigation };
 }
 
 // Documented B11 ceilings (docs/keiko-editor/1207-performance-budgets.md): peak heap growth across
@@ -607,8 +981,12 @@ const B11_RESIDUAL_GROWTH_BUDGET_BYTES = 16 * 1024 * 1024;
 function assertEvidenceBudgets(
   evidence: {
     b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
-    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
+    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number; p95: number };
     b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+    navigationRoundTripMs: {
+      definition: { p50: number; p95: number; resultCounts: readonly number[] };
+      references: { p50: number; p95: number; resultCounts: readonly number[] };
+    };
     b11Memory: {
       supported: boolean;
       baselineBytes: number | null;
@@ -620,6 +998,7 @@ function assertEvidenceBudgets(
       editorWorkerLoaded: boolean;
       languageWorkerLoaded: boolean;
     };
+    workspaceReadCapDegradation: { attempted: boolean; ok: boolean; truncated: boolean };
   },
   measuredRuns: number,
   workerRequests: readonly WorkerRequest[],
@@ -627,17 +1006,41 @@ function assertEvidenceBudgets(
   expect(evidence.b4ColdStartMs.p50).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP50);
   expect(evidence.b4ColdStartMs.p95).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP95);
   expect(evidence.b5KeystrokeMs.captured).toBe(true);
+  expect(evidence.b5KeystrokeMs.p95).toBeLessThan(evidence.b5KeystrokeMs.budgetMax);
   expect(evidence.b5KeystrokeMs.maxLongTaskMs).toBeLessThanOrEqual(
     evidence.b5KeystrokeMs.budgetMax,
   );
   expect(evidence.b6InteractionMs.captured).toBe(true);
   expect(evidence.b6InteractionMs.p75).toBeLessThanOrEqual(evidence.b6InteractionMs.budgetP75);
+  expect(evidence.navigationRoundTripMs.definition.p50).toBeGreaterThanOrEqual(0);
+  expect(evidence.navigationRoundTripMs.definition.p95).toBeGreaterThanOrEqual(
+    evidence.navigationRoundTripMs.definition.p50,
+  );
+  expect(evidence.navigationRoundTripMs.definition.resultCounts.every((count) => count > 0)).toBe(
+    true,
+  );
+  expect(evidence.navigationRoundTripMs.references.p50).toBeGreaterThanOrEqual(0);
+  expect(evidence.navigationRoundTripMs.references.p95).toBeGreaterThanOrEqual(
+    evidence.navigationRoundTripMs.references.p50,
+  );
+  expect(evidence.navigationRoundTripMs.references.resultCounts.every((count) => count > 0)).toBe(
+    true,
+  );
   expect(evidence.workerLoadCapture.totalWorkerRequests).toBeGreaterThan(0);
   expect(evidence.workerLoadCapture.editorWorkerLoaded).toBe(true);
   expect(evidence.workerLoadCapture.languageWorkerLoaded).toBe(false);
   expect(workerRequests.some(isTsWorkerRequest)).toBe(false);
   expect(workerRequests.some(isLanguageWorkerRequest)).toBe(false);
   expect(evidence.b4ColdStartMs.p50 > 0).toBe(true);
+  // Adversarial near-cap workspace (audit defect #2): the probe must have actually run and returned a
+  // healthy response, and the workspace-read budget must have genuinely tripped — proving graceful
+  // degradation (truncation), not a crash, a hang, or a fixture that never approached the cap.
+  expect(evidence.workspaceReadCapDegradation.attempted).toBe(true);
+  expect(evidence.workspaceReadCapDegradation.ok).toBe(true);
+  expect(
+    evidence.workspaceReadCapDegradation.truncated,
+    "adversarial near-cap workspace must trigger graceful workspace-read-budget truncation",
+  ).toBe(true);
   expect(measuredRuns).toBe(resolveMeasuredRuns());
   // B11 memory: assert the recorded ceilings so the budget is actionable rather than merely recorded
   // (GEN-PERF-BENCHMARK-003). When the browser exposes a heap probe, peak/residual growth over the
@@ -660,6 +1063,28 @@ function assertEvidenceBudgets(
   }
 }
 
+interface ReleaseEvidence {
+  b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
+  b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number; p95: number };
+  b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+  navigationRoundTripMs: {
+    definition: { p50: number; p95: number; resultCounts: readonly number[] };
+    references: { p50: number; p95: number; resultCounts: readonly number[] };
+  };
+  b11Memory: {
+    supported: boolean;
+    baselineBytes: number | null;
+    peakBytes: number | null;
+    residualBytes: number | null;
+  };
+  workerLoadCapture: {
+    totalWorkerRequests: number;
+    editorWorkerLoaded: boolean;
+    languageWorkerLoaded: boolean;
+  };
+  workspaceReadCapDegradation: { attempted: boolean; ok: boolean; truncated: boolean };
+}
+
 test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evidence", async ({
   page,
 }, testInfo) => {
@@ -669,34 +1094,29 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
   const projectPath = createProjectFixture();
   await seedFilesWindow(page, projectPath);
   const capture = installWorkerCapture(page);
-  const measurements = await collectEvidenceMeasurements(page, capture);
-  const { coldStartsMs, typing, memory } = measurements;
+  const measurements = await collectEvidenceMeasurements(page, capture, projectPath);
+  const { coldStartsMs, typing, memory, navigation } = measurements;
+
+  // Adversarial near-cap workspace probe (audit defect #2): a single, cheap measurement (no repeated
+  // warmups/runs) against a workspace whose total source bytes exceed maxWorkspaceReadBytes, proving
+  // graceful degradation without materially extending this release-evidence smoke's runtime.
+  const adversarialRoot = createAdversarialWorkspaceFixture();
+  const workspaceCapDegradation = await measureWorkspaceCapDegradation(page, adversarialRoot);
+  await writeEvidence(coldStartsMs, typing, memory, navigation, capture, workspaceCapDegradation);
+
+  const evidence = buildEvidence(
+    coldStartsMs,
+    typing,
+    memory,
+    navigation,
+    capture.workerRequests,
+    workspaceCapDegradation,
+  ) as unknown as ReleaseEvidence;
 
   await testInfo.attach("editor-perf-evidence", {
-    body: JSON.stringify(
-      buildEvidence(coldStartsMs, typing, memory, capture.workerRequests),
-      null,
-      2,
-    ),
+    body: JSON.stringify(evidence, null, 2),
     contentType: "application/json",
   });
-
-  const evidence = buildEvidence(coldStartsMs, typing, memory, capture.workerRequests) as {
-    b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
-    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
-    b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
-    b11Memory: {
-      supported: boolean;
-      baselineBytes: number | null;
-      peakBytes: number | null;
-      residualBytes: number | null;
-    };
-    workerLoadCapture: {
-      totalWorkerRequests: number;
-      editorWorkerLoaded: boolean;
-      languageWorkerLoaded: boolean;
-    };
-  };
 
   assertEvidenceBudgets(evidence, coldStartsMs.length, capture.workerRequests);
 });

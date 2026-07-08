@@ -17,6 +17,7 @@ import { registerKeikoEditorTheme, resolveEditorThemeTokensFromDom } from "../in
 import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.js";
 import { buildSaveActionDescriptor } from "./keybindings.js";
 import { buildGenerateTestsActionDescriptor } from "./command-actions.js";
+import { buildRenameSymbolActionDescriptor } from "./rename-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
 import {
   COMPLETION_ELIGIBLE_LANGUAGES,
@@ -57,12 +58,40 @@ import {
   registerKeikoFormattingProvider,
   type MonacoDocumentFormattingRegistrar,
 } from "./formatting-bridge.js";
+import {
+  DEFINITION_ELIGIBLE_LANGUAGES,
+  registerKeikoDefinitionProvider,
+  type MonacoDefinitionRegistrar,
+  type MonacoUriForPath,
+  type MonacoUriLike,
+} from "./definition-bridge.js";
+import {
+  REFERENCES_ELIGIBLE_LANGUAGES,
+  registerKeikoReferencesProvider,
+  type MonacoReferenceRegistrar,
+} from "./references-bridge.js";
+import {
+  CODE_ACTION_ELIGIBLE_LANGUAGES,
+  registerKeikoCodeActionProvider,
+  type MonacoCodeActionRegistrar,
+} from "./code-action-bridge.js";
+import {
+  DEFAULT_SIGNATURE_HELP_RETRIGGER_CHARACTERS,
+  DEFAULT_SIGNATURE_HELP_TRIGGER_CHARACTERS,
+  SIGNATURE_HELP_ELIGIBLE_LANGUAGES,
+  registerKeikoSignatureHelpProvider,
+  type MonacoSignatureHelpRegistrar,
+} from "./signature-help-bridge.js";
 import type {
+  EditorCodeActionsResolver,
   EditorCompletionResolver,
+  EditorDefinitionResolver,
   EditorDiagnosticsResolver,
   EditorFormattingResolver,
   EditorHoverResolver,
   EditorInlineCompletionResolver,
+  EditorReferencesResolver,
+  EditorSignatureHelpResolver,
   EditorSymbolsResolver,
 } from "../types.js";
 import {
@@ -73,10 +102,11 @@ import {
 /** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
 export interface MountMonaco {
   readonly editor: MonacoThemeRegistrar;
+  readonly Uri?: { parse(value: string): MonacoUriLike };
   // `Alt` is needed for the #1205 Generate Tests chord (`Cmd/Ctrl+Alt+T`); `CtrlCmd` for save.
   readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
-  // `KeyT` backs the Generate Tests chord; `KeyS` backs save.
-  readonly KeyCode: { readonly KeyS: number; readonly KeyT: number };
+  // `KeyT` backs Generate Tests, `F2` backs Rename Symbol, and `KeyS` backs save.
+  readonly KeyCode: { readonly KeyS: number; readonly KeyT: number; readonly F2: number };
   // The `languages` registry is present on the live `monaco` namespace; it is optional here so the
   // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
   // when it (or the completion args) is absent.
@@ -137,6 +167,8 @@ export interface WireEditorDiagnostics {
 export interface WireEditorCommands {
   /** Run the governed test-generation flow (#1202); bound to `Cmd/Ctrl+Alt+T`. */
   readonly generateTests?: (() => void) | undefined;
+  /** Run the governed rename-symbol flow (#2105); bound to F2. */
+  readonly renameSymbol?: (() => void) | undefined;
 }
 
 /** Host-injected hover wiring (Issue #1201); absent when the host supplies no resolver. */
@@ -166,6 +198,46 @@ export interface WireEditorFormatting {
   readonly languages?: readonly EditorLanguageId[] | undefined;
 }
 
+/** Host-injected go-to-definition wiring (Epic #2089); absent when unsupported. */
+export interface WireEditorDefinition {
+  readonly resolve: EditorDefinitionResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly uriForPath?: MonacoUriForPath | undefined;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+/** Host-injected find-references wiring (Epic #2089); absent when unsupported. */
+export interface WireEditorReferences {
+  readonly resolve: EditorReferencesResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly uriForPath?: MonacoUriForPath | undefined;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+/** Host-injected code-action wiring (Epic #2089); absent when unsupported. */
+export interface WireEditorCodeActions {
+  readonly resolve: EditorCodeActionsResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+/** Host-injected signature-help wiring (Epic #2089); absent when unsupported. */
+export interface WireEditorSignatureHelp {
+  readonly resolve: EditorSignatureHelpResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+  readonly triggerCharacters?: readonly string[] | undefined;
+  readonly retriggerCharacters?: readonly string[] | undefined;
+}
+
 /** Minimal editor surface the mount wiring needs (the live `onMount` first arg). */
 export interface MountEditor {
   addAction(descriptor: monaco.editor.IActionDescriptor): monaco.IDisposable;
@@ -186,6 +258,10 @@ export interface MountEditor {
   getContainerDomNode(): HTMLElement;
   saveViewState(): unknown;
   restoreViewState(state: unknown): void;
+}
+
+interface DisposableLike {
+  dispose(): void;
 }
 
 export interface WireEditorOnMountArgs {
@@ -215,6 +291,14 @@ export interface WireEditorOnMountArgs {
   readonly symbols?: WireEditorSymbols | undefined;
   /** Document-formatting wiring (Issue #1201); absent when the host supplies no formatting resolver. */
   readonly formatting?: WireEditorFormatting | undefined;
+  /** Go-to-definition wiring (Epic #2089); absent when the host supplies no resolver. */
+  readonly definition?: WireEditorDefinition | undefined;
+  /** Find-references wiring (Epic #2089); absent when the host supplies no resolver. */
+  readonly references?: WireEditorReferences | undefined;
+  /** Code-action wiring (Epic #2089); absent when the host supplies no resolver. */
+  readonly codeActions?: WireEditorCodeActions | undefined;
+  /** Signature-help wiring (Epic #2089); absent when the host supplies no resolver. */
+  readonly signatureHelp?: WireEditorSignatureHelp | undefined;
   /** Command-action wiring (Issue #1205); registers host commands into the Monaco command palette. */
   readonly commands?: WireEditorCommands | undefined;
 }
@@ -409,6 +493,104 @@ function installFormattingProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   });
 }
 
+function normalizeUriForPath(
+  uriParser: MountMonaco["Uri"] | undefined,
+  uriForPath: MonacoUriForPath | undefined,
+): MonacoUriForPath | undefined {
+  if (uriForPath === undefined || uriParser === undefined) {
+    return uriForPath;
+  }
+  return (path, currentModelUri): MonacoUriLike =>
+    uriParser.parse(uriForPath(path, currentModelUri).toString());
+}
+
+// Registers the go-to-definition provider. F12 remains Monaco-native; Keiko adds no keybinding.
+function installDefinitionProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const definition = args.definition;
+  const languages = args.monaco.languages;
+  if (definition === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoDefinitionRegistrar;
+  if (typeof registrar.registerDefinitionProvider !== "function") {
+    return null;
+  }
+  return registerKeikoDefinitionProvider({
+    languages: registrar,
+    resolve: definition.resolve,
+    isCurrentDocument: definition.isCurrentDocument,
+    documentLanguages: definition.languages ?? DEFINITION_ELIGIBLE_LANGUAGES,
+    streamId: definition.streamId,
+    newRequestId: definition.newRequestId,
+    uriForPath: normalizeUriForPath(args.monaco.Uri, definition.uriForPath),
+  });
+}
+
+// Registers the find-references provider. Shift+F12 remains Monaco-native; Keiko adds no keybinding.
+function installReferencesProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const references = args.references;
+  const languages = args.monaco.languages;
+  if (references === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoReferenceRegistrar;
+  if (typeof registrar.registerReferenceProvider !== "function") {
+    return null;
+  }
+  return registerKeikoReferencesProvider({
+    languages: registrar,
+    resolve: references.resolve,
+    isCurrentDocument: references.isCurrentDocument,
+    documentLanguages: references.languages ?? REFERENCES_ELIGIBLE_LANGUAGES,
+    streamId: references.streamId,
+    newRequestId: references.newRequestId,
+    uriForPath: normalizeUriForPath(args.monaco.Uri, references.uriForPath),
+  });
+}
+
+function installCodeActionProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const codeActions = args.codeActions;
+  const languages = args.monaco.languages;
+  if (codeActions === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoCodeActionRegistrar;
+  if (typeof registrar.registerCodeActionProvider !== "function") {
+    return null;
+  }
+  return registerKeikoCodeActionProvider({
+    languages: registrar,
+    resolve: codeActions.resolve,
+    isCurrentDocument: codeActions.isCurrentDocument,
+    documentLanguages: codeActions.languages ?? CODE_ACTION_ELIGIBLE_LANGUAGES,
+    streamId: codeActions.streamId,
+    newRequestId: codeActions.newRequestId,
+  });
+}
+
+function installSignatureHelpProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const signatureHelp = args.signatureHelp;
+  const languages = args.monaco.languages;
+  if (signatureHelp === undefined || languages === undefined) {
+    return null;
+  }
+  const registrar = languages as unknown as MonacoSignatureHelpRegistrar;
+  if (typeof registrar.registerSignatureHelpProvider !== "function") {
+    return null;
+  }
+  return registerKeikoSignatureHelpProvider({
+    languages: registrar,
+    resolve: signatureHelp.resolve,
+    isCurrentDocument: signatureHelp.isCurrentDocument,
+    documentLanguages: signatureHelp.languages ?? SIGNATURE_HELP_ELIGIBLE_LANGUAGES,
+    streamId: signatureHelp.streamId,
+    newRequestId: signatureHelp.newRequestId,
+    triggerCharacters: signatureHelp.triggerCharacters ?? DEFAULT_SIGNATURE_HELP_TRIGGER_CHARACTERS,
+    retriggerCharacters:
+      signatureHelp.retriggerCharacters ?? DEFAULT_SIGNATURE_HELP_RETRIGGER_CHARACTERS,
+  });
+}
+
 // Registers the diagnostics marker lifecycle when the host supplies a resolver and the live editor +
 // marker surface are available (Issue #1201). Unlike the providers above, diagnostics drive markers
 // from model-change events, so the bridge binds the live editor (getModel/onDidChangeModel) and
@@ -494,7 +676,27 @@ function installCommandActions(args: WireEditorOnMountArgs): readonly monaco.IDi
       ),
     );
   }
+  if (commands.renameSymbol !== undefined) {
+    disposables.push(
+      args.editor.addAction(
+        buildRenameSymbolActionDescriptor({
+          keys: { KeyCode: args.monaco.KeyCode },
+          run: commands.renameSymbol,
+        }),
+      ),
+    );
+  }
   return disposables;
+}
+
+function isDisposable(disposable: DisposableLike | null): disposable is DisposableLike {
+  return disposable !== null;
+}
+
+function disposeAll(disposables: readonly DisposableLike[]): void {
+  for (const disposable of disposables) {
+    disposable.dispose();
+  }
 }
 
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
@@ -510,23 +712,31 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const hoverSub = installHoverProvider(args);
   const symbolsSub = installDocumentSymbolProvider(args);
   const formattingSub = installFormattingProvider(args);
+  const definitionSub = installDefinitionProvider(args);
+  const referencesSub = installReferencesProvider(args);
+  const codeActionsSub = installCodeActionProvider(args);
+  const signatureHelpSub = installSignatureHelpProvider(args);
   const commandActions = installCommandActions(args);
+  const disposables = [
+    action,
+    cursorSub,
+    selectionSub,
+    completionSub,
+    inlineCompletionSub,
+    diagnosticsSub,
+    hoverSub,
+    symbolsSub,
+    formattingSub,
+    definitionSub,
+    referencesSub,
+    codeActionsSub,
+    signatureHelpSub,
+  ].filter(isDisposable);
   if (args.autoFocus) {
     args.editor.focus();
   }
   return () => {
-    action.dispose();
     removeBackstop();
-    cursorSub?.dispose();
-    selectionSub?.dispose();
-    completionSub?.dispose();
-    inlineCompletionSub?.dispose();
-    diagnosticsSub?.dispose();
-    hoverSub?.dispose();
-    symbolsSub?.dispose();
-    formattingSub?.dispose();
-    for (const disposable of commandActions) {
-      disposable.dispose();
-    }
+    disposeAll([...disposables, ...commandActions]);
   };
 }

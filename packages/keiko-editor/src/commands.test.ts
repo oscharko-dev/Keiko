@@ -19,6 +19,7 @@ const ALL_CAPABILITIES: readonly EditorHostCapability[] = [
   "applyPatchReview",
   "formatDocument",
   "runVerification",
+  "renameSymbol",
 ];
 
 const EXPECTED_IDS: readonly EditorCommandId[] = [
@@ -36,6 +37,7 @@ const EXPECTED_IDS: readonly EditorCommandId[] = [
   "editor.format",
   "editor.find",
   "editor.requestContext",
+  "editor.renameSymbol",
 ];
 
 const baseContext = (overrides: Partial<EditorCommandContext> = {}): EditorCommandContext => ({
@@ -109,6 +111,7 @@ describe("isCommandAvailable state gates", () => {
     expect(isCommandAvailable(command("editor.triggerInlineCompletion"), ctx)).toBe(false);
     expect(isCommandAvailable(command("editor.acceptInlineCompletion"), ctx)).toBe(false);
     expect(isCommandAvailable(command("editor.applyPatch"), ctx)).toBe(false);
+    expect(isCommandAvailable(command("editor.renameSymbol"), ctx)).toBe(false);
   });
 
   it("read-only still allows reject, preview, generateTests, and requestContext", () => {

@@ -20,19 +20,27 @@ import {
 } from "./on-mount.js";
 import type {
   WireEditorCommands,
+  WireEditorCodeActions,
   WireEditorCompletion,
+  WireEditorDefinition,
   WireEditorDiagnostics,
   WireEditorFormatting,
   WireEditorHover,
   WireEditorInlineCompletion,
+  WireEditorReferences,
+  WireEditorSignatureHelp,
   WireEditorSymbols,
 } from "./on-mount.js";
 import type {
+  EditorCodeActionsResponse,
   EditorCompletionResponse,
+  EditorDefinitionResponse,
   EditorDiagnosticsResponse,
   EditorFormattingResponse,
   EditorHoverResponse,
   EditorInlineCompletionResponse,
+  EditorReferencesResponse,
+  EditorSignatureHelpResponse,
   EditorSymbolsResponse,
 } from "../index.js";
 import {
@@ -311,13 +319,27 @@ function buildDiagnosticsWiring(
 function buildCommandsWiring(
   latestProps: MutableRefObject<KeikoCodeEditorProps>,
 ): WireEditorCommands | undefined {
-  if (latestProps.current.onGenerateTests === undefined) {
+  if (
+    latestProps.current.onGenerateTests === undefined &&
+    latestProps.current.onRenameSymbol === undefined
+  ) {
     return undefined;
   }
   return {
-    generateTests: (): void => {
-      latestProps.current.onGenerateTests?.();
-    },
+    ...(latestProps.current.onGenerateTests === undefined
+      ? {}
+      : {
+          generateTests: (): void => {
+            latestProps.current.onGenerateTests?.();
+          },
+        }),
+    ...(latestProps.current.onRenameSymbol === undefined
+      ? {}
+      : {
+          renameSymbol: (): void => {
+            latestProps.current.onRenameSymbol?.();
+          },
+        }),
   };
 }
 
@@ -393,6 +415,88 @@ function buildFormattingWiring(
   };
 }
 
+function buildDefinitionWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorDefinition | undefined {
+  if (latestProps.current.provideDefinition === undefined) {
+    return undefined;
+  }
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorDefinitionResponse> => {
+      const live = latestProps.current.provideDefinition;
+      return live === undefined
+        ? Promise.reject(new Error("definition resolver unavailable"))
+        : live(query, signal);
+    },
+    uriForPath: latestProps.current.uriForPath,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildReferencesWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorReferences | undefined {
+  if (latestProps.current.provideReferences === undefined) {
+    return undefined;
+  }
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorReferencesResponse> => {
+      const live = latestProps.current.provideReferences;
+      return live === undefined
+        ? Promise.reject(new Error("references resolver unavailable"))
+        : live(query, signal);
+    },
+    uriForPath: latestProps.current.uriForPath,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildCodeActionsWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorCodeActions | undefined {
+  if (latestProps.current.provideCodeActions === undefined) {
+    return undefined;
+  }
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorCodeActionsResponse> => {
+      const live = latestProps.current.provideCodeActions;
+      return live === undefined
+        ? Promise.reject(new Error("code-action resolver unavailable"))
+        : live(query, signal);
+    },
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildSignatureHelpWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorSignatureHelp | undefined {
+  if (latestProps.current.provideSignatureHelp === undefined) {
+    return undefined;
+  }
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorSignatureHelpResponse> => {
+      const live = latestProps.current.provideSignatureHelp;
+      return live === undefined
+        ? Promise.reject(new Error("signature-help resolver unavailable"))
+        : live(query, signal);
+    },
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
 // Stable per-editor-instance stream ids and the content-free telemetry accumulator. The completion
 // and inline-completion streams are distinct so inline supersession never aliases the completion
 // stream; the telemetry observer reads the live prop so a later `onInlineCompletionTelemetry`
@@ -460,6 +564,10 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
     hover: buildHoverWiring(args.latestProps, `${args.streamId}:hover`),
     symbols: buildSymbolsWiring(args.latestProps, `${args.streamId}:symbols`),
     formatting: buildFormattingWiring(args.latestProps, `${args.streamId}:formatting`),
+    definition: buildDefinitionWiring(args.latestProps, `${args.streamId}:definition`),
+    references: buildReferencesWiring(args.latestProps, `${args.streamId}:references`),
+    codeActions: buildCodeActionsWiring(args.latestProps, `${args.streamId}:codeActions`),
+    signatureHelp: buildSignatureHelpWiring(args.latestProps, `${args.streamId}:signatureHelp`),
     commands: buildCommandsWiring(args.latestProps),
   });
   applyRevealRequest(args.refs, args.latestProps.current.revealRequest);

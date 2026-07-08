@@ -109,10 +109,14 @@ function outcomeToResult(outcome: LanguageServiceOutcome, deps: UiHandlerDeps): 
     return { status: STATUS_BY_CODE[outcome.code], body: errorBody(outcome.code, outcome.message) };
   }
   const body = successBody(outcome);
-  // Formatting edits are applied to the user's buffer, not displayed. Redacting the success envelope
-  // would mutate secret-shaped string literals in valid format edits; the formatter result was
-  // already capped by `sanitizeFormatting`, and the route never logs it.
-  return { status: 200, body: outcome.kind === "formatting" ? body : deps.redactor(body) };
+  // Edit-bearing results are applied to buffers or reviewed byte-for-byte. Redacting the success
+  // envelope would mutate secret-shaped string literals in valid edits; each result was already
+  // capped and display strings were sanitized before this boundary, and the route never logs it.
+  const editBearing =
+    outcome.kind === "formatting" ||
+    outcome.kind === "renameApply" ||
+    outcome.kind === "codeActions";
+  return { status: 200, body: editBearing ? body : deps.redactor(body) };
 }
 
 export async function handleEditorLanguage(

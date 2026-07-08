@@ -15,8 +15,10 @@ import {
   KeikoCodeEditor,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCodeActionsResolver,
   type EditorCompletionResolver,
   type EditorContentDelta,
+  type EditorDefinitionResolver,
   type EditorDiagnosticsResolver,
   type EditorDiagnosticsSummary,
   type EditorFileModel,
@@ -25,8 +27,10 @@ import {
   type EditorInlineCompletionResolver,
   type EditorPosition,
   type EditorRange,
+  type EditorReferencesResolver,
   type EditorSaveRequest,
   type EditorSaveStatus,
+  type EditorSignatureHelpResolver,
   type EditorSymbolsResolver,
   type EditorThemeVariant,
   type InlineCompletionTelemetrySnapshot,
@@ -86,11 +90,18 @@ export interface EditorSurfaceProps {
   readonly provideHover?: EditorHoverResolver | undefined;
   readonly provideSymbols?: EditorSymbolsResolver | undefined;
   readonly provideFormatting?: EditorFormattingResolver | undefined;
+  readonly provideDefinition?: EditorDefinitionResolver | undefined;
+  readonly uriForPath?: KeikoCodeEditorProps["uriForPath"] | undefined;
+  readonly provideReferences?: EditorReferencesResolver | undefined;
+  readonly provideCodeActions?: EditorCodeActionsResolver | undefined;
+  readonly provideSignatureHelp?: EditorSignatureHelpResolver | undefined;
   readonly formatRequestNonce?: number | undefined;
   /** Content-free diagnostic-count observer for the host status bar (Issue #1205). */
   readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
   /** Host handler for the palette/keybinding "Generate Tests" command (Issue #1205). */
   readonly onGenerateTests?: (() => void) | undefined;
+  /** Host handler for the F2 Rename Symbol command (Epic #2089, Issue #2105). */
+  readonly onRenameSymbol?: (() => void) | undefined;
   /**
    * Whether the editor renders its own save/truncation footer (Issue #1205). The card sets this to
    * `false` because it renders the unified {@link EditorStatusBar} as the single status surface.
@@ -163,9 +174,15 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
       provideHover={props.provideHover}
       provideSymbols={props.provideSymbols}
       provideFormatting={props.provideFormatting}
+      provideDefinition={props.provideDefinition}
+      uriForPath={props.uriForPath}
+      provideReferences={props.provideReferences}
+      provideCodeActions={props.provideCodeActions}
+      provideSignatureHelp={props.provideSignatureHelp}
       formatRequestNonce={props.formatRequestNonce}
       onDiagnosticsSummary={props.onDiagnosticsSummary}
       onGenerateTests={props.onGenerateTests}
+      onRenameSymbol={props.onRenameSymbol}
       showStatusFooter={props.showStatusFooter}
     />
   );

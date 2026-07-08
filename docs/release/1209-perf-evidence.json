@@ -1,21 +1,85 @@
 {
-  "measuredAtIso": "2026-07-04T05:09:46.978Z",
-  "commit": "6c3d061ebfd937f427c093652124f42bed3e8836",
+  "measuredAtIso": "2026-07-08T12:57:56.575Z",
+  "commit": "3f57e47d34a7dbd72588c2bf7bc839cc495c5142",
   "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
   "b4ColdStartMs": {
     "budgetP50": 1500,
     "budgetP95": 2500,
     "samples": [
-      850,
-      362,
-      340
+      263,
+      242,
+      244
     ],
-    "p50": 362,
-    "p95": 850
+    "p50": 244,
+    "p95": 263
   },
   "b5KeystrokeMs": {
     "budgetMax": 50,
     "captured": true,
+    "samples": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "p50": 0,
+    "p95": 0,
     "activeElement": "div.native-edit-context",
     "longTaskCount": 0,
     "maxLongTaskMs": 0
@@ -24,10 +88,40 @@
     "budgetP75": 200,
     "captured": true,
     "source": "event-timing",
-    "eventCount": 25,
-    "interactionCount": 25,
-    "p75": 16,
-    "max": 16
+    "eventCount": 27,
+    "interactionCount": 27,
+    "p75": 24,
+    "max": 24
+  },
+  "navigationRoundTripMs": {
+    "definition": {
+      "samples": [
+        178,
+        13,
+        10
+      ],
+      "resultCounts": [
+        1,
+        1,
+        1
+      ],
+      "p50": 13,
+      "p95": 178
+    },
+    "references": {
+      "samples": [
+        20,
+        11,
+        10
+      ],
+      "resultCounts": [
+        5,
+        5,
+        5
+      ],
+      "p50": 11,
+      "p95": 20
+    }
   },
   "b11Memory": {
     "supported": true,

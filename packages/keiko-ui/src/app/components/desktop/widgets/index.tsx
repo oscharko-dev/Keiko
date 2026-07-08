@@ -529,6 +529,7 @@ registerWindowRender("editor", (cfg, ctx) => {
           layoutJson?: string | undefined;
         }) => void)
       | undefined;
+    openEditorFile?: typeof ctx.openEditorFile | undefined;
   } = {};
   if (root !== undefined) props.root = root;
   if (file !== undefined) props.file = file;
@@ -545,6 +546,7 @@ registerWindowRender("editor", (cfg, ctx) => {
   props.onWorkspaceChange = (patch) => {
     ctx.updateCfg(patch);
   };
+  props.openEditorFile = ctx.openEditorFile;
   // Issue #446 (AC4 / SC3) — remount on a workspace switch so no Monaco model or open document from
   // the previous workspace root survives into the new one. The #1491 dirty-buffer/hot-exit save fires
   // on unmount before the new tree mounts.

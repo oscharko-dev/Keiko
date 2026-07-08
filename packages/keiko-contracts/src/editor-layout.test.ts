@@ -39,6 +39,7 @@ describe("EditorLayoutStateV2 contracts", () => {
         activePaneId: "pane-1",
         sidebarWidth: 260,
         sidebarCollapsed: false,
+        outlinePanelVisible: true,
       }),
     );
     expect(created.tree).toEqual({ type: "pane", paneId: "pane-1" });
@@ -52,6 +53,7 @@ describe("EditorLayoutStateV2 contracts", () => {
       expect.objectContaining({
         schemaVersion: EDITOR_LAYOUT_SCHEMA_VERSION,
         sidebarWidth: 261,
+        outlinePanelVisible: true,
       }),
     );
   });
@@ -89,6 +91,7 @@ describe("EditorLayoutStateV2 contracts", () => {
     expect(restored.activePaneId).toBe("pane-a");
     expect(restored.sidebarWidth).toBe(440);
     expect(restored.sidebarCollapsed).toBe(true);
+    expect(restored.outlinePanelVisible).toBe(true);
     expect(restored.tree).toEqual({
       type: "split",
       id: "split-1",
@@ -118,11 +121,26 @@ describe("EditorLayoutStateV2 contracts", () => {
     expect(migrated.activePaneId).toBe("pane-1");
     expect(migrated.sidebarWidth).toBe(180);
     expect(migrated.sidebarCollapsed).toBe(true);
+    expect(migrated.outlinePanelVisible).toBe(true);
     expect(migrated.panes["pane-1"]?.activeFile).toBe("src/legacy.ts");
 
     const fallback = layout({ layoutJson: "{not-json" });
     expect(fallback.tree).toEqual({ type: "pane", paneId: "pane-1" });
     expect(fallback.panes["pane-1"]?.openFiles).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it("persists outline panel visibility through the existing layout state", () => {
+    const hidden = editorLayoutReducer(layout(), {
+      type: "set-outline-panel",
+      visible: false,
+    });
+    expect(hidden.outlinePanelVisible).toBe(false);
+    const reloaded = layout({ layoutJson: serializeEditorLayoutStateV2(hidden) });
+    expect(reloaded.outlinePanelVisible).toBe(false);
+    expect(
+      editorLayoutReducer(reloaded, { type: "set-outline-panel", visible: true })
+        .outlinePanelVisible,
+    ).toBe(true);
   });
 
   it("handles pane file actions and no-op pane ids without losing active state", () => {
@@ -162,7 +180,7 @@ describe("EditorLayoutStateV2 contracts", () => {
   });
 
   it("splits, moves, drops, resizes, and collapses recursive panes", () => {
-    const split = editorLayoutReducer(layout(), {
+    const split = editorLayoutReducer(layout({ openFiles: ["src/a.ts", "src/b.ts", "src/c.ts"] }), {
       type: "split-pane",
       paneId: "pane-1",
       direction: "row",
@@ -170,6 +188,8 @@ describe("EditorLayoutStateV2 contracts", () => {
     });
     expect(editorLayoutPaneIds(split)).toEqual(["pane-1", "pane-2"]);
     expect(activeEditorPane(split).id).toBe("pane-2");
+    expect(split.panes["pane-1"]?.openFiles).toEqual(["src/b.ts", "src/c.ts"]);
+    expect(split.panes["pane-2"]?.openFiles).toEqual(["src/a.ts"]);
 
     const moved = editorLayoutReducer(split, {
       type: "move-tab",
@@ -178,9 +198,9 @@ describe("EditorLayoutStateV2 contracts", () => {
       file: "src/b.ts",
       targetIndex: 0,
     });
-    expect(moved.panes["pane-1"]?.openFiles).toEqual(["src/a.ts"]);
+    expect(moved.panes["pane-1"]?.openFiles).toEqual(["src/c.ts"]);
     expect(moved.panes["pane-2"]?.openFiles).toEqual(["src/b.ts", "src/a.ts"]);
-    expect(editorLayoutOpenFiles(moved)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(editorLayoutOpenFiles(moved)).toEqual(["src/c.ts", "src/b.ts", "src/a.ts"]);
 
     const droppedLeft = editorLayoutReducer(moved, {
       type: "drop-tab",
@@ -416,17 +436,32 @@ describe("EditorLayoutStateV2 contracts", () => {
     expect(editorLayoutOpenFiles(folderRemoved)).toEqual(["docs/readme.md"]);
   });
 
+  it("does not split a single-tab pane into a duplicate view", () => {
+    const single = layout({ openFiles: ["src/a.ts"], file: "src/a.ts" });
+    expect(
+      editorLayoutReducer(single, {
+        type: "split-pane",
+        paneId: "pane-1",
+        direction: "row",
+        file: "src/a.ts",
+      }),
+    ).toBe(single);
+  });
+
   it("collapses a pane whose only tab is deleted", () => {
-    const split = editorLayoutReducer(layout({ openFiles: ["src/a.ts"], file: "src/a.ts" }), {
-      type: "split-pane",
-      paneId: "pane-1",
-      direction: "row",
-      file: "src/a.ts",
-    });
+    const split = editorLayoutReducer(
+      layout({ openFiles: ["src/a.ts", "src/b.ts"], file: "src/a.ts" }),
+      {
+        type: "split-pane",
+        paneId: "pane-1",
+        direction: "row",
+        file: "src/a.ts",
+      },
+    );
     expect(editorLayoutPaneIds(split)).toHaveLength(2);
-    // pane-2 holds only src/a.ts; deleting it everywhere also empties pane-1, leaving one pane.
+    // pane-2 holds only src/a.ts; deleting it removes that split and leaves pane-1 intact.
     const removed = editorLayoutReducer(split, { type: "remove-file", file: "src/a.ts" });
     expect(editorLayoutPaneIds(removed)).toHaveLength(1);
-    expect(editorLayoutOpenFiles(removed)).toEqual([]);
+    expect(editorLayoutOpenFiles(removed)).toEqual(["src/b.ts"]);
   });
 });

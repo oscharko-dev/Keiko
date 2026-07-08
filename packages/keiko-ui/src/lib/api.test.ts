@@ -40,10 +40,16 @@ import {
   retryUpdateSession,
   runUpdateRemediationAction,
   startUpdateSession,
+  requestEditorCodeActions,
   requestEditorCompletion,
+  requestEditorDefinition,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
+  requestEditorReferences,
+  requestEditorRenameApply,
+  requestEditorRenamePrepare,
+  requestEditorSignatureHelp,
   requestEditorSymbols,
   saveFilesContent,
   sendDesktopChatStream,
@@ -522,6 +528,206 @@ describe("language-intelligence helpers (Issue #1201)", () => {
           root: "/repo",
           document: { path: "src/a.ts", languageId: "typescript", text: "const x   =   1;\n" },
           options: { tabSize: 2, insertSpaces: true },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorDefinition posts a definition operation with the cursor position", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "definition", result: { locations: [], truncated: false } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorDefinition({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo();\n",
+      position: { line: 0, character: 1 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "definition",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo();\n" },
+          position: { line: 0, character: 1 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorReferences posts a references operation with the cursor position", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "references",
+        result: { locations: [], includesDeclaration: true, truncated: false },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorReferences({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo();\n",
+      position: { line: 0, character: 1 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "references",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo();\n" },
+          position: { line: 0, character: 1 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorCodeActions posts a codeActions operation with range and diagnostics", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "codeActions",
+        result: { actions: [], truncated: false, returnedCount: 0, totalCount: 0 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+
+    await requestEditorCodeActions({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo",
+      range,
+      diagnostics: [{ range, severity: "error", message: "x", source: "typescript" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "codeActions",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo" },
+          range,
+          diagnostics: [{ range, severity: "error", message: "x", source: "typescript" }],
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorSignatureHelp posts a signatureHelp operation with the cursor position", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "signatureHelp",
+        result: {
+          signatures: [],
+          activeSignature: null,
+          activeParameter: null,
+          truncated: false,
+          returnedCount: 0,
+          totalCount: 0,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorSignatureHelp({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo(",
+      position: { line: 0, character: 4 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "signatureHelp",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo(" },
+          position: { line: 0, character: 4 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorRenamePrepare posts a renamePrepare operation", async () => {
+    const range = { start: { line: 0, character: 1 }, end: { line: 0, character: 4 } };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "renamePrepare", result: { range, placeholder: "foo" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorRenamePrepare({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo",
+      position: { line: 0, character: 1 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "renamePrepare",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo" },
+          position: { line: 0, character: 1 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorRenameApply posts a renameApply operation with the new name", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "renameApply",
+        result: {
+          schemaVersion: "1",
+          files: [],
+          truncated: false,
+          filesTruncated: false,
+          returnedFileCount: 0,
+          totalFileCount: 0,
+          returnedEditCount: 0,
+          totalEditCount: 0,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorRenameApply({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo",
+      position: { line: 0, character: 1 },
+      newName: "bar",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "renameApply",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo" },
+          position: { line: 0, character: 1 },
+          newName: "bar",
         }),
       }),
     );
