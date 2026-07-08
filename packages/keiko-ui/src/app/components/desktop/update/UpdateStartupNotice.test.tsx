@@ -201,7 +201,6 @@ describe("UpdateStartupNotice", () => {
         openUpdates={vi.fn()}
         fetchReport={vi.fn(async () =>
           report({
-            targetVersion: undefined,
             updateAvailable: false,
             status: "degraded",
             availabilityState: "degraded",
@@ -241,7 +240,6 @@ describe("UpdateStartupNotice", () => {
         openUpdates={vi.fn()}
         fetchReport={vi.fn(async () =>
           report({
-            targetVersion: undefined,
             updateAvailable: false,
             status: "degraded",
             availabilityState: "degraded",
@@ -284,7 +282,6 @@ describe("UpdateStartupNotice", () => {
         openUpdates={vi.fn()}
         fetchReport={vi.fn(async () =>
           report({
-            targetVersion: undefined,
             updateAvailable: false,
             status: "degraded",
             availabilityState: "degraded",

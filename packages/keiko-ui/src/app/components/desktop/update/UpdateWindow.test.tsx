@@ -397,7 +397,6 @@ describe("UpdateWindow", () => {
   it("uses setup-required copy for unmanaged portable bootstrap installs", async () => {
     const api = apiFor({
       report: preflight({
-        targetVersion: undefined,
         updateAvailable: false,
         status: "degraded",
         availabilityState: "degraded",
@@ -478,7 +477,6 @@ describe("UpdateWindow", () => {
   it("uses organization-managed copy for externally managed portable installs", async () => {
     const api = apiFor({
       report: preflight({
-        targetVersion: undefined,
         updateAvailable: false,
         status: "degraded",
         availabilityState: "degraded",
@@ -566,7 +564,6 @@ describe("UpdateWindow", () => {
   it("uses release-unavailable copy for portable metadata network failures", async () => {
     const api = apiFor({
       report: preflight({
-        targetVersion: undefined,
         updateAvailable: false,
         status: "degraded",
         availabilityState: "degraded",
