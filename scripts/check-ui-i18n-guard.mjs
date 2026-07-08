@@ -92,26 +92,39 @@ function isZeroSha(value) {
   return /^0{40}$/.test(value);
 }
 
+function validateBaseSha(baseSha) {
+  if (baseSha !== undefined && baseSha !== "" && !isZeroSha(baseSha) && !isSafeGitSha(baseSha)) {
+    throw new Error(`check:ui-i18n received an unsafe base SHA: ${baseSha}`);
+  }
+}
+
+function validateBaseRef(baseRef) {
+  if (baseRef !== undefined && baseRef !== "" && !isSafeGitRef(baseRef)) {
+    throw new Error(`check:ui-i18n received an unsafe base ref: ${baseRef}`);
+  }
+}
+
+function pushBaseShaRanges(ranges, baseSha) {
+  if (baseSha && !isZeroSha(baseSha)) {
+    ranges.push(`${baseSha}..HEAD`, `${baseSha}...HEAD`);
+  }
+}
+
+function pushBaseRefRanges(ranges, baseRef) {
+  if (baseRef) {
+    ranges.push(`origin/${baseRef}...HEAD`, `${baseRef}...HEAD`);
+  }
+}
+
 function diffRangesFromEnv(env) {
   const baseRef = env.KEIKO_I18N_GUARD_BASE_REF ?? env.GITHUB_BASE_REF;
   const baseSha = env.KEIKO_I18N_GUARD_BASE_SHA ?? env.GITHUB_EVENT_BEFORE;
   const ranges = [];
 
-  if (baseSha !== undefined && baseSha !== "" && !isZeroSha(baseSha) && !isSafeGitSha(baseSha)) {
-    throw new Error(`check:ui-i18n received an unsafe base SHA: ${baseSha}`);
-  }
-
-  if (baseRef !== undefined && baseRef !== "" && !isSafeGitRef(baseRef)) {
-    throw new Error(`check:ui-i18n received an unsafe base ref: ${baseRef}`);
-  }
-
-  if (baseSha && !isZeroSha(baseSha)) {
-    ranges.push(`${baseSha}..HEAD`, `${baseSha}...HEAD`);
-  }
-
-  if (baseRef) {
-    ranges.push(`origin/${baseRef}...HEAD`, `${baseRef}...HEAD`);
-  }
+  validateBaseSha(baseSha);
+  validateBaseRef(baseRef);
+  pushBaseShaRanges(ranges, baseSha);
+  pushBaseRefRanges(ranges, baseRef);
 
   return ranges;
 }
