@@ -15,6 +15,7 @@ const PLAYWRIGHT_PLAN_COMMAND =
 const UI_RECEIPT_COMMAND = `.keiko-scripts/ui-verify-receipt.sh 2060 -- ${PLAYWRIGHT_PLAN_COMMAND}`;
 
 const WINDOW_IDS = ["issue-2060-project", "issue-2060-plugins", "issue-2060-automations"] as const;
+const SELECTION_VISUAL_SETTLE_TIMEOUT_MS = 500;
 
 const SCREENSHOT_ARTIFACTS = [
   "01-dark.png",
@@ -266,6 +267,23 @@ async function selectAllWindows(page: Page): Promise<void> {
   );
 }
 
+async function waitForSelectionVisualState(page: Page): Promise<void> {
+  await page.evaluate(async (timeoutMs) => {
+    const settle = Promise.allSettled(
+      document.getAnimations().map((animation) => animation.finished),
+    );
+    const timeout = new Promise((resolve) => window.setTimeout(resolve, timeoutMs));
+    await Promise.race([settle, timeout]);
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          resolve();
+        });
+      });
+    });
+  }, SELECTION_VISUAL_SETTLE_TIMEOUT_MS);
+}
+
 async function selectedWindowNames(page: Page): Promise<readonly string[]> {
   const names: string[] = [];
   for (const id of WINDOW_IDS) {
@@ -302,6 +320,7 @@ async function selectedStyleProof(page: Page): Promise<JsonObject> {
 async function captureMode(page: Page, mode: ModeCase): Promise<CaptureRecord> {
   await openMode(page, mode);
   await selectAllWindows(page);
+  await waitForSelectionVisualState(page);
   const workspace = page.locator("main.workspace");
   await workspace.screenshot({ path: screenshotPath(mode.file) });
   const viewport = page.viewportSize();

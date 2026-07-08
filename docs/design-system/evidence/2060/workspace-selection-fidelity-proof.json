@@ -89,7 +89,7 @@
       ],
       "styleProof": {
         "dataSelected": "true",
-        "selectedBoxShadow": "oklab(0.798006 -0.11297 0.0411329) 0px 0px 0px 1.7417px, oklab(0.259382 -0.0429412 0.0155519 / 0.285152) 0px 2.06637px 6.1991px 2.09238px, oklab(0.739998 -0.00564498 0.00206918 / 0.741704) 0px 0px 0px 0.741704px, rgba(0, 0, 0, 0.63) 0px 13.3507px 37.0852px -13.3507px",
+        "selectedBoxShadow": "lab(85.8762 -53.07 20.88) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, lab(69.9216 -1.91903 0.763297) 0px 0px 0px 1px, rgba(0, 0, 0, 0.85) 0px 18px 50px -18px",
         "selectedAfterBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)",
         "selectedAfterOpacity": "0.7",
         "tokens": {
@@ -120,7 +120,7 @@
       ],
       "styleProof": {
         "dataSelected": "true",
-        "selectedBoxShadow": "oklab(0.409121 -0.11257 0.0409795) 0px 0px 0px 1.84462px, oklab(0.712291 -0.117921 0.0427073 / 0.118247) 0px 0px 0px 5.91234px, rgba(20, 30, 25, 0.27) 0px 15.2031px 42.231px -15.2031px, oklab(0.349999 -0.00939958 0.00342804 / 0.844619) 0px 0px 0px 0.844619px",
+        "selectedBoxShadow": "lab(34.5325 -48.4093 18.8159) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, rgba(20, 30, 25, 0.32) 0px 18px 50px -18px, lab(24.7355 -3.20987 1.27535) 0px 0px 0px 1px",
         "selectedAfterBorderColor": "oklch(0.419997 0.139995 159.997 / 0.78)",
         "selectedAfterOpacity": "0.7",
         "tokens": {
@@ -151,7 +151,7 @@
       ],
       "styleProof": {
         "dataSelected": "true",
-        "selectedBoxShadow": "oklab(0.732712 -0.0736022 0.0268031) 0px 0px 0px 1.46964px, oklab(0.106915 -0.0177 0.00641037 / 0.43804) 0px 4.24286px 12.7286px -3.0768px, oklab(0.739998 -0.00564498 0.00206918 / 0.469642) 0px 0px 0px 0.469642px, rgba(0, 0, 0, 0.4) 0px 8.45356px 23.4821px -8.45356px",
+        "selectedBoxShadow": "lab(85.8762 -53.07 20.88) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, lab(69.9216 -1.91903 0.763297) 0px 0px 0px 1px, rgba(0, 0, 0, 0.85) 0px 18px 50px -18px",
         "selectedAfterBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)",
         "selectedAfterOpacity": "0.7",
         "tokens": {
