@@ -2,7 +2,7 @@
 
 Status: historical. This document records the npm-era browser PWA installability design governed
 by [ADR-0024](adr/ADR-0024-installable-pwa-architecture.md). For portable product delivery v2,
-[ADR-0116](adr/ADR-0116-portable-first-browser-install-suppression.md) supersedes browser-managed
+[ADR-0119](adr/ADR-0119-portable-first-browser-install-suppression.md) supersedes browser-managed
 PWA installation as an ordinary product installation path.
 
 Current portable users should install Keiko from the platform ZIP/native launcher flow documented

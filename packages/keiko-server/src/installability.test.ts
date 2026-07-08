@@ -1,4 +1,4 @@
-// ADR-0116 — retained browser asset gates. Each describe block exercises ONE retained browser
+// ADR-0119 — retained browser asset gates. Each describe block exercises ONE retained browser
 // asset criterion over a live in-process server that serves real public assets from
 // packages/keiko-ui/public. No new runtime dependencies: vitest + node:http + globalThis.fetch
 // only. The test boots on an ephemeral port and tears down after each suite.
@@ -84,7 +84,7 @@ function url(path: string): string {
 
 // ─── Gate 1: manifest reachable + correct Content-Type + non-installable field contract ────
 
-describe("Gate 1 — manifest reachable as retained browser metadata (ADR-0116)", () => {
+describe("Gate 1 — manifest reachable as retained browser metadata (ADR-0119)", () => {
   it("GET /manifest.webmanifest returns 200", async () => {
     const res = await fetch(url("/manifest.webmanifest"));
     expect(res.status).toBe(200);
