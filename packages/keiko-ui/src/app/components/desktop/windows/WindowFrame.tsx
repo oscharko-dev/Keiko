@@ -975,16 +975,19 @@ function WindowFrameImpl({
   // content-visibility is limited to full-mode windows (mini/tiny are already
   // cheap) and skipped for the editor so an off-screen Monaco never mis-measures.
   const enableContentVisibility = bodyMode === "full" && win.type !== "editor";
+  const bodyOverflow = win.type === "chat" && bodyMode === "full" ? "hidden" : undefined;
   const bodyStyle = useMemo<CSSProperties>(
-    () =>
-      enableContentVisibility
+    () => ({
+      ...(enableContentVisibility
         ? {
             contain: "layout style paint",
             contentVisibility: "auto",
             containIntrinsicSize: `${String(Math.round(ew))}px ${String(Math.round(eh))}px`,
           }
-        : { contain: "layout style paint" },
-    [enableContentVisibility, ew, eh],
+        : { contain: "layout style paint" }),
+      ...(bodyOverflow === undefined ? {} : { overflow: bodyOverflow }),
+    }),
+    [bodyOverflow, enableContentVisibility, ew, eh],
   );
   const sectionStyle = useMemo<CSSProperties>(
     () => ({
@@ -1001,6 +1004,9 @@ function WindowFrameImpl({
     () => ({
       width: ew,
       height: eh,
+      minWidth: 0,
+      minHeight: 0,
+      overflow: "clip",
       transform: `scale(${String(zoom)})`,
       transformOrigin: "0 0",
     }),

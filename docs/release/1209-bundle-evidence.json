@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1172472,
-    "loadedTotalBytes": 1172472,
+    "shipsTotalBytes": 1170743,
+    "loadedTotalBytes": 1170743,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 106160,
+    "largestWorkerBytes": 105690,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 106160,
+    "largestLoadedWorkerBytes": 105690,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,12 +30,12 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 105525,
+      "gzipBytes": 105466,
       "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 106160,
+      "gzipBytes": 105690,
       "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js"
     }
   ],
@@ -44,34 +44,34 @@
   "editorRuntimeChunks": [
     {
       "path": "dist/ui/static/_next/static/chunks/2tklwylfuzj8q.js",
-      "gzipBytes": 922728,
+      "gzipBytes": 921648,
       "rawBytes": 3764223,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js",
-      "gzipBytes": 106160,
+      "gzipBytes": 105690,
       "rawBytes": 349877,
       "workerLabel": "editor"
     },
     {
       "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js",
-      "gzipBytes": 105525,
+      "gzipBytes": 105466,
       "rawBytes": 349877,
       "workerLabel": "editor"
     },
     {
       "path": "dist/ui/static/_next/static/chunks/1dqzw5uj9lc1m.js",
-      "gzipBytes": 20539,
+      "gzipBytes": 20480,
       "rawBytes": 63747,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/1-p5yem7n8812.js",
-      "gzipBytes": 17520,
+      "gzipBytes": 17459,
       "rawBytes": 54017,
       "workerLabel": null
     }
   ],
-  "measurementSha256": "ee8ee428d14677608bc1c4401fc251c88aca37c1068c5519b0b3643bb728d264"
+  "measurementSha256": "8eaadf7a44204438b02aa455a4723c8260f6741c08e74f9a915ea2b8d91a5382"
 }
