@@ -84,7 +84,9 @@ function tokenize(body: string): readonly string[] {
   return norm.split(" ");
 }
 
-function scopeCoordinateKey(scope: MemoryScope): string {
+// Exported for reuse by health-scan.ts (Issue #2129) — same partition key used by every pairwise
+// memory scan in this package, kept as the single definition rather than a second copy.
+export function scopeCoordinateKey(scope: MemoryScope): string {
   switch (scope.kind) {
     case "user":
       return `user:${scope.userId}`;
@@ -99,7 +101,9 @@ function scopeCoordinateKey(scope: MemoryScope): string {
   }
 }
 
-function jaccardSimilarity(a: string, b: string): number {
+// Exported for reuse by health-scan.ts (Issue #2129) — the missing-cross-reference detector needs
+// the same body-similarity primitive; kept as the single definition rather than a second copy.
+export function jaccardSimilarity(a: string, b: string): number {
   const aTokens = new Set(tokenize(a));
   const bTokens = new Set(tokenize(b));
   if (aTokens.size === 0 && bTokens.size === 0) return 1;

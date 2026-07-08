@@ -359,6 +359,22 @@ export const DE_MESSAGES = {
   "memoria.consolidation.summary.configuredWithUpdates":
     "Modellgestuetzte Zusammenfassungen haben {count} vorgeschlagen{suffix}",
   "memoria.consolidation.summary.fallbackSuffix": "; {count} haben Quelltext erhalten.",
+  "memoria.healthScan": "Health-Scan",
+  "memoria.healthScan.region": "Ergebnisse des Erinnerungs-Health-Scans",
+  "memoria.healthScan.loading": "Health-Scan-Ergebnisse werden geladen...",
+  "memoria.healthScan.findingsCount": "{count} Befunde",
+  "memoria.healthScan.emptyTitle": "Keine Probleme gefunden",
+  "memoria.healthScan.emptyBody":
+    "Der letzte Health-Scan hat keine verwaisten Erinnerungen, fehlenden Querverweise, Veraltungs- oder haengenden Review-Probleme gefunden.",
+  "memoria.healthScan.recordsInspected": "{count} Datensaetze geprueft",
+  "memoria.healthScan.truncated": "Ergebnisse gekuerzt",
+  "memoria.healthScan.reason": "Grund",
+  "memoria.healthScan.memories": "Erinnerungen",
+  "memoria.healthScan.viewMemory": "Erinnerung {id} anzeigen",
+  "memoria.healthScan.kind.orphanMemory": "Verwaiste Erinnerung",
+  "memoria.healthScan.kind.missingCrossReference": "Fehlender Querverweis",
+  "memoria.healthScan.kind.staleNotArchived": "Veraltet, nicht archiviert",
+  "memoria.healthScan.kind.danglingReviewItem": "Haengender Review-Eintrag",
   "chat.grounded.cancel": "Grounded-Anfrage abbrechen",
   "attachment.rejection.textOnly":
     "Das ausgewaehlte Modell kann diesen Anhangstyp nicht verarbeiten. Waehle ein Modell mit Bild- oder Dokumentunterstuetzung.",
