@@ -61,18 +61,18 @@ ingestion continues to execute no JavaScript and trusts no DOM.
 
 ## Gate matrix
 
-| Gate                              | Status | Evidence (command)                                                                                                                                                                                        |
-| --------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Type check                        | PASS   | `npm run typecheck`                                                                                                                                                                                       |
-| Lint                              | PASS   | `npm run lint`                                                                                                                                                                                            |
-| Format                            | PASS   | `npm run format:check`                                                                                                                                                                                    |
-| Unit + integration tests          | PASS   | `npm test`                                                                                                                                                                                                |
-| Architecture (direction + policy) | PASS   | `npm run arch:check`                                                                                                                                                                                      |
-| Architecture (negative)           | PASS   | `npm run arch:check:negative`                                                                                                                                                                             |
-| Local Knowledge retrieval quality | PASS   | `npm run check:retrieval-quality` (18/18 fixtures; point-in-time snapshot as of this epic's merge — sibling epics have since grown the shared `ALL_FIXTURES` registry in `fixtures.ts` beyond this count) |
-| Grounded retrieval quality        | PASS   | `npm run check:grounded-retrieval-quality`                                                                                                                                                                |
-| Grounded faithfulness             | PASS   | `npm run check:grounded-faithfulness`                                                                                                                                                                     |
-| Release-impact metadata           | PASS   | `npm run check:release-impact` (unchanged; no new entry)                                                                                                                                                  |
+| Gate                              | Status | Evidence (command)                                                                                                             |
+| --------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Type check                        | PASS   | `npm run typecheck`                                                                                                            |
+| Lint                              | PASS   | `npm run lint`                                                                                                                 |
+| Format                            | PASS   | `npm run format:check`                                                                                                         |
+| Unit + integration tests          | PASS   | `npm test`                                                                                                                     |
+| Architecture (direction + policy) | PASS   | `npm run arch:check`                                                                                                           |
+| Architecture (negative)           | PASS   | `npm run arch:check:negative`                                                                                                  |
+| Local Knowledge retrieval quality | PASS   | `npm run check:retrieval-quality` (current shared registry: 27/27 fixtures, including all registered `html-manual-*` fixtures) |
+| Grounded retrieval quality        | PASS   | `npm run check:grounded-retrieval-quality`                                                                                     |
+| Grounded faithfulness             | PASS   | `npm run check:grounded-faithfulness`                                                                                          |
+| Release-impact metadata           | PASS   | `npm run check:release-impact` (unchanged; no new entry)                                                                       |
 
 `packages/keiko-ui/` is untouched, so the editor release-evidence fingerprint
 (`check:editor-release-evidence`) is unaffected. Platform-specific fingerprints remain

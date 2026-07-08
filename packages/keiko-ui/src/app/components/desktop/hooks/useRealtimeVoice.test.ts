@@ -1230,6 +1230,126 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
   });
 
+  it("routes recall_keiko_memory function calls through the memory tool without touching the turn", async () => {
+    const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+    const onGroundedToolCall = vi.fn();
+    const onMemoryToolCall = vi.fn(async () => ({
+      status: "ok",
+      memoryCount: 1,
+      memoryContext: "- (top signal: pinned memory) The user prefers pnpm.",
+      instruction: "Use the recalled memory context below to inform your reply.",
+    }));
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        memoryToolActive: true,
+        onMemoryToolCall,
+        onGroundedToolCall,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.output_item.done",
+        response_id: "r-memory",
+        item: {
+          id: "item-memory",
+          type: "function_call",
+          call_id: "call-memory-1",
+          name: "recall_keiko_memory",
+          arguments: '{"query":"package manager preference"}',
+        },
+      });
+      // Duplicate provider completion for the same call must not run the recall twice.
+      fireDataChannelEvent({
+        type: "response.done",
+        response: {
+          id: "r-memory",
+          output: [
+            {
+              id: "item-memory",
+              type: "function_call",
+              call_id: "call-memory-1",
+              name: "recall_keiko_memory",
+              arguments: '{"query":"package manager preference"}',
+            },
+          ],
+        },
+      });
+    });
+
+    await waitFor(() => expect(onMemoryToolCall).toHaveBeenCalledTimes(1));
+    expect(onMemoryToolCall).toHaveBeenCalledWith(
+      { callId: "call-memory-1", query: "package manager preference" },
+      expect.any(AbortSignal),
+    );
+    expect(onGroundedToolCall).not.toHaveBeenCalled();
+
+    await waitFor(() =>
+      expect(sendDataChannelEvent).toHaveBeenCalledWith({ type: "response.create" }),
+    );
+    const outputCall = sendDataChannelEvent.mock.calls.find(
+      ([event]) =>
+        typeof event === "object" &&
+        event !== null &&
+        (event as { type?: unknown }).type === "conversation.item.create",
+    );
+    expect(outputCall).toBeDefined();
+    const outputEvent = outputCall?.[0] as {
+      readonly item?: { readonly call_id?: string; readonly output?: string };
+    };
+    expect(outputEvent.item?.call_id).toBe("call-memory-1");
+    expect(JSON.parse(outputEvent.item?.output ?? "{}")).toMatchObject({
+      status: "ok",
+      memoryCount: 1,
+    });
+    // A memory recall is an internal remembering act: it never flushes or persists the voice turn.
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+  });
+
+  it("advertises the memory recall tool in session.update when active", async () => {
+    const { session, fireConnectionState, fireDataChannelState, sendDataChannelEvent } =
+      makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({ negotiateResult: "v=0\r\nfake-answer" });
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        memoryToolActive: true,
+        onMemoryToolCall: vi.fn(),
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => fireConnectionState("connected"));
+    act(() => fireDataChannelState("open"));
+
+    await waitFor(() =>
+      expect(sendDataChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "session.update",
+          session: expect.objectContaining({
+            instructions: expect.stringContaining("recall_keiko_memory"),
+            tools: [expect.objectContaining({ name: "recall_keiko_memory" })],
+            tool_choice: "auto",
+          }),
+        }),
+      ),
+    );
+  });
+
   it("retrieves and speaks grounded answers when the realtime provider has no tool calling", async () => {
     const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });

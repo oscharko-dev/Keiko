@@ -415,9 +415,6 @@ describe("API route contract", () => {
 
   it("includes the desktop files read-only routes", () => {
     expect(
-      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/directories"),
-    ).toBeDefined();
-    expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/tree"),
     ).toBeDefined();
     expect(
@@ -425,6 +422,17 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/preview"),
+    ).toBeDefined();
+  });
+
+  it("includes the native file dialog routes", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/native-file-dialog/open"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "GET" && r.pattern === "/api/native-file-dialog/capability",
+      ),
     ).toBeDefined();
   });
 

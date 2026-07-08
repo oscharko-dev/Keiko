@@ -15,6 +15,7 @@ type ChatSessionActionKeys =
   | "regenerateMessage"
   | "appendVoiceTurn"
   | "runRealtimeGroundedTool"
+  | "runRealtimeMemoryTool"
   | "cancelSend"
   | "replaceChat"
   | "cancelGrounded"
@@ -93,6 +94,9 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       ...(value.runRealtimeGroundedTool === undefined
         ? {}
         : { runRealtimeGroundedTool: value.runRealtimeGroundedTool }),
+      ...(value.runRealtimeMemoryTool === undefined
+        ? {}
+        : { runRealtimeMemoryTool: value.runRealtimeMemoryTool }),
     }),
     [
       value.clearError,
@@ -106,6 +110,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.regenerateMessage,
       value.appendVoiceTurn,
       value.runRealtimeGroundedTool,
+      value.runRealtimeMemoryTool,
       value.cancelSend,
       value.replaceChat,
       value.cancelGrounded,

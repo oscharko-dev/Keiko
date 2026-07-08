@@ -23,7 +23,6 @@ import type {
   EvidenceManifest,
   GroundedAnswer,
   GroundedAskRequest,
-  FilesDirectoryListing,
   FilesContentResponse,
   FilesMutationResponse,
   FilesPreviewResponse,
@@ -74,6 +73,9 @@ import type {
   MessageResponse,
   MessagesResponse,
   ModelCapability,
+  NativeFileDialogCapability,
+  NativeFileDialogRequest,
+  NativeFileDialogResponse,
   PatchChatMessageBody,
   PatchMessageResponse,
   PromptEnhancementWireRequest,
@@ -1051,6 +1053,35 @@ export async function runRealtimeGroundedTool(
   });
 }
 
+export interface RealtimeMemoryToolInput {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly callId: string;
+  readonly query: string;
+  readonly budgetTokens?: number | undefined;
+}
+
+export interface RealtimeMemoryToolOutput {
+  readonly status: "ok";
+  readonly memoryCount: number;
+  readonly memoryContext: string;
+  readonly instruction: string;
+}
+
+// Mid-session MemoriaViva recall for the realtime `recall_keiko_memory` tool. Unlike the grounded
+// tool this persists nothing to the chat — the response is handed back to the realtime provider as
+// the function-call output and exists only for the current spoken turn.
+export async function runRealtimeMemoryTool(
+  input: RealtimeMemoryToolInput,
+  signal?: AbortSignal,
+): Promise<RealtimeMemoryToolOutput> {
+  return fetchJson<RealtimeMemoryToolOutput>("/api/voice/realtime/memory-tool", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: signal ?? null,
+  });
+}
+
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can
 // cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
 // null` under exactOptionalPropertyTypes; convert at the boundary so callers
@@ -1274,18 +1305,27 @@ export async function sendDesktopChatStream(
 // ./terminal-api.ts. The PTY routes (/api/terminal/shells, /sessions, WS upgrade) are removed.
 
 // ---------------------------------------------------------------------------
-// Desktop files — selected-root browser, preview, and editor control plane
+// Native OS file/folder dialog (Epic #1941, ADR-0118). The BFF opens the platform picker and
+// returns ONLY validated selections; cancellation is a typed success, never an error. Selected
+// paths are never logged here and persist only into the same state the manual inputs already own.
 // ---------------------------------------------------------------------------
 
-export async function fetchFilesDirectories(
-  root: string,
-  path?: string,
-): Promise<FilesDirectoryListing> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  if (path !== undefined && path.length > 0) params.set("path", path);
-  return fetchJson(`/api/files/directories?${params.toString()}`);
+export async function fetchNativeFileDialogCapability(): Promise<NativeFileDialogCapability> {
+  return fetchJson("/api/native-file-dialog/capability");
 }
+
+export async function openNativeFileDialog(
+  input: NativeFileDialogRequest,
+): Promise<NativeFileDialogResponse> {
+  return fetchJson("/api/native-file-dialog/open", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Desktop files — selected-root browser, preview, and editor control plane
+// ---------------------------------------------------------------------------
 
 export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {
   const params = new URLSearchParams();

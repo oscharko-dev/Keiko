@@ -84,6 +84,7 @@ function mid(value: string): MemoryId {
 interface RecordOptions {
   readonly id: string;
   readonly body?: string;
+  readonly type?: MemoryRecord["type"];
   readonly status?: MemoryStatus;
   readonly confidence?: number;
   readonly sensitivity?: MemoryRecord["provenance"]["sensitivity"];
@@ -98,7 +99,7 @@ function insert(vault: MemoryVaultStore, options: RecordOptions): MemoryRecord {
     id: mid(options.id),
     schemaVersion: "1",
     scope: { kind: "user", userId: "u-1" as unknown as MemoryUserId },
-    type: "preference",
+    type: options.type ?? "preference",
     body: options.body ?? "prefers dark mode",
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -475,5 +476,39 @@ describe("runMemoryMaintenance — injected clock (O-V4 determinism)", () => {
     expect(vault.getMemory(mid("expired"))).toBeUndefined();
     // Survives because validUntil (1.7e12) is still in the future relative to the injected now.
     expect(vault.getMemory(mid("future"))).toBeDefined();
+  });
+});
+
+describe("handleRunMaintenance — type-aware decay (semanticization, env-gated)", () => {
+  const DECAY_DAYS = 45;
+
+  function seedTwoAgedTypes(vault: MemoryVaultStore): void {
+    const createdAt = Date.now() - DECAY_DAYS * DAY;
+    // Same confidence, same age, same (no) access — only the memory TYPE differs.
+    insert(vault, { id: "ep", type: "episodic", confidence: 0.5, createdAt });
+    insert(vault, { id: "se", type: "semantic-fact", confidence: 0.5, createdAt });
+  }
+
+  it("keeps both aged types when semanticization is off (default, byte-identical)", () => {
+    const vault = makeVault();
+    seedTwoAgedTypes(vault);
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(result.status).toBe(200);
+    expect(counts(result).archived).toBe(0);
+    expect(vault.getMemory(mid("ep"))?.status).toBe("accepted");
+    expect(vault.getMemory(mid("se"))?.status).toBe("accepted");
+  });
+
+  it("archives the aged episodic detail but keeps the semantic fact when enabled", () => {
+    const vault = makeVault();
+    seedTwoAgedTypes(vault);
+    const result = handleRunMaintenance(
+      makeCtx(),
+      makeDeps({ memoryVault: vault, env: { KEIKO_MEMORY_SEMANTICIZATION: "1" } }),
+    );
+    expect(result.status).toBe(200);
+    expect(counts(result).archived).toBe(1);
+    expect(vault.getMemory(mid("ep"))?.status).toBe("archived");
+    expect(vault.getMemory(mid("se"))?.status).toBe("accepted");
   });
 });

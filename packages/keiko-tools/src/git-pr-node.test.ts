@@ -207,11 +207,22 @@ describe("node PR adapter — updatePullRequest", () => {
 });
 
 describe("node PR adapter — output parsing edge cases", () => {
-  it("succeeds without a PR number when the create stdout is not numeric", async () => {
+  it("fails the create when exit is 0 but stdout is not a PR number", async () => {
+    // A "created" PR the caller cannot reference is a contract breach, not a success: `--jq
+    // .number` emits `null` when the response shape is unexpected, and the UI would render a
+    // successful outcome pointing at nothing.
     const spawn = scriptedSpawn([{ stdout: "not-a-number\n", exit: 0 }]);
     const result = await makeAdapter(spawn).createPullRequest(CREATE);
-    expect(result.outcome).toBe("succeeded");
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("internal-error");
     expect(result.createdPrExternalId).toBeUndefined();
+  });
+
+  it("fails the create when the response number is jq null", async () => {
+    const spawn = scriptedSpawn([{ stdout: "null\n", exit: 0 }]);
+    const result = await makeAdapter(spawn).createPullRequest(CREATE);
+    expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("internal-error");
   });
 
   it("fails the draft transition when the node id is malformed", async () => {

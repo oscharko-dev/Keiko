@@ -1999,8 +1999,10 @@ export {
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_STRUCTURED_PAYLOAD_KINDS,
   MEMORY_TYPES,
+  MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS,
   MEMORY_UPDATE_FIELDS,
   assertNeverMemoryType,
+  decayHalfLifeMultiplierForType,
   checkStatusTransition,
   hasStaleModelMetadata,
   isMemoryEdge,
@@ -2890,6 +2892,27 @@ export {
   validateSpokenActionAuditRecord,
 } from "./voice-action-intent.js";
 
+// ─── Voice session recap (Issue #504, ADR-0109) ───
+// Committed-transcript-derived memory candidates: capability predicate, candidate lifecycle,
+// content-free span/turn descriptors, and the recap audit record. The server (voice-recap.ts) is
+// the only site that joins this leaf with the memory-capture domain.
+export type {
+  VoiceSessionRecapSchemaVersion,
+  VoiceRecapCandidateStatus,
+  VoiceRecapCommittedSpanDescriptor,
+  VoiceRecapAssistantTurnDescriptor,
+  VoiceSessionRecapEvidenceSummary,
+  VoiceSessionRecapAuditRecord,
+} from "./voice-session-recap.js";
+export {
+  VOICE_SESSION_RECAP_SCHEMA_VERSION,
+  VOICE_RECAP_CANDIDATE_STATUSES,
+  isVoiceSessionRecapSchemaVersionSupported,
+  isVoiceRecapCandidateStatus,
+  voiceRecapAllowed,
+  validateVoiceSessionRecapAuditRecord,
+} from "./voice-session-recap.js";
+
 // ─── Task-scoped workspace domain (Issue #444, Epic #443) ───
 // The authoritative contract for what a task-scoped isolated workspace IS, how a task binds to it,
 // its lifecycle state machine (legal/illegal transitions + SC4 preconditions), drift/recovery
@@ -3019,3 +3042,30 @@ export {
   validateWorkspaceHealthEntry,
   validateWorkspaceHealthReport,
 } from "./task-workspace.js";
+
+// ─── Native OS file/folder dialog (Epic #1941, ADR-0118) ───────────────────────────
+export type {
+  NativeFileDialogMode,
+  NativeFileDialogSelectionKind,
+  NativeFileDialogFilter,
+  NativeFileDialogRequest,
+  NativeFileDialogSelection,
+  NativeFileDialogResponse,
+  NativeFileDialogCapability,
+  NativeFileDialogErrorCode,
+  NativeFileDialogRequestValidation,
+} from "./native-file-dialog.js";
+export {
+  NATIVE_FILE_DIALOG_SCHEMA_VERSION,
+  NATIVE_FILE_DIALOG_MODES,
+  NATIVE_FILE_DIALOG_ERROR_CODES,
+  NATIVE_FILE_DIALOG_TITLE_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_DEFAULT_PATH_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_MAX_FILTERS,
+  NATIVE_FILE_DIALOG_FILTER_NAME_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_MAX_EXTENSIONS_PER_FILTER,
+  NATIVE_FILE_DIALOG_MAX_SELECTIONS,
+  validateNativeFileDialogRequest,
+  nativeFileDialogSelectionBounds,
+  nativeFileDialogExpectedKind,
+} from "./native-file-dialog.js";

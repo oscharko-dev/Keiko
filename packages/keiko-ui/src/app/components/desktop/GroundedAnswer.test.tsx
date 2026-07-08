@@ -4,6 +4,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
+import activityBadgeStyles from "./GroundedAnswer.module.css";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type {
   GroundedAnswer as GroundedAnswerType,
@@ -13,6 +14,12 @@ import type {
   KnowledgePodRetrievalActivity,
   LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
+
+function cssClass(name: keyof typeof activityBadgeStyles): string {
+  const value = activityBadgeStyles[name];
+  if (value === undefined) throw new Error(`missing GroundedAnswer CSS module class ${name}`);
+  return value;
+}
 
 function citation(overrides: Partial<GroundedEvidenceCitation> = {}): GroundedEvidenceCitation {
   return {
@@ -528,19 +535,30 @@ describe("GroundedAnswer", () => {
       pods: Array.from({ length: 10 }, (_, index) => ({
         ...pod,
         podId: `cap-activity-${String(index)}` as typeof pod.podId,
-        displayName: `Activity Pod ${String(index)}`,
+        displayName:
+          index === 7
+            ? "Activity Pod With Extremely Long Safe Display Name That Must Wrap In Narrow Panels"
+            : `Activity Pod ${String(index)}`,
       })),
     });
-    render(
-      <GroundedAnswer
-        answer={{ ...localKnowledgeAnswer(), retrievalActivity: activity }}
-        busy={false}
-      />,
+    const { container } = render(
+      <div style={{ width: "280px" }}>
+        <GroundedAnswer
+          answer={{ ...localKnowledgeAnswer(), retrievalActivity: activity }}
+          busy={false}
+        />
+      </div>,
     );
 
     expect(screen.getByText(/Activity Pod 0/)).toBeInTheDocument();
-    expect(screen.getByText(/Activity Pod 7/)).toBeInTheDocument();
+    const details = screen.getByRole("list", { name: "Knowledge Pod activity details" });
+    expect(details).toHaveClass(cssClass("activityList"));
+    expect(
+      screen.getByText(/Activity Pod With Extremely Long Safe Display Name/u),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Activity Pod 8/)).toBeNull();
+    expect(container.querySelectorAll(`.${cssClass("activityListItem")}`)).toHaveLength(8);
+    expect(container.querySelector(`.${cssClass("activityMeta")}`)).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show all 10 Knowledge Pods" }));
     expect(screen.getByText(/Activity Pod 9/)).toBeInTheDocument();
   });
@@ -1233,6 +1251,53 @@ describe("GroundedAnswer", () => {
     fireEvent.click(chip);
 
     expect(openDocumentationTarget).not.toHaveBeenCalled();
+  });
+
+  it("keeps long HTML manual citation labels shrinkable in constrained chip rows", () => {
+    const longPageTitle =
+      "device-handbook-with-a-very-long-manual-page-title-and-versioned-appendix-name.html";
+    const manualCitation = knowledgeCitation({
+      source: "Field Service Knowledge Pod With Long Display Name",
+      htmlManual: {
+        sourceKind: "html-manual-http",
+        pageTitle: longPageTitle,
+        safePageId: "doc-device-long",
+        sectionPath: [
+          "Troubleshooting",
+          "Network Isolation",
+          "Extremely Long Diagnostic Subsection Label",
+        ],
+        anchorId: "diagnostic-timeouts",
+        parsedUnitId: "unit-device-long",
+        targetSummary: {
+          originSummary: "https://manual.internal",
+          pathSummary: "/…",
+        },
+        open: {
+          state: "available",
+          target: "keiko-html-manual-citation:opaque-long",
+        },
+      },
+    });
+    const { container } = render(
+      <div style={{ width: "280px" }}>
+        <GroundedAnswer answer={localKnowledgeAnswer([manualCitation])} busy={false} />
+      </div>,
+    );
+
+    openEvidenceDisclosure(container);
+    const chip = screen.getByRole("button", {
+      name: new RegExp(`${longPageTitle}.*Open manual`, "u"),
+    });
+    const item = chip.closest(".grounded-citations-item");
+    const range = chip.querySelector(".grounded-citation-range");
+
+    expect(item).toHaveClass(cssClass("citationListItem"));
+    expect(chip).toHaveClass(cssClass("manualCitationAction"));
+    expect(range).toHaveClass(cssClass("manualCitationRange"));
+    expect(range).toHaveTextContent(longPageTitle);
+    expect(chip).toHaveAttribute("title", expect.stringContaining(longPageTitle));
+    expect(screen.getByText("Open manual")).toBeInTheDocument();
   });
 
   it("never renders answer.content into the panel — neither as text nor as markup", () => {

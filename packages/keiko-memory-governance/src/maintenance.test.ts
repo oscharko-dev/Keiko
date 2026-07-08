@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts/memory";
 import {
   effectiveStrength,
   planMemoryMaintenance,
@@ -128,6 +129,80 @@ describe("effectiveStrength — outcome-gated utility factor (O-V1)", () => {
       ["m", { lastAccessedAt: NOW, accessCount: 0, outcomeCount: 2, utilitySum: 1 }],
     ]);
     expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBeCloseTo(0.5, 10);
+  });
+});
+
+describe("effectiveStrength — type-aware decay (semanticization)", () => {
+  // Same confidence, same age, same (no) access — the ONLY difference is memory TYPE.
+  const AGE_MS = 45 * DAY;
+  const CONFIDENCE = 0.5;
+  const episodic = makeRecord({
+    id: "ep",
+    type: "episodic",
+    confidence: CONFIDENCE,
+    createdAt: NOW - AGE_MS,
+  });
+  const semantic = makeRecord({
+    id: "se",
+    type: "semantic-fact",
+    confidence: CONFIDENCE,
+    createdAt: NOW - AGE_MS,
+  });
+  const preset = MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS;
+
+  it("is byte-identical across types when no multiplier map is supplied", () => {
+    // Backward compatibility: without the opt-in map, type does not influence the decay curve.
+    const ep = effectiveStrength(episodic, undefined, NOW);
+    const se = effectiveStrength(semantic, undefined, NOW);
+    expect(ep).toBe(se);
+    // 45-day age at the flat 45-day half-life => recency 0.5 => 0.25.
+    expect(ep).toBeCloseTo(0.25, 10);
+  });
+
+  it("fades an episodic memory faster than a semantic fact once the preset is applied", () => {
+    const ep = effectiveStrength(
+      episodic,
+      undefined,
+      NOW,
+      MEMORY_MAINTENANCE_DEFAULTS.halfLifeMs,
+      preset,
+    );
+    const se = effectiveStrength(
+      semantic,
+      undefined,
+      NOW,
+      MEMORY_MAINTENANCE_DEFAULTS.halfLifeMs,
+      preset,
+    );
+    expect(ep).toBeLessThan(se);
+    // Episodic half-life = 45 * 0.5 = 22.5d; at 45d that is two half-lives => recency 0.25 => 0.125.
+    expect(ep).toBeCloseTo(0.125, 6);
+    // Semantic half-life = 45 * 1.5 = 67.5d; at 45d recency = 2^(-45/67.5) => strength > episodic.
+    expect(se).toBeGreaterThan(0.3);
+  });
+});
+
+describe("planMemoryMaintenance — type-aware forgetting (semanticization)", () => {
+  const AGE_MS = 45 * DAY;
+  function typedRecord(id: string, type: MemoryRecord["type"]): MemoryRecord {
+    return makeRecord({ id, type, status: "accepted", confidence: 0.5, createdAt: NOW - AGE_MS });
+  }
+  const episodic = typedRecord("ep", "episodic");
+  const semantic = typedRecord("se", "semantic-fact");
+
+  it("archives neither type at this age with the flat (default) half-life", () => {
+    // Both sit at strength 0.25 > archiveMaxStrength (0.2): the pre-semanticization behaviour keeps
+    // an aging episodic detail exactly as long as an aging semantic fact.
+    const plan = planFor([episodic, semantic], emptyStats());
+    expect(plan.archive).toEqual([]);
+  });
+
+  it("archives the aged episodic detail but keeps the semantic fact once semanticization is on", () => {
+    const plan = planMemoryMaintenance([episodic, semantic], emptyStats(), {
+      nowMs: NOW,
+      policy: { decayHalfLifeMultiplierByType: MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS },
+    });
+    expect(plan.archive).toEqual(["ep" as MemoryId]);
   });
 });
 

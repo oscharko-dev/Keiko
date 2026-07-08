@@ -23,6 +23,7 @@ import {
   type MemoryAccessStatLike,
   type MemoryMaintenancePlan,
 } from "@oscharko-dev/keiko-memory-governance";
+import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryAuditEvent,
   MemoryAuditInitiatorSurface,
@@ -30,9 +31,11 @@ import type {
   MemoryEdgeId,
   MemoryId,
   MemoryRecord,
+  MemoryType,
 } from "@oscharko-dev/keiko-contracts";
 import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -275,6 +278,25 @@ function applyForgets(
 export interface RunMaintenanceOptions {
   /** Injected clock. Defaults to Date.now(). Pass a fixed value to make the pass replay-stable. */
   readonly nowMs?: number;
+  // Type-aware decay multipliers (semanticization). When supplied, episodic memories fade — and so
+  // archive/forget — faster than semantic facts / skills / preferences. When ABSENT the pass uses a
+  // single flat half-life for every type (byte-identical to the pre-semanticization behaviour), so
+  // the effect is strictly opt-in. Resolve it from the environment via `memorySemanticizationMultipliers`.
+  readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
+}
+
+// Env-gated rollout of type-aware decay (semanticization), mirroring the KEIKO_MEMORY_FUSION
+// convention: the capability ships wired and tested but OFF by default, so existing forgetting
+// behaviour and its evaluation evidence are unchanged until an operator opts in with
+// KEIKO_MEMORY_SEMANTICIZATION=1. Returns the recommended preset when enabled, otherwise undefined
+// (flat single half-life). Flipping the default to on is a follow-up gated on retrieval/forgetting
+// eval evidence, not a silent behaviour change here.
+export function memorySemanticizationMultipliers(
+  env: EnvSource,
+): Partial<Record<MemoryType, number>> | undefined {
+  return env.KEIKO_MEMORY_SEMANTICIZATION === "1"
+    ? MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS
+    : undefined;
 }
 
 export function runMemoryMaintenance(
@@ -286,13 +308,20 @@ export function runMemoryMaintenance(
   // same nowMs, so selection is consistent within a run and fully replay-stable when nowMs is
   // injected (the deterministic-verification invariant the rest of the stack honours).
   const nowMs = options?.nowMs ?? Date.now();
+  const planPolicy =
+    options?.decayHalfLifeMultiplierByType !== undefined
+      ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
+      : {};
   const counts = emptyCounts();
   const scopes = vault.listMemoryScopes();
   // Phase 1 — promote strong `proposed` memories FIRST. This keeps high-confidence captures visible
   // to consolidation in the same maintenance pass instead of waiting for a second run.
   const beforePromote = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
   const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
-  const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, { nowMs });
+  const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, {
+    nowMs,
+    policy: planPolicy,
+  });
   applyPromotions(
     vault,
     evidenceStore,
@@ -317,7 +346,7 @@ export function runMemoryMaintenance(
   // strength model; confidence itself is never mutated (O-V2).
   const all = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
-  const plan = planMemoryMaintenance(all, accessStats, { nowMs });
+  const plan = planMemoryMaintenance(all, accessStats, { nowMs, policy: planPolicy });
   applyFadeEffects(vault, evidenceStore, nowMs, plan, recordsById(all), counts);
   return counts;
 }
@@ -351,6 +380,9 @@ export interface MaybeRunAutoMaintenanceOptions {
   readonly nowMs: number;
   readonly enabled: boolean;
   readonly minIntervalMs?: number;
+  // Optional type-aware decay multipliers (semanticization). Forwarded verbatim to the pass; absent
+  // keeps the flat single half-life. Resolve from the env via `memorySemanticizationMultipliers`.
+  readonly decayHalfLifeMultiplierByType?: Partial<Record<MemoryType, number>>;
 }
 
 // Runs ONE bounded maintenance pass iff enabled AND due, advancing the cursor BEFORE running so a
@@ -367,7 +399,12 @@ export function maybeRunAutoMaintenance(
   if (!isMaintenanceDue(state.lastRunAtMs, options.nowMs, options.minIntervalMs)) return null;
   state.lastRunAtMs = options.nowMs;
   try {
-    return runMemoryMaintenance(vault, evidenceStore, { nowMs: options.nowMs });
+    return runMemoryMaintenance(vault, evidenceStore, {
+      nowMs: options.nowMs,
+      ...(options.decayHalfLifeMultiplierByType !== undefined
+        ? { decayHalfLifeMultiplierByType: options.decayHalfLifeMultiplierByType }
+        : {}),
+    });
   } catch {
     return null;
   }
@@ -378,7 +415,10 @@ export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): Ro
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
   try {
-    const counts = runMemoryMaintenance(vault, deps.evidenceStore);
+    const multipliers = memorySemanticizationMultipliers(deps.env);
+    const counts = runMemoryMaintenance(vault, deps.evidenceStore, {
+      ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
+    });
     return { status: 200, body: counts };
   } catch {
     // COUPLING-004: never forward the raw `error.message` into the response envelope — a vault

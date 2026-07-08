@@ -153,7 +153,11 @@ export {
   type TerminalPolicySummary,
 } from "./terminal.js";
 export { TerminalToolError, type TerminalErrorCode } from "./terminal-errors.js";
-export { runMemoryMaintenance, type MaintenanceCounts } from "./memory-maintenance-handlers.js";
+export {
+  runMemoryMaintenance,
+  memorySemanticizationMultipliers,
+  type MaintenanceCounts,
+} from "./memory-maintenance-handlers.js";
 export {
   exportMemoryDiagnostics,
   type ExportMemoryDiagnosticsOptions,
@@ -233,7 +237,6 @@ export {
   handleFilesDelete,
   handleFilesRename,
   handleFilesSearch,
-  listFilesDirectories,
   readFilesContent,
   readFilesPreview,
   readFilesTree,
@@ -241,9 +244,6 @@ export {
   searchFiles,
   writeFilesContent,
   type FilesContentResponse,
-  type FilesDirectoryEntry,
-  type FilesDirectoryListing,
-  type FilesDirectoryRoot,
   type FilesEntryKind,
   type FilesMutationResponse,
   type FilesSearchFileRole,

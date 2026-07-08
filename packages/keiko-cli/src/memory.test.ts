@@ -58,19 +58,26 @@ function mid(value: string): MemoryId {
 
 function insert(
   vault: MemoryVaultStore,
-  options: { id: string; status?: MemoryRecord["status"]; createdAt?: number; validUntil?: number },
+  options: {
+    id: string;
+    type?: MemoryRecord["type"];
+    status?: MemoryRecord["status"];
+    confidence?: number;
+    createdAt?: number;
+    validUntil?: number;
+  },
 ): MemoryRecord {
   const createdAt = options.createdAt ?? Date.now();
   return vault.insertMemory({
     id: mid(options.id),
     schemaVersion: "1",
     scope: { kind: "user", userId: "u-1" as unknown as MemoryUserId },
-    type: "preference",
+    type: options.type ?? "preference",
     body: "prefers dark mode",
     provenance: {
       sourceKind: "explicit-user-instruction",
       capturedAt: createdAt,
-      confidence: 0.9,
+      confidence: options.confidence ?? 0.9,
       sensitivity: "confidential",
     },
     validity:
@@ -200,6 +207,29 @@ describe("runMemoryCli maintain", () => {
     }
     const events = JSON.parse(evidenceStore.get(runId) ?? "[]") as MemoryAuditEvent[];
     expect(events.map((event) => event.kind)).toContain("memory:forgotten");
+  });
+
+  it("honours KEIKO_MEMORY_SEMANTICIZATION so the CLI pass does not drift from the server", async () => {
+    // Same aged episodic detail: flat half-life keeps it (strength 0.25 > archive floor 0.2), but
+    // the episodic ×0.5 multiplier archives it (strength 0.125). The CLI must read the flag exactly
+    // as the two server passes do — otherwise `keiko memory maintain` silently diverges from the UI.
+    const createdAt = Date.now() - 45 * 864e5;
+    const off = makeVault();
+    insert(off, { id: "ep", type: "episodic", confidence: 0.5, createdAt });
+    expect(await runMemoryCli(["maintain"], capture().io, {}, { vault: off })).toBe(0);
+    expect(off.getMemory(mid("ep"))?.status).toBe("accepted");
+
+    const on = makeVault();
+    insert(on, { id: "ep", type: "episodic", confidence: 0.5, createdAt });
+    expect(
+      await runMemoryCli(
+        ["maintain"],
+        capture().io,
+        { KEIKO_MEMORY_SEMANTICIZATION: "1" },
+        { vault: on },
+      ),
+    ).toBe(0);
+    expect(on.getMemory(mid("ep"))?.status).toBe("archived");
   });
 });
 

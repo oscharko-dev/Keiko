@@ -23,7 +23,6 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import {
   classifyFailure,
-  isContained,
   optionsWithDefaults,
   resolveRepository,
   type GitProcessResult,
@@ -31,6 +30,7 @@ import {
   type NormalizedGitRouteOptions,
   type RepositoryContext,
 } from "./gitRoutes.js";
+import { containsPath } from "@oscharko-dev/keiko-git";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { FilesError, runFilesHandler } from "./files.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -155,7 +155,7 @@ async function readLastSync(
     // resolved path is contained under it before stat-ing so a manipulated rev-parse result can
     // never stat an out-of-tree file. Containment failure ⇒ omit lastSync (metadata stays optional).
     const path = isAbsolute(rawPath) ? rawPath : resolve(repo.repositoryRoot, rawPath);
-    if (!isContained(repo.repositoryRoot, path)) return undefined;
+    if (!containsPath(repo.repositoryRoot, path)) return undefined;
     const info = await stat(path);
     return { lastFetchAtMs: Math.round(info.mtimeMs) };
   } catch {
