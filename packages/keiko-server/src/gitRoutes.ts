@@ -1,7 +1,6 @@
-import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 import type {
   GitChangedFile,
   GitDiffScope,
@@ -13,33 +12,37 @@ import {
   GIT_REPOSITORY_SCHEMA_VERSION,
   isRootRelativeFileIdentifier,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  classifyGitFailure,
+  containsPath,
+  defaultGitProcessRunner,
+  resolveGitMembership,
+  type GitProcessResult,
+  type GitProcessRunner,
+} from "@oscharko-dev/keiko-git";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { FilesError, resolveRoot, runFilesHandler } from "./files.js";
+
+// The git core moved to @oscharko-dev/keiko-git (shared with keiko-tools). Route modules and
+// their tests keep importing the process surface from here so the BFF has one seam for it.
+export {
+  createGitProcessRunner,
+  defaultGitNetworkProcessRunner,
+  defaultGitProcessRunner,
+  gitEnv,
+  networkGitEnv,
+} from "@oscharko-dev/keiko-git";
+export type {
+  GitProcessOptions,
+  GitProcessResult,
+  GitProcessRunner,
+} from "@oscharko-dev/keiko-git";
 
 const DEFAULT_STATUS_MAX_BYTES = 512 * 1024;
 const DEFAULT_DIFF_MAX_BYTES = 128 * 1024;
 const DEFAULT_MAX_CHANGES = 500;
 const DEFAULT_TIMEOUT_MS = 5_000;
-
-export interface GitProcessResult {
-  readonly exitCode: number | null;
-  readonly signal: NodeJS.Signals | null;
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly truncated: boolean;
-}
-
-export interface GitProcessOptions {
-  readonly cwd: string;
-  readonly maxBytes: number;
-  readonly timeoutMs: number;
-}
-
-export type GitProcessRunner = (
-  args: readonly string[],
-  options: GitProcessOptions,
-) => Promise<GitProcessResult>;
 
 export interface GitRouteOptions {
   readonly runner?: GitProcessRunner | undefined;
@@ -82,184 +85,6 @@ export interface GitBranchListResponse {
   readonly truncated: boolean;
 }
 
-function devNullPath(): string {
-  return process.platform === "win32" ? "NUL" : "/dev/null";
-}
-
-// Local-read env: fully config-isolated. HOME/XDG/global+system config are neutralized so a read
-// can never load a user `~/.gitconfig`, a credential helper, or an SSH identity. Correct for the
-// local status/diff/branches/summary/history/remotes reads, which never authenticate to a remote.
-export function gitEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? "",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_PAGER: "cat",
-    PAGER: "cat",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: devNullPath(),
-    GIT_OPTIONAL_LOCKS: "0",
-  };
-  if (process.platform === "win32") {
-    env.SystemRoot = process.env.SystemRoot ?? "";
-    env.WINDIR = process.env.WINDIR ?? "";
-  } else {
-    env.HOME = "/nonexistent";
-    env.XDG_CONFIG_HOME = "/nonexistent";
-  }
-  return env;
-}
-
-const GIT_NETWORK_ENV_PASSTHROUGH = [
-  "PATH",
-  "HOME",
-  "USERPROFILE",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "XDG_CONFIG_HOME",
-  "XDG_RUNTIME_DIR",
-  "SSH_AUTH_SOCK",
-  "SSH_AGENT_PID",
-  "LANG",
-  "LC_ALL",
-  "LC_CTYPE",
-  "TMPDIR",
-  "TEMP",
-  "TMP",
-  "USER",
-  "USERNAME",
-  "SystemRoot",
-  "WINDIR",
-] as const;
-
-function inheritAllowedGitNetworkEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const key of GIT_NETWORK_ENV_PASSTHROUGH) {
-    const value = source[key];
-    if (value !== undefined && value.length > 0) env[key] = value;
-  }
-  env.PATH ??= process.env.PATH ?? "";
-  return env;
-}
-
-// Network-sync env: clone/fetch/pull MUST be able to authenticate to private/SSH remotes, so they
-// preserve only the account and SSH-agent state needed for normal git credentials. They do not inherit
-// arbitrary ambient secrets or caller-provided GIT_* overrides. Prompts remain disabled at every
-// layer, so missing credentials fail closed rather than opening a terminal, GUI askpass, or first-use
-// host-key flow. Local reads keep the fully config-isolated `gitEnv` above.
-export function networkGitEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return {
-    ...inheritAllowedGitNetworkEnv(source),
-    GIT_TERMINAL_PROMPT: "0", // never prompt — fail closed
-    GIT_ASKPASS: devNullPath(),
-    SSH_ASKPASS: devNullPath(),
-    SSH_ASKPASS_REQUIRE: "never",
-    GCM_INTERACTIVE: "never",
-    GIT_PAGER: "cat",
-    PAGER: "cat",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_OPTIONAL_LOCKS: "0",
-    // No SSH credential prompt and no implicit first-use trust. Unknown or changed host keys fail
-    // closed and are surfaced by the sync outcome classifier.
-    GIT_SSH_COMMAND:
-      "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes -oNumberOfPasswordPrompts=0 -oKbdInteractiveAuthentication=no -oPasswordAuthentication=no",
-  };
-}
-
-// Factory: the runner owns process lifecycle state, byte caps, timeout, and spawn-error mapping
-// together. `buildEnv` is the only seam — the local reads pass the hardened `gitEnv`, network sync
-// passes the credential-capable `networkGitEnv`; everything else is identical.
-// eslint-disable-next-line max-lines-per-function
-export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitProcessRunner {
-  // eslint-disable-next-line max-lines-per-function
-  return (args, options) =>
-    // eslint-disable-next-line max-lines-per-function
-    new Promise((resolveResult) => {
-      const child = spawn("git", args, {
-        cwd: options.cwd,
-        env: buildEnv(),
-        shell: false,
-        windowsHide: true,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      const stdoutChunks: Buffer[] = [];
-      const stderrChunks: Buffer[] = [];
-      let stdoutBytes = 0;
-      let stderrBytes = 0;
-      let truncated = false;
-      let settled = false;
-      const timer = setTimeout(() => {
-        truncated = true;
-        child.kill("SIGTERM");
-      }, options.timeoutMs);
-
-      const capture = (chunks: Buffer[], currentBytes: number, chunk: Buffer): number => {
-        const remaining = options.maxBytes - currentBytes;
-        if (remaining <= 0) {
-          truncated = true;
-          child.kill("SIGTERM");
-          return currentBytes;
-        }
-        if (chunk.byteLength > remaining) {
-          chunks.push(chunk.subarray(0, remaining));
-          truncated = true;
-          child.kill("SIGTERM");
-          return options.maxBytes;
-        }
-        chunks.push(chunk);
-        return currentBytes + chunk.byteLength;
-      };
-
-      child.stdout.on("data", (chunk: Buffer) => {
-        stdoutBytes = capture(stdoutChunks, stdoutBytes, chunk);
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderrBytes = capture(stderrChunks, stderrBytes, chunk);
-      });
-      child.on("error", () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolveResult({
-          exitCode: 127,
-          signal: null,
-          stdout: "",
-          stderr: "git executable unavailable",
-          truncated,
-        });
-      });
-      child.on("close", (exitCode, signal) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolveResult({
-          exitCode,
-          signal,
-          stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-          stderr: Buffer.concat(stderrChunks).toString("utf8"),
-          truncated,
-        });
-      });
-    });
-}
-
-// Local reads use the hardened, config-isolated env; network sync needs the user's credential
-// configuration but must still never prompt (fail-closed) — see networkGitEnv.
-export const defaultGitProcessRunner: GitProcessRunner = createGitProcessRunner(gitEnv);
-
-export const defaultGitNetworkProcessRunner: GitProcessRunner =
-  createGitProcessRunner(networkGitEnv);
-
-export function isContained(root: string, target: string): boolean {
-  const rootCmp = process.platform === "win32" ? root.toLowerCase() : root;
-  const targetCmp = process.platform === "win32" ? target.toLowerCase() : target;
-  const rel = relative(rootCmp, targetCmp);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-function toPosix(value: string): string {
-  return value.replaceAll("\\", "/");
-}
-
 function genericUnavailable(
   root: string,
   reason: GitRepositoryStatusResponse["reason"],
@@ -285,15 +110,10 @@ function genericUnavailable(
 }
 
 export function classifyFailure(result: GitProcessResult): GitRepositoryStatusResponse["reason"] {
-  const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  if (result.exitCode === 127) return "git-missing";
-  if (text.includes("dubious ownership") || text.includes("safe.directory")) {
-    return "unsafe-repository";
-  }
-  if (text.includes("not a git repository")) {
-    return "not-a-repository";
-  }
-  return "git-error";
+  const reason = classifyGitFailure(result);
+  // "timeout" is not part of the wire vocabulary; report it as the generic git error while the
+  // precise classification stays available to server-side diagnostics via classifyGitFailure.
+  return reason === "timeout" ? "git-error" : reason;
 }
 
 // eslint-disable-next-line complexity
@@ -319,19 +139,11 @@ export async function resolveRepository(
     ctx.url.searchParams.get("root"),
     deps.redactor,
   );
-  const revParse = await options.runner(
-    [
-      "--no-pager",
-      "--no-optional-locks",
-      "-C",
-      selectedRoot.realRoot,
-      "rev-parse",
-      "--show-toplevel",
-    ],
-    { cwd: selectedRoot.realRoot, maxBytes: 16 * 1024, timeoutMs: options.timeoutMs },
-  );
-  if (revParse.exitCode !== 0) {
-    const reason = classifyFailure(revParse);
+  const membership = await resolveGitMembership(selectedRoot.realRoot, options.runner, {
+    timeoutMs: options.timeoutMs,
+  });
+  if (!membership.ok) {
+    const reason = classifyFailure(membership.result);
     return genericUnavailable(
       selectedRoot.root,
       reason,
@@ -340,9 +152,13 @@ export async function resolveRepository(
         : "Git status is unavailable for this folder.",
     );
   }
-  const rawRepositoryRoot = resolve(revParse.stdout.split(/\r?\n/u)[0]?.trim() ?? "");
+  const rawRepositoryRoot = resolve(membership.membership.repositoryRoot);
   const repositoryRoot = await realpath(rawRepositoryRoot).catch(() => rawRepositoryRoot);
-  if (!isContained(repositoryRoot, selectedRoot.realRoot)) {
+  // Membership and the selected-root prefix come from git itself (rev-parse --show-prefix), so a
+  // letter-case or Unicode-normalization spelling difference between the stored root and the
+  // on-disk path can no longer misclassify a valid subfolder. The containment check stays as
+  // defense-in-depth only, with platform filesystem identity rules (see keiko-git containsPath).
+  if (!containsPath(repositoryRoot, selectedRoot.realRoot)) {
     return genericUnavailable(
       selectedRoot.root,
       "repository-root-outside-root",
@@ -353,7 +169,7 @@ export async function resolveRepository(
     root: selectedRoot.root,
     realRoot: selectedRoot.realRoot,
     repositoryRoot,
-    selectedRootPrefix: toPosix(relative(repositoryRoot, selectedRoot.realRoot)),
+    selectedRootPrefix: membership.membership.prefix,
   };
 }
 
@@ -384,6 +200,9 @@ function stripSelectedPrefix(path: string, prefix: string): string | null {
 
 function toStatusCode(value: string | undefined): GitStatusCode {
   if (value === undefined || value === "") return " ";
+  // T (typechange: file↔symlink) is not part of the wire vocabulary; the closest truthful code
+  // is a modification. Anything unknown degrades to " " so future porcelain codes cannot crash.
+  if (value === "T") return "M";
   return [" ", "M", "A", "D", "R", "C", "U", "?", "!"].includes(value)
     ? (value as GitStatusCode)
     : " ";
@@ -417,7 +236,15 @@ function parseStatus(
     const rawPath = record.slice(3);
     const path = stripSelectedPrefix(rawPath, selectedRootPrefix);
     if (path === null || path.length === 0) continue;
-    const oldRawPath = indexStatus === "R" || indexStatus === "C" ? records[index + 1] : undefined;
+    // Renames/copies carry a NUL-separated original-path field. Since git 2.18 unstaged rename
+    // detection can put R/C in the WORKTREE column too — that field must be skipped either way,
+    // or the old path surfaces as a phantom change record.
+    const hasOldPath =
+      indexStatus === "R" ||
+      indexStatus === "C" ||
+      worktreeStatus === "R" ||
+      worktreeStatus === "C";
+    const oldRawPath = hasOldPath ? records[index + 1] : undefined;
     if (oldRawPath !== undefined) index += 1;
     if (changes.length < maxChanges) {
       const oldPath =

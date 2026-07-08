@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -119,6 +127,38 @@ describe("git repository routes", () => {
     }
   });
 
+  it("the default clone path never spawns git for an option-like repository URL", async () => {
+    // The injected-runner tests bypass the real cloneRepository. This drives the DEFAULT clone
+    // path end to end with an option-like URL and proves git is never spawned: a fake git on PATH
+    // writes a marker file if invoked, and the marker must never appear.
+    const capturePath = join(tmp, "should-not-spawn.marker");
+    const fakeGit = join(tmp, "git");
+    writeFileSync(
+      fakeGit,
+      [
+        "#!/usr/bin/env node",
+        `require("node:fs").writeFileSync(${JSON.stringify(capturePath)}, "spawned");`,
+        "process.exit(0);",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(fakeGit, 0o755);
+    vi.stubEnv("PATH", `${tmp}${delimiter}${process.env.PATH ?? ""}`);
+    try {
+      const result = await createCloneRepositoryHandler()(
+        ctx({
+          repositoryUrl: "--upload-pack=touch /tmp/pwned",
+          destinationPath: join(tmp, "app"),
+        }),
+        deps(),
+      );
+      expect(result.status).toBe(400);
+      expect(existsSync(capturePath)).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects repository URLs that embed credentials", async () => {
     const cloneRunner = vi.fn(() => Promise.resolve(null));
     const handler = createCloneRepositoryHandler(cloneRunner);
@@ -135,6 +175,21 @@ describe("git repository routes", () => {
     expect(result.body).toMatchObject({
       error: { code: "BAD_REQUEST" },
     });
+    expect(cloneRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "--upload-pack=touch /tmp/pwned",
+    "-oProxyCommand=evil",
+    "--config=core.fsmonitor=evil",
+  ])("rejects an option-like repository URL that git could execute (%s)", async (repositoryUrl) => {
+    const cloneRunner = vi.fn(() => Promise.resolve(null));
+    const handler = createCloneRepositoryHandler(cloneRunner);
+
+    const result = await handler(ctx({ repositoryUrl, destinationPath: join(tmp, "app") }), deps());
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
     expect(cloneRunner).not.toHaveBeenCalled();
   });
 

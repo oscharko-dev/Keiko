@@ -150,6 +150,12 @@ function targetKeyOf(form: MergeForm): string {
   return [form.ownerAndRepo, form.prExternalId, form.baseBranchName, form.headBranchName].join(" ");
 }
 
+// GitHub PR numbers are decimal digits; anything else can never resolve and only surfaces as an
+// opaque provider error after the round-trip — reject it before the request leaves the card.
+function isValidPrNumber(value: string): boolean {
+  return /^\d+$/u.test(value);
+}
+
 function formToInput(form: MergeForm, projectId: string): GitDeliveryMergeInput {
   return {
     projectId,
@@ -244,6 +250,8 @@ interface FieldsProps {
 }
 
 function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const prNumberHintId = useId();
+  const prIdInvalid = form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
   return (
     <section style={SECTION_STYLE} aria-label="Merge target">
       <h3 style={HEADING_STYLE}>
@@ -268,7 +276,18 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
             onChange={(e) => onChange("prExternalId", e.target.value)}
             aria-label="Pull Request number"
             inputMode="numeric"
+            aria-invalid={prIdInvalid}
+            aria-describedby={prIdInvalid ? prNumberHintId : undefined}
           />
+          {prIdInvalid ? (
+            <p
+              id={prNumberHintId}
+              data-testid="gm-pr-number-hint"
+              style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
+            >
+              Enter the numeric Pull Request number, for example 1499.
+            </p>
+          ) : null}
         </label>
       </div>
       <div style={ROW_STYLE}>
@@ -510,7 +529,9 @@ function MergeOutcome({
 
 // ─── Card body ─────────────────────────────────────────────────────────────────────────────────────
 
-function liveTextFor(async: MergeAsync): string {
+function liveTextFor(
+  async: Pick<MergeAsyncState, "busy" | "error" | "outcome" | "preview">,
+): string {
   if (async.busy) return "Merge action running.";
   if (async.error !== null) return `Merge action failed: ${async.error}`;
   if (async.outcome !== null) return `Merge ${async.outcome.status}.`;
@@ -544,6 +565,9 @@ function GovernedMergeBody({
   const [confirmed, setConfirmed] = useState(false);
   // The merge-target key the loaded preview is valid for. Empty until a preview loads.
   const [previewedKey, setPreviewedKey] = useState("");
+  // The merge-target key of the last STARTED action: an outcome or error is rendered only while
+  // the form still names the exact target it was produced for (same rule as the preview gate).
+  const [actionKey, setActionKey] = useState("");
   const async = useGovernedMergeActions(client);
   const onChange = useCallback(<K extends keyof MergeForm>(key: K, value: MergeForm[K]): void => {
     setForm((f) => ({ ...f, [key]: value }));
@@ -551,6 +575,7 @@ function GovernedMergeBody({
 
   const onPreview = useCallback((): void => {
     const previewedTarget = targetKeyOf(form);
+    setActionKey(previewedTarget);
     void async.runPreview(formToInput(form, projectId)).then((preview) => {
       if (preview === null) return;
       // Default the selection to the preview's chosen default strategy (AC2 — never a hard-coded UI
@@ -565,6 +590,7 @@ function GovernedMergeBody({
   }, [async, form, projectId]);
 
   const onExecute = useCallback((): void => {
+    setActionKey(targetKeyOf(form));
     async.runExecute(formToInput(form, projectId));
   }, [async, form, projectId]);
 
@@ -572,15 +598,18 @@ function GovernedMergeBody({
   // mergeable PR, and — when the policy gates approval — the explicit high-risk confirmation.
   const canPreview =
     form.ownerAndRepo !== "" &&
-    form.prExternalId !== "" &&
+    isValidPrNumber(form.prExternalId) &&
     form.baseBranchName !== "" &&
     form.headBranchName !== "";
-  const preview = async.preview;
-  const requiresApproval = preview?.requiresApproval ?? false;
-  const mergeable = preview?.readiness.mergeable ?? false;
+  const targetKey = targetKeyOf(form);
   // The loaded preview must be for the CURRENT target — editing a target field after a preview re-gates
   // the merge until a fresh preview confirms the new target's readiness/approval (AC1).
-  const previewMatchesTarget = preview !== null && previewedKey === targetKeyOf(form);
+  const preview = previewedKey === targetKey ? async.preview : null;
+  const requiresApproval = preview?.requiresApproval ?? false;
+  const mergeable = preview?.readiness.mergeable ?? false;
+  const previewMatchesTarget = preview !== null;
+  const visibleOutcome = actionKey === targetKey ? async.outcome : null;
+  const visibleError = actionKey === targetKey ? async.error : null;
   const canExecute =
     canPreview &&
     previewMatchesTarget &&
@@ -615,7 +644,12 @@ function GovernedMergeBody({
           clip: "rect(0 0 0 0)",
         }}
       >
-        {liveTextFor(async)}
+        {liveTextFor({
+          busy: async.busy,
+          error: visibleError,
+          outcome: visibleOutcome,
+          preview,
+        })}
       </p>
       <MergeTargetFields form={form} busy={async.busy} onChange={onChange} />
       <StrategySelector form={form} preview={preview} busy={async.busy} onChange={onChange} />
@@ -642,7 +676,7 @@ function GovernedMergeBody({
           Merge Pull Request
         </button>
       </div>
-      <MergeOutcome outcome={async.outcome} error={async.error} />
+      <MergeOutcome outcome={visibleOutcome} error={visibleError} />
     </div>
   );
 }

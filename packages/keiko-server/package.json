@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.2.14",
+    "@oscharko-dev/keiko-git": "0.2.14",
     "@oscharko-dev/keiko-security": "0.2.14",
     "@oscharko-dev/keiko-model-gateway": "0.2.14",
     "@oscharko-dev/keiko-quality-intelligence": "0.2.14",

@@ -160,6 +160,7 @@
     "@oscharko-dev/keiko-cli": "0.2.14",
     "@oscharko-dev/keiko-contracts": "0.2.14",
     "@oscharko-dev/keiko-evaluations": "0.2.14",
+    "@oscharko-dev/keiko-git": "0.2.14",
     "@oscharko-dev/keiko-evidence": "0.2.14",
     "@oscharko-dev/keiko-harness": "0.2.14",
     "@oscharko-dev/keiko-local-knowledge": "0.2.14",
@@ -185,6 +186,7 @@
   },
   "bundleDependencies": [
     "@oscharko-dev/keiko-contracts",
+    "@oscharko-dev/keiko-git",
     "@oscharko-dev/keiko-security",
     "@oscharko-dev/keiko-model-gateway",
     "@oscharko-dev/keiko-workspace",

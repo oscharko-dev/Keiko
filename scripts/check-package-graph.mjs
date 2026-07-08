@@ -124,10 +124,15 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     ],
   ],
   ["@oscharko-dev/keiko-security", ["@oscharko-dev/keiko-contracts"]],
+  // Shared governed git core (runner + hardened env + repository-membership resolution +
+  // failure classification). A leaf next to keiko-security: only contracts may be imported so
+  // the spawn path can never pull in server, tool, or provider code.
+  ["@oscharko-dev/keiko-git", ["@oscharko-dev/keiko-contracts"]],
   [
     "@oscharko-dev/keiko-server",
     [
       "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-git",
       "@oscharko-dev/keiko-security",
       "@oscharko-dev/keiko-model-gateway",
       "@oscharko-dev/keiko-workspace",

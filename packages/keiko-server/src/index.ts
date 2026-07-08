@@ -153,7 +153,11 @@ export {
   type TerminalPolicySummary,
 } from "./terminal.js";
 export { TerminalToolError, type TerminalErrorCode } from "./terminal-errors.js";
-export { runMemoryMaintenance, type MaintenanceCounts } from "./memory-maintenance-handlers.js";
+export {
+  runMemoryMaintenance,
+  memorySemanticizationMultipliers,
+  type MaintenanceCounts,
+} from "./memory-maintenance-handlers.js";
 export {
   exportMemoryDiagnostics,
   type ExportMemoryDiagnosticsOptions,

@@ -131,7 +131,8 @@ describe("GET /api/git/status", () => {
     store.createProject(selectedRoot, "nested fixture");
     const runner = vi
       .fn<GitProcessRunner>()
-      .mockResolvedValueOnce(ok(`${root}\n`))
+      // rev-parse --show-toplevel --show-prefix: git reports the prefix with a trailing slash.
+      .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
         ok(
           [
@@ -206,13 +207,52 @@ describe("GET /api/git/status", () => {
     });
   });
 
+  it("skips the old-path field of worktree-side renames and reports typechanges as modifications", async () => {
+    // Y=R (unstaged rename detection, git >= 2.18) also emits a NUL-separated original-path
+    // field; failing to skip it used to surface the old path as a phantom change record. T
+    // (typechange) is not part of the wire vocabulary and must degrade to M, not to clean.
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(
+        ok(
+          [
+            "## main",
+            " R src/renamed-in-worktree.ts",
+            "src/original-name.ts",
+            " T src/now-a-symlink.ts",
+            "T  src/staged-typechange.ts",
+          ].join("\0") + "\0",
+        ),
+      );
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      state: "available",
+      changes: [
+        { path: "src/renamed-in-worktree.ts", worktreeStatus: "R", unstaged: true },
+        { path: "src/now-a-symlink.ts", worktreeStatus: "M", unstaged: true },
+        { path: "src/staged-typechange.ts", indexStatus: "M", staged: true },
+      ],
+    });
+    const paths = (result.body as { changes: readonly { path: string }[] }).changes.map(
+      (change) => change.path,
+    );
+    expect(paths).not.toContain("src/original-name.ts");
+  });
+
   it("handles detached-at headers, ignored/unknown status codes, and copy old paths outside the selected root", async () => {
     const selectedRoot = join(root, "workspace");
     await mkdir(selectedRoot);
     store.createProject(selectedRoot, "nested fixture");
     const runner = vi
       .fn<GitProcessRunner>()
-      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
       .mockResolvedValueOnce(
         ok(
           [
