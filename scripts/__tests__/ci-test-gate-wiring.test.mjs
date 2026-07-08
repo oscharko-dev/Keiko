@@ -16,6 +16,14 @@ const repoRoot = resolve(here, "..", "..");
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
 const extendedE2e = readFileSync(resolve(repoRoot, ".github/workflows/e2e-extended.yml"), "utf8");
+const htmlManualReleaseEvidence = readFileSync(
+  resolve(repoRoot, "docs/qa/html-manual-retrieval-evaluation-evidence.md"),
+  "utf8",
+);
+const retrievalFixtures = readFileSync(
+  resolve(repoRoot, "packages/keiko-local-knowledge/src/evaluations/fixtures.ts"),
+  "utf8",
+);
 
 // GEN-TEST-E2E-005: the editor/git/LK browser suites were wired into no workflow and could silently
 // rot. e2e-extended.yml runs them on a schedule; pin that they stay wired.
@@ -63,6 +71,25 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:adr-index",
 ];
 
+const REQUIRED_HTML_MANUAL_RELEASE_GATES = [
+  "check:retrieval-quality",
+  "check:grounded-retrieval-quality",
+  "check:grounded-faithfulness",
+  "Leakage suites",
+  "typecheck",
+  "lint",
+  "format:check",
+  "arch:check",
+];
+
+const HTML_MANUAL_FIXTURE_IDS = [
+  ...new Set(
+    [...retrievalFixtures.matchAll(/\n\s*id: "(html-manual-[^"]+)"/gu)].map((match) =>
+      String(match[1]),
+    ),
+  ),
+];
+
 describe("CI test/gate wiring guard", () => {
   for (const command of REQUIRED_CI_COMMANDS) {
     it(`ci.yml wires \`${command}\``, () => {
@@ -80,6 +107,22 @@ describe("CI test/gate wiring guard", () => {
   it("runs the excluded UI suite in its own required CI job with a coverage ratchet", () => {
     expect(ci).toContain("npm run test:coverage:ui");
     expect(ci).toContain("npm run check:coverage:ui");
+  });
+
+  it("machine-pins the HTML manual release evidence gate matrix (AUDIT-E1858-002)", () => {
+    expect(htmlManualReleaseEvidence).toContain("## Required vs advisory gates");
+    for (const gate of REQUIRED_HTML_MANUAL_RELEASE_GATES) {
+      expect(htmlManualReleaseEvidence, `${gate} must stay listed in release evidence`).toContain(
+        gate,
+      );
+    }
+    for (const fixtureId of HTML_MANUAL_FIXTURE_IDS) {
+      expect(
+        htmlManualReleaseEvidence,
+        `${fixtureId} must stay represented in release evidence`,
+      ).toContain(fixtureId);
+    }
+    expect(htmlManualReleaseEvidence).not.toContain("not a machine-enforced artifact");
   });
 
   // GEN-TEST-E2E-005: the previously-orphaned editor/git/LK suites must stay wired into a scheduled

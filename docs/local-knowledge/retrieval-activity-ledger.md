@@ -329,23 +329,21 @@ recurring leakage-guard gap class plus one CodeQL-flagged regression introduced 
   package-surface, retrieval-quality, grounded-retrieval-quality, grounded-faithfulness, coverage
   baseline/release-targets/branches) and all CI checks were green at merge.
 
-### Currently known, dispositioned-as-follow-up gaps
+### Post-audit residuals and dispositions
 
-These are known limitations that were identified but intentionally not fixed in the above rounds;
-they remain open, non-release-blocking follow-ups:
+The following earlier follow-ups have been closed in code and regression tests:
 
-- **Silent fail-closed assembly.** `tryBuildKnowledgePodRetrievalActivity` in
-  `packages/keiko-server/src/local-knowledge-grounded-qa.ts` catches any error from
-  `buildKnowledgePodRetrievalActivity` and returns `undefined` with no logging, diagnostic record,
-  or correlation id — the answer still renders correctly (fail-closed), but a future regression in
-  the activity-assembly contract would omit `retrievalActivity` silently and permanently, with
-  nothing distinguishing "nothing to show" from "assembly is broken." The repository already has
-  an established pattern for this class of problem (`diagnostics-log.ts`'s
-  `emitServerDiagnostic`/`serverDiagnosticFromError`, gated by `check-error-observability`), which
-  this internal swallow does not yet route through.
-- **Badge visual differentiation.** `GroundedAnswer.tsx`'s six `ACTIVITY_STATE_LABELS` values
-  (`Searched`, `Skipped`, `Degraded`, `Denied`, `Unavailable`, `Not selected`) all render through
-  the identical `grounded-evidence-summary-badge` class with no state-specific modifier or
-  color/icon cue — fully accessible (the text is the accessible name), but a sighted user skimming
-  a long, expanded pod list has no at-a-glance visual differentiator between states beyond the
-  label text.
+- **Silent fail-closed assembly:** `tryBuildKnowledgePodRetrievalActivity` now emits a redacted
+  server diagnostic when activity assembly fails while still omitting the broken activity payload
+  from the answer. Regression:
+  `local-knowledge-grounded-qa.rescue.test.ts` — "emits a diagnostic when retrieval activity
+  assembly fails closed".
+- **Badge visual differentiation:** `GroundedAnswer.tsx` now stamps state-specific attributes on
+  retrieval-activity badges and `GroundedAnswer.module.css` maps them to scoped visual accents.
+  Regression: `GroundedAnswer.test.tsx` — "marks Knowledge Pod activity badges with state-specific
+  attributes".
+
+Responsive structure is covered at the component level: `GroundedAnswer.test.tsx` renders a narrow
+container with many pods and a long safe display name, verifies disclosure capping, and pins the
+component-scoped wrap/shrink classes used by `GroundedAnswer.module.css`. Screenshot-level evidence
+remains optional release evidence, not a prerequisite for this code-path closure.

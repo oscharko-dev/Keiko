@@ -79,6 +79,7 @@ import { assertUsableAssistantContent } from "./assistant-response.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { requestConfiguredRerank } from "./grounded-model-reranker.js";
 import { buildHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
+import { invalidRerankMappingDiagnostics, withKeptCount } from "./grounded-rerank.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -1251,25 +1252,6 @@ export function fallbackReferenceSelection(
   limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] {
   return references.slice(0, limits.maxPromptReferences);
-}
-
-function withKeptCount(
-  diagnostics: GroundedRerankerDiagnostics,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return { ...diagnostics, keptCount };
-}
-
-function invalidRerankMappingDiagnostics(
-  diagnostics: GroundedRerankerDiagnostics,
-  keptCount: number,
-): GroundedRerankerDiagnostics {
-  return {
-    ...diagnostics,
-    status: "invalid-response",
-    failureKind: "invalid-response",
-    keptCount,
-  };
 }
 
 // Exported for deterministic unit coverage of the malformed-provider-mapping guard (#1925/#1926):

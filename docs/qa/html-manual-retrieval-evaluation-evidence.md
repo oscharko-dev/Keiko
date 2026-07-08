@@ -57,6 +57,11 @@ evaluation suites. Values are the body-free scorecard aggregate.
 | Grounded retrieval / faithfulness gates     | PASS (unchanged scripted corpora)                                                                                                    |
 | Leakage classes gated (evidence + activity) | raw-body, path, token-query, credential-url, cookie, prompt, provider-endpoint, customer-hostname; raw vectors excluded structurally |
 
+Registered HTML-manual fixtures represented by this gate surface:
+`html-manual-structure`, `html-manual-table-row`, `html-manual-frameset`,
+`html-manual-code-block`, `html-manual-malformed`, `html-manual-denied-link`,
+`html-manual-index-page`, and `html-manual-multilingual`.
+
 ## Gate command summary
 
 Run from the repository root against this branch.
@@ -104,12 +109,9 @@ its own owning epics and is advisory here.
   owned by Epic #1857. Both remain advisory for the P0 surface.
 - Editor release-evidence and UI fingerprints are untouched by this epic (no `keiko-ui` or
   `keiko-editor` change), so those gates carry negligible risk from this change set.
-- The "Required vs advisory gates" table above is documentation, not a machine-enforced artifact —
-  no script or CI job asserts that this document exists, is current, or lists every `html-manual-*`
-  fixture actually present in `ALL_FIXTURES`. The underlying gates it names (`check:retrieval-quality`,
-  `check:grounded-retrieval-quality`, `check:grounded-faithfulness`, the leakage suites) are all
-  machine-enforced via the required `ci` job; only this closure-bookkeeping layer relies on human
-  review. This mirrors the deliberate documentation-only closure pattern used by every prior
-  `docs/qa/*-evidence.md` record in this program (ADR-0111) and by Issue #1906's own scope, which
-  explicitly chose this over wiring the table into `release-impact.catalog.json` or a new `ci.yml`
+- The "Required vs advisory gates" table above is now pinned by
+  `scripts/__tests__/ci-test-gate-wiring.test.mjs`: the document must exist, retain the required
+  gate names, and represent every registered `html-manual-*` fixture id from `ALL_FIXTURES`. The
+  underlying gates it names (`check:retrieval-quality`, `check:grounded-retrieval-quality`,
+  `check:grounded-faithfulness`, the leakage suites) remain machine-enforced via the required `ci`
   job.

@@ -32,3 +32,36 @@
   border-color: var(--feedback-success);
   color: var(--feedback-success);
 }
+
+.activityList {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.activityListItem {
+  min-width: 0;
+}
+
+.activityMeta {
+  overflow-wrap: anywhere;
+}
+
+.citationListItem {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.manualCitationAction {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.manualCitationRange {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.manualCitationAction :global(.grounded-citation-action-label),
+.manualCitationAction :global(.grounded-citation-score) {
+  flex: 0 0 auto;
+}

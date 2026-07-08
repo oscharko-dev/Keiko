@@ -599,6 +599,28 @@ describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
     }
   });
 
+  it("keeps DNS-resolved metadata blocked when private-network egress is enabled", async () => {
+    // `allowPrivateNetwork` permits RFC-1918 intranet targets, not cloud metadata or other
+    // link-local classes reached through a hostname. The DNS validation must therefore still run
+    // when the flag is enabled; otherwise a hostname that resolves to 169.254.169.254 would bypass
+    // the literal-host check entirely.
+    vi.resetModules();
+    vi.doMock("node:dns/promises", () => ({
+      lookup: vi.fn(() => Promise.resolve([{ address: "169.254.169.254", family: 4 }])),
+    }));
+    try {
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      await expect(
+        pinnedGatewayFetch("http://private-manual.invalid/latest/meta-data", {
+          egress: { allowPrivateNetwork: true },
+        }),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
   it("re-validates and refuses a redirect hop whose DNS resolves to a blocked address", async () => {
     // The origin is a legitimate, allowed target; its redirect Location points at a second
     // hostname that only resolves to a blocked (metadata-class) address on the redirect-hop
