@@ -94,9 +94,9 @@ picked/cancelled/busy/unsupported/error) and the `useNativeFileDialogCapability`
 - `NewWindowDialog` directory config fields, the agent repository picker, and the unit-test
   source-file picker (native absolute paths are normalized repo-relative; out-of-workspace picks
   are refused with calm copy).
-- Quality Intelligence `RunLauncher` folder/file source selection (the path stays display-only by
-  design — GEN-UI-A11Y-011; on unsupported platforms Browse is disabled with an explanatory note,
-  which is the one surface without manual entry).
+- Quality Intelligence `RunLauncher` folder/file source selection (an always-editable path input
+  pairs with Browse; on unsupported platforms Browse is disabled with an explanatory note inviting
+  manual entry).
 - Local-knowledge `capsule-actions` (the chosen scope decides the mode; multi-file picks fold
   into shared root + relative files via `nativePathsToRootAndFiles`) and
   `source-rebind-control` (always a folder pick — the old picker's file branch also collapsed to

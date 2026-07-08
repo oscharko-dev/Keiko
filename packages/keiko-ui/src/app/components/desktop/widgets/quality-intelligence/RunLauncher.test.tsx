@@ -355,26 +355,27 @@ describe("RunLauncher — initial render", () => {
     expect(sourceTypeRadio("Folder")).toHaveAttribute("aria-checked", "false");
   });
 
-  it("does not expose the folder/file path display as an editable textbox (#47)", async () => {
+  it("exposes the folder/file path as an always-editable manual-entry textbox (#47)", async () => {
     const user = userEvent.setup();
     render(<RunLauncher />);
 
     await chooseSourceType(user, "Folder");
-    // The path value is a display, not an editor: it must not be an interactive textbox (a
-    // role="textbox" without a tabIndex is an invalid, non-focusable widget — GEN-UI-A11Y-011).
-    expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
+    // The path field is a real textbox: manual entry is first-class, matching every other
+    // Browse-paired path field in the app (NewWindowDialog, capsule-actions, source-rebind-control).
+    const input = screen.getByRole("textbox", { name: /folder path/i });
+    expect(input).toBeEnabled();
     // The empty-state placeholder is still shown, associated with its "Folder path" label.
-    expect(screen.getByText(/choose a local folder/i)).toBeInTheDocument();
+    expect(input).toHaveAttribute("placeholder", "Choose a local folder…");
   });
 
-  // ADR-0118 D4 documents the QI folder/file source as the ONE surface that keeps NO manual-entry
-  // fallback on an unsupported platform (unlike NewWindowDialog/capsule-actions/source-rebind
-  // control, which all keep an editable input). This pins that documented, maintainer-decided
-  // behavior so a future change to it is a deliberate, visible diff rather than a silent drift.
-  it("keeps Browse disabled with an explanatory note and no manual fallback on unsupported platforms", async () => {
+  // ADR-0118 D4 (as amended) — the QI folder/file source is now an always-editable manual-entry
+  // input, matching NewWindowDialog/capsule-actions/source-rebind-control. On an unsupported
+  // platform only Browse is disabled; the path input stays enabled and drives the run.
+  it("keeps Browse disabled with an explanatory note but still accepts manual path entry on unsupported platforms", async () => {
     vi.mocked(nativeFileDialogSupported).mockResolvedValueOnce(false);
     const user = userEvent.setup();
-    render(<RunLauncher />);
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} />);
 
     await chooseSourceType(user, "Folder");
 
@@ -383,9 +384,20 @@ describe("RunLauncher — initial render", () => {
     expect(
       screen.getByText(/native dialogs are unavailable on this platform/i),
     ).toBeInTheDocument();
-    // No editable control exists for the path on this surface — the only way to fill it in is via
-    // a supported native dialog, which the platform above does not offer.
-    expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
+
+    const input = screen.getByRole("textbox", { name: /folder path/i });
+    expect(input).toBeEnabled();
+    await user.type(input, "/repos/my-app/docs");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => expect(startImpl).toHaveBeenCalledTimes(1));
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.sources[0]).toMatchObject({
+      kind: "workspace",
+      path: "/repos/my-app/docs",
+    });
   });
 
   it("renders a requirements textarea (default source type)", () => {
@@ -436,13 +448,12 @@ describe("RunLauncher — source-type switching", () => {
 
     await chooseSourceType(user, "Folder");
 
-    // After switch: folder path picker present (a labelled Browse button + display value, NOT an
-    // editable textbox — the value is chosen via the dialog, GEN-UI-A11Y-011), textarea gone.
+    // After switch: folder path picker present (a labelled Browse button + a manual-entry path
+    // input), textarea gone.
     expect(screen.getByText(/^folder path$/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
-    // The path display is a plain labelled value, not an interactive textbox widget.
-    expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /folder path/i })).toBeInTheDocument();
   });
 
   it("swaps the requirements textarea for a file-path browser when 'File' is selected", async () => {
@@ -454,7 +465,7 @@ describe("RunLauncher — source-type switching", () => {
     expect(screen.getByText(/^file path$/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /file path/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /file path/i })).toBeInTheDocument();
   });
 
   it("re-shows the requirements textarea when switching back to 'Requirements text'", async () => {
@@ -608,6 +619,61 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       label: "My project",
     });
     expect(calledRequest.seed).toBeUndefined();
+  });
+
+  it("calls startImpl with a manually typed workspace path, never opening the native dialog", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await chooseSourceType(user, "Folder");
+    await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/repos/my-app/docs");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    expect(pickWithNativeDialog).not.toHaveBeenCalled();
+
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.sources[0]).toMatchObject({
+      kind: "workspace",
+      path: "/repos/my-app/docs",
+    });
+  });
+
+  it("lets a Browse-picked value be edited further by typing, sharing one state cell", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await chooseSourceType(user, "Folder");
+    vi.mocked(pickWithNativeDialog).mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/repos/my-app/docs"],
+    });
+    const browse = screen.getByRole("button", { name: /browse/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
+
+    const input = await screen.findByRole("textbox", { name: /folder path/i });
+    await waitFor(() => expect(input).toHaveValue("/repos/my-app/docs"));
+
+    await user.type(input, "/nested");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.sources[0]).toMatchObject({
+      kind: "workspace",
+      path: "/repos/my-app/docs/nested",
+    });
   });
 
   it("calls startImpl with a file source when the single-file source type is selected", async () => {
