@@ -48,6 +48,13 @@ const SIDECAR_RUNTIME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const STAGING_ASSET_ID_UNAVAILABLE = 0;
 const MAC_APP_ICON_FILE = "Keiko.icns";
 const MAC_APP_ICON_SOURCE = join(repoRoot, "native", "portable-launcher", "keiko.icns");
+const WINDOWS_LAUNCHER_ICON_SOURCE = join(repoRoot, "native", "portable-launcher", "keiko.ico");
+const WINDOWS_LAUNCHER_RESOURCE_SOURCE = join(
+  repoRoot,
+  "native",
+  "portable-launcher",
+  "keiko-portable-launcher.rc",
+);
 const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "package.json",
   "dist/index.js",
@@ -942,6 +949,10 @@ function nativeLauncherSource() {
   return join(repoRoot, "native", "portable-launcher", "keiko-portable-launcher.c");
 }
 
+function windowsLauncherResourceSource() {
+  return WINDOWS_LAUNCHER_RESOURCE_SOURCE;
+}
+
 function nativeLauncherTargetDefine(target) {
   return `KEIKO_PORTABLE_TARGET="${target.platformTarget}"`;
 }
@@ -965,18 +976,42 @@ function compileMacLauncher(target, destination) {
 }
 
 function compileWindowsLauncher(target, destination) {
-  run("cl", [
-    "/nologo",
-    "/O2",
-    "/DUNICODE",
-    "/D_UNICODE",
-    `/D${nativeLauncherTargetDefine(target)}`,
-    `/Fe:${destination}`,
-    nativeLauncherSource(),
-    "/link",
-    "/SUBSYSTEM:WINDOWS",
-    "/ENTRY:wmainCRTStartup",
-  ]);
+  requireWindowsLauncherIconSource();
+  const tempRoot = mkdtempSync(join(tmpdir(), "keiko-windows-launcher-resource-"));
+  try {
+    const resourcePath = join(tempRoot, "keiko-portable-launcher.res");
+    run("rc", ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()]);
+    run("cl", [
+      "/nologo",
+      "/O2",
+      "/DUNICODE",
+      "/D_UNICODE",
+      `/D${nativeLauncherTargetDefine(target)}`,
+      `/Fe:${destination}`,
+      nativeLauncherSource(),
+      resourcePath,
+      "/link",
+      "/SUBSYSTEM:WINDOWS",
+      "/ENTRY:wmainCRTStartup",
+    ]);
+  } finally {
+    rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function requireWindowsLauncherIconSource() {
+  if (
+    !existsSync(WINDOWS_LAUNCHER_ICON_SOURCE) ||
+    !statSync(WINDOWS_LAUNCHER_ICON_SOURCE).isFile()
+  ) {
+    fail("portable Windows launcher icon is required");
+  }
+  if (
+    !existsSync(WINDOWS_LAUNCHER_RESOURCE_SOURCE) ||
+    !statSync(WINDOWS_LAUNCHER_RESOURCE_SOURCE).isFile()
+  ) {
+    fail("portable Windows launcher resource is required");
+  }
 }
 
 function stageSupportLauncher(target, stageRoot) {

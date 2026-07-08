@@ -435,6 +435,18 @@ function stagedMacResourcesRoot(outDir, platformTarget) {
   return join(stagedMacAppRoot(outDir, platformTarget), "Contents", "Resources");
 }
 
+function readPortableStageSource() {
+  return readFileSync("scripts/stage-portable-runtime.mjs", "utf8");
+}
+
+function expectIconAssetHeaders() {
+  const macIcon = readFileSync("native/portable-launcher/keiko.icns");
+  const windowsIcon = readFileSync("native/portable-launcher/keiko.ico");
+  expect(macIcon.subarray(0, 4).toString("ascii")).toBe("icns");
+  expect(windowsIcon.subarray(0, 4)).toEqual(Buffer.from([0, 0, 1, 0]));
+  expect(windowsIcon.readUInt16LE(4)).toBeGreaterThan(0);
+}
+
 function sidecarRuntimeFor(platformTarget, overrides = {}) {
   const target = portableTarget(platformTarget);
   const name = overrides.name ?? "opencode-compatible";
@@ -837,6 +849,18 @@ describe("portable runtime package scripts", () => {
 
     expect(appSurfaceFailures(appRoot)).toContain("dist/cli/index.js is required");
     expect(appSurfaceFailures(appRoot)).toContain("package.json version must match root");
+  });
+
+  it("wires native launcher icons for Windows and both macOS artifact targets", () => {
+    expectIconAssetHeaders();
+    expect(readFileSync("native/portable-launcher/keiko-portable-launcher.rc", "utf8")).toContain(
+      "native/portable-launcher/keiko.ico",
+    );
+    const source = readPortableStageSource();
+    expect(source).toContain("CFBundleIconFile");
+    expect(source).toContain("Keiko.icns");
+    expect(source).toContain('run("rc"');
+    expect(source).toContain("windowsLauncherResourceSource()");
   });
 });
 
