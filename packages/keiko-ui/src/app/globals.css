@@ -17444,14 +17444,16 @@ html[data-keiko-gateway-setup-open="true"] {
 }
 .qi-input:focus-visible,
 .qi-textarea:focus-visible,
-.qi-select:focus-visible {
+.qi-select:focus-visible,
+.qi-path-value:focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--accent);
 }
 :root[data-input-modality="keyboard"] .qi-input:focus-visible,
 :root[data-input-modality="keyboard"] .qi-textarea:focus-visible,
-:root[data-input-modality="keyboard"] .qi-select:focus-visible {
+:root[data-input-modality="keyboard"] .qi-select:focus-visible,
+:root[data-input-modality="keyboard"] .qi-path-value:focus-visible {
   outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
   border-color: var(--accent);
@@ -17568,8 +17570,12 @@ select.qi-select {
   color: var(--text-primary);
   font-size: 12.5px;
 }
-.qi-path-value[data-empty="true"] {
-  color: var(--text-secondary);
+.qi-path-value::placeholder {
+  color: var(--input-placeholder);
+}
+.qi-path-value:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .qi-browse-btn {
   min-width: 82px;
@@ -20662,147 +20668,9 @@ button.figma-view-preview {
 .dlg-dirbtn {
   white-space: nowrap;
 }
-.dir-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.file-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.file-picker-head {
-  display: flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 5px 10px;
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  background: var(--inset);
-}
-.file-picker-path {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-.dir-top {
-  display: flex;
-  gap: 8px;
-}
-.dir-top .dir-path {
-  width: auto;
-  flex: 1;
-  min-width: 0;
-}
-.dir-roots {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.dir-chip {
-  min-height: 24px;
-  padding: 4px 11px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-.dir-chip:hover {
-  background: var(--card-2);
-  color: var(--fg);
-}
-.dir-chip:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
-  outline-offset: 2px;
-}
-.dir-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 220px;
-  overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-default) transparent;
-  border: 1px solid var(--line-soft);
-  border-radius: var(--radius-sm);
-  padding: 4px;
-}
-.dir-list::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-.dir-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-.dir-list::-webkit-scrollbar-thumb {
-  background: var(--border-default);
-  border: 3px solid transparent;
-  border-radius: 10px;
-  background-clip: padding-box;
-}
-.dir-list::-webkit-scrollbar-thumb:hover {
-  background: var(--border-strong);
-  background-clip: padding-box;
-}
-.file-picker-list {
-  max-height: 260px;
-}
-.dir-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  min-height: 28px;
-  padding: 6px 10px;
-  border-radius: 7px;
-  text-align: left;
-  font-size: 12.5px;
-  color: var(--fg-muted);
-}
-.dir-row:hover {
-  background: var(--card-2);
-  color: var(--fg);
-}
-.dir-row:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.file-picker-row[data-selected="true"] {
-  border: 1px solid var(--accent-line);
-  background: var(--accent-dim);
-  color: var(--accent-text);
-}
-.file-picker-row .file-picker-meta {
-  margin-left: auto;
-  color: var(--fg-faint);
-  font-size: 11px;
-}
-.file-picker-warning {
-  color: var(--warn);
-}
-.dir-row:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
-  outline-offset: -2px;
-}
-.dir-note {
-  font-size: 12px;
-  color: var(--fg-faint);
-  padding: 6px 10px;
-}
-.dir-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 9px;
-}
 /* C086 — same recipe as .gw-error (globals.css ~5959): readable var(--fg) ink on a
    danger-tinted card, 12.5px to match dialog body type instead of inherited 16px */
-.dlg-error,
-.dir-error {
+.dlg-error {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in oklch, var(--feedback-danger) 48%, transparent);

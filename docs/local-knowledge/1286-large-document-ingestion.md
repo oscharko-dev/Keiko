@@ -67,6 +67,13 @@ Knowledge configuration / BFF defaults rather than hidden inside parser
 constants. `largeDocumentPolicyFingerprint()` produces a stable string that is
 persisted with each checkpoint so a resumed job can detect a policy change.
 
+`maxRawFileBytes` is also enforced synchronously at connect time for `"files"`
+scopes (`guardConnectorSourcePath` in `keiko-server/local-knowledge-handlers.ts`):
+a native multi-file pick is a bounded, explicit relative-file list, so each file
+is `stat`-ed and rejected up front instead of only being discovered during
+indexing. `"folder"`/`"repository"` scopes are unbounded recursive walks and stay
+size-checked only at indexing time, as before.
+
 ## 4. Progressive extraction
 
 A `ProgressiveExtractor` yields the document as an ordered sequence of bounded
