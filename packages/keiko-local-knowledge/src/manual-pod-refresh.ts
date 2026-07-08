@@ -54,6 +54,7 @@ import {
   type HtmlManualIndexingProgress,
 } from "./manual-pod-progress.js";
 import {
+  HTML_MANUAL_SOURCE_SCOPE_VERSION,
   readHtmlManualSourceMetadata,
   updateHtmlManualRefreshState,
   type HtmlManualSourceMetadata,
@@ -120,6 +121,12 @@ function reconstructHtmlManualSource(
   metadata: HtmlManualSourceMetadata,
   proposedPodName: string,
 ): HtmlManualSource {
+  if (
+    metadata.sourceScopeVersion !== undefined &&
+    metadata.sourceScopeVersion !== HTML_MANUAL_SOURCE_SCOPE_VERSION
+  ) {
+    throw new KnowledgeStoreError("persisted manual source scope version is unsupported");
+  }
   const scope = reconstructScope(metadata);
   if (scope === undefined) {
     throw new KnowledgeStoreError("persisted manual scope is incomplete; cannot refresh");

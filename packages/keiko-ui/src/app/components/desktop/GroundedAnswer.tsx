@@ -520,15 +520,18 @@ function KnowledgePodRetrievalActivityPanel({
           value={`${formatCount(summary.referenceCount)} ${pluralize(summary.referenceCount, "reference")} · ${formatCount(summary.citationCount)} ${pluralize(summary.citationCount, "citation")}`}
         />
       </dl>
-      <ul className="grounded-uncertainty-list" aria-label="Knowledge Pod activity details">
+      <ul
+        className={`grounded-uncertainty-list ${activityBadgeStyles.activityList}`}
+        aria-label="Knowledge Pod activity details"
+      >
         {visiblePods.map((pod) => (
-          <li key={`${pod.podKind}-${pod.podId}`}>
+          <li key={`${pod.podKind}-${pod.podId}`} className={activityBadgeStyles.activityListItem}>
             <span className="grounded-evidence-summary-badge" data-activity-state={pod.state}>
               {ACTIVITY_STATE_LABELS[pod.state]}
             </span>{" "}
             {activityPodLine(pod)}
             {" · "}
-            <span className="grounded-meta">
+            <span className={`grounded-meta ${activityBadgeStyles.activityMeta}`}>
               {`Modes: ${activityModes(pod)} · Reasons: ${activityReasons(pod)}`}
             </span>
           </li>
@@ -597,7 +600,10 @@ function LocalKnowledgeCitationList({
       <span className="grounded-citations-label">Knowledge citations</span>
       <ul className="grounded-citations" aria-label="Knowledge citations">
         {visible.map((citation) => (
-          <li key={citation.stableId} className="grounded-citations-item">
+          <li
+            key={citation.stableId}
+            className={`grounded-citations-item ${activityBadgeStyles.citationListItem}`}
+          >
             <KnowledgeCitationChip
               citation={citation}
               citationPreview={citationPreview}
@@ -681,7 +687,7 @@ function ManualCitationChip({
   return (
     <button
       type="button"
-      className={`grounded-citation grounded-citation-action${modifier}`}
+      className={`grounded-citation grounded-citation-action ${activityBadgeStyles.manualCitationAction}${modifier}`}
       aria-disabled={unavailable ? "true" : undefined}
       aria-label={`${label} · ${actionLabel}`}
       title={`${knowledgeCitationTitle(citation)} · ${actionLabel}`}
@@ -693,7 +699,9 @@ function ManualCitationChip({
         setState(openDocumentationTarget(target) ? "opened" : "failed");
       }}
     >
-      <span className="grounded-citation-range">{label}</span>
+      <span className={`grounded-citation-range ${activityBadgeStyles.manualCitationRange}`}>
+        {label}
+      </span>
       <span className="grounded-citation-action-label" aria-live="polite">
         {actionLabel}
       </span>

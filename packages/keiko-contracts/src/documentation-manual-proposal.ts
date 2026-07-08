@@ -128,8 +128,8 @@ export interface DocumentationManualDetection {
 // later crawler will honour, so the user can see it before approving.
 export type DocumentationManualRobotsPosture = "honor-robots-txt" | "not-applicable";
 
-// Redaction-safe classes of link the (future) crawl will refuse. Reported as reason codes only; the UI
-// renders counts/labels, never raw denied URLs.
+// Redaction-safe classes of link the (future) crawl will refuse. Pre-consent detection performs no
+// crawl, so these are reason-code labels only; no denied-link counts or raw URLs exist yet.
 export const DOCUMENTATION_MANUAL_DENIED_LINK_CLASSES = [
   "cross-origin",
   "outside-path-prefix",

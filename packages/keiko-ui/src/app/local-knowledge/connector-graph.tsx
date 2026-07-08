@@ -27,10 +27,15 @@ import type {
   CapsuleSetId,
   CapsuleLifecycleState,
   KnowledgePodSetReadinessReasonCode,
+  KnowledgePodModelUsePolicy,
   ManualRefreshChangeSummary,
   ManualRefreshReasonCode,
 } from "@oscharko-dev/keiko-contracts";
-import { MANUAL_REFRESH_REASON_GUIDANCE } from "@oscharko-dev/keiko-contracts";
+import {
+  MANUAL_REFRESH_REASON_GUIDANCE,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import type {
@@ -103,6 +108,12 @@ function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
   );
 }
 
+type CreateCapsulePolicyMode = "sealed-local" | "standard";
+
+function policyForCreateMode(mode: CreateCapsulePolicyMode): KnowledgePodModelUsePolicy {
+  return mode === "sealed-local" ? sealedLocalPodModelUsePolicy() : standardPodModelUsePolicy();
+}
+
 function CreateCapsuleDialog({
   busy,
   error,
@@ -112,7 +123,7 @@ function CreateCapsuleDialog({
   readonly busy: boolean;
   readonly error: string | null;
   readonly onCancel: () => void;
-  readonly onSubmit: (name: string) => Promise<void>;
+  readonly onSubmit: (name: string, modelUsePolicy: KnowledgePodModelUsePolicy) => Promise<void>;
 }): ReactNode {
   const titleId = useId();
   const descriptionId = useId();
@@ -122,6 +133,7 @@ function CreateCapsuleDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const [name, setName] = useState("");
+  const [policyMode, setPolicyMode] = useState<CreateCapsulePolicyMode>("sealed-local");
   const [validationError, setValidationError] = useState<string | null>(null);
   useModalInteractionLock();
 
@@ -189,7 +201,7 @@ function CreateCapsuleDialog({
       return;
     }
     setValidationError(null);
-    await onSubmit(trimmed);
+    await onSubmit(trimmed, policyForCreateMode(policyMode));
   }
 
   const dialogError = validationError ?? error;
@@ -232,6 +244,29 @@ function CreateCapsuleDialog({
               }}
             />
           </label>
+          <fieldset className="mc-dialog-field" disabled={busy}>
+            <legend className="mc-dialog-label">Model-use policy</legend>
+            <label>
+              <input
+                type="radio"
+                name="model-use-policy"
+                value="sealed-local"
+                checked={policyMode === "sealed-local"}
+                onChange={() => setPolicyMode("sealed-local")}
+              />{" "}
+              Sealed local
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="model-use-policy"
+                value="standard"
+                checked={policyMode === "standard"}
+                onChange={() => setPolicyMode("standard")}
+              />{" "}
+              Standard
+            </label>
+          </fieldset>
           {/* role=alert + field link, matching the Compose dialog (uiux-fix F032, C103). */}
           {dialogError !== null ? (
             <div id={errorId} role="alert" aria-live="assertive" className="mc-dialog-error">
@@ -1520,9 +1555,12 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   // as disconnect (AUDIT-E1821-003).
   const [deleteSetTarget, setDeleteSetTarget] = useState<CapsuleSetListEntry | null>(null);
 
-  async function submitCreateCapsule(name: string): Promise<void> {
+  async function submitCreateCapsule(
+    name: string,
+    modelUsePolicy: KnowledgePodModelUsePolicy,
+  ): Promise<void> {
     try {
-      await handleCreateCapsule(name);
+      await handleCreateCapsule(name, modelUsePolicy);
       setCreateDialogOpen(false);
     } catch {
       // The state hook surfaces the error message; keep the dialog open for correction/retry.

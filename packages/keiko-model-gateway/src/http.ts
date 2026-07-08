@@ -513,7 +513,7 @@ async function enforceOutboundTargetPolicy(
 ): Promise<readonly LookupAddress[] | undefined> {
   const literalReason = outboundTargetBlockedReason(target, egress);
   if (literalReason !== undefined) throw blockedTargetError(literalReason);
-  if (egress?.allowPrivateNetwork === true || !options.resolveDns) return undefined;
+  if (!options.resolveDns) return undefined;
   const addresses = await dnsLookup(target.hostname, { all: true, verbatim: true });
   for (const address of addresses) {
     const reason = outboundAddressBlockedReason(address.address, egress);
