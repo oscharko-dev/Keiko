@@ -402,7 +402,7 @@ describe("refreshHtmlManualPod", () => {
 
   it("keeps a changed page's previous vectors when its own re-embed fails", async () => {
     // Regression for a Critical finding (see docs/local-knowledge/html-manual-refresh-lifecycle-
-    // ledger.md "Known gap: an indexing-phase failure/partial does not roll back a changed page's
+    // ledger.md "Resolved post-audit: indexing-phase failure does not erase a changed page's
     // vectors"): the shared indexing orchestrator used to delete a changed page's previous
     // chunks/vectors (real re-extraction cascade-deletes parsed_units -> chunks -> vectors; a
     // force/stale re-chunk deletes chunks -> vectors directly) before attempting its re-embed, so a
@@ -529,6 +529,19 @@ describe("refreshHtmlManualPod", () => {
 
     await expect(refreshHtmlManualPod(refreshDeps(baseManual()))).rejects.toThrow(
       /persisted manual scope is incomplete/u,
+    );
+  });
+
+  it("throws when the persisted manual scope version is newer than this refresh code supports", async () => {
+    await createBasePod();
+    store._internal.db
+      .prepare(
+        "UPDATE html_manual_sources SET source_scope_version = 2 WHERE capsule_id = :c AND source_id = :s",
+      )
+      .run({ c: CAPSULE_ID, s: SOURCE_ID });
+
+    await expect(refreshHtmlManualPod(refreshDeps(baseManual()))).rejects.toThrow(
+      /manual source scope version is unsupported/u,
     );
   });
 

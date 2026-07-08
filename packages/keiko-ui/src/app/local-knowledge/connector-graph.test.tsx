@@ -29,6 +29,10 @@ import type {
   KnowledgeCapsuleId,
   CapsuleLifecycleState,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 
 const pushMock = vi.fn();
 
@@ -706,7 +710,7 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 });
 
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
-  it("submits a trimmed display name from the create dialog", async () => {
+  it("submits a trimmed display name with sealed-local policy from the create dialog", async () => {
     const createCapsuleImpl = vi
       .fn()
       .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
@@ -727,7 +731,40 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     );
 
     await waitFor(() => {
-      expect(createCapsuleImpl).toHaveBeenCalledWith({ displayName: "Treasury Docs" });
+      expect(createCapsuleImpl).toHaveBeenCalledWith({
+        displayName: "Treasury Docs",
+        modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      });
+    });
+  });
+
+  it("submits the explicit standard policy when selected in the create dialog", async () => {
+    const createCapsuleImpl = vi
+      .fn()
+      .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
+    const user = userEvent.setup();
+
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
+    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
+    await user.type(within(dialog).getByLabelText(/pod display name/i), "Standard Docs");
+    await user.click(within(dialog).getByLabelText(/^standard$/i));
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: /^create Knowledge Pod$/i,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(createCapsuleImpl).toHaveBeenCalledWith({
+        displayName: "Standard Docs",
+        modelUsePolicy: standardPodModelUsePolicy(),
+      });
     });
   });
 

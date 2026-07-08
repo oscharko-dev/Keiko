@@ -1417,6 +1417,11 @@ describe("local-knowledge reranker diagnostics", () => {
       reasonCode: "reranker-unavailable",
     },
     {
+      kind: "cancelled" as const,
+      status: "unavailable" as const,
+      reasonCode: "reranker-unavailable",
+    },
+    {
       kind: "invalid-response" as const,
       status: "invalid-response" as const,
       reasonCode: "reranker-invalid-response",

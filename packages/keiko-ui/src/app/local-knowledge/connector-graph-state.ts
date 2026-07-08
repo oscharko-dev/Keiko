@@ -3,7 +3,11 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import type { KnowledgeCapsuleId, CapsuleSetId } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  CapsuleSetId,
+  KnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   capsulesForKnowledgePodUi,
   capsuleSetsForKnowledgePodUi,
@@ -201,16 +205,16 @@ function useCapsuleCreate(
   creating: boolean;
   createError: string | null;
   clearCreateError: () => void;
-  handleCreateCapsule: (name: string) => Promise<void>;
+  handleCreateCapsule: (name: string, modelUsePolicy: KnowledgePodModelUsePolicy) => Promise<void>;
 } {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  async function doCreate(name: string): Promise<void> {
+  async function doCreate(name: string, modelUsePolicy: KnowledgePodModelUsePolicy): Promise<void> {
     setCreating(true);
     setCreateError(null);
     try {
-      await createCapsuleImpl({ displayName: name });
+      await createCapsuleImpl({ displayName: name, modelUsePolicy });
       reload();
     } catch (error) {
       setCreateError(formatError(error));

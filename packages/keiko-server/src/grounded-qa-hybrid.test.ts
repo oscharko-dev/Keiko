@@ -1809,56 +1809,59 @@ describe("hybrid model reranker", () => {
     expect(answer.retrievalActivity?.pods[0]?.reasonCodes).toContain("policy-denied");
   });
 
-  it("falls back to the preliminary order when the configured reranker times out", async () => {
-    const { capsuleId: capId } = await seedReadyCapsule("Timeout Rerank Docs");
-    const folderScope: ChatConnectedScope = {
-      kind: "directory",
-      relativePaths: ["src/rerank-timeout.ts"],
-      connectedAtMs: NOW,
-      root: tempRoot("rerank-timeout-repo"),
-    };
-    const connectorScope: ChatLocalKnowledgeScope = {
-      kind: "capsule",
-      capsuleId: capId,
-      connectedAtMs: NOW,
-    };
-    const chatId = makeHybridChat([folderScope], [connectorScope]);
-    const packMap = new Map([
-      ["src/rerank-timeout.ts", folderPack("src/rerank-timeout.ts", 0.5, "rerank-timeout-atom")],
-    ]);
+  it.each(["timeout", "cancelled"] as const)(
+    "falls back to the preliminary order when the configured reranker returns %s",
+    async (kind) => {
+      const { capsuleId: capId } = await seedReadyCapsule(`Failed Rerank Docs ${kind}`);
+      const folderScope: ChatConnectedScope = {
+        kind: "directory",
+        relativePaths: [`src/rerank-${kind}.ts`],
+        connectedAtMs: NOW,
+        root: tempRoot(`rerank-${kind}-repo`),
+      };
+      const connectorScope: ChatLocalKnowledgeScope = {
+        kind: "capsule",
+        capsuleId: capId,
+        connectedAtMs: NOW,
+      };
+      const chatId = makeHybridChat([folderScope], [connectorScope]);
+      const packMap = new Map([
+        [`src/rerank-${kind}.ts`, folderPack(`src/rerank-${kind}.ts`, 0.5, `rerank-${kind}-atom`)],
+      ]);
 
-    const result = await handleGroundedAsk(
-      routeCtx(JSON.stringify({ chatId, content: "Timeout fallback?" })),
-      hybridDeps({
-        config: rerankerGatewayConfig(),
-        configPresent: true,
-        rerankRequest: () => Promise.resolve({ ok: false, kind: "timeout" }),
-      }),
-      undefined,
-      undefined,
-      {
-        folderRetriever: folderRetrieverFor(packMap),
-        connectorRetrieve: singleConnectorRetrieve(capId),
-        answer: sentinelAnswerer("Fallback answer [1] [2]."),
-      },
-    );
+      const result = await handleGroundedAsk(
+        routeCtx(JSON.stringify({ chatId, content: `Reranker ${kind} fallback?` })),
+        hybridDeps({
+          config: rerankerGatewayConfig(),
+          configPresent: true,
+          rerankRequest: () => Promise.resolve({ ok: false, kind }),
+        }),
+        undefined,
+        undefined,
+        {
+          folderRetriever: folderRetrieverFor(packMap),
+          connectorRetrieve: singleConnectorRetrieve(capId),
+          answer: sentinelAnswerer("Fallback answer [1] [2]."),
+        },
+      );
 
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
-    expect(answer.contextPack.reranker).toMatchObject({
-      status: "unavailable",
-      mode: "provider-backed",
-      failureKind: "timeout",
-      candidateCount: 2,
-      documentCount: 2,
-      keptCount: 2,
-    });
-    expect(answer.retrievalActivity?.pods[0]).toMatchObject({
-      state: "degraded",
-      reasonCodes: ["searched", "reranker-unavailable"],
-    });
-  });
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = asHybrid(result.body as GroundedAnswer);
+      expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
+      expect(answer.contextPack.reranker).toMatchObject({
+        status: "unavailable",
+        mode: "provider-backed",
+        failureKind: kind,
+        candidateCount: 2,
+        documentCount: 2,
+        keptCount: 2,
+      });
+      expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+        state: "degraded",
+        reasonCodes: ["searched", "reranker-unavailable"],
+      });
+    },
+  );
 
   it("falls back with invalid-response diagnostics when reranker response is unusable", async () => {
     const { capsuleId: capId } = await seedReadyCapsule("Invalid Rerank Docs");

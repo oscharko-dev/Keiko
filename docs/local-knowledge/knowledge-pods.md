@@ -195,11 +195,11 @@ queries, vectors, or scores.
 ## Model-use policy
 
 Knowledge Pods carry an additive `modelUsePolicy` contract that resolves to a
-body-free operation matrix. New UI-created pods default to explicit standard policy so
-existing indexing and grounded-answer behavior remains available when a user creates a
-normal pod. Legacy persisted rows without an explicit policy resolve as `sealed-local`,
-which fails closed for operations that would release pod content to external model
-providers.
+body-free operation matrix. New UI-created pods now choose an explicit policy in the
+create dialog and default to `sealed-local`; users must deliberately select `standard`
+when they want external model-use operations. Legacy persisted rows without an explicit
+policy also resolve as `sealed-local`, which fails closed for operations that would
+release pod content to external model providers.
 
 The sealed-local default denies:
 
