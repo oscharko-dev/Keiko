@@ -18,8 +18,21 @@
 
 import { fireEvent, render, screen, waitFor, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
+
+// Epic #1941 — Browse now opens the native OS dialog through the shared client; mock the module
+// so the capability hook reports "supported" and picks resolve deterministically.
+vi.mock("@/lib/native-file-dialog", () => ({
+  nativeFileDialogSupported: vi.fn(async () => true),
+  pickWithNativeDialog: vi.fn(async () => ({ kind: "cancelled" }) as const),
+}));
+
+beforeEach(() => {
+  vi.mocked(pickWithNativeDialog).mockReset();
+  vi.mocked(pickWithNativeDialog).mockResolvedValue({ kind: "cancelled" });
+});
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   resolveKnowledgePodModelUsePolicy,
@@ -48,8 +61,6 @@ type StartQiRunFn = (
 ) => Promise<void>;
 type FetchCapsulesFn = NonNullable<RunLauncherProps["fetchCapsulesImpl"]>;
 type FetchCapsuleSetsFn = NonNullable<RunLauncherProps["fetchCapsuleSetsImpl"]>;
-type FetchProjectsFn = NonNullable<RunLauncherProps["fetchProjectsImpl"]>;
-type FetchFilesTreeFn = NonNullable<RunLauncherProps["fetchFilesTreeImpl"]>;
 type CancelQiRunFn = NonNullable<RunLauncherProps["cancelImpl"]>;
 
 const DONE_FRAME: QualityIntelligenceRunStreamMessage = {
@@ -238,27 +249,6 @@ function knowledgePodSetSummary(
   };
 }
 
-const treeEntryBase = {
-  sizeBytes: 0,
-  modifiedAt: 1,
-  extension: null,
-  symlink: false,
-  readable: true,
-};
-
-function fakeFetchProjects(projects: readonly unknown[]): FetchProjectsFn {
-  return vi.fn().mockResolvedValue({ projects }) as unknown as FetchProjectsFn;
-}
-
-function fakeFetchFilesTree(entries: readonly unknown[]): FetchFilesTreeFn {
-  return vi.fn(async (root: string, path = "") => ({
-    root,
-    path,
-    truncated: false,
-    entries,
-  })) as unknown as FetchFilesTreeFn;
-}
-
 function sourceTypeRadio(label: string): HTMLElement {
   const radio = screen
     .getAllByRole("radio")
@@ -272,27 +262,6 @@ async function chooseSourceType(
   label: string,
 ): Promise<void> {
   await user.click(sourceTypeRadio(label));
-}
-
-function pickerProps(
-  root = "/repos/my-app",
-): Pick<RunLauncherProps, "fetchProjectsImpl" | "fetchFilesTreeImpl"> {
-  return {
-    fetchProjectsImpl: fakeFetchProjects([
-      { path: root, name: "My app", available: true, availabilityReason: null },
-    ]),
-    fetchFilesTreeImpl: fakeFetchFilesTree([
-      { ...treeEntryBase, name: "docs", path: "docs", kind: "directory" },
-      {
-        ...treeEntryBase,
-        name: "requirements.md",
-        path: "requirements.md",
-        kind: "file",
-        sizeBytes: 1200,
-        extension: "md",
-      },
-    ]),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +476,7 @@ describe("RunLauncher — Generate button enable/disable", () => {
 
   it("enables the Generate button once a folder has been picked (workspace source)", async () => {
     const user = userEvent.setup();
-    render(<RunLauncher {...pickerProps()} />);
+    render(<RunLauncher />);
 
     await chooseSourceType(user, "Folder");
     expect(screen.getByRole("button", { name: /generate test cases/i })).toHaveAttribute(
@@ -515,18 +484,23 @@ describe("RunLauncher — Generate button enable/disable", () => {
       "true",
     );
 
-    await user.click(screen.getByRole("button", { name: /browse/i }));
-    await screen.findByRole("dialog", { name: /choose folder source/i });
-    await user.click(await screen.findByRole("button", { name: "docs" }));
-    await user.click(screen.getByRole("button", { name: /use selection/i }));
-    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
-      "aria-disabled",
+    vi.mocked(pickWithNativeDialog).mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/repos/my-app/docs"],
+    });
+    const browse = screen.getByRole("button", { name: /browse/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+        "aria-disabled",
+      ),
     );
   });
 
   it("enables the Generate button once a file has been picked (single-file source)", async () => {
     const user = userEvent.setup();
-    render(<RunLauncher {...pickerProps()} />);
+    render(<RunLauncher />);
 
     await chooseSourceType(user, "File");
     expect(screen.getByRole("button", { name: /generate test cases/i })).toHaveAttribute(
@@ -534,12 +508,17 @@ describe("RunLauncher — Generate button enable/disable", () => {
       "true",
     );
 
-    await user.click(screen.getByRole("button", { name: /browse/i }));
-    await screen.findByRole("dialog", { name: /choose file source/i });
-    await user.click(await screen.findByRole("button", { name: "requirements.md" }));
-    await user.click(screen.getByRole("button", { name: /use selection/i }));
-    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
-      "aria-disabled",
+    vi.mocked(pickWithNativeDialog).mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/repos/my-app/requirements.md"],
+    });
+    const browse = screen.getByRole("button", { name: /browse/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /generate test cases/i })).not.toHaveAttribute(
+        "aria-disabled",
+      ),
     );
   });
 });
@@ -576,14 +555,23 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
   it("calls startImpl with a workspace source when the workspace source type is selected", async () => {
     const user = userEvent.setup();
     const { startImpl } = makeStreamingFake([DONE_FRAME]);
-    render(<RunLauncher startImpl={startImpl} {...pickerProps()} />);
+    render(<RunLauncher startImpl={startImpl} />);
 
     await chooseSourceType(user, "Folder");
     await user.type(screen.getByLabelText(/source label/i), "My project");
-    await user.click(screen.getByRole("button", { name: /browse/i }));
-    await screen.findByRole("dialog", { name: /choose folder source/i });
-    await user.click(await screen.findByRole("button", { name: "docs" }));
-    await user.click(screen.getByRole("button", { name: /use selection/i }));
+    vi.mocked(pickWithNativeDialog).mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/repos/my-app/docs"],
+    });
+    const browse = screen.getByRole("button", { name: /browse/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
+    await waitFor(() =>
+      expect(pickWithNativeDialog).toHaveBeenCalledWith({
+        mode: "open-directory",
+        title: "Choose folder source",
+      }),
+    );
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -604,14 +592,23 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
   it("calls startImpl with a file source when the single-file source type is selected", async () => {
     const user = userEvent.setup();
     const { startImpl } = makeStreamingFake([DONE_FRAME]);
-    render(<RunLauncher startImpl={startImpl} {...pickerProps()} />);
+    render(<RunLauncher startImpl={startImpl} />);
 
     await chooseSourceType(user, "File");
     await user.type(screen.getByLabelText(/source label/i), "Fachkonzept file");
-    await user.click(screen.getByRole("button", { name: /browse/i }));
-    await screen.findByRole("dialog", { name: /choose file source/i });
-    await user.click(await screen.findByRole("button", { name: "requirements.md" }));
-    await user.click(screen.getByRole("button", { name: /use selection/i }));
+    vi.mocked(pickWithNativeDialog).mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/repos/my-app/requirements.md"],
+    });
+    const browse = screen.getByRole("button", { name: /browse/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
+    await waitFor(() =>
+      expect(pickWithNativeDialog).toHaveBeenCalledWith({
+        mode: "open-file",
+        title: "Choose file source",
+      }),
+    );
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -949,20 +946,17 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
       succeededDone(acceptedRunId),
     ]);
     const onRunCompleted = vi.fn();
-    render(
-      <RunLauncher
-        startImpl={startImpl}
-        onRunCompleted={onRunCompleted}
-        {...pickerProps("/tmp/drift-fixture")}
-      />,
-    );
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
 
     await chooseSourceType(user, "Folder");
     await user.type(screen.getByLabelText(/source label/i), "Drift fixture");
-    await user.click(screen.getByRole("button", { name: /browse/i }));
-    await screen.findByRole("dialog", { name: /choose folder source/i });
-    await user.click(await screen.findByRole("button", { name: "docs" }));
-    await user.click(screen.getByRole("button", { name: /use selection/i }));
+    vi.mocked(pickWithNativeDialog).mockResolvedValueOnce({
+      kind: "picked",
+      paths: ["/tmp/drift-fixture/docs"],
+    });
+    const browse = screen.getByRole("button", { name: /browse/i });
+    await waitFor(() => expect(browse).not.toBeDisabled());
+    await user.click(browse);
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await done;

@@ -1248,29 +1248,9 @@ export interface TerminalEventEnvelope {
 // machine path (the selected workspace root) and every `path` field is a ROOT-RELATIVE POSIX file
 // identifier interpreted relative to that root — never an absolute path. The BFF emits tree/
 // content/preview paths root-relative and HARD-rejects an absolute `path` with 400 BAD_PATH
-// ("The path must be relative to the selected root.", keiko-server/src/files.ts). The lone
-// exception is FilesDirectoryListing / FilesDirectoryRoot below (the lazy directory picker), whose
-// `path` fields are ABSOLUTE machine paths; callers MUST convert such a path to a root-relative
-// identifier (see `resolveWorkspaceFileIdentifier` in ./editor-workspace-path) before using it as a
-// tree/content/write file id. Clients normalize candidate paths through that contract so an
-// absolute identifier can never reach these endpoints.
-
-export interface FilesDirectoryRoot {
-  readonly label: string;
-  readonly path: string;
-}
-
-export interface FilesDirectoryEntry {
-  readonly name: string;
-  readonly path: string;
-}
-
-export interface FilesDirectoryListing {
-  readonly path: string;
-  readonly parent: string | null;
-  readonly entries: readonly FilesDirectoryEntry[];
-  readonly roots: readonly FilesDirectoryRoot[];
-}
+// ("The path must be relative to the selected root.", keiko-server/src/files.ts). Absolute local
+// paths enter the system only through the native OS dialog route (Epic #1941, ADR-0115) or manual
+// entry, and are validated server-side before use.
 
 export type FilesEntryKind = "directory" | "file" | "symlink";
 

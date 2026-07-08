@@ -2988,3 +2988,30 @@ export {
   validateWorkspaceHealthEntry,
   validateWorkspaceHealthReport,
 } from "./task-workspace.js";
+
+// ─── Native OS file/folder dialog (Epic #1941, ADR-0115) ───────────────────────────
+export type {
+  NativeFileDialogMode,
+  NativeFileDialogSelectionKind,
+  NativeFileDialogFilter,
+  NativeFileDialogRequest,
+  NativeFileDialogSelection,
+  NativeFileDialogResponse,
+  NativeFileDialogCapability,
+  NativeFileDialogErrorCode,
+  NativeFileDialogRequestValidation,
+} from "./native-file-dialog.js";
+export {
+  NATIVE_FILE_DIALOG_SCHEMA_VERSION,
+  NATIVE_FILE_DIALOG_MODES,
+  NATIVE_FILE_DIALOG_ERROR_CODES,
+  NATIVE_FILE_DIALOG_TITLE_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_DEFAULT_PATH_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_MAX_FILTERS,
+  NATIVE_FILE_DIALOG_FILTER_NAME_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_MAX_EXTENSIONS_PER_FILTER,
+  NATIVE_FILE_DIALOG_MAX_SELECTIONS,
+  validateNativeFileDialogRequest,
+  nativeFileDialogSelectionBounds,
+  nativeFileDialogExpectedKind,
+} from "./native-file-dialog.js";

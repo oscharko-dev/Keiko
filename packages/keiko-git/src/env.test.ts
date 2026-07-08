@@ -18,6 +18,23 @@ describe("gitEnv", () => {
     }
   });
 
+  it("uses the Windows system profile when the host platform is win32", () => {
+    // gitEnv branches on process.platform at CALL time, so the win32 profile (NUL config target,
+    // SystemRoot/WINDIR passthrough, no POSIX HOME neutralization) is testable on any host.
+    const original = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32" });
+    try {
+      const env = gitEnv();
+      expect(env.GIT_CONFIG_GLOBAL).toBe("NUL");
+      expect(env.SystemRoot).toBe(process.env.SystemRoot ?? "");
+      expect(env.WINDIR).toBe(process.env.WINDIR ?? "");
+      expect(env.HOME).toBeUndefined();
+      expect(env.XDG_CONFIG_HOME).toBeUndefined();
+    } finally {
+      if (original !== undefined) Object.defineProperty(process, "platform", original);
+    }
+  });
+
   it("never inherits ambient variables beyond PATH and platform system roots", () => {
     const env = gitEnv();
     expect(env.LANG).toBeUndefined();

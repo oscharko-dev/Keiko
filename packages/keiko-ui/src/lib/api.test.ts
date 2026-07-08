@@ -9,7 +9,6 @@ import {
   deleteProject,
   closePdfCitationPreviewSession,
   fetchFilesContent,
-  fetchFilesDirectories,
   fetchFilesPreview,
   fetchFilesSearch,
   fetchFilesTree,
@@ -23,8 +22,10 @@ import {
   fetchGitStatus,
   fetchConfig,
   fetchModels,
+  fetchNativeFileDialogCapability,
   fetchPdfCitationPreviewDocument,
   fetchProjects,
+  openNativeFileDialog,
   regenerateDesktopChat,
   fetchStartupUpdatePreflight,
   fetchUpdateRemediationStatus,
@@ -573,12 +574,9 @@ describe("files API helpers", () => {
     vi.unstubAllGlobals();
   });
 
-  it("encodes directory picker, tree, preview, and editor requests", async () => {
+  it("encodes tree, preview, and editor requests", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({ path: "/repo space", parent: null, entries: [], roots: [] }),
-      )
       .mockResolvedValueOnce(
         jsonResponse({ root: "/repo space", path: "src/app.ts", entries: [], truncated: false }),
       )
@@ -636,7 +634,6 @@ describe("files API helpers", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchFilesDirectories("/repo space");
     await fetchFilesTree("/repo space", "src/app.ts");
     await fetchFilesPreview("/repo space", "src/app.ts");
     await fetchFilesContent("/repo space", "src/app.ts");
@@ -649,34 +646,27 @@ describe("files API helpers", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/files/directories?root=%2Frepo+space",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
       "/api/files/tree?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      2,
       "/api/files/preview?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
+      3,
       "/api/files/content?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      5,
+      4,
       "/api/files/content",
       expect.objectContaining({
         method: "PATCH",
@@ -691,6 +681,53 @@ describe("files API helpers", () => {
           content: "const x = 2;\n",
           expectedModifiedAt: 1,
         }),
+      }),
+    );
+  });
+
+  it("posts native dialog requests with the CSRF envelope and never logs paths", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        cancelled: false,
+        selections: [{ path: "/repo space/docs", kind: "directory" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await openNativeFileDialog({
+      mode: "open-directory",
+      title: "Ordner wählen",
+      defaultPath: "/repo space",
+    });
+
+    expect(response.selections[0]?.path).toBe("/repo space/docs");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/native-file-dialog/open",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          mode: "open-directory",
+          title: "Ordner wählen",
+          defaultPath: "/repo space",
+        }),
+      }),
+    );
+  });
+
+  it("fetches the native dialog capability", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ supported: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchNativeFileDialogCapability()).resolves.toEqual({ supported: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/native-file-dialog/capability",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
   });

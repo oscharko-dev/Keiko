@@ -134,6 +134,7 @@ import {
 import type { EditorLanguageRouteOptions } from "./editor/languageRoutes.js";
 import type { RuntimeCapabilityRouteOptions } from "./runtime/capabilityRoutes.js";
 import type { GitRouteOptions } from "./gitRoutes.js";
+import type { NativeFileDialogRouteOptions } from "./native-file-dialog/route.js";
 import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
 import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
 import type {
@@ -311,6 +312,10 @@ export interface UiHandlerDeps {
   // Test-only Git BFF seams. Production leaves this undefined so repository status/diff use the
   // fixed native Git runner and conservative caps.
   readonly gitRouteOptions?: GitRouteOptions | undefined;
+  // Epic #1941 — native OS file/folder dialog seam. Tests inject a fake adapter, platform, or
+  // single-flight state; production leaves this undefined so the route lazily selects the real
+  // platform adapter and the module-level single-flight instance.
+  readonly nativeFileDialog?: NativeFileDialogRouteOptions | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:

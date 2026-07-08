@@ -1,24 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import {
-  ApiError,
-  createProject,
-  fetchFilesDirectories,
-  fetchFilesTree,
-  fetchModels,
-  fetchProjects,
-  startRun,
-} from "../../../../lib/api";
+import { ApiError, createProject, fetchModels, fetchProjects, startRun } from "../../../../lib/api";
 import type {
   AgentWorkflowId,
-  FilesDirectoryListing,
-  FilesTreeEntry,
   ModelCapability,
   ProjectWithAvailability,
 } from "../../../../lib/types";
+import { pickWithNativeDialog } from "../../../../lib/native-file-dialog";
 import { Icons } from "../Icons";
+import { useNativeFileDialogCapability } from "../hooks/useNativeFileDialogCapability";
 import type { FilesWindowContext } from "../hooks/useWorkspace.types";
 import {
   type ConfigField,
@@ -75,179 +67,37 @@ function focusableInside(root: HTMLElement): readonly HTMLElement[] {
   return out;
 }
 
-interface DirectoryPickerProps {
-  readonly value: string;
-  readonly projectId?: string | undefined;
-  readonly selectProjectRoot?: boolean | undefined;
-  readonly onSelect: (path: string) => void;
-  readonly onClose: () => void;
-}
-
-// M2 (#532) — exported so tests can assert the mapping independently of the
-// component render cycle. Maps BFF error codes to user-facing copy:
-//   400 BAD_ROOT  → absolute path required
-//   403 DENIED    → path on the filesystem deny-list
-export function directoryPickerError(error: unknown): string {
-  if (error instanceof ApiError) {
-    if (error.code === "BAD_ROOT") return "Enter an absolute folder path.";
-    if (error.code === "DENIED") return "That location is excluded.";
-  }
-  return error instanceof Error ? error.message : "Unable to read directories.";
-}
-
 function errorMessage(error: unknown): string {
-  return directoryPickerError(error);
+  return error instanceof Error ? error.message : "Something went wrong.";
 }
 
-function DirectoryPicker({
-  value,
-  projectId,
-  selectProjectRoot = false,
-  onSelect,
-  onClose,
-}: DirectoryPickerProps): ReactNode {
-  const [listing, setListing] = useState<FilesDirectoryListing | null>(null);
-  const [draft, setDraft] = useState(value);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const requestRoot = projectId ?? value.trim();
+// Epic #1941 (ADR-0118 D4) — copy for the two calm native-dialog outcomes every Browse surface in
+// this dialog shares. Manual path entry stays available either way.
+const NATIVE_DIALOG_BUSY_MESSAGE = "A native dialog is already open. Close it first.";
+const NATIVE_DIALOG_UNSUPPORTED_MESSAGE =
+  "Native dialogs are unavailable on this platform. Enter the path manually.";
 
-  const load = useCallback(
-    async (path?: string): Promise<void> => {
-      // M2 (#532): the BFF now accepts any absolute folder. When there is no
-      // requestRoot yet, show a prompt rather than an error so the input feels
-      // intentional (the user hasn't typed anything yet, not an error state).
-      if (requestRoot.length === 0) {
-        setListing(null);
-        setError("Enter an absolute folder path.");
-        return;
-      }
-      setLoading(true);
-      setError(null);
-      try {
-        const next = await fetchFilesDirectories(requestRoot, path);
-        setListing(next);
-        setDraft(next.path);
-      } catch (err) {
-        setError(errorMessage(err));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [requestRoot],
-  );
-
-  // uiux-fix F017 C341 — load once when the picker opens. Re-running on every outer
-  // input keystroke fired a fetch per character and flashed transient errors
-  // ("Enter an absolute folder path.") while the user was still typing; navigation
-  // stays explicit via Go/Enter/row clicks.
-  useEffect(() => {
-    void load(value.length > 0 ? value : undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only load
-  }, []);
-
-  const choose = (): void => {
-    if (listing !== null) {
-      onSelect(selectProjectRoot ? (listing.roots[0]?.path ?? listing.path) : listing.path);
-      onClose();
-    }
-  };
-
-  return (
-    <div className="dir-picker" role="group" aria-label="Directory picker">
-      <div className="dir-top">
-        <input
-          className="dlg-input mono dir-path"
-          value={draft}
-          aria-label="Folder path"
-          placeholder="/absolute/folder/path"
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              // uiux-fix F017 C364 — the dialog submits on plain Enter in inputs now;
-              // keep Enter-to-navigate local to the picker.
-              event.stopPropagation();
-              void load(draft);
-            }
-          }}
-        />
-        <button type="button" className="dlg-btn dir-go" onClick={() => void load(draft)}>
-          Go
-        </button>
-      </div>
-      {listing !== null ? (
-        <div className="dir-roots">
-          {listing.roots.map((root) => (
-            <button
-              type="button"
-              key={`${root.label}:${root.path}`}
-              className="dir-chip"
-              onClick={() => void load(root.path)}
-            >
-              {root.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <div className="dir-list">
-        {listing?.parent !== null && listing?.parent !== undefined ? (
-          <button
-            type="button"
-            className="dir-row"
-            onClick={() => void load(listing.parent ?? undefined)}
-          >
-            <Icons.back size={14} />
-            <span>Parent directory</span>
-          </button>
-        ) : null}
-        {listing?.entries.map((entry) => (
-          <button
-            type="button"
-            className="dir-row"
-            key={entry.path}
-            onClick={() => void load(entry.path)}
-          >
-            <Icons.folder size={14} />
-            <span>{entry.name}</span>
-          </button>
-        ))}
-        {loading ? (
-          <div className="dir-note" role="status">
-            Loading directories…
-          </div>
-        ) : null}
-        {!loading && listing !== null && listing.entries.length === 0 ? (
-          <div className="dir-note">No child directories.</div>
-        ) : null}
-        {error !== null ? (
-          <div className="dir-error" role="alert">
-            {error}
-          </div>
-        ) : null}
-      </div>
-      <div className="dir-actions">
-        <button type="button" className="dlg-btn" onClick={onClose}>
-          Close
-        </button>
-        <button
-          type="button"
-          className="dlg-btn dlg-primary"
-          onClick={choose}
-          disabled={listing === null}
-        >
-          Use directory
-        </button>
-      </div>
-    </div>
-  );
-}
-
-interface FilePickerProps {
-  readonly root: string;
-  readonly value: string;
-  readonly onSelect: (path: string) => void;
-  readonly onClose: () => void;
+// Opens the native OS folder dialog and routes the outcome: a picked path lands in `onPick`,
+// cancellation is a non-event, everything else becomes calm dialog copy via `onError`.
+async function browseNativeDirectory(
+  seedPath: string,
+  title: string,
+  onPick: (path: string) => void,
+  onError: (message: string) => void,
+): Promise<void> {
+  const trimmed = seedPath.trim();
+  const outcome = await pickWithNativeDialog({
+    mode: "open-directory",
+    title,
+    ...(trimmed.length > 0 ? { defaultPath: trimmed } : {}),
+  });
+  if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
+    onPick(outcome.paths[0]);
+    return;
+  }
+  if (outcome.kind === "busy") onError(NATIVE_DIALOG_BUSY_MESSAGE);
+  if (outcome.kind === "unsupported") onError(NATIVE_DIALOG_UNSUPPORTED_MESSAGE);
+  if (outcome.kind === "error") onError(outcome.message);
 }
 
 type ProductionAgentWorkflowId = Extract<
@@ -273,29 +123,6 @@ function splitPaths(value: string): string[] {
     .split(/[\n,]/u)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
-}
-
-function parentRelativeFilePath(path: string): string {
-  const normalized = toPosix(path.trim()).replace(/\/+$/u, "");
-  const idx = normalized.lastIndexOf("/");
-  return idx > 0 ? normalized.slice(0, idx) : "";
-}
-
-function displayPickerDirectory(path: string): string {
-  return path.length === 0 ? "Repository root" : path;
-}
-
-function formatPickerBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let size = bytes;
-  let index = 0;
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024;
-    index += 1;
-  }
-  const value = index === 0 ? size.toFixed(0) : size.toFixed(size >= 10 ? 1 : 2);
-  return `${value} ${units[index]}`;
 }
 
 // AC #4: no longer prefers a placeholder id — use the first available model.
@@ -327,133 +154,6 @@ function normalizePathList(workspaceRoot: string, value: string): string {
   return splitPaths(value)
     .map((entry) => normalizeAgentPathForWorkspace(workspaceRoot, entry))
     .join(", ");
-}
-
-function FilePicker({ root, value, onSelect, onClose }: FilePickerProps): ReactNode {
-  const initialPath = normalizeAgentPathForWorkspace(root, value);
-  const [directory, setDirectory] = useState(parentRelativeFilePath(initialPath));
-  const [selectedPath, setSelectedPath] = useState(initialPath);
-  const [entries, setEntries] = useState<readonly FilesTreeEntry[]>([]);
-  const [truncated, setTruncated] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (root.trim().length === 0) {
-      setEntries([]);
-      setTruncated(false);
-      setLoading(false);
-      setError("Select a repository first.");
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    void fetchFilesTree(root.trim(), directory)
-      .then((listing) => {
-        if (cancelled) return;
-        setEntries(listing.entries);
-        setTruncated(listing.truncated);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setEntries([]);
-        setTruncated(false);
-        setError(errorMessage(err));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [directory, root]);
-
-  const goParent = (): void => setDirectory(parentRelativeFilePath(directory));
-  const choose = (): void => {
-    if (selectedPath.trim().length === 0) return;
-    onSelect(normalizeAgentPathForWorkspace(root, selectedPath));
-    onClose();
-  };
-
-  const directories = entries.filter((entry) => entry.kind === "directory");
-  const files = entries.filter((entry) => entry.kind !== "directory");
-
-  return (
-    <div className="file-picker" role="group" aria-label="File picker">
-      <div className="file-picker-head">
-        <span className="file-picker-path mono">{displayPickerDirectory(directory)}</span>
-      </div>
-      <div className="dir-list file-picker-list">
-        {directory.length > 0 ? (
-          <button type="button" className="dir-row" onClick={goParent}>
-            <Icons.back size={14} />
-            <span>Parent folder</span>
-          </button>
-        ) : null}
-        {directories.map((entry) => (
-          <button
-            type="button"
-            className="dir-row file-picker-row"
-            key={entry.path}
-            disabled={!entry.readable}
-            onClick={() => setDirectory(entry.path)}
-            title={entry.path}
-          >
-            <Icons.folder size={14} />
-            <span>{entry.name}</span>
-          </button>
-        ))}
-        {files.map((entry) => (
-          <button
-            type="button"
-            className="dir-row file-picker-row"
-            data-selected={selectedPath === entry.path ? "true" : undefined}
-            key={entry.path}
-            disabled={!entry.readable}
-            aria-pressed={selectedPath === entry.path}
-            onClick={() => setSelectedPath(entry.path)}
-            title={entry.path}
-          >
-            <Icons.file size={14} />
-            <span>{entry.name}</span>
-            <span className="file-picker-meta mono">{formatPickerBytes(entry.sizeBytes)}</span>
-          </button>
-        ))}
-        {loading ? (
-          <div className="dir-note" role="status">
-            Loading files…
-          </div>
-        ) : null}
-        {!loading && error === null && entries.length === 0 ? (
-          <div className="dir-note">No files in this folder.</div>
-        ) : null}
-        {truncated ? (
-          <div className="dir-note file-picker-warning" role="status">
-            Showing only the first {entries.length.toString()} entries.
-          </div>
-        ) : null}
-        {error !== null ? (
-          <div className="dir-error" role="alert">
-            {error}
-          </div>
-        ) : null}
-      </div>
-      <div className="dir-actions">
-        <button type="button" className="dlg-btn" onClick={onClose}>
-          Close
-        </button>
-        <button
-          type="button"
-          className="dlg-btn dlg-primary"
-          onClick={choose}
-          disabled={selectedPath.trim().length === 0}
-        >
-          Use file
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function buildInitialAgentFields(
@@ -578,12 +278,20 @@ function validationMessage(
   return null;
 }
 
+// Epic #1941 — how a directory field reaches the native OS folder dialog. `supported` reflects
+// the BFF host platform; when false the Browse button is disabled and the text input stays the
+// (manual) fallback.
+interface DirectoryBrowseControl {
+  readonly supported: boolean;
+  readonly open: (key: string, value: string) => void;
+}
+
 function renderField(
   f: ConfigField,
   cfg: Cfg,
   set: (k: string, v: CfgValue) => void,
   firstRef: ((node: HTMLElement | null) => void) | null,
-  openDirectoryPicker: (key: string) => void,
+  browse: DirectoryBrowseControl,
 ): ReactNode {
   if (f.type === "perm") return <PermControl cfg={cfg} set={set} />;
   const raw = cfg[f.key];
@@ -626,24 +334,33 @@ function renderField(
     );
   }
   if (f.type === "directory") {
+    const nativeNoteId = `dlg-native-note-${f.key}`;
     return (
-      <span className="dlg-dirwrap">
-        <input
-          ref={firstRef ?? undefined}
-          className="dlg-input mono"
-          placeholder={f.placeholder ?? f.label}
-          value={value}
-          onClick={() => openDirectoryPicker(f.key)}
-          onChange={(e) => set(f.key, e.target.value)}
-        />
-        <button
-          type="button"
-          className="dlg-btn dlg-dirbtn"
-          onClick={() => openDirectoryPicker(f.key)}
-        >
-          Browse
-        </button>
-      </span>
+      <>
+        <span className="dlg-dirwrap">
+          <input
+            ref={firstRef ?? undefined}
+            className="dlg-input mono"
+            placeholder={f.placeholder ?? f.label}
+            value={value}
+            onChange={(e) => set(f.key, e.target.value)}
+          />
+          <button
+            type="button"
+            className="dlg-btn dlg-dirbtn"
+            disabled={!browse.supported}
+            aria-describedby={browse.supported ? undefined : nativeNoteId}
+            onClick={() => browse.open(f.key, value)}
+          >
+            Browse
+          </button>
+        </span>
+        {!browse.supported ? (
+          <span id={nativeNoteId} className="dlg-note">
+            {NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
+          </span>
+        ) : null}
+      </>
     );
   }
   return (
@@ -659,17 +376,19 @@ function renderField(
 
 interface AgentLauncherProps {
   readonly filesContext: FilesWindowContext | null;
-  readonly directoryField: string | null;
-  readonly setDirectoryField: (key: string | null) => void;
   readonly setDialogError: (message: string | null) => void;
   readonly onConfirm: (cfg: Cfg) => void;
   readonly onClose: () => void;
 }
 
+// Absolute-path shape shared by both native platforms (POSIX, drive-letter, UNC). Used to detect
+// a picked source file that lies OUTSIDE the workspace and therefore cannot become repo-relative.
+function isAbsolutePathLike(value: string): boolean {
+  return value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\");
+}
+
 function AgentLauncher({
   filesContext,
-  directoryField,
-  setDirectoryField,
   setDialogError,
   onConfirm,
   onClose,
@@ -699,12 +418,15 @@ function AgentLauncher({
   const selectedAgent = AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
   const startLabel =
     workflow === "unit-test-generation" ? "Start Unit Test Agent" : "Start Bugfix Agent";
+  const nativeDialogSupported = useNativeFileDialogCapability();
   const firstAvailableProjectRoot = projects[0] ?? "";
   const repositoryBrowseSeed =
     workspace.length > 0 ? workspace : (filesContext?.root ?? firstAvailableProjectRoot);
-  const canBrowseRepository = repositoryBrowseSeed.length > 0;
+  // Native dialogs need no seed root (they open at the OS default location), only platform
+  // support; the seed merely positions the dialog when one is known.
+  const canBrowseRepository = nativeDialogSupported;
   const repositoryBrowseHelperId = "agent-repository-browse-help";
-  const canBrowseSourceFile = registered;
+  const canBrowseSourceFile = nativeDialogSupported && workspace.length > 0;
   const sourceBrowseHelperId = "agent-source-file-browse-help";
 
   useEffect(() => {
@@ -813,8 +535,37 @@ function AgentLauncher({
 
   const openRepositoryPicker = (): void => {
     if (!canBrowseRepository) return;
-    if (workspace.length === 0) setWorkspaceRoot(repositoryBrowseSeed);
-    setDirectoryField("agentWorkspace");
+    void browseNativeDirectory(
+      repositoryBrowseSeed,
+      "Select repository folder",
+      setWorkspaceRoot,
+      setDialogError,
+    );
+  };
+
+  // Picked source files come back ABSOLUTE from the native dialog; the agent workflows expect
+  // repo-relative paths, so normalize against the workspace and refuse out-of-workspace picks
+  // instead of silently writing an absolute path into the field.
+  const openSourceFilePicker = (): void => {
+    if (!canBrowseSourceFile) return;
+    void pickWithNativeDialog({
+      mode: "open-file",
+      title: "Select source file",
+      defaultPath: workspace,
+    }).then((outcome) => {
+      if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
+        const relative = normalizeAgentPathForWorkspace(workspace, outcome.paths[0]);
+        if (isAbsolutePathLike(relative)) {
+          setDialogError("Choose a file inside the selected repository.");
+          return;
+        }
+        updateField({ unitFilePath: relative });
+        return;
+      }
+      if (outcome.kind === "busy") setDialogError(NATIVE_DIALOG_BUSY_MESSAGE);
+      if (outcome.kind === "unsupported") setDialogError(NATIVE_DIALOG_UNSUPPORTED_MESSAGE);
+      if (outcome.kind === "error") setDialogError(outcome.message);
+    });
   };
 
   const renderAgentFields = (): ReactNode => {
@@ -840,25 +591,17 @@ function AgentLauncher({
               aria-label="Browse source file"
               disabled={!canBrowseSourceFile}
               aria-describedby={!canBrowseSourceFile ? sourceBrowseHelperId : undefined}
-              onClick={() => {
-                if (canBrowseSourceFile) setDirectoryField("unitSourceFile");
-              }}
+              onClick={openSourceFilePicker}
             >
               Browse
             </button>
           </span>
           {!canBrowseSourceFile ? (
             <span id={sourceBrowseHelperId} className="dlg-note">
-              Select a registered repository before browsing source files.
+              {nativeDialogSupported
+                ? "Select a repository before browsing source files."
+                : NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
             </span>
-          ) : null}
-          {directoryField === "unitSourceFile" ? (
-            <FilePicker
-              root={workspace}
-              value={fields.unitFilePath}
-              onSelect={(path) => updateField({ unitFilePath: path })}
-              onClose={() => setDirectoryField(null)}
-            />
           ) : null}
         </label>
       );
@@ -989,16 +732,8 @@ function AgentLauncher({
         </span>
         {!canBrowseRepository ? (
           <span id={repositoryBrowseHelperId} className="dlg-note">
-            Enter an absolute repository path to enable Browse.
+            {NATIVE_DIALOG_UNSUPPORTED_MESSAGE}
           </span>
-        ) : null}
-        {directoryField === "agentWorkspace" ? (
-          <DirectoryPicker
-            value={repositoryBrowseSeed}
-            projectId={projects.includes(repositoryBrowseSeed) ? repositoryBrowseSeed : undefined}
-            onSelect={setWorkspaceRoot}
-            onClose={() => setDirectoryField(null)}
-          />
         ) : null}
       </label>
       {workspace.length > 0 && !registered ? (
@@ -1078,7 +813,7 @@ export function NewWindowDialog({
   const [cfg, setCfg] = useState<Cfg>(() => initialCfg(fields));
   const [shown, setShown] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
-  const [directoryField, setDirectoryField] = useState<string | null>(null);
+  const nativeDialogSupported = useNativeFileDialogCapability();
   const firstFieldRef = useRef<HTMLElement | null>(null);
   const dlgRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -1162,6 +897,15 @@ export function NewWindowDialog({
   }, [cfg.root, type]);
 
   const set = (k: string, v: CfgValue): void => setCfg((s) => ({ ...s, [k]: v }));
+  // Epic #1941 — directory fields browse through the native OS dialog; a picked folder lands in
+  // the same cfg slot the manual input writes, cancellation changes nothing.
+  const browse: DirectoryBrowseControl = {
+    supported: nativeDialogSupported,
+    open: (key, value) => {
+      setDialogError(null);
+      void browseNativeDirectory(value, "Select folder", (path) => set(key, path), setDialogError);
+    },
+  };
   const submit = (): void => {
     if (type !== "agents") onConfirm(cfg);
   };
@@ -1176,9 +920,8 @@ export function NewWindowDialog({
       return;
     }
     // uiux-fix F017 C364 — plain Enter in a single-line field confirms the dialog
-    // (one-field-dialog expectation). Textareas keep Enter for newlines, buttons keep
-    // native activation, and the DirectoryPicker path input stops propagation so its
-    // Enter keeps navigating instead of submitting.
+    // (one-field-dialog expectation). Textareas keep Enter for newlines and buttons keep
+    // native activation.
     if (e.key === "Enter") {
       const tag = e.target instanceof HTMLElement ? e.target.tagName : "";
       if (tag === "INPUT" || tag === "SELECT") {
@@ -1244,8 +987,6 @@ export function NewWindowDialog({
           {type === "agents" ? (
             <AgentLauncher
               filesContext={filesContext}
-              directoryField={directoryField}
-              setDirectoryField={setDirectoryField}
               setDialogError={setDialogError}
               onConfirm={onConfirm}
               onClose={onClose}
@@ -1273,16 +1014,8 @@ export function NewWindowDialog({
                         firstFieldRef.current = node;
                       }
                     : null,
-                  setDirectoryField,
+                  browse,
                 )}
-                {f.type === "directory" && directoryField === f.key ? (
-                  <DirectoryPicker
-                    value={typeof cfg[f.key] === "string" ? (cfg[f.key] as string) : ""}
-                    selectProjectRoot={f.key === "root"}
-                    onSelect={(path) => set(f.key, path)}
-                    onClose={() => setDirectoryField(null)}
-                  />
-                ) : null}
               </label>
             ))}
           {dialogError !== null ? (
