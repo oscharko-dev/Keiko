@@ -82,6 +82,14 @@ export interface ConsolidationEvidence {
   readonly detail?: string;
 }
 
+// Optional, advisory-only annotation (Issue #2130 / ADR-0120). Populated exclusively by the
+// keiko-server enrichment pass AFTER this pure engine returns — never by the engine itself, and
+// never in a way that changes `proposedAction` or any reviewer-facing behavior. Absent by default.
+export interface ReviewItemSuggestedResolution {
+  readonly recommendedWinnerId: MemoryId;
+  readonly rationale: string;
+}
+
 export interface ReviewItem {
   readonly id: string;
   readonly reason: ReviewReason;
@@ -96,6 +104,7 @@ export interface ReviewItem {
   // not silently apply conflict-resolution relationships before a reviewer settles the item.
   readonly proposedEdges?: readonly MemoryEdge[];
   readonly detectedAt: number;
+  readonly suggestedResolution?: ReviewItemSuggestedResolution;
 }
 
 // ─── Options ──────────────────────────────────────────────────────────────────

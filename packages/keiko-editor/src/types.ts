@@ -459,6 +459,125 @@ export type EditorFormattingResolver = (
   signal: AbortSignal,
 ) => Promise<EditorFormattingResponse>;
 
+/** A workspace-relative editor location returned by navigation operations. */
+export interface EditorLocation {
+  readonly path: string;
+  readonly range: EditorRange;
+}
+
+/** Content-free definition request: a document position to resolve. */
+export interface EditorDefinitionRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+  readonly position: EditorPosition;
+}
+
+export interface EditorDefinitionQuery {
+  readonly request: EditorDefinitionRequest;
+  readonly documentText: string;
+}
+
+export interface EditorDefinitionResponse {
+  readonly request: EditorRequestIdentity;
+  readonly locations: readonly EditorLocation[];
+}
+
+export type EditorDefinitionResolver = (
+  query: EditorDefinitionQuery,
+  signal: AbortSignal,
+) => Promise<EditorDefinitionResponse>;
+
+/** Content-free references request: a document position to search from. */
+export interface EditorReferencesRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+  readonly position: EditorPosition;
+  readonly includeDeclaration: boolean;
+}
+
+export interface EditorReferencesQuery {
+  readonly request: EditorReferencesRequest;
+  readonly documentText: string;
+}
+
+export interface EditorReferencesResponse {
+  readonly request: EditorRequestIdentity;
+  readonly locations: readonly EditorLocation[];
+  readonly includesDeclaration: boolean;
+}
+
+export type EditorReferencesResolver = (
+  query: EditorReferencesQuery,
+  signal: AbortSignal,
+) => Promise<EditorReferencesResponse>;
+
+export type EditorCodeActionKind = "quickfix" | "refactor" | "source";
+
+/** A single Monaco code action. `edits: null` means the action is intentionally non-applicable. */
+export interface EditorCodeAction {
+  readonly title: string;
+  readonly kind: EditorCodeActionKind;
+  readonly edits: readonly EditorTextEdit[] | null;
+}
+
+/** Content-free code-action request for a selected range and active diagnostics. */
+export interface EditorCodeActionsRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+  readonly range: EditorRange;
+  readonly diagnostics: readonly EditorDiagnostic[];
+}
+
+export interface EditorCodeActionsQuery {
+  readonly request: EditorCodeActionsRequest;
+  readonly documentText: string;
+}
+
+export interface EditorCodeActionsResponse {
+  readonly request: EditorRequestIdentity;
+  readonly actions: readonly EditorCodeAction[];
+}
+
+export type EditorCodeActionsResolver = (
+  query: EditorCodeActionsQuery,
+  signal: AbortSignal,
+) => Promise<EditorCodeActionsResponse>;
+
+export interface EditorSignatureParameterInformation {
+  readonly label: string;
+}
+
+export interface EditorSignatureInformation {
+  readonly label: string;
+  readonly documentation?: string | undefined;
+  readonly parameters: readonly EditorSignatureParameterInformation[];
+}
+
+/** Content-free signature-help request for the active call expression position. */
+export interface EditorSignatureHelpRequest {
+  readonly request: EditorRequestIdentity;
+  readonly document: EditorDocumentIdentity;
+  readonly position: EditorPosition;
+  readonly triggerCharacter?: string | undefined;
+}
+
+export interface EditorSignatureHelpQuery {
+  readonly request: EditorSignatureHelpRequest;
+  readonly documentText: string;
+}
+
+export interface EditorSignatureHelpResponse {
+  readonly request: EditorRequestIdentity;
+  readonly signatures: readonly EditorSignatureInformation[];
+  readonly activeSignature: number | null;
+  readonly activeParameter: number | null;
+}
+
+export type EditorSignatureHelpResolver = (
+  query: EditorSignatureHelpQuery,
+  signal: AbortSignal,
+) => Promise<EditorSignatureHelpResponse>;
+
 // ─── Test generation ─────────────────────────────────────────────────────────────
 //
 // Wave-2 surface (ADR-0042 D7): editor-driven test generation/execution/verification is gated

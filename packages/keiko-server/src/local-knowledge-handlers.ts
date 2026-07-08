@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
   addSourceToCapsule,
@@ -2511,8 +2511,10 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
 // A connector's entry point: attach a host folder (or file set) as a knowledge source
 // so it can be indexed. Connectors deliberately reach OUTSIDE the workspace (the product
 // connects ANY machine folder of manuals), so containment is by realpath + the always-on
-// deny list (never index ~/.ssh, ~/.aws, .git, …) — not a workspace root. Per-file size
-// and format limits are enforced later by the indexing discovery walk.
+// deny list (never index ~/.ssh, ~/.aws, .git, …) — not a workspace root. Format limits and
+// per-file size limits for "folder"/"repository" scopes are enforced later by the indexing
+// discovery walk; "files" scopes are a bounded, explicit list, so their per-file size is
+// checked synchronously here too (see assertFilesScopeSizeLimits).
 
 function connectScopeRootPath(scope: KnowledgeSourceScope): string {
   return scope.kind === "folder" || scope.kind === "files" ? scope.rootPath : scope.repositoryRoot;
@@ -2567,6 +2569,29 @@ function persistSourceRootRebind(
   updateCapsuleState(store, capsule.id, "stale");
 }
 
+// "files" scopes carry a bounded, explicit relative-file list from a native multi-file pick
+// (unlike "folder"/"repository" scopes, which are an unbounded recursive walk deferred to
+// indexing), so it is cheap and safe to reject oversized files synchronously at connect time
+// rather than let indexing discover them later. Reuses the same maxRawFileBytes ceiling that
+// indexing enforces (resolveLargeDocumentPolicy), so connect-time and index-time limits stay
+// numerically identical.
+function assertFilesScopeSizeLimits(root: string, files: readonly string[]): void {
+  for (const relativeFile of files) {
+    const absolutePath = join(root, relativeFile);
+    let fileStats: ReturnType<typeof statSync>;
+    try {
+      fileStats = statSync(absolutePath);
+    } catch {
+      throw new InvalidRequest("Source path does not exist or is not accessible.");
+    }
+    if (fileStats.size > DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.maxRawFileBytes) {
+      throw new InvalidRequest(
+        "One or more selected files exceed the maximum indexable file size.",
+      );
+    }
+  }
+}
+
 // Canonicalize (realpath) then refuse denied locations and non-directory roots BEFORE
 // touching the store. realpath resolves symlinks so a link into ~/.ssh cannot slip past.
 function guardConnectorSourcePath(scope: KnowledgeSourceScope): KnowledgeSourceScope {
@@ -2583,6 +2608,9 @@ function guardConnectorSourcePath(scope: KnowledgeSourceScope): KnowledgeSourceS
   }
   if (!stats.isDirectory()) {
     throw new InvalidRequest("Source path must be an existing directory.");
+  }
+  if (canonical.kind === "files") {
+    assertFilesScopeSizeLimits(root, canonical.files);
   }
   return canonical;
 }

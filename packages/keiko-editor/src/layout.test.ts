@@ -48,14 +48,21 @@ describe("EditorLayoutStateV2", () => {
   });
 
   it("reorders and moves tabs without mutating file contents", () => {
-    const base = layout();
+    const base = createEditorLayoutStateV2({
+      root: "/repo",
+      file: "src/a.ts",
+      openFiles: ["src/a.ts", "src/b.ts", "src/c.ts"],
+      defaultSidebarWidth: 260,
+      minSidebarWidth: 180,
+      maxSidebarWidth: 440,
+    });
     const reordered = editorLayoutReducer(base, {
       type: "reorder-tab",
       paneId: "pane-1",
       file: "src/b.ts",
       targetIndex: 0,
     });
-    expect(reordered.panes["pane-1"]?.tabOrder).toEqual(["src/b.ts", "src/a.ts"]);
+    expect(reordered.panes["pane-1"]?.tabOrder).toEqual(["src/b.ts", "src/a.ts", "src/c.ts"]);
 
     const split = editorLayoutReducer(reordered, {
       type: "split-pane",
@@ -70,18 +77,30 @@ describe("EditorLayoutStateV2", () => {
       file: "src/b.ts",
     });
 
-    expect(moved.panes["pane-1"]?.openFiles).toEqual(["src/a.ts"]);
+    expect(split.panes["pane-1"]?.openFiles).toEqual(["src/b.ts", "src/c.ts"]);
+    expect(split.panes["pane-2"]?.openFiles).toEqual(["src/a.ts"]);
+    expect(moved.panes["pane-1"]?.openFiles).toEqual(["src/c.ts"]);
     expect(moved.panes["pane-2"]?.openFiles).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(editorLayoutOpenFiles(moved)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(editorLayoutOpenFiles(moved)).toEqual(["src/c.ts", "src/a.ts", "src/b.ts"]);
   });
 
   it("collapses an empty pane and its redundant split parent", () => {
-    const split = editorLayoutReducer(layout(), {
-      type: "split-pane",
-      paneId: "pane-1",
-      direction: "row",
-      file: "src/a.ts",
-    });
+    const split = editorLayoutReducer(
+      createEditorLayoutStateV2({
+        root: "/repo",
+        file: "src/a.ts",
+        openFiles: ["src/a.ts", "src/b.ts"],
+        defaultSidebarWidth: 260,
+        minSidebarWidth: 180,
+        maxSidebarWidth: 440,
+      }),
+      {
+        type: "split-pane",
+        paneId: "pane-1",
+        direction: "row",
+        file: "src/a.ts",
+      },
+    );
     const closed = editorLayoutReducer(split, {
       type: "close-pane",
       paneId: "pane-2",

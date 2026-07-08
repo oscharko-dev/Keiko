@@ -7,14 +7,25 @@
 
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import type {
+  LanguageCodeAction,
+  LanguageCodeActionsResult,
   LanguageCompletionItem,
   LanguageCompletionResult,
+  LanguageDefinitionResult,
   LanguageDiagnostic,
   LanguageDiagnosticsResult,
   LanguageDocumentSymbol,
   LanguageFormattingResult,
   LanguageHoverResult,
+  LanguageLocation,
+  LanguageReferencesResult,
+  LanguageRenameApplyResult,
+  LanguageRenameChangesetFile,
+  LanguageRenamePrepareResult,
   LanguageServiceLimits,
+  LanguageSignatureHelpResult,
+  LanguageSignatureInformation,
+  LanguageSignatureParameterInformation,
   LanguageSymbolResult,
 } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -148,5 +159,145 @@ export function sanitizeFormatting(
     edits: withinLength,
     truncated:
       raw.truncated || raw.edits.length > capped.length || withinLength.length < capped.length,
+  };
+}
+
+function sanitizeLocation(
+  location: LanguageLocation,
+  limits: LanguageServiceLimits,
+): LanguageLocation {
+  return { path: clip(location.path, limits.maxDetailChars), range: location.range };
+}
+
+export function sanitizeDefinition(
+  raw: LanguageDefinitionResult,
+  limits: LanguageServiceLimits,
+): LanguageDefinitionResult {
+  const capped = raw.locations.slice(0, limits.maxDefinitionLocations);
+  return {
+    locations: capped.map((location) => sanitizeLocation(location, limits)),
+    truncated: raw.truncated || raw.locations.length > capped.length,
+  };
+}
+
+export function sanitizeReferences(
+  raw: LanguageReferencesResult,
+  limits: LanguageServiceLimits,
+): LanguageReferencesResult {
+  const capped = raw.locations.slice(0, limits.maxReferenceLocations);
+  return {
+    locations: capped.map((location) => sanitizeLocation(location, limits)),
+    includesDeclaration: raw.includesDeclaration,
+    truncated: raw.truncated || raw.locations.length > capped.length,
+  };
+}
+
+export function sanitizeRenamePrepare(
+  raw: LanguageRenamePrepareResult,
+  limits: LanguageServiceLimits,
+): LanguageRenamePrepareResult {
+  if (raw.range === null) {
+    return { range: null, reason: clip(raw.reason, limits.maxMessageChars) };
+  }
+  return { range: raw.range, placeholder: clip(raw.placeholder, limits.maxLabelChars) };
+}
+
+function boundedRenameFile(
+  file: LanguageRenameChangesetFile,
+  remainingEdits: number,
+): LanguageRenameChangesetFile {
+  return {
+    path: file.path,
+    expectedContentHash: file.expectedContentHash,
+    edits: file.edits.slice(0, remainingEdits),
+  };
+}
+
+export function sanitizeRenameApply(
+  raw: LanguageRenameApplyResult,
+  limits: LanguageServiceLimits,
+): LanguageRenameApplyResult {
+  const files: LanguageRenameChangesetFile[] = [];
+  let returnedEditCount = 0;
+  for (const file of raw.files.slice(0, limits.maxRenameChangesetFiles)) {
+    if (returnedEditCount >= limits.maxRenameChangesetEdits) break;
+    const bounded = boundedRenameFile(file, limits.maxRenameChangesetEdits - returnedEditCount);
+    if (bounded.edits.length === 0) continue;
+    returnedEditCount += bounded.edits.length;
+    files.push(bounded);
+  }
+  return {
+    schemaVersion: raw.schemaVersion,
+    files,
+    truncated: raw.truncated || returnedEditCount < raw.totalEditCount,
+    filesTruncated: raw.filesTruncated || files.length < raw.totalFileCount,
+    returnedFileCount: files.length,
+    totalFileCount: raw.totalFileCount,
+    returnedEditCount,
+    totalEditCount: raw.totalEditCount,
+  };
+}
+
+function sanitizeCodeAction(
+  action: LanguageCodeAction,
+  limits: LanguageServiceLimits,
+): LanguageCodeAction {
+  return {
+    title: clip(action.title, limits.maxLabelChars),
+    kind: action.kind,
+    edits: action.edits,
+  };
+}
+
+export function sanitizeCodeActions(
+  raw: LanguageCodeActionsResult,
+  limits: LanguageServiceLimits,
+): LanguageCodeActionsResult {
+  const capped = raw.actions.slice(0, limits.maxCodeActions);
+  return {
+    actions: capped.map((action) => sanitizeCodeAction(action, limits)),
+    truncated: raw.truncated || raw.actions.length > capped.length,
+    returnedCount: capped.length,
+    totalCount: raw.totalCount,
+  };
+}
+
+function sanitizeSignatureParameter(
+  parameter: LanguageSignatureParameterInformation,
+  limits: LanguageServiceLimits,
+): LanguageSignatureParameterInformation {
+  return { label: clip(parameter.label, limits.maxLabelChars) };
+}
+
+function sanitizeSignature(
+  signature: LanguageSignatureInformation,
+  limits: LanguageServiceLimits,
+): LanguageSignatureInformation {
+  return {
+    label: clip(signature.label, limits.maxDetailChars),
+    ...(signature.documentation !== undefined
+      ? { documentation: clip(signature.documentation, limits.maxDocumentationChars) }
+      : {}),
+    parameters: signature.parameters.map((parameter) =>
+      sanitizeSignatureParameter(parameter, limits),
+    ),
+  };
+}
+
+export function sanitizeSignatureHelp(
+  raw: LanguageSignatureHelpResult,
+  limits: LanguageServiceLimits,
+): LanguageSignatureHelpResult {
+  const capped = raw.signatures.slice(0, limits.maxSignatures);
+  return {
+    signatures: capped.map((signature) => sanitizeSignature(signature, limits)),
+    activeSignature:
+      raw.activeSignature !== null && raw.activeSignature < capped.length
+        ? raw.activeSignature
+        : null,
+    activeParameter: raw.activeParameter,
+    truncated: raw.truncated || raw.signatures.length > capped.length,
+    returnedCount: capped.length,
+    totalCount: raw.totalCount,
   };
 }

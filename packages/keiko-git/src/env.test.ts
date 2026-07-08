@@ -41,6 +41,27 @@ describe("gitEnv", () => {
     expect(env.GIT_DIR).toBeUndefined();
     expect(env.GIT_SSH_COMMAND).toBeUndefined();
   });
+
+  it("falls back to an empty PATH when no source path is present", () => {
+    expect(gitEnv({}, process.platform).PATH).toBe("");
+  });
+
+  it("uses Windows null device and system roots when building a Windows env", () => {
+    const env = gitEnv(
+      {
+        PATH: "C:\\Git\\bin",
+        SystemRoot: "C:\\Windows",
+        WINDIR: "C:\\Windows",
+      },
+      "win32",
+    );
+    expect(env.PATH).toBe("C:\\Git\\bin");
+    expect(env.GIT_CONFIG_GLOBAL).toBe("NUL");
+    expect(env.SystemRoot).toBe("C:\\Windows");
+    expect(env.WINDIR).toBe("C:\\Windows");
+    expect(env.HOME).toBeUndefined();
+    expect(env.XDG_CONFIG_HOME).toBeUndefined();
+  });
 });
 
 describe("networkGitEnv", () => {
@@ -87,5 +108,10 @@ describe("networkGitEnv", () => {
   it("ignores empty passthrough values", () => {
     const env = networkGitEnv({ PATH: "/usr/bin", HOME: "" });
     expect(env.HOME).toBeUndefined();
+  });
+
+  it("falls back to the process PATH when the source omits PATH", () => {
+    const env = networkGitEnv({});
+    expect(env.PATH).toBe(process.env.PATH ?? "");
   });
 });

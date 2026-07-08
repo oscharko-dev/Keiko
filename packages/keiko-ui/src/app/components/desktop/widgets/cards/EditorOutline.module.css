@@ -1,0 +1,176 @@
+.outline {
+  display: flex;
+  min-height: 0;
+  max-height: 38%;
+  flex: 0 0 auto;
+  flex-direction: column;
+  border-block-end: 1px solid color-mix(in oklch, var(--ed-fg) 18%, transparent);
+  background: color-mix(in oklch, var(--ed-bg) 88%, transparent);
+}
+
+.outlineHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 7px;
+}
+
+.outlineTitle {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--ed-fg);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outlineToggle,
+.outlineRow,
+.breadcrumbButton {
+  color: var(--ed-fg);
+}
+
+.outlineToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid color-mix(in oklch, var(--ed-fg) 18%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--ed-bg) 78%, transparent);
+}
+
+.outlineToggleIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.outlineToggleIcon[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.outlineToggle:hover,
+.outlineToggle:focus-visible,
+.outlineRow:hover,
+.outlineRow:focus-visible,
+.breadcrumbButton:hover,
+.breadcrumbButton:focus-visible {
+  outline: 2px solid var(--ed-focus);
+  outline-offset: -2px;
+  background: var(--ed-line-active);
+}
+
+.outlineBody {
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 5px 7px;
+}
+
+.outlineTree {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.outlineRow {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 24px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.outlineRow[aria-selected="true"] {
+  background: var(--ed-selection);
+}
+
+.outlineCaret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ed-gutter-fg-active);
+}
+
+.outlineCaret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+.outlineName {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outlineKind {
+  overflow: hidden;
+  color: var(--ed-gutter-fg);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.outlineEmpty {
+  margin: 0;
+  padding: 10px 7px 12px;
+  color: var(--ed-gutter-fg-active);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-block-end: 1px solid color-mix(in oklch, var(--ed-fg) 14%, transparent);
+  background: color-mix(in oklch, var(--ed-bg) 92%, transparent);
+  color: var(--ed-gutter-fg-active);
+  font-size: 12px;
+}
+
+.breadcrumbFile,
+.breadcrumbButton {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumbSegment {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.breadcrumbFile {
+  flex: 0 2 auto;
+  color: var(--ed-gutter-fg-active);
+}
+
+.breadcrumbButton {
+  max-width: 220px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  font: inherit;
+}
+
+.breadcrumbSeparator {
+  color: var(--ed-gutter-fg);
+}

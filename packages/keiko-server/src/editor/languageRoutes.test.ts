@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import type { RouteResult } from "../routes.js";
 import type { UiStore } from "../store/index.js";
 import {
   handleEditorLanguage,
@@ -97,6 +98,95 @@ function redactEveryString(value: unknown): unknown {
 }
 
 const stableLanguageOptions: EditorLanguageRouteOptions = { now: () => 0 };
+
+function tsconfig(): string {
+  return JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      module: "ESNext",
+      moduleResolution: "Bundler",
+      target: "ES2022",
+    },
+    include: ["src/**/*.ts"],
+  });
+}
+
+function positionOf(text: string, needle: string, offset = 0): { line: number; character: number } {
+  const index = text.indexOf(needle, offset);
+  if (index < 0) throw new Error(`needle not found: ${needle}`);
+  const prefix = text.slice(0, index);
+  const lines = prefix.split("\n");
+  return { line: lines.length - 1, character: lines.at(-1)?.length ?? 0 };
+}
+
+function rangeOf(
+  text: string,
+  needle: string,
+): {
+  start: { line: number; character: number };
+  end: { line: number; character: number };
+} {
+  const start = positionOf(text, needle);
+  return { start, end: { line: start.line, character: start.character + needle.length } };
+}
+
+async function writeProject(files: Readonly<Record<string, string>>): Promise<void> {
+  await writeFile(join(root, "tsconfig.json"), tsconfig(), "utf8");
+  for (const [relativePath, text] of Object.entries(files)) {
+    await writeFile(join(root, relativePath), text, "utf8");
+  }
+}
+
+function postLanguage(
+  body: unknown,
+  redactor: UiHandlerDeps["redactor"] = buildRedactor({}),
+): Promise<RouteResult> {
+  return handleEditorLanguage(postContext(body), deps(redactor), stableLanguageOptions);
+}
+
+function routeRequestFor(operation: string, decl: string, main: string): unknown {
+  if (operation === "definition" || operation === "references" || operation === "renamePrepare") {
+    const text = operation === "definition" ? main : decl;
+    return {
+      operation,
+      root,
+      document: {
+        path: operation === "definition" ? "src/main.ts" : "src/decl.ts",
+        languageId: "typescript",
+        text,
+      },
+      position: positionOf(
+        text,
+        "sharedValue",
+        operation === "definition" ? text.indexOf("use") : 0,
+      ),
+    };
+  }
+  if (operation === "renameApply") {
+    return {
+      operation,
+      root,
+      document: { path: "src/decl.ts", languageId: "typescript", text: decl },
+      position: positionOf(decl, "sharedValue"),
+      newName: "renamedValue",
+    };
+  }
+  if (operation === "codeActions") {
+    return {
+      operation,
+      root,
+      document: { path: "src/main.ts", languageId: "typescript", text: main },
+      range: rangeOf(main, "sharedValue"),
+      diagnostics: [],
+    };
+  }
+  return {
+    operation,
+    root,
+    document: { path: "src/main.ts", languageId: "typescript", text: main },
+    position: positionOf(main, "sharedValue"),
+  };
+}
 
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "keiko-ls-route-")));
@@ -227,6 +317,117 @@ describe("POST /api/editor/language", () => {
     expect(body.operation).toBe("formatting");
     expect(body.result.edits.length).toBeGreaterThan(0);
     expect(body.result.edits.map((edit) => edit.newText)).not.toContain("[REDACTED]");
+  });
+
+  it("serves definition, references, rename, code actions, and signature help for TypeScript", async () => {
+    const decl = "export const sharedValue = 1;\n";
+    const main = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";
+    const overloads =
+      "export function choose(value: string): string;\n" +
+      "export function choose(value: number): number;\n" +
+      "export function choose(value: string | number): string | number { return value; }\n" +
+      "export const result = choose(1);\n";
+    await writeProject({ "src/decl.ts": decl, "src/main.ts": main, "src/overloads.ts": overloads });
+
+    const definition = await postLanguage({
+      operation: "definition",
+      root,
+      document: { path: "src/main.ts", languageId: "typescript", text: main },
+      position: positionOf(main, "sharedValue", main.indexOf("use")),
+    });
+    const references = await postLanguage({
+      operation: "references",
+      root,
+      document: { path: "src/decl.ts", languageId: "typescript", text: decl },
+      position: positionOf(decl, "sharedValue"),
+    });
+    const renamePrepare = await postLanguage({
+      operation: "renamePrepare",
+      root,
+      document: { path: "src/decl.ts", languageId: "typescript", text: decl },
+      position: positionOf(decl, "sharedValue"),
+    });
+    const renameApply = await postLanguage({
+      operation: "renameApply",
+      root,
+      document: { path: "src/decl.ts", languageId: "typescript", text: decl },
+      position: positionOf(decl, "sharedValue"),
+      newName: "renamedValue",
+    });
+    const signatureHelp = await postLanguage({
+      operation: "signatureHelp",
+      root,
+      document: { path: "src/overloads.ts", languageId: "typescript", text: overloads },
+      position: positionOf(overloads, "1", overloads.indexOf("choose(1")),
+    });
+
+    expect(definition).toMatchObject({ status: 200, body: { operation: "definition" } });
+    expect(references).toMatchObject({ status: 200, body: { operation: "references" } });
+    expect(renamePrepare).toMatchObject({ status: 200, body: { operation: "renamePrepare" } });
+    expect(renameApply).toMatchObject({ status: 200, body: { operation: "renameApply" } });
+    expect(signatureHelp).toMatchObject({ status: 200, body: { operation: "signatureHelp" } });
+  });
+
+  it("serves code actions for a TypeScript diagnostic", async () => {
+    const main = "export const result = helperValue;\n";
+    await writeProject({
+      "src/helper.ts": "export const helperValue = 1;\n",
+      "src/main.ts": main,
+    });
+
+    const result = await postLanguage({
+      operation: "codeActions",
+      root,
+      document: { path: "src/main.ts", languageId: "typescript", text: main },
+      range: rangeOf(main, "helperValue"),
+      diagnostics: [
+        {
+          range: rangeOf(main, "helperValue"),
+          severity: "error",
+          message: "Cannot find name 'helperValue'.",
+          source: "typescript",
+          code: "2304",
+        },
+      ],
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ operation: "codeActions" });
+    const body = result.body as { result: { actions: { edits: unknown[] | null }[] } };
+    expect(body.result.actions.some((action) => (action.edits?.length ?? 0) > 0)).toBe(true);
+  });
+
+  it("rejects unadvertised language and operation pairs without echoing content", async () => {
+    const result = await postLanguage({
+      operation: "renamePrepare",
+      root,
+      document: { path: "src/a.json", languageId: "json", text: '{"secret":"value"}\n' },
+      position: { line: 0, character: 2 },
+    });
+
+    expect(result.status).toBe(422);
+    expect(result.body).toMatchObject({ error: { code: "UNSUPPORTED_OPERATION" } });
+    expect(JSON.stringify(result.body)).not.toContain("secret");
+  });
+
+  it.each([
+    ["definition", true],
+    ["references", true],
+    ["renamePrepare", true],
+    ["renameApply", false],
+    ["codeActions", false],
+    ["signatureHelp", true],
+  ] as const)("routes redaction for %s", async (operation, shouldRedact) => {
+    const decl = "export const sharedValue = 1;\n";
+    const main = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";
+    await writeProject({ "src/decl.ts": decl, "src/main.ts": main });
+    const request = routeRequestFor(operation, decl, main);
+
+    const result = await postLanguage(request, redactEveryString);
+
+    expect(result.status).toBe(200);
+    const body = result.body as { operation?: string };
+    expect(body.operation).toBe(shouldRedact ? "[REDACTED]" : operation);
   });
 
   it("cancels analysis when the response closes before finishing", async () => {

@@ -4,27 +4,30 @@
 // git message is stable English — a localized `fatal:` line must never defeat failure
 // classification. Porcelain `-z` path output is raw bytes and unaffected by the C locale.
 
-function devNullPath(): string {
-  return process.platform === "win32" ? "NUL" : "/dev/null";
+function devNullPath(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "NUL" : "/dev/null";
 }
 
 // Local-read env: fully config-isolated. HOME/XDG/global+system config are neutralized so a read
 // can never load a user `~/.gitconfig`, a credential helper, or an SSH identity. Correct for the
 // local status/diff/branches/summary/history/remotes reads, which never authenticate to a remote.
-export function gitEnv(): NodeJS.ProcessEnv {
+export function gitEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? "",
+    PATH: source.PATH ?? "",
     GIT_TERMINAL_PROMPT: "0",
     GIT_PAGER: "cat",
     PAGER: "cat",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: devNullPath(),
+    GIT_CONFIG_GLOBAL: devNullPath(platform),
     GIT_OPTIONAL_LOCKS: "0",
     LC_ALL: "C",
   };
-  if (process.platform === "win32") {
-    env.SystemRoot = process.env.SystemRoot ?? "";
-    env.WINDIR = process.env.WINDIR ?? "";
+  if (platform === "win32") {
+    env.SystemRoot = source.SystemRoot ?? "";
+    env.WINDIR = source.WINDIR ?? "";
   } else {
     env.HOME = "/nonexistent";
     env.XDG_CONFIG_HOME = "/nonexistent";

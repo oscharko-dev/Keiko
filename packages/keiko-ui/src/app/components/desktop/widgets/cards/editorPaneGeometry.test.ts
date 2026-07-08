@@ -60,6 +60,7 @@ function layout(
     panes: Object.fromEntries(panes.map((p) => [p.id, p])),
     sidebarWidth: 260,
     sidebarCollapsed: false,
+    outlinePanelVisible: true,
   };
 }
 

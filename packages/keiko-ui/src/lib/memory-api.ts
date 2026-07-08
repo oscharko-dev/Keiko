@@ -27,6 +27,7 @@ import type {
   MemoryConsolidationJobSettingsWire,
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
+  MemoryHealthScanResultWire,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -190,6 +191,16 @@ export async function fetchMemoryReviewQueue(
   fetchImpl = fetchJson<MemoryReviewQueueResponse>,
 ): Promise<MemoryReviewQueueResponse> {
   return fetchImpl("/api/memory/review-queue");
+}
+
+// ---------------------------------------------------------------------------
+// Health scan (Issue #2129)
+// ---------------------------------------------------------------------------
+
+export async function fetchMemoryHealthScan(
+  fetchImpl = fetchJson<MemoryHealthScanResultWire>,
+): Promise<MemoryHealthScanResultWire> {
+  return fetchImpl("/api/memory/health-scan");
 }
 
 // ---------------------------------------------------------------------------

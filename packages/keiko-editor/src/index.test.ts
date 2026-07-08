@@ -51,7 +51,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
     ]);
   });
 
-  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193 + #1194 + #1195 + #1199 + #1200 + #1201)", () => {
+  it("exposes exactly the intended runtime export surface (#1191 + #1192 + #1193 + #1194 + #1195 + #1199 + #1200 + #1201 + #2089)", () => {
     const expected = [
       // Package identity, language + workspace contract, geometry, file model, completion,
       // commands (#1191 + #1192).
@@ -116,6 +116,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       // Patch-preview adapter + KeikoDiffEditor React component (#1195).
       "buildPatchPreview",
       "DEFAULT_PATCH_PREVIEW_LIMITS",
+      "buildRenamePreview",
       "KeikoDiffEditor",
       // Monaco completion-provider bridge (#1199).
       "createKeikoCompletionProvider",
@@ -171,6 +172,32 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "editsToMonaco",
       "monacoFormattingOptionsToEditor",
       "FORMATTING_ELIGIBLE_LANGUAGES",
+      // Monaco navigation/refactoring bridges (Epic #2089).
+      "createKeikoDefinitionProvider",
+      "registerKeikoDefinitionProvider",
+      "locationToMonacoLocation",
+      "definitionResponseToMonaco",
+      "DEFINITION_ELIGIBLE_LANGUAGES",
+      "createKeikoReferencesProvider",
+      "registerKeikoReferencesProvider",
+      "referenceToMonacoLocation",
+      "referencesResponseToMonaco",
+      "REFERENCES_ELIGIBLE_LANGUAGES",
+      "createKeikoCodeActionProvider",
+      "registerKeikoCodeActionProvider",
+      "monacoRangeToEditor",
+      "markerToEditorDiagnostic",
+      "actionKindToMonaco",
+      "actionToMonaco",
+      "codeActionsResponseToMonaco",
+      "CODE_ACTION_ELIGIBLE_LANGUAGES",
+      "createKeikoSignatureHelpProvider",
+      "registerKeikoSignatureHelpProvider",
+      "signatureToMonaco",
+      "signatureHelpResponseToMonaco",
+      "DEFAULT_SIGNATURE_HELP_TRIGGER_CHARACTERS",
+      "DEFAULT_SIGNATURE_HELP_RETRIGGER_CHARACTERS",
+      "SIGNATURE_HELP_ELIGIBLE_LANGUAGES",
       // Governed test-generation flow controllers (#1202).
       "buildTestGenerationContext",
       "buildTestGenerationRequest",
@@ -187,8 +214,12 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "EDITOR_COMMAND_KEYBINDINGS",
       "EDITOR_GENERATE_TESTS_ACTION_ID",
       "EDITOR_GENERATE_TESTS_ACTION_LABEL",
+      "EDITOR_RENAME_SYMBOL_ACTION_ID",
+      "EDITOR_RENAME_SYMBOL_ACTION_LABEL",
       "buildGenerateTestsKeybinding",
       "buildGenerateTestsActionDescriptor",
+      "buildRenameSymbolKeybinding",
+      "buildRenameSymbolActionDescriptor",
       "deriveEditorStatusBar",
       "editorLanguageLabel",
       "EditorStatusBar",
