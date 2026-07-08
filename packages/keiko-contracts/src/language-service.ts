@@ -23,13 +23,22 @@
 // changes incompatibly; consumers pin against the literal to detect skew.
 export const LANGUAGE_SERVICE_SCHEMA_VERSION = "1" as const;
 
-// The governed operations. Completion, diagnostics, hover (quick info), document symbols, and
-// document formatting are the first-release deterministic surface; each provider advertises the
-// subset it implements. Formatting (Issue #1201) returns the reviewable text edits an explicit,
-// cancellable "format document" command applies; it is computed deterministically by the provider,
-// never by a model.
+// The governed operations. Completion, diagnostics, hover (quick info), document symbols,
+// formatting, navigation, and refactoring are deterministic surfaces; each provider advertises the
+// subset it implements. Formatting and rename return reviewable text edits an explicit, cancellable
+// command/review flow applies; they are computed deterministically by the provider, never by a model.
 export type LanguageServiceOperation =
-  "diagnostics" | "completion" | "hover" | "symbols" | "formatting";
+  | "diagnostics"
+  | "completion"
+  | "hover"
+  | "symbols"
+  | "formatting"
+  | "definition"
+  | "references"
+  | "renamePrepare"
+  | "renameApply"
+  | "codeActions"
+  | "signatureHelp";
 
 export const LANGUAGE_SERVICE_OPERATIONS: readonly LanguageServiceOperation[] = [
   "diagnostics",
@@ -37,6 +46,12 @@ export const LANGUAGE_SERVICE_OPERATIONS: readonly LanguageServiceOperation[] = 
   "hover",
   "symbols",
   "formatting",
+  "definition",
+  "references",
+  "renamePrepare",
+  "renameApply",
+  "codeActions",
+  "signatureHelp",
 ] as const;
 
 // Stable, content-free error codes the editor relies on to drive recovery UX. The BFF emits them as
@@ -204,6 +219,81 @@ export interface LanguageFormattingResult {
   readonly truncated: boolean;
 }
 
+export interface LanguageLocation {
+  readonly path: string;
+  readonly range: LanguageRange;
+}
+
+export interface LanguageDefinitionResult {
+  readonly locations: readonly LanguageLocation[];
+  readonly truncated: boolean;
+}
+
+export interface LanguageReferencesResult {
+  readonly locations: readonly LanguageLocation[];
+  readonly includesDeclaration: boolean;
+  readonly truncated: boolean;
+}
+
+export type LanguageRenamePrepareResult =
+  | { readonly range: LanguageRange; readonly placeholder: string }
+  | { readonly range: null; readonly reason: string };
+
+export const LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION = "1" as const;
+
+export interface LanguageRenameChangesetFile {
+  readonly path: string;
+  readonly edits: readonly LanguageTextEdit[];
+  readonly expectedContentHash: string;
+}
+
+export interface LanguageRenameChangeset {
+  readonly schemaVersion: typeof LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION;
+  readonly files: readonly LanguageRenameChangesetFile[];
+  readonly truncated: boolean;
+  readonly filesTruncated: boolean;
+  readonly returnedFileCount: number;
+  readonly totalFileCount: number;
+  readonly returnedEditCount: number;
+  readonly totalEditCount: number;
+}
+
+export type LanguageRenameApplyResult = LanguageRenameChangeset;
+
+export type LanguageCodeActionKind = "quickfix" | "refactor" | "source";
+
+export interface LanguageCodeAction {
+  readonly title: string;
+  readonly kind: LanguageCodeActionKind;
+  readonly edits: readonly LanguageTextEdit[] | null;
+}
+
+export interface LanguageCodeActionsResult {
+  readonly actions: readonly LanguageCodeAction[];
+  readonly truncated: boolean;
+  readonly returnedCount: number;
+  readonly totalCount: number;
+}
+
+export interface LanguageSignatureParameterInformation {
+  readonly label: string;
+}
+
+export interface LanguageSignatureInformation {
+  readonly label: string;
+  readonly documentation?: string;
+  readonly parameters: readonly LanguageSignatureParameterInformation[];
+}
+
+export interface LanguageSignatureHelpResult {
+  readonly signatures: readonly LanguageSignatureInformation[];
+  readonly activeSignature: number | null;
+  readonly activeParameter: number | null;
+  readonly truncated: boolean;
+  readonly returnedCount: number;
+  readonly totalCount: number;
+}
+
 export type LanguageProviderAvailability = "available" | "unavailable";
 
 // The pluggability surface. A provider declares its id, the `languages` it serves, and the
@@ -231,6 +321,12 @@ export interface LanguageServiceLimits {
   readonly maxDiagnostics: number;
   readonly maxSymbols: number;
   readonly maxFormattingEdits: number;
+  readonly maxDefinitionLocations: number;
+  readonly maxReferenceLocations: number;
+  readonly maxCodeActions: number;
+  readonly maxSignatures: number;
+  readonly maxRenameChangesetFiles: number;
+  readonly maxRenameChangesetEdits: number;
   readonly maxHoverChars: number;
   readonly maxLabelChars: number;
   readonly maxDetailChars: number;
@@ -252,6 +348,12 @@ export const DEFAULT_LANGUAGE_SERVICE_LIMITS: LanguageServiceLimits = {
   maxDiagnostics: 512,
   maxSymbols: 512,
   maxFormattingEdits: 4_096,
+  maxDefinitionLocations: 64,
+  maxReferenceLocations: 512,
+  maxCodeActions: 32,
+  maxSignatures: 32,
+  maxRenameChangesetFiles: 128,
+  maxRenameChangesetEdits: 4_096,
   maxHoverChars: 4_096,
   maxLabelChars: 256,
   maxDetailChars: 1_024,
@@ -298,12 +400,62 @@ export interface LanguageFormattingRequest {
   readonly options?: LanguageFormattingOptions;
 }
 
+export interface LanguageDefinitionRequest {
+  readonly operation: "definition";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+}
+
+export interface LanguageReferencesRequest {
+  readonly operation: "references";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+}
+
+export interface LanguageRenamePrepareRequest {
+  readonly operation: "renamePrepare";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+}
+
+export interface LanguageRenameApplyRequest {
+  readonly operation: "renameApply";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+  readonly newName: string;
+}
+
+export interface LanguageCodeActionsRequest {
+  readonly operation: "codeActions";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly range: LanguageRange;
+  readonly diagnostics: readonly LanguageDiagnostic[];
+}
+
+export interface LanguageSignatureHelpRequest {
+  readonly operation: "signatureHelp";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+}
+
 export type LanguageServiceRequest =
   | LanguageDiagnosticsRequest
   | LanguageCompletionRequest
   | LanguageHoverRequest
   | LanguageSymbolsRequest
-  | LanguageFormattingRequest;
+  | LanguageFormattingRequest
+  | LanguageDefinitionRequest
+  | LanguageReferencesRequest
+  | LanguageRenamePrepareRequest
+  | LanguageRenameApplyRequest
+  | LanguageCodeActionsRequest
+  | LanguageSignatureHelpRequest;
 
 // ─── Pure validation (trust-boundary edge: the BFF validates a client-supplied request) ──────────
 // Result envelope follows the package convention: a discriminated `{ ok: true; value } | { ok:
@@ -339,12 +491,43 @@ export function isLanguagePosition(value: unknown): value is LanguagePosition {
   );
 }
 
+export function isLanguageRange(value: unknown): value is LanguageRange {
+  return (
+    isRecord(value) &&
+    isLanguagePosition(value.start) &&
+    isLanguagePosition(value.end) &&
+    comparePositions(value.start, value.end) <= 0
+  );
+}
+
+function comparePositions(left: LanguagePosition, right: LanguagePosition): number {
+  if (left.line !== right.line) {
+    return left.line - right.line;
+  }
+  return left.character - right.character;
+}
+
 export function isLanguageDocumentOverlay(value: unknown): value is LanguageDocumentOverlay {
   return (
     isRecord(value) &&
     isNonEmptyString(value.path) &&
     isNonEmptyString(value.languageId) &&
     typeof value.text === "string"
+  );
+}
+
+function isLanguageDiagnosticSeverity(value: unknown): value is LanguageDiagnosticSeverity {
+  return value === "error" || value === "warning" || value === "info" || value === "hint";
+}
+
+export function isLanguageDiagnostic(value: unknown): value is LanguageDiagnostic {
+  return (
+    isRecord(value) &&
+    isLanguageRange(value.range) &&
+    isLanguageDiagnosticSeverity(value.severity) &&
+    isNonEmptyString(value.message) &&
+    isNonEmptyString(value.source) &&
+    (value.code === undefined || typeof value.code === "string")
   );
 }
 
@@ -381,6 +564,34 @@ function isLanguageServiceOperation(value: unknown): value is LanguageServiceOpe
   );
 }
 
+type PositionOperation = Extract<
+  LanguageServiceOperation,
+  | "completion"
+  | "hover"
+  | "definition"
+  | "references"
+  | "renamePrepare"
+  | "renameApply"
+  | "signatureHelp"
+>;
+
+type BaseDocumentOperation = Extract<LanguageServiceOperation, "diagnostics" | "symbols">;
+
+const POSITION_OPERATIONS: readonly PositionOperation[] = [
+  "completion",
+  "hover",
+  "definition",
+  "references",
+  "renamePrepare",
+  "renameApply",
+  "signatureHelp",
+] as const;
+
+const BASE_DOCUMENT_OPERATIONS: readonly BaseDocumentOperation[] = [
+  "diagnostics",
+  "symbols",
+] as const;
+
 function collectBaseErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
   if (!isNonEmptyString(value.root)) {
@@ -392,8 +603,78 @@ function collectBaseErrors(value: Record<string, unknown>): string[] {
   return errors;
 }
 
-function needsPosition(operation: LanguageServiceOperation): boolean {
-  return operation === "completion" || operation === "hover";
+function isPositionOperation(operation: LanguageServiceOperation): operation is PositionOperation {
+  return POSITION_OPERATIONS.includes(operation as PositionOperation);
+}
+
+function isBaseDocumentOperation(
+  operation: LanguageServiceOperation,
+): operation is BaseDocumentOperation {
+  return BASE_DOCUMENT_OPERATIONS.includes(operation as BaseDocumentOperation);
+}
+
+function isLanguageDiagnostics(value: unknown): value is readonly LanguageDiagnostic[] {
+  return Array.isArray(value) && value.every(isLanguageDiagnostic);
+}
+
+function collectPositionErrors(
+  operation: LanguageServiceOperation,
+  value: Record<string, unknown>,
+): readonly string[] {
+  return isPositionOperation(operation) && !isLanguagePosition(value.position)
+    ? ["position must be { line, character }"]
+    : [];
+}
+
+function collectRangeErrors(
+  operation: LanguageServiceOperation,
+  value: Record<string, unknown>,
+): readonly string[] {
+  return operation === "codeActions" && !isLanguageRange(value.range)
+    ? ["range must be { start, end }"]
+    : [];
+}
+
+function collectRenameApplyErrors(
+  operation: LanguageServiceOperation,
+  value: Record<string, unknown>,
+): readonly string[] {
+  return operation === "renameApply" && !isNonEmptyString(value.newName)
+    ? ["newName must be a non-empty string"]
+    : [];
+}
+
+function collectCodeActionErrors(
+  operation: LanguageServiceOperation,
+  value: Record<string, unknown>,
+): readonly string[] {
+  return operation === "codeActions" && !isLanguageDiagnostics(value.diagnostics)
+    ? ["diagnostics must be an array of LanguageDiagnostic"]
+    : [];
+}
+
+function collectFormattingErrors(
+  operation: LanguageServiceOperation,
+  value: Record<string, unknown>,
+): readonly string[] {
+  return operation === "formatting" &&
+    value.options !== undefined &&
+    !isLanguageFormattingOptions(value.options)
+    ? ["options must be { tabSize?, insertSpaces? }"]
+    : [];
+}
+
+function collectOperationErrors(
+  operation: LanguageServiceOperation,
+  value: Record<string, unknown>,
+): string[] {
+  return [
+    ...collectPositionErrors(operation, value),
+    ...collectRangeErrors(operation, value),
+    ...collectRenameApplyErrors(operation, value),
+    ...collectCodeActionErrors(operation, value),
+    ...collectFormattingErrors(operation, value),
+  ];
 }
 
 // Validates an `unknown` payload into a LanguageServiceRequest, reporting one error per failed
@@ -411,17 +692,7 @@ export function parseLanguageServiceRequest(
     };
   }
   const operation = value.operation;
-  const errors = collectBaseErrors(value);
-  if (needsPosition(operation) && !isLanguagePosition(value.position)) {
-    errors.push("position must be { line, character }");
-  }
-  if (
-    operation === "formatting" &&
-    value.options !== undefined &&
-    !isLanguageFormattingOptions(value.options)
-  ) {
-    errors.push("options must be { tabSize?, insertSpaces? }");
-  }
+  const errors = [...collectBaseErrors(value), ...collectOperationErrors(operation, value)];
   if (errors.length > 0) {
     return { ok: false, errors };
   }
@@ -435,13 +706,89 @@ function assembleRequest(
 ): LanguageServiceRequest {
   const root = value.root as string;
   const document = value.document as LanguageDocumentOverlay;
-  if (operation === "completion" || operation === "hover") {
-    return { operation, root, document, position: value.position as LanguagePosition };
+  return assembleValidatedRequest(operation, root, document, value);
+}
+
+function assembleValidatedRequest(
+  operation: LanguageServiceOperation,
+  root: string,
+  document: LanguageDocumentOverlay,
+  value: Record<string, unknown>,
+): LanguageServiceRequest {
+  if (operation === "renameApply") {
+    return assembleRenameApplyRequest(root, document, value);
+  }
+  if (isPositionOperation(operation)) {
+    return assemblePositionRequest(operation, root, document, value);
+  }
+  if (operation === "codeActions") {
+    return assembleCodeActionsRequest(root, document, value);
   }
   if (operation === "formatting") {
-    return value.options === undefined
-      ? { operation, root, document }
-      : { operation, root, document, options: value.options as LanguageFormattingOptions };
+    return assembleFormattingRequest(root, document, value);
+  }
+  if (isBaseDocumentOperation(operation)) {
+    return { operation, root, document };
   }
   return { operation, root, document };
+}
+
+function assembleRenameApplyRequest(
+  root: string,
+  document: LanguageDocumentOverlay,
+  value: Record<string, unknown>,
+): LanguageRenameApplyRequest {
+  return {
+    operation: "renameApply",
+    root,
+    document,
+    position: value.position as LanguagePosition,
+    newName: value.newName as string,
+  };
+}
+
+function assemblePositionRequest(
+  operation: Exclude<PositionOperation, "renameApply">,
+  root: string,
+  document: LanguageDocumentOverlay,
+  value: Record<string, unknown>,
+): Extract<
+  LanguageServiceRequest,
+  { readonly operation: Exclude<PositionOperation, "renameApply"> }
+> {
+  return {
+    operation,
+    root,
+    document,
+    position: value.position as LanguagePosition,
+  };
+}
+
+function assembleCodeActionsRequest(
+  root: string,
+  document: LanguageDocumentOverlay,
+  value: Record<string, unknown>,
+): LanguageCodeActionsRequest {
+  return {
+    operation: "codeActions",
+    root,
+    document,
+    range: value.range as LanguageRange,
+    diagnostics: value.diagnostics as readonly LanguageDiagnostic[],
+  };
+}
+
+function assembleFormattingRequest(
+  root: string,
+  document: LanguageDocumentOverlay,
+  value: Record<string, unknown>,
+): LanguageFormattingRequest {
+  return value.options === undefined
+    ? { operation: "formatting", root, document }
+    : {
+        operation: "formatting",
+        root,
+        document,
+        options: value.options as LanguageFormattingOptions,
+      };
 }

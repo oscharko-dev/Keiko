@@ -27,6 +27,8 @@
  * 6. Persisted values are clamped on read and write. Split ratios and the sidebar width are
  *    clamped, and unknown or malformed persisted state falls back to a fresh single-pane layout
  *    rather than blocking the editor.
+ * 7. Outline visibility is additive UI state. Missing persisted values default to visible so older
+ *    layout JSON automatically gains the workspace outline without migration.
  */
 export const EDITOR_LAYOUT_SCHEMA_VERSION = 2 as const;
 
@@ -64,6 +66,7 @@ export interface EditorLayoutStateV2 {
   readonly panes: Readonly<Record<string, EditorPaneStateV2>>;
   readonly sidebarWidth: number;
   readonly sidebarCollapsed: boolean;
+  readonly outlinePanelVisible: boolean;
 }
 
 export interface EditorTabDragIntent {
@@ -106,6 +109,7 @@ export type EditorLayoutAction =
       readonly width?: number | undefined;
       readonly collapsed?: boolean | undefined;
     }
+  | { readonly type: "set-outline-panel"; readonly visible: boolean }
   | {
       readonly type: "replace-root";
       readonly root: string;
@@ -320,6 +324,7 @@ function parseV2(
     panes: visiblePanes,
     sidebarWidth: persistedSidebarWidth(record, input),
     sidebarCollapsed: record.sidebarCollapsed === true,
+    outlinePanelVisible: record.outlinePanelVisible !== false,
   };
 }
 
@@ -364,6 +369,7 @@ function parseV1(
     panes,
     sidebarWidth: persistedSidebarWidth(record, input),
     sidebarCollapsed: record.sidebarCollapsed === true,
+    outlinePanelVisible: record.outlinePanelVisible !== false,
   };
 }
 
@@ -401,6 +407,7 @@ export function createEditorLayoutStateV2(
     panes: { [pane.id]: pane },
     sidebarWidth: input.defaultSidebarWidth,
     sidebarCollapsed: false,
+    outlinePanelVisible: true,
   };
 }
 
@@ -413,6 +420,7 @@ export function serializeEditorLayoutStateV2(layout: EditorLayoutStateV2): strin
     panes: layout.panes,
     sidebarWidth: Math.round(layout.sidebarWidth),
     sidebarCollapsed: layout.sidebarCollapsed,
+    outlinePanelVisible: layout.outlinePanelVisible,
   });
 }
 
@@ -521,21 +529,18 @@ function resizeSplitNode(node: EditorLayoutNode, splitId: string, ratio: number)
   };
 }
 
-function splitPane(
+function insertSplitPane(
   layout: EditorLayoutStateV2,
-  paneId: string,
+  targetPaneId: string,
   direction: EditorSplitDirection,
-  file: string | undefined,
+  file: string,
   before: boolean,
 ): EditorLayoutStateV2 {
-  const source = layout.panes[paneId];
-  if (source === undefined) return layout;
-  const activeFile = file ?? source.activeFile;
-  if (activeFile.length === 0) return layout;
+  if (layout.panes[targetPaneId] === undefined || file.length === 0) return layout;
   const newPaneId = nextPaneId(layout);
-  const newPane = createPane(newPaneId, activeFile, [activeFile]);
-  const first: EditorLayoutPaneNode = { type: "pane", paneId: before ? newPaneId : paneId };
-  const second: EditorLayoutPaneNode = { type: "pane", paneId: before ? paneId : newPaneId };
+  const newPane = createPane(newPaneId, file, [file]);
+  const first: EditorLayoutPaneNode = { type: "pane", paneId: before ? newPaneId : targetPaneId };
+  const second: EditorLayoutPaneNode = { type: "pane", paneId: before ? targetPaneId : newPaneId };
   const replacement: EditorLayoutSplitNode = {
     type: "split",
     id: nextSplitId(layout.tree),
@@ -547,9 +552,30 @@ function splitPane(
   return {
     ...layout,
     activePaneId: newPaneId,
-    tree: replacePaneNode(layout.tree, paneId, replacement),
+    tree: replacePaneNode(layout.tree, targetPaneId, replacement),
     panes: { ...layout.panes, [newPaneId]: newPane },
   };
+}
+
+function splitPane(
+  layout: EditorLayoutStateV2,
+  paneId: string,
+  direction: EditorSplitDirection,
+  file: string | undefined,
+  before: boolean,
+): EditorLayoutStateV2 {
+  const source = layout.panes[paneId];
+  if (source === undefined) return layout;
+  const activeFile = file ?? source.activeFile;
+  if (activeFile.length === 0 || !source.openFiles.includes(activeFile)) return layout;
+  if (withoutFile(source.openFiles, activeFile).length === 0) return layout;
+  return insertSplitPane(
+    closeTab(layout, paneId, activeFile),
+    paneId,
+    direction,
+    activeFile,
+    before,
+  );
 }
 
 function removePane(layout: EditorLayoutStateV2, paneId: string): EditorLayoutStateV2 {
@@ -685,6 +711,11 @@ type StructureAction = Extract<
   { readonly type: "close-pane" | "move-tab" | "drop-tab" | "split-pane" }
 >;
 type LayoutStateAction = Exclude<EditorLayoutAction, PaneFileAction | StructureAction>;
+type LayoutPreferenceAction = Extract<
+  LayoutStateAction,
+  { readonly type: "set-active-pane" | "resize-split" | "set-sidebar" | "set-outline-panel" }
+>;
+type LayoutMutationAction = Exclude<LayoutStateAction, LayoutPreferenceAction>;
 
 const PANE_FILE_ACTION_TYPES = new Set<EditorLayoutAction["type"]>([
   "open-file",
@@ -744,12 +775,19 @@ function reduceDropTab(
   if (intent.zone === "center") {
     return moveTab(layout, intent.fromPaneId, intent.toPaneId, intent.file, intent.targetIndex);
   }
-  return splitPane(
-    moveTab(layout, intent.fromPaneId, intent.fromPaneId, intent.file),
+  const fromPane = layout.panes[intent.fromPaneId];
+  if (fromPane?.openFiles.includes(intent.file) !== true) return layout;
+  const direction = intent.zone === "top" || intent.zone === "bottom" ? "column" : "row";
+  const before = intent.zone === "top" || intent.zone === "left";
+  if (intent.fromPaneId === intent.toPaneId) {
+    return splitPane(layout, intent.toPaneId, direction, intent.file, before);
+  }
+  return insertSplitPane(
+    closeTab(layout, intent.fromPaneId, intent.file),
     intent.toPaneId,
-    intent.zone === "top" || intent.zone === "bottom" ? "column" : "row",
+    direction,
     intent.file,
-    intent.zone === "top" || intent.zone === "left",
+    before,
   );
 }
 
@@ -782,12 +820,31 @@ function replaceRoot(
     panes: { [pane.id]: pane },
     sidebarWidth: action.sidebarWidth ?? layout.sidebarWidth,
     sidebarCollapsed: false,
+    outlinePanelVisible: layout.outlinePanelVisible,
   };
 }
 
 function reduceLayoutStateAction(
   layout: EditorLayoutStateV2,
   action: LayoutStateAction,
+): EditorLayoutStateV2 {
+  return isLayoutPreferenceAction(action)
+    ? reduceLayoutPreferenceAction(layout, action)
+    : reduceLayoutMutationAction(layout, action);
+}
+
+function isLayoutPreferenceAction(action: LayoutStateAction): action is LayoutPreferenceAction {
+  return (
+    action.type === "set-active-pane" ||
+    action.type === "resize-split" ||
+    action.type === "set-sidebar" ||
+    action.type === "set-outline-panel"
+  );
+}
+
+function reduceLayoutPreferenceAction(
+  layout: EditorLayoutStateV2,
+  action: LayoutPreferenceAction,
 ): EditorLayoutStateV2 {
   switch (action.type) {
     case "set-active-pane":
@@ -802,6 +859,16 @@ function reduceLayoutStateAction(
         sidebarWidth: action.width ?? layout.sidebarWidth,
         sidebarCollapsed: action.collapsed ?? layout.sidebarCollapsed,
       };
+    case "set-outline-panel":
+      return { ...layout, outlinePanelVisible: action.visible };
+  }
+}
+
+function reduceLayoutMutationAction(
+  layout: EditorLayoutStateV2,
+  action: LayoutMutationAction,
+): EditorLayoutStateV2 {
+  switch (action.type) {
     case "replace-root":
       return replaceRoot(layout, action);
     case "rename-file":

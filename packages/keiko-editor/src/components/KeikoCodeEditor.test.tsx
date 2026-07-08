@@ -87,8 +87,8 @@ vi.mock("@monaco-editor/react", () => {
   const fakeMonaco = {
     editor: { defineTheme: vi.fn(), setModelMarkers: vi.fn() },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
-    KeyMod: { CtrlCmd: 2048 },
-    KeyCode: { KeyS: 49 },
+    KeyMod: { CtrlCmd: 2048, Alt: 512 },
+    KeyCode: { KeyS: 49, KeyT: 53, F2: 60 },
     languages: {
       CompletionItemKind: {
         Text: 1,

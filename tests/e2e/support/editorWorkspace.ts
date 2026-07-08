@@ -12,7 +12,7 @@
  * keiko-editor-hot-exit IndexedDB store in editorHotExitStore.ts.
  */
 import { expect, type Locator, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -59,6 +59,7 @@ interface SeedEditorWindowOptions {
   readonly active?: string | null;
   readonly windowId?: string;
   readonly theme?: "dark" | "light";
+  readonly resetWorkspace?: boolean;
 }
 
 const createdRoots: string[] = [];
@@ -67,7 +68,7 @@ const createdRoots: string[] = [];
 export function createEditorWorkspace(files: readonly EditorWorkspaceFile[]): {
   readonly root: string;
 } {
-  const root = mkdtempSync(join(tmpdir(), "keiko-1377-editor-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-1377-editor-")));
   createdRoots.push(root);
   for (const file of files) {
     const absolute = join(root, file.path);
@@ -95,6 +96,7 @@ export async function seedEditorWindow(
   page: Page,
   opts: SeedEditorWindowOptions = {},
 ): Promise<void> {
+  const windowId = opts.windowId ?? "issue-1377-editor";
   const cfg =
     opts.root === undefined
       ? {}
@@ -104,7 +106,11 @@ export async function seedEditorWindow(
           ...(opts.openFiles === undefined ? {} : { openFiles: [...opts.openFiles] }),
         };
   await page.addInitScript(
-    ({ window: editorWindow, lsKey }) => {
+    ({ window: editorWindow, lsKey, resetKey, resetWorkspace }) => {
+      if (resetWorkspace && window.sessionStorage.getItem(resetKey) !== "1") {
+        window.localStorage.removeItem(lsKey);
+        window.sessionStorage.setItem(resetKey, "1");
+      }
       window.localStorage.setItem("keiko.theme", editorWindow.theme);
       window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
       if (window.localStorage.getItem(lsKey) === null) {
@@ -114,10 +120,12 @@ export async function seedEditorWindow(
     },
     {
       lsKey: WORKSPACE_LS_KEY,
+      resetKey: `${WORKSPACE_LS_KEY}:seed-reset:${windowId}`,
+      resetWorkspace: opts.resetWorkspace ?? false,
       window: {
         theme: opts.theme ?? "dark",
         entry: {
-          id: opts.windowId ?? "issue-1377-editor",
+          id: windowId,
           type: "editor",
           x: 24,
           y: 24,

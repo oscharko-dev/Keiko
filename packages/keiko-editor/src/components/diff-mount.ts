@@ -19,12 +19,14 @@ export interface MountDiffMonaco {
 export interface MountDiffEditor {
   getContainerDomNode(): HTMLElement;
   goToDiff(target: "next" | "previous"): void;
+  setModel?: ((model: null) => void) | undefined;
 }
 
 /** Imperative handle the toolbar uses to navigate hunks. */
 export interface DiffMountController {
   goToNextDiff(): void;
   goToPreviousDiff(): void;
+  dispose(): void;
 }
 
 export interface WireDiffEditorOnMountArgs {
@@ -58,6 +60,9 @@ export function wireDiffEditorOnMount(args: WireDiffEditorOnMountArgs): DiffMoun
     },
     goToPreviousDiff: (): void => {
       args.editor.goToDiff("previous");
+    },
+    dispose: (): void => {
+      args.editor.setModel?.(null);
     },
   };
 }

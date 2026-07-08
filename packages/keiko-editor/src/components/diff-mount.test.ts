@@ -2,10 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { wireDiffEditorOnMount, type MountDiffEditor, type MountDiffMonaco } from "./diff-mount.js";
 
-function fakeEditor(goToDiff: (target: "next" | "previous") => void): MountDiffEditor {
+function fakeEditor(
+  goToDiff: (target: "next" | "previous") => void,
+  setModel?: (model: null) => void,
+): MountDiffEditor {
   return {
     getContainerDomNode: (): HTMLElement => document.createElement("div"),
     goToDiff,
+    ...(setModel === undefined ? {} : { setModel }),
   };
 }
 
@@ -46,5 +50,18 @@ describe("wireDiffEditorOnMount", () => {
     });
     expect(onThemeError).toHaveBeenCalled();
     expect(typeof controller.goToNextDiff).toBe("function");
+  });
+
+  it("clears the live diff model before unmount disposal", () => {
+    const setModel = vi.fn();
+    const controller = wireDiffEditorOnMount({
+      editor: fakeEditor(vi.fn(), setModel),
+      monaco: fakeMonaco,
+      themeVariant: "dark",
+    });
+
+    controller.dispose();
+
+    expect(setModel).toHaveBeenCalledWith(null);
   });
 });

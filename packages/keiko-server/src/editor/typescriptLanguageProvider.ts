@@ -5,12 +5,15 @@
 // service is created per request and disposed afterwards, keeping each call stateless and
 // deterministic.
 
+import { relative } from "node:path";
 import ts from "typescript";
 import {
   MAX_LANGUAGE_FORMATTING_TAB_SIZE,
+  type LanguageCodeActionsResult,
   type LanguageCompletionItem,
   type LanguageCompletionItemKind,
   type LanguageCompletionResult,
+  type LanguageDefinitionResult,
   type LanguageDiagnostic,
   type LanguageDiagnosticSeverity,
   type LanguageDocumentSymbol,
@@ -18,6 +21,10 @@ import {
   type LanguageHoverResult,
   type LanguagePosition,
   type LanguageProviderDescriptor,
+  type LanguageReferencesResult,
+  type LanguageRenameApplyResult,
+  type LanguageRenamePrepareResult,
+  type LanguageSignatureHelpResult,
   type LanguageSymbolKind,
   type LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
@@ -29,10 +36,30 @@ import type {
   LanguageDiagnosticsRaw,
   LanguageFormattingRaw,
   LanguageProvider,
+  LanguageProviderFailure,
   LanguageProviderContext,
   LanguageSymbolsRaw,
 } from "./languageProvider.js";
 import { computeLineStarts, positionToOffset, spanToRange } from "./textOffsets.js";
+import {
+  resolveTypescriptDefinition,
+  resolveTypescriptReferences,
+} from "./typescriptNavigationProvider.js";
+import {
+  resolveTypescriptCodeActions,
+  resolveTypescriptRenameApply,
+  resolveTypescriptRenamePrepare,
+  resolveTypescriptSignatureHelp,
+} from "./typescriptRefactoringProvider.js";
+import {
+  createTypescriptProjectService,
+  getProjectCompletions,
+  getProjectDiagnostics,
+  getProjectFormatting,
+  getProjectHover,
+  getProjectSymbols,
+  type TypescriptProjectHandle,
+} from "./typescriptProjectService.js";
 
 const TS_LANGUAGES: readonly string[] = [
   "typescript",
@@ -44,7 +71,19 @@ const TS_LANGUAGES: readonly string[] = [
 const DESCRIPTOR: LanguageProviderDescriptor = {
   id: "typescript",
   languages: TS_LANGUAGES,
-  operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
+  operations: [
+    "diagnostics",
+    "completion",
+    "hover",
+    "symbols",
+    "formatting",
+    "definition",
+    "references",
+    "renamePrepare",
+    "renameApply",
+    "codeActions",
+    "signatureHelp",
+  ],
   availability: "available",
 };
 
@@ -122,10 +161,59 @@ function symbolKind(kind: string): LanguageSymbolKind {
 //
 // Lazily created so tests can spy on `ts.createDocumentRegistry` and observe a single call.
 let sharedDocumentRegistry: ts.DocumentRegistry | undefined;
+const sharedProjectService = createTypescriptProjectService();
 
 function documentRegistry(): ts.DocumentRegistry {
   sharedDocumentRegistry ??= ts.createDocumentRegistry();
   return sharedDocumentRegistry;
+}
+
+function normalizeSlashes(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function relativeOverlayPath(ctx: LanguageProviderContext): string {
+  return normalizeSlashes(relative(ctx.root, ctx.overlayPath));
+}
+
+function singleFileHandle(
+  ctx: LanguageProviderContext,
+  service: ts.LanguageService,
+): TypescriptProjectHandle {
+  const overlayRelativePath = relativeOverlayPath(ctx);
+  return {
+    service,
+    configPath: "",
+    projectKey: `single-file:${ctx.overlayPath}`,
+    rootFileNames: [ctx.overlayPath],
+    limits: ctx.limits,
+    overlayPath: ctx.overlayPath,
+    overlayText: ctx.overlayText,
+    wasReused: false,
+    truncated: false,
+    sourceText: (fileName: string): string | undefined =>
+      normalizeSlashes(fileName) === normalizeSlashes(ctx.overlayPath)
+        ? ctx.overlayText
+        : undefined,
+    workspaceRelativePath: (fileName: string): string | undefined =>
+      normalizeSlashes(fileName) === normalizeSlashes(ctx.overlayPath)
+        ? overlayRelativePath
+        : undefined,
+  };
+}
+
+function resolveProject(ctx: LanguageProviderContext): TypescriptProjectHandle | undefined {
+  const result = sharedProjectService.resolveProject(ctx);
+  return result.kind === "project" ? result.project : undefined;
+}
+
+function withProjectOrSingle<T>(
+  ctx: LanguageProviderContext,
+  run: (project: TypescriptProjectHandle) => T,
+): T {
+  const project = resolveProject(ctx);
+  if (project !== undefined) return run(project);
+  return withService(ctx, (service) => run(singleFileHandle(ctx, service)));
 }
 
 function withService<T>(ctx: LanguageProviderContext, run: (service: ts.LanguageService) => T): T {
@@ -297,18 +385,74 @@ function buildFormatting(
   return { edits, truncated: changes.length > capped.length };
 }
 
+function diagnosticsFor(ctx: LanguageProviderContext): LanguageDiagnosticsRaw {
+  const project = resolveProject(ctx);
+  if (project !== undefined) return getProjectDiagnostics(project);
+  return withService(ctx, (svc) => buildDiagnostics(ctx, svc));
+}
+
+function completionsFor(
+  ctx: LanguageProviderContext,
+  position: LanguagePosition,
+): LanguageCompletionResult {
+  const project = resolveProject(ctx);
+  if (project !== undefined) return getProjectCompletions(project, position);
+  return withService(ctx, (svc) => buildCompletions(ctx, svc, position));
+}
+
+function hoverFor(ctx: LanguageProviderContext, position: LanguagePosition): LanguageHoverResult {
+  const project = resolveProject(ctx);
+  if (project !== undefined) return getProjectHover(project, position);
+  return withService(ctx, (svc) => buildHover(ctx, svc, position));
+}
+
+function symbolsFor(ctx: LanguageProviderContext): LanguageSymbolsRaw {
+  const project = resolveProject(ctx);
+  if (project !== undefined) return getProjectSymbols(project);
+  return withService(ctx, (svc) => buildSymbols(ctx, svc));
+}
+
+function formattingFor(
+  ctx: LanguageProviderContext,
+  options: LanguageFormattingOptions | undefined,
+): LanguageFormattingRaw {
+  const project = resolveProject(ctx);
+  if (project !== undefined) return getProjectFormatting(project, options);
+  return withService(ctx, (svc) => buildFormatting(ctx, svc, options));
+}
+
+function renameApplyFor(
+  ctx: LanguageProviderContext,
+  position: LanguagePosition,
+  newName: string,
+): LanguageRenameApplyResult | LanguageProviderFailure {
+  const result = withProjectOrSingle(ctx, (project) =>
+    resolveTypescriptRenameApply(project, position, newName),
+  );
+  return result.kind === "error" ? result : result.result;
+}
+
 export function createTypescriptLanguageProvider(): LanguageProvider {
   return {
     descriptor: DESCRIPTOR,
     supports: (languageId: string): boolean => TS_LANGUAGES.includes(languageId),
-    getDiagnostics: (ctx): LanguageDiagnosticsRaw =>
-      withService(ctx, (svc) => buildDiagnostics(ctx, svc)),
-    getCompletions: (ctx, position): LanguageCompletionResult =>
-      withService(ctx, (svc) => buildCompletions(ctx, svc, position)),
-    getHover: (ctx, position): LanguageHoverResult =>
-      withService(ctx, (svc) => buildHover(ctx, svc, position)),
-    getSymbols: (ctx): LanguageSymbolsRaw => withService(ctx, (svc) => buildSymbols(ctx, svc)),
-    getFormatting: (ctx, options): LanguageFormattingRaw =>
-      withService(ctx, (svc) => buildFormatting(ctx, svc, options)),
+    getDiagnostics: diagnosticsFor,
+    getCompletions: completionsFor,
+    getHover: hoverFor,
+    getSymbols: symbolsFor,
+    getFormatting: formattingFor,
+    getDefinition: (ctx, position): LanguageDefinitionResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptDefinition(project, position)),
+    getReferences: (ctx, position): LanguageReferencesResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptReferences(project, position)),
+    getRenamePrepare: (ctx, position): LanguageRenamePrepareResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptRenamePrepare(project, position)),
+    getRenameApply: renameApplyFor,
+    getCodeActions: (ctx, range, diagnostics): LanguageCodeActionsResult =>
+      withProjectOrSingle(ctx, (project) =>
+        resolveTypescriptCodeActions(project, range, diagnostics),
+      ),
+    getSignatureHelp: (ctx, position): LanguageSignatureHelpResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptSignatureHelp(project, position)),
   };
 }

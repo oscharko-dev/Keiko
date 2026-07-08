@@ -46,6 +46,15 @@ function resolveCommit(): string {
  */
 
 const RELATIVE_PATH = "packages/keiko-cli/src/run.ts";
+const HELPER_PATH = "packages/keiko-cli/src/helper.ts";
+const RUN_TEXT = `import { helper } from "./helper.js";
+
+export const e2eFixture = helper();
+`;
+const HELPER_TEXT = `export function helper(): boolean {
+  return true;
+}
+`;
 const EVIDENCE_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -60,6 +69,7 @@ interface TypingMetrics {
   readonly longTasks: number[];
   readonly events: number[];
   readonly interactionDurations: number[];
+  readonly keystrokeMainThreadWork: number[];
   observerInstalled?: boolean;
   landed?: boolean;
   activeElement?: string;
@@ -73,12 +83,36 @@ interface MemoryMetrics {
   cycles: number;
 }
 
+interface NavigationOperationMetrics {
+  readonly samples: readonly number[];
+  readonly resultCounts: readonly number[];
+}
+
+interface NavigationMetrics {
+  readonly definition: NavigationOperationMetrics;
+  readonly references: NavigationOperationMetrics;
+}
+
 function createProjectFixture(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-perf-"));
   tempProjects.push(root);
   mkdirSync(join(root, "packages", "keiko-cli", "src"), { recursive: true });
   writeFileSync(join(root, "README.md"), "# Keiko perf fixture\n", "utf8");
-  writeFileSync(join(root, RELATIVE_PATH), "export const e2eFixture = true;\n", "utf8");
+  writeFileSync(
+    join(root, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        target: "ES2022",
+      },
+      include: ["packages/**/*.ts"],
+    }),
+    "utf8",
+  );
+  writeFileSync(join(root, RELATIVE_PATH), RUN_TEXT, "utf8");
+  writeFileSync(join(root, HELPER_PATH), HELPER_TEXT, "utf8");
   return root;
 }
 
@@ -162,7 +196,9 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
     await filesWindow.getByRole("button", { name: "Open in editor" }).click();
     const editorWindow = page.getByRole("region", { name: /Editor.*run\.ts/u });
     await expect(editorWindow.locator(".monaco-editor")).toBeVisible();
-    await expect(editorWindow.locator(".view-line").first()).toContainText("e2eFixture");
+    await expect(
+      editorWindow.locator(".view-line").filter({ hasText: "e2eFixture" }),
+    ).toBeVisible();
     if (run >= warmups) {
       samples.push(Date.now() - start);
     }
@@ -177,7 +213,12 @@ async function measureColdStarts(page: Page, warmups: number, runs: number): Pro
 /** Install long-task + Event Timing observers in the page (best-effort; unsupported types no-op). */
 async function installPerfObservers(page: Page): Promise<boolean> {
   return page.evaluate(() => {
-    const store: TypingMetrics = { longTasks: [], events: [], interactionDurations: [] };
+    const store: TypingMetrics = {
+      longTasks: [],
+      events: [],
+      interactionDurations: [],
+      keystrokeMainThreadWork: [],
+    };
     (window as unknown as { __keikoPerf: TypingMetrics }).__keikoPerf = store;
     let observerInstalled = false;
     try {
@@ -222,19 +263,30 @@ async function awaitNextPaint(page: Page): Promise<void> {
   );
 }
 
-const TYPING_CHUNKS = ["export const greeting = ", "'keiko editor ", "performance evidence';"];
+const TYPING_CHUNKS = Array.from("export const greeting = 'keiko editor performance evidence';");
 
 async function insertMeasuredChunks(page: Page): Promise<void> {
   for (const chunk of TYPING_CHUNKS) {
+    const longTaskStart = await page.evaluate(
+      () =>
+        (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf?.longTasks.length ?? 0,
+    );
     const start = Date.now();
     await page.keyboard.insertText(chunk);
     await awaitNextPaint(page);
     const duration = Date.now() - start;
-    await page.evaluate((value) => {
-      (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf?.interactionDurations.push(
-        value,
-      );
-    }, duration);
+    await page.evaluate(
+      ({ value, startIndex }) => {
+        const store = (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf;
+        if (store === undefined) return;
+        const newLongTasks = store.longTasks.slice(startIndex);
+        store.keystrokeMainThreadWork.push(Math.round(Math.max(0, ...newLongTasks)));
+        (
+          window as unknown as { __keikoPerf?: TypingMetrics }
+        ).__keikoPerf?.interactionDurations.push(value);
+      },
+      { value: duration, startIndex: longTaskStart },
+    );
   }
 }
 
@@ -263,6 +315,64 @@ async function hasTypedTextLanded(editorWindow: ReturnType<Page["getByRole"]>): 
     .isVisible({ timeout: 5_000 });
 }
 
+async function measureLanguageOperation(
+  page: Page,
+  root: string,
+  operation: "definition" | "references",
+): Promise<{ readonly durationMs: number; readonly resultCount: number }> {
+  return page.evaluate(
+    async ({ fixtureRoot, languageOperation, text }) => {
+      const started = performance.now();
+      const response = await fetch("/api/editor/language", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: JSON.stringify({
+          operation: languageOperation,
+          root: fixtureRoot,
+          document: {
+            path: "packages/keiko-cli/src/run.ts",
+            languageId: "typescript",
+            text,
+          },
+          position: { line: 2, character: 26 },
+        }),
+      });
+      const durationMs = Math.round(performance.now() - started);
+      if (!response.ok) {
+        throw new Error(`language ${languageOperation} failed with ${String(response.status)}`);
+      }
+      const envelope = (await response.json()) as {
+        readonly result?: { readonly locations?: readonly unknown[] };
+      };
+      return { durationMs, resultCount: envelope.result?.locations?.length ?? 0 };
+    },
+    { fixtureRoot: root, languageOperation: operation, text: RUN_TEXT },
+  );
+}
+
+async function measureNavigationRoundTrips(
+  page: Page,
+  root: string,
+  runs: number,
+): Promise<NavigationMetrics> {
+  const definitionSamples: number[] = [];
+  const definitionCounts: number[] = [];
+  const referenceSamples: number[] = [];
+  const referenceCounts: number[] = [];
+  for (let index = 0; index < runs; index += 1) {
+    const definition = await measureLanguageOperation(page, root, "definition");
+    definitionSamples.push(definition.durationMs);
+    definitionCounts.push(definition.resultCount);
+    const references = await measureLanguageOperation(page, root, "references");
+    referenceSamples.push(references.durationMs);
+    referenceCounts.push(references.resultCount);
+  }
+  return {
+    definition: { samples: definitionSamples, resultCounts: definitionCounts },
+    references: { samples: referenceSamples, resultCounts: referenceCounts },
+  };
+}
+
 async function readTypingMetrics(page: Page): Promise<TypingMetrics | undefined> {
   return page.evaluate(() => (window as unknown as { __keikoPerf?: TypingMetrics }).__keikoPerf);
 }
@@ -272,6 +382,35 @@ async function readActiveElement(page: Page): Promise<string> {
     const el = document.activeElement;
     return el ? `${el.tagName.toLowerCase()}.${el.className}`.slice(0, 80) : "none";
   });
+}
+
+function completeTypingMetrics(input: {
+  readonly metrics: TypingMetrics | undefined;
+  readonly observerInstalled: boolean;
+  readonly landed: boolean;
+  readonly activeElement: string;
+}): TypingMetrics {
+  const metrics = input.metrics;
+  if (metrics === undefined) {
+    return {
+      longTasks: [],
+      events: [],
+      interactionDurations: [],
+      keystrokeMainThreadWork: [],
+      observerInstalled: input.observerInstalled,
+      landed: input.landed,
+      activeElement: input.activeElement,
+    };
+  }
+  return {
+    longTasks: metrics.longTasks,
+    events: metrics.events,
+    interactionDurations: metrics.interactionDurations,
+    keystrokeMainThreadWork: metrics.keystrokeMainThreadWork,
+    observerInstalled: metrics.observerInstalled ?? input.observerInstalled,
+    landed: input.landed,
+    activeElement: input.activeElement,
+  };
 }
 
 /**
@@ -292,14 +431,7 @@ async function measureTyping(
   }
   const metrics = await readTypingMetrics(page);
   const activeElement = await readActiveElement(page);
-  return {
-    longTasks: metrics?.longTasks ?? [],
-    events: metrics?.events ?? [],
-    interactionDurations: metrics?.interactionDurations ?? [],
-    observerInstalled: metrics?.observerInstalled ?? observerInstalled,
-    landed,
-    activeElement,
-  };
+  return completeTypingMetrics({ metrics, observerInstalled, landed, activeElement });
 }
 
 /** B11: per-cycle baseline (no editor) -> peak (editor open) -> residual (editor closed) heap. */
@@ -485,9 +617,13 @@ function buildWorkerLoadCapture(workerRequests: readonly WorkerRequest[]): Recor
 }
 
 function buildB5Evidence(typing: TypingMetrics): Record<string, unknown> {
+  const samples = typing.keystrokeMainThreadWork;
   return {
     budgetMax: 50,
-    captured: typing.landed === true && typing.observerInstalled === true,
+    captured: typing.landed === true && typing.observerInstalled === true && samples.length > 0,
+    samples,
+    p50: percentile(samples, 50),
+    p95: percentile(samples, 95),
     activeElement: typing.activeElement ?? "unknown",
     longTaskCount: typing.longTasks.length,
     maxLongTaskMs: Math.round(Math.max(0, ...typing.longTasks)),
@@ -508,10 +644,22 @@ function buildB6Evidence(typing: TypingMetrics): Record<string, unknown> {
   };
 }
 
+function buildNavigationOperationEvidence(
+  metrics: NavigationOperationMetrics,
+): Record<string, unknown> {
+  return {
+    samples: metrics.samples,
+    resultCounts: metrics.resultCounts,
+    p50: percentile(metrics.samples, 50),
+    p95: percentile(metrics.samples, 95),
+  };
+}
+
 function buildEvidence(
   coldStartsMs: number[],
   typing: TypingMetrics,
   memory: MemoryMetrics,
+  navigation: NavigationMetrics,
   workerRequests: readonly WorkerRequest[],
 ): Record<string, unknown> {
   return {
@@ -528,6 +676,10 @@ function buildEvidence(
     },
     b5KeystrokeMs: buildB5Evidence(typing),
     b6InteractionMs: buildB6Evidence(typing),
+    navigationRoundTripMs: {
+      definition: buildNavigationOperationEvidence(navigation.definition),
+      references: buildNavigationOperationEvidence(navigation.references),
+    },
     b11Memory: memory,
     workerLoadCapture: buildWorkerLoadCapture(workerRequests),
   };
@@ -543,12 +695,17 @@ async function writeEvidence(
   coldStartsMs: number[],
   typing: TypingMetrics,
   memory: MemoryMetrics,
+  navigation: NavigationMetrics,
   capture: WorkerCapture,
 ): Promise<void> {
   await capture.settleWorkerCaptures();
   writeFileSync(
     EVIDENCE_PATH,
-    `${JSON.stringify(buildEvidence(coldStartsMs, typing, memory, capture.workerRequests), null, 2)}\n`,
+    `${JSON.stringify(
+      buildEvidence(coldStartsMs, typing, memory, navigation, capture.workerRequests),
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
 }
@@ -571,31 +728,36 @@ interface EvidenceMeasurements {
   readonly coldStartsMs: number[];
   readonly typing: TypingMetrics;
   readonly memory: MemoryMetrics;
+  readonly navigation: NavigationMetrics;
 }
 
 async function collectEvidenceMeasurements(
   page: Page,
   capture: WorkerCapture,
+  projectPath: string,
 ): Promise<EvidenceMeasurements> {
   const measuredRuns = resolveMeasuredRuns();
+  await page.goto("/");
+  const navigation = await measureNavigationRoundTrips(page, projectPath, measuredRuns);
   const coldStartsMs = await measureColdStarts(page, 1, measuredRuns);
   let typing: TypingMetrics = {
     longTasks: [],
     events: [],
     interactionDurations: [],
+    keystrokeMainThreadWork: [],
     landed: false,
   };
   let memory = await measureMemoryBestEffort(page);
-  await writeEvidence(coldStartsMs, typing, memory, capture);
+  await writeEvidence(coldStartsMs, typing, memory, navigation, capture);
 
   await page.goto("/");
   const editorWindow = await openEditorCard(page);
   typing = await measureTyping(page, editorWindow);
-  await writeEvidence(coldStartsMs, typing, memory, capture);
+  await writeEvidence(coldStartsMs, typing, memory, navigation, capture);
 
   memory = await measureMemoryBestEffort(page);
-  await writeEvidence(coldStartsMs, typing, memory, capture);
-  return { coldStartsMs, typing, memory };
+  await writeEvidence(coldStartsMs, typing, memory, navigation, capture);
+  return { coldStartsMs, typing, memory, navigation };
 }
 
 // Documented B11 ceilings (docs/keiko-editor/1207-performance-budgets.md): peak heap growth across
@@ -607,8 +769,12 @@ const B11_RESIDUAL_GROWTH_BUDGET_BYTES = 16 * 1024 * 1024;
 function assertEvidenceBudgets(
   evidence: {
     b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
-    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
+    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number; p95: number };
     b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+    navigationRoundTripMs: {
+      definition: { p50: number; p95: number; resultCounts: readonly number[] };
+      references: { p50: number; p95: number; resultCounts: readonly number[] };
+    };
     b11Memory: {
       supported: boolean;
       baselineBytes: number | null;
@@ -627,11 +793,26 @@ function assertEvidenceBudgets(
   expect(evidence.b4ColdStartMs.p50).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP50);
   expect(evidence.b4ColdStartMs.p95).toBeLessThanOrEqual(evidence.b4ColdStartMs.budgetP95);
   expect(evidence.b5KeystrokeMs.captured).toBe(true);
+  expect(evidence.b5KeystrokeMs.p95).toBeLessThan(evidence.b5KeystrokeMs.budgetMax);
   expect(evidence.b5KeystrokeMs.maxLongTaskMs).toBeLessThanOrEqual(
     evidence.b5KeystrokeMs.budgetMax,
   );
   expect(evidence.b6InteractionMs.captured).toBe(true);
   expect(evidence.b6InteractionMs.p75).toBeLessThanOrEqual(evidence.b6InteractionMs.budgetP75);
+  expect(evidence.navigationRoundTripMs.definition.p50).toBeGreaterThanOrEqual(0);
+  expect(evidence.navigationRoundTripMs.definition.p95).toBeGreaterThanOrEqual(
+    evidence.navigationRoundTripMs.definition.p50,
+  );
+  expect(evidence.navigationRoundTripMs.definition.resultCounts.every((count) => count > 0)).toBe(
+    true,
+  );
+  expect(evidence.navigationRoundTripMs.references.p50).toBeGreaterThanOrEqual(0);
+  expect(evidence.navigationRoundTripMs.references.p95).toBeGreaterThanOrEqual(
+    evidence.navigationRoundTripMs.references.p50,
+  );
+  expect(evidence.navigationRoundTripMs.references.resultCounts.every((count) => count > 0)).toBe(
+    true,
+  );
   expect(evidence.workerLoadCapture.totalWorkerRequests).toBeGreaterThan(0);
   expect(evidence.workerLoadCapture.editorWorkerLoaded).toBe(true);
   expect(evidence.workerLoadCapture.languageWorkerLoaded).toBe(false);
@@ -669,22 +850,32 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
   const projectPath = createProjectFixture();
   await seedFilesWindow(page, projectPath);
   const capture = installWorkerCapture(page);
-  const measurements = await collectEvidenceMeasurements(page, capture);
-  const { coldStartsMs, typing, memory } = measurements;
+  const measurements = await collectEvidenceMeasurements(page, capture, projectPath);
+  const { coldStartsMs, typing, memory, navigation } = measurements;
 
   await testInfo.attach("editor-perf-evidence", {
     body: JSON.stringify(
-      buildEvidence(coldStartsMs, typing, memory, capture.workerRequests),
+      buildEvidence(coldStartsMs, typing, memory, navigation, capture.workerRequests),
       null,
       2,
     ),
     contentType: "application/json",
   });
 
-  const evidence = buildEvidence(coldStartsMs, typing, memory, capture.workerRequests) as {
+  const evidence = buildEvidence(
+    coldStartsMs,
+    typing,
+    memory,
+    navigation,
+    capture.workerRequests,
+  ) as {
     b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
-    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
+    b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number; p95: number };
     b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+    navigationRoundTripMs: {
+      definition: { p50: number; p95: number; resultCounts: readonly number[] };
+      references: { p50: number; p95: number; resultCounts: readonly number[] };
+    };
     b11Memory: {
       supported: boolean;
       baselineBytes: number | null;
