@@ -127,8 +127,8 @@ function diffRangesFromEnv(env) {
 
   validateBaseSha(baseSha);
   validateBaseRef(baseRef);
-  pushBaseShaRanges(ranges, baseSha);
   pushBaseRefRanges(ranges, baseRef);
+  pushBaseShaRanges(ranges, baseSha);
 
   return ranges;
 }

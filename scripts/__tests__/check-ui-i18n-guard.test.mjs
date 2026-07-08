@@ -103,6 +103,27 @@ test("detects changed files from workflow_dispatch base ref safely", () => {
   assert.equal(calls[0], "origin/release-1209...HEAD");
 });
 
+test("prefers pull request base ref over synchronize before SHA", () => {
+  const calls = [];
+  const files = changedFilesFromGit(
+    "repo",
+    (_repoRoot, range) => {
+      calls.push(range);
+      return range === "origin/dev...HEAD"
+        ? { ok: true, error: "", files: [EN_CATALOG, DE_CATALOG] }
+        : { ok: false, error: "missing range", files: [] };
+    },
+    {
+      GITHUB_EVENT_NAME: "pull_request",
+      KEIKO_I18N_GUARD_BASE_REF: "dev",
+      KEIKO_I18N_GUARD_BASE_SHA: "abc1234",
+    },
+  );
+
+  assert.deepEqual(files, [EN_CATALOG, DE_CATALOG]);
+  assert.equal(calls[0], "origin/dev...HEAD");
+});
+
 test("rejects unsafe git env values before spawning git", () => {
   assert.throws(
     () =>
