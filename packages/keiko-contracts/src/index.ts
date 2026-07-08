@@ -2037,6 +2037,17 @@ export type {
   MemoryConsolidationJobResponseWire,
 } from "./memory-consolidation-wire.js";
 
+export type {
+  MemoryHealthScanFindingKindWire,
+  MemoryHealthScanMemoryRefWire,
+  MemoryHealthScanFindingWire,
+  MemoryHealthScanResultWire,
+} from "./memory-health-scan-wire.js";
+export {
+  MEMORY_HEALTH_SCAN_REASON_MAX_CHARS,
+  MEMORY_HEALTH_SCAN_FINDING_KINDS,
+} from "./memory-health-scan-wire.js";
+
 // ─── Workflow memory port (Issue #213 / Epic #204) ──────────────────────────────
 // Optional read-only port that workflow packages compose with to inject scoped memory
 // context before model invocation and emit memory lifecycle events. Memory cannot grant

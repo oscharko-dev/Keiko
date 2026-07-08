@@ -230,6 +230,7 @@ export interface MemoryListContentProps {
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly onOpenConsolidation?: (() => void) | undefined;
   readonly onOpenReviewQueue?: (() => void) | undefined;
+  readonly onOpenHealthScan?: (() => void) | undefined;
   readonly policyEnabled?: boolean | undefined;
   readonly onPolicyEnabledChange?: ((next: boolean) => void) | undefined;
   readonly showWorkspaceBackLink?: boolean;
@@ -243,6 +244,7 @@ export function MemoryListContent({
   onOpenDetail,
   onOpenConsolidation,
   onOpenReviewQueue,
+  onOpenHealthScan,
   policyEnabled,
   onPolicyEnabledChange,
   showWorkspaceBackLink = true,
@@ -341,6 +343,19 @@ export function MemoryListContent({
               className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
             >
               {t("memoria.reviewQueue")}
+            </Link>
+          )}
+          {onOpenHealthScan !== undefined ? (
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost lk-btn-lg"
+              onClick={onOpenHealthScan}
+            >
+              {t("memoria.healthScan")}
+            </button>
+          ) : (
+            <Link href="/memoriaviva/health-scan" className="lk-btn lk-btn-ghost lk-btn-lg">
+              {t("memoria.healthScan")}
             </Link>
           )}
         </div>

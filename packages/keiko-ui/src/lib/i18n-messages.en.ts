@@ -352,6 +352,22 @@ export const EN_MESSAGES = {
   "memoria.consolidation.summary.configuredWithUpdates":
     "Model-assisted summaries proposed {count}{suffix}",
   "memoria.consolidation.summary.fallbackSuffix": "; {count} preserved source text.",
+  "memoria.healthScan": "Health scan",
+  "memoria.healthScan.region": "Memory health scan findings",
+  "memoria.healthScan.loading": "Loading health scan findings...",
+  "memoria.healthScan.findingsCount": "{count} findings",
+  "memoria.healthScan.emptyTitle": "No issues found",
+  "memoria.healthScan.emptyBody":
+    "The last health scan found no orphaned memories, missing cross-references, staleness, or dangling review issues.",
+  "memoria.healthScan.recordsInspected": "{count} records inspected",
+  "memoria.healthScan.truncated": "Results truncated",
+  "memoria.healthScan.reason": "Reason",
+  "memoria.healthScan.memories": "Memories",
+  "memoria.healthScan.viewMemory": "View memory {id}",
+  "memoria.healthScan.kind.orphanMemory": "Orphan memory",
+  "memoria.healthScan.kind.missingCrossReference": "Missing cross-reference",
+  "memoria.healthScan.kind.staleNotArchived": "Stale, not archived",
+  "memoria.healthScan.kind.danglingReviewItem": "Dangling review item",
   "chat.grounded.cancel": "Cancel grounded request",
   "attachment.rejection.textOnly":
     "The selected model can't accept this attachment type. Choose a model that supports images or documents.",
