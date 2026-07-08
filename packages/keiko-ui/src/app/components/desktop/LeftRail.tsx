@@ -143,6 +143,18 @@ function LeftRailImpl({
           type="button"
           className="rail-btn"
           data-side="left"
+          data-active={openTools.has("editor") ? "true" : "false"}
+          aria-label={t("rail.editor")}
+          aria-pressed={openTools.has("editor")}
+          data-tip={t("rail.editor")}
+          onClick={() => onTool("editor")}
+        >
+          <Icons.editor size={19} />
+        </button>
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
           data-active={openTools.has("localKnowledge") ? "true" : "false"}
           aria-label={t("rail.localKnowledge")}
           aria-pressed={openTools.has("localKnowledge")}

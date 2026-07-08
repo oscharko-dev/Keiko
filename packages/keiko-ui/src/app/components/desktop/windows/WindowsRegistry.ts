@@ -308,6 +308,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     title: "Editor",
     icon: "editor",
     desc: "Open a folder or file",
+    // Toggle-able from the left rail: `deriveOpenTools` reads `tool` to reflect the open state on
+    // the rail button (the editor stays a config-capable card type opened via the New Window dialog
+    // or `openWindow("editor", …)`; this only adds the rail-toggle affordance).
+    tool: true,
     w: 920,
     h: 620,
     min: { w: 620, h: 380 },

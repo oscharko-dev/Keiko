@@ -13,6 +13,7 @@ export const DE_MESSAGES = {
   "rail.quality": "Quality Intelligence",
   "rail.promptEnhancer": "Prompt Enhancer",
   "rail.localKnowledge": "Lokales Wissen",
+  "rail.editor": "Editor",
   "rail.figma": "Figma-Snapshot",
   "rail.lightMode": "Heller Modus",
   "rail.darkMode": "Dunkler Modus",

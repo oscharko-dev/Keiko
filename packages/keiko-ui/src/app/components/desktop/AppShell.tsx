@@ -282,6 +282,7 @@ const TOOL_TYPES: readonly WindowType[] = [
   "resources",
   "localKnowledge",
   "governedGit",
+  "editor",
   "figma",
   "quality",
   "promptEnhancer",

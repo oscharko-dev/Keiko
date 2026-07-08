@@ -41,6 +41,7 @@ import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./Edit
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
+import { EditorEmptyState } from "./EditorEmptyState";
 import {
   sameEditorOutlineSnapshot,
   type EditorOutlineRevealRequest,
@@ -1384,7 +1385,9 @@ export function EditorWidget({
   ]);
 
   if (workspaceRoot.length === 0) {
-    return <EditorRuntimeWidget {...props} />;
+    // Unbound editor (opened without a project root, e.g. toggled from the left rail): offer the
+    // native OS folder picker so the user can choose a project and start working (ADR-0118).
+    return <EditorEmptyState onOpenRoot={openRoot} />;
   }
 
   const renderPane = (pane: EditorPaneStateV2): ReactNode => {
