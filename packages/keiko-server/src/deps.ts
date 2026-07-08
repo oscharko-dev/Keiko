@@ -161,6 +161,7 @@ import {
   createServerWorkspaceIndexProvider,
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
+import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -246,6 +247,9 @@ export interface UiHandlerDeps {
   // Optional dedicated evidence store for coding-workbench records. When absent, coding-sidecar
   // routes keep the root evidence store clean and fall back to diagnostics-only observability.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
+  // Optional governed connector mutation seam for Autonomous Delivery. Production may leave this
+  // absent; the autonomous executor then fails connector writes closed instead of using provider APIs.
+  readonly autonomousDeliveryConnector?: AutonomousDeliveryConnectorExecutor | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the

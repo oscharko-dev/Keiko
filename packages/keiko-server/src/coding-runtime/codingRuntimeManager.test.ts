@@ -126,6 +126,20 @@ function governedAssistRequest(
   };
 }
 
+function autonomousDeliveryRequest(
+  workspaceRoot: string,
+  managedRoot: string,
+  executablePath: string,
+): CodingRuntimeLaunchRequest {
+  return {
+    ...launchRequest(workspaceRoot, managedRoot, executablePath),
+    runId: "run-1993",
+    taskRef: "issue-1993",
+    requestedMode: "autonomous-delivery",
+    effectiveMode: "autonomous-delivery",
+  };
+}
+
 function createManagedFixture(): {
   readonly workspaceRoot: string;
   readonly managedRoot: string;
@@ -1003,6 +1017,51 @@ describe("coding runtime manager", () => {
       failureCode: "failure-redacted",
       retryable: false,
     });
+  });
+
+  it("fails closed for autonomous sidecar mutations outside the server delivery executor", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const manager = createCodingRuntimeManager({
+      spawn: harness.spawn,
+      processEnv: {},
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+      nowIso: () => "2026-07-07T13:00:00.000Z",
+    });
+
+    manager.start(
+      autonomousDeliveryRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.stdout.write(pushPermissionLine("perm-1993-push-denied"));
+    harness.children[0]?.stdout.write(
+      permissionLine({
+        requestId: "perm-1993-connector-write-denied",
+        kind: "connector-access",
+        actionClass: "connector-access",
+        reasonCode: "approval-required",
+        actionKind: "connector-write",
+        scopeLabel: "workspace-scope",
+        risk: "high",
+        policyReason: "approval-required",
+        commandLabel: "connector-write",
+        connectorScopes: ["issue-tracker.write"],
+      }),
+    );
+    harness.children[0]?.stdout.write(
+      pushPermissionLine("perm-1993-push-stopped", undefined, true),
+    );
+    await settle();
+
+    expect(events.filter((event) => event.failureCode === "delivery-denied")).toHaveLength(2);
+    expect(events.find((event) => event.failureCode === "operator-stopped")).toMatchObject({
+      kind: "failure-redacted",
+      failureSummary: "operator-stopped",
+      retryable: false,
+    });
+    expect(events.some((event) => event.kind === "permission-requested")).toBe(false);
   });
 
   it("escalates stop to SIGKILL when the sidecar misses the shutdown deadline", async () => {
