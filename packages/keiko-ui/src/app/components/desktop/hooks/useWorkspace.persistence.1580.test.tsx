@@ -63,6 +63,33 @@ function setHidden(hidden: boolean): void {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
 }
 
+function trackLocalStorageWrites(): {
+  readonly keys: readonly string[];
+  readonly restore: () => void;
+} {
+  const originalStorage = window.localStorage;
+  const keys: string[] = [];
+  const trackedStorage = new Proxy(originalStorage, {
+    get(target, prop, receiver) {
+      if (prop === "setItem") {
+        return (key: string, value: string): void => {
+          keys.push(key);
+          target.setItem(key, value);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  Object.defineProperty(window, "localStorage", { configurable: true, value: trackedStorage });
+  return {
+    keys,
+    restore: () => {
+      Object.defineProperty(window, "localStorage", { configurable: true, value: originalStorage });
+    },
+  };
+}
+
 describe("Issue #1580 — debounced workspace persistence", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -109,24 +136,27 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     });
     const baseline = window.localStorage.getItem(WS_LS);
     expect(baseline).toBe(JSON.stringify([seedWindow()]));
-    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
+    const storageWrites = trackLocalStorageWrites();
 
-    act(() => {
-      getByTestId("minimize").click();
-      getByTestId("minimize").click();
-      getByTestId("minimize").click();
-    });
-    expect(window.localStorage.getItem(WS_LS)).toBe(baseline);
-    expect(setItemSpy.mock.calls.filter(([key]) => key === WS_LS)).toHaveLength(0);
+    try {
+      act(() => {
+        getByTestId("minimize").click();
+        getByTestId("minimize").click();
+        getByTestId("minimize").click();
+      });
+      expect(window.localStorage.getItem(WS_LS)).toBe(baseline);
+      expect(storageWrites.keys.filter((key) => key === WS_LS)).toHaveLength(0);
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(400);
-    });
-    const flushed = window.localStorage.getItem(WS_LS);
-    expect(flushed).not.toBe(baseline);
-    expect(flushed).toContain('"minimized":true');
-    expect(setItemSpy.mock.calls.filter(([key]) => key === WS_LS)).toHaveLength(1);
-    setItemSpy.mockRestore();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      const flushed = window.localStorage.getItem(WS_LS);
+      expect(flushed).not.toBe(baseline);
+      expect(flushed).toContain('"minimized":true');
+      expect(storageWrites.keys.filter((key) => key === WS_LS)).toHaveLength(1);
+    } finally {
+      storageWrites.restore();
+    }
   });
 
   it("debounces the view write and flushes it on pagehide", () => {
