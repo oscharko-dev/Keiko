@@ -16,10 +16,14 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  handleSendDesktopChatStream,
+  MAX_ACTIVE_CHAT_STREAMS_ENV,
+  _resetActiveChatStreamsForTests,
+} from "./chat-stream-handlers.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
-import type { RouteContext } from "./routes.js";
+import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -654,5 +658,108 @@ describe("desktop chat SSE streaming handler", () => {
     expect(content).not.toContain("Discussion mode directives:");
     // With no mode, docs, or memory the latest turn is the bare draft.
     expect(content).toBe("Should we ship this?");
+  });
+});
+
+// GEN-PERF-CHATSTREAM-001 — the chat SSE route was the only stream type without a
+// concurrency bulkhead (agent runs cap at 16, QI at 2, voice at 64). Above the cap the
+// route must reject with a JSON 429 BEFORE any SSE header (so the client degrades to the
+// buffered path) and must free the slot when a stream settles.
+describe("concurrent chat stream bulkhead", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    _resetActiveChatStreamsForTests();
+  });
+
+  it("rejects streams above the cap with 429 and frees the slot after settle", async () => {
+    vi.stubEnv(MAX_ACTIVE_CHAT_STREAMS_ENV, "1");
+    const chatId = seedChat();
+    let releaseFirst: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("buffered")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        yield { type: "delta", token: "hi" };
+        await gate;
+        yield { type: "done", response: normalizedResponse("done") };
+      },
+    };
+    const d = deps(model);
+    const first = captureRes();
+    const firstOutcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "one" }),
+        first.res,
+      ),
+      d,
+    );
+    // Wait until the first stream actually holds the slot (its first token frame is out).
+    await vi.waitFor(() => {
+      expect(first.writes.join("")).toContain("event: token");
+    });
+    const second = captureRes();
+    const rejected = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "two" }),
+        second.res,
+      ),
+      d,
+    );
+    expect(rejected).toMatchObject({
+      status: 429,
+      body: { error: { code: "TOO_MANY_STREAMS" } },
+    });
+    // The rejection happened before any SSE header/frame reached the second response.
+    expect(second.status).toBeUndefined();
+    expect(second.writes).toHaveLength(0);
+    releaseFirst();
+    await expect(firstOutcome).resolves.toBe(STREAMING);
+    const third = captureRes();
+    const accepted = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "three" }),
+        third.res,
+      ),
+      d,
+    );
+    expect(accepted).toBe(STREAMING);
+    expect(parseSse(third.writes).some((record) => record.event === "done")).toBe(true);
+  });
+
+  it("keeps the slot accounting correct when the stream handler throws", async () => {
+    vi.stubEnv(MAX_ACTIVE_CHAT_STREAMS_ENV, "1");
+    const chatId = seedChat();
+    const failing: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("unused")),
+      // The stream failing before its first chunk IS the scenario under test.
+      // eslint-disable-next-line require-yield -- fails before any chunk by design
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        throw new Error("upstream exploded");
+      },
+    };
+    const first = captureRes();
+    const outcome = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "boom" }),
+        first.res,
+      ),
+      deps(failing),
+    );
+    expect(outcome).toBe(STREAMING);
+    // The slot must be released by the finally even though the stream errored.
+    const { model } = streamingModel("recovered");
+    const second = captureRes();
+    const accepted = await handleSendDesktopChatStream(
+      routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "again" }),
+        second.res,
+      ),
+      deps(model),
+    );
+    expect(accepted).toBe(STREAMING);
+    expect(parseSse(second.writes).some((record) => record.event === "done")).toBe(true);
   });
 });

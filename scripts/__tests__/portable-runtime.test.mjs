@@ -427,6 +427,14 @@ function writePrimaryLauncherFixture(target, destination) {
   writeFileSync(destination, `fixture native launcher for ${target.platformTarget}\n`);
 }
 
+function stagedMacAppRoot(outDir, platformTarget) {
+  return join(outDir, platformTarget, "payload", "Keiko", "Keiko.app");
+}
+
+function stagedMacResourcesRoot(outDir, platformTarget) {
+  return join(stagedMacAppRoot(outDir, platformTarget), "Contents", "Resources");
+}
+
 function sidecarRuntimeFor(platformTarget, overrides = {}) {
   const target = portableTarget(platformTarget);
   const name = overrides.name ?? "opencode-compatible";
@@ -1184,6 +1192,12 @@ describe("stage-portable-runtime", () => {
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "app")),
     ).toBe(true);
+    const macAppRoot = stagedMacAppRoot(outDir, "macos-arm64");
+    const macResourcesRoot = stagedMacResourcesRoot(outDir, "macos-arm64");
+    const infoPlist = readFileSync(join(macAppRoot, "Contents", "Info.plist"), "utf8");
+    expect(infoPlist).toContain("<key>CFBundleIconFile</key>");
+    expect(infoPlist).toContain("<string>Keiko.icns</string>");
+    expect(statSync(join(macResourcesRoot, "Keiko.icns")).size).toBeGreaterThan(0);
     expect(
       existsSync(
         join(
@@ -1387,6 +1401,10 @@ describe("stage-portable-runtime", () => {
 
     await assembleStageForTest("macos-x64", nodeArchive, outDir, dir, [sidecarSpec]);
 
+    const macAppRoot = stagedMacAppRoot(outDir, "macos-x64");
+    const infoPlist = readFileSync(join(macAppRoot, "Contents", "Info.plist"), "utf8");
+    expect(infoPlist).toContain("<string>Keiko.icns</string>");
+    expect(existsSync(join(stagedMacResourcesRoot(outDir, "macos-x64"), "Keiko.icns"))).toBe(true);
     const manifest = JSON.parse(
       readFileSync(join(outDir, "macos-x64", "manifest", "portable-manifest.json"), "utf8"),
     );

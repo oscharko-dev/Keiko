@@ -15,6 +15,7 @@ import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
 import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
+import { redactedEventJson } from "./sse-frame-cache.js";
 import {
   errorBody,
   STREAMING,
@@ -221,8 +222,9 @@ function writeCommandEvent(
   controller: AbortController,
   onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
-  const redacted = redactor(event);
-  const data = JSON.stringify(redacted);
+  // GEN-PERF-FANOUT-001 — redact+serialize once per event across all subscribers; only
+  // the per-connection `id:` cursor differs between them.
+  const data = redactedEventJson(redactor, event);
   const frame = `id: ${String(seq)}\nevent: command:${event.kind}\ndata: ${data}\n\n`;
   writeOrDestroy(res, frame, controller, onBackpressure);
 }

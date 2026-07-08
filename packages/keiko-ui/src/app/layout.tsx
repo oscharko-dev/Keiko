@@ -8,7 +8,6 @@ export const metadata: Metadata = {
   // workspace for knowledge work") — "developer-assist" misdescribed the product to the
   // non-developer audiences the install surface reaches.
   description: "Keiko — a governed agentic workspace for knowledge work.",
-  manifest: "/manifest.webmanifest",
   icons: {
     icon: [{ url: "/favicon.svg", type: "image/svg+xml" }],
     apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
@@ -20,8 +19,7 @@ export const metadata: Metadata = {
 // dark canvas during F5 reloads instead of flashing white before CSS variables
 // resolve (#302). The light theme opts back into a light UA canvas via the
 // `color-scheme: light` declaration scoped to `[data-theme="light"]`.
-// `themeColor` (#4EBA87 = --accent) drives the OS task-switcher tile color and the
-// PWA window chrome on standalone-display installs (ADR-0024 D4).
+// `themeColor` (#4EBA87 = --accent) keeps browser UI chrome aligned with Keiko branding.
 export const viewport: Viewport = {
   colorScheme: "dark light",
   themeColor: "#4EBA87",

@@ -15,6 +15,7 @@ import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
+import { useUnhandledRejectionLog } from "./hooks/useUnhandledRejectionLog";
 import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
@@ -59,7 +60,6 @@ import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bind
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
-import { InstallBanner } from "./install/InstallBanner";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
@@ -957,7 +957,6 @@ function AppShellInner(): ReactNode {
               )}
               {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
               {needsGatewaySetup ? <GatewaySetupDialog /> : null}
-              <InstallBanner />
             </div>
           </AnnouncerProvider>
         </WsContext.Provider>
@@ -978,13 +977,15 @@ export function AppShell(): ReactNode {
     clearAppBootRecoveryReloadMarker();
     setMounted(true);
   }, []);
-  // Register the PWA service worker exactly once per client mount (issue #126, ADR-0024 D6).
-  // Sitting in the outer mount component means we register on first client render and never
-  // again across the inner shell's remount cycle. `registerSw` is a silent no-op on SSR /
-  // unsupported browsers / failure, so this effect cannot break the app.
+  // Register the static-shell service worker exactly once per client mount. The portable-first
+  // app shell no longer advertises a browser install manifest, so this is cache/update plumbing,
+  // not a browser-managed product installation path.
   useEffect(() => {
     registerSw();
   }, []);
+  // GEN-STAB-WINDOW-002 — surface (bounded) unhandled promise rejections; the shell had
+  // no listener, so escaped async failures degraded long sessions with zero signal.
+  useUnhandledRejectionLog();
   // uiux-fix F039 C402 — the gate used to be a completely empty .app: from first paint until
   // hydration finished the user saw a bare surface colour with zero loading feedback. A pure-CSS
   // placeholder (pulsing logo, reduced-motion-safe) gives that feedback. The hydration guarantee

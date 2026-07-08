@@ -8,6 +8,7 @@
 import type { ServerResponse } from "node:http";
 import type { StreamEvent } from "./sink.js";
 import type { Redactor } from "./deps.js";
+import { redactedEventJson } from "./sse-frame-cache.js";
 
 export const SSE_HEADERS: Readonly<Record<string, string>> = {
   "Content-Type": "text/event-stream; charset=utf-8",
@@ -34,16 +35,18 @@ export function startSseHeartbeat(res: ServerResponse, intervalMs = 15000): () =
 }
 
 // Frames one event as an SSE message. The event is redacted (defense in depth: live events are
-// already redacted by the harness emitter, D7) before serialization.
+// already redacted by the harness emitter, D7) before serialization. GEN-PERF-FANOUT-001:
+// redaction+serialization run once per event and are shared across every subscriber and
+// ring-buffer replay of the same event object.
 export function frameEvent(event: StreamEvent, redactor: Redactor): string {
-  const data = JSON.stringify(redactor(event));
+  const data = redactedEventJson(redactor, event);
   return `id: ${String(event.seq)}\nevent: ${event.type}\ndata: ${data}\n\n`;
 }
 
 // Frames one event as an unnamed SSE message. The event type stays inside the JSON payload, letting
 // clients consume every run event through EventSource.onmessage instead of one listener per type.
 export function frameMessageEvent(event: StreamEvent, redactor: Redactor): string {
-  const data = JSON.stringify(redactor(event));
+  const data = redactedEventJson(redactor, event);
   return `id: ${String(event.seq)}\ndata: ${data}\n\n`;
 }
 

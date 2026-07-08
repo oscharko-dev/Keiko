@@ -213,6 +213,18 @@ When a capsule set or hybrid grounded answer combines multiple pods, deny wins p
 operation. A single sealed pod disables shared external reranking for the combined
 candidate set to avoid leaking sealed excerpts through a cross-source reranker.
 
+Sealed-local also denies `rawContentRelease`, and that single operation gates both
+retrieval lanes: the dense lane's per-capsule policy check and the lexical/BM25 lane's
+`collectLexicalCandidatesForCapsule` check both key off it. Combined with `localEmbeddings`
+having no runtime consumer today (it is reserved forward-compatible surface, like
+`localReranking` above), a sealed-local pod out of the box is **not searchable or citable
+at all** — neither dense nor lexical evidence is ever surfaced, even for a purely local
+query that never leaves the device. This is a maximally conservative default, not a
+partial one: "locally searchable, not externally released" requires an explicit `custom`
+policy with `rawContentRelease: "allow"` (see the `standardPodModelUsePolicy()` preset for
+the fully-open comparison and the custom-policy composition test in
+`scoped-vector-search.test.ts`), not the `sealed-local` preset.
+
 Policy denial is surfaced through closed reason codes only. Indexing emits
 `POLICY_DENIED`; retrieval diagnostics use `policy-denied` lanes; grounded answers and
 retrieval activity render denied or degraded pod states with `local-only` and `sealed`

@@ -694,6 +694,14 @@ export function regressFixtureExpectations(fixture) {
   return clone;
 }
 
+// AUDIT-E1858-OPT-001: a probe id that resolves to no fixture (e.g. a future typo) must be a
+// hard failure, not a silent reduction in coverage — the aggregate `probed > 0` guard only
+// checks "did the mechanism run at all", not "did every listed id resolve".
+function unresolvedProbeFixtureIds(fixtures, probeFixtureIds) {
+  const selectedIds = new Set(fixtures.map((fixture) => fixture.id));
+  return probeFixtureIds.filter((id) => !selectedIds.has(id));
+}
+
 export async function runLocalKnowledgeRegressionProbes(
   log,
   fixtures = ALL_FIXTURES,
@@ -701,6 +709,7 @@ export async function runLocalKnowledgeRegressionProbes(
   probeFixtureIds = REGRESSION_PROBE_FIXTURE_IDS,
 ) {
   const selected = fixtures.filter((fixture) => probeFixtureIds.includes(fixture.id));
+  const unresolved = unresolvedProbeFixtureIds(selected, probeFixtureIds);
   const tautological = [];
   let probed = 0;
   for (const fixture of selected) {
@@ -721,11 +730,29 @@ export async function runLocalKnowledgeRegressionProbes(
       `local-knowledge-retrieval-regression: no probe fixtures matched ${probeFixtureIds.join(", ")}`,
     );
   }
-  return { ok: tautological.length === 0 && probed > 0, tautological, probed };
+  if (unresolved.length > 0) {
+    log(
+      `local-knowledge-retrieval-regression: unresolved probe fixture ids: ${unresolved.join(", ")}`,
+    );
+  }
+  return {
+    ok: isRegressionProbeClean(tautological, probed, unresolved),
+    tautological,
+    probed,
+    unresolved,
+  };
+}
+
+function isRegressionProbeClean(tautological, probed, unresolved) {
+  return tautological.length === 0 && probed > 0 && unresolved.length === 0;
 }
 
 function regressionFailureMessage(regression) {
   if (regression.ok) return undefined;
+  const unresolved = regression.unresolved ?? [];
+  if (unresolved.length > 0) {
+    return `local knowledge regression probe ids did not resolve to a fixture: ${unresolved.join(", ")}`;
+  }
   return regression.probed === 0
     ? "local knowledge regression probes did not run (no probe fixtures matched)"
     : `local knowledge regression probes were tautological: ${regression.tautological.join(", ")}`;

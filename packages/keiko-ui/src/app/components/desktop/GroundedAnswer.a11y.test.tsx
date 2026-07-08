@@ -158,9 +158,43 @@ function retrievalActivity(): KnowledgePodRetrievalActivity {
   };
 }
 
+// AUDIT-E1816-004: the axe fixture above only ever exercises the "searched" pod state. A
+// markup regression specific to one of the other five states (e.g. a denied/sealed badge losing
+// its accessible name) would not be caught by the automated axe engine without a dedicated scan.
+function nonSearchedRetrievalActivity(): KnowledgePodRetrievalActivity {
+  const base = retrievalActivity();
+  const pod = base.pods[0];
+  if (pod === undefined) throw new Error("expected a base retrieval activity pod fixture");
+  return {
+    ...base,
+    summary: {
+      ...base.summary,
+      searchedCount: 0,
+      skippedCount: 1,
+      degradedCount: 1,
+      deniedCount: 1,
+      unavailableCount: 1,
+      notSelectedCount: 1,
+    },
+    pods: [
+      { ...pod, podId: "cap-skipped" as typeof pod.podId, state: "skipped" },
+      { ...pod, podId: "cap-degraded" as typeof pod.podId, state: "degraded" },
+      {
+        ...pod,
+        podId: "cap-denied" as typeof pod.podId,
+        state: "denied",
+        modes: ["local-only", "sealed"],
+        reasonCodes: ["policy-denied"],
+      },
+      { ...pod, podId: "cap-unavailable" as typeof pod.podId, state: "unavailable" },
+      { ...pod, podId: "cap-not-selected" as typeof pod.podId, state: "not-selected" },
+    ],
+  };
+}
+
 function localKnowledgeAnswer(
   citations: readonly LocalKnowledgeEvidenceCitation[] = [knowledgeCitation()],
-): GroundedAnswerType {
+): Extract<GroundedAnswerType, { readonly groundingKind: "local-knowledge" }> {
   return {
     groundingKind: "local-knowledge",
     userMessageId: "lk-u",
@@ -285,6 +319,20 @@ describe("GroundedAnswer a11y", () => {
 
   it("jest-axe: expanded Knowledge Pod retrieval activity has no violations", async () => {
     const { container } = render(<GroundedAnswer answer={localKnowledgeAnswer()} busy={false} />);
+    openEvidenceDisclosure(container);
+    expect(
+      screen.getByRole("region", { name: "Knowledge Pod retrieval activity" }),
+    ).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("jest-axe: expanded activity with skipped, degraded, denied, unavailable, and not-selected pods has no violations", async () => {
+    const { container } = render(
+      <GroundedAnswer
+        answer={{ ...localKnowledgeAnswer(), retrievalActivity: nonSearchedRetrievalActivity() }}
+        busy={false}
+      />,
+    );
     openEvidenceDisclosure(container);
     expect(
       screen.getByRole("region", { name: "Knowledge Pod retrieval activity" }),

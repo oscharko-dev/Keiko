@@ -70,4 +70,23 @@ describe("lexical analyzer", () => {
     expect(analyzed.indexTerms).toEqual(expect.arrayContaining(["支払い", "支払"]));
     expect(analyzed.indexTerms).toEqual(expect.arrayContaining(["고객번호", "고객"]));
   });
+
+  // Regression for AUDIT-E1817-001: an unsegmented CJK/Kana/Hangul run has no whitespace to
+  // bound `TOKEN_PATTERN`, so a pasted document (or hostile query) hands `multilingualSubtokens`
+  // a single token thousands of characters long. Before the fix, every character and every
+  // adjacent pair became its own alternative in the group, so the term-group size grew linearly
+  // with the input and `ftsGroupQuery` OR-joined all of them into one unbounded FTS5 MATCH
+  // string. The fix caps the characters considered for n-gram expansion, so the group stays
+  // under a small, fixed ceiling regardless of input length.
+  it("bounds term-group size for a multi-thousand-character unsegmented CJK token", () => {
+    // Distinct Han code points (not a repeated character) so every single-character and
+    // adjacent-pair alternative is unique — a repeated character would collapse through the
+    // de-duplicating `Set` in `multilingualSubtokens` and mask the unbounded-expansion bug.
+    const veryLongUnsegmentedToken = Array.from({ length: 5_000 }, (_, i) =>
+      String.fromCodePoint(0x4e00 + (i % 20_000)),
+    ).join("");
+    const groups = lexicalQueryTermGroups([veryLongUnsegmentedToken]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.terms.length).toBeLessThan(200);
+  });
 });

@@ -27,6 +27,29 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 
+// GEN-PERF-RELACT-002 — per-database prepared-statement cache (same idiom as
+// keiko-local-knowledge vector-persist.ts). The relationship-activity SSE poll calls
+// listRelationships up to 2 + 4×64 times per 5s tick; re-running db.prepare() on every
+// call paid SQL parse/compile cost on the server main thread for identical statements.
+// The key set is bounded: every caller passes a module-scope SQL constant, and the one
+// dynamic statement (listRelationships) draws from at most 2^7 clause combinations of
+// LIST_FILTER_FRAGMENTS. Entries die with their DatabaseSync (WeakMap).
+const STATEMENTS = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
+
+function statement(db: DatabaseSync, sql: string): StatementSync {
+  let bySql = STATEMENTS.get(db);
+  if (bySql === undefined) {
+    bySql = new Map();
+    STATEMENTS.set(db, bySql);
+  }
+  let prepared = bySql.get(sql);
+  if (prepared === undefined) {
+    prepared = db.prepare(sql);
+    bySql.set(sql, prepared);
+  }
+  return prepared;
+}
+
 // ─── Bounded-query caps (api-contract.md §7) ──────────────────────────────────
 export const MAX_LIST_LIMIT = 256;
 export const DEFAULT_LIST_LIMIT = 64;
@@ -351,7 +374,7 @@ export function insertRelationship(db: DatabaseSync, rel: NewRelationship): Stor
   // structural barrier. CHECK constraints + the partial unique indexes catch the rest.
   const scopeCoordinate = relationshipScopeCoordinate(rel.scope);
   try {
-    db.prepare(SQL_INSERT).run(
+    statement(db, SQL_INSERT).run(
       rel.id,
       RELATIONSHIP_SCHEMA_VERSION,
       rel.workspaceId,
@@ -387,7 +410,7 @@ export function insertRelationship(db: DatabaseSync, rel: NewRelationship): Stor
     occurredAt: rel.createdAt,
     summary: rel.summary,
   });
-  const row = db.prepare(SQL_GET).get(rel.id, rel.workspaceId) as RelationshipRow | undefined;
+  const row = statement(db, SQL_GET).get(rel.id, rel.workspaceId) as RelationshipRow | undefined;
   if (row === undefined) {
     throw new UiStoreError("INTERNAL", "Insert returned no row.", 500);
   }
@@ -399,7 +422,7 @@ export function getRelationship(
   id: string,
   workspaceId: string,
 ): StoredRelationship | undefined {
-  const row = db.prepare(SQL_GET).get(id, workspaceId) as RelationshipRow | undefined;
+  const row = statement(db, SQL_GET).get(id, workspaceId) as RelationshipRow | undefined;
   return row === undefined ? undefined : rowToRelationship(row);
 }
 
@@ -408,7 +431,8 @@ export function getRelationshipEtag(
   id: string,
   workspaceId: string,
 ): string | undefined {
-  const row = db.prepare(SQL_GET_ETAG_SCOPED).get(id, workspaceId) as { etag?: string } | undefined;
+  const row = statement(db, SQL_GET_ETAG_SCOPED).get(id, workspaceId) as
+    { etag?: string } | undefined;
   return row?.etag;
 }
 
@@ -442,7 +466,7 @@ export function updateRelationshipLifecycle(
     occurredAt: args.updatedAt,
     summary: args.summary,
   });
-  const row = db.prepare(SQL_GET).get(args.id, args.workspaceId) as RelationshipRow | undefined;
+  const row = statement(db, SQL_GET).get(args.id, args.workspaceId) as RelationshipRow | undefined;
   if (row === undefined) throw notFound("Relationship");
   return rowToRelationship(row);
 }
@@ -469,7 +493,7 @@ export function reconnectRelationship(db: DatabaseSync, args: ReconnectArgs): St
       args.workspaceId,
     );
   if (info.changes === 0) throw notFound("Relationship");
-  const row = db.prepare(SQL_GET).get(args.id, args.workspaceId) as RelationshipRow | undefined;
+  const row = statement(db, SQL_GET).get(args.id, args.workspaceId) as RelationshipRow | undefined;
   if (row === undefined) throw notFound("Relationship");
   return rowToRelationship(row);
 }
@@ -481,12 +505,20 @@ export function relationshipCardinalitySnapshot(
   target: { readonly kind: RelationshipObjectKind; readonly id: string },
 ): RelationshipCardinalitySnapshot {
   const sourceCount = (
-    db.prepare(SQL_COUNT_PRODUCES_EVIDENCE_FOR_SOURCE).get(workspaceId, source.kind, source.id) as {
+    statement(db, SQL_COUNT_PRODUCES_EVIDENCE_FOR_SOURCE).get(
+      workspaceId,
+      source.kind,
+      source.id,
+    ) as {
       n: number;
     }
   ).n;
   const targetCount = (
-    db.prepare(SQL_COUNT_STARTS_WORKFLOW_FOR_TARGET).get(workspaceId, target.kind, target.id) as {
+    statement(db, SQL_COUNT_STARTS_WORKFLOW_FOR_TARGET).get(
+      workspaceId,
+      target.kind,
+      target.id,
+    ) as {
       n: number;
     }
   ).n;
@@ -539,7 +571,7 @@ export function listRelationships(
     " etag, confidence, summary FROM relationships WHERE " +
     clauses.join(" AND ") +
     " ORDER BY etag DESC, id ASC LIMIT ?";
-  const rows = db.prepare(sql).all(...params) as unknown as RelationshipRow[];
+  const rows = statement(db, sql).all(...params) as unknown as RelationshipRow[];
   const truncated = rows.length > q.limit;
   const slice = truncated ? rows.slice(0, q.limit) : rows;
   const entries = slice.map(rowToRelationship);
@@ -586,7 +618,7 @@ export function listRelationshipLifecycleHistory(
   if (limit <= 0 || limit > LIFECYCLE_HISTORY_RETAIN) {
     throw invalidRequest("History limit out of bounds.");
   }
-  const rows = db.prepare(SQL_LIST_HISTORY).all(relationshipId, limit) as {
+  const rows = statement(db, SQL_LIST_HISTORY).all(relationshipId, limit) as {
     relationship_id: string;
     from_state: string;
     to_state: string;
@@ -666,7 +698,7 @@ function computeLifecycleTotals(
   db: DatabaseSync,
   workspaceId: string,
 ): Record<RelationshipLifecycleState, number> {
-  const rows = db.prepare(SQL_HEALTH_COUNTS).all(workspaceId) as {
+  const rows = statement(db, SQL_HEALTH_COUNTS).all(workspaceId) as {
     lifecycle: string;
     n: number;
   }[];
@@ -923,7 +955,7 @@ function insertHistoryRow(
     readonly summary?: string | undefined;
   },
 ): void {
-  db.prepare(SQL_INSERT_HISTORY).run(
+  statement(db, SQL_INSERT_HISTORY).run(
     row.id,
     row.relationshipId,
     row.fromState,
@@ -1117,9 +1149,9 @@ function runWalk(
 ): DependencyWalkResult {
   const state = seedWalkState(seed, options);
   const outgoingStatement =
-    options.direction === "incoming" ? undefined : db.prepare(SQL_FIND_BY_SOURCE);
+    options.direction === "incoming" ? undefined : statement(db, SQL_FIND_BY_SOURCE);
   const incomingStatement =
-    options.direction === "outgoing" ? undefined : db.prepare(SQL_FIND_BY_TARGET);
+    options.direction === "outgoing" ? undefined : statement(db, SQL_FIND_BY_TARGET);
   let depthReached = 0;
   let frontier: readonly WalkNode[] = [...state.collectedNodes];
   for (let depth = 0; depth < options.maxDepth; depth++) {

@@ -479,6 +479,52 @@ function releaseImpactCatalogForPublishTest() {
   };
 }
 
+function curlStubBody() {
+  return ['log("curl");', "process.exit(0);"].join("\n");
+}
+
+function writePortableAssetsFixture(root, options = {}) {
+  const outsideEvidence = join(root, "..", "outside-portable-evidence.txt");
+  writeFileSync(outsideEvidence, "outside evidence must not be uploaded\n");
+  const artifacts = PORTABLE_TARGETS.map((target, index) => {
+    const targetRoot = join(root, target.platformTarget);
+    const archivePath = join(targetRoot, target.assetName);
+    const manifestPath = join(targetRoot, "manifest", "portable-manifest.json");
+    mkdirSync(join(targetRoot, "evidence"), { recursive: true });
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
+    const { manifest, provenanceText } = portableManifest(target, archivePath, 1000 + index);
+    writePortableEvidence(targetRoot, manifest, provenanceText);
+    if (options.symlinkEvidenceOutsideRoot === true && index === 0) {
+      const sbomPath = join(targetRoot, "evidence", "sbom.cdx.json");
+      rmSync(sbomPath, { force: true });
+      symlinkSync(outsideEvidence, sbomPath);
+    }
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+    return { archivePath, manifestPath, platformTarget: target.platformTarget };
+  });
+  const manifestPath = join(root, "portable-assets.json");
+  writeFileSync(manifestPath, JSON.stringify({ schemaVersion: 1, artifacts }, null, 2) + "\n");
+  return manifestPath;
+}
+
+function writePortableEvidence(targetRoot, manifest, provenanceText) {
+  writeFileSync(
+    join(targetRoot, "evidence", "SHA256SUMS.txt"),
+    `${manifest.artifact.sha256}  ${manifest.artifact.assetName}\n`,
+  );
+  writeFileSync(join(targetRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
+  writeFileSync(
+    join(targetRoot, "evidence", "third-party-notices.txt"),
+    "Portable fixture notices.\n",
+  );
+  writeFileSync(
+    join(targetRoot, "evidence", "signing-verification.json"),
+    JSON.stringify({ status: "verified-production" }) + "\n",
+  );
+  writeFileSync(join(targetRoot, "evidence", "provenance.intoto.jsonl"), provenanceText);
+}
+
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.
 // `npmBody` is the stub-`npm` behaviour under test; `initState` seeds the publish state.
 // Returns the exit status, stdout/stderr, and the ordered list of intercepted calls.

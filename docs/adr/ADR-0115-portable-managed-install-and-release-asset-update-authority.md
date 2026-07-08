@@ -1,4 +1,4 @@
-# ADR-0114: Portable managed install and release-asset update authority
+# ADR-0115: Portable managed install and release-asset update authority
 
 ## Status
 

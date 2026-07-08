@@ -1,4 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+// GEN-PERF-EDITOR-003 — tab-drag target resolution is rAF-coalesced (one layout pass per
+// frame, last-event-wins), so drag-feedback assertions must let the pending frame apply.
+async function nextFrame(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        resolve();
+      });
+    });
+  });
+}
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
@@ -1144,7 +1156,7 @@ describe("EditorWidget workspace session", () => {
     expect(layout.panes["pane-2"].openFiles).toEqual(["src/c.ts"]);
   });
 
-  it("moves a pointer-dragged tab onto the pane currently under the cursor", () => {
+  it("moves a pointer-dragged tab onto the pane currently under the cursor", async () => {
     const onWorkspaceChange = vi.fn();
     const previousBodyCursor = document.body.style.cursor;
     const previousBodyUserSelect = document.body.style.userSelect;
@@ -1221,9 +1233,12 @@ describe("EditorWidget workspace session", () => {
       expect(document.querySelector(".ed-tab-drag-ghost")).toBeNull();
       expect(probeState.dragModeStarts).toEqual([]);
       fireEvent.pointerMove(window, { clientX: 40, clientY: 10, pointerType: "mouse" });
+      // Drag ACTIVATION is synchronous (GEN-PERF-EDITOR-003 keeps it on the raw event)…
       expect(probeState.dragModeStarts).toEqual([{ paneId: "pane-1", path: "src/a.ts" }]);
       expect(document.body.style.cursor).toBe("grabbing");
       expect(sourceTab).toHaveAttribute("data-tab-held", "true");
+      // …while target resolution and ghost positioning land on the next frame.
+      await nextFrame();
       expect(targetPane).toHaveAttribute("data-tab-drop-target", "true");
       const dragGhost = document.querySelector<HTMLElement>(".ed-tab-drag-ghost");
       expect(dragGhost).toHaveTextContent("src/a.ts");
@@ -1291,7 +1306,7 @@ describe("EditorWidget workspace session", () => {
     expect(container.querySelector(".ed-pane")).toHaveAttribute("data-dragging", "false");
   });
 
-  it("reorders tabs by pointer drag within the same tab rail", () => {
+  it("reorders tabs by pointer drag within the same tab rail", async () => {
     const onWorkspaceChange = vi.fn();
     const previousElementFromPoint = document.elementFromPoint;
     const previousBodyCursor = document.body.style.cursor;
@@ -1347,6 +1362,8 @@ describe("EditorWidget workspace session", () => {
         pointerType: "mouse",
       });
       fireEvent.pointerMove(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+      // GEN-PERF-EDITOR-003 — insertion-target resolution lands on the next frame.
+      await nextFrame();
 
       expect(probeState.runtimeProps?.tabInsertTarget).toEqual({
         file: "src/b.ts",

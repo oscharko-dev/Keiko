@@ -53,7 +53,11 @@ import type {
   RetrievalEvalScorecard,
 } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
-import type { RetrievalDiagnostics, RetrievalNoEvidenceReason } from "../retrieval/types.js";
+import type {
+  RetrievalDiagnostics,
+  RetrievalNoEvidenceReason,
+  RetrievalReference,
+} from "../retrieval/types.js";
 
 // ─── Public dependency surface ───────────────────────────────────────────────
 
@@ -374,10 +378,13 @@ function defaultClock(): () => number {
 
 // ─── Public entrypoint ───────────────────────────────────────────────────────
 
-export async function runRetrievalEval(
+async function runFixture(
   fixture: RetrievalEvalFixture,
-  deps: RunRetrievalEvalDeps = {},
-): Promise<RetrievalEvalScorecard> {
+  deps: RunRetrievalEvalDeps,
+): Promise<{
+  readonly scorecard: RetrievalEvalScorecard;
+  readonly perQuery: readonly QueryEvaluation[];
+}> {
   const now = deps.now ?? defaultClock();
   const runId = deps.runId ?? `eval-${fixture.id}`;
   const dir = mkdtempSync(join(tmpdir(), "keiko-eval-"));
@@ -390,9 +397,29 @@ export async function runRetrievalEval(
       perQuery.push(await runOneQuery(store, query, seeded, now));
     }
     const modelJudged = await runModelJudge(deps.modelJudge, fixture, perQuery);
-    return buildScorecard(fixture, runId, perQuery, modelJudged);
+    return { scorecard: buildScorecard(fixture, runId, perQuery, modelJudged), perQuery };
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+export async function runRetrievalEval(
+  fixture: RetrievalEvalFixture,
+  deps: RunRetrievalEvalDeps = {},
+): Promise<RetrievalEvalScorecard> {
+  return (await runFixture(fixture, deps)).scorecard;
+}
+
+// Exposes the raw per-query `RetrievalReference[]` alongside the scorecard. The scorecard's
+// aggregate dimensions (e.g. `citationQuality`) intentionally collapse per-query evidence
+// shape into a single [0, 1] score, which is too coarse to assert a specific field (like a
+// citation's `anchorId`) on a specific query's top reference. Tests that need to verify an
+// exact evidence shape — not just that the aggregate dimension cleared its floor — use this.
+export async function runRetrievalEvalReferences(
+  fixture: RetrievalEvalFixture,
+  deps: RunRetrievalEvalDeps = {},
+): Promise<ReadonlyMap<string, readonly RetrievalReference[]>> {
+  const { perQuery } = await runFixture(fixture, deps);
+  return new Map(perQuery.map((evaluation) => [evaluation.query.id, evaluation.references]));
 }

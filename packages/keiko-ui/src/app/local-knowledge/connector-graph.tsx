@@ -24,6 +24,7 @@ import {
 } from "react";
 import type {
   KnowledgeCapsuleId,
+  CapsuleSetId,
   CapsuleLifecycleState,
   KnowledgePodSetReadinessReasonCode,
   ManualRefreshChangeSummary,
@@ -50,6 +51,7 @@ import {
   serializeLocalKnowledgeConnectorDrag,
 } from "./connector-drag";
 import manualRefreshStyles from "./manual-refresh-panel.module.css";
+import setCountsStyles from "./set-counts.module.css";
 
 // ---------------------------------------------------------------------------
 // AlertBanner
@@ -346,6 +348,95 @@ function DisconnectConfirmDialog({
 }
 
 // ---------------------------------------------------------------------------
+// DeleteCapsuleSetConfirmDialog — deleting a set has no undo; member capsules
+// are unaffected, only the set's own metadata/membership is removed
+// (AUDIT-E1821-003). Same focus-trap/Escape/Tab behavior as
+// DisconnectConfirmDialog above.
+// ---------------------------------------------------------------------------
+
+function DeleteCapsuleSetConfirmDialog({
+  capsuleSetName,
+  onCancel,
+  onConfirm,
+}: {
+  readonly capsuleSetName: string;
+  readonly onCancel: () => void;
+  readonly onConfirm: () => void;
+}): ReactNode {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalInteractionLock();
+
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (dialog !== null) focusablesIn(dialog)[0]?.focus();
+    return () => trigger?.focus?.();
+  }, []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return undefined;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusables = focusablesIn(dialog);
+      if (focusables.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    dialog.addEventListener("keydown", handleKeyDown);
+    return () => dialog.removeEventListener("keydown", handleKeyDown);
+  }, [onCancel]);
+
+  return createPortal(
+    <div className="mc-dialog-backdrop" role="presentation">
+      <div
+        ref={dialogRef}
+        className="mc-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        tabIndex={-1}
+      >
+        <h2 id={titleId} className="mc-dialog-title">
+          Delete Knowledge Pod Set
+        </h2>
+        <p id={descriptionId} className="mc-dialog-body">
+          Delete &quot;{capsuleSetName}&quot;? The set&apos;s member Knowledge Pods keep their own
+          indexes and are not affected; only this set is removed.
+        </p>
+        <div className="mc-dialog-actions">
+          <button type="button" className="lk-btn lk-btn-ghost" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="lk-btn lk-btn-danger" onClick={onConfirm}>
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // StatusBadge
 // ---------------------------------------------------------------------------
 
@@ -424,6 +515,7 @@ const MANUAL_REFRESH_COUNT_LABELS: Record<keyof ManualRefreshChangeSummary["coun
   addedPages: "Added",
   changedPages: "Changed",
   removedPages: "Removed",
+  movedPages: "Moved",
   unchangedPages: "Unchanged",
   failedPages: "Failed",
   deniedLinks: "Denied links",
@@ -540,31 +632,59 @@ function setReasonLabels(setReadiness: CapsuleSetReadinessSummary): readonly str
   return setReadiness.reasonCodes.map((code) => SET_READINESS_REASON_LABELS[code]);
 }
 
-function setCountsLine(set: CapsuleSetListEntry): string {
-  const counts = set.knowledgePod?.counts;
-  if (counts === undefined) return `${set.capsuleCount.toString()} Knowledge Pods`;
-  const base = [
-    `${counts.capsuleCount.toString()} pods`,
-    `${counts.sourceCount.toString()} sources`,
-    `${counts.documentCount.toString()} docs`,
-    `${counts.chunkCount.toString()} chunks`,
-    `${counts.vectorCount.toString()} vectors`,
+function setCountsEntries(
+  counts: NonNullable<NonNullable<CapsuleSetListEntry["knowledgePod"]>["counts"]>,
+  setReadiness: CapsuleSetReadinessSummary | undefined,
+): ReadonlyArray<readonly [string, string]> {
+  const base: ReadonlyArray<readonly [string, string]> = [
+    ["pods", counts.capsuleCount.toString()],
+    ["sources", counts.sourceCount.toString()],
+    ["docs", counts.documentCount.toString()],
+    ["chunks", counts.chunkCount.toString()],
+    ["vectors", counts.vectorCount.toString()],
   ];
-  const setReadiness = set.knowledgePod?.setReadiness;
-  if (setReadiness === undefined) return base.join(" / ");
-  const reasonLabels = setReasonLabels(setReadiness);
+  if (setReadiness === undefined) return base;
   return [
     ...base,
-    `${setReadiness.readyCount.toString()} ready`,
-    `${setReadiness.degradedCount.toString()} degraded`,
-    `${setReadiness.unavailableCount.toString()} unavailable`,
-    `${setReadiness.deniedCount.toString()} policy denied`,
-    `${setReadiness.indexingCount.toString()} indexing`,
-    `${setReadiness.staleCount.toString()} stale`,
-    `${setReadiness.errorCount.toString()} error`,
-    `${setReadiness.missingCount.toString()} missing`,
-    ...(reasonLabels.length > 0 ? [`reasons: ${reasonLabels.join(", ")}`] : []),
-  ].join(" / ");
+    ["ready", setReadiness.readyCount.toString()],
+    ["degraded", setReadiness.degradedCount.toString()],
+    ["unavailable", setReadiness.unavailableCount.toString()],
+    ["policy denied", setReadiness.deniedCount.toString()],
+    ["indexing", setReadiness.indexingCount.toString()],
+    ["stale", setReadiness.staleCount.toString()],
+    ["error", setReadiness.errorCount.toString()],
+    ["missing", setReadiness.missingCount.toString()],
+  ];
+}
+
+// Structured definition list instead of one long slash-joined string (AUDIT-E1821-005):
+// warnings/counts should reduce ambiguity, not become a wall of status text (#1931 engineering
+// notes). Follows the same dt/dd + reasons-list pattern as manualRefreshCounts above.
+function SetCountsList({ set }: { readonly set: CapsuleSetListEntry }): ReactNode {
+  const counts = set.knowledgePod?.counts;
+  if (counts === undefined) {
+    return <>{`${set.capsuleCount.toString()} Knowledge Pods`}</>;
+  }
+  const setReadiness = set.knowledgePod?.setReadiness;
+  const entries = setCountsEntries(counts, setReadiness);
+  const reasonLabels = setReadiness === undefined ? [] : setReasonLabels(setReadiness);
+  return (
+    <>
+      <dl className="lkd-set-counts">
+        {entries.map(([label, value]) => (
+          <Fragment key={label}>
+            <dt>{label}</dt>
+            <dd>{value}</dd>
+          </Fragment>
+        ))}
+      </dl>
+      {reasonLabels.length > 0 ? (
+        <ul className="lkd-set-counts-reasons">
+          <li>{`reasons: ${reasonLabels.join(", ")}`}</li>
+        </ul>
+      ) : null}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -807,20 +927,38 @@ function CapsuleRow({
   const startDragOut = (startX: number, startY: number): void => {
     dragActiveRef.current = true;
     let dragging = false;
+    // GEN-PERF-LK-DRAG-001 — raw pointermove fires at up to 120-240Hz; committing the
+    // ghost position per event meant one React render per event. Buffer the latest
+    // pointer and commit at most once per animation frame (last-event-wins), the same
+    // pattern as workspaceActions' connect gesture.
+    let lastGhostX = 0;
+    let lastGhostY = 0;
+    let ghostFrame: number | null = null;
+    const applyGhost = (): void => {
+      ghostFrame = null;
+      if (!dragging) return;
+      setDragGhost({
+        x: lastGhostX,
+        y: lastGhostY,
+        label: capsule.displayName,
+        state: capsule.lifecycleState,
+      });
+    };
     const move = (moveEvent: PointerEvent | MouseEvent): void => {
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;
       if (!dragging && Math.hypot(dx, dy) < 6) return;
       dragging = true;
       document.body.style.cursor = "grabbing";
-      setDragGhost({
-        x: moveEvent.clientX,
-        y: moveEvent.clientY,
-        label: capsule.displayName,
-        state: capsule.lifecycleState,
-      });
+      lastGhostX = moveEvent.clientX;
+      lastGhostY = moveEvent.clientY;
+      ghostFrame ??= requestAnimationFrame(applyGhost);
     };
     const teardown = (): void => {
+      if (ghostFrame !== null) {
+        cancelAnimationFrame(ghostFrame);
+        ghostFrame = null;
+      }
       if (pointerEventsSupported) {
         window.removeEventListener("pointermove", move);
         window.removeEventListener("pointerup", up);
@@ -1063,9 +1201,13 @@ function CapsuleSection({
 function CapsuleSetRow({
   capsuleSet,
   onAddToWorkspace,
+  onDelete,
+  deleteBusy,
 }: {
   readonly capsuleSet: CapsuleSetListEntry;
   readonly onAddToWorkspace: () => void;
+  readonly onDelete: () => void;
+  readonly deleteBusy: boolean;
 }): ReactNode {
   const guidance = capsuleSet.knowledgePod?.guidance;
   const guidanceDescriptionId = useId();
@@ -1124,8 +1266,13 @@ function CapsuleSetRow({
             {capsuleSet.capsuleCount.toString()} Pods
           </span>
           <EmbeddingGuidanceBadge guidance={guidance} />
-          <small id={countsId} style={{ display: "block", color: "var(--text-secondary)" }}>
-            Knowledge Pod Set readiness: {readinessLabel(readiness)}. {setCountsLine(capsuleSet)}.
+          <small
+            id={countsId}
+            className={setCountsStyles.scope}
+            style={{ display: "block", color: "var(--text-secondary)" }}
+          >
+            {`Knowledge Pod Set readiness: ${readinessLabel(readiness)}.`}
+            <SetCountsList set={capsuleSet} />
           </small>
           <EmbeddingGuidanceDescription id={guidanceDescriptionId} guidance={guidance} />
         </span>
@@ -1140,6 +1287,16 @@ function CapsuleSetRow({
         >
           Add to workspace
         </button>
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          onClick={onDelete}
+          disabled={deleteBusy}
+          aria-label={`Delete Knowledge Pod Set ${capsuleSet.displayName}`}
+          aria-describedby={describedBy}
+        >
+          {deleteBusy ? "Deleting…" : "Delete"}
+        </button>
       </div>
     </article>
   );
@@ -1147,8 +1304,12 @@ function CapsuleSetRow({
 
 function CapsuleSetSection({
   capsuleSets,
+  onDelete,
+  deleteBusyId,
 }: {
   readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly onDelete: (capsuleSet: CapsuleSetListEntry) => void;
+  readonly deleteBusyId: CapsuleSetId | null;
 }): ReactNode {
   if (capsuleSets.length === 0) return null;
   return (
@@ -1182,6 +1343,8 @@ function CapsuleSetSection({
                     center,
                   );
               }}
+              onDelete={() => onDelete(capsuleSet)}
+              deleteBusy={deleteBusyId === capsuleSet.id}
             />
           </li>
         ))}
@@ -1342,6 +1505,10 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
     handleDisconnect,
     handleOpenHealth,
     handleCreateCapsule,
+    capsuleSetActionBusy,
+    capsuleSetActionError,
+    clearCapsuleSetActionError,
+    handleDeleteCapsuleSet,
   } = useConnectorGraph({ ...props, onOpenCapsule: handleOpenCapsule });
   const isLoading = loadStatus === "loading";
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -1349,6 +1516,9 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   // Disconnect is destructive (removes the source link, no undo) — ask first
   // instead of firing the DELETE straight from the row button (uiux-fix F033, C064).
   const [disconnectTarget, setDisconnectTarget] = useState<CapsuleListEntry | null>(null);
+  // Deleting a set is destructive and has no undo — same confirm-first pattern
+  // as disconnect (AUDIT-E1821-003).
+  const [deleteSetTarget, setDeleteSetTarget] = useState<CapsuleSetListEntry | null>(null);
 
   async function submitCreateCapsule(name: string): Promise<void> {
     try {
@@ -1412,6 +1582,9 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
       <p role="status" className="visually-hidden">
         {!isLoading && loadError === null ? catalogAnnouncement(capsules, capsuleSets) : null}
       </p>
+      {capsuleSetActionError !== null ? (
+        <AlertBanner message={capsuleSetActionError} onDismiss={clearCapsuleSetActionError} />
+      ) : null}
       <section
         aria-label="Knowledge Pods"
         aria-busy={isLoading}
@@ -1432,7 +1605,11 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           }
           onOpenHealth={handleOpenHealth}
         />
-        <CapsuleSetSection capsuleSets={capsuleSets} />
+        <CapsuleSetSection
+          capsuleSets={capsuleSets}
+          onDelete={setDeleteSetTarget}
+          deleteBusyId={capsuleSetActionBusy}
+        />
       </section>
       {createDialogOpen ? (
         <CreateCapsuleDialog
@@ -1461,6 +1638,16 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           onConfirm={() => {
             handleDisconnect(disconnectTarget.id);
             setDisconnectTarget(null);
+          }}
+        />
+      ) : null}
+      {deleteSetTarget !== null ? (
+        <DeleteCapsuleSetConfirmDialog
+          capsuleSetName={deleteSetTarget.displayName}
+          onCancel={() => setDeleteSetTarget(null)}
+          onConfirm={() => {
+            handleDeleteCapsuleSet(deleteSetTarget.id);
+            setDeleteSetTarget(null);
           }}
         />
       ) : null}

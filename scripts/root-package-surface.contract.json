@@ -245,6 +245,7 @@
     "OpenAIEmbeddingSuccess",
     "OutboundHttpEgressConfig",
     "OutcomeInput",
+    "ParseGatewayConfigOptions",
     "PatchProposedEvent",
     "PathDeniedError",
     "PathEscapeError",

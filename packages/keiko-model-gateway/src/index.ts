@@ -110,6 +110,7 @@ export {
   toSafeObject,
   validateBaseUrl,
   type EnvSource,
+  type ParseGatewayConfigOptions,
   type SafeGatewayConfig,
   type SafeProviderConfig,
   type SafeRerankerConfig,

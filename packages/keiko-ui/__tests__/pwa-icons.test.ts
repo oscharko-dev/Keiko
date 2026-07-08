@@ -15,7 +15,7 @@ interface PngFixture {
   readonly height: number;
 }
 
-// ADR-0024 D5 — manifest-referenced raster set plus apple-touch and the legacy ICO fallback.
+// Browser branding raster set plus apple-touch and the legacy ICO fallback.
 // favicon.ico ships as a 32×32 PNG payload (see scripts/generate-pwa-icons.mjs header) because
 // the codebase has no ICO encoder and the spec permits the PNG-bytes-with-.ico-extension form.
 const PNG_FIXTURES: readonly PngFixture[] = [
@@ -58,7 +58,7 @@ function sha256(file: string): string {
     .digest("hex");
 }
 
-describe("PWA icon assets (ADR-0024 D5, issue #123)", () => {
+describe("browser icon assets", () => {
   it.each(PNG_FIXTURES)("$file exists and is non-empty", (fixture) => {
     const stat = statSync(resolve(PUBLIC_DIR, fixture.file));
     expect(stat.isFile()).toBe(true);
@@ -80,7 +80,7 @@ describe("PWA icon assets (ADR-0024 D5, issue #123)", () => {
     expect(sha256(fixture.file)).not.toBe(OLD_PLACEHOLDER_HASHES.get(fixture.file));
   });
 
-  it("ships favicon.svg as the standalone cone mark, not the PWA install artwork", () => {
+  it("ships favicon.svg as the standalone cone mark, not install artwork", () => {
     const favicon = readFileSync(resolve(PUBLIC_DIR, "favicon.svg"), "utf8");
     expect(favicon).toContain('fill="#4EBA87"');
     expect(favicon).toContain("<title>Keiko cone logo</title>");
@@ -88,7 +88,7 @@ describe("PWA icon assets (ADR-0024 D5, issue #123)", () => {
     expect(favicon).not.toContain("<rect");
   });
 
-  it("ships every manifest-referenced icon path on disk", () => {
+  it("ships every legacy manifest icon path on disk", () => {
     interface IconEntry {
       readonly src: string;
     }

@@ -135,11 +135,32 @@ function evaluateHttpLink(
   };
 }
 
+// Repeatedly percent-decode a path component so single- and double-encoded traversal payloads
+// (e.g. `%2e%2e`, `..%2f`, `%252e%252e`) normalise to their literal form before segment comparison,
+// the same way the WHATWG URL parser normalises the http path. Bounded to guard against a decode
+// bomb; fails closed (returns null) on a malformed escape sequence.
+function decodePathComponent(raw: string): string | null {
+  let current = raw;
+  for (let i = 0; i < 5; i += 1) {
+    let next: string;
+    try {
+      next = decodeURIComponent(current);
+    } catch {
+      return null;
+    }
+    if (next === current) return current;
+    current = next;
+  }
+  return current;
+}
+
 // Join a relative link onto the base page's directory and normalise `.`/`..` segments. Returns null
 // when the result escapes above the manual root.
 function resolveLocalPath(baseKey: string, rawLink: string): string | null {
+  const decoded = decodePathComponent(rawLink);
+  if (decoded === null) return null;
   const baseDir = baseKey.includes("/") ? baseKey.slice(0, baseKey.lastIndexOf("/")) : "";
-  const joined = rawLink.startsWith("/") ? rawLink.slice(1) : `${baseDir}/${rawLink}`;
+  const joined = decoded.startsWith("/") ? decoded.slice(1) : `${baseDir}/${decoded}`;
   const out: string[] = [];
   for (const segment of joined.split("/")) {
     if (segment === "" || segment === ".") continue;

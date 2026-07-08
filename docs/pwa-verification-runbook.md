@@ -1,4 +1,9 @@
-# PWA Verification Runbook
+# Historical PWA Verification Runbook
+
+Status: historical. ADR-0116 suppresses browser-managed PWA installation for portable-first
+delivery. Use this runbook only when auditing the legacy npm-era PWA surface or existing
+browser-managed shortcuts. Current portable release validation uses the portable launch/setup and
+updater v2 QA matrices instead.
 
 ## Purpose
 

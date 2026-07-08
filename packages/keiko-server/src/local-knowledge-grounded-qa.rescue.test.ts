@@ -49,9 +49,11 @@ import {
   retrievalActivityResultFromScoped,
   tryBuildKnowledgePodRetrievalActivity,
   type KnowledgePodRetrievalActivityResultInput,
+  type KnowledgePodRetrievalActivitySourceInput,
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 
@@ -303,6 +305,27 @@ describe("local-knowledge citation rescue (#189)", () => {
     expect(citations[0]?.source).not.toContain(secret);
     expect(citations[0]?.label).toContain("[REDACTED]");
     expect(citations[0]?.lineage.chunkId).toBe("chunk-1");
+  });
+
+  it("AUDIT-E1816-007: drops citation.source when it is path-shaped/PII-shaped instead of leaking it verbatim", () => {
+    // The generic redactor only strips known secret shapes (e.g. tokens matching a configured
+    // pattern); it does not reject a raw filesystem path or an email-shaped source label. Those
+    // must be caught by the same activity-safe-text allowlist already enforced on the
+    // retrieval-activity object for this answer, not leaked verbatim on the citation.
+    const reference = ref(1);
+    const unsafeSourceLabel = "/Users/oscharko/secret-projects/customer-acme/manual.md";
+
+    const citations = buildLocalKnowledgeCitations(
+      result({
+        references: [reference],
+        citations: [{ reference, marker: "[1]", index: 1, citation: reference.citation }],
+      }),
+      undefined,
+      () => unsafeSourceLabel,
+    );
+
+    expect(citations).toHaveLength(1);
+    expect(citations[0]?.source).toBeUndefined();
   });
 
   it("projects HTML manual citation metadata as safe labels plus an opaque docs-browser target", async () => {
@@ -1803,6 +1826,49 @@ describe("local-knowledge retrieval activity", () => {
     }
   });
 
+  it("AUDIT-E1817-003: maps a resolved retrieval strategy to an activity mode", async () => {
+    // retrievalDiagnostics.strategy ("balanced" | "exact" | "broad") was computed and
+    // unit-tested at the retrieval layer but never reached the operator-facing Knowledge Pod
+    // retrieval-activity summary. "balanced" is the default and carries no extra signal.
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Activity Strategy Capsule",
+        capsuleId: "cap-activity-strategy",
+        sourceId: "src-activity-strategy",
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const selected = selectedActivityScope(capsuleValue);
+      const cases = [
+        ["balanced", ["local-only", "hybrid", "lexical", "vector"]],
+        ["exact", ["local-only", "hybrid", "lexical", "vector", "exact"]],
+        ["broad", ["local-only", "hybrid", "lexical", "vector", "broad"]],
+      ] as const;
+
+      for (const [strategy, expectedModes] of cases) {
+        const activity = buildKnowledgePodRetrievalActivity({
+          store: knowledgeStore,
+          sources: [
+            {
+              selected,
+              result: {
+                references: [],
+                citationCounts: new Map(),
+                noEvidence: false,
+                retrievalDiagnostics: { ...activityDiagnostics("hybrid"), strategy },
+              },
+            },
+          ],
+        });
+        expect(activity.pods[0]?.modes).toEqual(expectedModes);
+      }
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
   it("uses enforced no-evidence reasons in retrieval activity", async () => {
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
@@ -2106,6 +2172,22 @@ describe("local-knowledge retrieval activity", () => {
         scopeKind: "capsule-set",
         scopeLabel: "Cached Activity Set",
       };
+      // AUDIT-E1816-002: these 16 capsules are repeated across 16 sources on purpose, to exercise
+      // the summary cache — buildKnowledgePodRetrievalActivity now merges the resulting duplicate
+      // podId rows into 16 unique pods, so a further 10 genuinely distinct capsules are added below
+      // to still exceed MAX_RETRIEVAL_ACTIVITY_PODS and exercise the overflow/collapse path.
+      const extraCapsules: KnowledgeCapsule[] = [];
+      for (let index = 0; index < 10; index += 1) {
+        const id = String(index).padStart(2, "0");
+        const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+          displayName: `Extra Activity Pod ${id}`,
+          capsuleId: `cap-cache-extra-${id}`,
+          sourceId: `src-cache-extra-${id}`,
+          documentId: `doc-cache-extra-${id}`,
+          contentHash: id.repeat(32),
+        });
+        extraCapsules.push(requireCapsule(knowledgeStore, seeded.capsuleId));
+      }
       let prepareCalls = 0;
       const restorePrepare = countPrepareCalls(knowledgeStore._internal.db, () => {
         prepareCalls += 1;
@@ -2113,21 +2195,32 @@ describe("local-knowledge retrieval activity", () => {
       try {
         const activity = buildKnowledgePodRetrievalActivity({
           store: knowledgeStore,
-          sources: Array.from({ length: 16 }, () => ({
-            selected,
-            result: {
-              references: [],
-              citationCounts: new Map(),
-              noEvidence: false,
-              retrievalDiagnostics: activityDiagnostics("hybrid"),
-            },
-          })),
+          sources: [
+            ...Array.from({ length: 16 }, () => ({
+              selected,
+              result: {
+                references: [],
+                citationCounts: new Map(),
+                noEvidence: false,
+                retrievalDiagnostics: activityDiagnostics("hybrid"),
+              },
+            })),
+            ...extraCapsules.map((capsule) => ({
+              selected: selectedActivityScope(capsule),
+              result: {
+                references: [],
+                citationCounts: new Map(),
+                noEvidence: false,
+                retrievalDiagnostics: activityDiagnostics("hybrid"),
+              },
+            })),
+          ],
         });
-        expect(activity.summary.searchedCount).toBe(256);
+        expect(activity.summary.searchedCount).toBe(26);
         expect(activity.pods).toHaveLength(24);
         expect(activity.pods.at(-1)).toMatchObject({
           podKind: "pod-set",
-          displayName: "233 additional Knowledge Pods",
+          displayName: "3 additional Knowledge Pods",
           state: "skipped",
           reasonCodes: ["max-sources-exceeded"],
         });
@@ -2135,6 +2228,105 @@ describe("local-knowledge retrieval activity", () => {
         restorePrepare();
       }
       expect(prepareCalls).toBeLessThan(128);
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("AUDIT-E1821-002: collapses overflow pods into one aggregate that sums denied/unavailable evidence", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const capsules: KnowledgeCapsule[] = [];
+      const sourceIds: KnowledgeSourceId[] = [];
+      for (let index = 0; index < 26; index += 1) {
+        const id = String(index).padStart(2, "0");
+        const sourceId = `src-overflow-${id}` as KnowledgeSourceId;
+        const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+          displayName: `Overflow Pod ${id}`,
+          capsuleId: `cap-overflow-${id}`,
+          sourceId,
+          documentId: `doc-overflow-${id}`,
+          contentHash: id.repeat(32),
+        });
+        capsules.push(requireCapsule(knowledgeStore, seeded.capsuleId));
+        sourceIds.push(sourceId);
+      }
+      // The first 23 pods stay visible (MAX_RETRIEVAL_ACTIVITY_PODS - 1); the final 3 are pushed
+      // into the collapsed overflow pod. Two of the three carry denied/unavailable evidence so the
+      // aggregate must still surface their reference/citation counts instead of silently dropping
+      // them under the generic "skipped" collapse state.
+      const searchedSource = (
+        capsule: KnowledgeCapsule,
+        sourceId: KnowledgeSourceId,
+      ): KnowledgePodRetrievalActivitySourceInput => ({
+        selected: selectedActivityScope(capsule),
+        result: {
+          references: [retrievalActivityReference(capsule.id, sourceId)],
+          citationCounts: new Map([[String(capsule.id), 1]]),
+          noEvidence: false,
+        },
+      });
+      const deniedSource = (
+        capsule: KnowledgeCapsule,
+        sourceId: KnowledgeSourceId,
+      ): KnowledgePodRetrievalActivitySourceInput => ({
+        selected: selectedActivityScope(capsule),
+        result: {
+          references: [retrievalActivityReference(capsule.id, sourceId)],
+          citationCounts: new Map<string, number>(),
+          noEvidence: true,
+          reason: "answer-grounding-rejected" as const,
+        },
+      });
+      const unavailableSource = (
+        capsule: KnowledgeCapsule,
+      ): KnowledgePodRetrievalActivitySourceInput => ({
+        selected: selectedActivityScope(capsule),
+        result: {
+          references: [],
+          citationCounts: new Map<string, number>(),
+          noEvidence: true,
+          reason: "no-vectors" as const,
+        },
+      });
+      const capsuleAt = (index: number): KnowledgeCapsule => {
+        const found = capsules.at(index);
+        if (found === undefined) throw new Error(`missing capsule at index ${String(index)}`);
+        return found;
+      };
+      const sourceIdAt = (index: number): KnowledgeSourceId => {
+        const found = sourceIds.at(index);
+        if (found === undefined) throw new Error(`missing source id at index ${String(index)}`);
+        return found;
+      };
+      const visible = capsules
+        .slice(0, 23)
+        .map((capsule, index) => searchedSource(capsule, sourceIdAt(index)));
+      const overflowSearched = searchedSource(capsuleAt(23), sourceIdAt(23));
+      const overflowDenied = deniedSource(capsuleAt(24), sourceIdAt(24));
+      const overflowUnavailable = unavailableSource(capsuleAt(25));
+
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [...visible, overflowSearched, overflowDenied, overflowUnavailable],
+      });
+
+      expect(activity.pods).toHaveLength(24);
+      const collapsedPod = activity.pods.at(-1);
+      expect(collapsedPod).toMatchObject({
+        podKind: "pod-set",
+        displayName: "3 additional Knowledge Pods",
+        state: "skipped",
+        reasonCodes: ["max-sources-exceeded"],
+      });
+      // The collapsed aggregate's counts must be the sum of the three collapsed pods (one
+      // searched with 1 reference/1 citation, one denied with 1 reference/0 citations, one
+      // unavailable with 0 references/0 citations) so denied/unavailable evidence is not silently
+      // dropped behind the generic "skipped" collapse state.
+      expect(collapsedPod?.counts.referenceCount).toBe(2);
+      expect(collapsedPod?.counts.citationCount).toBe(1);
     } finally {
       knowledgeStore.close();
     }
@@ -2228,6 +2420,108 @@ describe("local-knowledge retrieval activity", () => {
         "Knowledge Pod retrieval activity validation failed.",
       );
       expect(tryBuildKnowledgePodRetrievalActivity(input)).toBeUndefined();
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("emits an operator diagnostic instead of failing silently when activity assembly fails closed", async () => {
+    // AUDIT-E1816-001: the fail-closed catch in tryBuildKnowledgePodRetrievalActivity previously
+    // swallowed the projection error with no logging, no diagnostic record, and no correlation id.
+    const sourceId = "src-diagnostic-fail-closed" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Diagnostic Fail Closed Capsule",
+        capsuleId: "cap-diagnostic-fail-closed",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const records: ServerDiagnosticRecord[] = [];
+      const input = {
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(seeded.capsuleId, sourceId)],
+              citationCounts: new Map([[String(seeded.capsuleId), -1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            records.push(record);
+          },
+        },
+      } as const;
+
+      const activity = tryBuildKnowledgePodRetrievalActivity(input);
+
+      expect(activity).toBeUndefined();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        source: "retrieval-activity.tryBuild",
+        errorClass: "Error",
+        message: "Knowledge Pod retrieval activity validation failed.",
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("merges duplicate pod rows when two sources resolve the same Knowledge Pod", async () => {
+    // AUDIT-E1816-002: two connector scopes that both resolve the same capsule previously emitted
+    // two activity rows sharing the identical podId, which collide on the client's list key and
+    // silently hide one source's contribution.
+    const sourceIdA = "src-dup-pod-a" as KnowledgeSourceId;
+    const sourceIdB = "src-dup-pod-b" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Shared Capsule",
+        capsuleId: "cap-shared-across-sources",
+        sourceId: sourceIdA,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const selected = selectedActivityScope(capsuleValue);
+      const referenceA = retrievalActivityReference(seeded.capsuleId, sourceIdA);
+      const referenceB = retrievalActivityReference(seeded.capsuleId, sourceIdB);
+
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [referenceA],
+              citationCounts: new Map([[String(seeded.capsuleId), 1]]),
+              noEvidence: false,
+            },
+          },
+          {
+            selected,
+            result: {
+              references: [referenceB],
+              citationCounts: new Map([[String(seeded.capsuleId), 1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+      });
+
+      const podIds = activity.pods.map((pod) => pod.podId);
+      expect(podIds).toHaveLength(1);
+      expect(new Set(podIds).size).toBe(1);
+      expect(activity.pods[0]).toMatchObject({
+        state: "searched",
+        counts: { referenceCount: 2, citationCount: 2 },
+      });
     } finally {
       knowledgeStore.close();
     }

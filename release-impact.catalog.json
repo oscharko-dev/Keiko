@@ -218,7 +218,7 @@
       "releaseNoteCategory": "new-additions",
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "Keiko can ship as three portable downloads with bundled Node, managed first-run setup, and one-click in-app updates for portable-managed installs.",
+      "userVisibleSummary": "Keiko can ship as three portable downloads with bundled Node, managed first-run setup, one-click in-app updates for portable-managed installs, and no competing browser-managed install prompt.",
       "affectedStateStores": [
         "install-registration",
         "update-runtime-state",
@@ -248,7 +248,7 @@
       "remediation": "no-action-required",
       "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
-        "Adds portable Keiko downloads for Windows x64, macOS arm64, and macOS x64 with bundled Node, managed first-run setup, and one-click in-app updates for portable-managed installs."
+        "Adds portable Keiko downloads for Windows x64, macOS arm64, and macOS x64 with bundled Node, managed first-run setup, one-click in-app updates for portable-managed installs, and no competing browser-managed install prompt."
       ],
       "internalOnly": false,
       "observableImpact": true,
@@ -267,10 +267,11 @@
         "runtimeEpic": 1942,
         "updaterEpic": 1945,
         "finalQaIssue": 1961,
-        "authorityAdr": "ADR-0114",
+        "authorityAdr": "ADR-0115",
         "targets": ["windows-x64", "macos-arm64", "macos-x64"],
         "primaryUserPath": "download-extract-open-setup-update-in-app",
         "promotedPackageManagerPath": false,
+        "promotedBrowserPwaPath": false,
         "rollback": false,
         "enterpriseManagedRollout": false,
         "sidecarUpdatesOnlyAsWholeProductAsset": true

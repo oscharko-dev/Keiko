@@ -7,6 +7,7 @@ import {
   ChatSessionProvider,
   useChatSessionActions,
   useChatSessionCatalog,
+  useChatSessionComposer,
   useChatSessionContext,
 } from "./ChatSessionContext";
 
@@ -186,6 +187,123 @@ describe("GEN-PERF-CHAT-002 — settled bubble render insulation", () => {
       />,
     );
     expect(onBubbleRender).toHaveBeenCalledTimes(2);
+  });
+});
+
+// GEN-PERF-CHAT-014 — the composer (and every non-bubble sibling in ChatWindow) reads the
+// settled slice. It must stay inert across per-frame streaming flushes — that is the whole
+// point of the slice — while remaining reactive to drafts, and the full-context hook must
+// keep delivering the live streaming delta unchanged.
+const ComposerProbe = memo(function ComposerProbe(props: {
+  readonly onRender: () => void;
+}): ReactNode {
+  useChatSessionComposer();
+  props.onRender();
+  return null;
+});
+
+function ComposerHarness(props: {
+  readonly value: ChatSessionApi;
+  readonly onComposerRender: () => void;
+  readonly onFullRender: () => void;
+}): ReactNode {
+  return (
+    <ChatSessionProvider value={props.value}>
+      <ComposerProbe onRender={props.onComposerRender} />
+      <FullProbe onRender={props.onFullRender} />
+    </ChatSessionProvider>
+  );
+}
+
+function streamingMessage(content: string): ChatSessionApi["streamingAssistantMessage"] {
+  return {
+    id: "live",
+    chatId: "c1",
+    role: "assistant",
+    content,
+    timestamp: 1,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+}
+
+describe("GEN-PERF-CHAT-014 — composer render insulation from streaming flushes", () => {
+  it("does not re-render a settled-slice consumer on streaming-only updates", () => {
+    const onComposerRender = vi.fn();
+    const onFullRender = vi.fn();
+    const initial = session();
+    const { rerender } = render(
+      <ComposerHarness
+        value={initial}
+        onComposerRender={onComposerRender}
+        onFullRender={onFullRender}
+      />,
+    );
+    expect(onComposerRender).toHaveBeenCalledTimes(1);
+
+    // 10 coalesced token flushes: only streamingAssistantMessage changes.
+    for (let i = 0; i < 10; i += 1) {
+      rerender(
+        <ComposerHarness
+          value={{ ...initial, streamingAssistantMessage: streamingMessage("x".repeat(i + 1)) }}
+          onComposerRender={onComposerRender}
+          onFullRender={onFullRender}
+        />,
+      );
+    }
+
+    // The settled-slice consumer stayed inert; the full-context consumer saw every flush.
+    expect(onComposerRender).toHaveBeenCalledTimes(1);
+    expect(onFullRender).toHaveBeenCalledTimes(11);
+  });
+
+  it("still re-renders the settled-slice consumer on draft changes", () => {
+    const onComposerRender = vi.fn();
+    const onFullRender = vi.fn();
+    const initial = session();
+    const { rerender } = render(
+      <ComposerHarness
+        value={initial}
+        onComposerRender={onComposerRender}
+        onFullRender={onFullRender}
+      />,
+    );
+    rerender(
+      <ComposerHarness
+        value={{ ...initial, draft: "typed" }}
+        onComposerRender={onComposerRender}
+        onFullRender={onFullRender}
+      />,
+    );
+    expect(onComposerRender).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps delivering the streaming delta through the full-context hook", () => {
+    const seen: (string | undefined)[] = [];
+    function StreamReader(): ReactNode {
+      const { streamingAssistantMessage } = useChatSessionContext();
+      seen.push(streamingAssistantMessage?.content);
+      return <span>{streamingAssistantMessage?.content ?? "idle"}</span>;
+    }
+    const initial = session();
+    const { rerender, getByText } = render(
+      <ChatSessionProvider value={initial}>
+        <StreamReader />
+      </ChatSessionProvider>,
+    );
+    expect(getByText("idle")).toBeTruthy();
+    rerender(
+      <ChatSessionProvider
+        value={{ ...initial, streamingAssistantMessage: streamingMessage("abc") }}
+      >
+        <StreamReader />
+      </ChatSessionProvider>,
+    );
+    expect(getByText("abc")).toBeTruthy();
+    expect(seen.at(-1)).toBe("abc");
   });
 });
 

@@ -32,7 +32,11 @@ import {
   type SyntheticEvent,
 } from "react";
 import type { VoiceSessionGroundingContext } from "@oscharko-dev/keiko-contracts";
-import { useChatSessionCatalog, useChatSessionContext } from "./context/ChatSessionContext";
+import {
+  useChatSessionCatalog,
+  useChatSessionComposer,
+  useChatSessionContext,
+} from "./context/ChatSessionContext";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
@@ -156,6 +160,18 @@ const CHAT_TURN_WINDOW_OVERSCAN = 8;
 // settle before a screen reader announces, so it hears the meaningful state, not every flicker.
 const DIALOG_ANNOUNCE_DEBOUNCE_MS = 400;
 const CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX = 132;
+// GEN-PERF-CHAT-015 — below the windowing threshold every turn is fully rendered; with
+// code-block/citation-heavy answers that is ~150-200 DOM nodes per turn, all paying
+// layout/paint even when scrolled out of the window's viewport. content-visibility lets
+// the browser skip rendering work for off-screen turns (same idiom as WindowFrame's
+// win-body containment and globals.css .fpv-line). `auto` in contain-intrinsic-size
+// remembers each turn's real size after first render, so scrollbar geometry stays honest;
+// the constant seeds the estimate exactly like the windowing spacer does. Inline style —
+// globals.css is SHA-gated (#1300) and must not grow for this.
+const CHAT_TURN_CONTENT_VISIBILITY_STYLE: CSSProperties = {
+  contentVisibility: "auto",
+  containIntrinsicSize: `auto ${String(CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX)}px`,
+};
 
 function timeLabel(timestamp: number): string {
   const date = new Date(timestamp);
@@ -716,7 +732,7 @@ function ConversationThreadImpl({
         const userMessage = turn.user;
         const isLastTurn = turn.id === lastTurnId;
         return (
-          <div className="chat-turn" key={turn.id}>
+          <div className="chat-turn" key={turn.id} style={CHAT_TURN_CONTENT_VISIBILITY_STYLE}>
             <div
               className="chat-turn-cell chat-turn-prompt"
               data-chat-question-id={userMessage?.id}
@@ -843,7 +859,7 @@ function setQuestionMapButtonWave(button: HTMLButtonElement, wave: number, peak:
 }
 
 // Exported for the GEN-PERF-CHAT-012 two-phase read/write regression test.
-export function ConversationQuestionMap({
+function ConversationQuestionMapImpl({
   items,
   onJump,
 }: {
@@ -965,6 +981,10 @@ export function ConversationQuestionMap({
     </nav>
   );
 }
+
+// GEN-PERF-CHAT-014 — items are useMemo'd off the settled transcript and onJump is a
+// stable callback, so the question map skips every per-frame stream-flush re-render.
+export const ConversationQuestionMap = memo(ConversationQuestionMapImpl);
 
 // Issue #1580 — memoized so a chat-window re-render that does not change the
 // transcript inputs (e.g. a resize, or unrelated composer state) skips reconciling
@@ -1951,7 +1971,6 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
 }
 
 interface ComposerCoreProps {
-  readonly session: ChatSessionApi;
   readonly ready: boolean;
   readonly placeholder: string;
   readonly minimal?: boolean;
@@ -1960,8 +1979,7 @@ interface ComposerCoreProps {
   readonly barCompact?: boolean;
 }
 
-function ComposerCore({
-  session,
+function ComposerCoreImpl({
   ready,
   placeholder,
   minimal = false,
@@ -1970,6 +1988,12 @@ function ComposerCore({
   barCompact = false,
 }: ComposerCoreProps): ReactNode {
   const t = useTranslate();
+  // GEN-PERF-CHAT-014 — the settled slice: identical to the full session API minus the
+  // per-frame streaming delta, which the composer never renders. Combined with the memo
+  // wrapper below, a token flush no longer re-executes this whole subtree (textarea
+  // auto-grow, attachment intake, mention autocomplete, voice-capability gating) up to
+  // 60×/s while a reply streams.
+  const session = useChatSessionComposer();
   const {
     draft,
     loading,
@@ -2599,6 +2623,11 @@ function ComposerCore({
   );
 }
 
+// GEN-PERF-CHAT-014 — bail out of stream-flush renders: all props are primitives and the
+// consumed contexts (settled state + actions + translate) keep their identity across a
+// token flush, so the default shallow comparison is sufficient.
+const ComposerCore = memo(ComposerCoreImpl);
+
 // Deliverable: polished empty state when no messages are present and an active
 // chat exists. Keep the center copy intentionally minimal so the composer
 // remains the primary action.
@@ -3077,7 +3106,7 @@ function LocalKnowledgeScopeControl({
   );
 }
 
-function ChatScopeHeader({
+function ChatScopeHeaderImpl({
   chat,
   onChatChanged,
   memoryControl,
@@ -3107,6 +3136,12 @@ function ChatScopeHeader({
   );
 }
 
+// GEN-PERF-CHAT-014 — `chat` keeps identity across a token flush, `onChatChanged` is a
+// stable action, and `memoryControl` is memoized at the call site, so the memo skips the
+// per-frame stream re-render (this header runs the knowledge-catalog hook — the single
+// most expensive sibling of the message list).
+const ChatScopeHeader = memo(ChatScopeHeaderImpl);
+
 // Issue #185 — surface the latest grounded answer's citations + uncertainty + omitted-count
 // directly under the assistant bubble it explains. Hidden when there is no grounded turn yet
 // or when the active chat carries no connectedScope binding (regular gateway chats never
@@ -3125,7 +3160,7 @@ function contextSummaryOf(
   return undefined;
 }
 
-function GroundedAnswerPanel({
+function GroundedAnswerPanelImpl({
   chat,
   busy,
 }: {
@@ -3359,6 +3394,10 @@ function MemoryActionCard({
   );
 }
 
+// GEN-PERF-CHAT-014 — both props are stable across a token flush (chat identity, sending
+// constant while a stream runs), so the memo skips the per-frame re-render.
+const GroundedAnswerPanel = memo(GroundedAnswerPanelImpl);
+
 function formatMemoryCapturedAt(capturedAt: number): string {
   return new Date(capturedAt).toISOString().slice(0, 10);
 }
@@ -3398,17 +3437,33 @@ function useMemoryDisclosureState(
       : t("chat.memory.noneIncluded");
   const memoryCountLabel = memoryCount > 99 ? "99+" : String(memoryCount);
 
-  return {
-    open,
-    actionStatus,
-    disclosureId,
-    disclosureButtonRef,
-    memoryCount,
-    memoryCountLabel,
-    memoryDisclosureLabel,
-    toggleDisclosure,
-    handleActionSettled,
-  };
+  // GEN-PERF-CHAT-014 — a fresh object literal here defeated the memo on every consumer
+  // (ChatScopeHeader via memoryControl, MemoryPanel via disclosure) on every ChatWindow
+  // render, including each per-frame stream flush. The ref is intentionally not a dep —
+  // it is identity-stable for the component lifetime.
+  return useMemo(
+    () => ({
+      open,
+      actionStatus,
+      disclosureId,
+      disclosureButtonRef,
+      memoryCount,
+      memoryCountLabel,
+      memoryDisclosureLabel,
+      toggleDisclosure,
+      handleActionSettled,
+    }),
+    [
+      open,
+      actionStatus,
+      disclosureId,
+      memoryCount,
+      memoryCountLabel,
+      memoryDisclosureLabel,
+      toggleDisclosure,
+      handleActionSettled,
+    ],
+  );
 }
 
 function MemoryDisclosureButton({
@@ -3438,7 +3493,7 @@ function MemoryDisclosureButton({
   );
 }
 
-function MemoryPanel({
+function MemoryPanelImpl({
   latestMemory,
   acceptCandidate,
   rejectCandidate,
@@ -3528,6 +3583,10 @@ function MemoryPanel({
   );
 }
 
+// GEN-PERF-CHAT-014 — memory props and the (memoized) disclosure object keep identity
+// across a token flush, so the memo skips the per-frame re-render.
+const MemoryPanel = memo(MemoryPanelImpl);
+
 export function ChatWindow({
   windowId,
   mini = false,
@@ -3601,6 +3660,12 @@ export function ChatWindow({
   const effectiveControlsNarrow = controlsNarrow || mini || effectiveMinimal || workflowCompact;
   const effectiveBarCompact = barCompact || effectiveMinimal;
   const memoryDisclosure = useMemoryDisclosureState(latestMemory);
+  // GEN-PERF-CHAT-014 — a JSX literal in the header prop would hand ChatScopeHeader a
+  // fresh element identity every render and defeat its memo.
+  const memoryControl = useMemo(
+    () => <MemoryDisclosureButton disclosure={memoryDisclosure} />,
+    [memoryDisclosure],
+  );
   const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
   const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);
   const pendingQuestionScrollRef = useRef<string | null>(null);
@@ -3685,7 +3750,7 @@ export function ChatWindow({
         <ChatScopeHeader
           chat={activeChat}
           onChatChanged={replaceChat}
-          memoryControl={<MemoryDisclosureButton disclosure={memoryDisclosure} />}
+          memoryControl={memoryControl}
         />
       ) : null}
       {activeChat !== undefined ? (
@@ -3789,7 +3854,6 @@ export function ChatWindow({
             }}
           >
             <ComposerCore
-              session={session}
               ready={ready}
               placeholder={
                 visible.length === 0 && loading

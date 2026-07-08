@@ -322,6 +322,7 @@ const MANUAL_REFRESH_COUNT_KEYS = [
   "addedPages",
   "changedPages",
   "removedPages",
+  "movedPages",
   "unchangedPages",
   "failedPages",
   "deniedLinks",

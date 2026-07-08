@@ -17,7 +17,14 @@ import {
 import { ChatWindow, clearKnowledgeCatalogCacheForTests, copyableMessageText } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
-import type { Chat, ChatMessage, GroundedAnswer, ModelCapability } from "@/lib/types";
+import type { PdfCitationPreviewWindowApi } from "./hooks/usePdfCitationPreview";
+import type {
+  Chat,
+  ChatMessage,
+  GroundedAnswer,
+  LocalKnowledgeEvidenceCitation,
+  ModelCapability,
+} from "@/lib/types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
@@ -125,6 +132,7 @@ function renderWindow(
     readonly linkedRoots?: readonly string[] | undefined;
     readonly openEditorFile?: ComponentProps<typeof ChatWindow>["openEditorFile"];
     readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+    readonly previewWindows?: ComponentProps<typeof ChatWindow>["previewWindows"];
   } = {},
 ): void {
   const chatWindowProps: ComponentProps<typeof ChatWindow> = {
@@ -132,6 +140,7 @@ function renderWindow(
     ...(props.linkedRoots === undefined ? {} : { linkedRoots: props.linkedRoots }),
     ...(props.openEditorFile === undefined ? {} : { openEditorFile: props.openEditorFile }),
     ...(props.onOpenRunResult === undefined ? {} : { onOpenRunResult: props.onOpenRunResult }),
+    ...(props.previewWindows === undefined ? {} : { previewWindows: props.previewWindows }),
   };
   render(
     <ChatSessionProvider value={session}>
@@ -549,6 +558,110 @@ describe("ChatWindow cancel button", () => {
     );
     expect(screen.getByText("src/a.ts:1-2")).toBeInTheDocument();
     expect(screen.getByText("Scope: 1 file in files (s-plural)")).toBeInTheDocument();
+  });
+
+  it("clicking an HTML manual citation opens a docbrowser window with the citation's navigation target", async () => {
+    // AUDIT-E1854-001 audit gap: GroundedAnswer.test.tsx only exercises the citation-chip-to-
+    // callback wiring with a vi.fn() standing in for openDocumentationTarget. This exercises the
+    // real ChatWindow.tsx glue (its useCallback) end to end, so a future rename of the window kind
+    // or config key breaks a test instead of silently breaking every HTML-manual citation "Open".
+    const user = userEvent.setup();
+    const addWindow = vi.fn().mockReturnValue("docbrowser-1");
+    const previewWindows: PdfCitationPreviewWindowApi = {
+      add: addWindow,
+      focus: vi.fn(),
+      update: vi.fn(),
+    };
+    const manualCitation: LocalKnowledgeEvidenceCitation = {
+      stableId: "lk-1",
+      marker: "[1]",
+      label: "alpha.md",
+      source: "Device Handbook",
+      score: 0.91,
+      lineage: {
+        capsuleId: "cap-1" as LocalKnowledgeEvidenceCitation["lineage"]["capsuleId"],
+        sourceId: "src-1" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
+        documentId: "doc-1" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+        chunkId: "chunk-1" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
+      },
+      htmlManual: {
+        sourceKind: "html-manual-http",
+        pageTitle: "device-handbook.html",
+        safePageId: "doc-device",
+        sectionPath: ["Troubleshooting", "Timeouts"],
+        anchorId: "timeouts",
+        parsedUnitId: "unit-device",
+        targetSummary: {
+          originSummary: "https://manual.internal",
+          pathSummary: "/…",
+        },
+        open: {
+          state: "available",
+          target: "keiko-html-manual-citation:opaque-target",
+        },
+      },
+    };
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "local-knowledge",
+      userMessageId: "lk-u",
+      assistantMessageId: "a",
+      content: "Answer [1].",
+      citations: [manualCitation],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 5,
+      noEvidence: false,
+      contextPack: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: "lk-1",
+        scopeLabel: "Caps",
+        capsuleCount: 1,
+        sourceCount: 1,
+        citationCount: 1,
+        referenceBudget: 10,
+        referencesUsed: 1,
+      },
+    };
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "a",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Answer [1].",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+            groundedAnswer,
+          },
+        ],
+      }),
+      { previewWindows },
+    );
+
+    const disclosure = document.querySelector("details.grounded-evidence-disclosure");
+    if (!(disclosure instanceof HTMLDetailsElement)) {
+      throw new Error("expected grounded evidence disclosure");
+    }
+    const summary = disclosure.querySelector("summary");
+    if (summary === null) throw new Error("expected grounded evidence summary");
+    await user.click(summary);
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "[1] Device Handbook · HTML manual · device-handbook.html · Troubleshooting · Timeouts · Open manual",
+      }),
+    );
+
+    expect(addWindow).toHaveBeenCalledWith("docbrowser", {
+      target: "keiko-html-manual-citation:opaque-target",
+    });
   });
 
   it("calls cancelGrounded when the cancel button is clicked", async () => {
@@ -2319,6 +2432,10 @@ describe("ChatWindow message copy", () => {
     expect(prompt?.querySelector('[data-role="user"][data-layout="turn"]')).not.toBeNull();
     expect(answer?.querySelector('[data-role="assistant"][data-layout="turn"]')).not.toBeNull();
     expect(turn?.querySelector('[role="separator"]')).toBeNull();
+    // GEN-PERF-CHAT-015 — off-screen turns must carry rendering containment so a long
+    // conversation below the windowing threshold does not pay layout/paint for every turn.
+    expect(turn?.style.contentVisibility).toBe("auto");
+    expect(turn?.style.containIntrinsicSize).toBe("auto 132px");
   });
 
   it("renders a left-side question map and jumps to the selected prompt", () => {

@@ -183,6 +183,23 @@ function validateCodexSubscriptionProfileResponse(value: unknown): GitRepository
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
+// GEN-RES-FETCH-001 — reads against the loopback BFF must not hang the UI when the BFF
+// stalls (a GET still pending after 15s is a failure, not a slow success; the browser's
+// own network timeout is minutes). State-changing requests keep NO default deadline —
+// long-running mutations (git operations, index builds) are legitimate — and a
+// caller-supplied signal is COMBINED with the deadline, never replaced by it.
+const DEFAULT_READ_TIMEOUT_MS = 15_000;
+
+function withReadDeadline(
+  init: RequestInit | undefined,
+  isStateChanging: boolean,
+): AbortSignal | null {
+  if (isStateChanging) return init?.signal ?? null;
+  const deadline = AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
+  const caller = init?.signal;
+  return caller === undefined || caller === null ? deadline : AbortSignal.any([caller, deadline]);
+}
+
 async function fetchJson<T>(
   path: string,
   init?: RequestInit,
@@ -192,6 +209,7 @@ async function fetchJson<T>(
   const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
     ...init,
+    signal: withReadDeadline(init, isStateChanging),
     headers: {
       Accept: "application/json",
       ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
@@ -227,6 +245,7 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
   const res = await fetch(path, {
     ...init,
     cache: "no-store",
+    signal: withReadDeadline(init, isStateChanging),
     headers: {
       Accept: "application/pdf",
       ...(isStateChanging ? { "Content-Type": "application/json" } : {}),

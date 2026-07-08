@@ -1,4 +1,4 @@
-# ADR-0115: Coding autonomy modes and sidecar runtime authority
+# ADR-0117: Coding autonomy modes and sidecar runtime authority
 
 ## Status
 

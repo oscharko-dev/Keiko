@@ -9,7 +9,7 @@
 //   - redactor invocation (single call site)
 //   - happy paths for the read routes
 
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
 import { promises as fs } from "node:fs";
@@ -66,12 +66,17 @@ function makeReq(opts: {
   return e;
 }
 
-function makeCtx(req: FakeReq, params: Record<string, string> = {}): RouteContext {
+function makeCtx(
+  req: FakeReq,
+  params: Record<string, string> = {},
+  opts: { readonly writeReturns?: (chunk: string) => boolean } = {},
+): RouteContext {
   const url = new URL(`http://localhost${req.url}`);
   // The minimum ServerResponse interface the SSE handler touches.
   const writtenHead: { status?: number; headers?: Record<string, string> } = {};
   let body = "";
   let ended = false;
+  let destroyed = false;
   const res = {
     writeHead(status: number, headers: Record<string, string>): void {
       writtenHead.status = status;
@@ -83,12 +88,20 @@ function makeCtx(req: FakeReq, params: Record<string, string> = {}): RouteContex
     },
     write(chunk: string): boolean {
       body += chunk;
-      return true;
+      return opts.writeReturns?.(chunk) ?? true;
     },
     end(): void {
       ended = true;
     },
-    _sse: { writtenHead, body: (): string => body, ended: (): boolean => ended },
+    destroy(): void {
+      destroyed = true;
+    },
+    _sse: {
+      writtenHead,
+      body: (): string => body,
+      ended: (): boolean => ended,
+      destroyed: (): boolean => destroyed,
+    },
   } as unknown as ServerResponse;
   return {
     req: req as unknown as IncomingMessage,
@@ -1132,6 +1145,70 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
     // Idle: no activity event frames, and no payload leaked.
     expect(body).not.toContain("event: relationship:activity");
     req.emit("close");
+  });
+
+  // GEN-PERF-RELACT-001 — before the shared broadcaster, every events connection ran its
+  // own 5s refresh timer and its own snapshot sweep: this test read 4 listRelationships
+  // calls per tick for two connections (2 sweeps × blocked+stale). Shared, it reads 2.
+  it("two concurrent events streams share one snapshot sweep per refresh tick", () => {
+    vi.useFakeTimers();
+    try {
+      const store = freshStore();
+      const calls = { count: 0 };
+      const countingStore: typeof store = {
+        ...store,
+        listRelationships: (query) => {
+          calls.count += 1;
+          return store.listRelationships(query);
+        },
+      };
+      const { redactor } = trackingRedactor();
+      const deps = buildDeps("ws-a", countingStore, redactor);
+      const req1 = makeReq({ method: "GET", url: "/api/relationships/events" });
+      const ctx1 = makeCtx(req1);
+      const req2 = makeReq({ method: "GET", url: "/api/relationships/events" });
+      const ctx2 = makeCtx(req2);
+      expect(handleRelationshipEvents(ctx1, deps)).toBe(STREAMING);
+      expect(handleRelationshipEvents(ctx2, deps)).toBe(STREAMING);
+      calls.count = 0;
+      vi.advanceTimersByTime(5000);
+      expect(calls.count).toBe(2);
+      req1.emit("close");
+      req2.emit("close");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // GEN-PERF-RELACT-001 — the events route was the only SSE writer in the server that
+  // ignored res.write()'s backpressure boolean: a minimized/throttled window grew the
+  // response buffer without bound. A rejected write must abort + destroy that client
+  // and stop feeding it, while an unrelated healthy stream keeps working.
+  it("destroys a non-draining events client instead of buffering without bound", () => {
+    vi.useFakeTimers();
+    try {
+      const store = freshStore();
+      const { redactor } = trackingRedactor();
+      const deps = buildDeps("ws-a", store, redactor);
+      const slowReq = makeReq({ method: "GET", url: "/api/relationships/events" });
+      const slowCtx = makeCtx(slowReq, {}, { writeReturns: () => false });
+      const healthyReq = makeReq({ method: "GET", url: "/api/relationships/events" });
+      const healthyCtx = makeCtx(healthyReq);
+      expect(handleRelationshipEvents(slowCtx, deps)).toBe(STREAMING);
+      expect(handleRelationshipEvents(healthyCtx, deps)).toBe(STREAMING);
+      const slowSse = (slowCtx.res as unknown as { _sse: { destroyed(): boolean; body(): string } })
+        ._sse;
+      expect(slowSse.destroyed()).toBe(true);
+      const slowBytes = slowSse.body().length;
+      // Neither the refresh tick nor the ping keeps writing to the killed client.
+      vi.advanceTimersByTime(35_000);
+      expect(slowSse.body().length).toBe(slowBytes);
+      const healthySse = (healthyCtx.res as unknown as { _sse: { body(): string } })._sse;
+      expect(healthySse.body()).toContain(": ping");
+      healthyReq.emit("close");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("events?poll=1 returns a finite NDJSON body with the same allowlisted snapshot contract", async () => {

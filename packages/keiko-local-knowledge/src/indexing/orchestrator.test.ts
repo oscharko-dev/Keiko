@@ -1057,6 +1057,74 @@ describe("runIndexingJob — incremental", () => {
     ).toBeDefined();
   });
 
+  it("prunes a genuinely deleted document in one source while a failing document in another source blocks that source's own prune", async () => {
+    // Regression: finalizeSourceRun's failedDocumentsThisSource guard is computed from a
+    // per-source snapshot (state.failedDocuments before/after that source's own stream), not
+    // the job-wide counter. A future refactor that widened the snapshot to job-wide scope would
+    // make a failure in ANY source block pruning in EVERY source — this proves source isolation
+    // across a genuine multi-source job, not just within a single source's own run.
+    const multi = buildTwoSourceFixture();
+    try {
+      await drain(runIndexingJob(buildOptions(multi)));
+
+      const failingDocumentId = documentIdFor({
+        capsuleId: multi.capsuleId,
+        sourceId: multi.sourceId,
+        relativePath: "alpha.txt",
+      });
+      const deletedDocumentId = documentIdFor({
+        capsuleId: multi.capsuleId,
+        sourceId: multi.otherSourceId,
+        relativePath: "beta.txt",
+      });
+      expect(
+        readExistingDocumentRow(multi.store._internal.db, multi.capsuleId, failingDocumentId),
+      ).toBeDefined();
+      expect(
+        readExistingDocumentRow(multi.store._internal.db, multi.capsuleId, deletedDocumentId),
+      ).toBeDefined();
+
+      const failingAdapter = scriptedAdapter({
+        responder: (req) =>
+          req.input.includes("MARKERFAIL")
+            ? { ok: false, kind: "unsupported-model" }
+            : {
+                ok: true,
+                value: {
+                  vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+                  modelId: DEFAULT_EMBEDDING.modelId,
+                },
+              },
+      });
+
+      // Source A (multi.sourceId): alpha.txt changes to content that fails re-embedding.
+      // Source B (multi.otherSourceId): beta.txt is genuinely removed this run — its scope's
+      // only file is now missing from the workspace, so a clean discovery pass should prune it.
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(multi, {
+            embeddingAdapter: failingAdapter,
+            workspaceFs: memoryFs(ROOT, [
+              { relativePath: "alpha.txt", content: "MARKERFAIL alpha changed. ".repeat(32) },
+            ]),
+          }),
+        ),
+      );
+
+      expect(events.some((e) => e.kind === "document-failed")).toBe(true);
+      // Source A's failing document is retained — its own prune is blocked by the failure.
+      expect(
+        readExistingDocumentRow(multi.store._internal.db, multi.capsuleId, failingDocumentId),
+      ).toBeDefined();
+      // Source B's genuinely deleted document is still pruned despite source A's failure.
+      expect(
+        readExistingDocumentRow(multi.store._internal.db, multi.capsuleId, deletedDocumentId),
+      ).toBeUndefined();
+    } finally {
+      multi.cleanup();
+    }
+  });
+
   it("keeps persisted rows when a bounded discovery pass reaches the file cap", async () => {
     await drain(runIndexingJob(buildOptions(fixture)));
     const cappedOutDocumentId = documentIdFor({
