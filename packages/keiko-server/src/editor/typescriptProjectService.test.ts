@@ -151,28 +151,25 @@ describe("typescript project service", () => {
     );
 
     // A workspace larger than the cap must never yield a partially-populated program (which would
-    // answer cross-file navigation/rename with silently-incomplete results); it fails closed so the
-    // provider falls back to the single-file overlay path (Issue #2100).
+    // answer cross-file navigation/rename with silently-incomplete results); it fails closed through
+    // the provider instead of falling back to a narrower analysis path (Issue #2100).
     expect(result.kind).toBe("error");
     if (result.kind === "error") expect(result.code).toBe("DOCUMENT_TOO_LARGE");
   });
 
-  it("interrupts an operation when the request deadline has already passed", () => {
+  it("interrupts project discovery when the request deadline has already passed", () => {
     writeProject();
     const service = createTypescriptProjectService();
     // deadlineMs 0 with a frozen clock at 0 means the deadline is already reached on the first
-    // cooperative check, so the resolver refuses rather than running an uninterruptible analysis.
-    const result = service.resolveProject(
-      ctx("src/main.ts", "import { helper } from './helper.js';\nhelper(1);\n", {
-        ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
-        deadlineMs: 0,
-      }),
-    );
-    expect(result.kind).toBe("project");
-    if (result.kind !== "project") throw new Error("expected project");
+    // cooperative check, so discovery refuses before building a project graph.
     let thrown: unknown;
     try {
-      getProjectDiagnostics(result.project);
+      service.resolveProject(
+        ctx("src/main.ts", "import { helper } from './helper.js';\nhelper(1);\n", {
+          ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+          deadlineMs: 0,
+        }),
+      );
     } catch (error) {
       thrown = error;
     }

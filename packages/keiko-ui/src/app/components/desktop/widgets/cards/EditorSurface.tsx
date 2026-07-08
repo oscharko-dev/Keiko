@@ -23,6 +23,7 @@ import {
   type EditorDiagnosticsSummary,
   type EditorFileModel,
   type EditorFormattingResolver,
+  type EditorHostEditRequest,
   type EditorHoverResolver,
   type EditorInlineCompletionResolver,
   type EditorPosition,
@@ -63,6 +64,7 @@ export interface EditorSurfaceProps {
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
   readonly revealRequest?: KeikoCodeEditorProps["revealRequest"] | undefined;
+  readonly hostEditRequest?: EditorHostEditRequest | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
   /**
    * Host completion resolver (Issue #1199). When present, the editor registers a Monaco completion
@@ -165,6 +167,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
       onSelectionChange={props.onSelectionChange}
       onCursorChange={props.onCursorChange}
       revealRequest={props.revealRequest}
+      hostEditRequest={props.hostEditRequest}
       onRuntimeError={onRuntimeError}
       provideCompletions={props.provideCompletions}
       completionTriggerCharacters={props.completionTriggerCharacters}

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { RouteResult } from "../routes.js";
@@ -140,8 +141,9 @@ async function writeProject(files: Readonly<Record<string, string>>): Promise<vo
 function postLanguage(
   body: unknown,
   redactor: UiHandlerDeps["redactor"] = buildRedactor({}),
+  options: EditorLanguageRouteOptions = stableLanguageOptions,
 ): Promise<RouteResult> {
-  return handleEditorLanguage(postContext(body), deps(redactor), stableLanguageOptions);
+  return handleEditorLanguage(postContext(body), deps(redactor), options);
 }
 
 function routeRequestFor(operation: string, decl: string, main: string): unknown {
@@ -186,6 +188,56 @@ function routeRequestFor(operation: string, decl: string, main: string): unknown
     document: { path: "src/main.ts", languageId: "typescript", text: main },
     position: positionOf(main, "sharedValue"),
   };
+}
+
+function expectUnknownArray(value: unknown, label: string): readonly unknown[] {
+  expect(Array.isArray(value)).toBe(true);
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  return value as readonly unknown[];
+}
+
+function expectNavigationShape(result: Record<string, unknown>): void {
+  const locations = expectUnknownArray(result.locations, "locations");
+  expect(locations).not.toHaveLength(0);
+  if (!isRecord(locations[0])) throw new Error("location must be an object");
+  expect(typeof locations[0].path).toBe("string");
+}
+
+function expectRenameApplyShape(result: Record<string, unknown>): void {
+  const files = expectUnknownArray(result.files, "files");
+  if (!isRecord(files[0])) throw new Error("rename file must be an object");
+  expect(typeof files[0].path).toBe("string");
+  expect(Array.isArray(files[0].edits)).toBe(true);
+  expect(typeof files[0].expectedContentHash).toBe("string");
+}
+
+function expectRangeShape(value: unknown): void {
+  if (!isRecord(value)) throw new Error("range must be an object");
+  expect(isRecord(value.start)).toBe(true);
+  expect(isRecord(value.end)).toBe(true);
+}
+
+function expectLanguageResultShape(body: unknown, operation: string): void {
+  expect(body).toMatchObject({ operation });
+  if (!isRecord(body) || !isRecord(body.result)) throw new Error("missing result body");
+  const result = body.result;
+  if (operation === "definition" || operation === "references") {
+    expectNavigationShape(result);
+    return;
+  }
+  if (operation === "renamePrepare") {
+    expectRangeShape(result.range);
+    expect(typeof result.placeholder).toBe("string");
+    return;
+  }
+  if (operation === "renameApply") {
+    expectRenameApplyShape(result);
+    return;
+  }
+  if (operation === "signatureHelp") {
+    expectUnknownArray(result.signatures, "signatures");
+    expect(result.returnedCount).toEqual(expect.any(Number));
+  }
 }
 
 beforeEach(async () => {
@@ -366,6 +418,11 @@ describe("POST /api/editor/language", () => {
     expect(renamePrepare).toMatchObject({ status: 200, body: { operation: "renamePrepare" } });
     expect(renameApply).toMatchObject({ status: 200, body: { operation: "renameApply" } });
     expect(signatureHelp).toMatchObject({ status: 200, body: { operation: "signatureHelp" } });
+    expectLanguageResultShape(definition.body, "definition");
+    expectLanguageResultShape(references.body, "references");
+    expectLanguageResultShape(renamePrepare.body, "renamePrepare");
+    expectLanguageResultShape(renameApply.body, "renameApply");
+    expectLanguageResultShape(signatureHelp.body, "signatureHelp");
   });
 
   it("serves code actions for a TypeScript diagnostic", async () => {
@@ -395,6 +452,69 @@ describe("POST /api/editor/language", () => {
     expect(result.body).toMatchObject({ operation: "codeActions" });
     const body = result.body as { result: { actions: { edits: unknown[] | null }[] } };
     expect(body.result.actions.some((action) => (action.edits?.length ?? 0) > 0)).toBe(true);
+  });
+
+  it("redacts code-action display labels without mutating edit text", async () => {
+    const main = "export const result = helperValue;\n";
+    await writeProject({
+      "src/helper.ts": "export const helperValue = 1;\n",
+      "src/main.ts": main,
+    });
+
+    const result = await postLanguage(
+      {
+        operation: "codeActions",
+        root,
+        document: { path: "src/main.ts", languageId: "typescript", text: main },
+        range: rangeOf(main, "helperValue"),
+        diagnostics: [
+          {
+            range: rangeOf(main, "helperValue"),
+            severity: "error",
+            message: "Cannot find name 'helperValue'.",
+            source: "typescript",
+            code: "2304",
+          },
+        ],
+      },
+      redactEveryString,
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      operation: string;
+      result: { actions: { title: string; edits: { newText: string }[] | null }[] };
+    };
+    const action = body.result.actions.find((entry) => (entry.edits?.length ?? 0) > 0);
+    expect(body.operation).toBe("codeActions");
+    expect(action?.title).toBe("[REDACTED]");
+    expect(action?.edits?.map((edit) => edit.newText)).not.toContain("[REDACTED]");
+  });
+
+  it("fails closed when TypeScript project discovery exceeds workspace caps", async () => {
+    const main = "export const value = 1;\n";
+    const files: Record<string, string> = { "src/main.ts": main };
+    for (let index = 0; index < 6; index += 1) {
+      files[`src/many-${String(index)}.ts`] = "export const value = 1;\n";
+    }
+    await writeProject(files);
+
+    const result = await postLanguage(
+      {
+        operation: "diagnostics",
+        root,
+        document: { path: "src/main.ts", languageId: "typescript", text: main },
+      },
+      buildRedactor({}),
+      {
+        ...stableLanguageOptions,
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxWorkspaceReadFiles: 2 },
+      },
+    );
+
+    expect(result.status).toBe(413);
+    expect(result.body).toMatchObject({ error: { code: "DOCUMENT_TOO_LARGE" } });
+    expect(JSON.stringify(result.body)).not.toContain(root);
   });
 
   it("rejects unadvertised language and operation pairs without echoing content", async () => {

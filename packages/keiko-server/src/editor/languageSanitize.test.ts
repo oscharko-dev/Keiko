@@ -4,10 +4,16 @@ import {
   type LanguageServiceLimits,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  sanitizeCodeActions,
   sanitizeCompletion,
+  sanitizeDefinition,
   sanitizeDiagnostics,
   sanitizeFormatting,
   sanitizeHover,
+  sanitizeReferences,
+  sanitizeRenameApply,
+  sanitizeRenamePrepare,
+  sanitizeSignatureHelp,
   sanitizeSymbols,
 } from "./languageSanitize.js";
 
@@ -259,6 +265,140 @@ describe("sanitizeFormatting", () => {
       { edits: [{ range, newText: "ok" }], truncated: true },
       DEFAULT_LANGUAGE_SERVICE_LIMITS,
     );
+    expect(result.truncated).toBe(true);
+  });
+});
+
+describe("sanitizeDefinition and sanitizeReferences", () => {
+  it("clips location paths and caps navigation results", () => {
+    const locations = [
+      { path: `src/${BIDI}abcdef.ts`, range },
+      { path: "src/second.ts", range },
+    ];
+    const limits = { ...tinyLimits, maxDefinitionLocations: 1, maxReferenceLocations: 1 };
+
+    const definition = sanitizeDefinition({ locations, truncated: false }, limits);
+    const references = sanitizeReferences(
+      { locations, includesDeclaration: true, truncated: false },
+      limits,
+    );
+
+    expect(definition.locations).toEqual([{ path: "src/a", range }]);
+    expect(definition.truncated).toBe(true);
+    expect(references.locations).toEqual([{ path: "src/a", range }]);
+    expect(references.includesDeclaration).toBe(true);
+    expect(references.truncated).toBe(true);
+  });
+});
+
+describe("sanitizeRenamePrepare and sanitizeRenameApply", () => {
+  it("clips display strings for rename prepare", () => {
+    expect(sanitizeRenamePrepare({ range, placeholder: `shared${BIDI}Value` }, tinyLimits)).toEqual(
+      {
+        range,
+        placeholder: "share",
+      },
+    );
+    expect(sanitizeRenamePrepare({ range: null, reason: "not renameable" }, tinyLimits)).toEqual({
+      range: null,
+      reason: "not r",
+    });
+  });
+
+  it("caps review changesets without mutating edit text or hashes", () => {
+    const result = sanitizeRenameApply(
+      {
+        schemaVersion: "1",
+        files: [
+          {
+            path: "src/a.ts",
+            expectedContentHash: "abc",
+            edits: [
+              { range, newText: "one" },
+              { range, newText: "two" },
+            ],
+          },
+          { path: "src/b.ts", expectedContentHash: "def", edits: [{ range, newText: "three" }] },
+        ],
+        truncated: false,
+        filesTruncated: false,
+        returnedFileCount: 2,
+        totalFileCount: 2,
+        returnedEditCount: 3,
+        totalEditCount: 3,
+      },
+      {
+        ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+        maxRenameChangesetFiles: 2,
+        maxRenameChangesetEdits: 2,
+      },
+    );
+
+    expect(result.files).toEqual([
+      {
+        path: "src/a.ts",
+        expectedContentHash: "abc",
+        edits: [
+          { range, newText: "one" },
+          { range, newText: "two" },
+        ],
+      },
+    ]);
+    expect(result.returnedEditCount).toBe(2);
+    expect(result.truncated).toBe(true);
+  });
+});
+
+describe("sanitizeCodeActions", () => {
+  it("clips action labels while preserving edit text", () => {
+    const result = sanitizeCodeActions(
+      {
+        actions: [
+          { title: `quick${BIDI}fix`, kind: "quickfix", edits: [{ range, newText: "SECRET" }] },
+          { title: "second", kind: "quickfix", edits: null },
+        ],
+        truncated: false,
+        returnedCount: 2,
+        totalCount: 2,
+      },
+      { ...tinyLimits, maxCodeActions: 1 },
+    );
+
+    expect(result.actions).toEqual([
+      { title: "quick", kind: "quickfix", edits: [{ range, newText: "SECRET" }] },
+    ]);
+    expect(result.returnedCount).toBe(1);
+    expect(result.totalCount).toBe(2);
+    expect(result.truncated).toBe(true);
+  });
+});
+
+describe("sanitizeSignatureHelp", () => {
+  it("clips signature display strings and caps signatures", () => {
+    const result = sanitizeSignatureHelp(
+      {
+        signatures: [
+          {
+            label: `call${BIDI}Target(value: string)`,
+            documentation: "documentation",
+            parameters: [{ label: "valueParameter" }],
+          },
+          { label: "second(value: string)", parameters: [{ label: "value" }] },
+        ],
+        activeSignature: 1,
+        activeParameter: 0,
+        truncated: false,
+        returnedCount: 2,
+        totalCount: 2,
+      },
+      { ...tinyLimits, maxSignatures: 1 },
+    );
+
+    expect(result.signatures).toEqual([
+      { label: "callT", documentation: "docum", parameters: [{ label: "value" }] },
+    ]);
+    expect(result.activeSignature).toBe(null);
+    expect(result.returnedCount).toBe(1);
     expect(result.truncated).toBe(true);
   });
 });

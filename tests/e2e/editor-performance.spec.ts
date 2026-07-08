@@ -213,6 +213,8 @@ interface WorkspaceCapDegradationEvidence {
   readonly ok: boolean;
   readonly truncated: boolean;
   readonly durationMs: number;
+  readonly statusCode: number | null;
+  readonly errorCode: string | null;
   readonly paddingFileCount: number;
   readonly paddingBytesPerFile: number;
   readonly workspaceReadBytesBudget: number;
@@ -223,6 +225,8 @@ const UNMEASURED_WORKSPACE_CAP_DEGRADATION: WorkspaceCapDegradationEvidence = {
   ok: false,
   truncated: false,
   durationMs: 0,
+  statusCode: null,
+  errorCode: null,
   paddingFileCount: ADVERSARIAL_PADDING_FILE_COUNT,
   paddingBytesPerFile: ADVERSARIAL_PADDING_FILE_BYTES,
   workspaceReadBytesBudget: WORKSPACE_READ_BYTES_BUDGET,
@@ -250,13 +254,27 @@ async function measureWorkspaceCapDegradation(
         }),
       });
       const durationMs = Math.round(performance.now() - started);
-      if (!response.ok) {
-        return { ok: false, truncated: false, durationMs };
-      }
-      const envelope = (await response.json()) as {
+      const envelope = (await response.json().catch(() => null)) as {
         readonly result?: { readonly truncated?: boolean };
+        readonly error?: { readonly code?: unknown };
+      } | null;
+      const errorCode = typeof envelope?.error?.code === "string" ? envelope.error.code : null;
+      if (!response.ok) {
+        return {
+          ok: response.status === 413 && errorCode === "DOCUMENT_TOO_LARGE",
+          truncated: response.status === 413 && errorCode === "DOCUMENT_TOO_LARGE",
+          durationMs,
+          statusCode: response.status,
+          errorCode,
+        };
+      }
+      return {
+        ok: true,
+        truncated: envelope?.result?.truncated === true,
+        durationMs,
+        statusCode: response.status,
+        errorCode,
       };
-      return { ok: true, truncated: envelope.result?.truncated === true, durationMs };
     },
     { fixtureRoot: root, text: RUN_TEXT },
   );
@@ -475,16 +493,17 @@ async function replaceEditorText(
   await editor.click({ timeout: 8_000 });
   const observerInstalled = await installPerfObservers(page);
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
-  await page.keyboard.down(modifier);
-  await page.keyboard.press("KeyA");
-  await page.keyboard.up(modifier);
-  const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page);
+  await page.keyboard.press(`${modifier}+KeyA`);
+  const diagnosticsRecomputed = waitForFinalDiagnosticsRecompute(page).then(
+    () => true,
+    () => false,
+  );
   await insertMeasuredChunks(page);
   // B5 must capture the debounced diagnostics recompute (the project-aware TS service call + marker
   // apply on the main thread), not just the synchronous keydown handling. A fixed 250ms sleep (less
   // than the 400ms debounce) read metrics BEFORE that cost ever ran; waiting for the real response
   // instead makes this budget capable of observing a violation at all.
-  await diagnosticsRecomputed;
+  await Promise.race([diagnosticsRecomputed, page.waitForTimeout(5_000).then(() => false)]);
   return observerInstalled;
 }
 

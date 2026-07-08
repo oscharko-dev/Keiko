@@ -54,6 +54,12 @@ export type EditorChangeOrigin =
   | "applied-patch"
   | "verification";
 
+export interface EditorHostEditRequest {
+  readonly id: string;
+  readonly text: string;
+  readonly origin: EditorChangeOrigin;
+}
+
 /**
  * `uri` is a host-scoped opaque document URI/id, not an absolute filesystem path or
  * credential-bearing URL. `version` is a monotonic host counter; it increments on every edit the

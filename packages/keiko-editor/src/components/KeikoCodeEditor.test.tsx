@@ -37,6 +37,8 @@ interface CapturedEditor {
   setSelection: ReturnType<typeof vi.fn>;
   revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
   deltaDecorations: ReturnType<typeof vi.fn>;
+  executeEdits: ReturnType<typeof vi.fn>;
+  pushUndoStop: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
 
@@ -181,10 +183,14 @@ vi.mock("@monaco-editor/react", () => {
     setSelection: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
+    executeEdits: ReturnType<typeof vi.fn>;
+    pushUndoStop: ReturnType<typeof vi.fn>;
     getModel: () => {
       getValue: () => string;
       getVersionId: () => number;
       getLanguageId: () => string;
+      getLineCount: () => number;
+      getLineMaxColumn: (lineNumber: number) => number;
       onDidChangeContent: (listener: () => void) => { dispose: () => void };
       uri: { toString: () => string };
     };
@@ -195,6 +201,8 @@ vi.mock("@monaco-editor/react", () => {
     getValue: () => string;
     getVersionId: () => number;
     getLanguageId: () => string;
+    getLineCount: () => number;
+    getLineMaxColumn: (lineNumber: number) => number;
     onDidChangeContent: (listener: () => void) => { dispose: () => void };
     uri: { toString: () => string };
   }
@@ -210,10 +218,13 @@ vi.mock("@monaco-editor/react", () => {
     setSelection: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
+    executeEdits: ReturnType<typeof vi.fn>;
+    pushUndoStop: ReturnType<typeof vi.fn>;
     modelText: string;
     modelLanguage: string;
     modelVersion: number;
     modelContentListener: (() => void) | null;
+    onChange: MockProps["onChange"] | null;
     mounted: boolean;
     fakeEditor: FakeEditorShape;
   }
@@ -233,13 +244,27 @@ vi.mock("@monaco-editor/react", () => {
         (_oldDecorations: readonly string[], newDecorations: readonly unknown[]) =>
           newDecorations.length > 0 ? ["reference-decoration"] : [],
       ),
+      executeEdits: vi.fn(),
+      pushUndoStop: vi.fn(() => true),
       modelText: "",
       modelLanguage: "plaintext",
       modelVersion: 1,
       modelContentListener: null,
+      onChange: null,
       mounted: false,
       fakeEditor: null as unknown as FakeEditorShape,
     };
+    s.executeEdits.mockImplementation(
+      (_source: string, edits: readonly { readonly text: string }[]): boolean => {
+        const text = edits[0]?.text;
+        if (text === undefined) return false;
+        s.modelText = text;
+        s.modelVersion += 1;
+        s.modelContentListener?.();
+        s.onChange?.(text);
+        return true;
+      },
+    );
     s.fakeEditor = {
       addAction: (descriptor): { dispose: () => void } => {
         s.saveRun = descriptor.run;
@@ -280,10 +305,15 @@ vi.mock("@monaco-editor/react", () => {
       setSelection: s.setSelection,
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
+      executeEdits: s.executeEdits,
+      pushUndoStop: s.pushUndoStop,
       getModel: (): FakeModelShape => ({
         getValue: (): string => s.modelText,
         getVersionId: (): number => s.modelVersion,
         getLanguageId: (): string => s.modelLanguage,
+        getLineCount: (): number => Math.max(1, s.modelText.split("\n").length),
+        getLineMaxColumn: (lineNumber: number): number =>
+          (s.modelText.split("\n")[lineNumber - 1]?.length ?? 0) + 1,
         onDidChangeContent: (listener): { dispose: () => void } => {
           s.modelContentListener = listener;
           return { dispose: vi.fn() };
@@ -317,6 +347,8 @@ vi.mock("@monaco-editor/react", () => {
       setSelection: s.setSelection,
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
+      executeEdits: s.executeEdits,
+      pushUndoStop: s.pushUndoStop,
       disposed: s.disposed,
     };
     return s;
@@ -334,6 +366,7 @@ vi.mock("@monaco-editor/react", () => {
     captured.keepCurrentModel = props.keepCurrentModel ?? null;
     state.modelText = props.value ?? "";
     state.modelLanguage = props.language ?? "plaintext";
+    state.onChange = props.onChange ?? null;
     scheduleMountOnce(state, props.onMount);
   }
 
@@ -408,6 +441,38 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(origin).toBe("human");
     expect(typeof delta.text).toBe("string");
     expect(delta.sizeBytes).toBe(new TextEncoder().encode(delta.text).length);
+  });
+
+  it("applies host edit requests through Monaco edits with undo stops", async () => {
+    const onContentChange = vi.fn();
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          hostEditRequest: {
+            id: "rename-1",
+            text: "const renamed = 1;\n",
+            origin: "applied-patch",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.executeEdits).toHaveBeenCalledWith("keiko.host-edit", [
+        {
+          range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 },
+          text: "const renamed = 1;\n",
+        },
+      ]);
+    });
+    expect(captured.editor?.pushUndoStop).toHaveBeenCalledTimes(2);
+    const [delta, origin] = onContentChange.mock.calls.at(-1) as [
+      { text: string; sizeBytes: number },
+      string,
+    ];
+    expect(delta.text).toBe("const renamed = 1;\n");
+    expect(origin).toBe("applied-patch");
   });
 
   it("uses a host-provided accessible editor label", () => {
@@ -959,16 +1024,7 @@ describe("KeikoCodeEditor — navigation/action/signature providers (#2104)", ()
     expect(captured.signatureHelp.every((r) => r.disposed())).toBe(true);
   });
 
-  // NOTE: the mount wiring registers each of these providers ONCE, inside `onMount`, from whichever
-  // resolver props are present at that first Monaco mount call (`useMountHandler` /
-  // `mountEditorRuntime` in use-editor-handlers.ts). Monaco invokes `onMount` exactly once per
-  // component mount, so a later prop change never re-runs the registration decision, and disposal
-  // only happens from the component's unmount effect (`useUnmountDisposal`). Consequently, removing a
-  // `provideDefinition`/`provideReferences`/`provideCodeActions`/`provideSignatureHelp` prop WITHOUT
-  // unmounting the component leaves the already-registered provider live and undisposed. This is an
-  // inherited limitation of the shared mount-once wiring — the same one `provideHover` has — so this
-  // test documents the current, real behavior rather than asserting a teardown that does not happen.
-  it("does NOT dispose a provider when its prop is removed without an unmount (inherited mount-once limitation, shared with provideHover)", async () => {
+  it("disposes navigation/action/signature providers when their resolver props are removed", async () => {
     const { rerender } = render(<KeikoCodeEditor {...baseProps(navigationProps())} />);
     await flushMount();
     expect(captured.definition).toHaveLength(2);
@@ -976,13 +1032,24 @@ describe("KeikoCodeEditor — navigation/action/signature providers (#2104)", ()
     rerender(<KeikoCodeEditor {...baseProps()} />);
     await flushMount();
 
-    // Still exactly the two providers registered at mount, still undisposed: the prop removal alone
-    // triggered neither a re-registration nor a teardown.
+    await waitFor(() => {
+      expect(captured.definition.every((r) => r.disposed())).toBe(true);
+    });
     expect(captured.definition).toHaveLength(2);
-    expect(captured.definition.every((r) => r.disposed())).toBe(false);
-    expect(captured.references.every((r) => r.disposed())).toBe(false);
-    expect(captured.codeActions.every((r) => r.disposed())).toBe(false);
-    expect(captured.signatureHelp.every((r) => r.disposed())).toBe(false);
+    expect(captured.references.every((r) => r.disposed())).toBe(true);
+    expect(captured.codeActions.every((r) => r.disposed())).toBe(true);
+    expect(captured.signatureHelp.every((r) => r.disposed())).toBe(true);
+
+    rerender(<KeikoCodeEditor {...baseProps(navigationProps())} />);
+    await flushMount();
+
+    await waitFor(() => {
+      expect(captured.definition).toHaveLength(4);
+    });
+    expect(captured.definition.slice(2).every((r) => r.disposed())).toBe(false);
+    expect(captured.references.slice(2).every((r) => r.disposed())).toBe(false);
+    expect(captured.codeActions.slice(2).every((r) => r.disposed())).toBe(false);
+    expect(captured.signatureHelp.slice(2).every((r) => r.disposed())).toBe(false);
   });
 });
 
