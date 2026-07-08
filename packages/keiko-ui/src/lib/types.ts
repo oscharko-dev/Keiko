@@ -130,7 +130,7 @@ export type {
   EditorCompletionContextSelectors,
   EditorCompletionWireRequest,
 } from "@oscharko-dev/keiko-contracts";
-// ─── Native OS file/folder dialog (Epic #1941, ADR-0115, contracts root barrel) ─────
+// ─── Native OS file/folder dialog (Epic #1941, ADR-0118, contracts root barrel) ─────
 export type {
   NativeFileDialogMode,
   NativeFileDialogSelectionKind,

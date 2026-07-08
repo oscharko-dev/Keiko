@@ -26,7 +26,7 @@ import {
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { pathIsDenied } from "../files-deny.js";
-import { FilesError, readJsonObject, resolveRoot } from "../files.js";
+import { FilesError, metadataIsSafe, readJsonObject, resolveRoot } from "../files.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import {
   createNativeFileDialogAdapter,
@@ -97,13 +97,13 @@ async function normalizeDefaultPath(value: string | undefined): Promise<string |
   }
 }
 
-function redactionSafe(value: string, deps: UiHandlerDeps): boolean {
-  return String(deps.redactor(value)) === value;
-}
-
-// Mirrors `resolveArbitraryRoot` for FILE targets (files.ts only models directory roots): deny on
-// the raw path, realpath, deny again on the resolved target, expected-kind stat, redaction safety.
+// Mirrors `resolveArbitraryRoot` for FILE targets (files.ts only models directory roots), in the
+// SAME order that function uses so the two "same invariant" chains cannot silently diverge:
+// metadata-redaction safety on the raw path, deny on the raw path, realpath, metadata-redaction
+// safety on the resolved target, deny on the resolved target, expected-kind stat. Reuses
+// files.ts's `metadataIsSafe` rather than re-deriving the redactor no-op check.
 async function validateFileSelection(path: string, deps: UiHandlerDeps): Promise<void> {
+  if (!metadataIsSafe(path, deps.redactor)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   if (pathIsDenied(path)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   let real: string;
   try {
@@ -111,14 +111,12 @@ async function validateFileSelection(path: string, deps: UiHandlerDeps): Promise
   } catch {
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   }
+  if (!metadataIsSafe(real, deps.redactor)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   if (pathIsDenied(real)) throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
   const stats = await stat(real).catch(() => {
     throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
   });
   if (!stats.isFile()) throw new SelectionRejection(INVALID_SELECTION_MESSAGE);
-  if (!redactionSafe(path, deps) || !redactionSafe(real, deps)) {
-    throw new SelectionRejection(DENIED_SELECTION_MESSAGE);
-  }
 }
 
 // Directory selections reuse the Files BFF root policy VERBATIM so a folder picked natively is

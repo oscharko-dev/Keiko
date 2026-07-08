@@ -87,6 +87,10 @@ describe("validateNativeFileDialogRequest", () => {
       "filters[0].name is too long",
     ],
     [
+      { mode: "open-file", filters: [{ name: "Evil|*.exe|Sneaky", extensions: ["png"] }] },
+      "filters[0].name contains an invalid character",
+    ],
+    [
       { mode: "open-file", filters: [{ name: "F", extensions: "png" }] },
       "filters[0].extensions must be an array",
     ],

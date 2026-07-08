@@ -154,6 +154,13 @@ function parseFilterName(value: unknown, index: number): FieldResult<string> {
   if (cleaned.length > NATIVE_FILE_DIALOG_FILTER_NAME_MAX_LENGTH) {
     return { ok: false, error: `filters[${String(index)}].name is too long` };
   }
+  // `|` is the field delimiter in the Windows adapter's `FileDialog.Filter` syntax
+  // (`description|pattern|description|pattern`, packages/keiko-server/src/native-file-dialog/
+  // scripts.ts). A name carrying one would desynchronize that pairing, so it is rejected the
+  // same way parseExtensions restricts its charset instead of the pattern's.
+  if (cleaned.includes("|")) {
+    return { ok: false, error: `filters[${String(index)}].name contains an invalid character` };
+  }
   return { ok: true, value: cleaned };
 }
 

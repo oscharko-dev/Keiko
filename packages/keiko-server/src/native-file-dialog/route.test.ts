@@ -307,6 +307,42 @@ describe("native file dialog route", () => {
     expect(result.status).toBe(422);
   });
 
+  it("treats a non-string redactor result as safe, matching files.ts's metadataIsSafe convention", async () => {
+    const root = await tempDir("keiko-native-file-redact-");
+    const file = join(root, "note.txt");
+    await writeFile(file, "hello");
+    const { deps } = buildDeps({ adapter: fakeAdapter({ cancelled: false, paths: [file] }) });
+    const nonStringRedactor = (value: unknown): unknown => (value === file ? 42 : value);
+    const overriddenDeps: UiHandlerDeps = { ...deps, redactor: nonStringRedactor };
+
+    const result = await handleNativeFileDialogOpen(
+      openContext({ mode: "open-file" }),
+      overriddenDeps,
+    );
+
+    expect(result.status).toBe(200);
+  });
+
+  it("checks metadata-redaction safety before the filesystem chain, mirroring resolveArbitraryRoot's order", async () => {
+    const missingPath = "/tmp/keiko-native-missing-unsafe-path.txt";
+    const { deps } = buildDeps({
+      adapter: fakeAdapter({ cancelled: false, paths: [missingPath] }),
+    });
+    const unsafeRedactor = (value: unknown): unknown =>
+      value === missingPath ? "[REDACTED]" : value;
+    const overriddenDeps: UiHandlerDeps = { ...deps, redactor: unsafeRedactor };
+
+    const result = await handleNativeFileDialogOpen(
+      openContext({ mode: "open-file" }),
+      overriddenDeps,
+    );
+
+    expect(result.status).toBe(422);
+    expect(errorOf(result.body).message).toBe(
+      "The selected path is excluded from Keiko's read surface.",
+    );
+  });
+
   it("accepts a symlinked directory with a safe target and returns the picked path", async () => {
     const root = await tempDir("keiko-native-symlink-ok-");
     const target = join(root, "real-project");

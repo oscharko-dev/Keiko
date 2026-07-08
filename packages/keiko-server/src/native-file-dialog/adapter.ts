@@ -10,6 +10,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import type { NativeFileDialogRequest } from "@oscharko-dev/keiko-contracts";
 import { NATIVE_FILE_DIALOG_MAX_SELECTIONS } from "@oscharko-dev/keiko-contracts";
+import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
 import { MACOS_NATIVE_FILE_DIALOG_SCRIPT, WINDOWS_NATIVE_FILE_DIALOG_SCRIPT } from "./scripts.js";
 
 // A native dialog is a human interaction: users legitimately keep it open while they search.
@@ -65,33 +66,77 @@ interface BoundedCapture {
   exceeded: boolean;
 }
 
+// A UTF-8 lead byte's expected total sequence length (1/2/3/4-byte forms). A stray continuation
+// byte cannot start a sequence; walking it as length 1 keeps truncation making forward progress
+// on malformed input instead of looping.
+function utf8SequenceLength(leadByte: number): number {
+  if ((leadByte & 0x80) === 0x00) return 1;
+  if ((leadByte & 0xe0) === 0xc0) return 2;
+  if ((leadByte & 0xf0) === 0xe0) return 3;
+  if ((leadByte & 0xf8) === 0xf0) return 4;
+  return 1;
+}
+
+// Truncates to the largest whole number of UTF-8 characters that fits within `maxBytes`, so the
+// result's own byte length never exceeds the cap. A naive JS-string `.slice(0, maxBytes)` cuts by
+// UTF-16 code units, which can leave several times `maxBytes` of actual UTF-8 content for
+// non-ASCII text; re-decoding a buffer sliced mid-sequence would instead substitute a 3-byte
+// U+FFFD per split sequence, which can itself push the result a few bytes back OVER the cap.
+function truncateUtf8(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value, "utf8");
+  let offset = 0;
+  while (offset < buffer.length) {
+    const leadByte = buffer[offset];
+    if (leadByte === undefined) break;
+    const charLength = utf8SequenceLength(leadByte);
+    if (offset + charLength > maxBytes) break;
+    offset += charLength;
+  }
+  return buffer.subarray(0, offset).toString("utf8");
+}
+
 function appendBounded(capture: BoundedCapture, chunk: Buffer, maxBytes: number): void {
   if (capture.exceeded) return;
   capture.value += chunk.toString("utf8");
   if (Buffer.byteLength(capture.value, "utf8") > maxBytes) {
-    capture.value = capture.value.slice(0, maxBytes);
+    capture.value = truncateUtf8(capture.value, maxBytes);
     capture.exceeded = true;
   }
 }
 
 interface KillEscalation {
   readonly wasTriggered: () => boolean;
+  readonly triggerOutputCapKill: () => void;
   readonly clear: () => void;
 }
 
-// SIGTERM at the interaction deadline, SIGKILL shortly after for a helper that ignores it.
+// SIGTERM at the interaction deadline, SIGKILL shortly after for a helper that ignores it. The
+// same escalation also arms when the stdout byte cap trips (`triggerOutputCapKill`), so a helper
+// that streams past the cap and then ignores SIGTERM cannot hold the route's single-flight lock
+// for anywhere near the full interaction timeout. `wasTriggered()` stays scoped to the
+// interaction-deadline path only, so `NativeDialogProcessResult.timedOut` keeps meaning exactly
+// "the interaction timeout fired" and does not get muddied by an output-cap kill.
 function startKillEscalation(child: ChildProcess, timeoutMs: number): KillEscalation {
   let triggered = false;
   let killTimer: NodeJS.Timeout | undefined;
-  const timer = setTimeout(() => {
-    triggered = true;
-    child.kill("SIGTERM");
+  const escalateToSigkill = (): void => {
     killTimer = setTimeout(() => {
       child.kill("SIGKILL");
     }, SIGKILL_ESCALATION_MS);
+  };
+  const timer = setTimeout(() => {
+    triggered = true;
+    child.kill("SIGTERM");
+    escalateToSigkill();
   }, timeoutMs);
   return {
     wasTriggered: (): boolean => triggered,
+    triggerOutputCapKill: (): void => {
+      if (killTimer !== undefined) return;
+      clearTimeout(timer);
+      child.kill("SIGTERM");
+      escalateToSigkill();
+    },
     clear: (): void => {
       clearTimeout(timer);
       if (killTimer !== undefined) clearTimeout(killTimer);
@@ -99,11 +144,26 @@ function startKillEscalation(child: ChildProcess, timeoutMs: number): KillEscala
   };
 }
 
+// Copy-only env allowlist for the dialog child, mirroring `gitEnv()`/`buildSandboxEnv`'s pattern:
+// never spread the BFF's full `process.env`, since it can legitimately hold live secrets (e.g. a
+// model-provider API key per keiko-model-gateway's config). PATH lets the platform helper resolve
+// its own runtime dependencies; the rest is the minimal session-identity state the helper needs to
+// join the user's login session (macOS TCC/WindowServer, Windows interactive desktop/COM). Dialog
+// configuration itself still never travels via env, only via stdin.
+const NATIVE_DIALOG_ENV_ALLOWLIST = [
+  "PATH",
+  "HOME",
+  "USERPROFILE",
+  "SystemRoot",
+  "WINDIR",
+] as const;
+
+function buildDialogEnv(processEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return buildSandboxEnv(processEnv, NATIVE_DIALOG_ENV_ALLOWLIST);
+}
+
 // Bounded runner for the dialog helper process. Modeled on the git route runner (shell:false,
-// windowsHide, timeout, byte caps) plus stdin delivery. The environment is intentionally
-// inherited: the helper must join the user's login session (macOS TCC/WindowServer, Windows
-// interactive desktop, COM/profile state) or no dialog can appear — configuration still never
-// travels via env, only via stdin.
+// windowsHide, timeout, byte caps, curated env) plus stdin delivery.
 export function runNativeDialogProcess(
   command: string,
   args: readonly string[],
@@ -115,6 +175,7 @@ export function runNativeDialogProcess(
       shell: false,
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
+      env: buildDialogEnv(),
     });
     const stdout: BoundedCapture = { value: "", exceeded: false };
     const stderr: BoundedCapture = { value: "", exceeded: false };
@@ -134,7 +195,7 @@ export function runNativeDialogProcess(
     };
     child.stdout.on("data", (chunk: Buffer) => {
       appendBounded(stdout, chunk, MAX_STDOUT_BYTES);
-      if (stdout.exceeded) child.kill("SIGTERM");
+      if (stdout.exceeded) escalation.triggerOutputCapKill();
     });
     child.stderr.on("data", (chunk: Buffer) => {
       appendBounded(stderr, chunk, MAX_STDERR_BYTES);
@@ -162,6 +223,38 @@ function processSummary(result: NativeDialogProcessResult): string {
   return `exitCode=${exit} stderrBytes=${stderrBytes} outputExceeded=${String(result.outputExceeded)}`;
 }
 
+// Closed shape: an adapter is a fixed, first-party script (scripts.ts) and its stdout is
+// otherwise untrusted input. A key outside this allowlist means either a broken/tampered helper
+// or content smuggling — reject rather than silently drop it, mirroring the "unknown key not
+// allowed (content-free)" convention in keiko-contracts/task-workspace.ts.
+const ADAPTER_OUTPUT_KEYS = new Set(["cancelled", "paths"]);
+
+function hasOnlyAllowedKeys(record: Record<string, unknown>): boolean {
+  return Object.keys(record).every((key) => ADAPTER_OUTPUT_KEYS.has(key));
+}
+
+function isPlainAdapterRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+interface RawAdapterOutput {
+  readonly cancelled: boolean;
+  readonly paths: readonly unknown[];
+}
+
+function validateAdapterOutputShape(parsed: unknown): RawAdapterOutput {
+  if (!isPlainAdapterRecord(parsed)) {
+    throw new NativeFileDialogAdapterError("failed", "native dialog output was not an object");
+  }
+  if (!hasOnlyAllowedKeys(parsed)) {
+    throw new NativeFileDialogAdapterError("failed", "native dialog output shape was invalid");
+  }
+  if (typeof parsed.cancelled !== "boolean" || !Array.isArray(parsed.paths)) {
+    throw new NativeFileDialogAdapterError("failed", "native dialog output shape was invalid");
+  }
+  return { cancelled: parsed.cancelled, paths: parsed.paths };
+}
+
 function parseAdapterOutput(stdout: string): NativeFileDialogAdapterResult {
   let parsed: unknown;
   try {
@@ -169,24 +262,18 @@ function parseAdapterOutput(stdout: string): NativeFileDialogAdapterResult {
   } catch {
     throw new NativeFileDialogAdapterError("failed", "native dialog output was not JSON");
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new NativeFileDialogAdapterError("failed", "native dialog output was not an object");
-  }
-  const record = parsed as Record<string, unknown>;
-  if (typeof record.cancelled !== "boolean" || !Array.isArray(record.paths)) {
-    throw new NativeFileDialogAdapterError("failed", "native dialog output shape was invalid");
-  }
-  if (record.paths.length > NATIVE_FILE_DIALOG_MAX_SELECTIONS) {
+  const { cancelled, paths: rawPaths } = validateAdapterOutputShape(parsed);
+  if (rawPaths.length > NATIVE_FILE_DIALOG_MAX_SELECTIONS) {
     throw new NativeFileDialogAdapterError("failed", "native dialog returned too many paths");
   }
   const paths: string[] = [];
-  for (const value of record.paths) {
+  for (const value of rawPaths) {
     if (typeof value !== "string") {
       throw new NativeFileDialogAdapterError("failed", "native dialog path was not a string");
     }
     paths.push(value);
   }
-  return { cancelled: record.cancelled, paths };
+  return { cancelled, paths };
 }
 
 async function runAdapterScript(

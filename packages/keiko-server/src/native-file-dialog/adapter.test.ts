@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMacosNativeFileDialogAdapter,
   createNativeFileDialogAdapter,
@@ -158,6 +158,8 @@ describe("adapter failure mapping", () => {
     ['{"cancelled":"yes","paths":[]}'],
     ['{"cancelled":false}'],
     ['{"cancelled":false,"paths":[42]}'],
+    ['{"cancelled":false,"paths":[],"unexpected":"value"}'],
+    ['{"cancelled":false,"paths":["/tmp/x"],"__proto__":{}}'],
   ])("maps malformed helper stdout %# to a typed failure", async (stdout) => {
     const error = await adapterFailure(captureRunner({ stdout }, []));
     expect(error.reason).toBe("failed");
@@ -221,6 +223,56 @@ describe("runNativeDialogProcess", () => {
       10_000,
     );
     expect(result.outputExceeded).toBe(true);
+  });
+
+  it("truncates overflowing stdout to the byte cap, not the character cap, for non-ASCII content", async () => {
+    // 100,000 copies of a 3-byte-UTF-8 BMP character: 100,000 UTF-16 code units but 300,000
+    // bytes, comfortably past the 256 KiB cap while staying well under it in code-unit count.
+    const result = await runNativeDialogProcess(
+      process.execPath,
+      ["-e", "process.stdout.write('日'.repeat(100000))"],
+      "",
+      10_000,
+    );
+    expect(result.outputExceeded).toBe(true);
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(256 * 1024);
+  });
+
+  it("escalates to SIGKILL when the output cap is exceeded, without waiting for the interaction timeout", async () => {
+    const startedAt = Date.now();
+    const result = await runNativeDialogProcess(
+      process.execPath,
+      [
+        "-e",
+        "process.on('SIGTERM', () => {}); " +
+          "process.stdout.write('x'.repeat(400 * 1024)); " +
+          "setInterval(() => {}, 1000);",
+      ],
+      "",
+      30_000,
+    );
+    expect(result.outputExceeded).toBe(true);
+    // The interaction timeout (30s) never fired — the output-cap kill escalated on its own.
+    expect(result.timedOut).toBe(false);
+    expect(Date.now() - startedAt).toBeLessThan(8_000);
+  }, 10_000);
+
+  it("spawns the helper with a minimal, allowlisted environment instead of full inheritance", async () => {
+    const sentinelName = "KEIKO_TEST_NATIVE_DIALOG_SECRET";
+    vi.stubEnv(sentinelName, "super-secret-value");
+    try {
+      const result = await runNativeDialogProcess(
+        process.execPath,
+        ["-e", "process.stdout.write(JSON.stringify(process.env))"],
+        "",
+        10_000,
+      );
+      const childEnv = JSON.parse(result.stdout) as Record<string, string | undefined>;
+      expect(childEnv[sentinelName]).toBeUndefined();
+      expect(childEnv.PATH).toBeDefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("reports a missing binary as exit 127 instead of throwing", async () => {

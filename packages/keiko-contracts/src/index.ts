@@ -3012,7 +3012,7 @@ export {
   validateWorkspaceHealthReport,
 } from "./task-workspace.js";
 
-// ─── Native OS file/folder dialog (Epic #1941, ADR-0115) ───────────────────────────
+// ─── Native OS file/folder dialog (Epic #1941, ADR-0118) ───────────────────────────
 export type {
   NativeFileDialogMode,
   NativeFileDialogSelectionKind,

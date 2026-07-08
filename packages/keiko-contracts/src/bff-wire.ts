@@ -1249,7 +1249,7 @@ export interface TerminalEventEnvelope {
 // identifier interpreted relative to that root — never an absolute path. The BFF emits tree/
 // content/preview paths root-relative and HARD-rejects an absolute `path` with 400 BAD_PATH
 // ("The path must be relative to the selected root.", keiko-server/src/files.ts). Absolute local
-// paths enter the system only through the native OS dialog route (Epic #1941, ADR-0115) or manual
+// paths enter the system only through the native OS dialog route (Epic #1941, ADR-0118) or manual
 // entry, and are validated server-side before use.
 
 export type FilesEntryKind = "directory" | "file" | "symlink";

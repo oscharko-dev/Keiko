@@ -239,7 +239,10 @@ function assertMetadataSafe(value: string, redactor: FilesMetadataRedactor): voi
   }
 }
 
-function metadataIsSafe(value: string, redactor: FilesMetadataRedactor): boolean {
+// Exported so callers outside this module (e.g. the native-file-dialog route, which mirrors
+// `resolveArbitraryRoot`'s chain for FILE targets) reuse the exact same "no-op redaction = safe"
+// invariant instead of re-deriving it.
+export function metadataIsSafe(value: string, redactor: FilesMetadataRedactor): boolean {
   const redacted = redactor(value);
   return typeof redacted !== "string" || redacted === value;
 }

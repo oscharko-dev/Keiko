@@ -1305,7 +1305,7 @@ export async function sendDesktopChatStream(
 // ./terminal-api.ts. The PTY routes (/api/terminal/shells, /sessions, WS upgrade) are removed.
 
 // ---------------------------------------------------------------------------
-// Native OS file/folder dialog (Epic #1941, ADR-0115). The BFF opens the platform picker and
+// Native OS file/folder dialog (Epic #1941, ADR-0118). The BFF opens the platform picker and
 // returns ONLY validated selections; cancellation is a typed success, never an error. Selected
 // paths are never logged here and persist only into the same state the manual inputs already own.
 // ---------------------------------------------------------------------------
