@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  applyWorkspaceReplace,
   cloneRepository,
   clearConfigCacheForTests,
   clearModelCacheForTests,
@@ -12,6 +13,9 @@ import {
   fetchFilesPreview,
   fetchFilesSearch,
   fetchFilesTree,
+  fetchWorkspaceSearch,
+  fetchWorkspaceSymbols,
+  fetchWorkspaceReplacePreview,
   fetchGitBranches,
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
@@ -956,6 +960,132 @@ describe("files API helpers", () => {
       "/api/files/search?root=%2Frepo+space&q=coding+context&limit=12",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("posts workspace search requests to the user-facing editor search route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        results: [],
+        truncated: false,
+        filesScanned: 0,
+        elapsedMs: 3,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkspaceSearch({
+      root: "/repo",
+      query: "needle",
+      mode: "literal",
+      caseSensitive: false,
+      includeGlobs: ["src/**/*.ts"],
+      excludeGlobs: ["dist/**"],
+      maxResults: 25,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/workspace-search",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          root: "/repo",
+          query: "needle",
+          mode: "literal",
+          caseSensitive: false,
+          includeGlobs: ["src/**/*.ts"],
+          excludeGlobs: ["dist/**"],
+          maxResults: 25,
+        }),
+      }),
+    );
+  });
+
+  it("posts workspace replace preview and apply requests to the governed routes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          files: [],
+          fileCount: 0,
+          editCount: 0,
+          truncated: false,
+          omittedFileCount: 0,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ appliedCount: 1, conflictCount: 0, conflicts: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkspaceReplacePreview({
+      root: "/repo",
+      query: "needle",
+      mode: "literal",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      replacement: "thread",
+      maxFiles: 20,
+    });
+    await applyWorkspaceReplace({
+      root: "/repo",
+      files: [
+        {
+          path: "src/app.ts",
+          baseContentHash: "a".repeat(64),
+          edits: [
+            {
+              range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 7 },
+              originalText: "needle",
+              newText: "thread",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/editor/workspace-search/replace-preview",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/workspace-search/replace-apply",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+  });
+
+  it("posts workspace symbol search requests to the governed symbol route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        results: [],
+        truncated: false,
+        filesScanned: 0,
+        elapsedMs: 1,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkspaceSymbols({ root: "/repo", query: "parseConfig", maxResults: 20 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/workspace-symbols",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        body: JSON.stringify({ root: "/repo", query: "parseConfig", maxResults: 20 }),
       }),
     );
   });

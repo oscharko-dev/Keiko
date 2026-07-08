@@ -28,13 +28,15 @@ export function applyShellUndoAction(api: WorkspaceApi, action: WorkspaceUiActio
 // ─── Shortcut bindings ────────────────────────────────────────────────────
 //
 // The shell-level keyboard contract is small by design (per ADR-0028 and
-// the UX blueprint minimum shortcut set). Cmd+K palette-open stays inline
-// in AppShell to preserve regression-free behaviour. The two undo/redo
-// chords are routed through useKeyboardShortcuts so the conflict-at-startup
-// + reserved-chord refusal contract applies.
+// the UX blueprint minimum shortcut set). Quick access chords are routed
+// through useKeyboardShortcuts so the conflict-at-startup + reserved-chord
+// refusal contract applies.
 
 export const SHELL_SHORTCUT_BINDINGS: readonly WorkspaceKeyboardShortcutBinding[] = [
   { commandId: "undo", chord: { key: "z", mod: ["cmd"] } },
   { commandId: "redo", chord: { key: "z", mod: ["cmd", "shift"] } },
   { commandId: "focus-status", chord: { key: "s", mod: ["alt"] } },
+  { commandId: "focus-workspace-search", chord: { key: "f", mod: ["cmd", "shift"] } },
+  { commandId: "quick-access.files", chord: { key: "p", mod: ["cmd"] } },
+  { commandId: "quick-access.commands", chord: { key: "p", mod: ["cmd", "shift"] } },
 ];

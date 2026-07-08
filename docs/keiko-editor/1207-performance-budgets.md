@@ -33,6 +33,8 @@ app performance rewrite.
 | B9  | Large file → hard editable limit (too-large path, no Monaco)  | **> 1,000,000 bytes**                                                              | Server (`files.ts`, `413 FILE_TOO_LARGE`)                                                        | Enforced (pre-#1207, #1191–#1206)                  |
 | B10 | Editor package own-code footprint                             | **≤ 96 KiB gzip** (committed ceiling)                                              | `check:editor-bundle-size`                                                                       | Enforced (#1207)                                   |
 | B11 | Monaco worker/model memory growth per open editor card        | **≤ 128 MiB** after warm start; **≤ 16 MiB** residual after card close + GC/settle | Browser memory smoke + deterministic disposal tests                                              | Ceiling owned here (#1207); browser evidence #1209 |
+| B12 | Workspace search query latency                                | **p50 ≤ 200 ms, p95 ≤ 500 ms**                                                     | `test:e2e:workspace-search-2090` route evidence                                                  | Release evidence (#2090)                           |
+| B13 | Workspace search result bounds                                | Response count stays within requested cap and reports truncation honestly          | `test:e2e:workspace-search-2090` large synthetic fixture                                         | Release evidence (#2090)                           |
 
 The B1/B2/B3/B5/B6 thresholds are quoted verbatim from ADR-0042 D3.6; B7 from Issue #1200 and the
 #1207 Review Addendum; B8/B9 from ADR-0042 D3.6 and the server limits; B10 is the #1207 deterministic

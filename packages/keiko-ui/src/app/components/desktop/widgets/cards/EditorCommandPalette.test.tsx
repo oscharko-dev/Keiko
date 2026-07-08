@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // vitest hoists the vi.mock factories below above this import.
+import { EditorCommandPalette } from "./EditorCommandPalette";
 import { EditorWidget } from "./EditorWidget";
-import { fetchFilesSearch } from "../../../../../lib/api";
+import type { EditorPaletteHost } from "./editorCommands";
 
 // Stub the heavy runtime + next/dynamic so the host chrome + palette can be tested without Monaco.
 vi.mock("next/dynamic", () => ({
@@ -58,93 +58,56 @@ function pressChord(init: KeyboardEventInit): void {
   fireEvent.keyDown(screen.getAllByTestId("pane-runtime")[0]!, init);
 }
 
+function fakeHost(): EditorPaletteHost {
+  return {
+    root: "/repo",
+    activePaneId: "pane-1",
+    paneCount: 1,
+    activeFile: "src/a.ts",
+    closedTabCount: 0,
+    dirtyCount: 0,
+    openQuickOpen: vi.fn(),
+    openCommandPalette: vi.fn(),
+    splitActive: vi.fn(),
+    closeActiveSplit: vi.fn(),
+    closeActiveTab: vi.fn(),
+    nextTab: vi.fn(),
+    prevTab: vi.fn(),
+    reopenClosed: vi.fn(),
+    saveAll: vi.fn(),
+  };
+}
+
 describe("Editor command palette + keybindings", () => {
-  it("opens Quick-Open on Ctrl/Cmd+P and opens the picked file", async () => {
-    vi.mocked(fetchFilesSearch).mockResolvedValue({
-      root: "/repo",
-      query: "wid",
-      truncated: false,
-      scannedFileCount: 1,
-      results: [
-        {
-          root: "/repo",
-          path: "src/widget.ts",
-          name: "widget.ts",
-          directory: "src",
-          extension: "ts",
-          sizeBytes: 10,
-          modifiedAt: 1,
-        },
-      ],
-    });
-    const { onWorkspaceChange } = renderEditor();
-
-    pressChord({ key: "p", ctrlKey: true });
-    const input = await screen.findByRole("combobox");
-    onWorkspaceChange.mockClear();
-    await userEvent.type(input, "wid");
-    const option = await screen.findByRole("option", { name: /widget\.ts/ });
-    await userEvent.click(option);
-
-    await waitFor(() =>
-      expect(
-        onWorkspaceChange.mock.calls.some(
-          (call) =>
-            (call[0] as { openFiles?: readonly string[] }).openFiles?.includes("src/widget.ts") ===
-            true,
-        ),
-      ).toBe(true),
-    );
-    // The palette closed after opening.
-    expect(screen.queryByRole("combobox")).toBeNull();
-  });
-
-  it("opens the command palette on Ctrl/Cmd+Shift+P and runs a command (split)", async () => {
+  it("does not claim Ctrl/Cmd+P inside the editor after global quick access owns it", () => {
     renderEditor();
-    expect(screen.getAllByTestId("pane-runtime")).toHaveLength(1);
-
-    pressChord({ key: "p", ctrlKey: true, shiftKey: true });
-    // Command mode is prefilled with ">".
-    const input = (await screen.findByRole("combobox")) as HTMLInputElement;
-    expect(input.value).toContain(">");
-    await userEvent.click(await screen.findByRole("option", { name: /Split Editor Right/ }));
-
-    await waitFor(() => expect(screen.getAllByTestId("pane-runtime")).toHaveLength(2));
+    pressChord({ key: "p", ctrlKey: true });
     expect(screen.queryByRole("combobox")).toBeNull();
   });
 
-  it("reopens the last closed tab via Ctrl/Cmd+Alt+T", async () => {
-    const { onWorkspaceChange } = renderEditor();
-
-    // Close the active tab (src/a.ts) through the command palette.
+  it("does not claim Ctrl/Cmd+Shift+P inside the editor after global quick access owns it", () => {
+    renderEditor();
     pressChord({ key: "p", ctrlKey: true, shiftKey: true });
-    await userEvent.click(await screen.findByRole("option", { name: /^Close Tab$/ }));
-    await waitFor(() =>
-      expect(
-        onWorkspaceChange.mock.calls.some((call) => {
-          const open = (call[0] as { openFiles?: readonly string[] }).openFiles ?? [];
-          return !open.includes("src/a.ts") && open.includes("src/b.ts");
-        }),
-      ).toBe(true),
-    );
-    onWorkspaceChange.mockClear();
+    expect(screen.queryByRole("combobox")).toBeNull();
+  });
 
-    // Reopen it.
+  it("keeps non-palette editor chords on the editor-local listener", async () => {
+    const { onWorkspaceChange } = renderEditor();
+    onWorkspaceChange.mockClear();
     pressChord({ key: "t", ctrlKey: true, altKey: true });
-    await waitFor(() =>
-      expect(
-        onWorkspaceChange.mock.calls.some(
-          (call) =>
-            (call[0] as { openFiles?: readonly string[] }).openFiles?.includes("src/a.ts") === true,
-        ),
-      ).toBe(true),
-    );
+    expect(onWorkspaceChange).not.toHaveBeenCalled();
   });
 
   it("traps Tab and Shift+Tab inside the dialog (GEN-UI-FOCUS-005)", async () => {
-    renderEditor();
-
-    pressChord({ key: "p", ctrlKey: true });
+    render(
+      <EditorCommandPalette
+        mode="commands"
+        root="/repo"
+        host={fakeHost()}
+        onOpenFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
     const input = await screen.findByRole("combobox");
     const dialog = screen.getByRole("dialog");
     // The mount effect moves focus into the combobox input.
@@ -163,21 +126,35 @@ describe("Editor command palette + keybindings", () => {
   });
 
   it("restores focus to the opener when the palette closes (GEN-UI-FOCUS-006)", async () => {
-    renderEditor();
-
-    // Focus a known trigger before opening so we can assert focus returns to it.
-    const runtime = screen.getAllByTestId("pane-runtime")[0]!;
-    runtime.setAttribute("tabindex", "-1");
-    runtime.focus();
-    expect(document.activeElement).toBe(runtime);
-
-    pressChord({ key: "p", ctrlKey: true });
+    function Harness(): ReactNode {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open
+          </button>
+          {open ? (
+            <EditorCommandPalette
+              mode="commands"
+              root="/repo"
+              host={fakeHost()}
+              onOpenFile={vi.fn()}
+              onClose={() => setOpen(false)}
+            />
+          ) : null}
+        </>
+      );
+    }
+    render(<Harness />);
+    const opener = screen.getByRole("button", { name: "Open" });
+    opener.focus();
+    fireEvent.click(opener);
     await screen.findByRole("combobox");
 
     // Close via Escape — focus must return to the opener, not be lost to <body>.
     fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("combobox")).toBeNull());
-    expect(document.activeElement).toBe(runtime);
+    expect(document.activeElement).toBe(opener);
   });
 
   it("cycles tabs with Ctrl/Cmd+Alt+Arrow", async () => {

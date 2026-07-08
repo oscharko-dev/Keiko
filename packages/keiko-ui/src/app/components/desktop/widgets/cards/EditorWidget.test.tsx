@@ -42,6 +42,10 @@ import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
 import {
+  useWorkspaceReplaceBuffers,
+  WorkspaceReplaceBufferProvider,
+} from "../../WorkspaceReplaceBufferContext";
+import {
   deleteEditorHotExitSnapshot,
   readEditorHotExitSnapshot,
   writeEditorHotExitSnapshot,
@@ -315,6 +319,20 @@ async function renderLoaded(
   return view;
 }
 
+type ReplaceBufferRegistry = NonNullable<ReturnType<typeof useWorkspaceReplaceBuffers>>;
+
+function CaptureReplaceRegistry({
+  onCapture,
+}: {
+  readonly onCapture: (registry: ReplaceBufferRegistry) => void;
+}): ReactElement | null {
+  const registry = useWorkspaceReplaceBuffers();
+  useEffect(() => {
+    if (registry !== null) onCapture(registry);
+  }, [onCapture, registry]);
+  return null;
+}
+
 function loadedIdentity(): EditorSurfaceProps["fileModel"]["identity"] {
   const identity = surface.props?.fileModel.identity;
   if (identity === undefined) {
@@ -401,6 +419,86 @@ describe("EditorWidget — load", () => {
       expect(screen.queryByTestId("editor-surface")).toBeNull();
     },
   );
+
+  it("applies reviewed workspace replacements inside an already-open dirty buffer", async () => {
+    let registry: ReplaceBufferRegistry | null = null;
+    render(
+      <WorkspaceReplaceBufferProvider>
+        <EditorRuntimeWidget windowId="replace-open" root="/repo" file="src/app.ts" />
+        <CaptureReplaceRegistry onCapture={(next) => (registry = next)} />
+      </WorkspaceReplaceBufferProvider>,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => expect(registry).not.toBeNull());
+    await act(async () => {
+      surface.props?.onContentChange(
+        { text: "const needle = true;\n// unsaved\n", sizeBytes: 31 },
+        "human",
+      );
+    });
+
+    let result: Awaited<ReturnType<ReplaceBufferRegistry["apply"]>> | undefined;
+    await act(async () => {
+      result = await registry?.apply("/repo", {
+        path: "src/app.ts",
+        baseContentHash: "a".repeat(64),
+        edits: [
+          {
+            range: { startLine: 1, startColumn: 7, endLine: 1, endColumn: 13 },
+            originalText: "needle",
+            newText: "thread",
+          },
+        ],
+      });
+    });
+
+    expect(result).toEqual({ status: "applied", path: "src/app.ts" });
+    await waitFor(() =>
+      expect(surface.props?.buffer.content.text).toBe("const thread = true;\n// unsaved\n"),
+    );
+    expect(saveFilesContent).not.toHaveBeenCalled();
+  });
+
+  it("reports a write conflict when an open buffer no longer matches the replacement preview", async () => {
+    let registry: ReplaceBufferRegistry | null = null;
+    render(
+      <WorkspaceReplaceBufferProvider>
+        <EditorRuntimeWidget windowId="replace-conflict" root="/repo" file="src/app.ts" />
+        <CaptureReplaceRegistry onCapture={(next) => (registry = next)} />
+      </WorkspaceReplaceBufferProvider>,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => expect(registry).not.toBeNull());
+    await act(async () => {
+      surface.props?.onContentChange({ text: "const changed = true;\n", sizeBytes: 22 }, "human");
+    });
+
+    let result: Awaited<ReturnType<ReplaceBufferRegistry["apply"]>> | undefined;
+    await act(async () => {
+      result = await registry?.apply("/repo", {
+        path: "src/app.ts",
+        baseContentHash: "a".repeat(64),
+        edits: [
+          {
+            range: { startLine: 1, startColumn: 7, endLine: 1, endColumn: 13 },
+            originalText: "needle",
+            newText: "thread",
+          },
+        ],
+      });
+    });
+
+    expect(result).toEqual({
+      status: "conflict",
+      conflict: {
+        path: "src/app.ts",
+        reason: "write-conflict",
+        detail: "The open editor buffer no longer matches the reviewed replacement preview.",
+      },
+    });
+    expect(surface.props?.buffer.content.text).toBe("const changed = true;\n");
+    expect(saveFilesContent).not.toHaveBeenCalled();
+  });
 });
 
 describe("EditorWidget — test generation (Issue #1202)", () => {

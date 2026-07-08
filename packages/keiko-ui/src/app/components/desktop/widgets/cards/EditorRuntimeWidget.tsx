@@ -106,7 +106,11 @@ import {
   type TestGenerationFlowState,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
-import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts";
+import {
+  editorBuiltinDocumentFormatting,
+  type WorkspaceReplaceApplyFile,
+  type WorkspaceReplacePreviewTextRange,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
@@ -157,6 +161,10 @@ import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
+import {
+  useRegisterWorkspaceReplaceBuffer,
+  type WorkspaceReplaceOpenBufferResult,
+} from "../../WorkspaceReplaceBufferContext";
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
@@ -386,6 +394,61 @@ export interface EditorExternalSaveRequest {
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   return error instanceof Error ? error.message : "The file could not be loaded.";
+}
+
+function lineStartOffsets(text: string): readonly number[] {
+  const starts: number[] = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\r") {
+      if (text[index + 1] === "\n") index += 1;
+      starts.push(index + 1);
+    } else if (char === "\n") {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+
+function lineContentEnd(text: string, starts: readonly number[], lineIndex: number): number {
+  const nextStart = starts[lineIndex + 1];
+  if (nextStart === undefined) return text.length;
+  if (nextStart >= 2 && text[nextStart - 2] === "\r" && text[nextStart - 1] === "\n") {
+    return nextStart - 2;
+  }
+  return nextStart - 1;
+}
+
+function oneBasedPositionOffset(
+  text: string,
+  starts: readonly number[],
+  line: number,
+  column: number,
+): number | null {
+  const lineIndex = line - 1;
+  if (lineIndex < 0 || lineIndex >= starts.length || column < 1) return null;
+  const lineStart = starts[lineIndex] ?? 0;
+  const contentEnd = lineContentEnd(text, starts, lineIndex);
+  const offset = lineStart + column - 1;
+  return offset <= contentEnd + 1 ? offset : null;
+}
+
+function textForRange(text: string, range: WorkspaceReplacePreviewTextRange): string | null {
+  const starts = lineStartOffsets(text);
+  const start = oneBasedPositionOffset(text, starts, range.startLine, range.startColumn);
+  const end = oneBasedPositionOffset(text, starts, range.endLine, range.endColumn);
+  if (start === null || end === null || end < start) return null;
+  return text.slice(start, end);
+}
+
+function replaceEditToEditorEdit(edit: WorkspaceReplaceApplyFile["edits"][number]): EditorTextEdit {
+  return {
+    range: {
+      start: { line: edit.range.startLine - 1, column: edit.range.startColumn - 1 },
+      end: { line: edit.range.endLine - 1, column: edit.range.endColumn - 1 },
+    },
+    newText: edit.newText,
+  };
 }
 
 /** Map a workspace path to a renderable editor language; intelligence is registry/capability-gated below. */
@@ -1939,6 +2002,59 @@ function EditorRuntimeWidget({
     [content, contentSizeBytes],
   );
   const largeFileDegraded = largeFileMode === "degraded";
+  const applyWorkspaceReplaceBuffer = useCallback(
+    (request: WorkspaceReplaceApplyFile): WorkspaceReplaceOpenBufferResult => {
+      if (file === undefined || request.path !== file || !fileModelMatchesTarget) {
+        return { status: "not-open" as const };
+      }
+      if (largeFileDegraded) {
+        return {
+          status: "conflict" as const,
+          conflict: {
+            path: request.path,
+            reason: "invalid-patch" as const,
+            detail: "The open editor buffer is read-only for large-file protection.",
+          },
+        };
+      }
+      const current = contentRef.current;
+      for (const edit of request.edits) {
+        if (textForRange(current, edit.range) !== edit.originalText) {
+          return {
+            status: "conflict" as const,
+            conflict: {
+              path: request.path,
+              reason: "write-conflict" as const,
+              detail: "The open editor buffer no longer matches the reviewed replacement preview.",
+            },
+          };
+        }
+      }
+      try {
+        const next = applyTextEditsToText(current, request.edits.map(replaceEditToEditorEdit));
+        contentRef.current = next;
+        setContent(next);
+        setFileModel((model) =>
+          model === null
+            ? model
+            : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+        );
+        setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+        return { status: "applied" as const, path: request.path };
+      } catch {
+        return {
+          status: "conflict" as const,
+          conflict: {
+            path: request.path,
+            reason: "invalid-patch" as const,
+            detail: "The reviewed replacement preview could not be applied to the open buffer.",
+          },
+        };
+      }
+    },
+    [file, fileModelMatchesTarget, largeFileDegraded],
+  );
+  useRegisterWorkspaceReplaceBuffer(root, file, applyWorkspaceReplaceBuffer);
 
   const completionLanguage = fileModel?.identity.language;
   const languageProvider = providerForLanguage(languageCapabilities, completionLanguage);
