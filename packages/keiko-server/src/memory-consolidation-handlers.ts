@@ -36,6 +36,7 @@ import type {
   ConsolidationJobSelection,
   ConsolidationJobSettings,
 } from "./memory-consolidation-registry.js";
+import { enrichReviewItemsWithAdvisory } from "./memory-conflict-advisory.js";
 
 const MAX_BODY_BYTES = 64_000;
 const DEFAULT_JACCARD_THRESHOLD = 0.85;
@@ -527,6 +528,73 @@ function emptyConsolidationResult(state: ConsolidationResult["state"]): Consolid
   };
 }
 
+// Runs the pure engine unchanged, then — only for a nominally completed result — enriches
+// review items with an advisory suggestion (Issue #2130 / ADR-0120). The enrichment call itself
+// never throws (see memory-conflict-advisory.ts's own top-level guard); a cancel request that
+// arrives during that window is folded back into `state: "canceled"` so the existing
+// `finalizeTerminalJob` branch handles it exactly like an engine-detected cancellation.
+async function enrichConsolidationResult(
+  deps: UiHandlerDeps,
+  jobId: string,
+  result: ConsolidationResult,
+  memories: readonly MemoryRecord[],
+): Promise<ConsolidationResult> {
+  if (result.state !== "completed") return result;
+  const advisory = await enrichReviewItemsWithAdvisory(deps, jobId, result.reviewItems, memories);
+  if (advisory.canceledDuringAdvisory) {
+    return { ...result, state: "canceled", reviewItems: advisory.enrichedItems };
+  }
+  return { ...result, reviewItems: advisory.enrichedItems };
+}
+
+async function runScheduledJob(
+  deps: UiHandlerDeps,
+  registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
+  jobId: string,
+  vault: MemoryVaultStore,
+  selection: ConsolidationJobSelection,
+  settings: ConsolidationJobSettings,
+): Promise<void> {
+  const queued = registry.get(jobId);
+  if (queued?.job.state !== "queued") return;
+  if (queued.cancelRequested) {
+    const canceled = transitionJob(queued.job, "canceled", { completedAt: Date.now() });
+    registry.complete(jobId, canceled, 0);
+    return;
+  }
+  const loaded = loadSelectedMemories(vault, selection, settings.maxRecordsPerRun);
+  const memories = loaded.records;
+  const afterLoad = registry.get(jobId);
+  if (afterLoad?.job.state !== "queued") return;
+  if (afterLoad.cancelRequested) {
+    const canceled = transitionJob(afterLoad.job, "canceled", { completedAt: Date.now() });
+    registry.complete(jobId, canceled, memories.length);
+    return;
+  }
+  if (memories.length === 0 || settings.maxClustersPerRun === 0) {
+    const result = emptyConsolidationResult("skipped");
+    const skipped = transitionJob(afterLoad.job, "skipped", {
+      completedAt: Date.now(),
+      result,
+    });
+    registry.complete(jobId, skipped, memories.length);
+    return;
+  }
+  const running = transitionJob(afterLoad.job, "running");
+  registry.setRunning(jobId, running);
+  const scheduledRecord = registry.get(jobId);
+  try {
+    const result = runConsolidation(
+      memories,
+      buildRunOptions(scheduledRecord, queued.createdAt, vault, memories, selection, settings),
+    );
+    const enrichedResult = await enrichConsolidationResult(deps, jobId, result, memories);
+    finalizeTerminalJob(registry, running, jobId, memories, enrichedResult, loaded.truncated);
+  } catch (error) {
+    failScheduledJob(registry, running, jobId, memories, error);
+  }
+}
+
 function scheduleJob(
   deps: UiHandlerDeps,
   jobId: string,
@@ -537,43 +605,7 @@ function scheduleJob(
   const registry = deps.consolidationJobs;
   if (registry === undefined) return;
   setImmediate(() => {
-    const queued = registry.get(jobId);
-    if (queued?.job.state !== "queued") return;
-    if (queued.cancelRequested) {
-      const canceled = transitionJob(queued.job, "canceled", { completedAt: Date.now() });
-      registry.complete(jobId, canceled, 0);
-      return;
-    }
-    const loaded = loadSelectedMemories(vault, selection, settings.maxRecordsPerRun);
-    const memories = loaded.records;
-    const afterLoad = registry.get(jobId);
-    if (afterLoad?.job.state !== "queued") return;
-    if (afterLoad.cancelRequested) {
-      const canceled = transitionJob(afterLoad.job, "canceled", { completedAt: Date.now() });
-      registry.complete(jobId, canceled, memories.length);
-      return;
-    }
-    if (memories.length === 0 || settings.maxClustersPerRun === 0) {
-      const result = emptyConsolidationResult("skipped");
-      const skipped = transitionJob(afterLoad.job, "skipped", {
-        completedAt: Date.now(),
-        result,
-      });
-      registry.complete(jobId, skipped, memories.length);
-      return;
-    }
-    const running = transitionJob(afterLoad.job, "running");
-    registry.setRunning(jobId, running);
-    const scheduledRecord = registry.get(jobId);
-    try {
-      const result = runConsolidation(
-        memories,
-        buildRunOptions(scheduledRecord, queued.createdAt, vault, memories, selection, settings),
-      );
-      finalizeTerminalJob(registry, running, jobId, memories, result, loaded.truncated);
-    } catch (error) {
-      failScheduledJob(registry, running, jobId, memories, error);
-    }
+    void runScheduledJob(deps, registry, jobId, vault, selection, settings);
   });
 }
 

@@ -19,6 +19,7 @@ export type {
   ConsolidationSummaryStatus,
   ProposedAction,
   ReviewItem,
+  ReviewItemSuggestedResolution,
   ReviewReason,
   StaleFlag,
   StaleReason,

@@ -2059,6 +2059,7 @@ export type {
   MemoryConsolidationEvidenceKindWire,
   MemoryConsolidationEvidenceWire,
   MemoryConsolidationReviewItemWire,
+  MemoryConsolidationSuggestedResolutionWire,
   MemoryConsolidationSummaryStatusWire,
   MemoryConsolidationResultWire,
   MemoryConsolidationJobWire,
