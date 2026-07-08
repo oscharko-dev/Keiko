@@ -10,6 +10,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   _realtimeInstructionsForTests,
   _realtimeMemoryContextForTests,
+  _realtimeSessionToolsForTests,
+  recallRealtimeMemoryBlock,
   sweepControlHeartbeat,
   VoiceControlConnection,
   type VoiceControlSocket,
@@ -646,6 +648,7 @@ describe("realtime voice memory context", () => {
         harness.deps,
         { chatId: harness.chatId, memory: { enabled: true, budgetTokens: 900 } },
         false,
+        false,
       );
 
       expect(instructions).toContain("Included memory context:\n");
@@ -676,8 +679,8 @@ describe("realtime voice memory context", () => {
       const listMessages = vi.spyOn(harness.deps.store, "listMessages");
       const chatContext = { chatId: harness.chatId, memory: { enabled: false } };
 
-      const first = await _realtimeInstructionsForTests(harness.deps, chatContext, false);
-      const second = await _realtimeInstructionsForTests(harness.deps, chatContext, false);
+      const first = await _realtimeInstructionsForTests(harness.deps, chatContext, false, false);
+      const second = await _realtimeInstructionsForTests(harness.deps, chatContext, false, false);
 
       expect(second).toBe(first);
       expect(listMessages).toHaveBeenCalledTimes(1);
@@ -686,7 +689,7 @@ describe("realtime voice memory context", () => {
     }
   });
 
-  it("does not use the chat title as a realtime memory query", async () => {
+  it("primes a fresh session query-less instead of using the chat title as a query", async () => {
     const harness = makeVoiceMemoryHarness(true);
     try {
       const memory = insertVoiceMemory(
@@ -706,9 +709,102 @@ describe("realtime voice memory context", () => {
         memory: { enabled: true, budgetTokens: 900 },
       });
 
-      expect(context).toBe("");
+      // Session priming: with no prior user message the memory still reaches the instructions —
+      // ranked on non-lexical signals. The chat title must never become a query, so no query
+      // embedding is requested. Priming is exposure, not retrieval practice: with no cue match
+      // (relevance/semantic both zero) the reinforcement filter correctly records NO access.
+      expect(context).toContain("The voice chat title is a deployment codename.");
       expect(harness.calls).toEqual([]);
       expect(harness.vault.getAccessStats([memory.id]).get(memory.id)?.accessCount ?? 0).toBe(0);
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("damps repeated reinforcement of the same memory inside one session window", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    try {
+      harness.store.createMessage({
+        chatId: harness.chatId,
+        role: "user",
+        content: "Which package manager should I use for pnpm installs?",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const memory = insertVoiceMemory(
+        harness.vault,
+        voiceProjectScope(harness.projectPath),
+        "voice-mem-damped",
+        "Use pnpm for installs.",
+      );
+      const chatContext = { chatId: harness.chatId, memory: { enabled: true, budgetTokens: 900 } };
+
+      const first = await _realtimeMemoryContextForTests(harness.deps, chatContext);
+      const second = await _realtimeMemoryContextForTests(harness.deps, chatContext);
+
+      // Both retrievals deliver context (a replay must never blank the instructions), but massed
+      // repetition inside one conversational episode reinforces exactly once (spacing principle).
+      expect(first).toContain("Use pnpm for installs.");
+      expect(second).toContain("Use pnpm for installs.");
+      expect(harness.vault.getAccessStats([memory.id]).get(memory.id)?.accessCount).toBe(1);
+
+      // The reinforcement is damped, but the RETRIEVAL AUDIT is intentionally NOT: every recall the
+      // user is spoken to must stay visible to governance. Both recalls emit a memory:retrieved
+      // event even though the second one did not reinforce. This fails if recordMemoryAudit is ever
+      // moved inside the reinforcement guard.
+      const retrievedEvents = harness.evidenceStore
+        .list()
+        .flatMap(
+          (runId) =>
+            JSON.parse(harness.evidenceStore.get(runId) ?? "[]") as readonly {
+              kind?: string;
+            }[],
+        )
+        .filter((event) => event.kind === "memory:retrieved");
+      expect(retrievedEvents).toHaveLength(2);
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("recalls mid-session with a live cue through the shared retrieval core", async () => {
+    const harness = makeVoiceMemoryHarness(true);
+    try {
+      const memory = insertVoiceMemory(
+        harness.vault,
+        voiceProjectScope(harness.projectPath),
+        "voice-mem-recall",
+        "The launch codename is Wolkenanker.",
+      );
+      storeVoiceEmbedding(harness.vault, memory.id, "The launch codename is Wolkenanker.");
+
+      const recall = await recallRealtimeMemoryBlock(harness.deps, harness.chatId, {
+        queryText: "Wie lautet der Projektdeckname?",
+        budgetTokens: 600,
+      });
+
+      expect(recall).not.toBeNull();
+      expect(recall?.memoryCount).toBe(1);
+      expect(recall?.contextText).toContain("Wolkenanker");
+      // The live cue IS embedded (unlike query-less priming) so semantic recall participates.
+      expect(harness.calls).toEqual(["Wie lautet der Projektdeckname?"]);
+      expect(harness.vault.getAccessStats([memory.id]).get(memory.id)?.accessCount).toBe(1);
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("returns null from the recall core for an unknown chat", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    try {
+      const recall = await recallRealtimeMemoryBlock(harness.deps, "missing-chat", {
+        queryText: "anything",
+      });
+      expect(recall).toBeNull();
     } finally {
       cleanupVoiceMemoryHarness(harness);
     }
@@ -747,6 +843,33 @@ describe("realtime voice memory context", () => {
     } finally {
       cleanupVoiceMemoryHarness(harness);
     }
+  });
+});
+
+describe("realtime session tool posture", () => {
+  it("pins the grounding tool when grounding is the only session tool", () => {
+    const posture = _realtimeSessionToolsForTests(true, false);
+    expect(posture.tools?.map((tool) => tool.name)).toEqual(["search_keiko_grounding"]);
+    expect(posture.toolChoice).toEqual({
+      type: "function",
+      function: { name: "search_keiko_grounding" },
+    });
+  });
+
+  it("widens to auto when the memory recall tool joins the session", () => {
+    const posture = _realtimeSessionToolsForTests(true, true);
+    expect(posture.tools?.map((tool) => tool.name)).toEqual([
+      "search_keiko_grounding",
+      "recall_keiko_memory",
+    ]);
+    expect(posture.toolChoice).toBe("auto");
+  });
+
+  it("offers memory recall alone as an auto tool and nothing when both are off", () => {
+    const memoryOnly = _realtimeSessionToolsForTests(false, true);
+    expect(memoryOnly.tools?.map((tool) => tool.name)).toEqual(["recall_keiko_memory"]);
+    expect(memoryOnly.toolChoice).toBe("auto");
+    expect(_realtimeSessionToolsForTests(false, false)).toEqual({});
   });
 });
 

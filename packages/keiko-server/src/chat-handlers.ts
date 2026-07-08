@@ -39,6 +39,7 @@ import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   maybeRunAutoMaintenance,
+  memorySemanticizationMultipliers,
   type AutoMaintenanceState,
 } from "./memory-maintenance-handlers.js";
 import {
@@ -734,9 +735,11 @@ const memoryMaintenanceCursor: AutoMaintenanceState = {};
 // Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. The
 // pass short-circuits on the cursor almost every turn and never throws into the chat path.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
+  const multipliers = memorySemanticizationMultipliers(deps.env);
   maybeRunAutoMaintenance(vault, deps.evidenceStore, memoryMaintenanceCursor, {
     nowMs: Date.now(),
     enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",
+    ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
   });
 }
 

@@ -39,6 +39,8 @@ export {
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_TYPES,
+  MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS,
+  decayHalfLifeMultiplierForType,
 } from "./memory.js";
 
 // ─── Record types ─────────────────────────────────────────────────────────────

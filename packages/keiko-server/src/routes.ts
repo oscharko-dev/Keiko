@@ -81,6 +81,8 @@ import {
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
+import { handleRealtimeMemoryVoiceTool } from "./voice-realtime-memory-tool.js";
+import { handleBuildVoiceRecap } from "./voice-recap.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
@@ -406,6 +408,18 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/voice/realtime/grounded-tool",
     handler: handleRealtimeGroundedVoiceTool,
+  },
+  // Mid-session MemoriaViva recall for the realtime voice `recall_keiko_memory` tool.
+  {
+    method: "POST",
+    pattern: "/api/voice/realtime/memory-tool",
+    handler: handleRealtimeMemoryVoiceTool,
+  },
+  // User-triggered voice session recap: committed spoken transcript → proposed memory candidates.
+  {
+    method: "POST",
+    pattern: "/api/voice/recap/build",
+    handler: handleBuildVoiceRecap,
   },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },

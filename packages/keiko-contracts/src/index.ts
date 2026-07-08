@@ -1968,8 +1968,10 @@ export {
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_STRUCTURED_PAYLOAD_KINDS,
   MEMORY_TYPES,
+  MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS,
   MEMORY_UPDATE_FIELDS,
   assertNeverMemoryType,
+  decayHalfLifeMultiplierForType,
   checkStatusTransition,
   hasStaleModelMetadata,
   isMemoryEdge,
@@ -2858,6 +2860,27 @@ export {
   validateSpokenActionProposal,
   validateSpokenActionAuditRecord,
 } from "./voice-action-intent.js";
+
+// ─── Voice session recap (Issue #504, ADR-0109) ───
+// Committed-transcript-derived memory candidates: capability predicate, candidate lifecycle,
+// content-free span/turn descriptors, and the recap audit record. The server (voice-recap.ts) is
+// the only site that joins this leaf with the memory-capture domain.
+export type {
+  VoiceSessionRecapSchemaVersion,
+  VoiceRecapCandidateStatus,
+  VoiceRecapCommittedSpanDescriptor,
+  VoiceRecapAssistantTurnDescriptor,
+  VoiceSessionRecapEvidenceSummary,
+  VoiceSessionRecapAuditRecord,
+} from "./voice-session-recap.js";
+export {
+  VOICE_SESSION_RECAP_SCHEMA_VERSION,
+  VOICE_RECAP_CANDIDATE_STATUSES,
+  isVoiceSessionRecapSchemaVersionSupported,
+  isVoiceRecapCandidateStatus,
+  voiceRecapAllowed,
+  validateVoiceSessionRecapAuditRecord,
+} from "./voice-session-recap.js";
 
 // ─── Task-scoped workspace domain (Issue #444, Epic #443) ───
 // The authoritative contract for what a task-scoped isolated workspace IS, how a task binds to it,
