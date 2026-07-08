@@ -1290,6 +1290,29 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(paste.defaultPrevented).toBe(true);
   });
 
+  it("clears workspace selection with Escape from the focused surface", () => {
+    const clearSelection = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
+          api: api({ clearSelection }),
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const escape = createEvent.keyDown(surface, { key: "Escape" });
+
+    fireEvent(surface, escape);
+
+    expect(clearSelection).toHaveBeenCalledTimes(1);
+    expect(escape.defaultPrevented).toBe(true);
+  });
+
   it("announces the current selected-window count through a live region", () => {
     const wins = [
       appWindow({ id: "agents-1", type: "agents" }),
@@ -1334,6 +1357,28 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
 
     expect(copySelectedWindows).not.toHaveBeenCalled();
     expect(pasteCopiedWindows).not.toHaveBeenCalled();
+  });
+
+  it("does not arm the Space hand tool when toggling a focused window selection", () => {
+    const toggleWindowSelection = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: api({ toggleWindowSelection }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+    const space = createEvent.keyDown(windowEl as HTMLElement, { key: " ", code: "Space" });
+
+    fireEvent(windowEl as HTMLElement, space);
+
+    expect(toggleWindowSelection).toHaveBeenCalledWith("agents-1");
+    expect(space.defaultPrevented).toBe(true);
+    expect(surface).not.toHaveAttribute("data-hand-tool");
   });
 
   it("does not start marquee selection from embedded window surfaces", () => {

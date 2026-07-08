@@ -4,7 +4,7 @@
   "verdict": "PASS",
   "proofType": "browser-capture-plus-jest-axe",
   "globalsCssSha256": "3fb769ffc1447e71bf68a5b2be70b8090556a4015267272efdb1c0fc7643d92e",
-  "workspaceSelectionCssSha256": "32f4e25876e01d5e5ff9d5f14e59075a36638788069a9762bae5cb179c5461b8",
+  "workspaceSelectionCssSha256": "5259151cf6e51573ef183f815e4435466b740f3be92e680668b5ec5a011ad2d8",
   "gate": "selected window regions expose selected state through accessible names and live count",
   "captures": [
     {

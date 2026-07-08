@@ -134,8 +134,8 @@ The copied payload is a schema-versioned, content-free layout descriptor:
 - window type,
 - geometry,
 - content zoom if safe,
-- descriptor-approved non-secret `cfg` fields that are already safe for `durable.ui` workspace
-  layout persistence,
+- an empty `cfg` object only; widget configuration, repository paths, authority ids, and content
+  references are intentionally not copied,
 - no raw file bodies, chat transcripts, terminal output, model output, repository diffs, API tokens,
   endpoints with credentials, evidence bodies, memory bodies, or unredacted local paths.
 

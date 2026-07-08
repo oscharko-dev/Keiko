@@ -109,6 +109,7 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     });
     const baseline = window.localStorage.getItem(WS_LS);
     expect(baseline).toBe(JSON.stringify([seedWindow()]));
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
 
     act(() => {
       getByTestId("minimize").click();
@@ -116,6 +117,7 @@ describe("Issue #1580 — debounced workspace persistence", () => {
       getByTestId("minimize").click();
     });
     expect(window.localStorage.getItem(WS_LS)).toBe(baseline);
+    expect(setItemSpy.mock.calls.filter(([key]) => key === WS_LS)).toHaveLength(0);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(400);
@@ -123,6 +125,8 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     const flushed = window.localStorage.getItem(WS_LS);
     expect(flushed).not.toBe(baseline);
     expect(flushed).toContain('"minimized":true');
+    expect(setItemSpy.mock.calls.filter(([key]) => key === WS_LS)).toHaveLength(1);
+    setItemSpy.mockRestore();
   });
 
   it("debounces the view write and flushes it on pagehide", () => {

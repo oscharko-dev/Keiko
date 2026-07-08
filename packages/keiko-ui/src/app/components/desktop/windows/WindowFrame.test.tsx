@@ -1,5 +1,5 @@
 import { createRef, useCallback, useState, type ReactNode, type RefObject } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
@@ -643,7 +643,7 @@ describe("WindowFrame content zoom controls", () => {
 
       fireEvent.pointerUp(window);
 
-      expect(focus).toHaveBeenCalledWith("agents-1");
+      expect(focus).not.toHaveBeenCalled();
       expect(replaceSelection).not.toHaveBeenCalled();
       expect(commitSnap).not.toHaveBeenCalled();
       expect(document.body.style.cursor).toBe("");
@@ -707,9 +707,12 @@ describe("WindowFrame content zoom controls", () => {
     expect(section).not.toBeNull();
     expect(section).toHaveAttribute("tabindex", "0");
 
-    fireEvent.keyDown(section as HTMLElement, { key: " ", code: "Space" });
+    const space = createEvent.keyDown(section as HTMLElement, { key: " ", code: "Space" });
+
+    fireEvent(section as HTMLElement, space);
 
     expect(toggleWindowSelection).toHaveBeenCalledWith("agents-1");
+    expect(space.defaultPrevented).toBe(true);
   });
 
   it("flushes and cleans up selected group drag on pointer cancel", () => {

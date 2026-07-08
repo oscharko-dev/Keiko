@@ -11,6 +11,14 @@ function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-
   return { id, type, x: 40, y: 50, w: 200, h: 140, z: 1, cfg, max: false, zoom: 1 };
 }
 
+function workspacePayload(windows: readonly Record<string, unknown>[]): string {
+  return JSON.stringify({
+    kind: "keiko.workspace.windows",
+    version: 1,
+    windows,
+  });
+}
+
 describe("workspace clipboard duplication (Issue #2059)", () => {
   it("copies eligible layout descriptors without serializing config paths or secrets", () => {
     const payload = buildWorkspaceClipboardPayload(
@@ -106,20 +114,36 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
   });
 
   it("fails closed for malformed, foreign, or secret-bearing payloads", () => {
-    const privilegedPayload = JSON.stringify({
-      kind: "keiko.workspace.windows",
-      version: 1,
-      windows: [
-        {
-          type: "files",
-          x: 0,
-          y: 0,
-          w: 200,
-          h: 140,
-          cfg: { resolvedRoot: "/repo" },
-        },
-      ],
-    });
+    const privilegedPayload = workspacePayload([
+      {
+        type: "files",
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 140,
+        cfg: { resolvedRoot: "/repo" },
+      },
+    ]);
+    const prototypeTypePayload = workspacePayload([
+      {
+        type: "constructor",
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 140,
+        cfg: {},
+      },
+    ]);
+    const singletonPayload = workspacePayload([
+      {
+        type: "chat",
+        x: 0,
+        y: 0,
+        w: 200,
+        h: 140,
+        cfg: {},
+      },
+    ]);
 
     expect(
       duplicateWorkspaceClipboardWindows({
@@ -141,16 +165,39 @@ describe("workspace clipboard duplication (Issue #2059)", () => {
         pasteOffsetPx: 32,
       }),
     ).toBeNull();
-    expect(
-      duplicateWorkspaceClipboardWindows({
-        wins: [],
-        payload: privilegedPayload,
-        viewport,
-        zStart: 0,
-        nowMs: 1,
-        pasteOffsetPx: 32,
-      }),
-    ).toBeNull();
+    for (const payload of [privilegedPayload, prototypeTypePayload, singletonPayload]) {
+      expect(
+        duplicateWorkspaceClipboardWindows({
+          wins: [],
+          payload,
+          viewport,
+          zStart: 0,
+          nowMs: 1,
+          pasteOffsetPx: 32,
+        }),
+      ).toBeNull();
+    }
+  });
+
+  it("allocates a suffix when a regenerated duplicate id collides", () => {
+    const source = [win("files", {}, "files-1")];
+    const payload = buildWorkspaceClipboardPayload(source, ["files-1"]);
+    const duplicated = duplicateWorkspaceClipboardWindows({
+      wins: [win("files", {}, "files-copy-rs-0"), win("files", {}, "files-copy-rs-0-1")],
+      payload: payload ?? "",
+      viewport,
+      zStart: 2,
+      nowMs: 1_000,
+      pasteOffsetPx: 32,
+    });
+
+    expect(duplicated?.pastedWindowIds).toEqual(["files-copy-rs-0-2"]);
+    expect(duplicated?.wins[2]).toMatchObject({
+      id: "files-copy-rs-0-2",
+      x: 72,
+      y: 82,
+      z: 3,
+    });
   });
 
   it("keeps pasted window title bars inside the workspace recovery bounds", () => {

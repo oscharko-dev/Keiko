@@ -40,6 +40,7 @@ import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
+import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 
 const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 type Handle = (typeof HANDLES)[number];
@@ -306,6 +307,20 @@ interface DragSession {
   readonly W: number;
 }
 
+function requestDragFrame(flush: () => void): number {
+  return typeof window.requestAnimationFrame === "function"
+    ? window.requestAnimationFrame(flush)
+    : window.setTimeout(flush, 0);
+}
+
+function cancelDragFrame(frame: number): void {
+  if (typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(frame);
+  } else {
+    window.clearTimeout(frame);
+  }
+}
+
 function attachDragListeners(
   api: WorkspaceApi,
   geo: DragGeometry,
@@ -344,18 +359,11 @@ function attachDragListeners(
   };
   const schedule = (): void => {
     if (frame !== null) return;
-    frame =
-      typeof window.requestAnimationFrame === "function"
-        ? window.requestAnimationFrame(flush)
-        : window.setTimeout(flush, 0);
+    frame = requestDragFrame(flush);
   };
   const cancelFrame = (): void => {
     if (frame === null) return;
-    if (typeof window.cancelAnimationFrame === "function") {
-      window.cancelAnimationFrame(frame);
-    } else {
-      window.clearTimeout(frame);
-    }
+    cancelDragFrame(frame);
     frame = null;
   };
   const move = (ev: PointerEvent): void => {
@@ -363,8 +371,12 @@ function attachDragListeners(
     const py = geo.toWY(ev.clientY);
     let nx = px - session.offX;
     let ny = py - session.offY;
-    nx = Math.max(geo.vpx0 - (session.W - 120), Math.min(geo.vpx0 + geo.vpw - 120, nx));
-    ny = Math.max(geo.vpy0, Math.min(geo.vpy0 + geo.vph - 38, ny));
+    const clamped = clampWorkspaceWindowOrigin(
+      { x: nx, y: ny, w: session.W },
+      { x: geo.vpx0, y: geo.vpy0, w: geo.vpw, h: geo.vph },
+    );
+    nx = clamped.x;
+    ny = clamped.y;
     pendingX = nx;
     pendingY = ny;
     pendingZone = detectSnapZone(px, py, geo, threshold);
@@ -422,18 +434,11 @@ function attachGroupDragListeners(
   };
   const schedule = (): void => {
     if (frame !== null) return;
-    frame =
-      typeof window.requestAnimationFrame === "function"
-        ? window.requestAnimationFrame(flush)
-        : window.setTimeout(flush, 0);
+    frame = requestDragFrame(flush);
   };
   const cancelFrame = (): void => {
     if (frame === null) return;
-    if (typeof window.cancelAnimationFrame === "function") {
-      window.cancelAnimationFrame(frame);
-    } else {
-      window.clearTimeout(frame);
-    }
+    cancelDragFrame(frame);
     frame = null;
   };
   const move = (ev: PointerEvent): void => {
@@ -800,7 +805,7 @@ function WindowFrameImpl({
       // user's cursor mid-click.
       if (connState === "valid") return;
       e.preventDefault();
-      focusWindowForTarget(e.target);
+      e.stopPropagation();
       const el = wsRef.current;
       if (el === null) return;
       const rect = el.getBoundingClientRect();
@@ -813,6 +818,7 @@ function WindowFrameImpl({
         attachGroupDragListeners(api, geo, e.clientX, e.clientY, () => setDraggingWindow(false));
         return;
       }
+      focusWindowForTarget(e.target);
       if (!selected) {
         api.replaceSelection([win.id]);
       }
@@ -1036,6 +1042,7 @@ function WindowFrameImpl({
       if (e.target !== e.currentTarget) return;
       if (e.key === " " || e.code === "Space") {
         e.preventDefault();
+        e.stopPropagation();
         api.toggleWindowSelection(win.id);
         return;
       }
@@ -1094,6 +1101,9 @@ function WindowFrameImpl({
     }),
     [ew, eh, zoom],
   );
+  const windowClassName = selected
+    ? `window ${selectionStyles.workspaceWindow} ${selectionStyles.selectedWindow}`
+    : `window ${selectionStyles.workspaceWindow}`;
 
   return (
     // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this named window region is keyboard
@@ -1101,7 +1111,7 @@ function WindowFrameImpl({
     // ports keep owning Enter/Space when a port itself is focused.
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.1 keyboard parity on the focusable window region
     <section
-      className={selected ? `window ${selectionStyles.selectedWindow}` : "window"}
+      className={windowClassName}
       // Audit C408 — a name turns the section into a named region, so AT users
       // can perceive window boundaries and jump between windows; C297 — the sub
       // (path/URL/title) disambiguates multiple windows of the same type.

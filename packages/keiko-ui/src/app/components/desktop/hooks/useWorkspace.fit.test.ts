@@ -7,6 +7,10 @@ import {
   normalizeWheelDelta,
   nextContentZoomFromWheel,
 } from "./useWorkspace";
+import {
+  WINDOW_RECOVERY_TITLEBAR_HEIGHT_PX,
+  WINDOW_RECOVERY_VISIBLE_WIDTH_PX,
+} from "../windowRecovery";
 import type { ViewportWorld } from "./useWorkspace.types";
 import type { AppWindow } from "../windows/types";
 
@@ -34,20 +38,20 @@ describe("fitWindowToViewport — capture windows on viewport shrink (audit C132
     // (0 visible title-bar pixels). At least 120px must stay reachable.
     const win = appWindow({ x: 721 });
     const next = fitWindowToViewport(win, vp);
-    expect(next.x).toBe(vp.x + vp.w - 120);
+    expect(next.x).toBe(vp.x + vp.w - WINDOW_RECOVERY_VISIBLE_WIDTH_PX);
     expect(next.y).toBe(win.y);
   });
 
   it("pulls a window stranded left of the viewport back into reach", () => {
     const win = appWindow({ x: -2000 });
     const next = fitWindowToViewport(win, vp);
-    expect(next.x).toBe(vp.x - (win.w - 120));
+    expect(next.x).toBe(vp.x - (win.w - WINDOW_RECOVERY_VISIBLE_WIDTH_PX));
   });
 
   it("clamps the title bar back above the bottom edge", () => {
     const win = appWindow({ y: 1500 });
     const next = fitWindowToViewport(win, vp);
-    expect(next.y).toBe(vp.y + vp.h - 38);
+    expect(next.y).toBe(vp.y + vp.h - WINDOW_RECOVERY_TITLEBAR_HEIGHT_PX);
   });
 
   it("returns the same object when the window is already visible", () => {
@@ -65,7 +69,7 @@ describe("fitWindowToViewport — capture windows on viewport shrink (audit C132
     const panned: ViewportWorld = { x: 300, y: 200, w: 600, h: 500 };
     const win = appWindow({ x: -1000, y: 0 });
     const next = fitWindowToViewport(win, panned);
-    expect(next.x).toBe(panned.x - (win.w - 120));
+    expect(next.x).toBe(panned.x - (win.w - WINDOW_RECOVERY_VISIBLE_WIDTH_PX));
     expect(next.y).toBe(panned.y);
   });
 
@@ -75,7 +79,10 @@ describe("fitWindowToViewport — capture windows on viewport shrink (audit C132
     const right = fitWindowToViewport(appWindow({ id: "right", x: 900, y: 900 }), compact);
 
     expect(left).toMatchObject({ x: -400, y: compact.y });
-    expect(right).toMatchObject({ x: 280, y: compact.y + compact.h - 38 });
+    expect(right).toMatchObject({
+      x: 280,
+      y: compact.y + compact.h - WINDOW_RECOVERY_TITLEBAR_HEIGHT_PX,
+    });
     expect(left.x).not.toBe(right.x);
     expect(left.y).not.toBe(right.y);
   });
@@ -99,7 +106,9 @@ describe("fitWindowsToViewport — array-identity preservation (GEN-PERF-WORKSPA
     // The unchanged window keeps its identity; only the stranded one is a new object.
     expect(next.find((w) => w.id === "fine")).toBe(fine);
     expect(next.find((w) => w.id === "stranded")).not.toBe(stranded);
-    expect(next.find((w) => w.id === "stranded")?.x).toBe(vp.x + vp.w - 120);
+    expect(next.find((w) => w.id === "stranded")?.x).toBe(
+      vp.x + vp.w - WINDOW_RECOVERY_VISIBLE_WIDTH_PX,
+    );
   });
 });
 

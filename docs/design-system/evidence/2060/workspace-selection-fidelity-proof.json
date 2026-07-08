@@ -6,7 +6,7 @@
   "route": "/",
   "appPath": "packaged-cli-ui",
   "globalsCssSha256": "3fb769ffc1447e71bf68a5b2be70b8090556a4015267272efdb1c0fc7643d92e",
-  "workspaceSelectionCssSha256": "32f4e25876e01d5e5ff9d5f14e59075a36638788069a9762bae5cb179c5461b8",
+  "workspaceSelectionCssSha256": "5259151cf6e51573ef183f815e4435466b740f3be92e680668b5ec5a011ad2d8",
   "captures": [
     {
       "file": "01-dark.png",
@@ -89,7 +89,7 @@
       ],
       "styleProof": {
         "dataSelected": "true",
-        "selectedBoxShadow": "oklab(0.781346 -0.102925 0.0374766) 0px 0px 0px 1.67229px, oklab(0.206813 -0.0342382 0.0124 / 0.324162) 0px 2.62171px 7.86514px 0.773434px, oklab(0.739998 -0.00564498 0.00206918 / 0.672286) 0px 0px 0px 0.672286px, rgba(0, 0, 0, 0.573) 0px 12.1011px 33.6143px -12.1011px",
+        "selectedBoxShadow": "oklab(0.798006 -0.11297 0.0411329) 0px 0px 0px 1.7417px, oklab(0.259382 -0.0429412 0.0155519 / 0.285152) 0px 2.06637px 6.1991px 2.09238px, oklab(0.739998 -0.00564498 0.00206918 / 0.741704) 0px 0px 0px 0.741704px, rgba(0, 0, 0, 0.63) 0px 13.3507px 37.0852px -13.3507px",
         "selectedAfterBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)",
         "selectedAfterOpacity": "0.7",
         "tokens": {
@@ -120,7 +120,7 @@
       ],
       "styleProof": {
         "dataSelected": "true",
-        "selectedBoxShadow": "oklab(0.406135 -0.10736 0.0390831) 0px 0px 0px 1.80197px, oklab(0.712291 -0.117921 0.0427073 / 0.112275) 0px 0px 0px 5.61376px, rgba(20, 30, 25, 0.26) 0px 14.4354px 40.0983px -14.4354px, oklab(0.349999 -0.00939958 0.00342804 / 0.801966) 0px 0px 0px 0.801966px",
+        "selectedBoxShadow": "oklab(0.409121 -0.11257 0.0409795) 0px 0px 0px 1.84462px, oklab(0.712291 -0.117921 0.0427073 / 0.118247) 0px 0px 0px 5.91234px, rgba(20, 30, 25, 0.27) 0px 15.2031px 42.231px -15.2031px, oklab(0.349999 -0.00939958 0.00342804 / 0.844619) 0px 0px 0px 0.844619px",
         "selectedAfterBorderColor": "oklch(0.419997 0.139995 159.997 / 0.78)",
         "selectedAfterOpacity": "0.7",
         "tokens": {
@@ -151,7 +151,7 @@
       ],
       "styleProof": {
         "dataSelected": "true",
-        "selectedBoxShadow": "oklab(0.758586 -0.0892026 0.0324816) 0px 0px 0px 1.57745px, oklab(0.152559 -0.0252564 0.00914705 / 0.377455) 0px 3.38038px 10.1411px -1.0284px, oklab(0.739998 -0.00564498 0.00206918 / 0.577453) 0px 0px 0px 0.577453px, rgba(0, 0, 0, 0.49) 0px 10.3941px 28.8726px -10.3941px",
+        "selectedBoxShadow": "oklab(0.732712 -0.0736022 0.0268031) 0px 0px 0px 1.46964px, oklab(0.106915 -0.0177 0.00641037 / 0.43804) 0px 4.24286px 12.7286px -3.0768px, oklab(0.739998 -0.00564498 0.00206918 / 0.469642) 0px 0px 0px 0.469642px, rgba(0, 0, 0, 0.4) 0px 8.45356px 23.4821px -8.45356px",
         "selectedAfterBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)",
         "selectedAfterOpacity": "0.7",
         "tokens": {

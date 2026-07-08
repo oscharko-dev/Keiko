@@ -12,6 +12,11 @@
     0 16px 46px var(--accent-glow);
 }
 
+.workspaceWindow:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 5px;
+}
+
 .selectedWindow {
   box-shadow:
     0 0 0 2px var(--focus-ring),
@@ -28,4 +33,14 @@
   border: 1px solid var(--accent-line);
   border-radius: inherit;
   opacity: 0.7;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marquee,
+  .workspaceWindow,
+  .selectedWindow,
+  .selectedWindow::after {
+    animation: none;
+    transition: none;
+  }
 }

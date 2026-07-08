@@ -16,6 +16,7 @@ import {
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
+import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type { UseWorkspaceResult, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
 import {
   parsePersistedConnections,
@@ -231,8 +232,12 @@ function applyArrowMove(
   else if (state.key === "ArrowLeft") x -= step;
   else if (state.key === "ArrowDown") y += step;
   else if (state.key === "ArrowUp") y -= step;
-  x = Math.max(-(win.w - 120), Math.min(rect.width - 120, x));
-  y = Math.max(0, Math.min(rect.height - 38, y));
+  const clamped = clampWorkspaceWindowOrigin(
+    { x, y, w: win.w },
+    { x: 0, y: 0, w: rect.width, h: rect.height },
+  );
+  x = clamped.x;
+  y = clamped.y;
   return { x, y, w: win.w, h: win.h };
 }
 
@@ -1384,8 +1389,7 @@ interface UseFitMaximizedArgs {
 // window entirely off-screen with no visible recovery path (audit C132).
 export function fitWindowToViewport(w: AppWindow, vp: ViewportWorld): AppWindow {
   if (w.max) return { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h };
-  const x = Math.max(vp.x - (w.w - 120), Math.min(vp.x + vp.w - 120, w.x));
-  const y = Math.max(vp.y, Math.min(vp.y + vp.h - 38, w.y));
+  const { x, y } = clampWorkspaceWindowOrigin(w, vp);
   return x === w.x && y === w.y ? w : { ...w, x, y };
 }
 

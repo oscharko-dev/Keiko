@@ -54,6 +54,7 @@ import {
   type FigmaImageDragPayload,
   type FigmaImageDropDetail,
 } from "./figma-image-drag";
+import { isWorkspaceWindowSelectable } from "./hooks/workspaceActions";
 import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
 import selectionStyles from "./WorkspaceSelection.module.css";
 
@@ -378,9 +379,7 @@ function selectableMarqueeHits(
   if (wins === null || !marqueeIsActive(rect)) return [];
   const worldRect = clientRectToWorldRect(rect, view);
   return wins
-    .filter(
-      (win) => win.minimized !== true && win.max !== true && windowIntersectsRect(win, worldRect),
-    )
+    .filter((win) => isWorkspaceWindowSelectable(win) && windowIntersectsRect(win, worldRect))
     .map((win) => win.id);
 }
 
@@ -547,6 +546,13 @@ export function Workspace({
   const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.target !== event.currentTarget) return;
     const key = event.key.toLowerCase();
+    if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (selection.selectedWindowIds.length > 0) {
+        api.clearSelection();
+        event.preventDefault();
+      }
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
       if (key === "c") {
         if (api.copySelectedWindows()) event.preventDefault();

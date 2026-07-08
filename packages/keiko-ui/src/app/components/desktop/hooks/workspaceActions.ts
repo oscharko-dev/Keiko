@@ -5,6 +5,7 @@ import { canConnect, snapMap } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
+import { clampWorkspaceGroupOrigin } from "../windowRecovery";
 import {
   activeEditorPane,
   createEditorLayoutStateV2,
@@ -611,14 +612,18 @@ function clampSelectionDelta(
   delta: { readonly dx: number; readonly dy: number },
   viewport: ViewportWorld,
 ): { readonly dx: number; readonly dy: number } {
-  const groupW = bounds.maxX - bounds.minX;
-  const nextX = bounds.minX + delta.dx;
-  const nextY = bounds.minY + delta.dy;
-  const clampedX = Math.max(
-    viewport.x - (groupW - 120),
-    Math.min(viewport.x + viewport.w - 120, nextX),
+  const clamped = clampWorkspaceGroupOrigin(
+    {
+      ...bounds,
+      minX: bounds.minX + delta.dx,
+      minY: bounds.minY + delta.dy,
+      maxX: bounds.maxX + delta.dx,
+      maxY: bounds.maxY + delta.dy,
+    },
+    viewport,
   );
-  const clampedY = Math.max(viewport.y, Math.min(viewport.y + viewport.h - 38, nextY));
+  const clampedX = clamped.x;
+  const clampedY = clamped.y;
   return { dx: clampedX - bounds.minX, dy: clampedY - bounds.minY };
 }
 

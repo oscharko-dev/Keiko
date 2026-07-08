@@ -2,6 +2,7 @@
 
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, WindowCfgValue } from "../windows/types";
+import { clampWorkspaceGroupOrigin } from "../windowRecovery";
 import type { ViewportWorld } from "./useWorkspace.types";
 import { sanitizePersistedWindows } from "./workspace-persistence";
 
@@ -46,7 +47,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function hasWindowType(value: unknown): value is WindowType {
-  return typeof value === "string" && value in WIN_TYPES;
+  return typeof value === "string" && Object.hasOwn(WIN_TYPES, value);
+}
+
+function isWorkspaceClipboardTypeEligible(type: WindowType): boolean {
+  if (WIN_TYPES[type].singleton === true) return false;
+  return type !== "qiRun";
 }
 
 function contentFreeCfgRecord(value: unknown): Record<string, WindowCfgValue> | null {
@@ -68,6 +74,7 @@ function descriptorFromRecord(value: unknown): WorkspaceClipboardWindowDescripto
   const zoom = value["zoom"] === undefined ? undefined : finiteNumber(value["zoom"]);
   if (x === null || y === null || w === null || h === null || cfg === null) return null;
   if (w <= 0 || h <= 0 || zoom === null) return null;
+  if (!isWorkspaceClipboardTypeEligible(value["type"])) return null;
   return {
     type: value["type"],
     x,
@@ -118,12 +125,11 @@ function selectableClipboardWindows(
 
 function isKeyedWindowDescriptor(win: AppWindow): boolean {
   if (win.type === "chat") return typeof win.cfg["chatId"] === "string";
-  return win.type === "qiRun" && typeof win.cfg["runId"] === "string";
+  return win.type === "qiRun";
 }
 
 function isWorkspaceClipboardWindowEligible(win: AppWindow): boolean {
-  if (WIN_TYPES[win.type].singleton === true) return false;
-  return !isKeyedWindowDescriptor(win);
+  return isWorkspaceClipboardTypeEligible(win.type) && !isKeyedWindowDescriptor(win);
 }
 
 function descriptorFromWindow(win: AppWindow): WorkspaceClipboardWindowDescriptor | null {
@@ -204,11 +210,9 @@ function clampPastedWindows(
   viewport: ViewportWorld,
 ): readonly AppWindow[] {
   const bounds = pastedBounds(wins);
-  const groupW = bounds.maxX - bounds.minX;
-  const minX = viewport.x - (groupW - 120);
-  const maxX = viewport.x + viewport.w - 120;
-  const targetX = Math.max(minX, Math.min(maxX, bounds.minX));
-  const targetY = Math.max(viewport.y, Math.min(viewport.y + viewport.h - 38, bounds.minY));
+  const clamped = clampWorkspaceGroupOrigin(bounds, viewport);
+  const targetX = clamped.x;
+  const targetY = clamped.y;
   const dx = targetX - bounds.minX;
   const dy = targetY - bounds.minY;
   if (dx === 0 && dy === 0) return wins;

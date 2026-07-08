@@ -1,7 +1,7 @@
 {
   "issue": "#2060",
   "epic": "#2055",
-  "generatedAt": "2026-07-07T19:15:44.713Z",
+  "generatedAt": "2026-07-08T00:04:42.535Z",
   "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:workspace-selection-2060",
   "receiptCommand": ".keiko-scripts/ui-verify-receipt.sh 2060 -- npx playwright test --config tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts --project=chromium",
   "playwrightCommand": "npx playwright test --config tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts --project=chromium",
