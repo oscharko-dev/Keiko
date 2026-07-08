@@ -22,7 +22,7 @@ The primary path does not ask users to install Node.js, install npm, run a packa
 terminal commands, restart by hand, manually verify the running version, or use the browser's
 `Install Keiko` / PWA shortcut action. Browser-managed PWA installation is not a product install
 path for portable delivery; see
-[ADR-0120](../adr/ADR-0120-portable-first-browser-install-suppression.md).
+[ADR-0122](../adr/ADR-0122-portable-first-browser-install-suppression.md).
 
 ## Platform Artifacts
 

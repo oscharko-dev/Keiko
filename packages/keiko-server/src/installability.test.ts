@@ -1,4 +1,4 @@
-// ADR-0120 — retained browser asset gates. Each describe block exercises ONE retained browser
+// ADR-0122 — retained browser asset gates. Each describe block exercises ONE retained browser
 // asset criterion over a live in-process server that serves real public assets from
 // packages/keiko-ui/public. No new runtime dependencies: vitest + node:http + globalThis.fetch
 // only. The test boots on an ephemeral port and tears down after each suite.

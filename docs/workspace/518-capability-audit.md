@@ -51,7 +51,7 @@ Per the epic's required implementation order, no downstream #518 issue may begin
 - A `widgets/panels/InspectorPanel.tsx`, `ResourcesPanel.tsx`, `NotificationsPanel.tsx`, `ActivityPanel`/`TimelinePanel.tsx`, and `SettingsPanel.tsx` for object inspection and status surfaces.
 - A bound theme system (`useTheme`), Twin mode (`useTwinMode`, `TwinContext`), Chat session (`ChatSessionContext`), and WebSocket context (`WsContext`).
 - A browser shell with static cache/update recovery via `registerSw`; browser-managed PWA
-  installation is suppressed for portable-first delivery by ADR-0120.
+  installation is suppressed for portable-first delivery by ADR-0122.
 
 The consequence is that the bulk of #518's implementation work is _extension_, not _new code_. The audit recommends closing #529 with documented deferral evidence and tightly scoping #526–#528 and #530 to the deltas required by the epic's Definition of Done.
 

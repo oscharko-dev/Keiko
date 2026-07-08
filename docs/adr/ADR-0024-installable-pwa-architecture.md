@@ -3,7 +3,7 @@
 ## Status
 
 Superseded for ordinary product installation by
-[ADR-0120](ADR-0120-portable-first-browser-install-suppression.md). Retained as historical
+[ADR-0122](ADR-0122-portable-first-browser-install-suppression.md). Retained as historical
 context for the npm-era PWA pilot and for static-shell browser safety boundaries.
 
 ## Date

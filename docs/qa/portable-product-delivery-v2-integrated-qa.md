@@ -20,14 +20,14 @@ branch. It is a release-readiness artifact, not a new runtime subsystem.
 ## ADR Reconciliation
 
 `origin/dev` currently owns `ADR-0113-governed-documentation-browser`. The portable program branch
-therefore uses `ADR-0119-portable-managed-install-and-release-asset-update-authority`.
+therefore uses `ADR-0121-portable-managed-install-and-release-asset-update-authority`.
 
 | Check                              | Evidence                                                                           | Result                                           |
 | ---------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------ |
 | Current `dev` ADR ownership        | `git ls-tree -r origin/dev docs/adr`                                               | `ADR-0113` is the governed documentation ADR.    |
-| Program branch portable authority  | `docs/adr/ADR-0119-portable-managed-install-and-release-asset-update-authority.md` | Portable authority is `ADR-0119`.                |
+| Program branch portable authority  | `docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md` | Portable authority is `ADR-0121`.                |
 | ADR index gate                     | `npm run check:adr-index`                                                          | Green after current-dev merge.                   |
-| Stale portable citation correction | `docs/release/portable-runtime-artifact-contract.md`                               | Portable release-impact tuple now says ADR-0119. |
+| Stale portable citation correction | `docs/release/portable-runtime-artifact-contract.md`                               | Portable release-impact tuple now says ADR-0121. |
 
 The older GitHub issue text that mentions provisional portable `ADR-0113` is superseded by the
 repository state above.
