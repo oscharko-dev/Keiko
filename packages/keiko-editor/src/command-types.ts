@@ -12,6 +12,7 @@ export type EditorHostCapability =
   | "provideDiagnostics"
   | "provideContext"
   | "generateTests"
+  | "renameSymbol"
   | "previewPatch"
   | "applyPatchReview"
   // Issue #1205: an explicit "Format Document" host capability (the governed deterministic formatter
@@ -31,6 +32,7 @@ export type EditorCommandId =
   // `editor.action.inlineSuggest.hide`), so it needs no host capability.
   | "editor.rejectInlineCompletion"
   | "editor.generateTests"
+  | "editor.renameSymbol"
   // Issue #1205: run verification over a generated patch (governed, off in v1 — see `runVerification`).
   | "editor.runVerification"
   | "editor.previewPatch"

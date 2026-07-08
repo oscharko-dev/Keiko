@@ -41,6 +41,7 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     requiredCapabilities: [],
   },
   { id: "editor.generateTests", title: "Generate Tests", requiredCapabilities: ["generateTests"] },
+  { id: "editor.renameSymbol", title: "Rename Symbol", requiredCapabilities: ["renameSymbol"] },
   {
     id: "editor.runVerification",
     title: "Run Verification",
@@ -74,6 +75,7 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   "editor.rejectPatch": (ctx) => ctx.pendingPatchId !== null,
   "editor.runVerification": (ctx) => ctx.pendingPatchId !== null,
   "editor.generateTests": () => true,
+  "editor.renameSymbol": (ctx) => !ctx.readOnly,
   "editor.previewPatch": () => true,
   "editor.openDiff": () => true,
   // Formatting rewrites the buffer, so it is offered only on an editable document.

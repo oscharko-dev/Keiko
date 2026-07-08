@@ -1,21 +1,85 @@
 {
-  "measuredAtIso": "2026-07-04T05:09:46.978Z",
-  "commit": "6c3d061ebfd937f427c093652124f42bed3e8836",
+  "measuredAtIso": "2026-07-08T21:21:47.650Z",
+  "commit": "a136531bd208c9b8e47a27da08b1a148d50cb37d",
   "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
   "b4ColdStartMs": {
     "budgetP50": 1500,
     "budgetP95": 2500,
     "samples": [
-      850,
-      362,
-      340
+      286,
+      203,
+      330
     ],
-    "p50": 362,
-    "p95": 850
+    "p50": 286,
+    "p95": 330
   },
   "b5KeystrokeMs": {
     "budgetMax": 50,
     "captured": true,
+    "samples": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "p50": 0,
+    "p95": 0,
     "activeElement": "div.native-edit-context",
     "longTaskCount": 0,
     "maxLongTaskMs": 0
@@ -24,10 +88,40 @@
     "budgetP75": 200,
     "captured": true,
     "source": "event-timing",
-    "eventCount": 25,
-    "interactionCount": 25,
+    "eventCount": 27,
+    "interactionCount": 27,
     "p75": 16,
     "max": 16
+  },
+  "navigationRoundTripMs": {
+    "definition": {
+      "samples": [
+        258,
+        23,
+        13
+      ],
+      "resultCounts": [
+        1,
+        1,
+        1
+      ],
+      "p50": 23,
+      "p95": 258
+    },
+    "references": {
+      "samples": [
+        58,
+        26,
+        18
+      ],
+      "resultCounts": [
+        5,
+        5,
+        5
+      ],
+      "p50": 26,
+      "p95": 58
+    }
   },
   "b11Memory": {
     "supported": true,
@@ -61,5 +155,16 @@
         "captureReason": "classified-response"
       }
     ]
+  },
+  "workspaceReadCapDegradation": {
+    "attempted": true,
+    "ok": true,
+    "truncated": true,
+    "durationMs": 206,
+    "statusCode": 413,
+    "errorCode": "DOCUMENT_TOO_LARGE",
+    "paddingFileCount": 5,
+    "paddingBytesPerFile": 900000,
+    "workspaceReadBytesBudget": 4000000
   }
 }

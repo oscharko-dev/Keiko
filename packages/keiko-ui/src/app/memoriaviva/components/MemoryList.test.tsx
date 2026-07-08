@@ -229,6 +229,7 @@ describe("MemoryList — populated state", () => {
   it("uses internal navigation buttons for secondary views in workspace-window mode", async () => {
     const onOpenConsolidation = vi.fn();
     const onOpenReviewQueue = vi.fn();
+    const onOpenHealthScan = vi.fn();
     const user = userEvent.setup();
     render(
       <MemoryListContent
@@ -237,13 +238,16 @@ describe("MemoryList — populated state", () => {
         fetchMemoriesImpl={fetchWith([makeRecord()])}
         onOpenConsolidation={onOpenConsolidation}
         onOpenReviewQueue={onOpenReviewQueue}
+        onOpenHealthScan={onOpenHealthScan}
         showWorkspaceBackLink={false}
       />,
     );
     await user.click(await screen.findByRole("button", { name: /consolidation/i }));
     await user.click(screen.getByRole("button", { name: /review queue/i }));
+    await user.click(screen.getByRole("button", { name: /health scan/i }));
     expect(onOpenConsolidation).toHaveBeenCalledTimes(1);
     expect(onOpenReviewQueue).toHaveBeenCalledTimes(1);
+    expect(onOpenHealthScan).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("link", { name: /back to workspace/i })).not.toBeInTheDocument();
   });
 
@@ -295,6 +299,16 @@ describe("MemoryList — populated state", () => {
       expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
         "href",
         "/memoriaviva/consolidation",
+      );
+    });
+  });
+
+  it("shows the health scan entry point in the header", async () => {
+    render(<MemoryList fetchMemoriesImpl={fetchWith([makeRecord()])} />);
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: /health scan/i })).toHaveAttribute(
+        "href",
+        "/memoriaviva/health-scan",
       );
     });
   });

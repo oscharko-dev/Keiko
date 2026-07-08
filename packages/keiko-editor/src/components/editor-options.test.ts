@@ -107,6 +107,36 @@ describe("buildEditorOptions", () => {
     ).toEqual({ enabled: true, above: false });
   });
 
+  it("keeps code actions and signature help disabled unless their providers are wired (#2104)", () => {
+    expect(buildEditorOptions({ readOnly: false, ariaPath: "a.ts" }).lightbulb).toEqual({
+      enabled: "off",
+    });
+    expect(buildEditorOptions({ readOnly: false, ariaPath: "a.ts" }).parameterHints).toEqual({
+      enabled: false,
+    });
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", codeActionsEnabled: false })
+        .lightbulb,
+    ).toEqual({ enabled: "off" });
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", signatureHelpEnabled: false })
+        .parameterHints,
+    ).toEqual({ enabled: false });
+  });
+
+  it("enables the lightbulb and parameter hints only for wired providers (#2104)", () => {
+    const options = buildEditorOptions({
+      readOnly: false,
+      ariaPath: "a.ts",
+      codeActionsEnabled: true,
+      signatureHelpEnabled: true,
+    });
+    expect(options.lightbulb).toEqual({ enabled: "on" });
+    expect(options.parameterHints).toEqual({ enabled: true });
+    expect(options.codeLens).toBe(false);
+    expect(options.minimap).toEqual({ enabled: false });
+  });
+
   it("keeps every other markdown-capable helper surface off even when hover is enabled (#1201)", () => {
     const withHover = buildEditorOptions({
       readOnly: false,

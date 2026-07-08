@@ -7,15 +7,21 @@
 
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  type LanguageCodeActionsResult,
   type LanguageCompletionResult,
+  type LanguageDefinitionResult,
   type LanguageDiagnosticsResult,
   type LanguageFormattingResult,
   type LanguageHoverResult,
   type LanguageServiceCapabilities,
   type LanguageServiceErrorCode,
   type LanguageProviderDescriptor,
+  type LanguageReferencesResult,
+  type LanguageRenameApplyResult,
+  type LanguageRenamePrepareResult,
   type LanguageServiceLimits,
   type LanguageServiceRequest,
+  type LanguageSignatureHelpResult,
   type LanguageSymbolResult,
   EDITOR_LANGUAGE_MODE_IDS,
   LANGUAGE_SERVICE_SCHEMA_VERSION,
@@ -25,6 +31,7 @@ import { createDeadlineCancellation, isCancellation } from "./languageCancellati
 import {
   createLanguageProviderRegistry,
   type LanguageProvider,
+  type LanguageProviderFailure,
   type LanguageProviderContext,
   type LanguageProviderRegistry,
 } from "./languageProvider.js";
@@ -36,9 +43,15 @@ import {
 } from "./builtinLanguageProviders.js";
 import {
   sanitizeCompletion,
+  sanitizeCodeActions,
+  sanitizeDefinition,
   sanitizeDiagnostics,
   sanitizeFormatting,
   sanitizeHover,
+  sanitizeReferences,
+  sanitizeRenameApply,
+  sanitizeRenamePrepare,
+  sanitizeSignatureHelp,
   sanitizeSymbols,
 } from "./languageSanitize.js";
 
@@ -114,6 +127,12 @@ export type LanguageServiceOutcome =
   | { readonly kind: "hover"; readonly result: LanguageHoverResult }
   | { readonly kind: "symbols"; readonly result: LanguageSymbolResult }
   | { readonly kind: "formatting"; readonly result: LanguageFormattingResult }
+  | { readonly kind: "definition"; readonly result: LanguageDefinitionResult }
+  | { readonly kind: "references"; readonly result: LanguageReferencesResult }
+  | { readonly kind: "renamePrepare"; readonly result: LanguageRenamePrepareResult }
+  | { readonly kind: "renameApply"; readonly result: LanguageRenameApplyResult }
+  | { readonly kind: "codeActions"; readonly result: LanguageCodeActionsResult }
+  | { readonly kind: "signatureHelp"; readonly result: LanguageSignatureHelpResult }
   | { readonly kind: "error"; readonly code: LanguageServiceErrorCode; readonly message: string };
 
 export interface RunLanguageOperationOptions {
@@ -132,8 +151,38 @@ function errorOutcome(code: LanguageServiceErrorCode, message: string): Language
   return { kind: "error", code, message };
 }
 
-function runOperation(
-  request: LanguageServiceRequest,
+function isProviderFailure(value: unknown): value is LanguageProviderFailure {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    value.kind === "error" &&
+    "code" in value &&
+    "message" in value
+  );
+}
+
+type CoreLanguageServiceRequest = Extract<
+  LanguageServiceRequest,
+  { operation: "diagnostics" | "completion" | "hover" | "symbols" | "formatting" }
+>;
+
+type ExtendedLanguageServiceRequest = Exclude<LanguageServiceRequest, CoreLanguageServiceRequest>;
+
+const CORE_OPERATIONS = new Set<string>([
+  "diagnostics",
+  "completion",
+  "hover",
+  "symbols",
+  "formatting",
+]);
+
+function isCoreRequest(request: LanguageServiceRequest): request is CoreLanguageServiceRequest {
+  return CORE_OPERATIONS.has(request.operation);
+}
+
+function runCoreOperation(
+  request: CoreLanguageServiceRequest,
   provider: LanguageProvider,
   ctx: LanguageProviderContext,
   limits: LanguageServiceLimits,
@@ -162,6 +211,127 @@ function runOperation(
         result: sanitizeFormatting(provider.getFormatting(ctx, request.options), limits),
       };
   }
+}
+
+function runDefinitionOperation(
+  request: Extract<LanguageServiceRequest, { operation: "definition" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getDefinition === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "definition",
+        result: sanitizeDefinition(provider.getDefinition(ctx, request.position), limits),
+      };
+}
+
+function runReferencesOperation(
+  request: Extract<LanguageServiceRequest, { operation: "references" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getReferences === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "references",
+        result: sanitizeReferences(provider.getReferences(ctx, request.position), limits),
+      };
+}
+
+function runRenamePrepareOperation(
+  request: Extract<LanguageServiceRequest, { operation: "renamePrepare" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getRenamePrepare === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "renamePrepare",
+        result: sanitizeRenamePrepare(provider.getRenamePrepare(ctx, request.position), limits),
+      };
+}
+
+function runRenameApplyOperation(
+  request: Extract<LanguageServiceRequest, { operation: "renameApply" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  if (provider.getRenameApply === undefined) {
+    return errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.");
+  }
+  const result = provider.getRenameApply(ctx, request.position, request.newName);
+  return isProviderFailure(result)
+    ? errorOutcome(result.code, result.message)
+    : { kind: "renameApply", result: sanitizeRenameApply(result, limits) };
+}
+
+function runCodeActionsOperation(
+  request: Extract<LanguageServiceRequest, { operation: "codeActions" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getCodeActions === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "codeActions",
+        result: sanitizeCodeActions(
+          provider.getCodeActions(ctx, request.range, request.diagnostics),
+          limits,
+        ),
+      };
+}
+
+function runSignatureHelpOperation(
+  request: Extract<LanguageServiceRequest, { operation: "signatureHelp" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getSignatureHelp === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "signatureHelp",
+        result: sanitizeSignatureHelp(provider.getSignatureHelp(ctx, request.position), limits),
+      };
+}
+
+function runExtendedOperation(
+  request: ExtendedLanguageServiceRequest,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  switch (request.operation) {
+    case "definition":
+      return runDefinitionOperation(request, provider, ctx, limits);
+    case "references":
+      return runReferencesOperation(request, provider, ctx, limits);
+    case "renamePrepare":
+      return runRenamePrepareOperation(request, provider, ctx, limits);
+    case "renameApply":
+      return runRenameApplyOperation(request, provider, ctx, limits);
+    case "codeActions":
+      return runCodeActionsOperation(request, provider, ctx, limits);
+    case "signatureHelp":
+      return runSignatureHelpOperation(request, provider, ctx, limits);
+  }
+}
+
+function runOperation(
+  request: LanguageServiceRequest,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return isCoreRequest(request)
+    ? runCoreOperation(request, provider, ctx, limits)
+    : runExtendedOperation(request, provider, ctx, limits);
 }
 
 export function runLanguageOperation(
@@ -202,6 +372,9 @@ export function runLanguageOperation(
       return cancellation.reason() === "timeout"
         ? errorOutcome("TIMED_OUT", "Analysis exceeded the time budget.")
         : errorOutcome("CANCELLED", "The request was cancelled.");
+    }
+    if (isProviderFailure(error)) {
+      return errorOutcome(error.code, error.message);
     }
     throw error;
   }

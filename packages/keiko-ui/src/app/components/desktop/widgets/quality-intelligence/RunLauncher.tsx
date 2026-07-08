@@ -547,9 +547,9 @@ export function RunLauncher({
     setConnectorError(null);
   }, []);
 
-  // Epic #1941 (ADR-0118) — the QI source path is deliberately display-only (GEN-UI-A11Y-011);
-  // Browse now opens the native OS dialog and the validated absolute path lands in the same
-  // `path` state. Cancellation changes nothing; busy/unsupported/failure become launcher copy.
+  // Epic #1941 (ADR-0118) — Browse opens the native OS dialog and the validated absolute path
+  // lands in the same `path` state that manual typing writes to (one state cell, no drift risk).
+  // Cancellation changes nothing; busy/unsupported/failure become launcher copy.
   const openNativeSourcePicker = useCallback((): void => {
     const isFile = sourceKind === "file";
     void pickWithNativeDialog({
@@ -964,21 +964,19 @@ export function RunLauncher({
             {isFile ? "File path" : "Folder path"}
           </span>
           <div className="qi-path-picker">
-            {/* Display-only value, NOT an editor: the path is chosen via the Browse dialog, so this
-                must not masquerade as an interactive textbox (GEN-UI-A11Y-011). It stays associated
-                with its label (aria-labelledby) so AT reads "File path: <value>" as plain text. */}
-            <div
+            <input
+              type="text"
               className="qi-path-value qi-monospace"
               aria-labelledby={sourcePathLabelId}
               title={path}
-              data-empty={path.trim().length === 0 ? "true" : undefined}
-            >
-              {path.trim().length > 0
-                ? path
-                : isFile
-                  ? "Choose a local file…"
-                  : "Choose a local folder…"}
-            </div>
+              placeholder={isFile ? "Choose a local file…" : "Choose a local folder…"}
+              value={path}
+              disabled={running}
+              onChange={(e) => {
+                setPath(e.target.value);
+                setError(null);
+              }}
+            />
             <button
               type="button"
               className="qi-btn qi-btn-secondary qi-browse-btn"
@@ -991,7 +989,7 @@ export function RunLauncher({
           </div>
           {!nativeDialogSupported ? (
             <span id={nativeUnsupportedNoteId} className="qi-field-note">
-              Native dialogs are unavailable on this platform.
+              Native dialogs are unavailable on this platform. Enter the path manually.
             </span>
           ) : null}
         </div>

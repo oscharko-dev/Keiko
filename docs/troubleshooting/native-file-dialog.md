@@ -3,7 +3,7 @@
 Operator guidance for the native Browse dialogs introduced by Epic #1941 (ADR-0118). The local
 Node BFF opens the platform picker (`POST /api/native-file-dialog/open`) and validates every
 returned path through the Files policy before the UI sees it. Manual path entry stays available
-on every surface that had it; the Quality Intelligence source path is display-only by design.
+on every surface that had it, including the Quality Intelligence source path.
 
 All entries follow the [troubleshooting entry template](./_template.md).
 

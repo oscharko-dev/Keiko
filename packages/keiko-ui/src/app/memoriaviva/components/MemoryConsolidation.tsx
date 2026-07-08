@@ -137,6 +137,31 @@ function ReviewAction({
   );
 }
 
+// Advisory-only annotation (Issue #2130 / ADR-0120): rendered distinct from, and never
+// pre-selecting, `ConflictResolutionControl`'s own action. Plain JSX text interpolation only
+// (no dangerouslySetInnerHTML anywhere in this file) so a hostile rationale string is always
+// escaped, never executed. Absent unless the operator opts in and the model call succeeded.
+function SuggestedResolutionNotice({
+  item,
+  onOpenDetail,
+  t,
+}: {
+  readonly item: MemoryConsolidationReviewItem;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (item.suggestedResolution === undefined) return null;
+  return (
+    <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+      <strong>{t("memoria.consolidation.advisory.label")}</strong>{" "}
+      {t("memoria.consolidation.advisory.keep")}{" "}
+      <MemoryIdLink id={item.suggestedResolution.recommendedWinnerId} onOpenDetail={onOpenDetail} />
+      {" — "}
+      {item.suggestedResolution.rationale}
+    </p>
+  );
+}
+
 function conflictResolutionForItem(
   item: MemoryConsolidationReviewItem,
 ): ResolveMemoryConflictInput | null {
@@ -884,6 +909,7 @@ export function MemoryConsolidation({
                       <span style={{ color: "var(--fg-muted)" }}>
                         <ReviewAction item={item} onOpenDetail={onOpenDetail} t={t} />
                       </span>
+                      <SuggestedResolutionNotice item={item} onOpenDetail={onOpenDetail} t={t} />
                       <ConflictResolutionControl
                         item={item}
                         busy={resolvingConflictId === item.id}

@@ -6,9 +6,18 @@ import { userEvent } from "@testing-library/user-event";
 import { useRef, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EditorPosition, EditorRange, EditorSaveRequest } from "../index.js";
+import type {
+  EditorCodeActionsResolver,
+  EditorDefinitionResolver,
+  EditorPosition,
+  EditorRange,
+  EditorReferencesResolver,
+  EditorSaveRequest,
+  EditorSignatureHelpResolver,
+} from "../index.js";
 import { KeikoCodeEditor } from "./KeikoCodeEditor.js";
 import { baseProps, buildBuffer, buildFileModel, dirtyFileModel } from "./test-harness.js";
+import type { KeikoCodeEditorProps } from "./types.js";
 
 // ─── Monaco mock: a <textarea>-backed fake that drives onChange and calls onMount. ───────────────
 
@@ -28,6 +37,8 @@ interface CapturedEditor {
   setSelection: ReturnType<typeof vi.fn>;
   revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
   deltaDecorations: ReturnType<typeof vi.fn>;
+  executeEdits: ReturnType<typeof vi.fn>;
+  pushUndoStop: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
 
@@ -54,19 +65,51 @@ interface CapturedCompletionRegistration {
   };
 }
 
+// A registration captured for the navigation/action/signature providers (#2104): the fake registrar
+// records which language it was registered for and exposes a live `disposed()` read so a test can
+// assert BOTH that registration happened and that a later `dispose()` call actually fired.
+interface CapturedNavigationRegistration {
+  readonly language: string;
+  readonly disposed: () => boolean;
+}
+
 const captured: {
   editor: CapturedEditor | null;
   language: string | null;
   completion: CapturedCompletionRegistration[];
+  definition: CapturedNavigationRegistration[];
+  references: CapturedNavigationRegistration[];
+  codeActions: CapturedNavigationRegistration[];
+  signatureHelp: CapturedNavigationRegistration[];
   options: Record<string, unknown> | null;
   keepCurrentModel: boolean | null;
 } = {
   editor: null,
   language: null,
   completion: [],
+  definition: [],
+  references: [],
+  codeActions: [],
+  signatureHelp: [],
   options: null,
   keepCurrentModel: null,
 };
+
+// Registers a fake navigation/action/signature provider: pushes a `CapturedNavigationRegistration`
+// into `sink` and returns a disposable whose `dispose()` flips that entry's `disposed()` read to
+// `true` — the same registrar/disposable shape `on-mount.test.ts` uses for these bridges.
+function registerFakeNavigationProvider(
+  sink: CapturedNavigationRegistration[],
+  language: string,
+): { dispose: () => void } {
+  let disposedFlag = false;
+  sink.push({ language, disposed: (): boolean => disposedFlag });
+  return {
+    dispose: (): void => {
+      disposedFlag = true;
+    },
+  };
+}
 
 vi.mock("@monaco-editor/react", () => {
   interface FakeSelection {
@@ -87,8 +130,8 @@ vi.mock("@monaco-editor/react", () => {
   const fakeMonaco = {
     editor: { defineTheme: vi.fn(), setModelMarkers: vi.fn() },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
-    KeyMod: { CtrlCmd: 2048 },
-    KeyCode: { KeyS: 49 },
+    KeyMod: { CtrlCmd: 2048, Alt: 512 },
+    KeyCode: { KeyS: 49, KeyT: 53, F2: 60 },
     languages: {
       CompletionItemKind: {
         Text: 1,
@@ -112,6 +155,17 @@ vi.mock("@monaco-editor/react", () => {
         captured.completion.push({ language, provider });
         return { dispose: vi.fn() };
       },
+      // Navigation/action/signature registration surface (#2104): registration/disposal only — the
+      // provider bodies themselves are exercised at the bridge-unit level (definition-bridge.test.ts,
+      // references-bridge.test.ts, code-action-bridge.test.ts, signature-help-bridge.test.ts).
+      registerDefinitionProvider: (language: string): { dispose: () => void } =>
+        registerFakeNavigationProvider(captured.definition, language),
+      registerReferenceProvider: (language: string): { dispose: () => void } =>
+        registerFakeNavigationProvider(captured.references, language),
+      registerCodeActionProvider: (language: string): { dispose: () => void } =>
+        registerFakeNavigationProvider(captured.codeActions, language),
+      registerSignatureHelpProvider: (language: string): { dispose: () => void } =>
+        registerFakeNavigationProvider(captured.signatureHelp, language),
     },
   };
   interface FakeEditorShape {
@@ -129,10 +183,14 @@ vi.mock("@monaco-editor/react", () => {
     setSelection: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
+    executeEdits: ReturnType<typeof vi.fn>;
+    pushUndoStop: ReturnType<typeof vi.fn>;
     getModel: () => {
       getValue: () => string;
       getVersionId: () => number;
       getLanguageId: () => string;
+      getLineCount: () => number;
+      getLineMaxColumn: (lineNumber: number) => number;
       onDidChangeContent: (listener: () => void) => { dispose: () => void };
       uri: { toString: () => string };
     };
@@ -143,6 +201,8 @@ vi.mock("@monaco-editor/react", () => {
     getValue: () => string;
     getVersionId: () => number;
     getLanguageId: () => string;
+    getLineCount: () => number;
+    getLineMaxColumn: (lineNumber: number) => number;
     onDidChangeContent: (listener: () => void) => { dispose: () => void };
     uri: { toString: () => string };
   }
@@ -158,10 +218,13 @@ vi.mock("@monaco-editor/react", () => {
     setSelection: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
+    executeEdits: ReturnType<typeof vi.fn>;
+    pushUndoStop: ReturnType<typeof vi.fn>;
     modelText: string;
     modelLanguage: string;
     modelVersion: number;
     modelContentListener: (() => void) | null;
+    onChange: MockProps["onChange"] | null;
     mounted: boolean;
     fakeEditor: FakeEditorShape;
   }
@@ -181,13 +244,27 @@ vi.mock("@monaco-editor/react", () => {
         (_oldDecorations: readonly string[], newDecorations: readonly unknown[]) =>
           newDecorations.length > 0 ? ["reference-decoration"] : [],
       ),
+      executeEdits: vi.fn(),
+      pushUndoStop: vi.fn(() => true),
       modelText: "",
       modelLanguage: "plaintext",
       modelVersion: 1,
       modelContentListener: null,
+      onChange: null,
       mounted: false,
       fakeEditor: null as unknown as FakeEditorShape,
     };
+    s.executeEdits.mockImplementation(
+      (_source: string, edits: readonly { readonly text: string }[]): boolean => {
+        const text = edits[0]?.text;
+        if (text === undefined) return false;
+        s.modelText = text;
+        s.modelVersion += 1;
+        s.modelContentListener?.();
+        s.onChange?.(text);
+        return true;
+      },
+    );
     s.fakeEditor = {
       addAction: (descriptor): { dispose: () => void } => {
         s.saveRun = descriptor.run;
@@ -228,10 +305,15 @@ vi.mock("@monaco-editor/react", () => {
       setSelection: s.setSelection,
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
+      executeEdits: s.executeEdits,
+      pushUndoStop: s.pushUndoStop,
       getModel: (): FakeModelShape => ({
         getValue: (): string => s.modelText,
         getVersionId: (): number => s.modelVersion,
         getLanguageId: (): string => s.modelLanguage,
+        getLineCount: (): number => Math.max(1, s.modelText.split("\n").length),
+        getLineMaxColumn: (lineNumber: number): number =>
+          (s.modelText.split("\n")[lineNumber - 1]?.length ?? 0) + 1,
         onDidChangeContent: (listener): { dispose: () => void } => {
           s.modelContentListener = listener;
           return { dispose: vi.fn() };
@@ -265,6 +347,8 @@ vi.mock("@monaco-editor/react", () => {
       setSelection: s.setSelection,
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
+      executeEdits: s.executeEdits,
+      pushUndoStop: s.pushUndoStop,
       disposed: s.disposed,
     };
     return s;
@@ -282,6 +366,7 @@ vi.mock("@monaco-editor/react", () => {
     captured.keepCurrentModel = props.keepCurrentModel ?? null;
     state.modelText = props.value ?? "";
     state.modelLanguage = props.language ?? "plaintext";
+    state.onChange = props.onChange ?? null;
     scheduleMountOnce(state, props.onMount);
   }
 
@@ -330,6 +415,10 @@ beforeEach(() => {
   captured.editor = null;
   captured.language = null;
   captured.completion = [];
+  captured.definition = [];
+  captured.references = [];
+  captured.codeActions = [];
+  captured.signatureHelp = [];
   captured.options = null;
   captured.keepCurrentModel = null;
 });
@@ -352,6 +441,38 @@ describe("KeikoCodeEditor — controlled editing", () => {
     expect(origin).toBe("human");
     expect(typeof delta.text).toBe("string");
     expect(delta.sizeBytes).toBe(new TextEncoder().encode(delta.text).length);
+  });
+
+  it("applies host edit requests through Monaco edits with undo stops", async () => {
+    const onContentChange = vi.fn();
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          hostEditRequest: {
+            id: "rename-1",
+            text: "const renamed = 1;\n",
+            origin: "applied-patch",
+          },
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.executeEdits).toHaveBeenCalledWith("keiko.host-edit", [
+        {
+          range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 },
+          text: "const renamed = 1;\n",
+        },
+      ]);
+    });
+    expect(captured.editor?.pushUndoStop).toHaveBeenCalledTimes(2);
+    const [delta, origin] = onContentChange.mock.calls.at(-1) as [
+      { text: string; sizeBytes: number },
+      string,
+    ];
+    expect(delta.text).toBe("const renamed = 1;\n");
+    expect(origin).toBe("applied-patch");
   });
 
   it("uses a host-provided accessible editor label", () => {
@@ -833,6 +954,102 @@ describe("KeikoCodeEditor — completion bridge (#1199)", () => {
     const [query] = provideCompletions.mock.calls[0] as [{ documentText: string }];
     expect(query.documentText).toBe("const a = 1;\n");
     expect(list.suggestions.map((s) => s.label)).toEqual(["render"]);
+  });
+});
+
+describe("KeikoCodeEditor — navigation/action/signature providers (#2104)", () => {
+  function definitionResolver(): EditorDefinitionResolver {
+    return (query) => Promise.resolve({ request: query.request.request, locations: [] });
+  }
+  function referencesResolver(): EditorReferencesResolver {
+    return (query) =>
+      Promise.resolve({
+        request: query.request.request,
+        locations: [],
+        includesDeclaration: true,
+      });
+  }
+  function codeActionsResolver(): EditorCodeActionsResolver {
+    return (query) => Promise.resolve({ request: query.request.request, actions: [] });
+  }
+  function signatureHelpResolver(): EditorSignatureHelpResolver {
+    return (query) =>
+      Promise.resolve({
+        request: query.request.request,
+        signatures: [],
+        activeSignature: null,
+        activeParameter: null,
+      });
+  }
+  function navigationProps(): Partial<KeikoCodeEditorProps> {
+    return {
+      provideDefinition: definitionResolver(),
+      provideReferences: referencesResolver(),
+      provideCodeActions: codeActionsResolver(),
+      provideSignatureHelp: signatureHelpResolver(),
+    };
+  }
+
+  it("registers a definition/references/codeActions/signatureHelp provider per governed language when the resolver props are supplied", async () => {
+    render(<KeikoCodeEditor {...baseProps(navigationProps())} />);
+    await flushMount();
+    expect(captured.definition.map((r) => r.language)).toEqual(["typescript", "javascript"]);
+    expect(captured.references.map((r) => r.language)).toEqual(["typescript", "javascript"]);
+    expect(captured.codeActions.map((r) => r.language)).toEqual(["typescript", "javascript"]);
+    expect(captured.signatureHelp.map((r) => r.language)).toEqual(["typescript", "javascript"]);
+  });
+
+  it("registers no navigation/action/signature providers when the host supplies no resolvers", async () => {
+    render(<KeikoCodeEditor {...baseProps()} />);
+    await flushMount();
+    expect(captured.definition).toEqual([]);
+    expect(captured.references).toEqual([]);
+    expect(captured.codeActions).toEqual([]);
+    expect(captured.signatureHelp).toEqual([]);
+  });
+
+  it("disposes every definition/references/codeActions/signatureHelp registration on unmount", async () => {
+    const { unmount } = render(<KeikoCodeEditor {...baseProps(navigationProps())} />);
+    await flushMount();
+    expect(captured.definition.every((r) => r.disposed())).toBe(false);
+    expect(captured.references.every((r) => r.disposed())).toBe(false);
+    expect(captured.codeActions.every((r) => r.disposed())).toBe(false);
+    expect(captured.signatureHelp.every((r) => r.disposed())).toBe(false);
+
+    unmount();
+
+    expect(captured.definition.every((r) => r.disposed())).toBe(true);
+    expect(captured.references.every((r) => r.disposed())).toBe(true);
+    expect(captured.codeActions.every((r) => r.disposed())).toBe(true);
+    expect(captured.signatureHelp.every((r) => r.disposed())).toBe(true);
+  });
+
+  it("disposes navigation/action/signature providers when their resolver props are removed", async () => {
+    const { rerender } = render(<KeikoCodeEditor {...baseProps(navigationProps())} />);
+    await flushMount();
+    expect(captured.definition).toHaveLength(2);
+
+    rerender(<KeikoCodeEditor {...baseProps()} />);
+    await flushMount();
+
+    await waitFor(() => {
+      expect(captured.definition.every((r) => r.disposed())).toBe(true);
+    });
+    expect(captured.definition).toHaveLength(2);
+    expect(captured.references.every((r) => r.disposed())).toBe(true);
+    expect(captured.codeActions.every((r) => r.disposed())).toBe(true);
+    expect(captured.signatureHelp.every((r) => r.disposed())).toBe(true);
+
+    rerender(<KeikoCodeEditor {...baseProps(navigationProps())} />);
+    await flushMount();
+
+    await waitFor(() => {
+      expect(captured.definition).toHaveLength(4);
+    });
+    expect(captured.definition.slice(2).every((r) => r.disposed())).toBe(false);
+    expect(captured.references.slice(2).every((r) => r.disposed())).toBe(false);
+    expect(captured.codeActions.slice(2).every((r) => r.disposed())).toBe(false);
+    expect(captured.signatureHelp.slice(2).every((r) => r.disposed())).toBe(false);
   });
 });
 

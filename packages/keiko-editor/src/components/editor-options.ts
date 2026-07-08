@@ -32,6 +32,16 @@ export interface BuildEditorOptionsArgs {
    */
   readonly hoverEnabled?: boolean | undefined;
   /**
+   * Whether a governed code-action provider is wired (Epic #2089). Monaco's lightbulb is enabled
+   * only when true; absent/false keeps it disabled so unsupported languages retain today's behavior.
+   */
+  readonly codeActionsEnabled?: boolean | undefined;
+  /**
+   * Whether a governed signature-help provider is wired (Epic #2089). Monaco parameter hints are
+   * enabled only when true; absent/false keeps the parameter-hints UI disabled.
+   */
+  readonly signatureHelpEnabled?: boolean | undefined;
+  /**
    * Whether the buffer is in large-file degraded mode (Issue #1207, ADR-0042 D3.6: buffers > 500 KB
    * or > 10,000 lines). Defaults to false. In degraded mode the per-render/per-keystroke-expensive
    * features (bracket-pair colorization, folding, occurrence highlighting, whitespace rendering) are
@@ -100,6 +110,8 @@ function buildPerformanceOptions(degraded: boolean): EditorConstructionOptions {
 function buildAssistanceOptions(
   inlineCompletionEnabled: boolean,
   hoverEnabled: boolean,
+  codeActionsEnabled: boolean,
+  signatureHelpEnabled: boolean,
 ): EditorConstructionOptions {
   return {
     // Force below-line placement so top-of-editor diagnostics do not render under Keiko window chrome.
@@ -108,7 +120,7 @@ function buildAssistanceOptions(
     quickSuggestions: false,
     quickSuggestionsDelay: 0,
     suggestOnTriggerCharacters: true,
-    parameterHints: { enabled: false },
+    parameterHints: { enabled: signatureHelpEnabled },
     suggest: { ...GOVERNED_COMPLETION_SUGGEST_OPTIONS },
     inlineSuggest: {
       // Enabled only when a governed inline-completion provider is wired (Issue #1200). The toolbar
@@ -122,7 +134,9 @@ function buildAssistanceOptions(
     links: false,
     colorDecorators: false,
     codeLens: false,
-    lightbulb: { enabled: "off" as monaco.editor.ShowLightbulbIconMode },
+    lightbulb: {
+      enabled: (codeActionsEnabled ? "on" : "off") as monaco.editor.ShowLightbulbIconMode,
+    },
     inlayHints: { enabled: "off" },
   };
 }
@@ -160,6 +174,8 @@ export function buildEditorOptions(
 ): monaco.editor.IStandaloneEditorConstructionOptions {
   const inlineCompletionEnabled = args.inlineCompletionEnabled ?? false;
   const hoverEnabled = args.hoverEnabled ?? false;
+  const codeActionsEnabled = args.codeActionsEnabled ?? false;
+  const signatureHelpEnabled = args.signatureHelpEnabled ?? false;
   // Large-file degraded mode (Issue #1207, ADR-0042 D3.6). On buffers > 500 KB or > 10,000 lines the
   // per-render/per-keystroke-expensive features are disabled and Monaco's large-file optimizations are
   // engaged, so typing stays within the < 50 ms main-thread budget. Normal buffers are unaffected.
@@ -169,7 +185,12 @@ export function buildEditorOptions(
     fontFamily: EDITOR_FONT_FAMILY,
     fontSize: EDITOR_FONT_SIZE,
     ...buildPerformanceOptions(degraded),
-    ...buildAssistanceOptions(inlineCompletionEnabled, hoverEnabled),
+    ...buildAssistanceOptions(
+      inlineCompletionEnabled,
+      hoverEnabled,
+      codeActionsEnabled,
+      signatureHelpEnabled,
+    ),
     ...buildChromeOptions(),
     multiCursorModifier: "alt",
     readOnly: args.readOnly,

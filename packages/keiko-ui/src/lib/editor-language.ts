@@ -14,23 +14,37 @@
 // notice in the editor is out of scope for #1201; the bounds are enforced and tested server-side.
 
 import type {
+  EditorCodeAction,
+  EditorCodeActionsResponse,
+  EditorDefinitionResponse,
   EditorDiagnostic,
   EditorDiagnosticsResponse,
   EditorDocumentSymbol,
   EditorFormattingResponse,
   EditorHoverResponse,
+  EditorLocation,
   EditorRange,
+  EditorReferencesResponse,
   EditorRequestIdentity,
+  EditorSignatureHelpResponse,
+  EditorSignatureInformation,
   EditorSymbolsResponse,
   EditorTextEdit,
 } from "@oscharko-dev/keiko-editor";
 import type {
+  LanguageCodeAction,
+  LanguageCodeActionsResult,
   LanguageDiagnostic,
+  LanguageDefinitionResult,
   LanguageDiagnosticsResult,
   LanguageDocumentSymbol,
   LanguageFormattingResult,
   LanguageHoverResult,
+  LanguageLocation,
   LanguageRange,
+  LanguageReferencesResult,
+  LanguageSignatureHelpResult,
+  LanguageSignatureInformation,
   LanguageSymbolResult,
   LanguageTextEdit,
 } from "./types";
@@ -103,4 +117,65 @@ export function mapWireToEditorFormattingResponse(
   wire: LanguageFormattingResult,
 ): EditorFormattingResponse {
   return { request, edits: wire.edits.map(toEditorTextEdit) };
+}
+
+function toEditorLocation(location: LanguageLocation): EditorLocation {
+  return { path: location.path, range: toEditorRange(location.range) };
+}
+
+/** Adapt the definition wire result into the editor definition response. */
+export function mapWireToEditorDefinitionResponse(
+  request: EditorRequestIdentity,
+  wire: LanguageDefinitionResult,
+): EditorDefinitionResponse {
+  return { request, locations: wire.locations.map(toEditorLocation) };
+}
+
+/** Adapt the references wire result into the editor references response. */
+export function mapWireToEditorReferencesResponse(
+  request: EditorRequestIdentity,
+  wire: LanguageReferencesResult,
+): EditorReferencesResponse {
+  return {
+    request,
+    locations: wire.locations.map(toEditorLocation),
+    includesDeclaration: wire.includesDeclaration,
+  };
+}
+
+function toEditorCodeAction(action: LanguageCodeAction): EditorCodeAction {
+  return {
+    title: action.title,
+    kind: action.kind,
+    edits: action.edits === null ? null : action.edits.map(toEditorTextEdit),
+  };
+}
+
+/** Adapt the code-action wire result into the editor code-action response. */
+export function mapWireToEditorCodeActionsResponse(
+  request: EditorRequestIdentity,
+  wire: LanguageCodeActionsResult,
+): EditorCodeActionsResponse {
+  return { request, actions: wire.actions.map(toEditorCodeAction) };
+}
+
+function toEditorSignature(signature: LanguageSignatureInformation): EditorSignatureInformation {
+  return {
+    label: signature.label,
+    ...(signature.documentation === undefined ? {} : { documentation: signature.documentation }),
+    parameters: signature.parameters.map((parameter) => ({ label: parameter.label })),
+  };
+}
+
+/** Adapt the signature-help wire result into the editor signature-help response. */
+export function mapWireToEditorSignatureHelpResponse(
+  request: EditorRequestIdentity,
+  wire: LanguageSignatureHelpResult,
+): EditorSignatureHelpResponse {
+  return {
+    request,
+    signatures: wire.signatures.map(toEditorSignature),
+    activeSignature: wire.activeSignature,
+    activeParameter: wire.activeParameter,
+  };
 }

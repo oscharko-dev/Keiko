@@ -8,6 +8,7 @@ import { useConversationMemorySettings } from "@/app/components/desktop/hooks/me
 import { Toggle } from "@/app/components/desktop/widgets/shared/Toggle";
 import type { fetchMemories } from "@/lib/memory-api";
 import { useTranslate } from "@/lib/i18n";
+import { HealthScanFindings } from "./HealthScanFindings";
 import { MemoryConsolidation } from "./MemoryConsolidation";
 import { MemoryDetail } from "./MemoryDetail";
 import { MemoryListContent } from "./MemoryList";
@@ -18,7 +19,8 @@ type MemoriaVivaWindowView =
   | { readonly kind: "list" }
   | { readonly kind: "detail"; readonly id: string }
   | { readonly kind: "consolidation" }
-  | { readonly kind: "reviewQueue" };
+  | { readonly kind: "reviewQueue" }
+  | { readonly kind: "healthScan" };
 
 const EMPTY_FILTERS: MemoryFilterState = {
   query: "",
@@ -143,6 +145,7 @@ export function MemoriaVivaWindow({ fetchMemoriesImpl }: MemoriaVivaWindowProps 
           onOpenDetail={openDetail}
           onOpenConsolidation={() => setView({ kind: "consolidation" })}
           onOpenReviewQueue={() => setView({ kind: "reviewQueue" })}
+          onOpenHealthScan={() => setView({ kind: "healthScan" })}
           policyEnabled={policyEnabled}
           onPolicyEnabledChange={setPolicyEnabled}
           showWorkspaceBackLink={false}
@@ -153,8 +156,10 @@ export function MemoriaVivaWindow({ fetchMemoriesImpl }: MemoriaVivaWindowProps 
         <MemoryDetail id={view.id} onBack={openList} />
       ) : view.kind === "consolidation" ? (
         <MemoryConsolidation onBack={openList} onOpenDetail={openDetail} />
-      ) : (
+      ) : view.kind === "reviewQueue" ? (
         <ReviewQueue onBack={openList} onOpenDetail={openDetail} />
+      ) : (
+        <HealthScanFindings onBack={openList} onOpenDetail={openDetail} />
       )}
     </div>
   );

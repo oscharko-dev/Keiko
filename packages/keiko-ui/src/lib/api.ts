@@ -56,10 +56,18 @@ import type {
   EditorPatchApplyWireResponse,
   LanguageDiagnosticsResult,
   LanguageServiceCapabilities,
+  LanguageDefinitionResult,
   LanguageHoverResult,
+  LanguageReferencesResult,
+  LanguageRenameApplyResult,
+  LanguageRenamePrepareResult,
   LanguageSymbolResult,
   LanguageFormattingResult,
   LanguageFormattingOptions,
+  LanguageCodeActionsResult,
+  LanguageDiagnostic,
+  LanguageRange,
+  LanguageSignatureHelpResult,
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
@@ -1817,6 +1825,142 @@ export async function requestEditorFormatting(
         root: input.root,
         document: languageDocument(input),
         ...(input.options === undefined ? {} : { options: input.options }),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorDefinition(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageDefinitionResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "definition",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorReferences(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageReferencesResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageReferencesResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "references",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorCodeActions(
+  input: EditorLanguageRequestInput & {
+    readonly range: LanguageRange;
+    readonly diagnostics: readonly LanguageDiagnostic[];
+  },
+  signal?: AbortSignal,
+): Promise<LanguageCodeActionsResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageCodeActionsResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "codeActions",
+        root: input.root,
+        document: languageDocument(input),
+        range: input.range,
+        diagnostics: input.diagnostics,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorSignatureHelp(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageSignatureHelpResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageSignatureHelpResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "signatureHelp",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorRenamePrepare(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageRenamePrepareResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageRenamePrepareResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "renamePrepare",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorRenameApply(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+    readonly newName: string;
+  },
+  signal?: AbortSignal,
+): Promise<LanguageRenameApplyResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageRenameApplyResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "renameApply",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+        newName: input.newName,
       }),
       ...(signal === undefined ? {} : { signal }),
     },

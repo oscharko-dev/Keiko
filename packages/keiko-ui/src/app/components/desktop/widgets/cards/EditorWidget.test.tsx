@@ -20,10 +20,16 @@ import {
   postEditorAgentSessionSnapshot,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
+  requestEditorCodeActions,
+  requestEditorDefinition,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
   requestEditorInlineCompletion,
+  requestEditorReferences,
+  requestEditorRenameApply,
+  requestEditorRenamePrepare,
+  requestEditorSignatureHelp,
   requestEditorSymbols,
   requestEditorTestGeneration,
   saveFilesContent,
@@ -59,6 +65,12 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorHover: vi.fn(),
     requestEditorSymbols: vi.fn(),
     requestEditorFormatting: vi.fn(),
+    requestEditorDefinition: vi.fn(),
+    requestEditorReferences: vi.fn(),
+    requestEditorRenamePrepare: vi.fn(),
+    requestEditorRenameApply: vi.fn(),
+    requestEditorCodeActions: vi.fn(),
+    requestEditorSignatureHelp: vi.fn(),
     requestEditorTestGeneration: vi.fn(),
   };
 });
@@ -127,7 +139,19 @@ const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
     {
       id: "typescript",
       languages: ["typescript", "javascript"],
-      operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
+      operations: [
+        "diagnostics",
+        "completion",
+        "hover",
+        "symbols",
+        "formatting",
+        "definition",
+        "references",
+        "codeActions",
+        "signatureHelp",
+        "renamePrepare",
+        "renameApply",
+      ],
       availability: "available",
     },
   ],
@@ -273,6 +297,7 @@ beforeEach(() => {
   vi.mocked(fetchEditorAgentAudit).mockResolvedValue({ records: [] });
   vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
   vi.mocked(saveFilesContent).mockResolvedValue(fileResponse());
+  vi.mocked(requestEditorSymbols).mockResolvedValue({ symbols: [], truncated: false });
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
   vi.mocked(postEditorAgentActionResult).mockResolvedValue({
     result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
@@ -1280,8 +1305,8 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
   });
 });
 
-describe("EditorWidget language intelligence (Issue #1201)", () => {
-  it("wires diagnostics, hover, symbols, and formatting resolvers for a TS/JS file", async () => {
+describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
+  it("wires governed language resolvers for a TS/JS file", async () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
     vi.mocked(requestEditorDiagnostics).mockResolvedValueOnce({
       diagnostics: [
@@ -1314,7 +1339,41 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
       ],
       truncated: false,
     });
-    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+    vi.mocked(requestEditorDefinition).mockResolvedValueOnce({
+      locations: [
+        {
+          path: "src/def.ts",
+          range: { start: { line: 2, character: 4 }, end: { line: 2, character: 9 } },
+        },
+      ],
+      truncated: false,
+    });
+    vi.mocked(requestEditorReferences).mockResolvedValueOnce({
+      locations: [
+        {
+          path: "src/ref.ts",
+          range: { start: { line: 3, character: 1 }, end: { line: 3, character: 6 } },
+        },
+      ],
+      includesDeclaration: true,
+      truncated: false,
+    });
+    vi.mocked(requestEditorCodeActions).mockResolvedValueOnce({
+      actions: [{ title: "Fix", kind: "quickfix", edits: [] }],
+      truncated: false,
+      returnedCount: 1,
+      totalCount: 1,
+    });
+    vi.mocked(requestEditorSignatureHelp).mockResolvedValueOnce({
+      signatures: [{ label: "fn(value: string)", parameters: [{ label: "value" }] }],
+      activeSignature: 0,
+      activeParameter: 0,
+      truncated: false,
+      returnedCount: 1,
+      totalCount: 1,
+    });
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-existing" }));
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" openEditorFile={openEditorFile} />);
     await screen.findByTestId("editor-surface");
 
     const identity = { requestId: "r", streamId: "s", sequence: 1 };
@@ -1377,6 +1436,139 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
       expect.any(AbortSignal),
     );
     expect(formatResponse.edits[0]?.newText).toBe(" = ");
+
+    const definition = surface.props?.provideDefinition;
+    expect(definition).toBeDefined();
+    if (definition === undefined) return;
+    const definitionResponse = await definition(
+      {
+        request: { request: identity, document, position: { line: 0, column: 6 } },
+        documentText: "const value=1;\n",
+      },
+      new AbortController().signal,
+    );
+    expect(requestEditorDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({ position: { line: 0, character: 6 } }),
+      expect.any(AbortSignal),
+    );
+    expect(definitionResponse.locations[0]?.path).toBe("src/def.ts");
+    expect(openEditorFile).toHaveBeenCalledWith({
+      root: "/repo",
+      path: "src/def.ts",
+      lineStart: 3,
+      lineEnd: 3,
+    });
+    const uri = surface.props?.uriForPath?.("src/def.ts", { toString: () => "current" }) as
+      | {
+          readonly scheme?: string;
+          readonly authority?: string;
+          readonly fsPath?: string;
+          readonly with?: unknown;
+          toString(): string;
+        }
+      | undefined;
+    expect(uri?.toString()).toContain("/src/def.ts");
+    expect(uri).toEqual(
+      expect.objectContaining({
+        scheme: "keiko-editor",
+        authority: "workspace",
+        fsPath: expect.stringContaining("/src/def.ts"),
+        with: expect.any(Function),
+      }),
+    );
+
+    const references = surface.props?.provideReferences;
+    expect(references).toBeDefined();
+    if (references === undefined) return;
+    const referencesResponse = await references(
+      {
+        request: {
+          request: identity,
+          document,
+          position: { line: 0, column: 6 },
+          includeDeclaration: true,
+        },
+        documentText: "const value=1;\n",
+      },
+      new AbortController().signal,
+    );
+    expect(referencesResponse.includesDeclaration).toBe(true);
+    expect(referencesResponse.locations[0]?.path).toBe("src/ref.ts");
+    expect(openEditorFile).toHaveBeenCalledTimes(2);
+    expect(openEditorFile).toHaveBeenLastCalledWith({
+      root: "/repo",
+      path: "src/ref.ts",
+      lineStart: 4,
+      lineEnd: 4,
+    });
+
+    const codeActions = surface.props?.provideCodeActions;
+    expect(codeActions).toBeDefined();
+    if (codeActions === undefined) return;
+    const actionResponse = await codeActions(
+      {
+        request: {
+          request: identity,
+          document,
+          range: { start: { line: 0, column: 0 }, end: { line: 0, column: 5 } },
+          diagnostics: [],
+        },
+        documentText: "const value=1;\n",
+      },
+      new AbortController().signal,
+    );
+    expect(actionResponse.actions[0]?.title).toBe("Fix");
+
+    const signatureHelp = surface.props?.provideSignatureHelp;
+    expect(signatureHelp).toBeDefined();
+    if (signatureHelp === undefined) return;
+    const signatureResponse = await signatureHelp(
+      {
+        request: { request: identity, document, position: { line: 0, column: 6 } },
+        documentText: "fn(",
+      },
+      new AbortController().signal,
+    );
+    expect(signatureResponse.signatures[0]?.label).toBe("fn(value: string)");
+  });
+
+  it("updates breadcrumbs from the shared document-symbol response and reveals clicked segments", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        content: "class Greeter {\n  run() {\n    return 1;\n  }\n}\n",
+      }),
+    );
+    vi.mocked(requestEditorSymbols).mockResolvedValueOnce({
+      symbols: [
+        {
+          name: "Greeter",
+          kind: "class",
+          range: { start: { line: 0, character: 0 }, end: { line: 4, character: 1 } },
+        },
+        {
+          name: "run",
+          kind: "method",
+          range: { start: { line: 1, character: 2 }, end: { line: 3, character: 3 } },
+        },
+      ],
+      truncated: false,
+    });
+
+    render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+    await screen.findByTestId("editor-surface");
+    act(() => {
+      surface.props?.onCursorChange?.({ line: 2, column: 4 });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Greeter" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "run" })).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Greeter" }));
+    await waitFor(() => {
+      expect(surface.props?.revealRequest?.range.start).toEqual({ line: 0, column: 0 });
+    });
   });
 
   it("registers no language-intelligence resolvers for a non-source file", async () => {
@@ -1389,6 +1581,297 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
     expect(surface.props?.provideHover).toBeUndefined();
     expect(surface.props?.provideSymbols).toBeUndefined();
     expect(surface.props?.provideFormatting).toBeUndefined();
+    expect(surface.props?.provideDefinition).toBeUndefined();
+    expect(surface.props?.provideReferences).toBeUndefined();
+    expect(surface.props?.provideCodeActions).toBeUndefined();
+    expect(surface.props?.provideSignatureHelp).toBeUndefined();
+  });
+
+  it("opens a rename changeset for review and applies accepted edits to the buffer", async () => {
+    const originalPrompt = window.prompt;
+    window.prompt = vi.fn(() => "renamed");
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    vi.mocked(requestEditorRenamePrepare).mockResolvedValueOnce({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+      placeholder: "value",
+    });
+    vi.mocked(requestEditorRenameApply).mockResolvedValueOnce({
+      schemaVersion: "1",
+      files: [
+        {
+          path: "src/app.ts",
+          expectedContentHash: BASE_VERSION.contentHash,
+          edits: [
+            {
+              range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+              newText: "renamed",
+            },
+          ],
+        },
+      ],
+      truncated: false,
+      filesTruncated: false,
+      returnedFileCount: 1,
+      totalFileCount: 1,
+      returnedEditCount: 1,
+      totalEditCount: 1,
+    });
+
+    try {
+      render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+      await screen.findByTestId("editor-surface");
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 0, column: 6 });
+      });
+      await waitFor(() => {
+        expect(surface.props?.onRenameSymbol).toBeDefined();
+      });
+
+      await act(async () => {
+        surface.props?.onRenameSymbol?.();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(diffSurface.props?.model.files[0]?.modified).toContain("renamed");
+      });
+      act(() => {
+        diffSurface.props?.onApply?.();
+      });
+      await waitFor(() => {
+        expect(surface.props?.hostEditRequest?.text).toBe("const renamed = 1;\n");
+      });
+      const request = surface.props?.hostEditRequest;
+      if (request === undefined) return;
+      act(() => {
+        surface.props?.onContentChange(
+          { text: request.text, sizeBytes: request.text.length },
+          request.origin,
+        );
+      });
+      await waitFor(() => {
+        expect(surface.props?.buffer.content.text).toBe("const renamed = 1;\n");
+      });
+      expect(surface.props?.fileModel.lastChangeOrigin).toBe("applied-patch");
+      expect(saveFilesContent).not.toHaveBeenCalled();
+    } finally {
+      window.prompt = originalPrompt;
+    }
+  });
+
+  it("applies accepted rename edits to a loaded closed-file buffer without saving to disk", async () => {
+    const originalPrompt = window.prompt;
+    const onDirtyChange = vi.fn();
+    window.prompt = vi.fn(() => "renamed");
+    vi.mocked(fetchFilesContent)
+      .mockResolvedValueOnce(fileResponse())
+      .mockResolvedValueOnce(
+        fileResponse({
+          path: "src/other.ts",
+          name: "other.ts",
+          content: "const value = 1;\n",
+        }),
+      );
+    vi.mocked(requestEditorRenamePrepare).mockResolvedValueOnce({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+      placeholder: "value",
+    });
+    vi.mocked(requestEditorRenameApply).mockResolvedValueOnce({
+      schemaVersion: "1",
+      files: [
+        {
+          path: "src/other.ts",
+          expectedContentHash: BASE_VERSION.contentHash,
+          edits: [
+            {
+              range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+              newText: "renamed",
+            },
+          ],
+        },
+      ],
+      truncated: false,
+      filesTruncated: false,
+      returnedFileCount: 1,
+      totalFileCount: 1,
+      returnedEditCount: 1,
+      totalEditCount: 1,
+    });
+
+    try {
+      const { rerender } = render(
+        <EditorRuntimeWidget
+          root="/repo"
+          file="src/app.ts"
+          openFiles={["src/app.ts", "src/other.ts"]}
+          onDirtyChange={onDirtyChange}
+        />,
+      );
+      await screen.findByTestId("editor-surface");
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 0, column: 6 });
+      });
+      await act(async () => {
+        surface.props?.onRenameSymbol?.();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(diffSurface.props?.model.files[0]?.displayPath).toBe("src/other.ts");
+      });
+
+      act(() => {
+        diffSurface.props?.onApply?.();
+      });
+      rerender(
+        <EditorRuntimeWidget
+          root="/repo"
+          file="src/other.ts"
+          openFiles={["src/app.ts", "src/other.ts"]}
+          onDirtyChange={onDirtyChange}
+        />,
+      );
+      await waitFor(() => {
+        expect(surface.props?.buffer.content.relativePath).toBe("src/other.ts");
+      });
+      expect(surface.props?.buffer.content.text).toBe("const renamed = 1;\n");
+      expect(surface.props?.fileModel.dirty).toBe(true);
+      expect(onDirtyChange).toHaveBeenCalledWith("src/other.ts", true);
+      expect(saveFilesContent).not.toHaveBeenCalled();
+    } finally {
+      window.prompt = originalPrompt;
+    }
+  });
+
+  it("applies a wide rename touching more files than the session cache capacity", async () => {
+    // Regression for Issue #2105: a rename whose changeset touches more distinct closed files than
+    // the bounded session cache (SESSION_CACHE_CAPACITY = 16) used to evict its own freshly-fetched
+    // sources before Accept, producing a spurious VERSION_MISMATCH ("not loaded") that aborted the
+    // whole apply. The review-time snapshots must let every file apply.
+    const originalPrompt = window.prompt;
+    const onDirtyChange = vi.fn();
+    window.prompt = vi.fn(() => "renamed");
+    const closedPaths = Array.from({ length: 20 }, (_, index) => `src/use-${String(index)}.ts`);
+    vi.mocked(fetchFilesContent).mockImplementation((_root, path) =>
+      Promise.resolve(
+        fileResponse({
+          path,
+          name: path.slice(path.lastIndexOf("/") + 1),
+          content: "const value = 1;\n",
+        }),
+      ),
+    );
+    vi.mocked(requestEditorRenamePrepare).mockResolvedValueOnce({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+      placeholder: "value",
+    });
+    vi.mocked(requestEditorRenameApply).mockResolvedValueOnce({
+      schemaVersion: "1",
+      files: closedPaths.map((path) => ({
+        path,
+        expectedContentHash: BASE_VERSION.contentHash,
+        edits: [
+          {
+            range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+            newText: "renamed",
+          },
+        ],
+      })),
+      truncated: false,
+      filesTruncated: false,
+      returnedFileCount: closedPaths.length,
+      totalFileCount: closedPaths.length,
+      returnedEditCount: closedPaths.length,
+      totalEditCount: closedPaths.length,
+    });
+
+    try {
+      render(
+        <EditorRuntimeWidget
+          root="/repo"
+          file="src/app.ts"
+          openFiles={["src/app.ts"]}
+          onDirtyChange={onDirtyChange}
+        />,
+      );
+      await screen.findByTestId("editor-surface");
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 0, column: 6 });
+      });
+      await act(async () => {
+        surface.props?.onRenameSymbol?.();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(diffSurface.props?.model.files.length).toBe(closedPaths.length);
+      });
+
+      act(() => {
+        diffSurface.props?.onApply?.();
+      });
+      // Every changeset file applies — including the earliest-cached ones that the LRU would have
+      // evicted — so no file is falsely reported as unloaded and nothing is written to disk.
+      await waitFor(() => {
+        expect(onDirtyChange).toHaveBeenCalledWith("src/use-0.ts", true);
+      });
+      for (const path of closedPaths) {
+        expect(onDirtyChange).toHaveBeenCalledWith(path, true);
+      }
+      expect(saveFilesContent).not.toHaveBeenCalled();
+    } finally {
+      window.prompt = originalPrompt;
+    }
+  });
+
+  it("reports a rename precondition conflict without applying stale edits", async () => {
+    const originalPrompt = window.prompt;
+    window.prompt = vi.fn(() => "renamed");
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    vi.mocked(requestEditorRenamePrepare).mockResolvedValueOnce({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+      placeholder: "value",
+    });
+    vi.mocked(requestEditorRenameApply).mockResolvedValueOnce({
+      schemaVersion: "1",
+      files: [
+        {
+          path: "src/app.ts",
+          expectedContentHash: "b".repeat(64),
+          edits: [
+            {
+              range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+              newText: "renamed",
+            },
+          ],
+        },
+      ],
+      truncated: false,
+      filesTruncated: false,
+      returnedFileCount: 1,
+      totalFileCount: 1,
+      returnedEditCount: 1,
+      totalEditCount: 1,
+    });
+
+    try {
+      render(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
+      await screen.findByTestId("editor-surface");
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 0, column: 6 });
+      });
+      await act(async () => {
+        surface.props?.onRenameSymbol?.();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(diffSurface.props?.model.files[0]?.modified).toContain("renamed");
+      });
+      act(() => {
+        diffSurface.props?.onApply?.();
+      });
+      await screen.findByText(/changed since the rename was computed/u);
+      expect(surface.props?.buffer.content.text).toBe("const value = 1;\n");
+    } finally {
+      window.prompt = originalPrompt;
+    }
   });
 
   it("keeps unavailable providers non-blocking and content-free in status and agent snapshots", async () => {
@@ -1423,6 +1906,10 @@ describe("EditorWidget language intelligence (Issue #1201)", () => {
       expect(surface.props?.provideHover).toBeUndefined();
       expect(surface.props?.provideSymbols).toBeUndefined();
       expect(surface.props?.provideFormatting).toBeUndefined();
+      expect(surface.props?.provideDefinition).toBeUndefined();
+      expect(surface.props?.provideReferences).toBeUndefined();
+      expect(surface.props?.provideCodeActions).toBeUndefined();
+      expect(surface.props?.provideSignatureHelp).toBeUndefined();
       expect(editorStatusField("language-service")).toHaveTextContent("LSP unavailable");
     });
     expect(editorStatusField("language-service")).toHaveAttribute(
