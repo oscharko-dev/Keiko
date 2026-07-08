@@ -78,6 +78,7 @@ import {
   type EditorHotExitSnapshotV1,
   type EditorFormattingResolver,
   type EditorFormattingQuery,
+  type EditorHostEditRequest,
   type EditorHoverResolver,
   type EditorHoverQuery,
   type EditorInlineCompletionResolver,
@@ -487,6 +488,17 @@ function openCrossFileLocation(input: {
     return;
   }
   input.openEditorFile({ root: input.root, ...revealRequestForLocation(input.location) });
+}
+
+function locationIsOpen(input: {
+  readonly path: string;
+  readonly file: string | undefined;
+  readonly openFiles: readonly string[] | undefined;
+  readonly layoutPanes: readonly EditorAgentPaneSnapshot[] | undefined;
+}): boolean {
+  if (input.path === input.file) return true;
+  if (input.openFiles?.includes(input.path) === true) return true;
+  return input.layoutPanes?.some((pane) => pane.openFiles.includes(input.path)) === true;
 }
 
 function renameEditsToEditor(fileChange: LanguageRenameChangesetFile): readonly EditorTextEdit[] {
@@ -994,6 +1006,9 @@ function EditorRuntimeWidget({
     // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
     readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
   } | null>(null);
+  const [activeHostEditRequest, setActiveHostEditRequest] = useState<
+    EditorHostEditRequest | undefined
+  >(undefined);
   // A11Y-2: focus the Accept button whenever a patch review appears.
   const patchAcceptButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -1441,15 +1456,20 @@ function EditorRuntimeWidget({
   );
 
   const onContentChange = useCallback(
-    (next: EditorContentDelta, _origin: EditorChangeOrigin): void => {
+    (next: EditorContentDelta, origin: EditorChangeOrigin): void => {
+      setActiveHostEditRequest(undefined);
       setContent(next.text);
       setFileModel((model: EditorFileModel | null) =>
-        model === null ? model : editorFileModelReducer(model, { type: "edited", origin: "human" }),
+        model === null ? model : editorFileModelReducer(model, { type: "edited", origin }),
       );
       setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
     },
     [],
   );
+
+  useEffect(() => {
+    setActiveHostEditRequest(undefined);
+  }, [file, root]);
 
   const onSaveRequested = useCallback(
     (request: EditorSaveRequest): void => {
@@ -1880,9 +1900,17 @@ function EditorRuntimeWidget({
         },
         signal,
       );
-      return mapWireToEditorReferencesResponse(query.request.request, wire);
+      const response = mapWireToEditorReferencesResponse(query.request.request, wire);
+      const crossFile = response.locations.find((location) => location.path !== file);
+      if (
+        crossFile !== undefined &&
+        !locationIsOpen({ path: crossFile.path, file, openFiles, layoutPanes })
+      ) {
+        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
+      }
+      return response;
     },
-    [file, hasTarget, root],
+    [file, hasTarget, layoutPanes, openEditorFile, openFiles, root],
   );
 
   const provideCodeActions = useCallback<EditorCodeActionsResolver>(
@@ -2621,13 +2649,17 @@ function EditorRuntimeWidget({
     }
     for (const plan of plans) {
       if (plan.target.active) {
-        setContent(plan.nextContent);
         setFileModel((model) =>
           model === null
             ? model
             : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
         );
         setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+        setActiveHostEditRequest({
+          id: createEditorRequestId(),
+          text: plan.nextContent,
+          origin: "applied-patch",
+        });
       } else if (plan.target.cached !== undefined) {
         sessionCacheRef.current.set(documentSessionKey(root, plan.target.path), {
           ...plan.target.cached,
@@ -2847,6 +2879,7 @@ function EditorRuntimeWidget({
         onSelectionChange={setCurrentSelection}
         onCursorChange={setCursor}
         revealRequest={surfaceRevealRequest}
+        hostEditRequest={activeHostEditRequest}
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
         onRenameSymbol={canRename ? runRename : undefined}

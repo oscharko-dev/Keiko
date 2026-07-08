@@ -18,6 +18,7 @@ import type {
   EditorDiagnosticsResolver,
   EditorFileModel,
   EditorFormattingResolver,
+  EditorHostEditRequest,
   EditorHoverResolver,
   EditorInlineCompletionResolver,
   EditorPosition,
@@ -101,6 +102,7 @@ export interface KeikoCodeEditorProps {
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
   readonly revealRequest?: EditorRevealRequest | undefined;
+  readonly hostEditRequest?: EditorHostEditRequest | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
   /**
    * Host-injected completion resolver (Issue #1199). When present, the editor registers a Monaco

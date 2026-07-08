@@ -335,6 +335,7 @@ function boundedProjectFiles(
 ): { readonly files: readonly string[]; readonly overCap: boolean } {
   const files: string[] = [];
   for (const fileName of candidates) {
+    ctx.cancellation.throwIfCancellationRequested();
     const real = containedReal(state, fileName);
     if (real === undefined || !sourceFileCandidate(real)) continue;
     if (files.length >= ctx.limits.maxWorkspaceReadFiles) {
@@ -351,7 +352,9 @@ function parseProjectConfig(
   configPath: string,
 ): ProjectDiscovery | TypescriptProjectServiceError {
   const state = newReadState(ctx.fs, ctx.root, ctx.limits);
+  ctx.cancellation.throwIfCancellationRequested();
   const configFile = ts.readConfigFile(configPath, (path) => readFile(state, path));
+  ctx.cancellation.throwIfCancellationRequested();
   if (configFile.error !== undefined || typeof configFile.config !== "object") {
     return errorResult("INVALID_REQUEST", "The TypeScript project configuration is invalid.");
   }
@@ -361,8 +364,11 @@ function parseProjectConfig(
     fileExists: (fileName: string): boolean => fileExists(state, fileName),
     readFile: (fileName: string): string | undefined => readFile(state, fileName),
   };
+  ctx.cancellation.throwIfCancellationRequested();
   const parsed = ts.parseJsonConfigFileContent(configFile.config, parseHost, dirname(configPath));
-  if (parsed.errors.length > 0) {
+  ctx.cancellation.throwIfCancellationRequested();
+  const invalidErrors = parsed.errors.filter((error) => error.code !== 18003);
+  if (invalidErrors.length > 0) {
     return errorResult("INVALID_REQUEST", "The TypeScript project configuration is invalid.");
   }
   const bounded = boundedProjectFiles(ctx, state, parsed.fileNames);
@@ -503,10 +509,16 @@ class ProjectLanguageServiceHost implements ts.LanguageServiceHost {
     const real = containedReal(state, directory);
     if (real === undefined) return [];
     try {
-      return this.fs
-        .readDir(real)
-        .filter((entry) => entry.isDirectory)
-        .map((entry) => join(real, entry.name));
+      const directories: string[] = [];
+      for (const entry of this.fs.readDir(real)) {
+        if (!entry.isDirectory) continue;
+        if (directories.length >= this.limits.maxWorkspaceReadFiles) {
+          this.budget.truncated = true;
+          break;
+        }
+        directories.push(join(real, entry.name));
+      }
+      return directories;
     } catch {
       return [];
     }
@@ -568,7 +580,9 @@ class CachedTypescriptProjectService implements TypescriptProjectService {
   }
 
   public resolveProject(ctx: LanguageProviderContext): TypescriptProjectServiceResult {
+    ctx.cancellation.throwIfCancellationRequested();
     const configPath = findConfigPath(ctx);
+    ctx.cancellation.throwIfCancellationRequested();
     if (configPath === undefined) {
       return { kind: "notProject", reason: "No containing tsconfig.json was discovered." };
     }
