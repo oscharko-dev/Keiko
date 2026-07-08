@@ -6,6 +6,7 @@ import {
   type CodingWorkbenchRuntimeEvent,
   type CodingWorkbenchRuntimeHealth,
 } from "@oscharko-dev/keiko-contracts";
+import { AUTONOMOUS_DELIVERY_PROJECTIONS } from "./codingWorkbenchAutonomousDeliveryProjection";
 import { GOVERNED_ASSIST_PROJECTIONS } from "./codingWorkbenchGovernedAssistProjection";
 
 export type CodingWorkbenchRunState =
@@ -462,6 +463,10 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
   }),
   governedAssist: GOVERNED_ASSIST_PROJECTIONS.proposed,
   governedAssistBlocked: GOVERNED_ASSIST_PROJECTIONS.blocked,
+  autonomousConfirmed: AUTONOMOUS_DELIVERY_PROJECTIONS.confirmed,
+  autonomousPolicyBlocked: AUTONOMOUS_DELIVERY_PROJECTIONS.policyBlocked,
+  autonomousVerificationFailed: AUTONOMOUS_DELIVERY_PROJECTIONS.verificationFailed,
+  autonomousCompleted: AUTONOMOUS_DELIVERY_PROJECTIONS.completed,
   failed: projection({
     runState: "failed",
     title: "Issue #1990 Coding Workbench UI",
@@ -542,6 +547,18 @@ export function codingWorkbenchProjectionForState(
   if (state === "governed-assist") return CODING_WORKBENCH_PROJECTIONS.governedAssist;
   if (state === "governed-assist-blocked") {
     return CODING_WORKBENCH_PROJECTIONS.governedAssistBlocked;
+  }
+  if (state === "autonomous-confirmed") {
+    return CODING_WORKBENCH_PROJECTIONS.autonomousConfirmed;
+  }
+  if (state === "autonomous-policy-blocked") {
+    return CODING_WORKBENCH_PROJECTIONS.autonomousPolicyBlocked;
+  }
+  if (state === "autonomous-verification-failed") {
+    return CODING_WORKBENCH_PROJECTIONS.autonomousVerificationFailed;
+  }
+  if (state === "autonomous-completed") {
+    return CODING_WORKBENCH_PROJECTIONS.autonomousCompleted;
   }
   if (state === "failed") return CODING_WORKBENCH_PROJECTIONS.failed;
   if (state === "completed") return CODING_WORKBENCH_PROJECTIONS.completed;

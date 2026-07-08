@@ -243,6 +243,53 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getAllByText("redacted-failure").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("renders Autonomous Delivery closeout states without exposing raw provider material", () => {
+    const { rerender } = render(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.autonomousConfirmed}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Issue #1994 Autonomous Delivery confirmed envelope" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Autonomous Delivery/u })).toBeChecked();
+    expect(screen.getByText("Governed PR gateway handoff pending")).toBeInTheDocument();
+    expect(screen.getByText("Delivery runner")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Authorization|Bearer|ghp_|diff --git|\/Users\//u),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.autonomousPolicyBlocked}
+      />,
+    );
+    expect(screen.getByText("No provider write executed")).toBeInTheDocument();
+    expect(screen.getAllByText("authority-expired").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("connector-scope-missing")).toBeInTheDocument();
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.autonomousVerificationFailed}
+      />,
+    );
+    expect(screen.getByText("PR creation blocked by verification")).toBeInTheDocument();
+    expect(screen.getAllByText("verification-failed").length).toBeGreaterThanOrEqual(1);
+
+    rerender(
+      <CodingWorkbenchWindow
+        api={api()}
+        projection={CODING_WORKBENCH_PROJECTIONS.autonomousCompleted}
+      />,
+    );
+    expect(screen.getByText("Draft PR created through governed PR gateway")).toBeInTheDocument();
+    expect(screen.getByText("governed-pr-gateway-handoff")).toBeInTheDocument();
+  });
+
   it("distinguishes managed gateway, OpenAI-through-gateway, and Codex subscription sources", async () => {
     render(<CodingWorkbenchWindow api={api()} projection={CODING_WORKBENCH_PROJECTIONS.running} />);
 

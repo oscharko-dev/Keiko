@@ -1,0 +1,89 @@
+{
+  "issue": 1994,
+  "epic": 1982,
+  "verdict": "PASS",
+  "cssSha256": "33e4101301e6a08a98496a2afb2fbdf3a4421f671a0cee3cdebd1f7df2dfc83f",
+  "harness": "tests/e2e/config/playwright.issue-1994-coding-workbench-closeout.config.ts",
+  "route": "/",
+  "appPath": "packaged-cli-ui",
+  "generatedAt": "2026-07-08T08:30:00Z",
+  "captures": [
+    {
+      "file": "01-autonomous-confirmed.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "autonomous-confirmed"
+    },
+    {
+      "file": "02-autonomous-completed.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "autonomous-completed"
+    },
+    {
+      "file": "03-autonomous-policy-hold.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "autonomous-policy-blocked"
+    },
+    {
+      "file": "04-autonomous-verification-failed.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "autonomous-verification-failed"
+    },
+    {
+      "file": "05-autonomous-narrow.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 390,
+        "height": 860
+      },
+      "state": "autonomous-confirmed"
+    }
+  ],
+  "assertions": {
+    "autonomousDeliverySelected": true,
+    "confirmedEnvelopeVisible": true,
+    "deliveryRunnerVisible": true,
+    "gatewayProviderProjectionVisible": true,
+    "governedPrGatewayHandoffVisible": true,
+    "policyHoldBlocksProviderWrite": true,
+    "verificationFailureBlocksPrHandoff": true,
+    "completedHandoffDisablesStop": true,
+    "rawStdoutHidden": true,
+    "rawStderrHidden": true,
+    "rawDiffsHidden": true,
+    "privatePathsHidden": true,
+    "tokenBearingTextHidden": true,
+    "narrowViewportHasNoHorizontalOverflow": true,
+    "seriousOrCriticalAxeViolations": 0
+  },
+  "artifacts": [
+    "01-autonomous-confirmed.png",
+    "02-autonomous-completed.png",
+    "03-autonomous-policy-hold.png",
+    "04-autonomous-verification-failed.png",
+    "05-autonomous-narrow.png",
+    "coding-workbench-autonomous-delivery-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ]
+}
