@@ -91,10 +91,6 @@ function readReleaseImpactCatalog() {
   return JSON.parse(readFileSync(resolve(repoRoot, override), "utf8"));
 }
 
-function readJsonFile(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
-
 function defaultOptions() {
   return {
     allowUntagged: false,
