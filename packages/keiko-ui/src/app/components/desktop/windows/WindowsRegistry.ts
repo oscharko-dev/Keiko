@@ -29,7 +29,6 @@ export type WindowType =
   | "integ"
   | "keiko"
   | "settings"
-  | "feedback"
   // Issue #1696 — governed package-update window. Opened only from Settings/startup notification,
   // not from the rail or command palette.
   | "updates"
@@ -309,6 +308,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     title: "Editor",
     icon: "editor",
     desc: "Open a folder or file",
+    // Toggle-able from the left rail: `deriveOpenTools` reads `tool` to reflect the open state on
+    // the rail button (the editor stays a config-capable card type opened via the New Window dialog
+    // or `openWindow("editor", …)`; this only adds the rail-toggle affordance).
+    tool: true,
     w: 920,
     h: 620,
     min: { w: 620, h: 380 },
@@ -483,18 +486,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     desc: "Preferences",
     w: 470,
     h: 560,
-    tool: true,
-    singleton: true,
-  },
-  feedback: {
-    title: "Feedback",
-    icon: "info",
-    accent: true,
-    desc: "Send a redacted feedback report",
-    w: 640,
-    h: 680,
-    min: { w: 420, h: 440 },
-    tiny: { w: 320, h: 260 },
     tool: true,
     singleton: true,
   },
@@ -863,6 +854,5 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "activity",
   "notifications",
   "resources",
-  "feedback",
   "settings",
 ];

@@ -8,14 +8,7 @@ export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
-const I18N_USAGE_PATTERNS = [
-  /\buseTranslate\s*\(/,
-  /\buseI18n\s*\(/,
-  /\bI18nTranslate\b/,
-  /\btranslate\s*\(/,
-  /["']@\/lib\/i18n["']/,
-  /["'][./]+lib\/i18n["']/,
-];
+const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /\bI18nTranslate\b/];
 
 function normalizePath(file) {
   return file.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -57,6 +50,16 @@ function hasI18nUsage(repoRoot, file) {
   return I18N_USAGE_PATTERNS.some((pattern) => pattern.test(source));
 }
 
+function isSafeGitSha(value) {
+  return /^[0-9a-fA-F]{7,40}$/.test(value);
+}
+
+function isSafeGitRef(value) {
+  return (
+    /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) && !value.includes("..") && !value.includes("//")
+  );
+}
+
 function diffNameOnly(repoRoot, range) {
   const result = spawnSync("git", ["diff", "--name-only", "--diff-filter=ACMRT", range], {
     cwd: repoRoot,
@@ -94,6 +97,14 @@ function diffRangesFromEnv(env) {
   const baseSha = env.KEIKO_I18N_GUARD_BASE_SHA ?? env.GITHUB_EVENT_BEFORE;
   const ranges = [];
 
+  if (baseSha !== undefined && baseSha !== "" && !isZeroSha(baseSha) && !isSafeGitSha(baseSha)) {
+    throw new Error(`check:ui-i18n received an unsafe base SHA: ${baseSha}`);
+  }
+
+  if (baseRef !== undefined && baseRef !== "" && !isSafeGitRef(baseRef)) {
+    throw new Error(`check:ui-i18n received an unsafe base ref: ${baseRef}`);
+  }
+
   if (baseSha && !isZeroSha(baseSha)) {
     ranges.push(`${baseSha}..HEAD`, `${baseSha}...HEAD`);
   }
@@ -122,17 +133,19 @@ export function changedFilesFromGit(repoRoot, diffNameOnlyFn = diffNameOnly, env
   );
 }
 
-function changedFilesFromInput(repoRoot) {
-  const filesIndex = process.argv.indexOf("--files");
+export function changedFilesFromInput(repoRoot, argv = process.argv, env = process.env) {
+  const filesIndex = argv.indexOf("--files");
   if (filesIndex >= 0) {
-    return process.argv.slice(filesIndex + 1);
+    return argv.slice(filesIndex + 1);
   }
 
-  if (process.env.KEIKO_I18N_GUARD_CHANGED_FILES) {
-    return process.env.KEIKO_I18N_GUARD_CHANGED_FILES.split(/[,\n;]/);
+  if (env.KEIKO_I18N_GUARD_CHANGED_FILES) {
+    return env.KEIKO_I18N_GUARD_CHANGED_FILES.split(/[,\n;]/)
+      .map((file) => file.trim())
+      .filter(Boolean);
   }
 
-  return changedFilesFromGit(repoRoot);
+  return changedFilesFromGit(repoRoot, diffNameOnly, env);
 }
 
 function symmetricDifference(left, right) {

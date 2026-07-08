@@ -90,8 +90,8 @@ jobs:
           KEIKO_I18N_GUARD_BASE_REF: ${{ github.base_ref }}
           KEIKO_I18N_GUARD_BASE_SHA: ${{ github.event.before }}
         run: |
-          if [ -n "${{ github.base_ref }}" ]; then
-            git fetch --no-tags --depth=100 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          if [ -n "${KEIKO_I18N_GUARD_BASE_REF:-}" ]; then
+            git fetch --no-tags --depth=100 origin "${KEIKO_I18N_GUARD_BASE_REF}:refs/remotes/origin/${KEIKO_I18N_GUARD_BASE_REF}"
           fi
           npm run check:ui-i18n
       - run: npm run check:adr-index

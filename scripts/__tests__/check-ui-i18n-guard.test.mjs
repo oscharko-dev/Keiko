@@ -8,6 +8,7 @@ import {
   DE_CATALOG,
   EN_CATALOG,
   changedFilesFromGit,
+  changedFilesFromInput,
   checkUiI18nGuard,
   isUiProductionSource,
 } from "../check-ui-i18n-guard.mjs";
@@ -68,18 +69,48 @@ test("detects changed files from the push event before SHA", () => {
     "repo",
     (_repoRoot, range) => {
       calls.push(range);
-      return range === "abc123..HEAD"
+      return range === "abc1234..HEAD"
         ? { ok: true, error: "", files: [UI_FILE, EN_CATALOG, DE_CATALOG] }
         : { ok: false, error: "missing range", files: [] };
     },
     {
       GITHUB_EVENT_NAME: "push",
-      KEIKO_I18N_GUARD_BASE_SHA: "abc123",
+      KEIKO_I18N_GUARD_BASE_SHA: "abc1234",
     },
   );
 
   assert.deepEqual(files, [UI_FILE, EN_CATALOG, DE_CATALOG]);
-  assert.equal(calls[0], "abc123..HEAD");
+  assert.equal(calls[0], "abc1234..HEAD");
+});
+
+test("detects changed files from workflow_dispatch base ref safely", () => {
+  const calls = [];
+  const files = changedFilesFromGit(
+    "repo",
+    (_repoRoot, range) => {
+      calls.push(range);
+      return range === "origin/release-1209...HEAD"
+        ? { ok: true, error: "", files: [UI_FILE] }
+        : { ok: false, error: "missing range", files: [] };
+    },
+    {
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+      KEIKO_I18N_GUARD_BASE_REF: "release-1209",
+    },
+  );
+
+  assert.deepEqual(files, [UI_FILE]);
+  assert.equal(calls[0], "origin/release-1209...HEAD");
+});
+
+test("rejects unsafe git env values before spawning git", () => {
+  assert.throws(
+    () =>
+      changedFilesFromGit("repo", () => ({ ok: true, error: "", files: [] }), {
+        KEIKO_I18N_GUARD_BASE_REF: "--help",
+      }),
+    /unsafe base ref/,
+  );
 });
 
 test("fails closed when changed files cannot be determined from git", () => {
@@ -90,6 +121,20 @@ test("fails closed when changed files cannot be determined from git", () => {
       }),
     /could not determine changed files/,
   );
+});
+
+test("reads explicit changed files from argv", () => {
+  const files = changedFilesFromInput("repo", ["node", "script.mjs", "--files", UI_FILE], {});
+
+  assert.deepEqual(files, [UI_FILE]);
+});
+
+test("reads explicit changed files from env", () => {
+  const files = changedFilesFromInput("repo", ["node", "script.mjs"], {
+    KEIKO_I18N_GUARD_CHANGED_FILES: `${UI_FILE}\ndocs/architecture.md`,
+  });
+
+  assert.deepEqual(files, [UI_FILE, "docs/architecture.md"]);
 });
 
 test("fails UI source changes that do not update both catalogs", async () => {
@@ -112,11 +157,31 @@ test("fails UI source changes that do not update both catalogs", async () => {
   );
 });
 
-test("fails UI source changes that do not use the i18n API", async () => {
+test("fails UI source changes that only import the i18n module", async () => {
   await withFixture(
     {
       ...matchingCatalogs,
-      [UI_FILE]: "export function NewFeature() { return <p>Hard-coded text</p>; }\n",
+      [UI_FILE]:
+        'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() { return <p>Hard-coded text</p>; }\n',
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE, EN_CATALOG, DE_CATALOG],
+      });
+
+      assert.equal(result.ok, false);
+      assert.match(result.problems.join("\n"), /no changed UI file uses the i18n API/);
+    },
+  );
+});
+
+test("fails UI source changes that only contain raw translate syntax", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]:
+        'export function NewFeature() {\n  return <svg><g transform="translate(10 10)"><text>Label</text></g></svg>;\n}\n',
     },
     (repoRoot) => {
       const result = checkUiI18nGuard({

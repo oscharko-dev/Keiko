@@ -137,12 +137,6 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
   },
   // Issue #1696 — browser surface for governed package update readiness and user-confirmed
   // update/remediation actions. Runtime session state lives in the BFF/local update state.
-  feedback: {
-    lifecycle: ["draft", "needs-review", "archived", "error"],
-    trustBoundary: ["ui", "network"],
-    authority: "user-confirm",
-    persistence: "transient",
-  },
   updates: {
     lifecycle: ["idle", "running", "blocked", "cancelled", "failed", "error"],
     trustBoundary: ["ui", "network", "tool"],

@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 260
+    "fileCount": 268
   },
   "b1": {
     "firstLoadScriptCount": 14,
@@ -11,8 +11,8 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1172423,
-    "loadedTotalBytes": 1172423,
+    "shipsTotalBytes": 1172472,
+    "loadedTotalBytes": 1172472,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
@@ -61,9 +61,9 @@
       "workerLabel": "editor"
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/3us1gpdrl_uxf.js",
-      "gzipBytes": 20490,
-      "rawBytes": 63552,
+      "path": "dist/ui/static/_next/static/chunks/1dqzw5uj9lc1m.js",
+      "gzipBytes": 20539,
+      "rawBytes": 63747,
       "workerLabel": null
     },
     {
@@ -73,5 +73,5 @@
       "workerLabel": null
     }
   ],
-  "measurementSha256": "f9d91f2caf3d0d243006844b536ecdbd29c551bc83c0f030ee3c8a26119a27b8"
+  "measurementSha256": "ee8ee428d14677608bc1c4401fc251c88aca37c1068c5519b0b3643bb728d264"
 }

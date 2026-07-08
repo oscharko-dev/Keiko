@@ -68,10 +68,6 @@ project content.
 
 ## Entries
 
-### Feedback intake fails closed
-
-See [Feedback Intake](./feedback-intake.md).
-
 ### 1. UI process does not become healthy after `keiko start`
 
 | Field             | Value                                    |

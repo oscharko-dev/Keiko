@@ -143,6 +143,18 @@ function LeftRailImpl({
           type="button"
           className="rail-btn"
           data-side="left"
+          data-active={openTools.has("editor") ? "true" : "false"}
+          aria-label={t("rail.editor")}
+          aria-pressed={openTools.has("editor")}
+          data-tip={t("rail.editor")}
+          onClick={() => onTool("editor")}
+        >
+          <Icons.editor size={19} />
+        </button>
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
           data-active={openTools.has("localKnowledge") ? "true" : "false"}
           aria-label={t("rail.localKnowledge")}
           aria-pressed={openTools.has("localKnowledge")}
@@ -162,18 +174,6 @@ function LeftRailImpl({
           onClick={() => onTool("figma")}
         >
           <Icons.layers size={19} />
-        </button>
-        <button
-          type="button"
-          className="rail-btn"
-          data-side="left"
-          data-active={openTools.has("feedback") ? "true" : "false"}
-          aria-label={t("rail.feedback")}
-          aria-pressed={openTools.has("feedback")}
-          data-tip={t("rail.feedback")}
-          onClick={() => onTool("feedback")}
-        >
-          <Icons.info size={19} />
         </button>
       </div>
       <div className="rail-div" />

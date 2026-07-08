@@ -223,43 +223,6 @@ export {
   UPDATE_REMEDIATION_SCHEMA_VERSION,
 } from "./update-remediation.js";
 
-// Governed feedback intake (Epic #2070).
-export type {
-  FeedbackAttachmentSummary,
-  FeedbackDiagnostics,
-  FeedbackGithubIssueDraft,
-  FeedbackGithubIssueRef,
-  FeedbackIntakeItem,
-  FeedbackIntakeReceipt,
-  FeedbackIntakeRejectionReason,
-  FeedbackIntakeStatus,
-  FeedbackRedactionProvenance,
-  FeedbackReportCategory,
-  FeedbackReportDraft,
-  FeedbackReportParse,
-  FeedbackReportParseFail,
-  FeedbackReportParseOk,
-  FeedbackReportPreview,
-  FeedbackReportSeverity,
-  FeedbackReviewAction,
-  FeedbackReviewEvent,
-  FeedbackReviewState,
-} from "./feedback-intake.js";
-export {
-  buildFeedbackGithubIssueDraft,
-  buildFeedbackReportPreview,
-  containsRedactedSentinel,
-  feedbackPreviewHasRedactionProvenance,
-  feedbackReviewStatusAfter,
-  FEEDBACK_INTAKE_REJECTION_REASONS,
-  FEEDBACK_INTAKE_SCHEMA_VERSION,
-  FEEDBACK_INTAKE_STATUSES,
-  FEEDBACK_REPORT_CATEGORIES,
-  FEEDBACK_REPORT_SEVERITIES,
-  FEEDBACK_REVIEW_ACTIONS,
-  parseFeedbackReportDraft,
-} from "./feedback-intake.js";
-
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,
@@ -456,6 +419,19 @@ export type {
   LanguageTextEdit,
   LanguageFormattingOptions,
   LanguageFormattingResult,
+  LanguageLocation,
+  LanguageDefinitionResult,
+  LanguageReferencesResult,
+  LanguageRenamePrepareResult,
+  LanguageRenameChangesetFile,
+  LanguageRenameChangeset,
+  LanguageRenameApplyResult,
+  LanguageCodeActionKind,
+  LanguageCodeAction,
+  LanguageCodeActionsResult,
+  LanguageSignatureParameterInformation,
+  LanguageSignatureInformation,
+  LanguageSignatureHelpResult,
   LanguageProviderAvailability,
   LanguageProviderDescriptor,
   LanguageServiceCapabilities,
@@ -465,6 +441,12 @@ export type {
   LanguageHoverRequest,
   LanguageSymbolsRequest,
   LanguageFormattingRequest,
+  LanguageDefinitionRequest,
+  LanguageReferencesRequest,
+  LanguageRenamePrepareRequest,
+  LanguageRenameApplyRequest,
+  LanguageCodeActionsRequest,
+  LanguageSignatureHelpRequest,
   LanguageServiceRequest,
   LanguageServiceParseOk,
   LanguageServiceParseFail,
@@ -474,9 +456,12 @@ export {
   LANGUAGE_SERVICE_SCHEMA_VERSION,
   LANGUAGE_SERVICE_OPERATIONS,
   LANGUAGE_SERVICE_ERROR_CODES,
+  LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION,
   MAX_LANGUAGE_FORMATTING_TAB_SIZE,
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   isLanguagePosition,
+  isLanguageRange,
+  isLanguageDiagnostic,
   isLanguageDocumentOverlay,
   isLanguageFormattingOptions,
   parseLanguageServiceRequest,
@@ -2051,6 +2036,17 @@ export type {
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
 } from "./memory-consolidation-wire.js";
+
+export type {
+  MemoryHealthScanFindingKindWire,
+  MemoryHealthScanMemoryRefWire,
+  MemoryHealthScanFindingWire,
+  MemoryHealthScanResultWire,
+} from "./memory-health-scan-wire.js";
+export {
+  MEMORY_HEALTH_SCAN_REASON_MAX_CHARS,
+  MEMORY_HEALTH_SCAN_FINDING_KINDS,
+} from "./memory-health-scan-wire.js";
 
 // ─── Workflow memory port (Issue #213 / Epic #204) ──────────────────────────────
 // Optional read-only port that workflow packages compose with to inject scoped memory
