@@ -250,7 +250,7 @@ describe("check-retrieval-quality regression probes", () => {
       ["exact-technical"],
     );
 
-    expect(result).toEqual({ ok: true, tautological: [], probed: 1 });
+    expect(result).toEqual({ ok: true, tautological: [], probed: 1, unresolved: [] });
     expect(logs.some((line) => line.includes("observed=below-floors"))).toBe(true);
   });
 
@@ -274,7 +274,30 @@ describe("check-retrieval-quality regression probes", () => {
       ["exact-technical"],
     );
 
-    expect(result).toEqual({ ok: false, tautological: [], probed: 0 });
+    expect(result).toEqual({
+      ok: false,
+      tautological: [],
+      probed: 0,
+      unresolved: ["exact-technical"],
+    });
+  });
+
+  it("fails closed when a registered probe id does not resolve to any fixture (AUDIT-E1858-OPT-001)", async () => {
+    const logs = [];
+    const result = await runLocalKnowledgeRegressionProbes(
+      (line) => logs.push(line),
+      [probeFixture("exact-technical")],
+      () => Promise.resolve(scorecard("exact-technical-regression-probe", { recall: 0, ndcg: 0 })),
+      ["exact-technical", "typo-id-that-does-not-exist"],
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      tautological: [],
+      probed: 1,
+      unresolved: ["typo-id-that-does-not-exist"],
+    });
+    expect(logs.some((line) => line.includes("unresolved probe fixture ids"))).toBe(true);
   });
 
   it("fails the aggregate gate when the regression probes are tautological", async () => {

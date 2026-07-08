@@ -107,9 +107,17 @@ function keepSearchToken(token: string): boolean {
   return token.length >= 2;
 }
 
+// An unsegmented CJK/Kana/Hangul run has no whitespace to bound `TOKEN_PATTERN` matches, so a
+// pasted document (or a hostile query) can hand this a single token thousands of characters
+// long. Without a cap, every character and every adjacent pair becomes its own alternative
+// inside one lexical term group, and `ftsGroupQuery` OR-joins the whole group into one FTS5
+// MATCH string — unbounded CPU/memory for a single query. Capping the characters considered
+// for n-gram expansion bounds the group to a small, fixed ceiling regardless of input length.
+const MULTILINGUAL_SUBTOKEN_EXPANSION_CHAR_LIMIT = 64;
+
 function multilingualSubtokens(token: string): readonly string[] {
   if (!CJK_OR_KANA_OR_HANGUL_PATTERN.test(token)) return [token];
-  const chars = Array.from(token);
+  const chars = Array.from(token).slice(0, MULTILINGUAL_SUBTOKEN_EXPANSION_CHAR_LIMIT);
   const out = new Set<string>([token, ...chars]);
   for (let i = 0; i < chars.length - 1; i += 1) {
     out.add(`${chars[i] ?? ""}${chars[i + 1] ?? ""}`);
@@ -195,7 +203,7 @@ function trimExactCandidate(value: string): string {
   return value.normalize("NFC").replace(EXACT_EDGE_PUNCTUATION_PATTERN, "");
 }
 
-function isExactTerm(value: string): boolean {
+export function isExactTerm(value: string): boolean {
   if (value.length < 2) return false;
   if (DIGIT_PATTERN.test(value)) return true;
   if (EXACT_SYMBOL_PATTERN.test(value)) return true;

@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, CapsuleSetId } from "@oscharko-dev/keiko-contracts";
 import {
   capsulesForKnowledgePodUi,
   capsuleSetsForKnowledgePodUi,
@@ -13,6 +13,7 @@ import {
   startIndexing,
   cancelIndexing,
   disconnectCapsule,
+  deleteCapsuleSet,
 } from "@/lib/local-knowledge-api";
 import { formatError } from "./format-error";
 import type {
@@ -152,6 +153,47 @@ function useCapsuleActions(
   };
 }
 
+function useCapsuleSetActions(
+  reload: () => void,
+  deleteCapsuleSetImpl: typeof deleteCapsuleSet,
+): {
+  capsuleSetActionBusy: CapsuleSetId | null;
+  capsuleSetActionError: string | null;
+  clearCapsuleSetActionError: () => void;
+  handleDeleteCapsuleSet: (id: CapsuleSetId) => void;
+} {
+  const [capsuleSetActionBusy, setCapsuleSetActionBusy] = useState<CapsuleSetId | null>(null);
+  const [capsuleSetActionError, setCapsuleSetActionError] = useState<string | null>(null);
+
+  async function runDelete(id: CapsuleSetId): Promise<void> {
+    setCapsuleSetActionBusy(id);
+    setCapsuleSetActionError(null);
+    try {
+      await deleteCapsuleSetImpl(id);
+      reload();
+    } catch (error) {
+      setCapsuleSetActionError(formatError(error));
+    } finally {
+      setCapsuleSetActionBusy(null);
+    }
+  }
+
+  function handleDeleteCapsuleSet(id: CapsuleSetId): void {
+    void runDelete(id);
+  }
+
+  function clearCapsuleSetActionError(): void {
+    setCapsuleSetActionError(null);
+  }
+
+  return {
+    capsuleSetActionBusy,
+    capsuleSetActionError,
+    clearCapsuleSetActionError,
+    handleDeleteCapsuleSet,
+  };
+}
+
 function useCapsuleCreate(
   createCapsuleImpl: typeof createCapsule,
   reload: () => void,
@@ -194,6 +236,7 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
     startIndexingImpl = startIndexing,
     cancelIndexingImpl = cancelIndexing,
     disconnectCapsuleImpl = disconnectCapsule,
+    deleteCapsuleSetImpl = deleteCapsuleSet,
     onOpenCapsule,
   } = props;
 
@@ -221,6 +264,12 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
     createCapsuleImpl,
     reload,
   );
+  const {
+    capsuleSetActionBusy,
+    capsuleSetActionError,
+    clearCapsuleSetActionError,
+    handleDeleteCapsuleSet,
+  } = useCapsuleSetActions(reload, deleteCapsuleSetImpl);
 
   return {
     capsules,
@@ -240,5 +289,9 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
     handleDisconnect,
     handleOpenHealth,
     handleCreateCapsule,
+    capsuleSetActionBusy,
+    capsuleSetActionError,
+    clearCapsuleSetActionError,
+    handleDeleteCapsuleSet,
   };
 }

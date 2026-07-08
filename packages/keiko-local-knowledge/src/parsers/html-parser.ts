@@ -224,10 +224,6 @@ function skipRawText(text: string, textLower: string, tagName: string, from: num
   return gt === -1 ? text.length : gt + 1;
 }
 
-function skipElement(text: string, textLower: string, tagName: string, from: number): number {
-  return skipRawText(text, textLower, tagName, from);
-}
-
 interface NestableElementEnd {
   // Offset of the matching close tag's `<` — i.e. one past the element's inner content.
   readonly contentEnd: number;
@@ -237,7 +233,7 @@ interface NestableElementEnd {
 
 // Depth-aware close for elements that legitimately nest same-named children — `<table>` (a cell
 // may contain a sub-table) and `<dl>` (a `<dd>` may contain a nested `<dl>`). A naive
-// `indexOf("</table>", from)` (what `skipElement` does) stops at the FIRST close tag, which for a
+// `indexOf("</table>", from)` (a plain substring search) stops at the FIRST close tag, which for a
 // nested table/dl is the INNER element's close — truncating the outer element and silently
 // dropping every sibling that follows the nested one. Walks tags via `nextEvent`, counting depth,
 // so the returned offsets bracket the matching OUTER close tag. MUST also skip `<script>`/`<style>`/
@@ -289,6 +285,17 @@ function skipNestableElement(
   from: number,
 ): number {
   return findNestableElementEnd(text, textLower, tagName, from).elementEnd;
+}
+
+// Skip past a non-raw-text container (`<title>`, `<pre>`, boilerplate `<nav>`/`<footer>`/`<aside>`)
+// to its matching close tag. This MUST go through the same RAW_TEXT_TAGS-aware, depth-tracking walk
+// as `skipNestableElement` (GRD-003) rather than a plain `indexOf("</" + tagName)` substring search:
+// a `<script>` nested inside one of these containers whose body happens to contain a literal
+// `</pre>`/`</title>`/`</nav>`/`</footer>`/`</aside>`-shaped substring (e.g. a JS string literal)
+// would otherwise be mis-read as the container's own close tag, prematurely ending the skip and
+// leaking the remainder of the still-open `<script>` body as ordinary text on the next scan step.
+function skipElement(text: string, textLower: string, tagName: string, from: number): number {
+  return skipNestableElement(text, textLower, tagName, from);
 }
 
 function isBoilerplateTag(tag: Tag): boolean {
@@ -492,6 +499,9 @@ function htmlFragmentText(fragment: string): string {
 interface ElementSpan {
   readonly name: string;
   readonly innerHtml: string;
+  // The matched element's own opening tag, verbatim — so callers can read attributes (e.g. a
+  // table cell's `colspan`/`rowspan`) without re-scanning the fragment.
+  readonly tagRaw: string;
 }
 
 // Extracts TOP-LEVEL `<name>...</name>` elements (any of `tagNames`) from an already-sliced
@@ -516,7 +526,11 @@ function extractElements(html: string, tagNames: ReadonlySet<string>): readonly 
     }
     if (event.tag.kind === "open" && tagNames.has(event.tag.name)) {
       const bounds = findNestableElementEnd(html, htmlLower, event.tag.name, event.tag.end);
-      spans.push({ name: event.tag.name, innerHtml: html.slice(event.tag.end, bounds.contentEnd) });
+      spans.push({
+        name: event.tag.name,
+        innerHtml: html.slice(event.tag.end, bounds.contentEnd),
+        tagRaw: event.tag.raw,
+      });
       cursor = bounds.elementEnd;
       continue;
     }
@@ -528,13 +542,43 @@ function extractElements(html: string, tagNames: ReadonlySet<string>): readonly 
 const ROW_TAGS: ReadonlySet<string> = new Set(["tr"]);
 const CELL_TAGS: ReadonlySet<string> = new Set(["td", "th"]);
 
-function tableCells(
-  rowHtml: string,
-): readonly { readonly header: boolean; readonly text: string }[] {
+// Bounds a `colspan`/`rowspan` attribute value to a sane positive integer so a malformed or
+// hostile table (e.g. `colspan="999999999"`) cannot force an unbounded column-expansion loop.
+const MAX_CELL_SPAN = 1000;
+
+function readSpanCount(tagRaw: string, attribute: string): number {
+  const raw = readAttribute(tagRaw, attribute);
+  if (raw === undefined) return 1;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
+  return Math.min(parsed, MAX_CELL_SPAN);
+}
+
+interface TableCell {
+  readonly header: boolean;
+  readonly text: string;
+  readonly colspan: number;
+  readonly rowspan: number;
+}
+
+function tableCells(rowHtml: string): readonly TableCell[] {
   return extractElements(rowHtml, CELL_TAGS).map((cell) => ({
     header: cell.name === "th",
     text: htmlFragmentText(cell.innerHtml),
+    colspan: readSpanCount(cell.tagRaw, "colspan"),
+    rowspan: readSpanCount(cell.tagRaw, "rowspan"),
   }));
+}
+
+// Repeats each cell `colspan` times so a spanning `<th>`/`<td>` occupies one array slot per
+// logical column it covers — otherwise header-to-value zipping (`appendTableRows`) stays purely
+// positional and misaligns every column from a spanning cell onward.
+function expandRowByColspan(row: readonly TableCell[]): readonly TableCell[] {
+  const expanded: TableCell[] = [];
+  for (const cell of row) {
+    for (let i = 0; i < cell.colspan; i += 1) expanded.push(cell);
+  }
+  return expanded;
 }
 
 function normalizeHeaders(headers: readonly string[], count: number): readonly string[] {
@@ -563,13 +607,32 @@ function appendTableCaption(state: ScanState, tableHtml: string): void {
   pushCleanedBlock(state, `Table caption: ${text}`);
 }
 
+// A header cell's `rowspan` is meant to carry that header down across the spanned data rows below
+// it — this parser does not track per-column carry-forward state across rows, so a spanning header
+// only labels its own row. Surface a body-safe diagnostic instead of silently misaligning the
+// spanned rows' headers.
+function warnIfHeaderRowspanUnsupported(state: ScanState, headerRow: readonly TableCell[]): void {
+  if (!headerRow.some((cell) => cell.header && cell.rowspan > 1)) return;
+  state.diagnostics.push(
+    diagnostic(
+      "HTML_TABLE_SPAN_UNSUPPORTED",
+      "table header cell uses rowspan > 1; header association is not carried into the spanned rows below it",
+      state.input.documentId,
+      "warning",
+    ),
+  );
+}
+
 function appendTableRows(state: ScanState, tableHtml: string): void {
   appendTableCaption(state, tableHtml);
-  const rows = extractElements(tableHtml, ROW_TAGS).map((row) => tableCells(row.innerHtml));
+  const rows = extractElements(tableHtml, ROW_TAGS)
+    .map((row) => tableCells(row.innerHtml))
+    .map(expandRowByColspan);
   if (rows.length === 0) return;
   const first = rows[0] ?? [];
   const headerIsSchema =
     rows.length > 1 && first.some((cell) => cell.header || /[A-Za-z_]/u.test(cell.text));
+  if (headerIsSchema) warnIfHeaderRowspanUnsupported(state, first);
   const maxCells = rows.reduce((max, row) => Math.max(max, row.length), 0);
   const headers = headerIsSchema
     ? normalizeHeaders(

@@ -266,6 +266,10 @@ function isSealedPolicy(
   );
 }
 
+// This independently derives the same "is this pod policy-denied" fact that
+// capsuleDegradationReasons() (single-pod path) and addPolicyReadinessReason() (pod-set path) in
+// keiko-local-knowledge/src/knowledge-pods.ts compute. Keep this in sync with those if either
+// changes (see AUDIT-E1819-003).
 function guidanceForPolicy(
   summary: KnowledgePodSummary,
   modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
@@ -484,6 +488,25 @@ export async function createCapsuleSet(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /api/local-knowledge/capsule-sets/:id — remove a Knowledge Pod Set's
+// membership metadata (#1929 audit fix). Member capsules are never touched.
+// ---------------------------------------------------------------------------
+
+export interface CapsuleSetActionResponse {
+  readonly ok: true;
+  readonly capsuleSetId: CapsuleSetId;
+}
+
+export async function deleteCapsuleSet(
+  capsuleSetId: CapsuleSetId,
+): Promise<CapsuleSetActionResponse> {
+  return fetchJson<CapsuleSetActionResponse>(
+    `/api/local-knowledge/capsule-sets/${encodeURIComponent(capsuleSetId)}`,
+    { method: "DELETE" },
+  );
 }
 
 // ---------------------------------------------------------------------------

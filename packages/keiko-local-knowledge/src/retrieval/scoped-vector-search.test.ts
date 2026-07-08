@@ -13,9 +13,11 @@ import type {
   CapsuleSetId,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
@@ -400,6 +402,54 @@ describe("searchVectorsForScope — composed capsule set", () => {
 
     expect(outcome.references).toHaveLength(0);
     expect(outcome.noEvidenceReason).toBe("policy-denied");
+  });
+
+  // Regression for AUDIT-E1819-002: only the two exported preset helpers
+  // (sealedLocalPodModelUsePolicy/standardPodModelUsePolicy) were used as enforcement-level
+  // fixtures. A hand-built `custom` policy that partially denies (dense lane) while partially
+  // allowing (lexical lane) exercises the same per-operation composition the contract-layer
+  // tests already cover, but end-to-end through actual retrieval.
+  it("enforces a custom policy's per-operation decisions end-to-end: dense lane denied, lexical lane allowed", async () => {
+    const { store } = getFixture();
+    const customPolicy: KnowledgePodModelUsePolicy = {
+      schemaVersion: KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+      mode: "custom",
+      operations: {
+        externalEmbeddings: "deny",
+        localEmbeddings: "allow",
+        externalReranking: "deny",
+        localReranking: "allow",
+        answerSynthesis: "deny",
+        rawContentRelease: "allow",
+        evidencePersistence: "allow",
+      },
+    };
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-custom",
+      sourceId: "src-custom",
+      documentId: "doc-custom",
+      modelUsePolicy: customPolicy,
+      text: "custom policy retrieval evidence body retained inside the pod",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const scope: RetrievalScopeInput = { capsuleIds: ["cap-custom" as KnowledgeCapsuleId] };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      scope,
+      "custom policy retrieval evidence body",
+      { topK: 20 },
+    );
+
+    // Dense lane is policy-denied (externalEmbeddings: "deny") ...
+    const laneStatuses = (outcome.diagnostics.embeddingLanes ?? []).map((lane) => lane.status);
+    expect(laneStatuses).toContain("policy-denied");
+    // ... but the lexical lane is allowed (rawContentRelease: "allow") and still returns the
+    // seeded chunk, so the resolved custom policy composes correctly per-operation instead of
+    // collapsing to an all-or-nothing sealed/standard behavior.
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.noEvidenceReason).toBeUndefined();
   });
 
   it("preserves configured gateway egress on the actual query embedding request", async () => {
@@ -2375,6 +2425,80 @@ describe("searchVectorsForScope — citation fields", () => {
         readonly n: number;
       },
     ).toMatchObject({ n: 1 });
+  });
+
+  // Regression for AUDIT-E1819-001: `collectLexicalCandidatesPass` OR'd every capsule's
+  // `policyDenied` flag into one scope-wide flag, and `collectLexicalCandidates` used that
+  // flag to skip the whole-lane OR-recall fallback whenever ANY in-scope capsule was denied —
+  // even when a co-selected non-denied capsule found nothing under the strict AND query and
+  // could have benefited from the fallback. A sealed sibling must not suppress a standard
+  // capsule's own OR-fallback recall.
+  it("does not let a sealed sibling's policy denial suppress a standard capsule's own OR-fallback recall", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-sealed-sibling",
+      sourceId: "src-sealed-sibling",
+      documentId: "doc-sealed-sibling",
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      text: "restricted sealed capsule body unrelated to the query",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    // Contains "alpha" but not "zulu" — the strict AND query ("alpha" AND "zulu") finds
+    // nothing here, so only the OR fallback ("alpha" OR "zulu") can recall this chunk.
+    const standard = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-standard-sibling",
+      sourceId: "src-standard-sibling",
+      documentId: "doc-standard-sibling",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      text: "alpha bravo charlie delta",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const scope: RetrievalScopeInput = {
+      capsuleIds: [
+        "cap-sealed-sibling" as KnowledgeCapsuleId,
+        "cap-standard-sibling" as KnowledgeCapsuleId,
+      ],
+    };
+
+    const outcome = await searchVectorsForScope(store, scriptedAdapter(), scope, "alpha zulu", {
+      topK: 5,
+    });
+
+    expect(outcome.diagnostics.lexicalOrFallbackUsed).toBe(true);
+    const refCapsuleIds = new Set(outcome.references.map((r) => String(r.capsuleId)));
+    expect(refCapsuleIds.has(String(standard.capsuleId))).toBe(true);
+    expect(refCapsuleIds.has("cap-sealed-sibling")).toBe(false);
+  });
+
+  // Regression for AUDIT-E1817-001: an unsegmented CJK/Kana/Hangul query with no whitespace
+  // (a pasted document, or a hostile input) used to make `multilingualSubtokens` generate every
+  // character and every adjacent character-pair as a separate FTS5 OR alternative with no upper
+  // bound, so a multi-thousand-character token drove an unbounded MATCH string. Extends the
+  // hostile-lexical-input test family above: the search must complete and return a bounded,
+  // safe result instead of building an unbounded query.
+  it("completes safely for a multi-thousand-character unsegmented CJK/Kana/Hangul query", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-cjk-hostile",
+      text: "契約書 支払い 고객번호 treasury controls evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const veryLongUnsegmentedQuery = Array.from({ length: 5_000 }, (_, i) =>
+      String.fromCodePoint(0x4e00 + (i % 20_000)),
+    ).join("");
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seeded.capsuleId] },
+      veryLongUnsegmentedQuery,
+      { topK: 2, strategy: "exact" },
+    );
+
+    expect(outcome.references.every((ref) => String(ref.capsuleId) === "cap-cjk-hostile")).toBe(
+      true,
+    );
+    expect(["available", "query-error"]).toContain(outcome.diagnostics.lexicalIndex);
   });
 
   it("recalls exact text matches outside the raw vector oversampling window", async () => {

@@ -58,8 +58,9 @@ export interface CreateHtmlManualPodDeps {
   readonly parserRegistry: ParserRegistry;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
-  // Injected byte-retrieval port (in-memory fixture in tests, WorkspaceFs-backed for local manuals,
-  // gatewayFetch-backed in keiko-server for intranet manuals).
+  // Injected byte-retrieval port (in-memory fixture in tests, WorkspaceFs-backed for local
+  // manuals). A gatewayFetch-backed keiko-server fetcher for intranet manuals is NOT implemented
+  // yet, and this function has no live server route or UI trigger — see Issue #2063.
   readonly fetcher: ManualCrawlFetcher;
   readonly capsuleId: KnowledgeCapsuleId;
   readonly sourceId: KnowledgeSourceId;

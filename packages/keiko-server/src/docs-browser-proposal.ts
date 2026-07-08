@@ -6,12 +6,17 @@
 //     matching an existing Knowledge Pod's opaque source fingerprint.
 //   * POST /api/docs-browser/approve  — re-derive the proposal server-side, refuse anything that is not
 //     an approvable manual (or is already indexed), and return the minimal, redaction-safe consent
-//     handoff the future crawler epic (#1853) will consume.
+//     handoff the crawler epic (#1853) consumes.
 //
 // Neither route performs ANY egress to the documentation target: detection and preview are pure over
 // the user-entered URL, and the only local touch is a read-only Knowledge Pod summary lookup for
 // duplicate detection. Nothing is crawled, fetched, captured, indexed, embedded, persisted, or sent to
 // a model here — producing a proposal or an approval starts no indexing work.
+//
+// Epic #1853's domain-layer crawler/indexer (`createHtmlManualPod`, `refreshHtmlManualPod` in
+// keiko-local-knowledge) is implemented and locally verified, but nothing in keiko-server or the UI
+// calls it yet: there is no live BFF trigger route and no gatewayFetch-backed HTTP fetcher for
+// intranet manuals. Wiring that live entry point is tracked separately in Issue #2063.
 
 import {
   applyAuthenticationRequiredOverride,
@@ -40,8 +45,21 @@ import { listKnowledgePodSummaries } from "@oscharko-dev/keiko-local-knowledge";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import { readDocsBrowserJsonBody } from "./docs-browser.js";
+import { resolveHtmlManualCitationNavigationTarget } from "./html-manual-citation-navigation.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+
+// A citation-opened manual's client-visible target is the opaque `keiko-html-manual-citation:`
+// token minted by the navigate route (html-manual-citation-navigation.ts), not the manual's real
+// URL — the navigation result never echoes the resolved URL back to the client. Resolve it here too
+// (mirroring handleDocsBrowserNavigate) so propose/approve classify the actual manual instead of
+// always falling through to `unsupported-scheme` for a target the navigate route just said was
+// eligible. A token that fails to resolve (or a non-citation target) falls through unchanged, which
+// is `unsupported-scheme` on the existing classification path.
+function resolveEffectiveTarget(target: string, deps: UiHandlerDeps): string {
+  const resolution = resolveHtmlManualCitationNavigationTarget(deps, target);
+  return resolution.kind === "resolved" ? resolution.target : target;
+}
 
 // A read-only source of validated Knowledge Pod summaries, injectable for tests. The production default
 // reads the local store; it never writes, indexes, or calls a model.
@@ -133,18 +151,19 @@ export function resolveManualProposal(
   listPods: KnowledgePodLister = safeListKnowledgePods,
   lastNavigationReason: DocumentationNavigationReason | null = null,
 ): DocumentationIndexingProposal {
+  const effectiveTarget = resolveEffectiveTarget(target, deps);
   const detection = applyAuthenticationRequiredOverride(
-    detectIndexableManual(target),
+    detectIndexableManual(effectiveTarget),
     lastNavigationReason,
   );
   const proposal = buildDocumentationIndexingProposal({
     detection,
-    targetClass: targetClassOf(target),
-    originSummary: summarizeManualOrigin(target),
-    pathPrefixSummary: summarizeManualPathPrefix(target),
+    targetClass: targetClassOf(effectiveTarget),
+    originSummary: summarizeManualOrigin(effectiveTarget),
+    pathPrefixSummary: summarizeManualPathPrefix(effectiveTarget),
   });
   if (!isApprovableProposalState(proposal.state)) return proposal;
-  const podId = findAlreadyIndexedPodId(target, deps, listPods);
+  const podId = findAlreadyIndexedPodId(effectiveTarget, deps, listPods);
   return podId === null ? proposal : asAlreadyIndexedProposal(proposal, podId);
 }
 
@@ -192,23 +211,24 @@ export function resolveManualApproval(
   listPods: KnowledgePodLister = safeListKnowledgePods,
   lastNavigationReason: DocumentationNavigationReason | null = null,
 ): ManualApprovalDecision {
+  const effectiveTarget = resolveEffectiveTarget(target, deps);
   const detection = applyAuthenticationRequiredOverride(
-    detectIndexableManual(target),
+    detectIndexableManual(effectiveTarget),
     lastNavigationReason,
   );
   if (!isApprovableProposalState(detection.state) || detection.sourceKind === null) {
     return NOT_APPROVABLE;
   }
-  if (findAlreadyIndexedPodId(target, deps, listPods) !== null) {
+  if (findAlreadyIndexedPodId(effectiveTarget, deps, listPods) !== null) {
     return {
       ok: false,
       code: "ALREADY_INDEXED",
       message: "This manual is already covered by a Knowledge Pod.",
     };
   }
-  const fingerprint = computeManualRootFingerprint(target);
+  const fingerprint = computeManualRootFingerprint(effectiveTarget);
   if (fingerprint === null) return NOT_APPROVABLE;
-  return { ok: true, approval: buildApproval(detection.sourceKind, fingerprint, target) };
+  return { ok: true, approval: buildApproval(detection.sourceKind, fingerprint, effectiveTarget) };
 }
 
 // ─── HTTP handlers ────────────────────────────────────────────────────────────────────

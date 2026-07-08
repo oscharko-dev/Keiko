@@ -43,6 +43,7 @@ import {
   handleConnectLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsuleSet,
+  handleDeleteLocalKnowledgeCapsuleSet,
   handleUpdateLocalKnowledgeCapsule,
   handleDisconnectLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
@@ -773,6 +774,49 @@ describe("local-knowledge handlers", () => {
     expect(detail.status).toBe(200);
   });
 
+  it("deletes a capsule set (#1929 audit fix), leaving member capsules unchanged", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const created = await handleCreateLocalKnowledgeCapsuleSet(
+      baseCtx(tmp, "POST", { displayName: "Quarterly Review", capsuleIds: ["cap-1"] }),
+      depsFor(tmp),
+    );
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const capsuleSetId = (created.body as { capsuleSet: { id: string } }).capsuleSet.id;
+
+    const deleted = await handleDeleteLocalKnowledgeCapsuleSet(
+      { ...baseCtx(tmp, "DELETE"), params: { capsuleSetId } },
+      depsFor(tmp),
+    );
+    expect(deleted.status, JSON.stringify(deleted.body)).toBe(200);
+    expect(deleted.body).toMatchObject({ ok: true, capsuleSetId });
+
+    const list = await handleListLocalKnowledgeCapsuleSets(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(list.body).toMatchObject({ capsuleSets: [] });
+
+    // Non-destructive: the member capsule is unaffected by the set's deletion.
+    const detail = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    expect(detail.status).toBe(200);
+  });
+
+  it("returns 404 when deleting a capsule set that does not exist", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleDeleteLocalKnowledgeCapsuleSet(
+      { ...baseCtx(tmp, "DELETE"), params: { capsuleSetId: "set-missing" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(404);
+  });
+
   it("rejects a capsule set with an empty displayName", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -1280,6 +1324,55 @@ describe("local-knowledge handlers", () => {
       knowledgePods: [{ id: capId, kind: "pod" }],
     });
     expect(JSON.stringify(result.body)).not.toContain("/tmp/set-1");
+  });
+
+  it("does not fail closed on the capsule-sets endpoint when an unrelated standalone capsule is corrupt", async () => {
+    // AUDIT-E1815-003: mirrors the capsules-endpoint regression test above in the opposite
+    // direction. listKnowledgePodSummaries() sets pods=[] for kind==="pod-set", so a corrupt
+    // standalone capsule that belongs to no set must never 503 the capsule-sets listing.
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "Audit Pod Set",
+      tags: [],
+      capsuleIds: [capId],
+    });
+    const unrelatedCapId = capsuleId("cap-unrelated");
+    createCapsule(store, {
+      id: unrelatedCapId,
+      displayName: "Unrelated Capsule",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      embeddingModelIdentity: {
+        provider: "openai",
+        modelId: "text-embedding-3-small",
+        vectorDimensions: 1536,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-unrelated",
+    });
+    store._internal.db
+      .prepare("UPDATE capsules SET vector_metric = 'manhattan' WHERE id = :c")
+      .run({ c: unrelatedCapId });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsuleSets: [{ id: "set-1", displayName: "Audit Pod Set" }],
+      knowledgePods: [{ id: "set-1", kind: "pod-set" }],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("manhattan");
   });
 
   it("lists persisted capsule sets without pod projection by default", async () => {

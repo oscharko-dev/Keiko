@@ -14,6 +14,10 @@ import type {
 
 export const EMBEDDING_PROFILE_SCHEMA_VERSION = "1" as const;
 
+// "local"/"remote" and "local-only"/"text-rerank" are reserved for future remote/federated pod
+// (Epic #1820+) and reranking-capability follow-up work; the only current production producer
+// (capsuleEmbeddingProfile) always sets locality: "provider" and policyCapabilities from
+// {"query-embedding", "external-denied"}. Not dead code -- forward-compatibility placeholders.
 export type EmbeddingProfileLocality = "local" | "provider" | "remote" | "opaque";
 
 export type EmbeddingProfilePolicyCapability =

@@ -630,6 +630,13 @@ export interface DocumentationManualProposalRequest {
   // caller report that the target required authentication so a proposal/approval is never offered
   // for a target the user was just told Keiko will not sign in to (child issue #1869). Absent or
   // null when no prior navigation result is available.
+  //
+  // AUDIT-E1852-002: this is advisory and client-reported, not server-verified — the BFF holds no
+  // per-target navigation-history record, so it trusts whatever value the caller sends verbatim. A
+  // direct (non-UI) API caller could send `null` regardless of the real last navigation outcome. Do
+  // not treat this field as a security control; a future contributor wiring the crawler epic (#1853)
+  // that needs an authoritative "did this target require auth" signal must add real server-side
+  // per-target navigation-history state, not rely on this value.
   readonly lastNavigationReason: DocumentationNavigationReason | null;
 }
 

@@ -12,6 +12,7 @@ import {
   embeddingProfileFromModelIdentity,
   embeddingProfileKey,
   type EmbeddingProfileCompatibilityDecision,
+  type EmbeddingProfileCompatibilityStatus,
   type EmbeddingProfileIdentity,
   type CapsuleLifecycleState,
   type CapsuleSet,
@@ -341,6 +342,13 @@ function countRows(
   return row?.n ?? 0;
 }
 
+// Unlike addPolicyReadinessReason() below (the pod-set path), this deliberately has no
+// policy-denied branch: the legacy-default resolved policy is sealed-local for every capsule
+// with no persisted modelUsePolicy, so adding one here would flip most existing "ready" pods to
+// "degraded" through capsuleReadiness(). The UI already surfaces policy-denied guidance
+// independently and with top priority (guidanceForPolicy() in keiko-ui/src/lib/local-knowledge-api.ts),
+// so there is no live user-facing gap; keep both computations of "is this pod policy-denied" in
+// sync if either one changes (see AUDIT-E1819-003).
 function capsuleDegradationReasons(
   capsule: KnowledgeCapsule,
   sources: readonly KnowledgeSource[],
@@ -376,6 +384,11 @@ function setReadiness(
   degradationReasons: readonly string[],
 ): KnowledgePodReadiness {
   if (members.length === 0) return "unavailable";
+  // Mirror capsuleReadiness()'s "deleting" -> "unavailable" mapping so a member mid-delete is
+  // never mislabeled as a healthier bucket (currently unreachable in practice, since
+  // deleteCapsule() never persists an intermediate "deleting" row, but the two functions cover
+  // the same CapsuleLifecycleState enum and must not drift out of sync).
+  if (members.some((member) => member.capsule.lifecycleState === "deleting")) return "unavailable";
   if (members.some((member) => member.capsule.lifecycleState === "indexing")) return "indexing";
   if (members.every((member) => member.capsule.lifecycleState === "ready")) {
     return degradationReasons.length === 0 ? "ready" : "degraded";
@@ -423,6 +436,9 @@ function addMemberReadiness(
   if (bucket.reason !== undefined) reasonCodes.add(bucket.reason);
 }
 
+// Pod-set-only policy-denied signal. See the comment on capsuleDegradationReasons() above for why
+// the single-pod path intentionally does not derive an equivalent reason from the same policy
+// check.
 function addPolicyReadinessReason(
   counts: SetReadinessCounts,
   reasonCodes: Set<KnowledgePodSetReadinessReasonCode>,
@@ -518,18 +534,45 @@ function capsuleEmbeddingProfile(capsule: KnowledgeCapsule): EmbeddingProfileIde
   });
 }
 
+// Most severe first: a genuine cross-member incompatibility must win over a softer, individual
+// member's own degraded/unknown state rather than being masked behind it.
+const EMBEDDING_STATUS_SEVERITY: Record<EmbeddingProfileCompatibilityStatus, number> = {
+  same: 0,
+  unknown: 1,
+  opaque: 2,
+  unavailable: 3,
+  incompatible: 4,
+};
+
+function moreSevereEmbeddingDecision(
+  a: EmbeddingProfileCompatibilityDecision,
+  b: EmbeddingProfileCompatibilityDecision,
+): EmbeddingProfileCompatibilityDecision {
+  return EMBEDDING_STATUS_SEVERITY[b.status] > EMBEDDING_STATUS_SEVERITY[a.status] ? b : a;
+}
+
 function setEmbeddingDecision(
   members: readonly CapsuleProjectionInput[],
 ): EmbeddingProfileCompatibilityDecision | undefined {
   const first = members[0];
   if (first === undefined) return undefined;
-  const firstNonSame = members.find((member) => member.embeddingDecision.status !== "same");
-  if (firstNonSame !== undefined) return firstNonSame.embeddingDecision;
-  for (const member of members.slice(1)) {
-    const decision = compareEmbeddingProfiles(first.embeddingProfile, member.embeddingProfile);
-    if (decision.status !== "same") return decision;
+  // Evaluate every member's own status AND every pairwise cross-comparison, not just the first
+  // non-'same' member's own status or the first member against the rest. A member with a merely
+  // degraded self-status (e.g. an unhardened legacy profile) must never short-circuit past a
+  // genuine incompatibility between two other members.
+  let worst = first.embeddingDecision;
+  for (let i = 0; i < members.length; i += 1) {
+    const memberI = members[i];
+    if (memberI === undefined) continue;
+    worst = moreSevereEmbeddingDecision(worst, memberI.embeddingDecision);
+    for (let j = i + 1; j < members.length; j += 1) {
+      const memberJ = members[j];
+      if (memberJ === undefined) continue;
+      const decision = compareEmbeddingProfiles(memberI.embeddingProfile, memberJ.embeddingProfile);
+      worst = moreSevereEmbeddingDecision(worst, decision);
+    }
   }
-  return first.embeddingDecision;
+  return worst;
 }
 
 function embeddingDegradationReasons(

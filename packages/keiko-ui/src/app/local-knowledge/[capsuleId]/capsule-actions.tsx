@@ -656,6 +656,59 @@ function ConfirmModal({
 }
 
 // ---------------------------------------------------------------------------
+// AffectedSetsNotice — AUDIT-E1821-001: deleting a capsule that belongs to one or
+// more Knowledge Pod Sets cascades the membership row out silently. The delete
+// response already carries affectedCapsuleSetIds; this surfaces it as a visible,
+// must-acknowledge notice before navigating away, instead of discarding it.
+// ---------------------------------------------------------------------------
+
+function AffectedSetsNotice({
+  affectedCapsuleSetCount,
+  onContinue,
+}: {
+  readonly affectedCapsuleSetCount: number;
+  readonly onContinue: () => void;
+}): ReactNode {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalInteractionLock();
+  useFocusTrap(dialogRef, true, onContinue);
+
+  const titleId = "lkd-affected-sets-title";
+  const descId = "lkd-affected-sets-desc";
+
+  return createPortal(
+    <div className="dlg-overlay in" role="presentation">
+      <div
+        ref={dialogRef}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
+        className="dlg"
+        tabIndex={-1}
+      >
+        <div className="dlg-head">
+          <div className="dlg-htext">
+            <div id={titleId} className="dlg-title">
+              Knowledge Pod Set membership changed
+            </div>
+            <div id={descId} className="dlg-sub">
+              {`This Knowledge Pod was removed from ${affectedCapsuleSetCount.toString()} Knowledge Pod Set${affectedCapsuleSetCount === 1 ? "" : "s"} it belonged to.`}
+            </div>
+          </div>
+        </div>
+        <div className="dlg-foot">
+          <button type="button" className="dlg-btn" onClick={onContinue}>
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CapsuleActions — root export
 // ---------------------------------------------------------------------------
 
@@ -700,6 +753,11 @@ export function CapsuleActions({
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // AUDIT-E1821-001: delayed onDeleted — when the delete response reports affected
+  // Knowledge Pod Sets, hold navigation until the user acknowledges the notice.
+  const [pendingDeleteResponse, setPendingDeleteResponse] = useState<CapsuleActionResponse | null>(
+    null,
+  );
   const [indexBusy, setIndexBusy] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressState | null>(null);
@@ -795,8 +853,13 @@ export function CapsuleActions({
       setProgress(null);
       setConfirm(null);
       if (kind === "delete") {
-        if (onDeleted !== undefined) onDeleted(response);
-        else onActionComplete();
+        if ((response.affectedCapsuleSetIds?.length ?? 0) > 0) {
+          setPendingDeleteResponse(response);
+        } else if (onDeleted !== undefined) {
+          onDeleted(response);
+        } else {
+          onActionComplete();
+        }
       } else {
         onActionComplete();
       }
@@ -805,6 +868,14 @@ export function CapsuleActions({
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleContinueAfterDelete(): void {
+    if (pendingDeleteResponse === null) return;
+    const response = pendingDeleteResponse;
+    setPendingDeleteResponse(null);
+    if (onDeleted !== undefined) onDeleted(response);
+    else onActionComplete();
   }
 
   function handleConfirm(): void {
@@ -932,6 +1003,13 @@ export function CapsuleActions({
           onNameChange={handleNameChange}
           onConfirm={handleConfirm}
           onCancel={handleCancel}
+        />
+      ) : null}
+
+      {pendingDeleteResponse !== null ? (
+        <AffectedSetsNotice
+          affectedCapsuleSetCount={pendingDeleteResponse.affectedCapsuleSetIds?.length ?? 0}
+          onContinue={handleContinueAfterDelete}
         />
       ) : null}
     </section>

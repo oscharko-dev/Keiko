@@ -86,6 +86,43 @@ Additional local verification from the audit branch:
 | UI coverage/build                  | passed | `npm run test:coverage:ui` passed with 266 files and 4,327 tests; `npm run build:ui` passed                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Editor release evidence            | passed | `npm run check:editor-release-evidence` was rerun after `npm run build:ui` on macOS and reported the known platform fingerprint difference. The same current worktree was copied to a temporary Linux `node:22-bookworm` container, where `npm ci`, `npm run build:packages`, `npm run build:ui`, and `npm run check:editor-release-evidence` passed with the committed Linux fingerprint `8e39300b5a056f7eb72665e053d5785840475164826f8fa6c5551ae7eac531d6`. The macOS-local fingerprint `b11bedda9822fabf6f72064e6017121ff8ca13b6813bac6d0063f8d62ba05632` was not committed.                                                                                                                                                                                                                                                                                                                       |
 
+Post-merge audit round 3 (2026-07-06, PR #2019, commit `b0e9cdf5`): a further active audit of the
+merged epic and child issues #1843-#1848 found and closed three additional evidence-backed
+hardening gaps:
+
+- Knowledge Pod embedding readiness metadata did not fully propagate retrieval query embedding
+  egress status, so a pod could appear ready while its dense lane was still blocked.
+- Dense lane grouping was not collision-safe: pods sharing a colliding embedding-identity hash
+  could be merged into the same lane instead of being kept isolated.
+- The connector graph UI did not surface pod-set readiness counts (unavailable/indexing/stale/
+  error member counts), so operators had no compact signal for a partially-ready pod set.
+
+Local and GitHub gates passed before merge; no new retrieval, evidence, policy, or UI subsystem
+was introduced. Evidence: `knowledge-pods.ts`/`.test.ts`, `scoped-vector-search.ts`/`.test.ts`,
+`connector-graph.tsx`/`.test.tsx`.
+
+Post-merge audit round 4 (2026-07-07, PR #2054, commit `e4d8b8a8`): an independent fourth-round
+audit (7 parallel verifiers plus a security pass) found the implementation production-sound with
+zero blocking defects, but surfaced five non-blocking test-coverage and documentation gaps against
+upstream perf/feature changes (#2049, #2052) that touched the same retrieval surface without
+altering its embedding-governance invariants:
+
+- `local-knowledge-embedding-profiles`: added coverage for the model-family-mismatch reason in the
+  ordered `PROFILE_COMPARISONS` table.
+- `knowledge-pods`: added coverage for a genuine cross-member `incompatible` status through the
+  real `buildKnowledgePodSetSummary` projection path, not just fingerprint drift.
+- `scoped-vector-search`: added coverage for the #2049 query-embedding LRU / preflight-TTL cache
+  (a cache hit avoids re-embedding and re-probing; caches stay isolated per adapter instance).
+- ADR-0036: documented the `LEXICAL_OR_FALLBACK_RRF_WEIGHT` exception introduced by #2049 as an
+  intra-lexical-lane refinement, not a change to the cross-engine or cross-space equal-weight
+  fusion that ADR governs.
+- `local-knowledge-api`: pinned the intentional policy-denied-over-incompatible guidance
+  precedence when both conditions hold on the same pod.
+
+No production code changed in this round; every acceptance criterion was already satisfied. This
+row also folds in this same 2026-07-07 audit's own finding that this ledger had fallen behind
+rounds 3 and 4 (now closed by the two entries above).
+
 ## Known limits
 
 - Remote and federated pods remain opaque future work unless they provide a reviewed

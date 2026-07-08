@@ -68,6 +68,11 @@ import {
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
@@ -505,6 +510,21 @@ function projectHtmlManualCitationMetadata(
     : { ...base, open: manualOpenUnavailable(resolved.reason) };
 }
 
+// AUDIT-E1816-007: citation projection predates the activity-safe-text gate this epic enforces on
+// the retrieval-activity object of the same answer. The generic label redactor only whitespace-
+// collapses and strips known secret shapes; it does not reject a filesystem path or PII-shaped
+// text. Route the source label through the same allowlist so an unsafe label is dropped instead of
+// reaching the client-facing citation verbatim.
+function safeCitationSource(
+  source: string | undefined,
+  redactLabel: LabelRedactor | undefined,
+): string | undefined {
+  if (source === undefined) return undefined;
+  const compact = citationLabelPart(source, redactLabel);
+  if (compact.length === 0) return undefined;
+  return isKnowledgePodRetrievalActivitySafeText(compact) ? compact : undefined;
+}
+
 export function projectLocalKnowledgeCitation(
   reference: RetrievalReference,
   marker: string,
@@ -512,8 +532,7 @@ export function projectLocalKnowledgeCitation(
   redactLabel?: LabelRedactor,
   store?: KnowledgeStore,
 ): LocalKnowledgeEvidenceCitation {
-  const source = sourceLookup?.(reference);
-  const safeSource = source === undefined ? undefined : citationLabelPart(source, redactLabel);
+  const safeSource = safeCitationSource(sourceLookup?.(reference), redactLabel);
   const htmlManual = projectHtmlManualCitationMetadata(store, reference, redactLabel);
   return {
     stableId: citationStableId(reference, marker),
@@ -526,7 +545,7 @@ export function projectLocalKnowledgeCitation(
       documentId: reference.citation.documentId,
       chunkId: reference.chunkId,
     },
-    ...(safeSource !== undefined && safeSource.length > 0 ? { source: safeSource } : {}),
+    ...(safeSource !== undefined ? { source: safeSource } : {}),
     ...(htmlManual !== undefined ? { htmlManual } : {}),
   };
 }
@@ -1087,20 +1106,20 @@ function buildLocalKnowledgeContextPack(
   };
 }
 
-function buildLocalKnowledgeAnswer(
-  chat: Chat,
+// Extracted from buildLocalKnowledgeAnswer to stay under the per-function line limit: builds the
+// citations list plus the retrieval-activity summary derived from it in one call.
+function citationsAndActivityForAnswer(
   store: KnowledgeStore,
   selected: SelectedLocalKnowledgeScope,
-  persisted: readonly [ChatMessage, ChatMessage],
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
-  elapsedMs: number,
-  assistantContent: string,
-  limits: ReturnType<typeof currentGroundingLimits>,
-  sourceLookup?: LocalKnowledgeCitationSourceLookup,
-  redactLabel?: LabelRedactor,
-): LocalKnowledgeGroundedAnswer {
-  const [user, assistant] = persisted;
-  const noEvidenceReason = enforcedNoEvidenceReason(result);
+  noEvidenceReason: string | undefined,
+  sourceLookup: LocalKnowledgeCitationSourceLookup | undefined,
+  redactLabel: LabelRedactor | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
+): {
+  readonly citations: LocalKnowledgeGroundedAnswer["citations"];
+  readonly retrievalActivity: ReturnType<typeof tryBuildKnowledgePodRetrievalActivity>;
+} {
   const citations = buildLocalKnowledgeCitations(
     result,
     noEvidenceReason,
@@ -1113,7 +1132,35 @@ function buildLocalKnowledgeAnswer(
     sources: [
       { selected, result: retrievalActivityResultFromScoped(result, citations, noEvidenceReason) },
     ],
+    diagnostics,
   });
+  return { citations, retrievalActivity };
+}
+
+function buildLocalKnowledgeAnswer(
+  chat: Chat,
+  store: KnowledgeStore,
+  selected: SelectedLocalKnowledgeScope,
+  persisted: readonly [ChatMessage, ChatMessage],
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  elapsedMs: number,
+  assistantContent: string,
+  limits: ReturnType<typeof currentGroundingLimits>,
+  sourceLookup?: LocalKnowledgeCitationSourceLookup,
+  redactLabel?: LabelRedactor,
+  diagnostics?: ServerDiagnosticSink,
+): LocalKnowledgeGroundedAnswer {
+  const [user, assistant] = persisted;
+  const noEvidenceReason = enforcedNoEvidenceReason(result);
+  const { citations, retrievalActivity } = citationsAndActivityForAnswer(
+    store,
+    selected,
+    result,
+    noEvidenceReason,
+    sourceLookup,
+    redactLabel,
+    diagnostics,
+  );
   return {
     groundingKind: "local-knowledge",
     userMessageId: user.id,
@@ -1145,6 +1192,7 @@ function buildStateFailureAnswer(
   stateFailure: { readonly reason: string; readonly message: string },
   redactLabel: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
+  diagnostics?: ServerDiagnosticSink,
 ): GroundedAnswer {
   const [user, assistant] = persisted;
   const answer = buildNoEvidenceAnswer(
@@ -1164,6 +1212,7 @@ function buildStateFailureAnswer(
     store,
     sources: [],
     skipped: [{ selected, reason: stateFailure.reason }],
+    diagnostics,
   });
   return {
     ...answer,
@@ -1525,6 +1574,7 @@ function activityModes(
 ): readonly KnowledgePodRetrievalActivityMode[] {
   const modes = new Set<KnowledgePodRetrievalActivityMode>(["local-only"]);
   addRetrievalMode(modes, result?.retrievalDiagnostics?.mode);
+  addStrategyMode(modes, result?.retrievalDiagnostics?.strategy);
   if (result?.reranker?.status === "applied") modes.add("reranked");
   if (hasPolicyDeniedSignal(result)) modes.add("sealed");
   return [...modes];
@@ -1543,6 +1593,17 @@ function addRetrievalMode(
   } else if (mode === "lexical-only" || mode === "lexical-degraded") {
     modes.add("lexical");
   }
+}
+
+// AUDIT-E1817-003: retrievalDiagnostics.strategy was computed and unit-tested at the retrieval
+// layer but never reached the operator-facing Knowledge Pod retrieval-activity summary. "balanced"
+// is the default and carries no extra signal; only a resolved non-default strategy is surfaced.
+function addStrategyMode(
+  modes: Set<KnowledgePodRetrievalActivityMode>,
+  strategy: NonNullable<ScopedGroundedResult["retrievalDiagnostics"]>["strategy"] | undefined,
+): void {
+  if (strategy === "exact") modes.add("exact");
+  else if (strategy === "broad") modes.add("broad");
 }
 
 function hasPolicyDeniedSignal(
@@ -1901,6 +1962,67 @@ function collapsedActivityPod(
   };
 }
 
+// AUDIT-E1816-002: connector scopes are not guaranteed capsule-disjoint (two connectors can both
+// resolve overlapping capsules). Each source independently emitted one pod row per capsule, so two
+// sources sharing a capsule produced two rows with the identical podId — a client-side list-key
+// collision that silently dropped one source's contribution. Merge by podId before bounding/
+// summarising so every source's contribution is reflected in exactly one row per real-world pod.
+const ACTIVITY_STATE_SEVERITY: Readonly<Record<KnowledgePodRetrievalActivityState, number>> = {
+  denied: 0,
+  degraded: 1,
+  unavailable: 2,
+  skipped: 3,
+  "not-selected": 4,
+  searched: 5,
+};
+
+function moreSevereState(
+  a: KnowledgePodRetrievalActivityState,
+  b: KnowledgePodRetrievalActivityState,
+): KnowledgePodRetrievalActivityState {
+  return ACTIVITY_STATE_SEVERITY[a] <= ACTIVITY_STATE_SEVERITY[b] ? a : b;
+}
+
+function mergePodCounts(
+  a: KnowledgePodRetrievalActivityPod["counts"],
+  b: KnowledgePodRetrievalActivityPod["counts"],
+): KnowledgePodRetrievalActivityPod["counts"] {
+  // sourceCount/documentCount/chunkCount/vectorCount are static facts about the underlying capsule
+  // (derived from the same cached summary for every duplicate), so only the per-retrieval counts
+  // are additive across sources.
+  return {
+    ...a,
+    referenceCount: a.referenceCount + b.referenceCount,
+    citationCount: a.citationCount + b.citationCount,
+  };
+}
+
+function mergeActivityPods(
+  a: KnowledgePodRetrievalActivityPod,
+  b: KnowledgePodRetrievalActivityPod,
+): KnowledgePodRetrievalActivityPod {
+  return {
+    ...a,
+    state: moreSevereState(a.state, b.state),
+    modes: [...new Set([...a.modes, ...b.modes])],
+    reasonCodes: [...new Set([...a.reasonCodes, ...b.reasonCodes])],
+    sourceIds: [...new Set([...a.sourceIds, ...b.sourceIds])],
+    counts: mergePodCounts(a.counts, b.counts),
+  };
+}
+
+function mergeDuplicatePods(
+  pods: readonly KnowledgePodRetrievalActivityPod[],
+): readonly KnowledgePodRetrievalActivityPod[] {
+  const merged = new Map<string, KnowledgePodRetrievalActivityPod>();
+  for (const pod of pods) {
+    const key = `${pod.podKind}:${String(pod.podId)}`;
+    const existing = merged.get(key);
+    merged.set(key, existing === undefined ? pod : mergeActivityPods(existing, pod));
+  }
+  return [...merged.values()];
+}
+
 function boundedActivityPods(
   pods: readonly KnowledgePodRetrievalActivityPod[],
 ): readonly KnowledgePodRetrievalActivityPod[] {
@@ -1948,10 +2070,11 @@ export function buildKnowledgePodRetrievalActivity(input: {
   readonly skipped?: readonly KnowledgePodRetrievalActivitySkippedInput[] | undefined;
 }): KnowledgePodRetrievalActivity {
   const summaryCache: ActivitySummaryCache = new Map();
-  const pods = [
+  const rawPods = [
     ...input.sources.flatMap((source) => podsForSource(input.store, summaryCache, source)),
     ...(input.skipped ?? []).flatMap((source) => podsForSkipped(input.store, summaryCache, source)),
   ];
+  const pods = mergeDuplicatePods(rawPods);
   const boundedPods = boundedActivityPods(pods);
   const activity: KnowledgePodRetrievalActivity = {
     schemaVersion: KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
@@ -1980,15 +2103,33 @@ function isRetrievalActivityProjectionError(error: unknown): boolean {
   );
 }
 
+// AUDIT-E1816-001: a fail-closed activity-assembly failure previously returned undefined with no
+// logging, no diagnostic record, and no correlation id — a future regression in the assembly
+// contract would silently and permanently disable Knowledge Pod transparency with zero operator-
+// visible signal. Route the (already redacted, static) failure message through the server's own
+// diagnostic sink before degrading. There is no per-request correlation id available at this seam
+// (an internal projection helper, not a route handler), so this record carries none, matching the
+// existing "unknown" fallback used elsewhere when no id is threaded through.
 export function tryBuildKnowledgePodRetrievalActivity(input: {
   readonly store: KnowledgeStore;
   readonly sources: readonly KnowledgePodRetrievalActivitySourceInput[];
   readonly skipped?: readonly KnowledgePodRetrievalActivitySkippedInput[] | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }): KnowledgePodRetrievalActivity | undefined {
   try {
     return buildKnowledgePodRetrievalActivity(input);
   } catch (error) {
     if (!isRetrievalActivityProjectionError(error)) throw error;
+    emitServerDiagnostic(
+      input.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: "unknown",
+        operation: "retrieval-activity.tryBuild",
+        source: "retrieval-activity.tryBuild",
+        error,
+        redact: (message) => message,
+      }),
+    );
     return undefined;
   }
 }
@@ -2085,6 +2226,7 @@ function persistScopedGroundedAnswer(
     limits,
     sourceLookup,
     (value: string): string => redactText(deps, value),
+    deps.diagnostics,
   ) satisfies GroundedAnswer;
   attachGroundedAnswerWithPreviewCitations(
     deps,
@@ -2181,6 +2323,7 @@ function stateFailureRoute(
     { ...stateFailure, message: redactedMessage },
     (value: string): string => redactText(deps, value),
     currentGroundingLimits(deps),
+    deps.diagnostics,
   );
   deps.store.attachGroundedAnswer(persisted[1].id, answer);
   return { status: 200, body: answer };

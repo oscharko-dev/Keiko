@@ -19,7 +19,7 @@ import {
   htmlManualMultilingualFixture,
   htmlManualTableRowFixture,
 } from "./fixtures.js";
-import { runRetrievalEval } from "./runner.js";
+import { runRetrievalEval, runRetrievalEvalReferences } from "./runner.js";
 import { PASS_THRESHOLDS, type RetrievalEvalFixture } from "./types.js";
 
 const NEW_MANUAL_FIXTURES: readonly RetrievalEvalFixture[] = [
@@ -85,6 +85,21 @@ describe("html-manual goldset fixtures — denied link and malformed page abstai
       expect(scorecard.outcomes.expectedNoEvidenceCount).toBe(1);
       expect(scorecard.outcomes.noEvidenceReasonCounts["below-min-score"]).toBe(1);
     }
+  });
+});
+
+describe("html-manual goldset fixtures — citation-open resolves an openable anchor (#2013 ledger claim)", () => {
+  it("the top reference for q-denied-citation-open carries a non-empty citation.anchorId", async () => {
+    // The ledger's "Denied link / citation-open" row claims this query catches "an in-scope
+    // block loses its openable citation". The aggregate citationQuality dimension only checks
+    // that `sectionPath` is non-empty — it never inspects `anchorId` — so that claim needs its
+    // own direct assertion rather than riding on the aggregate dimension staying at 1.0.
+    const referencesByQueryId = await runRetrievalEvalReferences(htmlManualDeniedLinkFixture);
+    const references = referencesByQueryId.get("q-denied-citation-open");
+    expect(references).toBeDefined();
+    const top = references?.[0];
+    expect(top).toBeDefined();
+    expect(top?.citation.anchorId).toBe("overview");
   });
 });
 

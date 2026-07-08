@@ -134,7 +134,7 @@ and no crawler, indexer, model call, or new egress.
   tokens, directory style, action-page tokens). It fetches nothing and executes no page JavaScript.
 - **The scope preview is a declaration, not a sample.** `POST /api/docs-browser/propose` classifies +
   detects + builds a bounded scope preview (explicit page/depth/byte/link/timeout caps, `followRedirects:
-  false`, denied link classes, a redacted proposed pod name, and `estimatedPageCount: null` because
+false`, denied link classes, a redacted proposed pod name, and `estimatedPageCount: null` because
   sampling is deferred to post-consent). The only local touch is a **read-only** Knowledge Pod summary
   lookup for already-indexed detection; it opens no indexing job and writes nothing.
 - **Consent is explicit and never pre-granted.** Every proposal is typed `approvalRequired: true` /
@@ -174,8 +174,9 @@ Epic #1852 set for its consent boundary. No constraint above is weakened.
   they resolve, canonicalise, deduplicate, and bound the traversal, but byte retrieval is delegated to an
   injected `ManualCrawlFetcher` port — the same injection pattern the indexing layer already uses for the
   `WorkspaceFs` filesystem port and the embedding adapter. A local manual is read through `WorkspaceFs`
-  (realpath-contained); an intranet manual is fetched by a `keiko-server` implementation backed by
-  `gatewayFetch`. The crawler opens no socket itself.
+  (realpath-contained); an intranet manual is intended to be fetched by a `keiko-server`
+  implementation backed by `gatewayFetch`, but that fetcher does not exist yet — see the "Deferred"
+  note below. The crawler opens no socket itself.
 - **One pure scope guard precedes every read/fetch, and fails closed.** `evaluateManualCrawlLink` is the
   single decision every candidate link is routed through before it is fetched or read. It layers an
   approved origin / path-prefix / local-root allowlist on top of the base scope and refuses every
@@ -219,6 +220,13 @@ Epic #1852 set for its consent boundary. No constraint above is weakened.
 The crawler consumes the pre-validated, redacted approval and never re-detects, re-summarises, or
 re-approves a target. The `keiko-server` egress route and any user-facing UI that drives the crawl remain
 the concern of later, separately governed work (chat-attach Epic #1854 and siblings).
+
+**Deferred: server-side trigger route and HTTP fetcher.** `createHtmlManualPod` and
+`refreshHtmlManualPod` (Epic #1856) are fully implemented, locally verified domain functions, but
+neither has a live entry point in the running product today: no `keiko-server` route calls either,
+no UI action triggers them, and the `gatewayFetch`-backed HTTP `ManualCrawlFetcher` for
+`html-manual-http` sources described above has not been built. Wiring a governed BFF trigger route
+and the HTTP fetcher is tracked in Issue #2063.
 
 ## Extension: citation-driven navigation for HTML manual chat answers (Epic #1854)
 

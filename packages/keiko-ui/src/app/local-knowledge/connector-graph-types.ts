@@ -1,6 +1,7 @@
 // Issue #197 — shared types for the connector graph surface.
 
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type { CapsuleSetId } from "@oscharko-dev/keiko-contracts";
 import type {
   fetchCapsules,
   fetchCapsuleSets,
@@ -8,11 +9,13 @@ import type {
   startIndexing,
   cancelIndexing,
   disconnectCapsule,
+  deleteCapsuleSet,
   CapsuleListEntry,
   CapsuleSetListEntry,
   CapsulesResponse,
   CapsuleSetsResponse,
   CapsuleActionResponse,
+  CapsuleSetActionResponse,
 } from "@/lib/local-knowledge-api";
 
 export type {
@@ -21,6 +24,7 @@ export type {
   CapsulesResponse,
   CapsuleSetsResponse,
   CapsuleActionResponse,
+  CapsuleSetActionResponse,
 };
 
 export type LoadStatus = "loading" | "ready" | "error";
@@ -36,6 +40,7 @@ export interface ConnectorGraphProps {
   readonly startIndexingImpl?: typeof startIndexing;
   readonly cancelIndexingImpl?: typeof cancelIndexing;
   readonly disconnectCapsuleImpl?: typeof disconnectCapsule;
+  readonly deleteCapsuleSetImpl?: typeof deleteCapsuleSet;
   readonly showBackToWorkspace?: boolean;
   readonly onOpenCapsule?: (id: KnowledgeCapsuleId) => void;
 }
@@ -58,6 +63,10 @@ export interface ConnectorGraphState {
   readonly handleDisconnect: (id: KnowledgeCapsuleId) => void;
   readonly handleOpenHealth: (id: KnowledgeCapsuleId) => void;
   readonly handleCreateCapsule: (name: string) => Promise<void>;
+  readonly capsuleSetActionBusy: CapsuleSetId | null;
+  readonly capsuleSetActionError: string | null;
+  readonly clearCapsuleSetActionError: () => void;
+  readonly handleDeleteCapsuleSet: (id: CapsuleSetId) => void;
 }
 
 export const STATUS_LABELS: Record<CapsuleLifecycleState, string> = {
