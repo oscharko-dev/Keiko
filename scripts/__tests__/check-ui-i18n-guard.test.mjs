@@ -183,7 +183,7 @@ test("fails mixed UI diffs when one file hard-codes text", async () => {
       [UI_FILE]:
         'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() { const t = useTranslate(); return <p>{t("feature.title")}</p>; }\n',
       "packages/keiko-ui/src/app/components/AnotherFeature.tsx":
-        'export function AnotherFeature() { return <p>Hard-coded text</p>; }\n',
+        "export function AnotherFeature() { return <p>Hard-coded text</p>; }\n",
     },
     (repoRoot) => {
       const result = checkUiI18nGuard({
