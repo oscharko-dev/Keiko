@@ -468,7 +468,7 @@ describe("GroundedAnswer", () => {
         { ...pod, podId: "cap-filtered" as typeof pod.podId, state: "not-selected" },
       ],
     });
-    render(
+    const { container } = render(
       <GroundedAnswer
         answer={{ ...localKnowledgeAnswer(), retrievalActivity: activity }}
         busy={false}
@@ -483,6 +483,15 @@ describe("GroundedAnswer", () => {
     expect(
       screen.getByText(/Modes: local only, sealed · Reasons: policy denied/u),
     ).toBeInTheDocument();
+
+    // AUDIT-E1816-006: each activity badge carries a state-scoped data attribute so the
+    // component-scoped CSS module can apply a per-state accent color, not just shared text.
+    const badgeStates = [
+      ...container.querySelectorAll(".grounded-evidence-summary-badge[data-activity-state]"),
+    ].map((badge) => badge.getAttribute("data-activity-state"));
+    expect(badgeStates).toEqual(
+      expect.arrayContaining(["skipped", "degraded", "denied", "unavailable", "not-selected"]),
+    );
   });
 
   it("keeps each per-pod activity state label announced in the activity list", () => {
@@ -1273,6 +1282,26 @@ describe("GroundedAnswer", () => {
         ...base.contextPack,
         reranker: {
           status: "unavailable" as const,
+          candidateCount: 3,
+          documentCount: 3,
+          keptCount: 3,
+        },
+      },
+    } as GroundedAnswerType;
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent?.toLowerCase()).toContain("reranker unavailable");
+  });
+
+  it("RB-4 (GEN-AI-RETRIEVAL-001): surfaces silent reranker degradation for an invalid-response status", () => {
+    const base = localKnowledgeAnswer();
+    const a = {
+      ...base,
+      contextPack: {
+        ...base.contextPack,
+        reranker: {
+          status: "invalid-response" as const,
+          failureKind: "invalid-response" as const,
           candidateCount: 3,
           documentCount: 3,
           keptCount: 3,

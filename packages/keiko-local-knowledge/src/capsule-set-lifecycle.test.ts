@@ -127,6 +127,24 @@ describe("capsule deletion cascades into set membership", () => {
     const set = getCapsuleSet(store, "set-y" as CapsuleSetId);
     expect(set?.capsuleIds).toStrictEqual([bId]);
   });
+
+  // AUDIT-E1821-001: the real cascade keeps CapsuleSet.capsuleIds in sync with live
+  // membership (see the previous test), so a downstream "missing member" comparison
+  // against the same capsuleIds can never observe the removal. The signal a caller
+  // actually needs — "this delete just shrank set-y" — has to come from the delete
+  // result itself, not from re-deriving the set afterwards. This exercises the real
+  // create-then-delete flow (not a synthetic CapsuleSet) to prove that signal is
+  // populated correctly, since the UI's post-delete warning depends on it.
+  it("returns the affected set id in the delete result for a real cascade", () => {
+    createCapsuleSet(store, {
+      id: "set-y" as CapsuleSetId,
+      displayName: "y",
+      tags: [],
+      capsuleIds: [aId, bId],
+    });
+    const result = deleteCapsule(store, aId);
+    expect(result.affectedCapsuleSetIds).toStrictEqual(["set-y"]);
+  });
 });
 
 describe("listCapsuleSets — no N+1 queries", () => {

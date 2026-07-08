@@ -4,6 +4,7 @@
 // so neither engine structurally dominates. Deterministic. See ADR-0036.
 
 import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
+import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export const RRF_K = 60;
 
@@ -164,4 +165,26 @@ export function applyModelRerankResults<P>(
     );
   }
   return withFinalMarkers(reranked.slice(0, topN));
+}
+
+// Shared diagnostics-shaping helpers for the single-scope (local-knowledge-grounded-qa.ts) and
+// hybrid (grounded-qa-hybrid.ts) reranking paths, so a future diagnostics-shaping change is made
+// in one place instead of drifting between two identical copies.
+export function withKeptCount(
+  diagnostics: GroundedRerankerDiagnostics,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return { ...diagnostics, keptCount };
+}
+
+export function invalidRerankMappingDiagnostics(
+  diagnostics: GroundedRerankerDiagnostics,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return {
+    ...diagnostics,
+    status: "invalid-response",
+    failureKind: "invalid-response",
+    keptCount,
+  };
 }

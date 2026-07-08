@@ -26,6 +26,7 @@ import type {
   GatewayConfig,
   ModelCapability,
   ModelProviderConfig,
+  ParseGatewayConfigOptions,
   VoiceProviderLocality,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -181,6 +182,24 @@ function validateLinkLocalGatewayBaseUrl(baseUrl: string, env: EnvSource): Route
       `Gateway baseUrl may not target link-local metadata addresses unless ${ALLOW_LINK_LOCAL_GATEWAY_ENV}=1 is set.`,
     ),
   };
+}
+
+// The candidate baseUrl has already passed `validateLinkLocalGatewayBaseUrl`'s dedicated,
+// env-flag-gated check by the time any egress-level validation runs (both the initial
+// `validateSetupConnection` guard and `verifySetupCandidate`'s defence-in-depth re-check are
+// reached only after that gate). Thread the same narrow, non-config-file opt-in into the egress
+// used for THIS candidate's validation only, so the downstream shared SSRF classifier (hardened
+// to unconditionally block metadata/link-local for the generic `allowPrivateNetwork` opt-in,
+// AUDIT-SEC-002) does not re-reject a URL this route has already deliberately approved. This
+// must never be derived from a generic env-to-egress mapping -- only from this one call site --
+// or every other `currentGatewayEgressConfig` consumer (reranker, voice, update-preflight,
+// local-knowledge connectors) would silently inherit the override too.
+function egressForCandidateValidation(
+  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig" | "env" | "egress">,
+): GatewayEgressConfig | undefined {
+  const base = currentGatewayEgressConfig(deps);
+  if (!envFlagEnabled(deps.env, ALLOW_LINK_LOCAL_GATEWAY_ENV)) return base;
+  return { ...base, allowLinkLocalAndMetadata: true };
 }
 
 function candidateBaseUrls(baseUrl: string): readonly string[] {
@@ -860,6 +879,17 @@ function parseImageInputModelIds(value: unknown): readonly string[] | RouteResul
   return names;
 }
 
+// Shared by every `parseGatewayConfig` call that runs immediately after
+// `validateLinkLocalGatewayBaseUrl` has already approved the same baseUrl for this request, so
+// the shared SSRF classifier (hardened to unconditionally block metadata/link-local for the
+// generic `allowPrivateNetwork` opt-in, AUDIT-SEC-002) does not re-reject a URL this route has
+// already deliberately approved via its own, narrower, env-flag-gated check.
+function linkLocalGatewayOverrideOptions(env: EnvSource): ParseGatewayConfigOptions {
+  return envFlagEnabled(env, ALLOW_LINK_LOCAL_GATEWAY_ENV)
+    ? { egressOverride: { allowLinkLocalAndMetadata: true } }
+    : {};
+}
+
 function validateSetupConnection(
   baseUrl: string,
   apiKey: string,
@@ -872,6 +902,7 @@ function validateSetupConnection(
     parseGatewayConfig(
       buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
       env,
+      linkLocalGatewayOverrideOptions(env),
     );
     return undefined;
   } catch (error) {
@@ -1240,6 +1271,7 @@ function validateVoiceProviderConnection(
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
       },
       env,
+      linkLocalGatewayOverrideOptions(env),
     );
     return undefined;
   } catch (error) {
@@ -1500,7 +1532,11 @@ function validationConfigForSetup(input: SetupVerificationInput): GatewayConfig 
     imageInputModelIds: input.imageInputModelIds,
     timeoutMs: input.timeoutMs,
   });
-  return parseGatewayConfig(withInheritedEgress(validationRawConfig, input.egress), input.env);
+  return parseGatewayConfig(
+    withInheritedEgress(validationRawConfig, input.egress),
+    input.env,
+    linkLocalGatewayOverrideOptions(input.env),
+  );
 }
 
 function normalizeLegacyDiscoveryResult(modelIds: readonly string[]): SetupCandidateModels {
@@ -1650,6 +1686,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   const candidateConfig = parseGatewayConfig(
     withInheritedEgress(candidateRawConfig, input.egress),
     input.env,
+    linkLocalGatewayOverrideOptions(input.env),
   );
   const testedModelIds = await input.tester(candidateConfig, candidateModels.chatModelIds);
   assertImageInputModelsWereTested(input.imageInputModelIds, testedModelIds);
@@ -1661,6 +1698,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfigWithOptionalBlocks, input.egress),
     input.env,
+    linkLocalGatewayOverrideOptions(input.env),
   );
   return {
     rawConfig: rawConfigWithOptionalBlocks,
@@ -1818,7 +1856,7 @@ async function trySetupCandidate(
     tester,
     discovery,
     env: deps.env,
-    egress: currentGatewayEgressConfig(deps),
+    egress: egressForCandidateValidation(deps),
     figmaAccessToken: request.figmaAccessToken,
     current,
   });
@@ -1851,6 +1889,7 @@ function saveExistingConfigUpdate(
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfig, currentGatewayEgressConfig(deps)),
     deps.env,
+    linkLocalGatewayOverrideOptions(deps.env),
   );
   persistGatewayConfig(rawConfig, gatewayConfig.storagePath, deps);
   gatewayConfig.set(config, true);

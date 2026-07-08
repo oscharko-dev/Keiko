@@ -81,6 +81,14 @@ async function listen(server: HttpServer | HttpsServer): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
+// Binds without an explicit host (dual-stack `::`) so a hostname whose DNS lookup returns both
+// an IPv6 and an IPv4 loopback address (e.g. "*.localhost") can reach this server either way.
+async function listenOnAllInterfaces(server: HttpServer | HttpsServer): Promise<number> {
+  server.listen(0);
+  await once(server, "listening");
+  return (server.address() as AddressInfo).port;
+}
+
 async function close(server: HttpServer | HttpsServer): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
@@ -534,6 +542,94 @@ describe("gatewayFetch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// AUDIT-SEC-001 — DNS-rebinding resolve-then-connect gap (pinned direct connect)
+// ---------------------------------------------------------------------------
+//
+// Each test loads a fresh copy of ./http.js with "node:dns/promises" mocked (vi.resetModules +
+// vi.doMock, same pattern as capabilities.test.ts) so the production dnsLookup call inside
+// enforceOutboundTargetPolicy is fully controlled, without disturbing the real-DNS-dependent
+// tests elsewhere in this file, which keep using the statically-imported gatewayFetch.
+
+describe("gatewayFetch DNS-rebinding pinning (AUDIT-SEC-001)", () => {
+  it("connects using the policy-validated address instead of re-resolving DNS at connect time", async () => {
+    // The hostname deliberately does not resolve via a real DNS query (RFC 2606 reserved
+    // "invalid" TLD). Before this fix, gatewayFetch validated it via the mocked lookup below
+    // and then handed the URL to globalThis.fetch, which performs its OWN, independent DNS
+    // resolution — unmocked, so it would fail outright (ENOTFOUND/EAI_AGAIN). After the fix,
+    // the connect reuses the address enforceOutboundTargetPolicy already validated and reaches
+    // the real origin server below, proving no second, independent resolution happens.
+    const origin = createHttpServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "vetted" }));
+    });
+    const originPort = await listen(origin);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      const response = await pinnedGatewayFetch(
+        `http://pinned-target.invalid:${String(originPort)}/manual`,
+      );
+      expect(await response.json()).toEqual({ via: "vetted" });
+    } finally {
+      await close(origin);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("still refuses the request when the policy-validated address is blocked (e.g. metadata)", async () => {
+    // Simulates a resolver answer that rebinds a previously-approved hostname to the cloud
+    // metadata address: the pinned address itself must still go through the same address
+    // classification, so a blocked answer is refused before any connect is attempted.
+    vi.resetModules();
+    vi.doMock("node:dns/promises", () => ({
+      lookup: vi.fn(() => Promise.resolve([{ address: "169.254.169.254", family: 4 }])),
+    }));
+    try {
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      await expect(
+        pinnedGatewayFetch("http://pinned-target.invalid/latest/meta-data"),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+    } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+
+  it("re-validates and refuses a redirect hop whose DNS resolves to a blocked address", async () => {
+    // The origin is a legitimate, allowed target; its redirect Location points at a second
+    // hostname that only resolves to a blocked (metadata-class) address on the redirect-hop
+    // DNS check, simulating a rebind between the original request and the redirect follow-up.
+    const origin = createHttpServer((_req, res) => {
+      res.writeHead(302, { location: "http://rebind-hop.invalid.test/next" });
+      res.end();
+    });
+    const originPort = await listen(origin);
+    try {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn((hostname: string) =>
+          hostname === "rebind-hop.invalid.test"
+            ? Promise.resolve([{ address: "169.254.169.254", family: 4 }])
+            : Promise.resolve([{ address: "127.0.0.1", family: 4 }]),
+        ),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      await expect(
+        pinnedGatewayFetch(`http://redirect-origin.invalid.test:${String(originPort)}/first`),
+      ).rejects.toMatchObject({ code: "PROXY_BLOCKED_BY_POLICY" });
+    } finally {
+      await close(origin);
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // isMissingIssuerError — only UNABLE_TO_GET_ISSUER_CERT_LOCALLY triggers fallback
 // ---------------------------------------------------------------------------
 
@@ -865,26 +961,38 @@ describe("mapProxyError (via OutboundHttpEgressError code assignment)", () => {
 // ---------------------------------------------------------------------------
 
 describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
-  async function assertBypassWithStubbedFetch(noProxy: string[], target: string): Promise<void> {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ via: "direct" }), {
-          headers: { "content-type": "application/json" },
-        }),
-      ),
-    ) as unknown as typeof fetch;
-    vi.stubGlobal("fetch", fetchMock);
+  // Uses a real listener (rather than stubbing globalThis.fetch) so the request genuinely
+  // resolves and connects to `host` -- required since AUDIT-SEC-001's DNS pinning means the
+  // direct path no longer necessarily goes through globalThis.fetch, so a stubbed fetch would
+  // silently never be hit and this would stop proving the noProxy subdomain match at all.
+  async function assertBypassesToRealOrigin(noProxy: string[], host: string): Promise<void> {
+    let originHits = 0;
+    let proxyHits = 0;
+    const origin = createHttpServer((_req, res) => {
+      originHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "origin" }));
+    });
+    const originPort = await listenOnAllInterfaces(origin);
+    const proxy = createHttpServer((_req, res) => {
+      proxyHits += 1;
+      res.writeHead(502);
+      res.end("should not be used");
+    });
+    const proxyPort = await listen(proxy);
     try {
-      const response = await gatewayFetch(target, {
+      const response = await gatewayFetch(`http://${host}:${String(originPort)}/models`, {
         egress: {
-          httpProxy: "http://127.0.0.1:1",
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
           noProxy,
         },
       });
-      expect(await response.json()).toEqual({ via: "direct" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(await response.json()).toEqual({ via: "origin" });
+      expect(proxyHits).toBe(0);
+      expect(originHits).toBe(1);
     } finally {
-      vi.unstubAllGlobals();
+      await close(proxy);
+      await close(origin);
     }
   }
 
@@ -934,11 +1042,11 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
   });
 
   it("bare domain rule bypasses subdomains", async () => {
-    await assertBypassWithStubbedFetch(["localhost"], "http://api.localhost/models");
+    await assertBypassesToRealOrigin(["localhost"], "api.localhost");
   });
 
   it("leading-dot domain rule bypasses subdomains", async () => {
-    await assertBypassWithStubbedFetch([".localhost"], "http://api.localhost/models");
+    await assertBypassesToRealOrigin([".localhost"], "api.localhost");
   });
 
   it("host:port form bypasses only the specific port", async () => {

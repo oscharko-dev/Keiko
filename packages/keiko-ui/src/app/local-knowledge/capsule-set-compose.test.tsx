@@ -177,3 +177,13 @@ describe("CapsuleSetComposeDialog — accessibility", () => {
     expect(await axe(container)).toHaveNoViolations();
   });
 });
+
+describe("CapsuleSetComposeDialog — responsive layout (AUDIT-E1821-004)", () => {
+  it("stays on the shared fluid `.mc-dialog` primitive instead of a fixed pixel width", () => {
+    render(<CapsuleSetComposeDialog {...defaultProps()} />);
+    // The dialog is rendered via createPortal into document.body, not the render container.
+    const dialog = document.body.querySelector(".mc-dialog");
+    expect(dialog).not.toBeNull();
+    expect(dialog).not.toHaveAttribute("style");
+  });
+});

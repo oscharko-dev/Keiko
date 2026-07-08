@@ -25,6 +25,8 @@ export const KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_MODES = [
   "sealed",
   "remote",
   "federated",
+  "exact",
+  "broad",
 ] as const;
 
 export type KnowledgePodRetrievalActivityMode =

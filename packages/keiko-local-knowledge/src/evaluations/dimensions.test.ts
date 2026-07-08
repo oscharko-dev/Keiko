@@ -285,4 +285,11 @@ describe("scoreContextBudgetFit", () => {
   it("returns 1.0 for an empty result set even when a budget is configured", () => {
     expect(scoreContextBudgetFit([], new Map(), 1)).toBe(1);
   });
+
+  it("returns 0.0 when the configured budget is zero or negative", () => {
+    const returned = [makeRef("c1", "cap")];
+    const tokens = new Map([["c1", 20]]);
+    expect(scoreContextBudgetFit(returned, tokens, 0)).toBe(0);
+    expect(scoreContextBudgetFit(returned, tokens, -5)).toBe(0);
+  });
 });
