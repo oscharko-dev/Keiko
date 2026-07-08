@@ -59,9 +59,42 @@ export function isManualUpdatePath(
 export function isPortableManagedInstall(session: UpdateSessionStatus): boolean {
   const mode = session.installMode;
   return (
-    mode.installKind === "portable-managed" ||
-    mode.recommendedAction === "portable-managed-update" ||
-    mode.portable?.status === "managed"
+    mode.status === "supported" &&
+    (mode.installKind === "portable-managed" ||
+      mode.recommendedAction === "portable-managed-update" ||
+      mode.portable?.status === "managed")
+  );
+}
+
+export function isPortableManagedPolicyDisabled(session: UpdateSessionStatus): boolean {
+  return isPortableManagedInstall(session) && !session.policy.enabled;
+}
+
+export function isPortableBootstrapSetupRequired(
+  report: UpdatePreflightReport,
+  session?: UpdateSessionStatus | undefined,
+): boolean {
+  if (isPortableExternallyManaged(report, session)) return false;
+  return (
+    report.blockers.some((blocker) => blocker.code === "portable-install-mode-ineligible") &&
+    (session === undefined
+      ? report.portableAsset?.status === "install-mode-ineligible"
+      : session.installMode.reason === "portable-bootstrap" ||
+        session.installMode.recommendedAction === "portable-bootstrap-setup" ||
+        session.installMode.installKind === "portable-bootstrap" ||
+        session.installMode.portable?.status === "bootstrap")
+  );
+}
+
+export function isPortableExternallyManaged(
+  report: UpdatePreflightReport,
+  session?: UpdateSessionStatus | undefined,
+): boolean {
+  return (
+    report.blockers.some((blocker) => blocker.code === "portable-install-managed-externally") ||
+    session?.installMode.reason === "portable-it-managed" ||
+    session?.installMode.installKind === "portable-it-managed" ||
+    session?.installMode.portable?.status === "it-managed"
   );
 }
 
@@ -85,6 +118,27 @@ export function isPortableManagedManualPath(
   session: UpdateSessionStatus,
 ): boolean {
   return isManualUpdatePath(report, session) && isPortableManagedInstall(session);
+}
+
+const PORTABLE_INTEGRITY_BLOCKER_CODES = new Set<string>([
+  "portable-checksum-missing",
+  "portable-checksum-mismatch",
+  "portable-signing-unverified",
+]);
+
+export function isPortableIntegrityBlocked(report: UpdatePreflightReport): boolean {
+  return report.blockers.some((blocker) => PORTABLE_INTEGRITY_BLOCKER_CODES.has(blocker.code));
+}
+
+export function isPortableReleaseMetadataUnavailable(report: UpdatePreflightReport): boolean {
+  return (
+    (report.installabilitySource === "github-release-asset" ||
+      report.portableAsset?.source === "github-release-asset") &&
+    !report.updateAvailable &&
+    (report.releaseMetadataStatus === "unavailable" ||
+      report.portableAsset?.status === "unavailable" ||
+      report.blockers.some((blocker) => blocker.code === "portable-release-unavailable"))
+  );
 }
 
 export function isUpdateCheckUnavailable(report: UpdatePreflightReport): boolean {
@@ -134,6 +188,7 @@ export function statusTitle(
     return t("updates.status.installing");
   }
   if (report.severity === "critical") return t("updates.status.critical");
+  if (isPortableReleaseMetadataUnavailable(report)) return t("updates.status.releaseUnavailable");
   if (isUpdateCheckUnavailable(report)) return t("updates.status.unavailable");
   if (report.updateAvailable) return t("updates.status.available");
   return t("updates.status.current");

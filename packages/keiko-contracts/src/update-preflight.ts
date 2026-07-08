@@ -63,6 +63,7 @@ export const UPDATE_PREFLIGHT_BLOCKER_CODES = [
   "breaking-exception-manual",
   "one-click-ineligible",
   "portable-install-mode-ineligible",
+  "portable-install-managed-externally",
   "portable-release-unavailable",
   "portable-release-malformed",
   "portable-asset-missing",
@@ -71,6 +72,7 @@ export const UPDATE_PREFLIGHT_BLOCKER_CODES = [
   "portable-manifest-malformed",
   "portable-checksum-missing",
   "portable-checksum-mismatch",
+  "portable-signing-unverified",
   "portable-sidecar-verification-failed",
 ] as const;
 

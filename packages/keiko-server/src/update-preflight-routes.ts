@@ -3,6 +3,7 @@ import {
   UPDATE_PORTABLE_TARGET_ASSET_NAMES,
   type ReleaseImpactCatalog,
   type UpdateInstallMode,
+  type UpdatePreflightBlockerCode,
   type UpdatePreflightPortableInstallability,
   type UpdatePreflightReport,
   type UpdatePortableTarget,
@@ -31,7 +32,7 @@ import {
 } from "./update-preflight-report.js";
 
 interface UpdatePreflightRuntimeOptions {
-  readonly currentVersion?: string;
+  readonly currentVersion?: string | (() => string);
   readonly bundledCatalog?: ReleaseImpactCatalog | undefined;
   readonly clock?: (() => Date) | undefined;
   readonly installMode?: (() => UpdateInstallMode) | undefined;
@@ -141,10 +142,15 @@ function portableBlockedReport(
   mode: UpdateInstallMode,
 ): UpdatePreflightReport {
   const target = mode.portable?.target ?? "windows-x64";
+  const code: UpdatePreflightBlockerCode =
+    mode.reason === "portable-it-managed"
+      ? "portable-install-managed-externally"
+      : "portable-install-mode-ineligible";
   return portableInstallModeBlockedReport(
     base,
     portableInstallability(target, "install-mode-ineligible"),
     mode.manualInstructions ?? "This portable install is not eligible for in-app self-update.",
+    code,
   );
 }
 
@@ -194,7 +200,10 @@ export async function runUpdatePreflight(
   deps: UiHandlerDeps,
   options: UpdatePreflightRuntimeOptions = {},
 ): Promise<UpdatePreflightReport> {
-  const currentVersion = options.currentVersion ?? SDK_VERSION;
+  const currentVersion =
+    typeof options.currentVersion === "function"
+      ? options.currentVersion()
+      : (options.currentVersion ?? SDK_VERSION);
   const checkedAt = (options.clock?.() ?? new Date()).toISOString();
   const base = reportBase(currentVersion, checkedAt);
   const mode = installModeForPreflight(deps, options);

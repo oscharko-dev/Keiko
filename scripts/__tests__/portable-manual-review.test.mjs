@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import {
   manualReviewPlan,
   prepareManualReview,
   prepareScenarioFixture,
+  targetRoot,
 } from "../portable-manual-review.mjs";
 import { findPortableMetadataRedactionFailures, PORTABLE_TARGETS } from "../portable-runtime.mjs";
 
@@ -97,6 +98,13 @@ describe("portable manual review harness", () => {
 
     const evidence = jsonAt(join(outDir, "prepare-evidence.json"));
     expect(findPortableMetadataRedactionFailures(evidence, "prepareEvidence")).toEqual([]);
+  });
+
+  it("creates scenario roots under the canonical temp directory", () => {
+    const outDir = tmpReviewRoot();
+    const root = targetRoot(outDir, "macos-arm64", "current-release");
+
+    expect(root.startsWith(`${realpathSync(tmpdir())}/`)).toBe(true);
   });
 
   it("creates an artifact slot for each required release target", () => {

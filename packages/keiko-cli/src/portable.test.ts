@@ -105,25 +105,36 @@ function writeApp(appRoot: string, version = "0.2.11"): void {
   writeFileSync(join(appRoot, "dist", "cli", "index.js"), "fixture cli\n");
 }
 
-function writeWindowsFixture(root: string, version = "0.2.11"): void {
+function writeWindowsFixture(root: string, version = "0.2.11", manifestVersion = "0.2.11"): void {
   mkdirSync(join(root, "runtime", "node"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
   writeApp(join(root, "app"), version);
   writeFileSync(join(root, "runtime", "node", "node.exe"), "fixture node\n");
   writeFileSync(join(root, "Keiko.exe"), "fixture launcher\n");
-  writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest("windows-x64"));
+  writeFileSync(
+    join(root, ".portable", "setup-manifest.json"),
+    setupManifest("windows-x64", manifestVersion),
+  );
 }
 
-function writeMacFixture(root: string, target: "macos-arm64" | "macos-x64"): string {
+function writeMacFixture(
+  root: string,
+  target: "macos-arm64" | "macos-x64",
+  version = "0.2.11",
+  manifestVersion = "0.2.11",
+): string {
   const app = join(root, "Keiko.app");
   const resources = join(app, "Contents", "Resources");
   mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
   mkdirSync(join(resources, "runtime", "node", "bin"), { recursive: true });
   mkdirSync(join(resources, ".portable"), { recursive: true });
-  writeApp(join(resources, "app"));
+  writeApp(join(resources, "app"), version);
   writeFileSync(join(resources, "runtime", "node", "bin", "node"), "fixture node\n");
   writeFileSync(join(app, "Contents", "MacOS", "Keiko"), "fixture launcher\n");
-  writeFileSync(join(resources, ".portable", "setup-manifest.json"), setupManifest(target));
+  writeFileSync(
+    join(resources, ".portable", "setup-manifest.json"),
+    setupManifest(target, manifestVersion),
+  );
   return app;
 }
 
@@ -135,6 +146,52 @@ function windowsPortableEnv(home: string): {
     APPDATA: join(home, "AppData", "Roaming"),
     LOCALAPPDATA: join(home, "AppData", "Local"),
   };
+}
+
+function writePortableFixture(root: string, target: PortableTarget, version = "0.2.11"): string {
+  if (target === "windows-x64") {
+    writeWindowsFixture(root, version, version);
+    return root;
+  }
+  writeMacFixture(root, target, version, version);
+  return root;
+}
+
+function managedRootForTarget(home: string, target: PortableTarget): string {
+  if (target === "windows-x64") return join(home, "managed", "Keiko");
+  return join(home, "Applications", "Keiko.app");
+}
+
+function appPackagePath(managedRoot: string, target: PortableTarget): string {
+  if (target === "windows-x64") return join(managedRoot, "app", "package.json");
+  return join(managedRoot, "Contents", "Resources", "app", "package.json");
+}
+
+function packageVersionAt(managedRoot: string, target: PortableTarget): string {
+  const parsed: unknown = JSON.parse(readFileSync(appPackagePath(managedRoot, target), "utf8"));
+  if (!isRecord(parsed) || typeof parsed.version !== "string") {
+    throw new Error("package fixture is malformed");
+  }
+  return parsed.version;
+}
+
+function portableLaunchArgs(
+  target: PortableTarget,
+  portableRoot: string,
+  managedRoot: string,
+  stateDir: string,
+): readonly string[] {
+  return [
+    "launch",
+    "--target",
+    target,
+    "--portable-root",
+    portableRoot,
+    "--managed-root",
+    managedRoot,
+    "--state-dir",
+    stateDir,
+  ];
 }
 
 function registration(stateDir: string): Record<string, unknown> {
@@ -912,6 +969,316 @@ describe("runPortableCli", () => {
     expect(spawns).toEqual([join(managedRoot, "Keiko.exe")]);
     expect(lifecycleStarts).toEqual([join(managedRoot, "app")]);
     expect(secondCapture.err()).not.toContain("already exists");
+  });
+
+  it.each(["windows-x64", "macos-arm64", "macos-x64"] as const)(
+    "upgrades the managed install when a newer %s package is clicked",
+    async (target) => {
+      const root = tempRoot();
+      const home = join(root, "home");
+      const stateDir = join(root, "state");
+      const managedRoot = managedRootForTarget(home, target);
+      const env = target === "windows-x64" ? windowsPortableEnv(home) : {};
+      const oldSource = writePortableFixture(join(root, "bootstrap"), target, "0.2.11");
+      const newSource = writePortableFixture(join(root, "downloaded"), target, "0.2.12");
+      const events: string[] = [];
+
+      const first = await runPortableCli(
+        portableLaunchArgs(target, oldSource, managedRoot, stateDir),
+        capture().io,
+        env,
+        {
+          homedir: () => home,
+          now: () => NOW,
+          spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+        },
+      );
+      writeFileSync(join(managedRoot, "active.txt"), "old install marker\n");
+      const c = capture();
+
+      const second = await runPortableCli(
+        portableLaunchArgs(target, newSource, managedRoot, stateDir),
+        c.io,
+        env,
+        {
+          homedir: () => home,
+          now: () => new Date("2026-07-07T00:00:00.000Z"),
+          lifecycleFn: (command) => {
+            events.push(command);
+            return Promise.resolve(0);
+          },
+        },
+      );
+
+      expect(first).toBe(0);
+      expect(second).toBe(0);
+      expect(events).toEqual(["stop", "start"]);
+      expect(packageVersionAt(managedRoot, target)).toBe("0.2.12");
+      expect(existsSync(join(managedRoot, "active.txt"))).toBe(false);
+      expect(registration(stateDir)).toMatchObject({ packageVersion: "0.2.12" });
+      expect(c.out()).toContain("portable upgrade installed from downloaded package");
+    },
+  );
+
+  it("does not downgrade the managed install when an older downloaded package is clicked", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const target: PortableTarget = "windows-x64";
+    const managedRoot = managedRootForTarget(home, target);
+    const env = windowsPortableEnv(home);
+    const currentSource = writePortableFixture(join(root, "current"), target, "0.2.12");
+    const olderSource = writePortableFixture(join(root, "older-download"), target, "0.2.11");
+    const events: string[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs(target, currentSource, managedRoot, stateDir),
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs(target, olderSource, managedRoot, stateDir),
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        lifecycleFn: (command) => {
+          events.push(command);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toEqual(["start"]);
+    expect(packageVersionAt(managedRoot, target)).toBe("0.2.12");
+    expect(registration(stateDir)).toMatchObject({ packageVersion: "0.2.12" });
+  });
+
+  it("replaces an attested Intel Mac managed install when an Apple Silicon package is clicked", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const intelSource = writePortableFixture(join(root, "intel"), "macos-x64", "0.2.12");
+    const armSource = writePortableFixture(join(root, "arm"), "macos-arm64", "0.2.12");
+    const events: string[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", intelSource, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-arm64", armSource, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => new Date("2026-07-07T00:00:00.000Z"),
+        lifecycleFn: (command) => {
+          events.push(command);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toEqual(["stop", "start"]);
+    expect(packageVersionAt(managedRoot, "macos-arm64")).toBe("0.2.12");
+    expect(registration(stateDir)).toMatchObject({
+      packageVersion: "0.2.12",
+      platformTarget: "macos-arm64",
+    });
+  });
+
+  it("replaces a valid Intel Mac managed install when registration is stale setup-failed", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const intelSource = writePortableFixture(join(root, "intel"), "macos-x64", "0.2.12");
+    const armSource = writePortableFixture(join(root, "arm"), "macos-arm64", "0.2.12");
+    const events: string[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", intelSource, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+    writeFailedRegistration("macos-arm64", stateDir, NOW, "managed root already exists");
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-arm64", armSource, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => new Date("2026-07-07T00:00:00.000Z"),
+        lifecycleFn: (command) => {
+          events.push(command);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toEqual(["stop", "start"]);
+    expect(packageVersionAt(managedRoot, "macos-arm64")).toBe("0.2.12");
+    expect(registration(stateDir)).toMatchObject({
+      packageVersion: "0.2.12",
+      platformTarget: "macos-arm64",
+      status: "managed",
+    });
+  });
+
+  it("does not replace a newer Intel Mac managed install when an older Apple Silicon package is clicked", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const managedRoot = managedRootForTarget(home, "macos-x64");
+    const intelSource = writePortableFixture(join(root, "intel"), "macos-x64", "0.2.12");
+    const olderArmSource = writePortableFixture(join(root, "arm"), "macos-arm64", "0.2.11");
+    const events: string[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs("macos-x64", intelSource, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs("macos-arm64", olderArmSource, managedRoot, stateDir),
+      capture().io,
+      {},
+      {
+        homedir: () => home,
+        lifecycleFn: (command) => {
+          events.push(command);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toEqual(["start"]);
+    expect(packageVersionAt(managedRoot, "macos-x64")).toBe("0.2.12");
+    expect(registration(stateDir)).toMatchObject({
+      packageVersion: "0.2.12",
+      platformTarget: "macos-x64",
+    });
+  });
+
+  it("preserves the managed install when the running UI cannot be stopped before upgrade", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const target: PortableTarget = "windows-x64";
+    const managedRoot = managedRootForTarget(home, target);
+    const env = windowsPortableEnv(home);
+    const oldSource = writePortableFixture(join(root, "bootstrap"), target, "0.2.11");
+    const newSource = writePortableFixture(join(root, "downloaded"), target, "0.2.12");
+    const events: string[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs(target, oldSource, managedRoot, stateDir),
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+
+    const code = await runPortableCli(
+      portableLaunchArgs(target, newSource, managedRoot, stateDir),
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        lifecycleFn: (command) => {
+          events.push(command);
+          return Promise.resolve(command === "stop" ? 1 : 0);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(events).toEqual(["stop"]);
+    expect(packageVersionAt(managedRoot, target)).toBe("0.2.11");
+    expect(registration(stateDir)).toMatchObject({ packageVersion: "0.2.11" });
+  });
+
+  it("restores and relaunches the previous install when upgrade registration fails", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const stateDir = join(root, "state");
+    const target: PortableTarget = "windows-x64";
+    const managedRoot = managedRootForTarget(home, target);
+    const env = windowsPortableEnv(home);
+    const oldSource = writePortableFixture(join(root, "bootstrap"), target, "0.2.11");
+    const newSource = writePortableFixture(join(root, "downloaded"), target, "0.2.12");
+    const events: string[] = [];
+
+    await runPortableCli(
+      portableLaunchArgs(target, oldSource, managedRoot, stateDir),
+      capture().io,
+      env,
+      {
+        homedir: () => home,
+        now: () => NOW,
+        spawnFn: () => spawn(process.execPath, ["-e", ""], { stdio: "ignore" }),
+      },
+    );
+    writeFileSync(join(managedRoot, "active.txt"), "old install marker\n");
+    writeFileSync(
+      join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat"),
+      "foreign launcher\n",
+    );
+    const c = capture();
+
+    const code = await runPortableCli(
+      portableLaunchArgs(target, newSource, managedRoot, stateDir),
+      c.io,
+      env,
+      {
+        homedir: () => home,
+        lifecycleFn: (command) => {
+          events.push(command);
+          return Promise.resolve(0);
+        },
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(events).toEqual(["stop", "start"]);
+    expect(packageVersionAt(managedRoot, target)).toBe("0.2.11");
+    expect(readFileSync(join(managedRoot, "active.txt"), "utf8")).toBe("old install marker\n");
+    expect(registration(stateDir)).toMatchObject({ packageVersion: "0.2.11" });
+    expect(c.err()).toContain("portable registration refused unknown artifact");
   });
 
   it("launches a same-path portable root through lifecycle after setup attestation", async () => {

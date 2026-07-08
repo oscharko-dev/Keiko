@@ -257,7 +257,7 @@ describe("UpdateWindow", () => {
     });
   });
 
-  it("limits blocked portable-managed updates to retry, current, details, and manual download", async () => {
+  it("blocks portable checksum mismatches with safety copy and no manual download path", async () => {
     const api = apiFor({
       report: portableReleaseReport({
         manualUpdateRequired: true,
@@ -273,7 +273,7 @@ describe("UpdateWindow", () => {
           {
             code: "portable-checksum-mismatch",
             severity: "high",
-            message: "The release asset checksum did not match the manifest.",
+            message: "The release verification file does not match the downloaded update archive.",
             userActionRequired: true,
           },
         ],
@@ -284,38 +284,378 @@ describe("UpdateWindow", () => {
     render(<UpdateWindow api={api} />);
 
     expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
-    expect(screen.getByText("Portable update needs attention")).toBeInTheDocument();
+    expect(screen.getByText("Update blocked for safety")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Keiko cannot complete this portable update automatically right now. The current version remains usable.",
+        "Keiko could not prove that this update file is the official release file. Your current Keiko version was not changed.",
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText("Keep using the current Keiko version; this update has not replaced it."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Open technical details below for the redacted reason Keiko blocked the update.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Keep using Keiko normally.")).toBeInTheDocument();
+    expect(screen.getByText("Try again later after the release is fixed.")).toBeInTheDocument();
+    expect(screen.getByText("Do not install this downloaded update manually.")).toBeInTheDocument();
     expect(screen.queryByText("Manual update instructions")).toBeNull();
     expect(screen.queryByLabelText("Package-manager commands")).toBeNull();
     expect(screen.queryByText("npm")).toBeNull();
     expect(screen.queryByText("Yarn")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open manual download" })).toBeNull();
 
+    fireEvent.click(screen.getByText("Technical details and logs"));
+    expect(
+      screen.getByText(
+        "The release verification file does not match the downloaded update archive.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Check again" })[0] as HTMLElement);
+    await waitFor(() => {
+      expect(api.checkPreflight).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps generic portable manual download guidance for non-integrity blockers", async () => {
+    const api = apiFor({
+      report: portableReleaseReport({
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+        portableAsset: {
+          source: "github-release-asset",
+          target: "macos-arm64",
+          requiredAssetName: "keiko-macos-arm64.zip",
+          status: "missing",
+        },
+        blockers: [
+          {
+            code: "portable-asset-missing",
+            severity: "high",
+            message: "The matching portable release asset is missing.",
+            userActionRequired: true,
+          },
+        ],
+      }),
+      status: portableManagedStatus(),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByText("Portable update needs attention")).toBeInTheDocument();
+    expect(
+      screen.getByText("Keep using the current Keiko version; this update has not replaced it."),
+    ).toBeInTheDocument();
     const download = screen.getByRole("link", { name: "Open manual download" });
     expect(download).toHaveAttribute(
       "href",
       "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.10",
     );
-    fireEvent.click(screen.getByText("Technical details and logs"));
+  });
+
+  it("uses policy-disabled copy for portable-managed updates blocked by local policy", async () => {
+    const api = apiFor({
+      report: portableReleaseReport(),
+      status: portableManagedStatus({
+        policy: {
+          enabled: false,
+          source: "environment",
+          reason: "KEIKO_UPDATE_MUTATION_DISABLED disables in-app package mutation.",
+        },
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
     expect(
-      screen.getByText("The release asset checksum did not match the manifest."),
+      screen.getByText(
+        "Automatic updates are disabled by local policy. Keep using this version or ask your administrator to enable updates.",
+      ),
     ).toBeInTheDocument();
+    expect(screen.getByText("Automatic updates disabled by policy")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Keiko cannot apply this update because local policy disables in-app update changes. The current version remains usable.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Check again after the policy changes.")).toBeInTheDocument();
+    expect(screen.queryByText("Portable update needs attention")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Open manual download" })).toBeNull();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Check again" })[0] as HTMLElement);
+    await waitFor(() => {
+      expect(api.checkPreflight).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      await screen.findByText(
+        "Checked just now. Automatic updates are still disabled by local policy.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Manual install is still pending. Follow the approved manual instructions, restart Keiko, then check again.",
+      ),
+    ).toBeNull();
+  });
+
+  it("uses setup-required copy for unmanaged portable bootstrap installs", async () => {
+    const api = apiFor({
+      report: preflight({
+        targetVersion: undefined,
+        updateAvailable: false,
+        status: "degraded",
+        availabilityState: "degraded",
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        portableAsset: {
+          source: "github-release-asset",
+          target: "macos-arm64",
+          requiredAssetName: "keiko-macos-arm64.zip",
+          status: "install-mode-ineligible",
+        },
+        blockers: [
+          {
+            code: "portable-install-mode-ineligible",
+            severity: "normal",
+            message:
+              "Run the portable setup flow from the Keiko launcher before using in-app updates.",
+            userActionRequired: true,
+          },
+        ],
+      }),
+      status: sessionStatus({
+        installMode: {
+          schemaVersion: "1",
+          status: "unsupported",
+          packageName: "@oscharko-dev/keiko",
+          installKind: "portable-bootstrap",
+          reason: "portable-bootstrap",
+          recommendedAction: "portable-bootstrap-setup",
+          manualInstructions:
+            "Run the portable setup flow from the Keiko launcher before using in-app updates.",
+          portable: {
+            status: "bootstrap",
+            target: "macos-arm64",
+            updateEligible: false,
+            packageVersion: "0.2.9",
+            stable: true,
+            managedRootKind: "home-relative",
+          },
+        },
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Portable setup required" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Current 0.2.9; portable setup is required for in-app updates."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByText(
+        "Run the portable setup flow from the Keiko launcher before using in-app updates.",
+      ).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Portable setup required").length).toBeGreaterThan(1);
+    expect(
+      screen.getByText(
+        "This Keiko folder is not managed by the launcher yet, so Keiko cannot update itself from inside the app.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Update status unavailable")).toBeNull();
+    expect(screen.queryByText("Current 0.2.9 -> target unknown")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
+
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => {
       expect(api.checkPreflight).toHaveBeenCalledTimes(1);
     });
+    expect(
+      await screen.findByText(
+        "Checked just now. Portable setup is still required before in-app updates can run.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("uses organization-managed copy for externally managed portable installs", async () => {
+    const api = apiFor({
+      report: preflight({
+        targetVersion: undefined,
+        updateAvailable: false,
+        status: "degraded",
+        availabilityState: "degraded",
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        portableAsset: {
+          source: "github-release-asset",
+          target: "macos-arm64",
+          requiredAssetName: "keiko-macos-arm64.zip",
+          status: "install-mode-ineligible",
+        },
+        blockers: [
+          {
+            code: "portable-install-managed-externally",
+            severity: "normal",
+            message:
+              "This Keiko install is managed outside the app and is not eligible for self-update.",
+            userActionRequired: true,
+          },
+        ],
+      }),
+      status: sessionStatus({
+        installMode: {
+          schemaVersion: "1",
+          status: "unsupported",
+          packageName: "@oscharko-dev/keiko",
+          installKind: "portable-it-managed",
+          reason: "portable-it-managed",
+          recommendedAction: "manual-download",
+          manualInstructions:
+            "This Keiko install is managed outside the app and is not eligible for self-update.",
+          portable: {
+            status: "it-managed",
+            target: "macos-arm64",
+            updateEligible: false,
+            packageVersion: "0.2.9",
+            stable: true,
+            managedRootKind: "absolute-local",
+          },
+        },
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "Updates managed by your organization",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Current 0.2.9; updates are managed outside this app."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Keep using this version. Updates for this install must come from your approved rollout path.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This Keiko install is managed outside the app, so Keiko will not replace it from here.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Install a newer version only through your approved software rollout or administrator.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("portable-it-managed")).toBeInTheDocument();
+    expect(screen.queryByText("Portable setup required")).toBeNull();
+    expect(screen.queryByText("Run the portable setup flow from the Keiko launcher")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => {
+      expect(api.checkPreflight).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      await screen.findByText(
+        "Checked just now. This install is still managed outside Keiko, so in-app updates are not available.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("uses release-unavailable copy for portable metadata network failures", async () => {
+    const api = apiFor({
+      report: preflight({
+        targetVersion: undefined,
+        updateAvailable: false,
+        status: "degraded",
+        availabilityState: "degraded",
+        registryStatus: "not-used",
+        releaseMetadataStatus: "unavailable",
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+        portableAsset: {
+          source: "github-release-asset",
+          target: "macos-arm64",
+          requiredAssetName: "keiko-macos-arm64.zip",
+          status: "unavailable",
+        },
+        blockers: [
+          {
+            code: "portable-release-unavailable",
+            severity: "normal",
+            message: "GitHub release asset metadata is unavailable for portable updates.",
+            userActionRequired: true,
+          },
+        ],
+      }),
+      status: portableManagedStatus(),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Update check unavailable" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Current 0.2.9; update download information could not be verified."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Keiko cannot verify the update download information right now. Keep using this version and check again later.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("portable-managed")).toBeInTheDocument();
+    expect(screen.getByText("unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.queryByText(/registry is reachable/u)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Update Keiko" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => {
+      expect(api.checkPreflight).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      await screen.findByText(
+        "Checked just now. Keiko still cannot verify update download information.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("blocks unverified portable signing evidence with safety copy and no manual download path", async () => {
+    const api = apiFor({
+      report: portableReleaseReport({
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+        portableAsset: {
+          source: "github-release-asset",
+          target: "macos-arm64",
+          requiredAssetName: "keiko-macos-arm64.zip",
+          status: "malformed",
+        },
+        blockers: [
+          {
+            code: "portable-signing-unverified",
+            severity: "high",
+            message: "The portable update is missing verified signing or notarization evidence.",
+            userActionRequired: true,
+          },
+        ],
+      }),
+      status: portableManagedStatus(),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByText("Update blocked for safety")).toBeInTheDocument();
+    expect(screen.getByText("Do not install this downloaded update manually.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open manual download" })).toBeNull();
+    fireEvent.click(screen.getByText("Technical details and logs"));
+    expect(
+      screen.getByText("The portable update is missing verified signing or notarization evidence."),
+    ).toBeInTheDocument();
   });
 
   it("blocks automatic install while preserving manual-review remediation copy", async () => {
@@ -1018,6 +1358,16 @@ describe("UpdateWindow", () => {
 
     expect(await screen.findByText("Follow-up action")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Update installed" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Restart required" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Verify restart" })).toBeNull();
+    expect(
+      screen.getByText(
+        "Run or defer the follow-up action before affected workflows are fully ready.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Restart and verification are needed to finish the update."),
+    ).toBeNull();
     expect(screen.queryByText("Follow-up after install")).toBeNull();
     expect(screen.getByText("Local Knowledge Reindex")).toBeInTheDocument();
     expect(screen.getByText("Vectors need reindexing.")).toBeInTheDocument();
@@ -1031,6 +1381,34 @@ describe("UpdateWindow", () => {
         }),
       );
     });
+  });
+
+  it("uses the completed session target in the summary before a fresh update check", async () => {
+    const api = apiFor({
+      report: preflight({
+        currentVersion: "0.2.14",
+        targetVersion: "0.2.15",
+        updateAvailable: true,
+        status: "update-available",
+        availabilityState: "update-available",
+      }),
+      status: portableManagedStatus({
+        lastSession: session({
+          phase: "succeeded",
+          targetVersion: "0.2.15",
+          restartRequired: false,
+          cancelable: false,
+          retryable: false,
+          message: "Portable update 0.2.15 is active and verified.",
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update installed" })).toBeInTheDocument();
+    expect(screen.getByText("Current 0.2.15 -> target 0.2.15")).toBeInTheDocument();
+    expect(screen.queryByText("Current 0.2.14 -> target 0.2.15")).toBeNull();
   });
 
   it("hides completed remediation after the follow-up action is done", async () => {

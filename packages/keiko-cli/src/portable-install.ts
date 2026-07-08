@@ -32,6 +32,7 @@ import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 import {
   defaultManagedRoot,
+  isPortableTarget,
   layoutFor,
   PACKAGE_NAME,
   primaryLauncherName,
@@ -44,6 +45,39 @@ import {
   type SpawnFn,
 } from "./portable-shared.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+
+export interface ValidatedPortableRoot {
+  readonly layout: PortableLayout;
+  readonly manifest: SetupManifest;
+}
+
+export interface PortableManagedUpgradeInput {
+  readonly target: PortableTarget;
+  readonly source: ValidatedPortableRoot;
+  readonly current: ValidatedPortableRoot;
+  readonly managedRoot: string;
+  readonly stateDir: string;
+  readonly env: EnvSource;
+  readonly home: string;
+  readonly now: Date;
+}
+
+interface StableVersion {
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+}
+
+interface PortableUpgradePaths {
+  readonly managedRoot: string;
+  readonly stagingRoot: string;
+  readonly stagedTarget: string;
+  readonly backupRoot: string;
+  readonly backupTarget: string;
+}
+
+const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const PORTABLE_TARGETS = ["windows-x64", "macos-arm64", "macos-x64"] as const;
 
 function readJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8")) as unknown;
@@ -151,6 +185,47 @@ function validateAppPackage(path: string, expectedVersion: string): void {
   }
 }
 
+function parseStableVersion(value: string): StableVersion | undefined {
+  const match = STABLE_SEMVER_RE.exec(value);
+  const major = match?.[1];
+  const minor = match?.[2];
+  const patch = match?.[3];
+  if (major === undefined || minor === undefined || patch === undefined) return undefined;
+  return { major: Number(major), minor: Number(minor), patch: Number(patch) };
+}
+
+function compareStableVersions(left: string, right: string): number {
+  const a = parseStableVersion(left);
+  const b = parseStableVersion(right);
+  if (a === undefined || b === undefined) {
+    throw new Error("portable upgrade requires stable semver versions");
+  }
+  if (a.major !== b.major) return a.major - b.major;
+  if (a.minor !== b.minor) return a.minor - b.minor;
+  return a.patch - b.patch;
+}
+
+export function portableSourceIsNewer(
+  source: ValidatedPortableRoot,
+  current: ValidatedPortableRoot,
+): boolean {
+  return compareStableVersions(source.manifest.packageVersion, current.manifest.packageVersion) > 0;
+}
+
+export function portableSourceCanReplaceManaged(
+  source: ValidatedPortableRoot,
+  current: ValidatedPortableRoot,
+): boolean {
+  const versionComparison = compareStableVersions(
+    source.manifest.packageVersion,
+    current.manifest.packageVersion,
+  );
+  if (versionComparison > 0) return true;
+  return (
+    versionComparison === 0 && source.manifest.platformTarget !== current.manifest.platformTarget
+  );
+}
+
 export function sameRealPath(left: string, right: string): boolean {
   try {
     return realpathSync(left) === realpathSync(right);
@@ -201,10 +276,7 @@ function promoteToManaged(
   }
 }
 
-export function validatePortableRoot(
-  target: PortableTarget,
-  root: string,
-): { readonly layout: PortableLayout; readonly manifest: SetupManifest } {
+export function validatePortableRoot(target: PortableTarget, root: string): ValidatedPortableRoot {
   const layout = layoutFor(target, root);
   if (!existsSync(layout.setupManifestPath))
     throw new Error("portable setup manifest is unavailable");
@@ -214,14 +286,134 @@ export function validatePortableRoot(
   return { layout, manifest };
 }
 
+function createPortableUpgradePaths(managedRoot: string, stateDir: string): PortableUpgradePaths {
+  assertManagedRootAllowed(managedRoot, stateDir);
+  const parent = dirname(managedRoot);
+  mkdirSync(parent, { recursive: true, mode: 0o755 });
+  const stagingRoot = mkdtempSync(join(parent, ".keiko-portable-upgrade-"));
+  const backupRoot = mkdtempSync(join(parent, ".keiko-previous-"));
+  return {
+    managedRoot,
+    stagingRoot,
+    stagedTarget: join(stagingRoot, basename(managedRoot)),
+    backupRoot,
+    backupTarget: join(backupRoot, basename(managedRoot)),
+  };
+}
+
+function restoreManagedUpgrade(paths: PortableUpgradePaths, promoted: boolean): void {
+  if (promoted) rmSync(paths.managedRoot, { recursive: true, force: true });
+  if (existsSync(paths.backupTarget) && !existsSync(paths.managedRoot)) {
+    renameSync(paths.backupTarget, paths.managedRoot);
+  }
+}
+
+function cleanupPortableUpgrade(paths: PortableUpgradePaths): void {
+  rmSync(paths.stagingRoot, { recursive: true, force: true });
+  rmSync(paths.backupRoot, { recursive: true, force: true });
+}
+
+function promoteStagedUpgrade(
+  input: PortableManagedUpgradeInput,
+  stagedSource: ValidatedPortableRoot,
+  paths: PortableUpgradePaths,
+): PortableLayout {
+  let moved = false;
+  let promoted = false;
+  try {
+    renameSync(paths.managedRoot, paths.backupTarget);
+    moved = true;
+    renameSync(paths.stagedTarget, paths.managedRoot);
+    promoted = true;
+    const layout = layoutFor(input.target, paths.managedRoot);
+    finalizeManagedSetup(
+      {
+        target: input.target,
+        portableRoot: input.source.layout.installRoot,
+        managedRoot: input.managedRoot,
+        stateDir: input.stateDir,
+        dryRun: false,
+        env: input.env,
+        home: input.home,
+      },
+      layout,
+      stagedSource.manifest,
+      input.now,
+    );
+    return layout;
+  } catch (error) {
+    if (moved) restoreManagedUpgrade(paths, promoted);
+    throw error;
+  }
+}
+
+export function upgradeManagedInstall(input: PortableManagedUpgradeInput): PortableLayout {
+  if (!portableSourceCanReplaceManaged(input.source, input.current)) {
+    throw new Error("portable upgrade candidate must be newer than or target-corrective");
+  }
+  const paths = createPortableUpgradePaths(input.managedRoot, input.stateDir);
+  try {
+    copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
+    const stagedSource = validatePortableRoot(input.target, paths.stagedTarget);
+    return promoteStagedUpgrade(input, stagedSource, paths);
+  } finally {
+    cleanupPortableUpgrade(paths);
+  }
+}
+
+export function attestedManagedInstall(
+  target: PortableTarget,
+  managedRoot: string,
+  stateDir: string,
+): ValidatedPortableRoot | undefined {
+  const registration = readManagedRegistration(stateDir);
+  if (registration?.platformTarget !== target) return undefined;
+  return attestedManagedLayout(registration, managedRoot, stateDir);
+}
+
+export function attestedRecordedManagedInstall(
+  managedRoot: string,
+  stateDir: string,
+): ValidatedPortableRoot | undefined {
+  const registration = readManagedRegistration(stateDir);
+  if (registration === undefined) return undefined;
+  return attestedManagedLayout(registration, managedRoot, stateDir);
+}
+
+export function attestedExistingPortableInstall(
+  managedRoot: string,
+  stateDir: string,
+): ValidatedPortableRoot | undefined {
+  try {
+    assertManagedRootAllowed(managedRoot, stateDir);
+    for (const target of PORTABLE_TARGETS) {
+      const attested = attestedPortableRootForTarget(target, managedRoot);
+      if (attested !== undefined) return attested;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function attestedPortableRootForTarget(
+  target: PortableTarget,
+  managedRoot: string,
+): ValidatedPortableRoot | undefined {
+  if (!isPortableTarget(target)) return undefined;
+  try {
+    return validatePortableRoot(target, managedRoot);
+  } catch {
+    return undefined;
+  }
+}
+
 export function attestedManagedRoot(
   target: PortableTarget,
   managedRoot: string,
   stateDir: string,
 ): PortableLayout | undefined {
-  const registration = readManagedRegistration(stateDir);
-  if (registration === undefined) return undefined;
-  return attestedManagedLayout(registration, managedRoot, stateDir)?.layout;
+  return attestedManagedInstall(target, managedRoot, stateDir)?.layout;
 }
 
 interface SetupPortableOptions {

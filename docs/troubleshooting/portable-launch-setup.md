@@ -99,6 +99,45 @@ install.
 
 ---
 
+## Manually downloaded portable update does not replace the current install
+
+| Field             | Value                                                |
+| ----------------- | ---------------------------------------------------- |
+| Severity          | High                                                 |
+| Surface           | Portable launch/setup, portable update fallback      |
+| Stable identifier | `portable manual update fallback refused activation` |
+
+**Symptom**
+
+The user downloads a newer portable ZIP and opens its `Keiko.exe` or `Keiko.app`, but the managed
+install remains on the previous version or Keiko reopens the previous version.
+
+**Root Cause**
+
+The manual re-download fallback only replaces an already-attested managed install when the clicked
+package is valid, stable, newer than the managed install, and the current local Keiko server can be
+stopped before the file swap. It refuses older, equal, beta, malformed, wrong-platform, or
+unattested packages. If the swap cannot finish safely, Keiko restores the previous managed install
+from its internal previous-install snapshot and relaunches the previous app where possible.
+
+**Diagnostic Steps**
+
+Support operators should check the content-free portable install state and update logs, then verify
+that the clicked artifact is the correct platform target and newer stable release. If the local UI
+could not stop, inspect the existing local UI port and process state with the standard local UI
+troubleshooting entries.
+
+**Resolution**
+
+- Prefer the in-app update button for ordinary users.
+- If using the manual re-download fallback, use the newer stable ZIP for the same platform target.
+- Close stuck Keiko processes only through the normal OS application controls or organization
+  support process; do not ask non-technical users to perform terminal cleanup.
+- If organization policy prevents process stop or file replacement, use an organization-approved
+  software distribution path when that later rollout epic exists.
+
+---
+
 ## Keiko starts but the browser cannot reach the local app
 
 | Field             | Value                               |

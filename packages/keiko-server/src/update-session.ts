@@ -88,6 +88,18 @@ function restartCommandPreview(env: NodeJS.ProcessEnv): UpdateRestartCommandPrev
   };
 }
 
+function assertRestartTargetMatches(
+  session: UpdateSession,
+  targetVersion: string | undefined,
+): void {
+  if (targetVersion === undefined || session.targetVersion === targetVersion) return;
+  throw new UpdateSessionError(
+    "UPDATE_TARGET_MISMATCH",
+    "The restart target does not match the session.",
+    409,
+  );
+}
+
 export interface UpdateSessionStartOutcome {
   readonly session: UpdateSession;
   readonly reused: boolean;
@@ -323,26 +335,21 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
           409,
         );
       }
-      if (targetVersion !== undefined && active.targetVersion !== targetVersion) {
-        throw new UpdateSessionError(
-          "UPDATE_TARGET_MISMATCH",
-          "The restart target does not match the session.",
-          409,
-        );
-      }
+      assertRestartTargetMatches(active, targetVersion);
       return active;
     }
     if (this.last?.phase === "restart-required") {
-      if (targetVersion !== undefined && this.last.targetVersion !== targetVersion) {
-        throw new UpdateSessionError(
-          "UPDATE_TARGET_MISMATCH",
-          "The restart target does not match the session.",
-          409,
-        );
-      }
+      assertRestartTargetMatches(this.last, targetVersion);
       return this.last;
     }
     if (targetVersion !== undefined) {
+      if (this.detector().installKind !== "package-manager") {
+        throw new UpdateSessionError(
+          "UPDATE_RESTART_NOT_PENDING",
+          "No restart verification is pending.",
+          409,
+        );
+      }
       return createRestartVerificationSession({
         packageName: PACKAGE_NAME,
         targetVersion,
@@ -467,7 +474,6 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     portableActivation: UpdatePortableActivationSummary,
   ): void {
     const activated = this.replace(session, {
-      phase: "restart-required",
       failureReason: "none",
       cancelable: false,
       retryable: false,
@@ -478,10 +484,10 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const updateCanComplete = this.portableCompletionGate?.(activated) ?? true;
     this.finish(
       this.replace(activated, {
-        phase: updateCanComplete ? "succeeded" : "restart-required",
+        phase: "succeeded",
         message: updateCanComplete
-          ? `Portable update ${session.targetVersion} is active and verified after relaunch.`
-          : `Keiko is now running ${session.targetVersion}. Complete remaining remediation before the update is marked successful.`,
+          ? `Portable update ${session.targetVersion} is active and verified.`
+          : `Keiko is now running ${session.targetVersion}. Complete remaining follow-up action before affected workflows are fully ready.`,
       }),
     );
   }

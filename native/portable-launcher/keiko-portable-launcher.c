@@ -5,10 +5,33 @@
 #if defined(_WIN32)
 #define UNICODE
 #define _UNICODE
+#include <stdarg.h>
+#include <wchar.h>
 #include <windows.h>
 
 #define KEIKO_WIDEN2(value) L##value
 #define KEIKO_WIDEN(value) KEIKO_WIDEN2(value)
+
+#ifndef _MSC_VER
+#ifndef _TRUNCATE
+#define _TRUNCATE ((size_t)-1)
+#endif
+static int keiko_snwprintf_s(wchar_t *out, size_t cap, size_t truncate, const wchar_t *fmt, ...) {
+  (void)truncate;
+  va_list args;
+  va_start(args, fmt);
+  int written = vswprintf(out, cap, fmt, args);
+  va_end(args);
+  if (written < 0 || (size_t)written >= cap) {
+    if (cap > 0) {
+      out[cap - 1] = L'\0';
+    }
+    return -1;
+  }
+  return written;
+}
+#define _snwprintf_s keiko_snwprintf_s
+#endif
 
 static int dirname_in_place(wchar_t *path) {
   wchar_t *last = NULL;

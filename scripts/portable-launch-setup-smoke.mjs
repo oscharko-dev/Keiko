@@ -39,14 +39,14 @@ function runtimeManifest(target) {
   };
 }
 
-function setupManifest(target) {
+function setupManifest(target, version = rootPackage.version) {
   return `${JSON.stringify(
     {
       schemaVersion: 1,
       platformTarget: target.platformTarget,
       packageName: rootPackage.name,
-      packageVersion: rootPackage.version,
-      stable: !rootPackage.version.includes("-"),
+      packageVersion: version,
+      stable: !version.includes("-"),
       primaryLauncher: target.primaryLauncher,
       bootstrapUpdateEligible: false,
       runtime: runtimeManifest(target),
@@ -56,46 +56,49 @@ function setupManifest(target) {
   )}\n`;
 }
 
-function writeAppFixture(appRoot) {
+function writeAppFixture(appRoot, version = rootPackage.version) {
   mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
   writeFileSync(
     join(appRoot, "package.json"),
-    `${JSON.stringify({ name: rootPackage.name, version: rootPackage.version }, null, 2)}\n`,
+    `${JSON.stringify({ name: rootPackage.name, version }, null, 2)}\n`,
   );
   writeFileSync(join(appRoot, "dist", "cli", "index.js"), "fixture cli\n");
 }
 
-function writeWindowsFixture(root, target) {
+function writeWindowsFixture(root, target, version = rootPackage.version) {
   mkdirSync(join(root, "runtime", "node"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "support"), { recursive: true });
-  writeAppFixture(join(root, "app"));
+  writeAppFixture(join(root, "app"), version);
   writeFileSync(join(root, "runtime", "node", "node.exe"), "fixture node\n");
   writeFileSync(join(root, "Keiko.exe"), "fixture launcher\n");
   writeFileSync(join(root, "support", "keiko-support.cmd"), "support launcher\n");
-  writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest(target));
+  writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));
   return root;
 }
 
-function writeMacFixture(root, target) {
+function writeMacFixture(root, target, version = rootPackage.version) {
   const appRoot = join(root, "Keiko.app");
   const resources = join(appRoot, "Contents", "Resources");
   mkdirSync(join(appRoot, "Contents", "MacOS"), { recursive: true });
   mkdirSync(join(resources, "runtime", "node", "bin"), { recursive: true });
   mkdirSync(join(resources, ".portable"), { recursive: true });
   mkdirSync(join(root, "support"), { recursive: true });
-  writeAppFixture(join(resources, "app"));
+  writeAppFixture(join(resources, "app"), version);
   writeFileSync(join(resources, "runtime", "node", "bin", "node"), "fixture node\n");
   writeFileSync(join(appRoot, "Contents", "MacOS", "Keiko"), "fixture launcher\n");
   writeFileSync(join(root, "support", "keiko-support.sh"), "support launcher\n");
-  writeFileSync(join(resources, ".portable", "setup-manifest.json"), setupManifest(target));
+  writeFileSync(
+    join(resources, ".portable", "setup-manifest.json"),
+    setupManifest(target, version),
+  );
   return appRoot;
 }
 
-function writeFixture(root, target) {
+function writeFixture(root, target, version = rootPackage.version) {
   return target.nodePlatform === "win32"
-    ? writeWindowsFixture(root, target)
-    : writeMacFixture(root, target);
+    ? writeWindowsFixture(root, target, version)
+    : writeMacFixture(root, target, version);
 }
 
 function targetEnv(target, home) {
@@ -116,6 +119,22 @@ function managedRoot(target, home) {
 function managedAppRoot(target, root) {
   if (target.nodePlatform === "win32") return join(root, "app");
   return join(root, "Contents", "Resources", "app");
+}
+
+function managedPackageJson(target, root) {
+  return join(managedAppRoot(target, root), "package.json");
+}
+
+function readManagedPackageVersion(target, root) {
+  return JSON.parse(readFileSync(managedPackageJson(target, root), "utf8")).version;
+}
+
+function previousStableVersion(version) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
+  if (match === null) fail(`root version is not stable semver: ${version}`);
+  const patch = Number(match[3]);
+  if (patch <= 0) fail(`root patch version cannot produce a previous fixture: ${version}`);
+  return `${match[1]}.${match[2]}.${String(patch - 1)}`;
 }
 
 function capture() {
@@ -174,7 +193,7 @@ async function runFixtureTarget(target, root, runPortableCli, now) {
     },
   );
   if (code !== 0) fail(`${target.platformTarget} first launch failed: ${first.err()}`);
-  return runFixtureRelaunch(
+  const relaunch = await runFixtureRelaunch(
     target,
     portableRoot,
     rootAfterSetup,
@@ -184,6 +203,10 @@ async function runFixtureTarget(target, root, runPortableCli, now) {
     runPortableCli,
     spawns,
   );
+  return {
+    ...relaunch,
+    manualDownloadUpgrade: await runFixtureManualUpgrade(target, root, runPortableCli, now),
+  };
 }
 
 function portableLaunchArgs(target, portableRoot, rootAfterSetup, stateDir) {
@@ -198,6 +221,77 @@ function portableLaunchArgs(target, portableRoot, rootAfterSetup, stateDir) {
     "--state-dir",
     stateDir,
   ];
+}
+
+async function runFixtureManualUpgrade(target, root, runPortableCli, now) {
+  const base = join(root, "manual-upgrade", target.platformTarget);
+  const home = join(base, "home");
+  const stateDir = join(base, "state");
+  const env = targetEnv(target, home);
+  const rootAfterSetup = managedRoot(target, home);
+  const oldVersion = previousStableVersion(rootPackage.version);
+  const oldRoot = writeFixture(join(base, "old-download"), target, oldVersion);
+  const newRoot = writeFixture(join(base, "new-download"), target, rootPackage.version);
+  const first = capture();
+  const firstCode = await runPortableCli(
+    portableLaunchArgs(target, oldRoot, rootAfterSetup, stateDir),
+    first.io,
+    env,
+    {
+      arch: () => target.nodeArchitecture,
+      homedir: () => home,
+      now: () => now,
+      platform: () => target.nodePlatform,
+      spawnFn: () => fakeChild(),
+    },
+  );
+  if (firstCode !== 0) fail(`${target.platformTarget} manual upgrade setup failed: ${first.err()}`);
+  return runFixtureManualUpgradeClick(
+    target,
+    newRoot,
+    rootAfterSetup,
+    stateDir,
+    env,
+    home,
+    runPortableCli,
+  );
+}
+
+async function runFixtureManualUpgradeClick(
+  target,
+  newRoot,
+  rootAfterSetup,
+  stateDir,
+  env,
+  home,
+  runPortableCli,
+) {
+  const second = capture();
+  const lifecycleCommands = [];
+  const code = await runPortableCli(
+    portableLaunchArgs(target, newRoot, rootAfterSetup, stateDir),
+    second.io,
+    env,
+    {
+      arch: () => target.nodeArchitecture,
+      homedir: () => home,
+      lifecycleFn: (command) => {
+        lifecycleCommands.push(command);
+        return Promise.resolve(0);
+      },
+      platform: () => target.nodePlatform,
+    },
+  );
+  if (code !== 0) fail(`${target.platformTarget} manual upgrade failed: ${second.err()}`);
+  const registration = readRegistration(stateDir);
+  return {
+    clickedNewerPackageStoppedServer: lifecycleCommands[0] === "stop",
+    relaunchedAfterSwap: lifecycleCommands[1] === "start",
+    upgradedPackageVersion:
+      registration.packageVersion === rootPackage.version &&
+      readManagedPackageVersion(target, rootAfterSetup) === rootPackage.version,
+    noRollbackPathUsed: !lifecycleCommands.includes("restart"),
+  };
 }
 
 async function runFixtureRelaunch(

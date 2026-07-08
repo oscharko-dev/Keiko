@@ -225,6 +225,26 @@ function portableBootstrapMode(target: UpdatePortableTarget = "macos-arm64"): Up
   };
 }
 
+function portableItManagedMode(target: UpdatePortableTarget = "macos-arm64"): UpdateInstallMode {
+  return {
+    schemaVersion: "1",
+    status: "unsupported",
+    packageName: "@oscharko-dev/keiko",
+    installKind: "portable-it-managed",
+    portable: {
+      status: "it-managed",
+      target,
+      updateEligible: false,
+      packageVersion: "0.2.10",
+      stable: true,
+    },
+    recommendedAction: "manual-download",
+    reason: "portable-it-managed",
+    manualInstructions:
+      "This Keiko install is managed outside the app and is not eligible for self-update.",
+  };
+}
+
 function portableAsset(name: string, id: number, size = 10_000): Record<string, unknown> {
   return {
     id,
@@ -777,7 +797,10 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(false);
     expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
     expect(report.blockers).toContainEqual(
-      expect.objectContaining({ code: "portable-manifest-malformed" }),
+      expect.objectContaining({
+        code: "portable-signing-unverified",
+        message: "The portable update is missing verified signing or notarization evidence.",
+      }),
     );
     deps.store.close();
   });
@@ -985,6 +1008,30 @@ describe("update preflight service", () => {
     expect(report.registryStatus).toBe("not-used");
     expect(report.portableAsset).toMatchObject({ target, status: "install-mode-ineligible" });
     expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-install-mode-ineligible" }),
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+    deps.store.close();
+  });
+
+  it("uses a distinct blocker for organization-managed portable installs", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const fetchImpl = vi.fn<typeof fetch>();
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableItManagedMode(target),
+    });
+
+    expect(report.status).toBe("degraded");
+    expect(report.registryStatus).toBe("not-used");
+    expect(report.portableAsset).toMatchObject({ target, status: "install-mode-ineligible" });
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-install-managed-externally" }),
+    );
+    expect(report.blockers).not.toContainEqual(
       expect.objectContaining({ code: "portable-install-mode-ineligible" }),
     );
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -1496,6 +1543,39 @@ describe("update preflight service", () => {
     expect(startupB.targetVersion).toBe("0.2.10");
     expect(manual.targetVersion).toBe("0.2.11");
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+    deps.store.close();
+  });
+
+  it("uses a dynamic current version for manual checks after activation", async () => {
+    let currentVersion = "0.2.9";
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.10" } }))
+      .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+    const service = createUpdatePreflightService({
+      currentVersion: () => currentVersion,
+      bundledCatalog: baseCatalog(),
+    });
+
+    const startup = await service.getStartupReport(deps);
+    currentVersion = "0.2.10";
+    const manual = await service.runManualCheck(deps);
+
+    expect(startup).toMatchObject({
+      currentVersion: "0.2.9",
+      targetVersion: "0.2.10",
+      status: "update-available",
+      updateAvailable: true,
+    });
+    expect(manual).toMatchObject({
+      currentVersion: "0.2.10",
+      targetVersion: "0.2.10",
+      status: "current",
+      updateAvailable: false,
+    });
     deps.store.close();
   });
 });

@@ -137,6 +137,14 @@ safe to defer. A failed download, verification, staging, activation, relaunch, o
 must fail closed and preserve the current working install when safe. This is failure recovery, not a
 user-facing rollback feature.
 
+The manual re-download fallback is part of the same portable-managed authority rather than a second
+update channel. If a user opens a newer portable release asset while an older attested managed
+install exists, the launcher may validate the clicked package locally, stop the running Keiko UI,
+promote the newer stable package into the managed root with the same previous-install snapshot and
+atomic-swap semantics, and relaunch the managed app. The fallback must reject equal, older,
+prerelease, beta, wrong-platform, malformed, or unattested packages; it must not expose rollback or
+ask ordinary users to run shell cleanup.
+
 Crash-safe promotion is mandatory because `.keiko/updates` does not store package payload backups.
 Portable updates must download, extract, and verify into staging first; they must never remove the
 currently launchable tree before the replacement is fully verified. Promotion requires same-volume

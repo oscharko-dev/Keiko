@@ -394,9 +394,9 @@ export function prepareManualReview(outDir = defaultOutDir()) {
   return { outDir, plan };
 }
 
-function targetRoot(reviewRoot, target, scenario) {
+export function targetRoot(reviewRoot, target, scenario) {
   const reviewId = createHash("sha256").update(resolve(reviewRoot)).digest("hex").slice(0, 12);
-  return join(tmpdir(), "keiko-portable-manual-review", reviewId, target, scenario);
+  return join(realpathSync(tmpdir()), "keiko-portable-manual-review", reviewId, target, scenario);
 }
 
 function setupManifest(target, version) {
@@ -894,13 +894,18 @@ function jsonResponse(value) {
   });
 }
 
-function portableMode(target, scenario) {
+function portableMode(target, scenario, packageVersion = CURRENT_VERSION) {
   if (scenario === "legacy-package-manager") return legacyInstallMode();
   const portable = {
-    status: scenario === "unmanaged-bootstrap" ? "bootstrap" : "managed",
+    status:
+      scenario === "unmanaged-bootstrap"
+        ? "bootstrap"
+        : scenario === "system-managed"
+          ? "it-managed"
+          : "managed",
     target,
     updateEligible: scenario !== "unmanaged-bootstrap" && scenario !== "system-managed",
-    packageVersion: CURRENT_VERSION,
+    packageVersion,
     stable: true,
     managedRootKind: scenario === "system-managed" ? "absolute-local" : "home-relative",
   };
@@ -1068,14 +1073,17 @@ function commandSuccess() {
   });
 }
 
+function resolveScenarioMode(input) {
+  return typeof input.mode === "function" ? input.mode() : input.mode;
+}
+
 function updateSession(server, stager, activator, input) {
-  const portable = input.mode.installKind === "portable-managed";
-  const runningVersion = { value: CURRENT_VERSION };
+  const portable = resolveScenarioMode(input).installKind === "portable-managed";
   return server.createUpdateSessionManager({
     processEnv: input.env,
-    detector: () => input.mode,
+    detector: () => resolveScenarioMode(input),
     facts: () => input.facts,
-    currentVersion: () => runningVersion.value,
+    currentVersion: () => input.runningVersion.value,
     idFactory: () => `manual-review-${input.scenario}-${input.target}`,
     now: () => Date.parse(FIXED_NOW),
     runCommandImpl: commandSuccess,
@@ -1095,7 +1103,7 @@ function updateSession(server, stager, activator, input) {
           spawnFn: () => fakeChild(),
           versionVerifier: () => {
             const verified = input.scenario !== "hostile-archive";
-            if (verified) runningVersion.value = TARGET_VERSION;
+            if (verified) input.runningVersion.value = TARGET_VERSION;
             return Promise.resolve(verified);
           },
         })
@@ -1113,7 +1121,8 @@ async function startScenarioServer(options) {
   prepareScenarioFixture(root, target, scenario);
   const modules = await loadServerModules();
   const env = scenarioEnv(root, scenario);
-  const mode = portableMode(target, scenario);
+  const runningVersion = { value: CURRENT_VERSION };
+  const mode = () => portableMode(target, scenario, runningVersion.value);
   const facts = scenarioFacts(root, target, scenario);
   const fetchImpl = localFetchFor(root, scenario);
   const localState = modules.server.createUpdateLocalStateManager({
@@ -1127,6 +1136,7 @@ async function startScenarioServer(options) {
     localState,
     mode,
     remediation,
+    runningVersion,
     scenario,
     target,
   });
@@ -1138,6 +1148,7 @@ async function startScenarioServer(options) {
     open: options.open,
     remediation,
     root,
+    runningVersion,
     scenario,
     session,
     target,
@@ -1149,9 +1160,9 @@ async function listenScenario(server, input) {
   const staticRoot = join(repoRoot, "dist", "ui", "static");
   const csp = await server.loadCspHeader(join(repoRoot, "dist", "ui", "csp-hashes.json"));
   const preflight = server.createUpdatePreflightService({
-    currentVersion: CURRENT_VERSION,
+    currentVersion: () => input.runningVersion.value,
     bundledCatalog: fakeCatalog(input.scenario === "remediation-required"),
-    installMode: () => input.mode,
+    installMode: () => resolveScenarioMode(input),
   });
   const deps = server.buildUiHandlerDeps({
     configPath: undefined,

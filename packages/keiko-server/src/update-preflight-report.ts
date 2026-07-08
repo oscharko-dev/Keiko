@@ -1,5 +1,6 @@
 import type {
   UpdatePreflightBlocker,
+  UpdatePreflightBlockerCode,
   UpdatePreflightImpactSummary,
   UpdatePreflightPatchNoteSection,
   UpdatePreflightPatchNotes,
@@ -120,6 +121,7 @@ const MANUAL_BLOCKER_CODES = new Set<UpdatePreflightBlocker["code"]>([
   "breaking-exception-manual",
   "one-click-ineligible",
   "portable-install-mode-ineligible",
+  "portable-install-managed-externally",
   "portable-release-unavailable",
   "portable-release-malformed",
   "portable-asset-missing",
@@ -128,6 +130,7 @@ const MANUAL_BLOCKER_CODES = new Set<UpdatePreflightBlocker["code"]>([
   "portable-manifest-malformed",
   "portable-checksum-missing",
   "portable-checksum-mismatch",
+  "portable-signing-unverified",
   "portable-sidecar-verification-failed",
 ]);
 
@@ -237,6 +240,7 @@ export function portableInstallModeBlockedReport(
   base: ReportBase,
   portableAsset: UpdatePreflightPortableInstallability,
   message: string,
+  code: UpdatePreflightBlockerCode = "portable-install-mode-ineligible",
 ): UpdatePreflightReport {
   return buildReport(base, {
     updateAvailable: false,
@@ -246,7 +250,7 @@ export function portableInstallModeBlockedReport(
     installabilitySource: "github-release-asset",
     portableAsset,
     severity: "normal",
-    blockers: [blocker("portable-install-mode-ineligible", message, "normal", true)],
+    blockers: [blocker(code, message, "normal", true)],
     warnings: [],
   });
 }

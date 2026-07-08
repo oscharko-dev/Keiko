@@ -303,14 +303,16 @@ describe("UpdateSessionManager", () => {
     expectPortableActivationInput({ activate, stageSummary });
     expect(manager.getStatus().lastSession).toMatchObject({
       phase: "succeeded",
+      message: "Portable update 0.2.12 is active and verified.",
       restartRequired: false,
       portableStage: { stageId: "stage-1", status: "staged" },
       portableActivation: { activationId: "activation-1", status: "activated" },
     });
   });
 
-  it("keeps portable activation non-terminal while remediation remains pending", async () => {
+  it("finishes verified portable activation while remediation remains pending", async () => {
     const completedTargets: string[] = [];
+    let phaseDuringCompletionGate: string | undefined;
     const manager = createUpdateSessionManager({
       detector: () => portableMode(),
       facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
@@ -319,20 +321,44 @@ describe("UpdateSessionManager", () => {
       portableActivator: { activate: vi.fn().mockResolvedValue(portableActivationSummary()) },
       portableCompletionGate: (session) => {
         completedTargets.push(session.targetVersion);
+        phaseDuringCompletionGate = manager.getStatus().activeSession?.phase;
         return false;
       },
     });
 
     manager.start({ targetVersion: "0.2.12" });
-    await waitForPhase(manager, "restart-required");
+    await waitForPhase(manager, "succeeded");
 
     expect(completedTargets).toEqual(["0.2.12"]);
-    expect(manager.getStatus().activeSession).toMatchObject({
-      phase: "restart-required",
+    expect(phaseDuringCompletionGate).toBe("running");
+    expect(manager.getStatus().activeSession).toBeUndefined();
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "succeeded",
       restartRequired: false,
       portableActivation: { activationId: "activation-1", status: "activated" },
       message:
-        "Keiko is now running 0.2.12. Complete remaining remediation before the update is marked successful.",
+        "Keiko is now running 0.2.12. Complete remaining follow-up action before affected workflows are fully ready.",
+    });
+  });
+
+  it("rejects stale restart verification after a completed portable activation", async () => {
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      currentVersion: () => "0.2.12",
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      idFactory: () => "session-1",
+      portableStager: { stage: vi.fn().mockResolvedValue(portableStageSummary()) },
+      portableActivator: { activate: vi.fn().mockResolvedValue(portableActivationSummary()) },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "succeeded");
+
+    expect(() => manager.verifyRestart("0.2.12")).toThrow(UpdateSessionError);
+    expect(manager.getStatus().lastSession).toMatchObject({
+      targetVersion: "0.2.12",
+      phase: "succeeded",
+      restartRequired: false,
     });
   });
 

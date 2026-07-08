@@ -42,6 +42,13 @@ interface ValidatedPortableManifest {
   readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }
 
+class PortableSigningVerificationError extends Error {
+  constructor() {
+    super("portable signing evidence is not verified");
+    this.name = "PortableSigningVerificationError";
+  }
+}
+
 function manifestAssetName(target: UpdatePortableTarget): string {
   return `${target}-portable-manifest.json`;
 }
@@ -239,7 +246,7 @@ function validateManifest(
   if (sha256 === undefined) return undefined;
   if (!validManifestIdentity(manifest, release, archive, target)) return undefined;
   if (!validManifestBooleans(manifest)) return undefined;
-  if (!securityVerified(manifest, target)) return undefined;
+  if (!securityVerified(manifest, target)) throw new PortableSigningVerificationError();
   if (!reviewedBindingValid(manifest, release, archive, target)) return undefined;
   return {
     archiveSha256: sha256,
@@ -341,6 +348,9 @@ async function resolvePortableEvidence(
   const manifestText = await readAssetSafely(deps, manifestAsset, MAX_PORTABLE_MANIFEST_BYTES);
   const manifest = manifestText === undefined ? undefined : manifestRecord(manifestText.text);
   const validated = validateManifestSafely(manifest, release, archive, target);
+  if (validated instanceof PortableSigningVerificationError) {
+    return signingResolution(target);
+  }
   if (validated instanceof PortableSidecarVerificationError) {
     return sidecarResolution(target);
   }
@@ -371,11 +381,16 @@ function validateManifestSafely(
   release: PortableRelease,
   archive: GitHubAsset,
   target: UpdatePortableTarget,
-): ValidatedPortableManifest | PortableSidecarVerificationError | undefined {
+):
+  | ValidatedPortableManifest
+  | PortableSigningVerificationError
+  | PortableSidecarVerificationError
+  | undefined {
   if (manifest === undefined) return undefined;
   try {
     return validateManifest(manifest, release, archive, target);
   } catch (error) {
+    if (error instanceof PortableSigningVerificationError) return error;
     if (error instanceof PortableSidecarVerificationError) return error;
     throw error;
   }
@@ -412,8 +427,26 @@ function checksumResolution(
       portableBlocker(
         reason === "missing" ? "portable-checksum-missing" : "portable-checksum-mismatch",
         reason === "missing"
-          ? "The matching portable checksum asset could not be read."
-          : "The matching portable checksum asset does not bind the selected archive.",
+          ? "The release verification file for this portable update could not be read."
+          : "The release verification file does not match the downloaded update archive.",
+      ),
+    ],
+    warnings: [],
+  };
+}
+
+function signingResolution(target: UpdatePortableTarget): PortableAssetResolution {
+  return {
+    installability: {
+      source: "github-release-asset",
+      target,
+      requiredAssetName: requiredAssetName(target),
+      status: "malformed",
+    },
+    blockers: [
+      portableBlocker(
+        "portable-signing-unverified",
+        "The portable update is missing verified signing or notarization evidence.",
       ),
     ],
     warnings: [],

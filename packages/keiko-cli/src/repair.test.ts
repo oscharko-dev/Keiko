@@ -73,9 +73,20 @@ function makeRoot(): string {
   return root;
 }
 
+function pathInsideRepository(path: string): boolean {
+  let cursor = path;
+  for (;;) {
+    if (existsSync(join(cursor, ".git"))) return true;
+    const parent = dirname(cursor);
+    if (parent === cursor) return false;
+    cursor = parent;
+  }
+}
+
 function makePolicyAllowedRoot(prefix: string): string {
   const cwdParent = dirname(process.cwd());
-  const parent = cwdParent.startsWith(REAL_TMPDIR) ? homedir() : cwdParent;
+  const parent =
+    cwdParent.startsWith(REAL_TMPDIR) || pathInsideRepository(cwdParent) ? homedir() : cwdParent;
   const root = mkdtempSync(join(parent, `.keiko-${prefix}-`));
   tempRoots.push(root);
   return root;

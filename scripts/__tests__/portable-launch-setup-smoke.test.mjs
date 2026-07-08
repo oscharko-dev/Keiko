@@ -43,6 +43,12 @@ describe("portable launch/setup smoke", () => {
     ]);
     for (const target of evidence.fixtureTargets) {
       expect(target).toMatchObject({
+        manualDownloadUpgrade: {
+          clickedNewerPackageStoppedServer: true,
+          noRollbackPathUsed: true,
+          relaunchedAfterSwap: true,
+          upgradedPackageVersion: true,
+        },
         pathWithoutNodeOrNpm: true,
         relaunchedFromManagedAppRoot: true,
         setupStatus: "managed",

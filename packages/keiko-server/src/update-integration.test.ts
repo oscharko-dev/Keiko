@@ -751,7 +751,7 @@ describe("governed updater integration", () => {
     expect(finalStatus.lastSession).toMatchObject({ targetVersion, phase: "succeeded" });
   });
 
-  it("keeps portable activation pending until release-impact remediation completes", async () => {
+  it("finishes portable activation while release-impact remediation remains pending", async () => {
     const targetVersion = nextPatchVersion(SDK_VERSION);
     const preflight = syntheticPreflightReport(targetVersion, {
       localKnowledgeReindexRequired: true,
@@ -841,16 +841,17 @@ describe("governed updater integration", () => {
     });
     expect(startedResponse.status).toBe(202);
 
-    const blockedStatus = await waitForPhase("restart-required");
+    const completedStatus = await waitForPhase("succeeded");
     expect(stage).toHaveBeenCalledOnce();
     expect(activate).toHaveBeenCalledOnce();
-    expect(blockedStatus.activeSession).toMatchObject({
+    expect(completedStatus.activeSession).toBeUndefined();
+    expect(completedStatus.lastSession).toMatchObject({
       targetVersion,
-      phase: "restart-required",
+      phase: "succeeded",
       restartRequired: false,
       portableActivation: { activationId: "portable-activation-1", status: "activated" },
     });
-    expect(blockedStatus.activeSession?.message).toContain("Complete remaining remediation");
+    expect(completedStatus.lastSession?.message).toContain("Complete remaining follow-up action");
     expect(updateLocalState.readRuntimeState()).toMatchObject({
       targetVersion,
       portableStage: { stageId: "portable-stage-1" },
@@ -886,13 +887,13 @@ describe("governed updater integration", () => {
       headers: csrfHeaders(),
       body: JSON.stringify({ targetVersion }),
     });
-    const verified = await readJson<UpdateSession>(verifiedResponse);
+    const verified = await readJson<{ readonly error: { readonly code: string } }>(
+      verifiedResponse,
+    );
 
-    expect(verifiedResponse.status).toBe(200);
+    expect(verifiedResponse.status).toBe(409);
     expect(verified).toMatchObject({
-      targetVersion,
-      phase: "succeeded",
-      restartRequired: false,
+      error: { code: "UPDATE_RESTART_NOT_PENDING" },
     });
     expect(localKnowledge.runs()).toBe(1);
   });

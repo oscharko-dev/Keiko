@@ -395,7 +395,7 @@ function portableBlockedReport(): JsonObject {
     blockers: [
       {
         code: "portable-checksum-mismatch",
-        message: "The release asset checksum did not match the manifest.",
+        message: "The release verification file does not match the downloaded update archive.",
         severity: "high",
         userActionRequired: true,
       },
@@ -754,22 +754,29 @@ async function assertPortableOneClickPath(updateWindow: Locator): Promise<void> 
 
 async function assertPortableBlockedPath(updateWindow: Locator): Promise<void> {
   await expect(updateWindow.getByRole("heading", { name: "Update available" })).toBeFocused();
-  await expect(updateWindow.getByText("Portable update needs attention")).toBeVisible();
+  await expect(updateWindow.getByText("Update blocked for safety")).toBeVisible();
   await expect(
     updateWindow.getByText(
-      "Keep using the current Keiko version; this update has not replaced it.",
+      "Keiko could not prove that this update file is the official release file. Your current Keiko version was not changed.",
     ),
+  ).toBeVisible();
+  await expect(updateWindow.getByText("Keep using Keiko normally.")).toBeVisible();
+  await expect(updateWindow.getByText("Try again later after the release is fixed.")).toBeVisible();
+  await expect(
+    updateWindow.getByText("Do not install this downloaded update manually."),
   ).toBeVisible();
   await expect(updateWindow.getByText("Manual update instructions")).toHaveCount(0);
   await expect(updateWindow.getByText("Package-manager commands")).toHaveCount(0);
   await expect(updateWindow.getByText("npm", { exact: true })).toHaveCount(0);
-  await expect(updateWindow.getByRole("link", { name: "Open manual download" })).toBeVisible();
+  await expect(updateWindow.getByRole("link", { name: "Open manual download" })).toHaveCount(0);
   const technicalDetails = updateWindow
     .locator("details")
     .filter({ hasText: "Technical details and logs" });
   await technicalDetails.locator("summary").click();
   await expect(
-    technicalDetails.getByText("The release asset checksum did not match the manifest."),
+    technicalDetails.getByText(
+      "The release verification file does not match the downloaded update archive.",
+    ),
   ).toBeVisible();
   await expect(updateWindow.getByRole("button", { name: "Check again" })).toBeEnabled();
 }

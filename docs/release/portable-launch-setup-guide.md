@@ -73,6 +73,14 @@ steps.
 The npm/Yarn updater remains a developer and compatibility path, not the promoted product journey
 for ordinary portable users.
 
+If a user manually downloads a newer portable ZIP and opens that newer `Keiko.exe` or `Keiko.app`
+while an older managed Keiko install is already present, the launcher treats it as a safe manual
+update fallback. Keiko validates that the clicked package is a stable newer version, stops the
+current local Keiko server, keeps an internal previous-install snapshot while swapping the managed
+install, relaunches the managed app, and opens Keiko again in the browser. Older, equal, beta, or
+malformed packages do not replace the managed install. The browser window itself is not forcibly
+closed; it may reconnect or be reopened after relaunch.
+
 ## Browser Install Prompt
 
 Keiko's browser tab may still use normal favicon, title, theme-color, and static shell cache
@@ -90,8 +98,10 @@ npm run smoke:portable-launch-setup
 
 The smoke creates disposable fixtures for `windows-x64`, `macos-arm64`, and `macos-x64`, launches
 through the portable setup seam with `PATH` stripped, verifies managed setup registration, verifies
-that relaunch uses the managed app root, validates the native launcher source uses bundled Node, and
-checks this documentation remains shell-free on the primary user path.
+that relaunch uses the managed app root, verifies the manually re-downloaded newer package fallback
+stops the old server and swaps to the new managed package for all three targets, validates the
+native launcher source uses bundled Node, and checks this documentation remains shell-free on the
+primary user path.
 
 When a real portable stage exists, operators can also validate the target directories:
 

@@ -4,12 +4,17 @@ import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { runLifecycleCli } from "./lifecycle.js";
 import {
-  attestedManagedRoot,
+  attestedExistingPortableInstall,
+  attestedManagedInstall,
+  attestedRecordedManagedInstall,
+  portableSourceCanReplaceManaged,
   sameRealPath,
   setupPortable,
   spawnManagedLauncher,
   statusPortable,
+  upgradeManagedInstall,
   validatePortableRoot,
+  type ValidatedPortableRoot,
 } from "./portable-install.js";
 import {
   defaultManagedRoot,
@@ -24,7 +29,7 @@ import {
 import type { CliIo } from "./runner.js";
 
 type LifecycleFn = (
-  command: "start",
+  command: "start" | "stop",
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
@@ -202,6 +207,96 @@ async function launchManaged(
   });
 }
 
+async function stopManaged(
+  layout: PortableLayout,
+  io: CliIo,
+  env: EnvSource,
+  stateDir: string,
+  lifecycleFn: LifecycleFn,
+): Promise<number> {
+  return lifecycleFn("stop", ["--state-dir", stateDir], io, env, {
+    cwd: layout.appRoot,
+  });
+}
+
+async function relaunchPreviousManaged(
+  layout: PortableLayout,
+  io: CliIo,
+  env: EnvSource,
+  stateDir: string,
+  lifecycleFn: LifecycleFn,
+): Promise<number> {
+  await launchManaged(layout, io, env, stateDir, lifecycleFn);
+  return 1;
+}
+
+async function upgradeManagedFromClickedPackage(
+  options: PortableCliOptions,
+  source: ValidatedPortableRoot,
+  current: ValidatedPortableRoot,
+  io: CliIo,
+  env: EnvSource,
+  deps: Pick<PortableRuntimeDeps, "now" | "lifecycleFn">,
+): Promise<number> {
+  if (!portableSourceCanReplaceManaged(source, current)) {
+    return launchManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
+  }
+  const stopped = await stopManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
+  if (stopped !== 0) return stopped;
+  try {
+    const upgraded = upgradeManagedInstall({
+      target: options.target,
+      source,
+      current,
+      managedRoot: options.managedRoot,
+      stateDir: options.stateDir,
+      env,
+      home: options.home,
+      now: deps.now(),
+    });
+    io.out("Keiko portable upgrade installed from downloaded package.\n");
+    return await launchManaged(upgraded, io, env, options.stateDir, deps.lifecycleFn);
+  } catch (error) {
+    io.err(
+      `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
+    );
+    return relaunchPreviousManaged(current.layout, io, env, options.stateDir, deps.lifecycleFn);
+  }
+}
+
+function attestedKnownManagedInstall(
+  options: PortableCliOptions,
+): ValidatedPortableRoot | undefined {
+  return (
+    attestedManagedInstall(options.target, options.managedRoot, options.stateDir) ??
+    attestedRecordedManagedInstall(options.managedRoot, options.stateDir) ??
+    attestedExistingPortableInstall(options.managedRoot, options.stateDir)
+  );
+}
+
+async function setupAndLaunchManaged(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: Pick<PortableRuntimeDeps, "now" | "lifecycleFn">,
+): Promise<number> {
+  const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
+  if (setup.code !== 0 || setup.layout === undefined) return setup.code;
+  return await launchManaged(setup.layout, io, env, options.stateDir, deps.lifecycleFn);
+}
+
+function setupDownloadedPortable(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: Pick<PortableRuntimeDeps, "now" | "spawnFn">,
+): number {
+  const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
+  if (setup.code !== 0 || setup.layout === undefined || options.noRelaunch) return setup.code;
+  spawnManagedLauncher(setup.layout, deps.spawnFn);
+  return 0;
+}
+
 async function launchPortable(
   options: PortableCliOptions,
   io: CliIo,
@@ -210,23 +305,21 @@ async function launchPortable(
 ): Promise<number> {
   try {
     const source = validatePortableRoot(options.target, options.portableRoot);
-    const attestedManaged = attestedManagedRoot(
-      options.target,
-      options.managedRoot,
-      options.stateDir,
-    );
-    if (attestedManaged !== undefined) {
-      return await launchManaged(attestedManaged, io, env, options.stateDir, deps.lifecycleFn);
-    }
     if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
-      const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
-      if (setup.code !== 0 || setup.layout === undefined) return setup.code;
-      return await launchManaged(setup.layout, io, env, options.stateDir, deps.lifecycleFn);
+      return await setupAndLaunchManaged(options, io, env, deps);
     }
-    const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
-    if (setup.code !== 0 || setup.layout === undefined || options.noRelaunch) return setup.code;
-    spawnManagedLauncher(setup.layout, deps.spawnFn);
-    return 0;
+    const attestedKnownManaged = attestedKnownManagedInstall(options);
+    if (attestedKnownManaged !== undefined) {
+      return await upgradeManagedFromClickedPackage(
+        options,
+        source,
+        attestedKnownManaged,
+        io,
+        env,
+        deps,
+      );
+    }
+    return setupDownloadedPortable(options, io, env, deps);
   } catch (error) {
     io.err(`keiko portable launch: ${error instanceof Error ? error.message : "unavailable"}\n`);
     return 1;
