@@ -43,6 +43,7 @@ export const MANUAL_REFRESH_REASON_CODES = [
   "pages-added",
   "pages-changed",
   "pages-removed",
+  "pages-moved",
   "pages-failed",
   "links-denied",
   "embedding-incompatible",
@@ -61,6 +62,7 @@ export const MANUAL_REFRESH_REASON_GUIDANCE: Readonly<Record<ManualRefreshReason
   "pages-added": "New pages were discovered and indexed.",
   "pages-changed": "Existing pages changed and were re-indexed.",
   "pages-removed": "Pages that are no longer reachable were removed from the pod.",
+  "pages-moved": "Pages moved to a new location; their content was unchanged.",
   "pages-failed":
     "Some pages could not be re-indexed and may be temporarily unsearchable; a future successful refresh will retry them.",
   "links-denied": "Some links were skipped because they fell outside the approved scope.",
@@ -78,6 +80,9 @@ export interface ManualRefreshChangeCounts {
   readonly addedPages: number;
   readonly changedPages: number;
   readonly removedPages: number;
+  // A page whose path changed but whose content fingerprint is identical to a removed path's is
+  // correlated into a single moved-page count rather than an unrelated removed+added pair.
+  readonly movedPages: number;
   readonly unchangedPages: number;
   readonly failedPages: number;
   readonly deniedLinks: number;
@@ -102,6 +107,7 @@ const COUNT_KEYS: readonly (keyof ManualRefreshChangeCounts)[] = [
   "addedPages",
   "changedPages",
   "removedPages",
+  "movedPages",
   "unchangedPages",
   "failedPages",
   "deniedLinks",

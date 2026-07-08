@@ -167,3 +167,11 @@ Commands re-run locally in this worktree after the fixes listed above, against `
   here are delivered by Epic #1858: HTML-manual goldset fixtures scored in `check:retrieval-quality`,
   cookie/prompt evidence-leakage gates, and a private pilot runbook. See
   `docs/qa/html-manual-retrieval-evaluation-evidence.md` for the closure evidence.
+- The full browser -> approval -> indexing -> chat attachment -> retrieval activity -> answer ->
+  citation -> browser reopen loop (the P0 value loop) is demonstrated by composing the separately
+  run suites listed above across epics #1852/#1853/#1856/#1854, not by a single test that exercises
+  the whole chain in one place. Each seam is independently well-tested; this is an
+  auditability/onboarding-clarity note, not a functional gap. A narrow composed integration test
+  spanning consent -> crawl -> attach -> ask -> cite -> reopen with synthetic fixtures would close
+  this for pilot-handoff clarity but is not required for this epic's closure (per the epic's Reuse
+  And No-Duplication Gate: independently tested seams by design, no second pipeline).

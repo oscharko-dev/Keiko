@@ -26,6 +26,7 @@
 // only — the chunker runs with force=false so it reuses the already-correct chunk rows.
 
 import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 
 import type {
   CheckpointFingerprint,
@@ -34,6 +35,7 @@ import type {
   ExtractionCheckpointRecord,
   IndexingJobError,
   KnowledgeCapsule,
+  KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
@@ -65,7 +67,11 @@ import {
 } from "../chunking/index.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
-import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions } from "../discovery/index.js";
+import {
+  DEFAULT_DISCOVERY_OPTIONS,
+  documentIdFor,
+  type DiscoveryOptions,
+} from "../discovery/index.js";
 import {
   deleteDocumentRow,
   insertDiagnosticRow,
@@ -96,6 +102,7 @@ import { embedChunkBatch } from "./embedding-batcher.js";
 import {
   countVectorsForDocument,
   deleteVectorsForDocument,
+  invalidateVectorIndexStateForCapsules,
   selectChunksForDocument,
 } from "./vector-persist.js";
 import {
@@ -222,6 +229,10 @@ interface RunState {
   vectorsPersisted: number;
   lastResumeToken: ChunkId | null;
   lastError?: IndexingJobError;
+  // Pre-run per-document snapshots captured at "file-discovered" time (see the "Per-document
+  // restore snapshot" section below), keyed by DocumentId. Restored only if that same
+  // document's re-processing ends this run in failure.
+  readonly restoreSnapshots: Map<string, DocumentRestoreSnapshot>;
 }
 
 function buildCounters(state: RunState): JobCounters {
@@ -265,6 +276,179 @@ function clearDocumentArtifacts(
 
 function markDocumentFailed(state: RunState, documentId: DocumentId): void {
   updateDocumentStatusRow(state.options.store._internal.db, state.capsule.id, documentId, "failed");
+}
+
+// ─── Per-document restore snapshot ─────────────────────────────────────────────
+// A changed page's previous chunks/vectors are destroyed before its re-embed is attempted
+// (real re-extraction cascade-deletes parsed_units -> chunks -> vectors; a force/stale
+// re-chunk deletes chunks -> vectors directly) — a per-page embed failure used to leave the
+// page with zero vectors instead of its previous (good) ones. This section captures a raw,
+// column-exact snapshot of a document's dependent rows synchronously at "file-discovered"
+// time (before extraction or re-chunking can touch anything) and restores it only if that
+// same document's standard chunk/embed processing ends this run in failure.
+type SqlCellValue = string | number | bigint | Uint8Array | null;
+type RawTableRow = Readonly<Record<string, SqlCellValue>>;
+
+interface DocumentRestoreSnapshot {
+  readonly document: RawTableRow;
+  readonly parsedUnits: readonly RawTableRow[];
+  readonly chunks: readonly RawTableRow[];
+  readonly chunkLexicalRows: readonly RawTableRow[];
+  readonly vectors: readonly RawTableRow[];
+}
+
+function selectRowsForDocument(
+  db: DatabaseSync,
+  table: string,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): readonly RawTableRow[] {
+  const rows = db
+    .prepare(`SELECT * FROM ${table} WHERE capsule_id = :c AND document_id = :d`)
+    .all({ c: String(capsuleId), d: String(documentId) });
+  return rows;
+}
+
+function selectDocumentRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): RawTableRow | undefined {
+  return db
+    .prepare("SELECT * FROM documents WHERE capsule_id = :c AND id = :d")
+    .get({ c: String(capsuleId), d: String(documentId) });
+}
+
+// Only a document that already has confirmed vectors from a prior run is worth protecting, and
+// only outside the progressive/bounded large-document path — that path owns its own
+// checkpointed resume semantics (partial progress is meant to be resumed, not reverted) and
+// must not be disturbed by an unrelated restore.
+function eligibleForRestoreSnapshot(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): boolean {
+  const checkpoint = selectExtractionCheckpoint(db, capsuleId, documentId);
+  if (checkpoint?.strategy === "progressive-pdf") return false;
+  return countVectorsForDocument(db, capsuleId, documentId) > 0;
+}
+
+function captureRestoreSnapshotIfEligible(
+  state: RunState,
+  source: KnowledgeSource,
+  relativePath: string,
+): void {
+  const documentId = documentIdFor({
+    capsuleId: state.capsule.id,
+    sourceId: source.id,
+    relativePath,
+  });
+  const db = state.options.store._internal.db;
+  if (!eligibleForRestoreSnapshot(db, state.capsule.id, documentId)) return;
+  const document = selectDocumentRow(db, state.capsule.id, documentId);
+  if (document === undefined) return;
+  state.restoreSnapshots.set(String(documentId), {
+    document,
+    parsedUnits: selectRowsForDocument(db, "parsed_units", state.capsule.id, documentId),
+    chunks: selectRowsForDocument(db, "chunks", state.capsule.id, documentId),
+    chunkLexicalRows: selectRowsForDocument(
+      db,
+      "chunk_lexical_index",
+      state.capsule.id,
+      documentId,
+    ),
+    vectors: selectRowsForDocument(db, "vectors", state.capsule.id, documentId),
+  });
+}
+
+function discardRestoreSnapshot(state: RunState, documentId: DocumentId): void {
+  state.restoreSnapshots.delete(String(documentId));
+}
+
+function requiredDocumentCell(row: RawTableRow, key: string, documentId: DocumentId): SqlCellValue {
+  const value = row[key];
+  if (value === undefined) {
+    throw new IndexingError(
+      "PERSISTENCE_FAILED",
+      `document snapshot for ${String(documentId)} is missing column ${key}`,
+    );
+  }
+  return value;
+}
+
+const RESTORE_DOCUMENT_ROW_SQL = [
+  "UPDATE documents SET",
+  "  size_bytes = :size_bytes, media_type = :media_type, content_hash = :content_hash,",
+  "  parser_id = :parser_id, parser_version = :parser_version,",
+  "  last_extracted_at = :last_extracted_at, status = :status",
+  "WHERE capsule_id = :capsule_id AND id = :id",
+].join(" ");
+
+// Reverts `documents.content_hash` (and the rest of the extraction-derived columns) back to the
+// snapshot's values. This is what makes a future refresh retry the failed page instead of
+// treating the just-restored (stale) content as already caught up: the next run's freshly
+// computed content hash for the (still-changed) page will no longer match.
+function restoreDocumentRow(db: DatabaseSync, documentId: DocumentId, row: RawTableRow): void {
+  const cell = (key: string): SqlCellValue => requiredDocumentCell(row, key, documentId);
+  db.prepare(RESTORE_DOCUMENT_ROW_SQL).run({
+    size_bytes: cell("size_bytes"),
+    media_type: cell("media_type"),
+    content_hash: cell("content_hash"),
+    parser_id: cell("parser_id"),
+    parser_version: cell("parser_version"),
+    last_extracted_at: cell("last_extracted_at"),
+    status: cell("status"),
+    capsule_id: cell("capsule_id"),
+    id: cell("id"),
+  });
+}
+
+function insertRawRow(db: DatabaseSync, table: string, row: RawTableRow): void {
+  const columns = Object.keys(row);
+  const sql = `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns
+    .map((column) => `:${column}`)
+    .join(", ")})`;
+  db.prepare(sql).run(row as Record<string, SqlCellValue>);
+}
+
+// Reverts a document to its last known-good state after this run's (re-)processing of it
+// failed. The failed attempt already replaced parsed_units (real re-extraction) or chunks
+// (force/stale re-chunk); deleting parsed_units cascades away whatever partial state it left
+// (chunks -> chunk_lexical_index + vectors, FK ON DELETE CASCADE), freeing the original ids so
+// the snapshot can be reinserted unchanged.
+function restoreDocumentSnapshot(
+  state: RunState,
+  documentId: DocumentId,
+  snapshot: DocumentRestoreSnapshot,
+): void {
+  const db = state.options.store._internal.db;
+  db.prepare("DELETE FROM parsed_units WHERE capsule_id = :c AND document_id = :d").run({
+    c: String(state.capsule.id),
+    d: String(documentId),
+  });
+  for (const row of snapshot.parsedUnits) insertRawRow(db, "parsed_units", row);
+  for (const row of snapshot.chunks) insertRawRow(db, "chunks", row);
+  for (const row of snapshot.chunkLexicalRows) insertRawRow(db, "chunk_lexical_index", row);
+  for (const row of snapshot.vectors) insertRawRow(db, "vectors", row);
+  restoreDocumentRow(db, documentId, snapshot.document);
+  invalidateVectorIndexStateForCapsules(db, [state.capsule.id]);
+}
+
+// Checked once a document's standard chunk/embed processing reaches a terminal outcome for this
+// run: if it failed AND a pre-run snapshot was captured, restore it so the document keeps
+// returning its previous (still valid) hits instead of going dark until some future refresh
+// happens to succeed. Always clears the snapshot afterward — a success needs no restore, and a
+// failure with no snapshot (first-ever index of this document) has nothing to revert to.
+function restoreSnapshotOnFailure(
+  state: RunState,
+  documentId: DocumentId,
+  events: readonly IndexingEvent[],
+): void {
+  const snapshot = state.restoreSnapshots.get(String(documentId));
+  discardRestoreSnapshot(state, documentId);
+  if (snapshot === undefined) return;
+  if (!events.some((event) => event.kind === "document-failed")) return;
+  restoreDocumentSnapshot(state, documentId, snapshot);
 }
 
 // ─── Per-chunk text projection ────────────────────────────────────────────────
@@ -1425,6 +1609,32 @@ function* handleUnsupportedDocument(
   };
 }
 
+// Extracted from handlePersistedDocument to stay under the per-function line limit: runs the
+// embed step for a freshly-chunked document and finalizes it (embed-then-swap failure handling +
+// event emission).
+async function* embedAndFinalizeChunkedDocument(
+  state: RunState,
+  result: ExtractionResult,
+  documentId: DocumentId,
+): AsyncGenerator<IndexingEvent> {
+  const embedResult = await embedDocumentChunks(
+    state,
+    documentId,
+    sourceForResult(state, result),
+    result.relativePath,
+  );
+  const handling = applyEmbedResult(
+    state,
+    result.sourceId,
+    documentId,
+    result.relativePath,
+    [],
+    embedResult,
+  );
+  restoreSnapshotOnFailure(state, documentId, handling.events);
+  yield* persistedEvents(handling);
+}
+
 async function* handlePersistedDocument(
   state: RunState,
   result: ExtractionResult,
@@ -1459,22 +1669,14 @@ async function* handlePersistedDocument(
 
   const chunkStep = tryChunkDocument(state, result, documentId);
   if (!("chunked" in chunkStep)) {
+    restoreSnapshotOnFailure(state, documentId, chunkStep.events);
     yield* persistedEvents(chunkStep);
     return;
   }
 
   yield* chunkStep.chunked.events;
   persistJobProgress(state);
-
-  const embedResult = await embedDocumentChunks(
-    state,
-    documentId,
-    sourceForResult(state, result),
-    result.relativePath,
-  );
-  yield* persistedEvents(
-    applyEmbedResult(state, result.sourceId, documentId, result.relativePath, [], embedResult),
-  );
+  yield* embedAndFinalizeChunkedDocument(state, result, documentId);
 }
 
 function* handleExtractionSkippedEvents(
@@ -1539,6 +1741,7 @@ async function* handleDiscoveryEvent(
 ): AsyncGenerator<IndexingEvent> {
   if (evt.kind === "file-discovered") {
     state.totalDocuments += 1;
+    captureRestoreSnapshotIfEligible(state, source, evt.relativePath);
     yield {
       kind: "document-discovered",
       jobId: state.jobId,
@@ -1572,6 +1775,10 @@ async function* handleDiscoveryEvent(
   }
   // evt.kind === "file-extracted"
   yield* handleFileExtracted(state, evt.result);
+  // Safety-net cleanup: `handlePersistedDocument`'s own success/failure branches already clear
+  // the snapshot it owns, but the "genuinely unchanged" and "extraction failed" outcomes never
+  // reach that function — discard is a no-op if it already ran.
+  discardRestoreSnapshot(state, evt.result.outcome.document.id);
 }
 
 function shouldStopAfterEvent(event: IndexingEvent): boolean {
@@ -1754,6 +1961,7 @@ function buildInitialState(
     skippedDocuments: 0,
     vectorsPersisted: 0,
     lastResumeToken: null,
+    restoreSnapshots: new Map(),
   };
 }
 

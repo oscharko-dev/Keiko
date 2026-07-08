@@ -67,8 +67,10 @@ export interface RefreshHtmlManualPodDeps {
   readonly store: KnowledgeStore;
   readonly parserRegistry: ParserRegistry;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
-  // Injected byte-retrieval port (WorkspaceFs-backed for local manuals, gatewayFetch-backed in
-  // keiko-server for intranet manuals). The refresh never constructs a fetcher itself (trust-9).
+  // Injected byte-retrieval port (WorkspaceFs-backed for local manuals). A gatewayFetch-backed
+  // keiko-server fetcher for intranet manuals is NOT implemented yet, and this function has no
+  // live server route or UI trigger — see Issue #2063. The refresh never constructs a fetcher
+  // itself (trust-9).
   readonly fetcher: ManualCrawlFetcher;
   readonly capsuleId: KnowledgeCapsuleId;
   readonly sourceId: KnowledgeSourceId;

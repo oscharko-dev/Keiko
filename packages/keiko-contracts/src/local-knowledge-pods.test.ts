@@ -584,6 +584,7 @@ describe("validateKnowledgePodSummary", () => {
         addedPages: 1,
         changedPages: 0,
         removedPages: 0,
+        movedPages: 0,
         unchangedPages: 5,
         failedPages: 0,
         deniedLinks: 0,

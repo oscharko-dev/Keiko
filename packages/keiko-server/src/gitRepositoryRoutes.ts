@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { stat } from "node:fs/promises";
 import { isIP } from "node:net";
@@ -14,7 +13,7 @@ import {
   validateProjectPath,
   type Project,
 } from "./store/index.js";
-import { networkGitEnv } from "./gitRoutes.js";
+import { defaultGitNetworkProcessRunner, isSafeGitPositional } from "@oscharko-dev/keiko-git";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -165,6 +164,10 @@ function repositoryHost(input: string): string | undefined {
 }
 
 function repositoryUrlAllowed(input: string): boolean {
+  // Reject option-like URLs (leading `-`) before anything else: a value git could re-read as an
+  // option (e.g. `--upload-pack=<cmd>`) must never reach the clone argv, independent of the `--`
+  // separator. Well-formed https/ssh/scp URLs never begin with `-`, so this rejects only abuse.
+  if (!isSafeGitPositional(input)) return false;
   const host = repositoryHost(input);
   if (typeof host !== "string" || host.length === 0) return false;
   const hostClass = classifyRepositoryHost(host);
@@ -209,20 +212,35 @@ type CloneRepositoryRunner = (
   destinationPath: string,
 ) => Promise<RouteResult | null>;
 
-const cloneRepository: CloneRepositoryRunner = function cloneRepository(
+// Clone goes through the shared hardened runner (single spawn path, byte cap, timeout with
+// SIGTERM→SIGKILL escalation) with the credential-capable network env.
+const cloneRepository: CloneRepositoryRunner = async function cloneRepository(
   repositoryUrl: string,
   destinationPath: string,
 ): Promise<RouteResult | null> {
-  return new Promise((resolveResult) => {
-    const child = spawn("git", ["clone", "--", repositoryUrl, destinationPath], {
-      cwd: dirname(destinationPath),
-      env: networkGitEnv(),
-      shell: false,
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    monitorCloneProcess(child, resolveResult);
-  });
+  // Fail closed at the spawn boundary: neither positional may be option-like, so a hostile URL or
+  // destination can never be re-read by git as `--upload-pack`/`--exec`/… even though `--` already
+  // separates them. The dash checks are written inline (not only via isSafeGitPositional, which
+  // guards the upstream URL allow-list) so the barrier sits directly on the dataflow into the
+  // spawn — a leading-dash value cannot reach the git argv below.
+  if (repositoryUrl.startsWith("-") || destinationPath.startsWith("-")) {
+    return invalid("The repository URL and destination must not be interpretable as git options.");
+  }
+  if (!isSafeGitPositional(repositoryUrl) || !isSafeGitPositional(destinationPath)) {
+    return invalid("The repository URL and destination must be non-empty.");
+  }
+  const result = await defaultGitNetworkProcessRunner(
+    ["clone", "--", repositoryUrl, destinationPath],
+    { cwd: dirname(destinationPath), maxBytes: MAX_OUTPUT_BYTES, timeoutMs: CLONE_TIMEOUT_MS },
+  );
+  if (result.exitCode === 127) {
+    return {
+      status: 503,
+      body: errorBody("GIT_UNAVAILABLE", "Git is not available on this host."),
+    };
+  }
+  if (result.exitCode === 0) return null;
+  return cloneFailure(result.truncated);
 };
 
 function cloneFailure(truncated: boolean): RouteResult {
@@ -235,47 +253,6 @@ function cloneFailure(truncated: boolean): RouteResult {
         : "Repository clone failed. Check the URL, credentials, and destination path.",
     ),
   };
-}
-
-function monitorCloneProcess(
-  child: ReturnType<typeof spawn>,
-  resolveResult: (result: RouteResult | null) => void,
-): void {
-  let outputBytes = 0;
-  let truncated = false;
-  let settled = false;
-  const timer = setTimeout(() => {
-    truncated = true;
-    child.kill("SIGTERM");
-  }, CLONE_TIMEOUT_MS);
-  const capture = (chunk: Buffer): void => {
-    outputBytes += chunk.byteLength;
-    if (outputBytes > MAX_OUTPUT_BYTES) {
-      truncated = true;
-      child.kill("SIGTERM");
-    }
-  };
-  child.stdout?.on("data", capture);
-  child.stderr?.on("data", capture);
-  child.on("error", () => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    resolveResult({
-      status: 503,
-      body: errorBody("GIT_UNAVAILABLE", "Git is not available on this host."),
-    });
-  });
-  child.on("close", (code) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(timer);
-    if (code === 0) {
-      resolveResult(null);
-      return;
-    }
-    resolveResult(cloneFailure(truncated));
-  });
 }
 
 export function createCloneRepositoryHandler(

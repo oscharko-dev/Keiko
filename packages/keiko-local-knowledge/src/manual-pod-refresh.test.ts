@@ -400,19 +400,16 @@ describe("refreshHtmlManualPod", () => {
     expect(referenceDoc).toBeDefined();
   });
 
-  it("characterizes the known gap: a changed page's vectors are not rolled back when its own re-embed fails", async () => {
-    // Documents a still-open architectural gap (see docs/local-knowledge/html-manual-refresh-
-    // lifecycle-ledger.md "Known gap: an indexing-phase failure/partial does not roll back a
-    // changed page's vectors"). Guide's previously-good vectors are deleted as part of the
-    // incremental fast-path/chunk-replace before its re-embed is attempted; when that re-embed
-    // fails, the page ends up with zero vectors rather than its previous (good) ones, for the
-    // window until a future successful refresh repairs it (proven not-permanent by the fingerprint-
-    // baseline test above). This is a shared indexing-orchestrator behaviour, not specific to HTML
-    // manual refresh -- fixing it requires an "embed-then-swap" staging change to
-    // packages/keiko-local-knowledge/src/indexing/orchestrator.ts's chunk/embed pipeline, used by
-    // every indexing job in the product, which is out of scope for this change and requires its own
-    // design/review. This test pins CURRENT behaviour so a future fix must consciously update it
-    // (flip the final assertion) rather than silently regress back to it.
+  it("keeps a changed page's previous vectors when its own re-embed fails", async () => {
+    // Regression for a Critical finding (see docs/local-knowledge/html-manual-refresh-lifecycle-
+    // ledger.md "Known gap: an indexing-phase failure/partial does not roll back a changed page's
+    // vectors"): the shared indexing orchestrator used to delete a changed page's previous
+    // chunks/vectors (real re-extraction cascade-deletes parsed_units -> chunks -> vectors; a
+    // force/stale re-chunk deletes chunks -> vectors directly) before attempting its re-embed, so a
+    // per-page embed failure left the page with zero vectors instead of its previous (good) ones.
+    // `indexing/orchestrator.ts` now snapshots a document's dependent rows before touching them and
+    // restores that snapshot when the same document's re-processing fails this run, so the page
+    // stays retrievable on its last known-good content until a future refresh succeeds.
     await createBasePod();
     const before = listPersistedDocumentsForSource(store._internal.db, CAPSULE_ID, SOURCE_ID);
     const guideDocBefore = before.find((doc) => doc.document_path.includes("guide"));
@@ -446,10 +443,8 @@ describe("refreshHtmlManualPod", () => {
     const guideDocAfter = after.find((doc) => doc.document_path.includes("guide"));
     if (guideDocAfter === undefined) throw new Error("guide document was not indexed");
     const vectorsAfter = countVectorsForDocument(store._internal.db, CAPSULE_ID, guideDocAfter.id);
-    // KNOWN GAP (tracked, not silently regressed): today this is 0, not >0. When the shared
-    // orchestrator gains embed-then-swap staging, this assertion should become
-    // `expect(vectorsAfter).toBeGreaterThan(0)` and the surrounding comment/ledger entry updated.
-    expect(vectorsAfter).toBe(0);
+    // Fixed: the page's previous (good) vectors survive a failed re-embed rather than being wiped.
+    expect(vectorsAfter).toBeGreaterThan(0);
   });
 
   it("persists the redacted change summary and crawl-run id for later diagnostics", async () => {

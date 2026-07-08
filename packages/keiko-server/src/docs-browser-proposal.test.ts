@@ -14,7 +14,17 @@ import type {
   KnowledgePodSummary,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  openKnowledgeStore,
+  persistHtmlManualSourceMetadata,
+  resolveKnowledgeStorePath,
+} from "@oscharko-dev/keiko-local-knowledge";
+import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { buildCspHeader } from "./csp.js";
+import {
+  buildHtmlManualCitationNavigationTarget,
+  resolveHtmlManualCitationNavigationTarget,
+} from "./html-manual-citation-navigation.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
@@ -24,7 +34,7 @@ import {
   resolveManualProposal,
 } from "./docs-browser-proposal.js";
 
-function stubDeps(): UiHandlerDeps {
+function stubDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -39,6 +49,73 @@ function stubDeps(): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
     store: createInMemoryUiStore(),
+    ...overrides,
+  };
+}
+
+// AUDIT-E1852-001 — a citation-opened manual's client-visible target is the opaque
+// `keiko-html-manual-citation:` token, not the manual's real URL. Seed a real knowledge store (via
+// `uiDbPath`, mirroring docs-browser.test.ts) with an indexed HTML manual and mint the same kind of
+// citation token the navigate route resolves, so propose/approve can be exercised against it.
+interface CitationFixture {
+  readonly deps: UiHandlerDeps;
+  readonly target: string;
+  readonly close: () => Promise<void>;
+}
+
+async function seedManualCitationFixture(): Promise<CitationFixture> {
+  const staticRoot = await mkdtemp(join(tmpdir(), "keiko-docs-propose-citation-"));
+  const uiDbPath = join(staticRoot, "ui.sqlite");
+  const store = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: staticRoot }),
+  });
+  const seeded = await seedCapsuleWithVectors(store, {
+    capsuleId: "cap-propose-citation",
+    sourceId: "src-propose-citation",
+    documentId: "doc-propose-citation",
+    safeDisplayName: "device-handbook.html",
+    unit: {
+      kind: "html-block",
+      headingPath: ["Troubleshooting"],
+      anchorId: "timeouts",
+      characterStart: 0,
+      characterEnd: 120,
+    },
+  });
+  persistHtmlManualSourceMetadata(store, seeded.capsuleId, seeded.sourceId, {
+    schemaVersion: "1",
+    scope: {
+      kind: "html-manual-http",
+      origin: "https://manual.internal",
+      pathPrefix: null,
+    },
+    limits: {
+      maxPages: 20,
+      maxDepth: 3,
+      maxBytes: 2_000_000,
+      maxLinkSample: 50,
+      timeoutMs: 30_000,
+      followRedirects: false,
+    },
+    sourceFingerprint: "fp-propose-citation",
+    proposedPodName: "Device Handbook",
+  });
+  const chunkId = seeded.chunkIds[0];
+  store.close();
+  if (chunkId === undefined) throw new Error("manual citation seed has no chunk");
+  const target = buildHtmlManualCitationNavigationTarget({
+    capsuleId: seeded.capsuleId,
+    sourceId: seeded.sourceId,
+    documentId: seeded.documentId,
+    chunkId,
+    anchorId: "timeouts",
+  });
+  return {
+    deps: stubDeps({ uiDbPath }),
+    target,
+    close: async (): Promise<void> => {
+      await rm(staticRoot, { recursive: true, force: true });
+    },
   };
 }
 
@@ -361,5 +438,43 @@ describe("already-indexed duplicate detection", () => {
     expect(decision.ok).toBe(true);
     if (!decision.ok) return;
     expect(decision.approval.approved).toBe(true);
+  });
+});
+
+describe("citation-opened manual target resolution (AUDIT-E1852-001)", () => {
+  it("resolves the citation token to the real manual URL instead of always reporting unsupported", async () => {
+    const fx = await seedManualCitationFixture();
+    try {
+      const resolution = resolveHtmlManualCitationNavigationTarget(fx.deps, fx.target);
+      expect(resolution.kind).toBe("resolved");
+      if (resolution.kind !== "resolved") return;
+      const fingerprint = computeManualRootFingerprint(resolution.target);
+      expect(fingerprint).not.toBeNull();
+      const proposal = resolveManualProposal(fx.target, fx.deps, () => [
+        podWithFingerprint(fingerprint ?? ""),
+      ]);
+      expect(proposal.state).toBe("already-indexed");
+      expect(proposal.alreadyIndexedPodId).toBe("capsule-existing");
+    } finally {
+      await fx.close();
+    }
+  });
+
+  it("does not resolve to unsupported for a citation token with no matching pod", async () => {
+    const fx = await seedManualCitationFixture();
+    try {
+      const proposal = resolveManualProposal(fx.target, fx.deps, () => []);
+      expect(proposal.state).not.toBe("unsupported");
+      const decision = resolveManualApproval(fx.target, fx.deps, () => []);
+      expect(decision.ok).toBe(true);
+    } finally {
+      await fx.close();
+    }
+  });
+
+  it("falls through unchanged for a non-citation target", () => {
+    const target = "https://intranet/handbook/index.html";
+    const proposal = resolveManualProposal(target, stubDeps(), () => []);
+    expect(proposal.state).toBe("likely-manual");
   });
 });

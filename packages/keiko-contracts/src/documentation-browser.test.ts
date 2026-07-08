@@ -105,6 +105,21 @@ describe("classifyDocumentationTarget — accepted", () => {
     expect(result.targetClass).toBe("external-http");
   });
 
+  it("classifies punycode/IDN homograph hosts as external, not intranet (AUDIT-E1852-004)", () => {
+    for (const raw of [
+      // Punycode-encoded host, already in the WHATWG-normalized ASCII form.
+      "https://xn--e1aybc.example/manual/index.html",
+      // Unicode homograph input; the WHATWG URL parser normalizes it to punycode (ToASCII)
+      // before classifyHttpHost ever sees it.
+      "https://аррӏе.com/manual/index.html",
+    ]) {
+      const result = classifyDocumentationTarget(raw);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.targetClass).toBe("external-http");
+    }
+  });
+
   it("summarises the path shape without leaking the real path", () => {
     const root = classifyDocumentationTarget("https://example.com/");
     const deep = classifyDocumentationTarget("https://example.com/secret/report.html?token=abc");

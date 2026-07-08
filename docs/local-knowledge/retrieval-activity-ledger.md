@@ -276,3 +276,76 @@ CI repair and security verification update on 2026-07-04:
 - Ran the repository's nearest local Qodana/static-analysis equivalent for this security-sensitive
   redaction surface: `npm run check:security-regression-matrix` — PASS, 42 findings mapped.
 - GitHub CodeQL remains the remote static-analysis gate for the final PR head.
+
+## Post-Merge Addendum (2026-07-07)
+
+Two audit-driven post-merge fix rounds changed the redaction surface this ledger describes after
+the initial 2026-07-04 implementation. This addendum records what leaked, what fixed it, and what
+tests were added, so the history does not have to be re-derived from `git log`.
+
+### PR #1973 — close retrieval-activity leakage gaps (2026-07-06, commit `627706e4`)
+
+A post-merge audit of #1832-#1836 found reproduced false negatives in the evidence-safe text
+guards that let a private filesystem path or PII reach the redacted activity view verbatim:
+
+- The filesystem-path guard was anchored at a string boundary only, so paths embedded mid-string
+  (`report=/Users/…`, `a/Users/…`), non-ASCII-prefixed paths, and `../` traversal sequences leaked
+  through undetected. Single lone slashes (`UI/UX`, `TCP/IP`, `Q3 / Finance`) were confirmed to
+  remain evidence-safe after the fix.
+- The phone heuristic was defeated by a trailing separator or word; the email heuristic stopped
+  early on underscore-domain inputs. Both were tightened.
+- Tests added: a leakage regression matrix (paths, traversal, home directories, endpoints, tokens,
+  PII) plus a benign-name allow-list locking the false-positive boundary
+  (`local-knowledge-pods.test.ts`, `local-knowledge-retrieval-activity.test.ts`); an end-to-end
+  fail-closed test asserting an out-of-contract count omits the activity while leaving the answer
+  intact, and a reranker-failure state-derivation test
+  (`local-knowledge-grounded-qa.rescue.test.ts`).
+- Also documented that summary counts describe the full retrieval while the rendered `pods` list
+  is display-bounded.
+
+### PR #2037 — close post-merge audit gaps, round 2 (2026-07-06, commit `ef5d867f`)
+
+An independent re-audit after 10+ unrelated commits touched the same shared files found a further
+recurring leakage-guard gap class plus one CodeQL-flagged regression introduced by its own fix:
+
+- `FILESYSTEM_PATH_RE`'s boundary-character enumeration was replaced with a negative lookbehind
+  (closing the same leakage-guard gap _class_ PR #1973 partially addressed, this time at the
+  regex-construction level instead of one more enumerated boundary character); single-backslash
+  path detection was added.
+- `SECRET_RE` was extended for GitHub fine-grained PATs, lowercase `bearer`, and JWT-shaped tokens.
+- `containsTokenParameterKey` now also catches bare `key=value` assignments outside a query string.
+- `containsEmailLikeText` now treats IPv4-shaped domains as PII.
+- `contextPack.scopeLabel` on both the local-knowledge and hybrid happy-path answer builders now
+  routes through the same `activityDisplayName` evidence-safe-text gate the no-evidence path and
+  `retrievalActivity` already used, closing an inconsistency between happy-path and no-evidence
+  redaction.
+- `GroundedAnswer.tsx` a11y test coverage was extended to the "skipped" pod state.
+- A CodeQL-flagged polynomial-regex (ReDoS) finding introduced by one of the above fixes was
+  replaced with a linear scan before merge.
+- Tests added/extended: `local-knowledge-pods.test.ts`, `local-knowledge-retrieval-activity.test.ts`,
+  `grounded-qa-hybrid.test.ts`, `local-knowledge-grounded-qa.rescue.test.ts`,
+  `GroundedAnswer.test.tsx`.
+- All local gates (typecheck, lint, format, full test suite, `arch:check`(`:negative`),
+  package-surface, retrieval-quality, grounded-retrieval-quality, grounded-faithfulness, coverage
+  baseline/release-targets/branches) and all CI checks were green at merge.
+
+### Currently known, dispositioned-as-follow-up gaps
+
+These are known limitations that were identified but intentionally not fixed in the above rounds;
+they remain open, non-release-blocking follow-ups:
+
+- **Silent fail-closed assembly.** `tryBuildKnowledgePodRetrievalActivity` in
+  `packages/keiko-server/src/local-knowledge-grounded-qa.ts` catches any error from
+  `buildKnowledgePodRetrievalActivity` and returns `undefined` with no logging, diagnostic record,
+  or correlation id — the answer still renders correctly (fail-closed), but a future regression in
+  the activity-assembly contract would omit `retrievalActivity` silently and permanently, with
+  nothing distinguishing "nothing to show" from "assembly is broken." The repository already has
+  an established pattern for this class of problem (`diagnostics-log.ts`'s
+  `emitServerDiagnostic`/`serverDiagnosticFromError`, gated by `check-error-observability`), which
+  this internal swallow does not yet route through.
+- **Badge visual differentiation.** `GroundedAnswer.tsx`'s six `ACTIVITY_STATE_LABELS` values
+  (`Searched`, `Skipped`, `Degraded`, `Denied`, `Unavailable`, `Not selected`) all render through
+  the identical `grounded-evidence-summary-badge` class with no state-specific modifier or
+  color/icon cue — fully accessible (the text is the accessible name), but a sighted user skimming
+  a long, expanded pod list has no at-a-glance visual differentiator between states beyond the
+  label text.

@@ -125,6 +125,50 @@ describe("requestLiteLLMRerank", () => {
     expect(outcome).toEqual({ ok: false, kind: "timeout" });
   });
 
+  it("maps a caller-cancelled request to cancelled, not timeout", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const outcome = await requestLiteLLMRerank(
+      baseRequest({
+        signal: controller.signal,
+        fetchImpl: () => Promise.reject(new DOMException("aborted", "AbortError")),
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: false, kind: "cancelled" });
+  });
+
+  it("returns invalid-response when the provider payload contains a duplicate result index", async () => {
+    const outcome = await requestLiteLLMRerank(
+      baseRequest({
+        fetchImpl: () =>
+          Promise.resolve(
+            jsonResponse({
+              results: [
+                { index: 0, relevance_score: 0.9 },
+                { index: 0, relevance_score: 0.5 },
+              ],
+            }),
+          ),
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: false, kind: "invalid-response" });
+  });
+
+  it("returns invalid-response when the provider payload contains an out-of-range result index", async () => {
+    const outcome = await requestLiteLLMRerank(
+      baseRequest({
+        fetchImpl: () =>
+          Promise.resolve(
+            jsonResponse({ results: [{ index: DOCUMENTS.length, relevance_score: 0.9 }] }),
+          ),
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: false, kind: "invalid-response" });
+  });
+
   it.each([
     ["PROXY_UNREACHABLE", "proxy-unreachable"],
     ["PROXY_AUTH_REQUIRED", "proxy-auth-required"],

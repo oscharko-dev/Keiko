@@ -19,7 +19,11 @@ import {
   type SearchScope,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
-import { defaultGitProcessRunner, isContained, type GitProcessRunner } from "./gitRoutes.js";
+import {
+  containsPath,
+  defaultGitProcessRunner,
+  type GitProcessRunner,
+} from "@oscharko-dev/keiko-git";
 
 const GIT_HISTORY_RECORD_SEP = "\x1e";
 const GIT_HISTORY_COMMIT_LIMIT = 200;
@@ -190,7 +194,7 @@ async function resolveGitRepositoryForHistory(
   } catch {
     realRepositoryRoot = repositoryRoot;
   }
-  if (!isContained(realRepositoryRoot, selectedRoot)) {
+  if (!containsPath(realRepositoryRoot, selectedRoot)) {
     return undefined;
   }
   return {

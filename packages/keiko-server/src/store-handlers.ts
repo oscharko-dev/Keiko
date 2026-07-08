@@ -4,9 +4,10 @@
 
 import type { IncomingMessage } from "node:http";
 import { realpathSync, statSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
 import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
@@ -551,12 +552,8 @@ function validateScopeRelativePaths(kind: SelectedScopeKind, paths: unknown): re
   return validated;
 }
 
-function isContainedPath(root: string, target: string): boolean {
-  const rootCmp = process.platform === "win32" ? root.toLowerCase() : root;
-  const targetCmp = process.platform === "win32" ? target.toLowerCase() : target;
-  const rel = relative(rootCmp, targetCmp);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
+// Platform-correct path identity (case/NFC on darwin+win32) lives in the shared git core.
+const isContainedPath = containsPath;
 
 function scopeTargetPath(realProjectRoot: string, relativePath: string): string {
   if (relativePath.length === 0) return realProjectRoot;

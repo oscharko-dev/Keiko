@@ -36,7 +36,11 @@ import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
-import { lexicalQueryTermGroups, type LexicalQueryTermGroup } from "./lexical-normalization.js";
+import {
+  isExactTerm,
+  lexicalQueryTermGroups,
+  type LexicalQueryTermGroup,
+} from "./lexical-normalization.js";
 import { decomposeChainedQuery } from "./query-decomposition.js";
 import {
   RetrievalError,
@@ -1572,10 +1576,14 @@ function collectLexicalCandidates(
     buildFtsMatchQuery(profile),
   );
   // Whole-lane OR fallback: only when the strict AND pass found NOTHING across every in-scope
-  // capsule (and nothing failed or was policy-denied) do we retry once with OR. Running the
-  // fallback per capsule instead would dilute ranking whenever a sibling capsule matches the
-  // strict query well.
-  if (strict.candidates.length > 0 || strict.queryError || strict.policyDenied) return strict;
+  // capsule (and the pass didn't hard-fail) do we retry once with OR. Running the fallback per
+  // capsule instead would dilute ranking whenever a sibling capsule matches the strict query
+  // well. `strict.policyDenied` is deliberately NOT part of this short-circuit (regression for
+  // AUDIT-E1819-001): a denied capsule already contributes zero rows to `strict.candidates` (see
+  // `collectLexicalCandidatesForCapsule`), so retrying the fallback here only ever surfaces
+  // candidates from the scope's non-denied members — it must not be suppressed scope-wide just
+  // because a co-selected sealed/denied sibling is also present.
+  if (strict.candidates.length > 0 || strict.queryError) return strict;
   const fallbackQuery = buildFtsOrFallbackQuery(profile);
   if (fallbackQuery === undefined) return strict;
   const fallback = collectLexicalCandidatesPass(
@@ -2928,13 +2936,6 @@ function extractExactPhrases(value: string): readonly string[] {
     if (tokens.length >= 2 || (tokens.length === 1 && phrase.length >= 3)) out.push(phrase);
   }
   return uniqueTokens(out);
-}
-
-function isExactTerm(value: string): boolean {
-  if (/\d/u.test(value)) return true;
-  if (/[._:/#-]/u.test(value)) return true;
-  if (/[a-z][A-Z]/u.test(value)) return true;
-  return value.length >= 3 && value === value.toUpperCase() && /\p{L}/u.test(value);
 }
 
 function hasDigitAndLetter(value: string): boolean {

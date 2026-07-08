@@ -155,6 +155,26 @@ function formToInput(form: PrForm, projectId: string): GitDeliveryPrInput {
   };
 }
 
+// A stable key over the PR-TARGET fields (not title/body, which the preview itself seeds). A
+// loaded preview or finished outcome is only meaningful for the exact target it ran against;
+// changing the action kind or any target field hides it, so a stale readiness panel or success
+// banner can never describe a different, never-executed target (mirrors the merge card's gate).
+function prTargetKeyOf(form: PrForm): string {
+  return [
+    form.kind,
+    form.ownerAndRepo,
+    form.headBranchName,
+    form.baseBranchName,
+    form.kind === "pr-update" ? form.prExternalId : "",
+  ].join(" ");
+}
+
+// GitHub PR numbers are decimal digits; anything else can never resolve and only surfaces as an
+// opaque provider error after the round-trip — reject it before the request leaves the card.
+function isValidPrNumber(value: string): boolean {
+  return /^\d+$/u.test(value);
+}
+
 // ─── Async actions hook (seq-guarded; surfaces preview / outcome / error) ───────────────────────────
 
 interface PrAsyncState {
@@ -259,6 +279,9 @@ function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
 }
 
 function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const prNumberHintId = useId();
+  const prIdInvalid =
+    form.kind === "pr-update" && form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
   return (
     <section style={SECTION_STYLE} aria-label="Pull Request metadata">
       <h3 style={HEADING_STYLE}>
@@ -306,7 +329,18 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
               disabled={busy}
               onChange={(e) => onChange("prExternalId", e.target.value)}
               aria-label="Pull Request number"
+              aria-invalid={prIdInvalid}
+              aria-describedby={prIdInvalid ? prNumberHintId : undefined}
             />
+            {prIdInvalid ? (
+              <p
+                id={prNumberHintId}
+                data-testid="gpr-pr-number-hint"
+                style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
+              >
+                Enter the numeric Pull Request number, for example 1499.
+              </p>
+            ) : null}
           </label>
           <label style={{ ...LABEL_STYLE, flex: 1 }}>
             Draft state
@@ -478,7 +512,7 @@ function PrOutcome({
 
 // ─── Card body ─────────────────────────────────────────────────────────────────────────────────────
 
-function liveTextFor(async: PrAsync): string {
+function liveTextFor(async: Pick<PrAsyncState, "busy" | "error" | "outcome" | "preview">): string {
   if (async.busy) return "Pull request action running.";
   if (async.error !== null) return `Pull request action failed: ${async.error}`;
   if (async.outcome !== null) return `Pull request ${async.outcome.status}.`;
@@ -507,14 +541,21 @@ function GovernedPullRequestBody({
   const [form, setForm] = useState<PrForm>(() =>
     initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
   );
+  // Target keys the loaded preview / last started action are valid for. A preview, outcome, or
+  // error is rendered only while the form still names the exact target it was produced for.
+  const [previewedKey, setPreviewedKey] = useState("");
+  const [actionKey, setActionKey] = useState("");
   const async = useGovernedPrActions(client);
   const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
     setForm((f) => ({ ...f, [key]: value }));
   }, []);
 
   const onPreview = useCallback((): void => {
+    const previewedTarget = prTargetKeyOf(form);
+    setActionKey(previewedTarget);
     void async.runPreview(formToInput(form, projectId)).then((preview) => {
       if (preview === null) return;
+      setPreviewedKey(previewedTarget);
       // Seed the editable fields from the synthesized draft when the user has not authored them yet.
       setForm((f) => ({
         ...f,
@@ -525,6 +566,7 @@ function GovernedPullRequestBody({
   }, [async, form, projectId]);
 
   const onExecute = useCallback((): void => {
+    setActionKey(prTargetKeyOf(form));
     async.runExecute(formToInput(form, projectId));
   }, [async, form, projectId]);
 
@@ -533,8 +575,12 @@ function GovernedPullRequestBody({
     form.ownerAndRepo !== "" &&
     form.headBranchName !== "" &&
     form.baseBranchName !== "" &&
-    (form.kind === "pr-create" || form.prExternalId !== "");
+    (form.kind === "pr-create" || isValidPrNumber(form.prExternalId));
   const canExecute = canPreview && form.title !== "";
+  const targetKey = prTargetKeyOf(form);
+  const visiblePreview = previewedKey === targetKey ? async.preview : null;
+  const visibleOutcome = actionKey === targetKey ? async.outcome : null;
+  const visibleError = actionKey === targetKey ? async.error : null;
   return (
     <div
       style={{
@@ -563,10 +609,15 @@ function GovernedPullRequestBody({
           clip: "rect(0 0 0 0)",
         }}
       >
-        {liveTextFor(async)}
+        {liveTextFor({
+          busy: async.busy,
+          error: visibleError,
+          outcome: visibleOutcome,
+          preview: visiblePreview,
+        })}
       </p>
       <PrMetadataFields form={form} busy={async.busy} onChange={onChange} />
-      {async.preview !== null ? <PrReadinessPanel preview={async.preview} /> : null}
+      {visiblePreview !== null ? <PrReadinessPanel preview={visiblePreview} /> : null}
       <div style={ROW_STYLE}>
         <button
           type="button"
@@ -586,7 +637,7 @@ function GovernedPullRequestBody({
           {form.kind === "pr-create" ? "Create Pull Request" : "Update Pull Request"}
         </button>
       </div>
-      <PrOutcome outcome={async.outcome} error={async.error} />
+      <PrOutcome outcome={visibleOutcome} error={visibleError} />
     </div>
   );
 }

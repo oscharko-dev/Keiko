@@ -45,22 +45,48 @@ interface PageDelta {
   readonly added: number;
   readonly changed: number;
   readonly removed: number;
+  readonly moved: number;
   readonly unchanged: number;
+}
+
+// Paths present in `prior` but absent from the new page set, keyed by their content fingerprint —
+// the candidate set a same-fingerprint added path can be correlated against to detect a move.
+function removedFingerprints(
+  prior: ReadonlyMap<string, ManualPageFingerprint>,
+  newPaths: ReadonlySet<string>,
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const [path, fingerprint] of prior) {
+    if (newPaths.has(path)) continue;
+    const key = fingerprint.contentFingerprint;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function diffPages(
   prior: ReadonlyMap<string, ManualPageFingerprint>,
   newPages: readonly ManualPageFingerprint[],
 ): PageDelta {
-  const newPaths = new Set<string>();
+  const newPaths = new Set(newPages.map((page) => page.relativePath));
+  const availableMoveSources = removedFingerprints(prior, newPaths);
   let added = 0;
   let changed = 0;
+  let moved = 0;
   let unchanged = 0;
   for (const page of newPages) {
-    newPaths.add(page.relativePath);
     const previous = prior.get(page.relativePath);
     if (previous === undefined) {
-      added += 1;
+      // A same-content page whose old path was removed this run is a move, not an unrelated
+      // remove+add pair — correlate by content fingerprint and consume one source per match so
+      // two new paths sharing a fingerprint cannot both claim the same removed page as a move.
+      const available = availableMoveSources.get(page.contentFingerprint) ?? 0;
+      if (available > 0) {
+        availableMoveSources.set(page.contentFingerprint, available - 1);
+        moved += 1;
+      } else {
+        added += 1;
+      }
     } else if (previous.contentFingerprint === page.contentFingerprint) {
       unchanged += 1;
     } else {
@@ -71,7 +97,8 @@ function diffPages(
   for (const path of prior.keys()) {
     if (!newPaths.has(path)) removed += 1;
   }
-  return { added, changed, removed, unchanged };
+  removed -= moved;
+  return { added, changed, removed, moved, unchanged };
 }
 
 // Crawl-runtime bookkeeping entries tallied when the crawl loop stops because it hit a governed
@@ -112,11 +139,12 @@ function countsFor(
   // reason codes carry the "not applied" signal instead of an inaccurate count.
   const appliedDelta = applied
     ? delta
-    : { added: 0, changed: 0, removed: 0, unchanged: delta.unchanged };
+    : { added: 0, changed: 0, removed: 0, moved: 0, unchanged: delta.unchanged };
   return {
     addedPages: appliedDelta.added,
     changedPages: appliedDelta.changed,
     removedPages: appliedDelta.removed,
+    movedPages: appliedDelta.moved,
     unchangedPages: appliedDelta.unchanged,
     failedPages: indexing?.failedDocuments ?? 0,
     deniedLinks: deniedLinkCount(crawl),
@@ -132,7 +160,9 @@ function resolveOutcome(
   if (!applied) return crawl.status === "limit-reached" ? "partial" : "failed";
   if (indexing === undefined || indexing.status === "failed") return "failed";
   if (counts.failedPages > 0) return "partial";
-  if (counts.addedPages + counts.changedPages + counts.removedPages === 0) return "unchanged";
+  if (counts.addedPages + counts.changedPages + counts.removedPages + counts.movedPages === 0) {
+    return "unchanged";
+  }
   return "updated";
 }
 
@@ -161,6 +191,7 @@ function countReasonCodes(
   if (counts.addedPages > 0) codes.add("pages-added");
   if (counts.changedPages > 0) codes.add("pages-changed");
   if (counts.removedPages > 0) codes.add("pages-removed");
+  if (counts.movedPages > 0) codes.add("pages-moved");
   if (counts.failedPages > 0) codes.add("pages-failed");
   if (counts.deniedLinks > 0) codes.add("links-denied");
 }
