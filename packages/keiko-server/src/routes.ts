@@ -91,6 +91,7 @@ import {
   handleCodingCodexSubscriptionProfile,
   handleCodingCodexSubscriptionSetup,
 } from "./coding-codex-subscription.js";
+import { AUTONOMOUS_DELIVERY_ROUTE_GROUP } from "./coding-runtime/autonomousDeliveryRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -1052,6 +1053,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #1577 agent repository operations: typed facade over existing Git read and governed delivery
   // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
   ...GIT_AGENT_OPERATION_ROUTE_GROUP,
+  // #1993 autonomous delivery: confirmed Authority Envelope gate over the existing typed repository
+  // operation facade. This route never shells out directly and returns content-free execution evidence.
+  ...AUTONOMOUS_DELIVERY_ROUTE_GROUP,
 ];
 
 interface PreparedRoute {

@@ -862,6 +862,8 @@ function sidecarRuntimeEvent(
   if (!validation.ok) {
     return runtimeEvent(active, sequence, "failure-redacted", invalidSidecarEventDetails());
   }
+  const autonomous = autonomousDeliveryRuntimeEvent(active, sequence, event, request);
+  if (autonomous !== undefined) return autonomous;
   const supervised = supervisedCodingRuntimeEvent(active, sequence, event, request);
   if (supervised !== undefined) return supervised;
   const decision = decideCodingWorkbenchActionForMode(
@@ -878,6 +880,28 @@ function sidecarRuntimeEvent(
   }
   return runtimeEvent(active, sequence, "permission-requested", {
     permissionRequest: request,
+  });
+}
+
+function autonomousDeliveryRuntimeEvent(
+  active: ActiveRuntime,
+  sequence: number,
+  event: SidecarPermissionEvent,
+  request: CodingWorkbenchPermissionRequest,
+): CodingWorkbenchRuntimeEvent | undefined {
+  if (active.context.effectiveMode !== "autonomous-delivery") return undefined;
+  if (active.stopRequested || event.operatorStopped === true) {
+    return runtimeEvent(active, sequence, "failure-redacted", {
+      failureCode: "operator-stopped",
+      failureSummary: "operator-stopped",
+      retryable: false,
+    });
+  }
+  if (request.actionClass === "workspace-read") return undefined;
+  return runtimeEvent(active, sequence, "failure-redacted", {
+    failureCode: "delivery-denied",
+    failureSummary: "delivery-denied",
+    retryable: false,
   });
 }
 
