@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryConsolidation } from "./MemoryConsolidation";
-import type { MemoryConsolidationJobResponse } from "@/lib/memory-api";
+import type {
+  MemoryConsolidationJobResponse,
+  MemoryConsolidationReviewItem,
+} from "@/lib/memory-api";
 import type { MemoryEdge, MemoryId } from "@oscharko-dev/keiko-contracts";
 
 vi.mock("next/link", () => ({
@@ -61,7 +64,27 @@ function runningJob(): MemoryConsolidationJobResponse {
   };
 }
 
-function completedJob(): MemoryConsolidationJobResponse {
+function defaultReviewItems(): readonly MemoryConsolidationReviewItem[] {
+  return [
+    {
+      id: "rv-1",
+      reason: "potential-conflict",
+      relatedMemoryIds: [memoryId("mem-old"), memoryId("mem-new")],
+      proposedAction: {
+        kind: "supersede",
+        older: memoryId("mem-old"),
+        newer: memoryId("mem-new"),
+      },
+      detectedAt: 1_700_000_000_500,
+    },
+  ];
+}
+
+// `reviewItemsOverride` lets Issue #2130 tests exercise a `suggestedResolution`-bearing item
+// without duplicating this whole fixture; every other caller keeps the original single item.
+function completedJob(
+  reviewItemsOverride?: readonly MemoryConsolidationReviewItem[],
+): MemoryConsolidationJobResponse {
   return {
     job: {
       job: {
@@ -86,19 +109,7 @@ function completedJob(): MemoryConsolidationJobResponse {
               detectedAt: 1_700_000_000_500,
             },
           ],
-          reviewItems: [
-            {
-              id: "rv-1",
-              reason: "potential-conflict",
-              relatedMemoryIds: [memoryId("mem-old"), memoryId("mem-new")],
-              proposedAction: {
-                kind: "supersede",
-                older: memoryId("mem-old"),
-                newer: memoryId("mem-new"),
-              },
-              detectedAt: 1_700_000_000_500,
-            },
-          ],
+          reviewItems: reviewItemsOverride ?? defaultReviewItems(),
           clustersInspected: 3,
           conflictPairsDetected: 1,
           recordsInspected: 2,
@@ -302,5 +313,62 @@ describe("MemoryConsolidation", () => {
       expect(cancelJobImpl).toHaveBeenCalledWith("job-1");
       expect(screen.getByRole("status")).toHaveTextContent("canceled");
     });
+  });
+
+  // Issue #2130 / ADR-0120 — advisory suggestion is off by default (byte-identical, AC1) and,
+  // when present, renders distinct from and never pre-selecting the resolve control (AC2).
+  it("renders no advisory annotation when suggestedResolution is absent (flag off / AC1)", async () => {
+    const startJobImpl = vi.fn().mockResolvedValue(runningJob());
+    const fetchJobImpl = vi.fn().mockResolvedValue(completedJob());
+    const user = userEvent.setup();
+
+    render(
+      <MemoryConsolidation
+        startJobImpl={startJobImpl}
+        fetchJobImpl={fetchJobImpl}
+        cancelJobImpl={vi.fn()}
+        pollIntervalMs={5}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start consolidation/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /resolve conflict/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByText("AI-generated suggestion:")).not.toBeInTheDocument();
+  });
+
+  it("renders the recommended id and rationale distinctly from the resolve control (AC2)", async () => {
+    const suggestedItem: MemoryConsolidationReviewItem = {
+      ...defaultReviewItems()[0]!,
+      suggestedResolution: {
+        recommendedWinnerId: memoryId("mem-new"),
+        rationale: "The newer record corrects an outdated region value.",
+      },
+    };
+    const startJobImpl = vi.fn().mockResolvedValue(runningJob());
+    const fetchJobImpl = vi.fn().mockResolvedValue(completedJob([suggestedItem]));
+    const user = userEvent.setup();
+
+    render(
+      <MemoryConsolidation
+        startJobImpl={startJobImpl}
+        fetchJobImpl={fetchJobImpl}
+        cancelJobImpl={vi.fn()}
+        pollIntervalMs={5}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start consolidation/i }));
+
+    expect(await screen.findByText("AI-generated suggestion:")).toBeInTheDocument();
+    expect(
+      screen.getByText(/The newer record corrects an outdated region value\./),
+    ).toBeInTheDocument();
+    // The suggestion never pre-selects: the reviewer's own resolve control is still present
+    // and requires its own explicit click (unaffected by the annotation above it).
+    const resolveButton = screen.getByRole("button", { name: /resolve conflict/i });
+    expect(resolveButton).toBeInTheDocument();
+    expect(resolveButton).not.toHaveAttribute("aria-disabled", "true");
   });
 });

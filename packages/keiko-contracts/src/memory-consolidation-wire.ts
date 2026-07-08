@@ -41,6 +41,15 @@ export interface MemoryConsolidationEvidenceWire {
   readonly detail?: string;
 }
 
+// Optional, advisory-only annotation (Issue #2130 / ADR-0120). Populated exclusively by a
+// keiko-server enrichment pass after consolidation completes; absent unless the operator opts in
+// via `KEIKO_MEMORY_CONFLICT_ADVISORY=1` and the underlying model call succeeds. Never changes
+// `proposedAction` or any reviewer-facing behavior — display only.
+export interface MemoryConsolidationSuggestedResolutionWire {
+  readonly recommendedWinnerId: MemoryId;
+  readonly rationale: string;
+}
+
 export interface MemoryConsolidationReviewItemWire {
   readonly id: string;
   readonly reason: MemoryConsolidationReviewReasonWire;
@@ -50,6 +59,7 @@ export interface MemoryConsolidationReviewItemWire {
   readonly evidence?: readonly MemoryConsolidationEvidenceWire[];
   readonly proposedEdges?: readonly MemoryEdge[];
   readonly detectedAt: number;
+  readonly suggestedResolution?: MemoryConsolidationSuggestedResolutionWire;
 }
 
 export interface MemoryConsolidationSummaryStatusWire {

@@ -12,6 +12,12 @@ import type {
   MemoryRecord,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  createDefaultChatCapability,
+  type GatewayConfig,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
   createConsolidationJobRegistry,
@@ -345,6 +351,89 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(asJobEnvelope(fetched).job.state).toBe("canceled");
+  });
+
+  it("folds a cancel request that arrives during the advisory phase into a canceled job (Issue #2130 / ADR-0120 D8)", async () => {
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "user prefers dark mode everywhere" });
+    insertAcceptedMemory(vault, { id: "m-2", body: "user prefers dark mode everywhere" });
+    insertAcceptedMemory(vault, { id: "m-3", body: "user prefers dark mode everywhere" });
+    const registry = createConsolidationJobRegistry();
+    const modelId = "advisory-model";
+    // Set once handleCreateConsolidationJob resolves, below — well before the model call actually
+    // runs (it only runs once the job's setImmediate-scheduled work executes). A mutable container
+    // (rather than a reassigned `let`) is captured by the closure below.
+    const jobRef: { id?: string } = {};
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        // Simulate a cancel request landing while the advisory model call is in flight — exactly
+        // the race ADR-0120 D8 closes (previously silently dropped once the pure engine returned).
+        if (jobRef.id !== undefined) registry.requestCancel(jobRef.id);
+        return Promise.resolve({
+          modelId,
+          content: "",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: { keep: "A", rationale: "Clear duplicate." },
+          usage: {
+            requestId: "advisory-request",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+    const config: GatewayConfig = {
+      providers: [
+        {
+          modelId,
+          baseUrl: "https://provider.example/v1",
+          apiKey: "test-secret-value-1234567890",
+          timeoutMs: 30_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          ...createDefaultChatCapability(modelId),
+          structuredOutput: true,
+          supportsResponseFormat: true,
+        },
+      ],
+    };
+    const deps = makeDeps({
+      memoryVault: vault,
+      consolidationJobs: registry,
+      env: { KEIKO_MEMORY_CONFLICT_ADVISORY: "1" },
+      config,
+      configPresent: true,
+      modelPortFactory: () => model,
+    });
+
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", { scopes: [{ kind: "user", userId: "u-1" }] }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    jobRef.id = asJobEnvelope(createResult).job.id;
+    const jobId = jobRef.id;
+    await flushImmediate();
+
+    const fetched = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${jobId}`, {}, { jobId }),
+      deps,
+    );
+    const envelope = asJobEnvelope(fetched);
+    expect(envelope.cancelRequested).toBe(true);
+    expect(envelope.job.state).toBe("canceled");
+    // The pure engine's own result (reviewItems, merge action) is preserved on the canceled
+    // envelope — only `state` folds to "canceled"; the advisory pass does not discard work.
+    expect(envelope.job.result?.reviewItems).toHaveLength(1);
+    expect(envelope.job.result?.reviewItems[0]?.reason).toBe("multi-way-duplicate");
   });
 
   it("returns 400 for malformed settings", async () => {

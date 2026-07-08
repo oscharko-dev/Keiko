@@ -352,6 +352,8 @@ export const EN_MESSAGES = {
   "memoria.consolidation.summary.configuredWithUpdates":
     "Model-assisted summaries proposed {count}{suffix}",
   "memoria.consolidation.summary.fallbackSuffix": "; {count} preserved source text.",
+  "memoria.consolidation.advisory.label": "AI-generated suggestion:",
+  "memoria.consolidation.advisory.keep": "Keep",
   "memoria.healthScan": "Health scan",
   "memoria.healthScan.region": "Memory health scan findings",
   "memoria.healthScan.loading": "Loading health scan findings...",
