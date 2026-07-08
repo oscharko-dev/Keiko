@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, setupGateway } from "@/lib/api";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
+import KeikoSelect from "../KeikoSelect";
 
 // Human-readable message first; the machine code (useful for support) is kept
 // separate and rendered as a secondary mono line, never as a raw
@@ -41,7 +42,7 @@ function timeoutMsFromInput(value: string, label = "Request timeout"): number | 
   return parsed;
 }
 
-function isAzureFoundryUrl(value: string): boolean {
+function isMicrosoftFoundryUrl(value: string): boolean {
   try {
     return new URL(value.trim()).hostname.endsWith(".services.ai.azure.com");
   } catch {
@@ -63,6 +64,33 @@ function storedVoiceModels(models: readonly ModelCapability[]): readonly string[
     .map((model) => model.id);
 }
 
+const VOICE_PROVIDER_LOCALITIES: readonly VoiceProviderLocality[] = [
+  "azure-foundry",
+  "customer-hosted",
+  "local-only",
+];
+
+const VOICE_PROVIDER_LOCALITY_SECTIONS = [
+  {
+    options: [
+      { value: "azure-foundry", label: "Microsoft Foundry" },
+      { value: "customer-hosted", label: "Customer-hosted" },
+      { value: "local-only", label: "Local-only" },
+    ],
+  },
+] satisfies readonly [
+  {
+    readonly options: readonly {
+      readonly value: VoiceProviderLocality;
+      readonly label: string;
+    }[];
+  },
+];
+
+function isVoiceProviderLocality(value: string): value is VoiceProviderLocality {
+  return VOICE_PROVIDER_LOCALITIES.includes(value as VoiceProviderLocality);
+}
+
 export function GatewaySetupDialog({
   onCancel,
   preserveExisting = false,
@@ -75,6 +103,7 @@ export function GatewaySetupDialog({
   readonly storedModels?: readonly ModelCapability[] | undefined;
 }): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const voiceProviderLocalityLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -214,9 +243,9 @@ export function GatewaySetupDialog({
     dialogRef.current?.focus();
     try {
       const parsedDeploymentNames = deploymentNamesFromInput(deploymentNames);
-      if (isAzureFoundryUrl(baseUrl) && parsedDeploymentNames.length === 0) {
+      if (isMicrosoftFoundryUrl(baseUrl) && parsedDeploymentNames.length === 0) {
         setError(
-          "Azure AI Foundry requires deployment names. Paste the names from the Deployments tab.",
+          "Microsoft Foundry requires deployment names. Paste the names from the Deployments tab.",
         );
         setBusy(false);
         return;
@@ -427,7 +456,7 @@ export function GatewaySetupDialog({
         />
       </label>
       <label className="gw-field">
-        <span>Deployment names for Azure</span>
+        <span>Deployment names for Microsoft Foundry</span>
         <textarea
           className="gw-input gw-textarea mono"
           value={deploymentNames}
@@ -468,23 +497,24 @@ export function GatewaySetupDialog({
           onChange={(event) => setVoiceModelId(event.target.value)}
         />
       </label>
-      <label className="gw-field">
-        <span>
+      <div className="gw-field">
+        <span id={voiceProviderLocalityLabelId}>
           Provider locality <span className="dlg-opt">optional</span>
         </span>
-        <select
-          className="gw-input mono"
+        <KeikoSelect
+          ariaLabelledBy={voiceProviderLocalityLabelId}
+          menuTitle="Provider locality"
+          sections={VOICE_PROVIDER_LOCALITY_SECTIONS}
+          showMenuHeader={false}
+          triggerClassName="gw-input gw-provider-locality-select"
+          menuClassName="gw-provider-locality-menu"
           value={voiceProviderLocality}
           disabled={busy || success !== undefined}
-          onChange={(event) =>
-            setVoiceProviderLocality(event.target.value as VoiceProviderLocality)
-          }
-        >
-          <option value="azure-foundry">Azure Foundry</option>
-          <option value="customer-hosted">Customer-hosted</option>
-          <option value="local-only">Local-only</option>
-        </select>
-      </label>
+          onValueChange={(next) => {
+            if (isVoiceProviderLocality(next)) setVoiceProviderLocality(next);
+          }}
+        />
+      </div>
       <label className="gw-field gw-span-2">
         <span>
           STT endpoint URL{" "}

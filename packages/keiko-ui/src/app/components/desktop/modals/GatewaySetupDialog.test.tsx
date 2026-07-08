@@ -98,10 +98,10 @@ describe("GatewaySetupDialog", () => {
     expect(figmaToken.closest("details")).toBeNull();
   });
 
-  it("requires real deployment names for Azure AI Foundry before testing credentials", async () => {
+  it("requires real deployment names for Microsoft Foundry before testing credentials", async () => {
     render(<GatewaySetupDialog />);
 
-    expect(screen.getByLabelText(/deployment names for azure/i)).toHaveAttribute(
+    expect(screen.getByLabelText(/deployment names for microsoft foundry/i)).toHaveAttribute(
       "placeholder",
       "Paste deployment names, one per line",
     );
@@ -114,7 +114,7 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
-    expect(screen.getByText(/azure ai foundry requires deployment names/i)).toBeInTheDocument();
+    expect(screen.getByText(/microsoft foundry requires deployment names/i)).toBeInTheDocument();
     expect(setupGateway).not.toHaveBeenCalled();
   });
 
@@ -312,7 +312,7 @@ describe("GatewaySetupDialog", () => {
     await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
     await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
     await userEvent.type(
-      screen.getByLabelText(/deployment names for azure/i),
+      screen.getByLabelText(/deployment names for microsoft foundry/i),
       "Mistral-Large-3\ngpt-5.4",
     );
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
@@ -405,6 +405,35 @@ describe("GatewaySetupDialog", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       /updated voice dictation credentials/i,
     );
+  });
+
+  it("uses the Keiko styled select for provider locality and labels Foundry correctly", async () => {
+    const user = userEvent.setup();
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedApiKeyHeaderName="authorization"
+        storedModels={[modelCapability("internal-chat")]}
+      />,
+    );
+
+    await user.click(screen.getByText("Update voice dictation credentials"));
+    const locality = screen.getByRole("combobox", { name: /provider locality/i });
+
+    expect(locality.tagName).toBe("BUTTON");
+    expect(locality).toHaveClass("gw-provider-locality-select");
+    expect(locality).toHaveClass("ksel-trigger");
+    expect(locality).toHaveTextContent("Microsoft Foundry");
+    expect(screen.queryByText("Azure Foundry")).not.toBeInTheDocument();
+
+    await user.click(locality);
+
+    const menu = document.querySelector(".gw-provider-locality-menu");
+    expect(menu).not.toBeNull();
+    expect(menu).toHaveClass("ksel-menu");
+    expect(screen.getByRole("listbox", { name: /provider locality/i })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Microsoft Foundry" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Azure Foundry" })).not.toBeInTheDocument();
   });
 
   it("submits a Figma access token without requiring other fields in update mode", async () => {
