@@ -249,6 +249,7 @@ async function placeCursorOnSymbolWithKeyboard(
   lineNeedle: string,
   symbol: string,
   lineNumber: number,
+  options: { readonly exactColumn?: boolean } = {},
 ): Promise<void> {
   const line = pane
     .locator(".monaco-editor .view-lines .view-line")
@@ -257,9 +258,13 @@ async function placeCursorOnSymbolWithKeyboard(
   await expect(line).toBeVisible();
   const offset = occurrenceOffset(await lineText(line), symbol, 0) + Math.floor(symbol.length / 2);
   await moveCursorFromLineStart(page, line, offset);
+  const expectedLabel =
+    options.exactColumn === false
+      ? new RegExp(`^Line ${String(lineNumber)}, column \\d+$`, "u")
+      : `Line ${String(lineNumber)}, column ${String(offset + 1)}`;
   await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="cursor"]`)).toHaveAttribute(
     "aria-label",
-    `Line ${String(lineNumber)}, column ${String(offset + 1)}`,
+    expectedLabel,
   );
 }
 
@@ -466,12 +471,11 @@ async function scenarioEmptyState(page: Page, testInfo: TestInfo): Promise<void>
   const errors = collectPageErrors(page);
   await seedEditorWindow(page, { windowId: "issue-1377-empty", resetWorkspace: true });
   await page.goto("/");
-  const host = page.locator(EDITOR_SELECTORS.host).first();
 
-  const empty = host.locator(EDITOR_SELECTORS.empty);
-  await expect(empty).toBeVisible();
-  await expect(empty).toContainText(/choose a file from the project tree/i);
-  await expect(host.locator(EDITOR_SELECTORS.monaco)).toHaveCount(0);
+  const projectPrompt = page.getByRole("note").filter({ hasText: "Open a project" });
+  await expect(projectPrompt).toBeVisible();
+  await expect(projectPrompt).toContainText(/choose a project folder to start editing/i);
+  await expect(page.locator(EDITOR_SELECTORS.monaco)).toHaveCount(0);
   await attachShot(page, testInfo, "empty.png");
   expect(errors).toEqual([]);
 }
@@ -572,7 +576,9 @@ async function scenarioGoToDefinition(page: Page, testInfo: TestInfo): Promise<v
   const { workspace } = await openNavigationEditor(page);
   const pane = firstPane(workspace);
 
-  await placeCursorOnSymbol(workspace, "return sharedValue + 1;", "sharedValue");
+  await placeCursorOnSymbolWithKeyboard(page, pane, "return sharedValue + 1;", "sharedValue", 7, {
+    exactColumn: false,
+  });
   const response = languageResponse(page, "definition");
   await page.keyboard.press("F12");
   await response;

@@ -6,6 +6,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   EDITOR_LANGUAGE_MODE_IDS,
+  LANGUAGE_SERVICE_OPERATIONS,
   type LanguageServiceLimits,
   type LanguageServiceRequest,
 } from "@oscharko-dev/keiko-contracts";
@@ -89,6 +90,13 @@ describe("describeLanguageCapabilities", () => {
     const pythonProvider = capabilities.providers.find((entry) => entry.id === "python-lsp");
     expect(pythonProvider?.availability).toBe("unavailable");
     expect(typeof pythonProvider?.unavailableReason).toBe("string");
+  });
+
+  it("keeps the TypeScript operation descriptor aligned with the contract operation table", () => {
+    const capabilities = describeLanguageCapabilities();
+    const provider = capabilities.providers.find((entry) => entry.id === "typescript");
+
+    expect(provider?.operations).toEqual(LANGUAGE_SERVICE_OPERATIONS);
   });
 });
 
@@ -487,6 +495,27 @@ describe("bounds and result caps", () => {
       { operation: "diagnostics", root, document: tsDocument("src/a.ts", "const x = 1;\n") },
       options("src/a.ts", { limits }),
     );
+    expect(outcome).toMatchObject({ kind: "error", code: "DOCUMENT_TOO_LARGE" });
+  });
+
+  it("fails closed when project discovery exceeds workspace caps", () => {
+    writeFileSync(
+      join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { strict: true }, include: ["src/**/*.ts"] }),
+      "utf8",
+    );
+    const text = "export const value = 1;\n";
+    for (let index = 0; index < 6; index += 1) {
+      writeFileSync(join(root, "src", `many-${String(index)}.ts`), text, "utf8");
+    }
+
+    const outcome = runLanguageOperation(
+      { operation: "diagnostics", root, document: tsDocument("src/many-0.ts", text) },
+      options("src/many-0.ts", {
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxWorkspaceReadFiles: 2 },
+      }),
+    );
+
     expect(outcome).toMatchObject({ kind: "error", code: "DOCUMENT_TOO_LARGE" });
   });
 

@@ -373,6 +373,9 @@ export function runLanguageOperation(
         ? errorOutcome("TIMED_OUT", "Analysis exceeded the time budget.")
         : errorOutcome("CANCELLED", "The request was cancelled.");
     }
+    if (isProviderFailure(error)) {
+      return errorOutcome(error.code, error.message);
+    }
     throw error;
   }
 }

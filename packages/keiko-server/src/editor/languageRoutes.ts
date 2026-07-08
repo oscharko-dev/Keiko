@@ -104,18 +104,40 @@ function successBody(outcome: Exclude<LanguageServiceOutcome, { kind: "error" }>
   return { operation: outcome.kind, result: outcome.result };
 }
 
+function redactStringLeaf(value: string, deps: UiHandlerDeps): string {
+  const redacted = deps.redactor(value);
+  return typeof redacted === "string" ? redacted : "[REDACTED]";
+}
+
+function redactedCodeActionsBody(
+  outcome: Extract<LanguageServiceOutcome, { kind: "codeActions" }>,
+  deps: UiHandlerDeps,
+): unknown {
+  return {
+    operation: outcome.kind,
+    result: {
+      ...outcome.result,
+      actions: outcome.result.actions.map((action) => ({
+        ...action,
+        title: redactStringLeaf(action.title, deps),
+        kind: redactStringLeaf(action.kind, deps),
+      })),
+    },
+  };
+}
+
 function outcomeToResult(outcome: LanguageServiceOutcome, deps: UiHandlerDeps): RouteResult {
   if (outcome.kind === "error") {
     return { status: STATUS_BY_CODE[outcome.code], body: errorBody(outcome.code, outcome.message) };
+  }
+  if (outcome.kind === "codeActions") {
+    return { status: 200, body: redactedCodeActionsBody(outcome, deps) };
   }
   const body = successBody(outcome);
   // Edit-bearing results are applied to buffers or reviewed byte-for-byte. Redacting the success
   // envelope would mutate secret-shaped string literals in valid edits; each result was already
   // capped and display strings were sanitized before this boundary, and the route never logs it.
-  const editBearing =
-    outcome.kind === "formatting" ||
-    outcome.kind === "renameApply" ||
-    outcome.kind === "codeActions";
+  const editBearing = outcome.kind === "formatting" || outcome.kind === "renameApply";
   return { status: 200, body: editBearing ? body : deps.redactor(body) };
 }
 

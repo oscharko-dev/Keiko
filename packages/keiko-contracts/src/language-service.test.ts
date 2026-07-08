@@ -415,6 +415,19 @@ describe("parseLanguageServiceRequest", () => {
     }
   });
 
+  it("requires newName for renameApply", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "renameApply",
+      root: "/repo",
+      document: overlay(),
+      position: position(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("newName must be a non-empty string");
+    }
+  });
+
   it.each(["definition", "references", "renamePrepare", "renameApply", "signatureHelp"] as const)(
     "rejects a wrong-typed position for %s",
     (operation) => {
@@ -460,6 +473,32 @@ describe("parseLanguageServiceRequest", () => {
         "range must be { start, end }",
         "diagnostics must be an array of LanguageDiagnostic",
       ]);
+    }
+  });
+
+  it("requires a range for codeActions", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "codeActions",
+      root: "/repo",
+      document: overlay(),
+      diagnostics: [diagnostic()],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("range must be { start, end }");
+    }
+  });
+
+  it("requires diagnostics for codeActions", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "codeActions",
+      root: "/repo",
+      document: overlay(),
+      range: range(),
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("diagnostics must be an array of LanguageDiagnostic");
     }
   });
 

@@ -92,6 +92,18 @@ export interface LanguageProviderFailure {
   readonly message: string;
 }
 
+export class LanguageProviderFailureError extends Error implements LanguageProviderFailure {
+  public readonly kind = "error" as const;
+
+  public constructor(
+    public readonly code: LanguageServiceErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LanguageProviderFailureError";
+  }
+}
+
 export type LanguageRenameApplyRaw = LanguageRenameApplyResult | LanguageProviderFailure;
 
 export interface LanguageDiagnosticsRaw {

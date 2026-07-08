@@ -255,6 +255,15 @@ export interface MountEditor {
     oldDecorations: string[],
     newDecorations: monaco.editor.IModelDeltaDecoration[],
   ): string[];
+  executeEdits?(
+    source: string | null | undefined,
+    edits: { readonly range: MonacoRange; readonly text: string }[],
+  ): boolean;
+  pushUndoStop?(): boolean;
+  getModel?(): {
+    getLineCount(): number;
+    getLineMaxColumn(lineNumber: number): number;
+  } | null;
   getContainerDomNode(): HTMLElement;
   saveViewState(): unknown;
   restoreViewState(state: unknown): void;
