@@ -1494,7 +1494,13 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
     );
     expect(referencesResponse.includesDeclaration).toBe(true);
     expect(referencesResponse.locations[0]?.path).toBe("src/ref.ts");
-    expect(openEditorFile).toHaveBeenCalledTimes(1);
+    expect(openEditorFile).toHaveBeenCalledTimes(2);
+    expect(openEditorFile).toHaveBeenLastCalledWith({
+      root: "/repo",
+      path: "src/ref.ts",
+      lineStart: 4,
+      lineEnd: 4,
+    });
 
     const codeActions = surface.props?.provideCodeActions;
     expect(codeActions).toBeDefined();
@@ -1632,8 +1638,20 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
         diffSurface.props?.onApply?.();
       });
       await waitFor(() => {
+        expect(surface.props?.hostEditRequest?.text).toBe("const renamed = 1;\n");
+      });
+      const request = surface.props?.hostEditRequest;
+      if (request === undefined) return;
+      act(() => {
+        surface.props?.onContentChange(
+          { text: request.text, sizeBytes: request.text.length },
+          request.origin,
+        );
+      });
+      await waitFor(() => {
         expect(surface.props?.buffer.content.text).toBe("const renamed = 1;\n");
       });
+      expect(surface.props?.fileModel.lastChangeOrigin).toBe("applied-patch");
       expect(saveFilesContent).not.toHaveBeenCalled();
     } finally {
       window.prompt = originalPrompt;

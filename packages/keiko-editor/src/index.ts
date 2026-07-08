@@ -63,6 +63,7 @@ export type {
   EditorRange,
   EditorTextEdit,
   EditorChangeOrigin,
+  EditorHostEditRequest,
   EditorDocumentIdentity,
   EditorFileModel,
   EditorSaveRequest,

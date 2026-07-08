@@ -40,6 +40,7 @@ import type {
   LanguageProviderContext,
   LanguageSymbolsRaw,
 } from "./languageProvider.js";
+import { LanguageProviderFailureError } from "./languageProvider.js";
 import { computeLineStarts, positionToOffset, spanToRange } from "./textOffsets.js";
 import {
   resolveTypescriptDefinition,
@@ -93,6 +94,9 @@ const SEVERITY_BY_CATEGORY: Readonly<Record<ts.DiagnosticCategory, LanguageDiagn
   [ts.DiagnosticCategory.Suggestion]: "hint",
   [ts.DiagnosticCategory.Message]: "info",
 };
+
+const PROJECT_TOO_LARGE_MESSAGE =
+  "The TypeScript project exceeds the maximum analyzable file or byte budget.";
 
 // Map (not an object literal) so a TypeScript element kind whose string value is "constructor"
 // cannot collide with `Object.prototype.constructor`.
@@ -203,9 +207,20 @@ function singleFileHandle(
   };
 }
 
+function failProjectTooLarge(): never {
+  throw new LanguageProviderFailureError("DOCUMENT_TOO_LARGE", PROJECT_TOO_LARGE_MESSAGE);
+}
+
 function resolveProject(ctx: LanguageProviderContext): TypescriptProjectHandle | undefined {
   const result = sharedProjectService.resolveProject(ctx);
-  return result.kind === "project" ? result.project : undefined;
+  if (result.kind === "project") return result.project;
+  if (result.kind === "notProject") return undefined;
+  throw new LanguageProviderFailureError(result.code, result.message);
+}
+
+function checkedProjectResult<T>(project: TypescriptProjectHandle, result: T): T {
+  if (project.truncated) failProjectTooLarge();
+  return result;
 }
 
 function withProjectOrSingle<T>(
@@ -213,7 +228,7 @@ function withProjectOrSingle<T>(
   run: (project: TypescriptProjectHandle) => T,
 ): T {
   const project = resolveProject(ctx);
-  if (project !== undefined) return run(project);
+  if (project !== undefined) return checkedProjectResult(project, run(project));
   return withService(ctx, (service) => run(singleFileHandle(ctx, service)));
 }
 
@@ -388,7 +403,7 @@ function buildFormatting(
 
 function diagnosticsFor(ctx: LanguageProviderContext): LanguageDiagnosticsRaw {
   const project = resolveProject(ctx);
-  if (project !== undefined) return getProjectDiagnostics(project);
+  if (project !== undefined) return checkedProjectResult(project, getProjectDiagnostics(project));
   return withService(ctx, (svc) => buildDiagnostics(ctx, svc));
 }
 
@@ -397,19 +412,22 @@ function completionsFor(
   position: LanguagePosition,
 ): LanguageCompletionResult {
   const project = resolveProject(ctx);
-  if (project !== undefined) return getProjectCompletions(project, position);
+  if (project !== undefined) {
+    return checkedProjectResult(project, getProjectCompletions(project, position));
+  }
   return withService(ctx, (svc) => buildCompletions(ctx, svc, position));
 }
 
 function hoverFor(ctx: LanguageProviderContext, position: LanguagePosition): LanguageHoverResult {
   const project = resolveProject(ctx);
-  if (project !== undefined) return getProjectHover(project, position);
+  if (project !== undefined)
+    return checkedProjectResult(project, getProjectHover(project, position));
   return withService(ctx, (svc) => buildHover(ctx, svc, position));
 }
 
 function symbolsFor(ctx: LanguageProviderContext): LanguageSymbolsRaw {
   const project = resolveProject(ctx);
-  if (project !== undefined) return getProjectSymbols(project);
+  if (project !== undefined) return checkedProjectResult(project, getProjectSymbols(project));
   return withService(ctx, (svc) => buildSymbols(ctx, svc));
 }
 
@@ -418,7 +436,9 @@ function formattingFor(
   options: LanguageFormattingOptions | undefined,
 ): LanguageFormattingRaw {
   const project = resolveProject(ctx);
-  if (project !== undefined) return getProjectFormatting(project, options);
+  if (project !== undefined) {
+    return checkedProjectResult(project, getProjectFormatting(project, options));
+  }
   return withService(ctx, (svc) => buildFormatting(ctx, svc, options));
 }
 

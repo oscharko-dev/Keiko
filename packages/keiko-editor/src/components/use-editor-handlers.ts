@@ -42,12 +42,14 @@ import type {
   EditorReferencesResponse,
   EditorSignatureHelpResponse,
   EditorSymbolsResponse,
+  EditorChangeOrigin,
 } from "../index.js";
 import {
   createEditorRequestId,
   DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
   editorRangeToMonaco,
+  type MonacoRange,
 } from "./completion-bridge.js";
 import { MONACO_BUILTIN_ACTION_IDS } from "./command-actions.js";
 import {
@@ -78,6 +80,13 @@ export interface EditorHandlers {
 const CHANGE_UTF8_ENCODER = new TextEncoder();
 
 type OverviewMarkersHandler = (markers: readonly DiagnosticOverviewMarker[]) => void;
+
+interface ProgrammaticEditorChange {
+  readonly text: string;
+  readonly origin: EditorChangeOrigin;
+}
+
+type ProgrammaticEditorChangeRef = MutableRefObject<ProgrammaticEditorChange | null>;
 
 interface EditorRefs {
   readonly editorRef: MutableRefObject<MountEditor | null>;
@@ -212,19 +221,88 @@ function useSaveEmitter(
 export function useChangeHandler(
   onContentChange: KeikoCodeEditorProps["onContentChange"],
   readOnly: boolean,
+  programmaticChangeRef?: ProgrammaticEditorChangeRef,
 ): OnChange {
   return useCallback<OnChange>(
     (value): void => {
       if (value === undefined || readOnly) {
         return;
       }
-      onContentChange(
-        { text: value, sizeBytes: CHANGE_UTF8_ENCODER.encode(value).length },
-        "human",
-      );
+      const programmatic = programmaticChangeRef?.current;
+      const origin = programmatic?.text === value ? programmatic.origin : "human";
+      if (programmaticChangeRef !== undefined && programmatic?.text === value) {
+        programmaticChangeRef.current = null;
+      }
+      onContentChange({ text: value, sizeBytes: CHANGE_UTF8_ENCODER.encode(value).length }, origin);
     },
-    [readOnly, onContentChange],
+    [readOnly, onContentChange, programmaticChangeRef],
   );
+}
+
+function wholeModelRange(editor: MountEditor): MonacoRange | null {
+  const model = editor.getModel?.();
+  if (model === undefined || model === null) return null;
+  const lineCount = model.getLineCount();
+  return {
+    startLineNumber: 1,
+    startColumn: 1,
+    endLineNumber: lineCount,
+    endColumn: model.getLineMaxColumn(lineCount),
+  };
+}
+
+function emitHostEditFallback(
+  request: NonNullable<KeikoCodeEditorProps["hostEditRequest"]>,
+  onContentChange: KeikoCodeEditorProps["onContentChange"],
+): void {
+  onContentChange(
+    { text: request.text, sizeBytes: CHANGE_UTF8_ENCODER.encode(request.text).length },
+    request.origin,
+  );
+}
+
+function applyHostEditRequest(
+  request: NonNullable<KeikoCodeEditorProps["hostEditRequest"]>,
+  refs: EditorRefs,
+  onContentChange: KeikoCodeEditorProps["onContentChange"],
+  programmaticChangeRef: ProgrammaticEditorChangeRef,
+): void {
+  const editor = refs.editorRef.current;
+  const range = editor === null ? null : wholeModelRange(editor);
+  if (editor?.executeEdits === undefined || range === null) {
+    emitHostEditFallback(request, onContentChange);
+    return;
+  }
+  programmaticChangeRef.current = { text: request.text, origin: request.origin };
+  editor.pushUndoStop?.();
+  const applied = editor.executeEdits("keiko.host-edit", [{ range, text: request.text }]);
+  editor.pushUndoStop?.();
+  if (!applied) {
+    programmaticChangeRef.current = null;
+    emitHostEditFallback(request, onContentChange);
+  }
+}
+
+function useHostEditRequest(
+  props: KeikoCodeEditorProps,
+  refs: EditorRefs,
+  programmaticChangeRef: ProgrammaticEditorChangeRef,
+): void {
+  const handledRequestIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const request = props.hostEditRequest;
+    if (request === undefined || handledRequestIdRef.current === request.id) return;
+    const applyIfMounted = (): void => {
+      if (refs.editorRef.current === null || handledRequestIdRef.current === request.id) return;
+      handledRequestIdRef.current = request.id;
+      applyHostEditRequest(request, refs, props.onContentChange, programmaticChangeRef);
+    };
+    if (refs.editorRef.current === null) {
+      queueMicrotask(applyIfMounted);
+      return;
+    }
+    applyIfMounted();
+  }, [programmaticChangeRef, props.hostEditRequest, props.onContentChange, refs]);
 }
 
 // Builds the completion wiring from the live props ref so a resolver swap (e.g. the host opening a
@@ -497,6 +575,29 @@ function buildSignatureHelpWiring(
   };
 }
 
+function availabilityBit(value: unknown): string {
+  return value === undefined ? "0" : "1";
+}
+
+function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
+  return [
+    props.provideCompletions,
+    props.provideInlineCompletions,
+    props.provideDiagnostics,
+    props.provideHover,
+    props.provideSymbols,
+    props.provideFormatting,
+    props.provideDefinition,
+    props.provideReferences,
+    props.provideCodeActions,
+    props.provideSignatureHelp,
+    props.onGenerateTests,
+    props.onRenameSymbol,
+  ]
+    .map(availabilityBit)
+    .join("");
+}
+
 // Stable per-editor-instance stream ids and the content-free telemetry accumulator. The completion
 // and inline-completion streams are distinct so inline supersession never aliases the completion
 // stream; the telemetry observer reads the live prop so a later `onInlineCompletionTelemetry`
@@ -573,6 +674,55 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
   applyRevealRequest(args.refs, args.latestProps.current.revealRequest);
 }
 
+interface RuntimeWiringRefreshArgs extends Omit<
+  MountRuntimeArgs,
+  "editor" | "monaco" | "autoFocus"
+> {
+  readonly availabilityKey: string;
+}
+
+type RuntimeWiringBaseArgs = Omit<RuntimeWiringRefreshArgs, "availabilityKey">;
+
+function refreshEditorRuntime(args: RuntimeWiringRefreshArgs): void {
+  const editor = args.refs.editorRef.current;
+  const monaco = args.refs.monacoRef.current;
+  const container = args.refs.containerRef.current;
+  if (editor === null || monaco === null || container === null) return;
+  args.refs.viewStateRef.current = captureViewState(editor);
+  args.refs.disposeRef.current?.();
+  args.refs.disposeRef.current = null;
+  mountEditorRuntime({ ...args, editor, monaco, autoFocus: false });
+}
+
+function useRuntimeWiringRefresh(args: RuntimeWiringRefreshArgs): void {
+  const mountedAvailabilityKey = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = mountedAvailabilityKey.current;
+    mountedAvailabilityKey.current = args.availabilityKey;
+    if (previous === null || previous === args.availabilityKey) return;
+    refreshEditorRuntime(args);
+  }, [args]);
+}
+
+function useRuntimeWiringBaseArgs(args: RuntimeWiringBaseArgs): RuntimeWiringBaseArgs {
+  return useMemo<RuntimeWiringBaseArgs>(
+    () => args,
+    [
+      args.refs,
+      args.emitSave,
+      args.latestProps,
+      args.streamId,
+      args.inlineStreamId,
+      args.telemetry,
+      args.onOverviewMarkers,
+      args.onCursorChange,
+      args.onSelectionChange,
+      args.onRuntimeError,
+      args.themeVariant,
+    ],
+  );
+}
+
 function useMountHandler(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
@@ -580,43 +730,33 @@ function useMountHandler(
   onOverviewMarkers: OverviewMarkersHandler | undefined,
 ): OnMount {
   const { onCursorChange, onSelectionChange, onRuntimeError, themeVariant, autoFocus } = props;
-  // Live props for the completion resolvers (read at provider-call time, not mount time).
   const latestProps = useRef(props);
   latestProps.current = props;
   const { streamId, inlineStreamId, telemetry } = useMountStreams(latestProps);
+  const availabilityKey = runtimeWiringAvailabilityKey(props);
+  const baseArgs = useRuntimeWiringBaseArgs({
+    refs,
+    emitSave,
+    latestProps,
+    streamId,
+    inlineStreamId,
+    telemetry,
+    onOverviewMarkers,
+    onCursorChange,
+    onSelectionChange,
+    onRuntimeError,
+    themeVariant,
+  });
+  const refreshArgs = useMemo<RuntimeWiringRefreshArgs>(
+    () => ({ ...baseArgs, availabilityKey }),
+    [availabilityKey, baseArgs],
+  );
+  useRuntimeWiringRefresh(refreshArgs);
   return useCallback<OnMount>(
     (editor, monaco): void => {
-      mountEditorRuntime({
-        editor,
-        monaco,
-        refs,
-        emitSave,
-        latestProps,
-        streamId,
-        inlineStreamId,
-        telemetry,
-        onOverviewMarkers,
-        onCursorChange,
-        onSelectionChange,
-        onRuntimeError,
-        themeVariant,
-        autoFocus,
-      });
+      mountEditorRuntime({ ...baseArgs, editor, monaco, autoFocus });
     },
-    [
-      refs,
-      emitSave,
-      themeVariant,
-      autoFocus,
-      onCursorChange,
-      onSelectionChange,
-      onRuntimeError,
-      latestProps,
-      streamId,
-      inlineStreamId,
-      telemetry,
-      onOverviewMarkers,
-    ],
+    [autoFocus, baseArgs],
   );
 }
 
@@ -672,8 +812,9 @@ export function useEditorHandlers(
   onOverviewMarkers?: OverviewMarkersHandler,
 ): EditorHandlers {
   const refs = useEditorRefs();
+  const programmaticChangeRef = useRef<ProgrammaticEditorChange | null>(null);
   const emitSave = useSaveEmitter(props, refs.editorRef, readOnly);
-  const onChange = useChangeHandler(props.onContentChange, readOnly);
+  const onChange = useChangeHandler(props.onContentChange, readOnly, programmaticChangeRef);
   const onMount = useMountHandler(props, refs, emitSave, onOverviewMarkers);
   const formatDocument = useCallback((): void => {
     const editor = refs.editorRef.current;
@@ -687,6 +828,7 @@ export function useEditorHandlers(
     [refs],
   );
   useUnmountDisposal(refs);
+  useHostEditRequest(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);
   useThemeReapply(props, refs);
   return { onChange, onMount, formatDocument, revealDiagnosticMarker: revealDiagnostic };
