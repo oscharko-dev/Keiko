@@ -235,4 +235,64 @@ describe("GovernedPullRequestCard", () => {
       ),
     );
   });
+
+  it("hides a finished outcome when the action kind or target changes", async () => {
+    render(
+      <GovernedPullRequestCard
+        projectId={PROJECT}
+        headBranchName="claude/issue-477-x"
+        client={makeClient()}
+      />,
+    );
+    fillForm();
+    fireEvent.click(screen.getByTestId("gpr-submit"));
+    await waitFor(() => expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument());
+    // Switching Create → Update retargets the form: the old "created" banner must disappear —
+    // it describes a different action than the one the form now names.
+    fireEvent.click(screen.getByRole("radio", { name: "Update" }));
+    expect(screen.queryByTestId("gpr-outcome")).not.toBeInTheDocument();
+    expect(screen.getByTestId("gpr-live")).toHaveTextContent("");
+    // Returning to the executed target restores the still-valid outcome.
+    fireEvent.click(screen.getByRole("radio", { name: "Create" }));
+    expect(screen.getByTestId("gpr-outcome")).toBeInTheDocument();
+  });
+
+  it("hides a stale readiness panel when a target field changes after a preview", async () => {
+    render(
+      <GovernedPullRequestCard
+        projectId={PROJECT}
+        headBranchName="claude/issue-477-x"
+        client={makeClient()}
+      />,
+    );
+    fillForm();
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(screen.getByTestId("gpr-readiness")).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Base branch"), { target: { value: "main" } });
+    expect(screen.queryByTestId("gpr-readiness")).not.toBeInTheDocument();
+  });
+
+  it("gates the update flow on a numeric PR number and explains the format", () => {
+    const client = makeClient();
+    render(
+      <GovernedPullRequestCard
+        projectId={PROJECT}
+        headBranchName="claude/issue-477-x"
+        client={client}
+      />,
+    );
+    fillForm();
+    fireEvent.click(screen.getByRole("radio", { name: "Update" }));
+    fireEvent.change(screen.getByLabelText("Pull Request number"), {
+      target: { value: "PR#12" },
+    });
+    expect(screen.getByTestId("gpr-pr-number-hint")).toHaveTextContent(
+      "numeric Pull Request number",
+    );
+    expect(screen.getByLabelText("Pull Request number")).toHaveAttribute("aria-invalid", "true");
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    fireEvent.click(screen.getByTestId("gpr-submit"));
+    expect(client.prPreview).not.toHaveBeenCalled();
+    expect(client.prExecute).not.toHaveBeenCalled();
+  });
 });
