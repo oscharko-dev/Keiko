@@ -197,11 +197,14 @@ afterEach(() => {
 });
 
 describe("EditorWidget workspace session", () => {
-  it("passes through to the runtime widget while no workspace root is selected", () => {
+  it("shows the project picker (not the runtime widget) while no workspace root is selected", () => {
     render(<EditorWidget />);
 
-    expect(screen.getByTestId("runtime-probe")).toBeInTheDocument();
-    expect(screen.getByTestId("runtime-root")).toHaveTextContent("");
+    // Unbound editor (e.g. toggled open from the left rail) offers the native folder picker so a
+    // project can be chosen, rather than passing through to an empty, dead-end runtime widget.
+    expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-empty-browse")).toBeInTheDocument();
+    expect(screen.queryByTestId("runtime-probe")).toBeNull();
     expect(screen.queryByTestId("files-probe")).toBeNull();
     expect(screen.queryByRole("button", { name: "Resize project tree" })).toBeNull();
   });
