@@ -136,6 +136,39 @@ function stringFieldMatches(
   return typeof value === "string" && pattern.test(value);
 }
 
+function signatureKind(target: UpdatePortableTarget): string {
+  return target === "windows-x64" ? "authenticode" : "developer-id-notarized";
+}
+
+function targetChecksVerified(
+  target: UpdatePortableTarget,
+  checks: Record<string, unknown> | undefined,
+): boolean {
+  const keys =
+    target === "windows-x64"
+      ? ["publisherChainVerified", "timestampVerified"]
+      : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+  return keys.every((key) => checks?.[key] === true);
+}
+
+function securityVerified(
+  manifest: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): boolean {
+  const security = recordAt(manifest, "security");
+  const checks = security === undefined ? undefined : recordAt(security, "verificationChecks");
+  const macos = target !== "windows-x64";
+  return all([
+    fieldEquals(security, "verificationPolicy", "production"),
+    fieldEquals(security, "verificationStatus", "verified-production"),
+    fieldEquals(security, "signatureKind", signatureKind(target)),
+    fieldEquals(security, "signatureVerified", true),
+    fieldEquals(security, "notarizationRequired", macos),
+    fieldEquals(security, "notarizationVerified", macos),
+    targetChecksVerified(target, checks),
+  ]);
+}
+
 function validManifestBooleans(manifest: Record<string, unknown>): boolean {
   const release = recordAt(manifest, "release");
   const updateEligibility = recordAt(manifest, "updateEligibility");
@@ -205,6 +238,7 @@ function reviewedBindingValid(
     fieldEquals(binding, "platformTarget", target),
     fieldEquals(binding, "packageVersion", release.targetVersion),
     fieldEquals(binding, "archiveSha256", archiveSha256),
+    fieldEquals(binding, "platformSignatureLocallyVerified", true),
   ]);
 }
 
@@ -218,6 +252,7 @@ function validateManifest(
   if (sha256 === undefined) return undefined;
   if (!validManifestIdentity(manifest, release, archive, target)) return undefined;
   if (!validManifestBooleans(manifest)) return undefined;
+  if (!securityVerified(manifest, target)) return undefined;
   if (!reviewedBindingValid(manifest, release, archive, target)) return undefined;
   return {
     archiveSha256: sha256,

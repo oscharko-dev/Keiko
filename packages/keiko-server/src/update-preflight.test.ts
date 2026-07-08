@@ -279,23 +279,29 @@ function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
       sha256: "e".repeat(64),
     },
     signing: {
-      verificationPolicy: "production",
-      verificationStatus: "verified-production",
-      verificationReasonCodes: [],
-      signatureKind: target === "windows-x64" ? "authenticode" : "developer-id-notarized",
-      signatureVerified: true,
-      notarizationRequired: target !== "windows-x64",
-      notarizationVerified: target !== "windows-x64",
-      verificationChecks:
-        target === "windows-x64"
-          ? { publisherChainVerified: true, timestampVerified: true }
-          : {
-              developerIdVerified: true,
-              notarizationVerified: true,
-              stapleVerified: true,
-              assessmentVerified: true,
-            },
+      ...signingEvidence(target),
     },
+  };
+}
+
+function signingEvidence(target: UpdatePortableTarget): Record<string, unknown> {
+  return {
+    verificationPolicy: "production",
+    verificationStatus: "verified-production",
+    verificationReasonCodes: [],
+    signatureKind: target === "windows-x64" ? "authenticode" : "developer-id-notarized",
+    signatureVerified: true,
+    notarizationRequired: target !== "windows-x64",
+    notarizationVerified: target !== "windows-x64",
+    verificationChecks:
+      target === "windows-x64"
+        ? { publisherChainVerified: true, timestampVerified: true }
+        : {
+            developerIdVerified: true,
+            notarizationVerified: true,
+            stapleVerified: true,
+            assessmentVerified: true,
+          },
   };
 }
 
@@ -345,9 +351,11 @@ function portableManifest(
         platformTarget: target,
         packageVersion: "0.2.11",
         archiveSha256: ARCHIVE_SHA,
+        platformSignatureLocallyVerified: true,
         ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
       },
     },
+    security: signingEvidence(target),
     ...(sidecarRuntimes.length > 0 ? { sidecarRuntimes } : {}),
     updateEligibility: {
       stableOnly: true,
@@ -733,6 +741,43 @@ describe("update preflight service", () => {
     expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
     expect(report.blockers).toContainEqual(
       expect.objectContaining({ code: "portable-sidecar-verification-failed" }),
+    );
+    deps.store.close();
+  });
+
+  it("blocks portable one-click readiness when artifact signing evidence is unverified", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const manifest = portableManifest(target);
+    const security = manifest.security as Record<string, unknown>;
+    security.verificationStatus = "verification-failed";
+    security.signatureVerified = false;
+    security.notarizationVerified = false;
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(manifest)));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-manifest-malformed" }),
     );
     deps.store.close();
   });
