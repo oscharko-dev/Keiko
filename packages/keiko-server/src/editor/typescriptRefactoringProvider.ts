@@ -78,6 +78,7 @@ export function resolveTypescriptRenamePrepare(
   project: TypescriptProjectHandle,
   position: LanguagePosition,
 ): LanguageRenamePrepareResult {
+  project.cancellation.throwIfCancellationRequested();
   const info = project.service.getRenameInfo(project.overlayPath, offsetFor(project, position), {
     allowRenameOfImportPath: false,
   });
@@ -165,6 +166,7 @@ export function resolveTypescriptRenameApply(
   position: LanguagePosition,
   newName: string,
 ): TypescriptRenameApplyResolution {
+  project.cancellation.throwIfCancellationRequested();
   const offset = offsetFor(project, position);
   const info = project.service.getRenameInfo(project.overlayPath, offset, {
     allowRenameOfImportPath: false,
@@ -194,34 +196,19 @@ function diagnosticCodes(diagnostics: readonly { readonly code?: string }[]): re
     .filter((code): code is number => Number.isInteger(code));
 }
 
-function rawCodeActionCandidates(
-  project: TypescriptProjectHandle,
-  range: LanguageRange,
-  diagnostics: readonly { readonly code?: string }[],
-): readonly CodeActionCandidate[] {
-  const offsets = rangeOffsets(project.overlayText, range);
-  const fixes = project.service.getCodeFixesAtPosition(
-    project.overlayPath,
-    offsets.pos,
-    offsets.end,
-    diagnosticCodes(diagnostics),
-    ts.getDefaultFormatCodeSettings("\n"),
-    USER_PREFERENCES,
-  );
-  return [
-    ...fixes.map((fix): CodeActionCandidate => ({
-      title: fix.description,
-      kind: "quickfix",
-      changes: fix.changes,
-    })),
-    ...refactorCandidates(project, offsets),
-  ];
+interface RefactorActionRef {
+  readonly refactorName: string;
+  readonly action: ts.RefactorActionInfo;
 }
 
-function refactorCandidates(
+// Enumerate applicable refactor actions WITHOUT computing their edits, so the caller can bound how
+// many of the expensive `getEditsForRefactor` calls it makes to the result cap (Issue #2102: apply
+// caps before building the full result set, so a position with many refactors cannot exhaust the
+// request budget).
+function applicableRefactorActions(
   project: TypescriptProjectHandle,
   offsets: ts.TextRange,
-): readonly CodeActionCandidate[] {
+): readonly RefactorActionRef[] {
   return project.service
     .getApplicableRefactors(
       project.overlayPath,
@@ -231,21 +218,30 @@ function refactorCandidates(
       undefined,
       false,
     )
-    .flatMap((refactor): readonly CodeActionCandidate[] =>
-      refactor.actions.flatMap((action): readonly CodeActionCandidate[] => {
-        if (action.notApplicableReason !== undefined || action.isInteractive === true) return [];
-        const edits = project.service.getEditsForRefactor(
-          project.overlayPath,
-          ts.getDefaultFormatCodeSettings("\n"),
-          offsets,
-          refactor.name,
-          action.name,
-          USER_PREFERENCES,
-        );
-        if (edits === undefined || edits.notApplicableReason !== undefined) return [];
-        return [{ title: action.description, kind: "refactor", changes: edits.edits }];
-      }),
+    .flatMap((refactor): readonly RefactorActionRef[] =>
+      refactor.actions
+        .filter(
+          (action) => action.notApplicableReason === undefined && action.isInteractive !== true,
+        )
+        .map((action) => ({ refactorName: refactor.name, action })),
     );
+}
+
+function refactorCandidate(
+  project: TypescriptProjectHandle,
+  offsets: ts.TextRange,
+  ref: RefactorActionRef,
+): CodeActionCandidate | null {
+  const edits = project.service.getEditsForRefactor(
+    project.overlayPath,
+    ts.getDefaultFormatCodeSettings("\n"),
+    offsets,
+    ref.refactorName,
+    ref.action.name,
+    USER_PREFERENCES,
+  );
+  if (edits === undefined || edits.notApplicableReason !== undefined) return null;
+  return { title: ref.action.description, kind: "refactor", changes: edits.edits };
 }
 
 function codeActionEdits(
@@ -278,17 +274,41 @@ export function resolveTypescriptCodeActions(
   range: LanguageRange,
   diagnostics: readonly { readonly code?: string }[],
 ): LanguageCodeActionsResult {
-  const raw = rawCodeActionCandidates(project, range, diagnostics);
-  const capped = raw.slice(0, project.limits.maxCodeActions);
-  const actions = capped.flatMap((candidate): readonly LanguageCodeAction[] => {
+  project.cancellation.throwIfCancellationRequested();
+  const limit = project.limits.maxCodeActions;
+  const offsets = rangeOffsets(project.overlayText, range);
+  const fixes = project.service.getCodeFixesAtPosition(
+    project.overlayPath,
+    offsets.pos,
+    offsets.end,
+    diagnosticCodes(diagnostics),
+    ts.getDefaultFormatCodeSettings("\n"),
+    USER_PREFERENCES,
+  );
+  const refactorRefs = applicableRefactorActions(project, offsets);
+  const totalCount = fixes.length + refactorRefs.length;
+  // Materialise candidates only up to the cap, quick fixes first, computing refactor edits lazily
+  // so the expensive `getEditsForRefactor` runs at most `limit` times regardless of how many
+  // refactors apply at this position.
+  const candidates: CodeActionCandidate[] = [];
+  for (const fix of fixes) {
+    if (candidates.length >= limit) break;
+    candidates.push({ title: fix.description, kind: "quickfix", changes: fix.changes });
+  }
+  for (const ref of refactorRefs) {
+    if (candidates.length >= limit) break;
+    const candidate = refactorCandidate(project, offsets, ref);
+    if (candidate !== null) candidates.push(candidate);
+  }
+  const actions = candidates.flatMap((candidate): readonly LanguageCodeAction[] => {
     const action = buildCodeAction(project, candidate);
     return action === null ? [] : [action];
   });
   return {
     actions,
-    truncated: project.truncated || raw.length > capped.length,
+    truncated: project.truncated || totalCount > limit,
     returnedCount: actions.length,
-    totalCount: raw.length,
+    totalCount,
   };
 }
 
@@ -322,6 +342,7 @@ export function resolveTypescriptSignatureHelp(
   project: TypescriptProjectHandle,
   position: LanguagePosition,
 ): LanguageSignatureHelpResult {
+  project.cancellation.throwIfCancellationRequested();
   const help = project.service.getSignatureHelpItems(
     project.overlayPath,
     offsetFor(project, position),

@@ -56,7 +56,9 @@ The changeset groups edits by root-relative file path, carries an `expectedConte
 per file, and reports result truncation separately for dropped edits and dropped files. It also
 carries returned/total file and edit counts so review surfaces and verification evidence can prove
 that truncation occurred without exposing dropped content. This reuses the editor-agent precondition
-and conflict model from ADR-0058 instead of creating a parallel stale write scheme. Any later accept
+and conflict model from ADR-0058 instead of creating a parallel stale write scheme. `expectedContentHash`
+uses the same lowercase sha256-hex content-hash convention as `EditorAgentSessionSnapshot.activeFileContentHash`
+(ADR-0058), so the server-side staleness check compares like with like. Any later accept
 path must present the changeset for explicit human review before any buffer mutation; saving remains
 a separate explicit user action.
 

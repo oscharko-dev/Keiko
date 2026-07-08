@@ -244,6 +244,9 @@ export const LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION = "1" as const;
 export interface LanguageRenameChangesetFile {
   readonly path: string;
   readonly edits: readonly LanguageTextEdit[];
+  // Lowercase sha256 hex digest of the file's current content, the same convention as
+  // `EditorAgentSessionSnapshot.activeFileContentHash` (ADR-0058), so the server-side staleness
+  // check that applies this changeset compares like with like.
   readonly expectedContentHash: string;
 }
 

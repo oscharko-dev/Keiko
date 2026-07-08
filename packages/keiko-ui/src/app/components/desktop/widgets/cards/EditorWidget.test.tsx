@@ -1723,6 +1723,86 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
     }
   });
 
+  it("applies a wide rename touching more files than the session cache capacity", async () => {
+    // Regression for Issue #2105: a rename whose changeset touches more distinct closed files than
+    // the bounded session cache (SESSION_CACHE_CAPACITY = 16) used to evict its own freshly-fetched
+    // sources before Accept, producing a spurious VERSION_MISMATCH ("not loaded") that aborted the
+    // whole apply. The review-time snapshots must let every file apply.
+    const originalPrompt = window.prompt;
+    const onDirtyChange = vi.fn();
+    window.prompt = vi.fn(() => "renamed");
+    const closedPaths = Array.from({ length: 20 }, (_, index) => `src/use-${String(index)}.ts`);
+    vi.mocked(fetchFilesContent).mockImplementation((_root, path) =>
+      Promise.resolve(
+        fileResponse({
+          path,
+          name: path.slice(path.lastIndexOf("/") + 1),
+          content: "const value = 1;\n",
+        }),
+      ),
+    );
+    vi.mocked(requestEditorRenamePrepare).mockResolvedValueOnce({
+      range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+      placeholder: "value",
+    });
+    vi.mocked(requestEditorRenameApply).mockResolvedValueOnce({
+      schemaVersion: "1",
+      files: closedPaths.map((path) => ({
+        path,
+        expectedContentHash: BASE_VERSION.contentHash,
+        edits: [
+          {
+            range: { start: { line: 0, character: 6 }, end: { line: 0, character: 11 } },
+            newText: "renamed",
+          },
+        ],
+      })),
+      truncated: false,
+      filesTruncated: false,
+      returnedFileCount: closedPaths.length,
+      totalFileCount: closedPaths.length,
+      returnedEditCount: closedPaths.length,
+      totalEditCount: closedPaths.length,
+    });
+
+    try {
+      render(
+        <EditorRuntimeWidget
+          root="/repo"
+          file="src/app.ts"
+          openFiles={["src/app.ts"]}
+          onDirtyChange={onDirtyChange}
+        />,
+      );
+      await screen.findByTestId("editor-surface");
+      act(() => {
+        surface.props?.onCursorChange?.({ line: 0, column: 6 });
+      });
+      await act(async () => {
+        surface.props?.onRenameSymbol?.();
+        await Promise.resolve();
+      });
+      await waitFor(() => {
+        expect(diffSurface.props?.model.files.length).toBe(closedPaths.length);
+      });
+
+      act(() => {
+        diffSurface.props?.onApply?.();
+      });
+      // Every changeset file applies — including the earliest-cached ones that the LRU would have
+      // evicted — so no file is falsely reported as unloaded and nothing is written to disk.
+      await waitFor(() => {
+        expect(onDirtyChange).toHaveBeenCalledWith("src/use-0.ts", true);
+      });
+      for (const path of closedPaths) {
+        expect(onDirtyChange).toHaveBeenCalledWith(path, true);
+      }
+      expect(saveFilesContent).not.toHaveBeenCalled();
+    } finally {
+      window.prompt = originalPrompt;
+    }
+  });
+
   it("reports a rename precondition conflict without applying stale edits", async () => {
     const originalPrompt = window.prompt;
     window.prompt = vi.fn(() => "renamed");

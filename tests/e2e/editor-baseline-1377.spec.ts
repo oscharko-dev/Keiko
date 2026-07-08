@@ -87,7 +87,14 @@ export class AppController {
   },
   {
     path: HELPER_FILE,
-    content: `export const sharedValue = 41;
+    // Cross-file navigation fixture: `sharedValue` is declared below the fold (line 5, not line 1) so
+    // go-to-definition (F12) must actually reveal/scroll to the real target line rather than merely
+    // switching tabs onto an already-visible line 1 (audit defect #3).
+    content: `// Cross-file navigation fixture module for the editor baseline gate (#1377).
+// sharedValue is declared below the fold on purpose; see scenarioGoToDefinition.
+export const leadingHelperConstant = 0;
+
+export const sharedValue = 41;
 export const missingHelperValue = 1;
 
 export function callTarget(value: string): string {
@@ -285,7 +292,7 @@ async function triggerRename(page: Page, pane: Locator, nextName: string): Promi
     pane,
     "export const sharedValue = 41;",
     "sharedValue",
-    1,
+    5,
   );
   const prepare = languageResponse(page, "renamePrepare");
   const apply = languageResponse(page, "renameApply");
@@ -571,6 +578,14 @@ async function scenarioGoToDefinition(page: Page, testInfo: TestInfo): Promise<v
   await response;
 
   await expect(tabHit(pane, HELPER_FILE)).toHaveAttribute("aria-selected", "true");
+  // sharedValue is declared on line 5 of the (deliberately multi-line) helper fixture, below the
+  // fold. Asserting the status-bar cursor position — not just tab selection and text visibility,
+  // which would pass even if F12 merely switched tabs without navigating — proves F12 actually
+  // revealed and moved the cursor to the real cross-file definition line (audit defect #3).
+  await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="cursor"]`)).toHaveAttribute(
+    "aria-label",
+    /^Line 5, column \d+$/u,
+  );
   await expect(
     workspace.locator(".monaco-editor .view-line").filter({ hasText: "export const sharedValue" }),
   ).toBeVisible();
@@ -599,7 +614,7 @@ async function scenarioFindReferences(page: Page, testInfo: TestInfo): Promise<v
     helperPane,
     "export const sharedValue = 41;",
     "sharedValue",
-    1,
+    5,
   );
   const response = languageResponse(page, "references");
   await page.keyboard.press("Shift+F12");

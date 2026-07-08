@@ -187,6 +187,7 @@ function singleFileHandle(
     projectKey: `single-file:${ctx.overlayPath}`,
     rootFileNames: [ctx.overlayPath],
     limits: ctx.limits,
+    cancellation: ctx.cancellation,
     overlayPath: ctx.overlayPath,
     overlayText: ctx.overlayText,
     wasReused: false,

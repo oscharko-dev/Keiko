@@ -122,10 +122,32 @@ describe("typescript navigation provider", () => {
       positionOf(text, "localValue", text.indexOf("use")),
     );
     const missing = resolveTypescriptReferences(handle, { line: 0, character: 3 });
+    const missingDefinition = resolveTypescriptDefinition(handle, { line: 0, character: 3 });
 
     expect(sameFile.locations[0]?.path).toBe("src/local.ts");
     expect(missing.locations).toEqual([]);
     expect(missing.includesDeclaration).toBe(false);
+    // The definition resolver must also return a well-formed empty result (not throw) for a
+    // position with no symbol (Issue #2101 acceptance: both resolvers).
+    expect(missingDefinition.locations).toEqual([]);
+    expect(missingDefinition.truncated).toBe(false);
+  });
+
+  it("reports includesDeclaration false when the declaration is outside the workspace", () => {
+    // Referencing a lib symbol (Array.prototype.map): its declaration lives in a lib .d.ts outside
+    // the workspace root and is filtered out, so includesDeclaration must be false even though the
+    // in-workspace usage is returned. Regression guard: the flag is derived from what actually
+    // survived into the returned locations, not from the raw referenced-symbol count (Issue #2101).
+    const text = "const values: string[] = [];\nvalues.map((value) => value);\n";
+    writeFileSync(join(root, "src", "libref.ts"), text, "utf8");
+    const result = resolveTypescriptReferences(
+      project("src/libref.ts", text),
+      positionOf(text, "map"),
+    );
+
+    expect(result.locations.length).toBeGreaterThan(0);
+    expect(result.locations.every((location) => location.path === "src/libref.ts")).toBe(true);
+    expect(result.includesDeclaration).toBe(false);
   });
 
   it("filters definitions outside the workspace root", () => {

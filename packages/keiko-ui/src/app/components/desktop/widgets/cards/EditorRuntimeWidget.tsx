@@ -553,6 +553,7 @@ type RenameSourcesResult =
   | {
       readonly status: "ready";
       readonly sources: Readonly<Record<string, PatchPreviewSource>>;
+      readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
     }
   | {
       readonly status: "conflict";
@@ -988,6 +989,10 @@ function EditorRuntimeWidget({
   const [renameReview, setRenameReview] = useState<{
     readonly changeset: LanguageRenameChangeset;
     readonly model: PatchPreviewModel;
+    // Snapshots of every non-active changeset file, captured at review time so Accept never depends
+    // on the bounded LRU session cache surviving (a wide rename can touch far more files than the
+    // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
+    readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
   } | null>(null);
   // A11Y-2: focus the Accept button whenever a patch review appears.
   const patchAcceptButtonRef = useRef<HTMLButtonElement>(null);
@@ -2100,29 +2105,26 @@ function EditorRuntimeWidget({
     [content, contentSizeBytes, file, fileModel, fileModelMatchesTarget, largeFileDegraded],
   );
 
-  const renameSourceForPath = useCallback(
-    (path: string): PatchPreviewSource | undefined => {
-      if (root === undefined) return undefined;
-      if (path === file) {
-        return patchPreviewSourceFromText(path, contentRef.current);
-      }
-      const cached = sessionCacheRef.current.get(documentSessionKey(root, path));
-      if (cached === undefined) return undefined;
-      return patchPreviewSourceFromText(path, cached.content);
-    },
-    [file, root],
-  );
-
   const loadRenameSources = useCallback(
     async (changeset: LanguageRenameChangeset): Promise<RenameSourcesResult> => {
       const sources: Record<string, PatchPreviewSource> = {};
+      const snapshots: Record<string, EditorFileSessionSnapshot> = {};
       for (const fileChange of changeset.files) {
-        const source = renameSourceForPath(fileChange.path);
-        if (source !== undefined) {
-          sources[fileChange.path] = source;
+        if (fileChange.path === file) {
+          // The active buffer is always read from live editor state, never the session cache.
+          sources[fileChange.path] = patchPreviewSourceFromText(
+            fileChange.path,
+            contentRef.current,
+          );
           continue;
         }
         if (root === undefined) continue;
+        const cached = sessionCacheRef.current.get(documentSessionKey(root, fileChange.path));
+        if (cached !== undefined) {
+          snapshots[fileChange.path] = cached;
+          sources[fileChange.path] = patchPreviewSourceFromText(fileChange.path, cached.content);
+          continue;
+        }
         const response = await fetchFilesContent(root, fileChange.path);
         if (response.session.version.contentHash !== fileChange.expectedContentHash) {
           return {
@@ -2140,14 +2142,18 @@ function EditorRuntimeWidget({
           response,
         });
         sessionCacheRef.current.set(documentSessionKey(root, fileChange.path), snapshot);
+        snapshots[fileChange.path] = snapshot;
         sources[fileChange.path] = patchPreviewSourceFromText(fileChange.path, snapshot.content);
       }
-      return { status: "ready", sources };
+      return { status: "ready", sources, snapshots };
     },
-    [editorModelScope, renameSourceForPath, root],
+    [editorModelScope, file, root],
   );
   const renameTargetForPath = useCallback(
-    (path: string): RenameApplyTarget | null => {
+    (
+      path: string,
+      snapshots?: Readonly<Record<string, EditorFileSessionSnapshot>>,
+    ): RenameApplyTarget | null => {
       if (root === undefined) return null;
       if (path === file) {
         return {
@@ -2158,7 +2164,10 @@ function EditorRuntimeWidget({
           active: true,
         };
       }
-      const cached = sessionCacheRef.current.get(documentSessionKey(root, path));
+      // Prefer the live session cache, but fall back to the review-time snapshot so a rename whose
+      // sources were evicted from the bounded cache before Accept still applies (Issue #2105).
+      const cached =
+        sessionCacheRef.current.get(documentSessionKey(root, path)) ?? snapshots?.[path];
       if (cached === undefined) return null;
       return {
         path,
@@ -2216,6 +2225,7 @@ function EditorRuntimeWidget({
             sources: sources.sources,
             patchId: `rename-symbol:${newName}`,
           }),
+          snapshots: sources.snapshots,
         });
       } catch (error) {
         announceToolbarNotice(error instanceof Error ? error.message : "Rename failed.");
@@ -2599,7 +2609,10 @@ function EditorRuntimeWidget({
     if (renameReview === null || root === undefined) return;
     const plans: RenameApplyPlan[] = [];
     for (const change of renameReview.changeset.files) {
-      const plan = buildRenamePlan(change, renameTargetForPath(change.path));
+      const plan = buildRenamePlan(
+        change,
+        renameTargetForPath(change.path, renameReview.snapshots),
+      );
       if ("code" in plan) {
         setAgentConflict({ code: plan.code, message: plan.message });
         return;

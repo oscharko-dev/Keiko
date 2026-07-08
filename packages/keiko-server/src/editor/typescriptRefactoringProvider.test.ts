@@ -150,6 +150,7 @@ function fakeProject(
     projectKey: "fake",
     rootFileNames: Object.keys(sourceByFile),
     limits,
+    cancellation: createDeadlineCancellation({ deadlineMs: limits.deadlineMs, now: () => 0 }),
     overlayPath,
     overlayText: sourceByFile[overlayPath] ?? "",
     wasReused: false,
@@ -324,6 +325,32 @@ describe("typescript refactoring provider", () => {
     expect(signature.truncated).toBe(true);
     expect(signature.returnedCount).toBe(1);
     expect(signature.totalCount).toBe(2);
+  });
+
+  it("caps the rename changeset by file count and flags filesTruncated", () => {
+    const files = basicRenameFiles(
+      Object.fromEntries(
+        Array.from({ length: 4 }, (_, index) => [
+          `src/use-${String(index)}.ts`,
+          "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n",
+        ]),
+      ),
+    );
+    const rename = resolveTypescriptRenameApply(
+      project(files, "src/decl.ts", {
+        ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
+        maxRenameChangesetFiles: 2,
+      }),
+      positionOf(files["src/decl.ts"] ?? "", "sharedValue"),
+      "renamed",
+    );
+
+    expect(rename.kind).toBe("result");
+    if (rename.kind === "result") {
+      expect(rename.result.filesTruncated).toBe(true);
+      expect(rename.result.returnedFileCount).toBe(2);
+      expect(rename.result.returnedFileCount).toBeLessThan(rename.result.totalFileCount);
+    }
   });
 
   it("excludes rename and code-action edit locations outside the workspace root", () => {

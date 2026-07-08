@@ -415,6 +415,37 @@ describe("parseLanguageServiceRequest", () => {
     }
   });
 
+  it.each(["definition", "references", "renamePrepare", "renameApply", "signatureHelp"] as const)(
+    "rejects a wrong-typed position for %s",
+    (operation) => {
+      const result = parseLanguageServiceRequest({
+        operation,
+        root: "/repo",
+        document: overlay(),
+        position: "not-an-object",
+        newName: operation === "renameApply" ? "renamedSymbol" : undefined,
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors).toContain("position must be { line, character }");
+      }
+    },
+  );
+
+  it("rejects a wrong-typed newName for renameApply", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "renameApply",
+      root: "/repo",
+      document: overlay(),
+      position: position(),
+      newName: 123,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toContain("newName must be a non-empty string");
+    }
+  });
+
   it("requires a range and diagnostics for codeActions", () => {
     const result = parseLanguageServiceRequest({
       operation: "codeActions",
@@ -422,6 +453,23 @@ describe("parseLanguageServiceRequest", () => {
       document: overlay(),
       range: { start: position() },
       diagnostics: [{ ...diagnostic(), severity: "fatal" }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toEqual([
+        "range must be { start, end }",
+        "diagnostics must be an array of LanguageDiagnostic",
+      ]);
+    }
+  });
+
+  it("rejects a wrong-typed range and a wrong-typed diagnostics list for codeActions", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "codeActions",
+      root: "/repo",
+      document: overlay(),
+      range: "0:0",
+      diagnostics: "nope",
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {

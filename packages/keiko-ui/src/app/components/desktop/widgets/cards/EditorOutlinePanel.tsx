@@ -107,8 +107,21 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
 
   useEffect(() => {
     setExpandedIds(collectExpandableIds(tree));
+  }, [tree, treeKey]);
+
+  useEffect(() => {
     setFocusId(selectedId ?? allNodeIds[0] ?? null);
-  }, [allNodeIds, selectedId, tree, treeKey]);
+  }, [allNodeIds, selectedId]);
+
+  useEffect(() => {
+    if (selectedId === null) return;
+    const ancestorIds = containingPath.slice(0, -1).map((node) => node.id);
+    if (ancestorIds.length === 0) return;
+    setExpandedIds((current) => {
+      const missing = ancestorIds.filter((id) => !current.has(id));
+      return missing.length === 0 ? current : new Set([...current, ...missing]);
+    });
+  }, [containingPath, selectedId]);
 
   const focusRow = useCallback((id: string | undefined): void => {
     if (id === undefined) return;

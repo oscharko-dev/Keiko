@@ -17,6 +17,11 @@ interface LocationCandidate {
   readonly textSpan: ts.TextSpan;
 }
 
+interface ReferenceCandidate {
+  readonly candidate: LocationCandidate;
+  readonly isDeclaration: boolean;
+}
+
 function offsetFor(project: TypescriptProjectHandle, position: LanguagePosition): number {
   return positionToOffset(project.overlayText, computeLineStarts(project.overlayText), position);
 }
@@ -46,20 +51,23 @@ function containedLocations(
   limit: number,
 ): { readonly locations: readonly LanguageLocation[]; readonly truncated: boolean } {
   const locations: LanguageLocation[] = [];
-  let visited = 0;
+  let capped = false;
   for (const candidate of candidates) {
-    visited += 1;
+    if (locations.length >= limit) {
+      capped = true;
+      break;
+    }
     const location = locationFromCandidate(project, candidate);
     if (location !== null) locations.push(location);
-    if (locations.length >= limit) break;
   }
-  return { locations, truncated: project.truncated || visited < candidates.length };
+  return { locations, truncated: project.truncated || capped };
 }
 
 export function resolveTypescriptDefinition(
   project: TypescriptProjectHandle,
   position: LanguagePosition,
 ): LanguageDefinitionResult {
+  project.cancellation.throwIfCancellationRequested();
   const results = project.service.getDefinitionAtPosition(
     project.overlayPath,
     offsetFor(project, position),
@@ -74,6 +82,7 @@ export function resolveTypescriptReferences(
   project: TypescriptProjectHandle,
   position: LanguagePosition,
 ): LanguageReferencesResult {
+  project.cancellation.throwIfCancellationRequested();
   const referencedSymbols = project.service.findReferences(
     project.overlayPath,
     offsetFor(project, position),
@@ -81,14 +90,31 @@ export function resolveTypescriptReferences(
   if (referencedSymbols === undefined || referencedSymbols.length === 0) {
     return { locations: [], includesDeclaration: false, truncated: false };
   }
-  const candidates = referencedSymbols.flatMap((symbol) => [
-    symbol.definition,
-    ...symbol.references,
-  ]);
-  const locations = containedLocations(project, candidates, project.limits.maxReferenceLocations);
-  return {
-    locations: locations.locations,
-    includesDeclaration: referencedSymbols.length > 0,
-    truncated: locations.truncated,
-  };
+  const items: readonly ReferenceCandidate[] = referencedSymbols.flatMap(
+    (symbol): readonly ReferenceCandidate[] => [
+      { candidate: symbol.definition, isDeclaration: true },
+      ...symbol.references.map((reference): ReferenceCandidate => ({
+        candidate: reference,
+        isDeclaration: false,
+      })),
+    ],
+  );
+  const locations: LanguageLocation[] = [];
+  let includesDeclaration = false;
+  let capped = false;
+  for (const item of items) {
+    if (locations.length >= project.limits.maxReferenceLocations) {
+      capped = true;
+      break;
+    }
+    const location = locationFromCandidate(project, item.candidate);
+    if (location === null) continue;
+    locations.push(location);
+    // Only report the declaration as included if the declaration location actually survived
+    // workspace-containment filtering and the result cap into the returned set (Issue #2101):
+    // a reference query whose declaration lives outside the workspace (e.g. a lib .d.ts) must not
+    // claim `includesDeclaration: true`.
+    if (item.isDeclaration) includesDeclaration = true;
+  }
+  return { locations, includesDeclaration, truncated: project.truncated || capped };
 }

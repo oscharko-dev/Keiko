@@ -87,6 +87,35 @@ export function cleanupEditorWorkspaces(): void {
 }
 
 /**
+ * Generate `count` synthetic TypeScript source files under `root/dir`, each padded with comment bytes
+ * to (approximately) `bytesPerFile`, so a test can build a workspace whose total read bytes exceed
+ * `LanguageServiceLimits.maxWorkspaceReadBytes` (packages/keiko-contracts/src/language-service.ts)
+ * without hand-authoring adversarial TypeScript content inline. Every generated file stays valid,
+ * analyzable TypeScript (a header comment, a padding comment, and one real export), so it is a
+ * legitimate program root file the TS compiler must actually read — not dead weight it would skip.
+ */
+export function writePaddedFixtureFiles(
+  root: string,
+  dir: string,
+  count: number,
+  bytesPerFile: number,
+): void {
+  const absoluteDir = join(root, dir);
+  mkdirSync(absoluteDir, { recursive: true });
+  for (let index = 0; index < count; index += 1) {
+    const header = `// Padded near-cap fixture file ${String(index)} (generated; see writePaddedFixtureFiles).\n`;
+    const footer = `export const nearCapFixtureValue${String(index)} = ${String(index)};\n`;
+    const paddingLength = Math.max(0, bytesPerFile - header.length - footer.length);
+    const padding = paddingLength > 0 ? `// ${"x".repeat(paddingLength)}\n` : "";
+    writeFileSync(
+      join(absoluteDir, `padded-${String(index)}.ts`),
+      `${header}${padding}${footer}`,
+      "utf8",
+    );
+  }
+}
+
+/**
  * Seed the persisted editor window via `addInitScript` (runs on every navigation, including reload).
  * The workspace entry is written only when absent so a reload reads the layout the app persisted —
  * the precondition that lets persistence and recovery scenarios prove real round-trips rather than
