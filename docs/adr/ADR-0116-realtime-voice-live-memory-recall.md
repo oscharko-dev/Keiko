@@ -1,4 +1,4 @@
-# ADR-0115: Realtime voice live memory recall — mid-session `recall_keiko_memory` tool, session priming, and spaced reinforcement
+# ADR-0116: Realtime voice live memory recall — mid-session `recall_keiko_memory` tool, session priming, and spaced reinforcement
 
 ## Status
 

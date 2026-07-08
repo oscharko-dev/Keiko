@@ -1,4 +1,4 @@
-# ADR-0116: Type-aware memory decay (semanticization) — per-type disuse half-life, env-gated rollout
+# ADR-0117: Type-aware memory decay (semanticization) — per-type disuse half-life, env-gated rollout
 
 ## Status
 
@@ -84,7 +84,7 @@ behaviour change here.
   confidence immutability, O-V4 bounded autonomous maintenance.
 - [`packages/keiko-memory-governance/src/maintenance.ts`](../../packages/keiko-memory-governance/src/maintenance.ts) —
   the maintenance planner where the multiplier is applied.
-- [ADR-0115](ADR-0115-realtime-voice-live-memory-recall.md) — the conversational-memory sibling
+- [ADR-0116](ADR-0116-realtime-voice-live-memory-recall.md) — the conversational-memory sibling
   milestone (plasticity/recall); this ADR is the forgetting sibling.
 
 ## Date
