@@ -104,6 +104,51 @@ export const MEMORY_TYPES: readonly MemoryType[] = [
   "pinned",
 ] as const;
 
+// ─── Type-aware decay half-life multipliers (systems consolidation / semanticization) ──────────
+// Human memory does not forget everything at one rate. The complementary-learning-systems model
+// (McClelland/McNaughton/O'Reilly) distinguishes a fast-learning, fast-FADING episodic store
+// (hippocampal — specific events) from a slow-consolidating, durable semantic/procedural store
+// (neocortical — gist facts and skills). "Semanticization" is the transfer from the former to the
+// latter: the specific dinner fades in weeks; that you are vegetarian persists for years.
+//
+// These are MULTIPLIERS on the base disuse half-life used by the forgetting/maintenance pass:
+//   effectiveHalfLife = baseHalfLife * multiplier
+// A multiplier > 1 slows decay (the memory resists disuse-forgetting longer); < 1 speeds it up.
+// The vocabulary is TOTAL over MemoryType so a new type surfaces here as a compile error rather
+// than silently defaulting. `pinned`/`correction`/`negative` are neutral (1): pinned never decays
+// anyway (guarded upstream), and corrections/negatives are governance artifacts whose retention is
+// driven by their supersession/conflict semantics, not by a disuse curve.
+//
+// This is a RECOMMENDED preset. Consumers that pass no per-type multipliers get a flat multiplier
+// of 1 for every type — byte-identical to the pre-semanticization single-half-life behaviour — so
+// the effect is strictly opt-in (the established convention for every optional memory signal).
+export const MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS: Readonly<Record<MemoryType, number>> = {
+  episodic: 0.5, // specific events fade fastest — the hippocampal, rapidly-forgotten store
+  "semantic-fact": 1.5, // consolidated gist knowledge is durable
+  procedural: 2, // skills and habits are the most persistent form of memory
+  preference: 1.5, // stable dispositions persist
+  correction: 1, // governance artifact — retention driven by supersession, not disuse
+  decision: 1.25, // durable but revisitable
+  negative: 1, // "do-not" facts — neutral disuse curve
+  pinned: 1, // pinned never decays (guarded upstream); neutral for completeness
+} as const;
+
+// Pure lookup: the per-type half-life multiplier, honouring an optional partial override map (a
+// caller may tune a single type without restating the whole table). A `null`/`undefined`/NaN or
+// non-positive override is ignored in favour of the preset, so a malformed policy can never zero or
+// invert a memory's decay. Returns 1 for a type absent from both override and preset (defensive).
+export function decayHalfLifeMultiplierForType(
+  type: MemoryType,
+  overrides?: Partial<Record<MemoryType, number>>,
+): number {
+  const override = overrides?.[type];
+  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+    return override;
+  }
+  const preset = MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS[type];
+  return typeof preset === "number" && preset > 0 ? preset : 1;
+}
+
 // ─── Sensitivity ──────────────────────────────────────────────────────────────
 // Capture (#207) and audit (#214) MUST honour the sensitivity contract:
 //  - "public":       safe for evidence persistence and MemoriaViva display.

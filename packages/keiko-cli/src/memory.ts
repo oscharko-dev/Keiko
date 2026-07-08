@@ -217,12 +217,20 @@ async function runMaintain(
   env: EnvSource,
   deps: MemoryCliDeps,
 ): Promise<number> {
-  const [{ runMemoryMaintenance }, evidence] = await Promise.all([loadServer(), loadEvidence()]);
+  const [{ runMemoryMaintenance, memorySemanticizationMultipliers }, evidence] = await Promise.all([
+    loadServer(),
+    loadEvidence(),
+  ]);
   const vault = resolveVault(args, env, deps);
   const evidenceDir = evidence.resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
   const evidenceStore = deps.evidenceStore ?? evidence.createNodeEvidenceStore(evidenceDir);
+  // Honour KEIKO_MEMORY_SEMANTICIZATION on the CLI exactly as the two server passes do, so the
+  // "CLI and UI never drift" invariant in this module's header holds when the flag is on.
+  const multipliers = memorySemanticizationMultipliers(env);
   try {
-    const counts = runMemoryMaintenance(vault, evidenceStore);
+    const counts = runMemoryMaintenance(vault, evidenceStore, {
+      ...(multipliers !== undefined ? { decayHalfLifeMultiplierByType: multipliers } : {}),
+    });
     io.out(renderMaintenanceReport(counts));
     return 0;
   } finally {
