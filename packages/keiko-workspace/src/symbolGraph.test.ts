@@ -91,6 +91,19 @@ describe("buildSymbolGraph", () => {
     expect(graph.records).toEqual([]);
     expect(graph.diagnostics.unsupportedLanguages).toEqual(["java"]);
   });
+
+  it("stops the scan and marks the graph truncated when the signal is already aborted", async () => {
+    const { scope, fs } = makeScope({
+      "src/config.ts":
+        "export function parseConfig(raw: string): string {\n  return raw.trim();\n}\n",
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, fs, controller.signal);
+    expect(graph.diagnostics.truncated).toBe(true);
+    expect(graph.records).toEqual([]);
+    expect(graph.diagnostics.filesScanned).toBe(0);
+  });
 });
 
 describe("symbolGraphAdapter", () => {
