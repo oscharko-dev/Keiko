@@ -34,6 +34,7 @@ export interface WorkspaceSymbolSearchRequest {
   readonly root: string;
   readonly query: string;
   readonly maxResults: number;
+  readonly scopePath?: string | undefined;
 }
 
 export interface WorkspaceSymbolSearchResult {
@@ -288,6 +289,12 @@ export function validateWorkspaceSymbolSearchRequest(value: unknown): Validation
   validateQuery(value.query, "literal", reasons);
   if (!isPositiveIntegerWithin(value.maxResults, WORKSPACE_SEARCH_MAX_RESULTS)) {
     reasons.push("maxResults invalid");
+  }
+  if (
+    value.scopePath !== undefined &&
+    (typeof value.scopePath !== "string" || !isRelativeWorkspacePathShape(value.scopePath))
+  ) {
+    reasons.push("scopePath invalid");
   }
   return buildResult(reasons);
 }

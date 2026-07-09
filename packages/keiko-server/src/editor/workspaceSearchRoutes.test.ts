@@ -80,6 +80,7 @@ function symbolBody(overrides: Record<string, unknown> = {}): Record<string, unk
 beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), "keiko-workspace-search-route-")));
   await mkdir(join(root, "src"), { recursive: true });
+  await mkdir(join(root, "src", "scoped"), { recursive: true });
   await writeFile(
     join(root, "src", "a.ts"),
     [
@@ -96,6 +97,16 @@ beforeEach(async () => {
     [
       "export function parseConfigBeta(value: string): string {",
       "  return parseConfigBeta(value);",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(
+    join(root, "src", "scoped", "c.ts"),
+    [
+      "export function parseConfigScoped(value: string): string {",
+      "  return value.toUpperCase();",
       "}",
       "",
     ].join("\n"),
@@ -157,6 +168,16 @@ describe("POST /api/editor/workspace-search", () => {
     const sensitiveBody = sensitive.body as { results: unknown[] };
     const insensitiveBody = insensitive.body as { results: unknown[] };
     expect(insensitiveBody.results.length).toBeGreaterThan(sensitiveBody.results.length);
+  });
+
+  it("keeps user-facing workspace search lexical rather than semantic", async () => {
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "configuration parser" })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ results: [] });
   });
 
   it("applies include and exclude glob filters through the governed file-search facade", async () => {
@@ -237,6 +258,38 @@ describe("POST /api/editor/workspace-symbols", () => {
       line: 1,
     });
     expect(body.filesScanned).toBeGreaterThan(0);
+  });
+
+  it("narrows symbol results to the optional root-relative scope", async () => {
+    const result = await handleEditorWorkspaceSymbols(
+      postContext(
+        symbolBody({ query: "parseConfig", scopePath: "src/scoped" }),
+        "/api/editor/workspace-symbols",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: { path: string; symbol: string }[] };
+    expect(body.results).toEqual([
+      expect.objectContaining({ path: "src/scoped/c.ts", symbol: "parseConfigScoped" }),
+    ]);
+  });
+
+  it("rejects denied and escaping symbol scopes before scanning", async () => {
+    const denied = await handleEditorWorkspaceSymbols(
+      postContext(symbolBody({ scopePath: ".git/config" }), "/api/editor/workspace-symbols"),
+      deps(),
+    );
+    const escape = await handleEditorWorkspaceSymbols(
+      postContext(symbolBody({ scopePath: "../secret" }), "/api/editor/workspace-symbols"),
+      deps(),
+    );
+
+    expect(denied.status).toBe(403);
+    expect(denied.body).toMatchObject({ error: { code: "DENIED" } });
+    expect(escape.status).toBe(400);
+    expect(escape.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
   });
 
   it("returns an empty result set when no symbols match", async () => {
@@ -376,6 +429,40 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
     expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
     expect(content).toContain("readConfig");
     expect(content).toContain('export const marker = parseConfig("a");');
+  });
+
+  it("keeps exact closed-file content while using the governed patch preflight", async () => {
+    await writeFile(
+      join(root, "src", "no-newline.ts"),
+      'export const value = "parseConfig";',
+      "utf8",
+    );
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/no-newline.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const body = preview.body as {
+      files: {
+        path: string;
+        baseContentHash: string;
+        edits: readonly unknown[];
+      }[];
+    };
+    const file = body.files[0];
+    if (file === undefined) throw new Error("missing preview file");
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "no-newline.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0 });
+    expect(content).toBe('export const value = "readConfig";');
   });
 
   it("reports a structured conflict when the file changed after preview", async () => {

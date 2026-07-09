@@ -35,6 +35,7 @@ interface CapturedEditor {
   saveKeybinding: () => number | undefined;
   focus: ReturnType<typeof vi.fn>;
   setSelection: ReturnType<typeof vi.fn>;
+  setPosition: ReturnType<typeof vi.fn>;
   revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
   deltaDecorations: ReturnType<typeof vi.fn>;
   executeEdits: ReturnType<typeof vi.fn>;
@@ -181,6 +182,7 @@ vi.mock("@monaco-editor/react", () => {
     restoreViewState: ReturnType<typeof vi.fn>;
     focus: ReturnType<typeof vi.fn>;
     setSelection: ReturnType<typeof vi.fn>;
+    setPosition: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
     executeEdits: ReturnType<typeof vi.fn>;
@@ -216,6 +218,7 @@ vi.mock("@monaco-editor/react", () => {
     selectionListener: ((e: { selection: FakeSelection }) => void) | null;
     focus: ReturnType<typeof vi.fn>;
     setSelection: ReturnType<typeof vi.fn>;
+    setPosition: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
     executeEdits: ReturnType<typeof vi.fn>;
@@ -239,6 +242,7 @@ vi.mock("@monaco-editor/react", () => {
       selectionListener: null,
       focus: vi.fn(),
       setSelection: vi.fn(),
+      setPosition: vi.fn(),
       revealRangeInCenterIfOutsideViewport: vi.fn(),
       deltaDecorations: vi.fn(
         (_oldDecorations: readonly string[], newDecorations: readonly unknown[]) =>
@@ -303,6 +307,7 @@ vi.mock("@monaco-editor/react", () => {
       restoreViewState: vi.fn(),
       focus: s.focus,
       setSelection: s.setSelection,
+      setPosition: s.setPosition,
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
       executeEdits: s.executeEdits,
@@ -345,6 +350,7 @@ vi.mock("@monaco-editor/react", () => {
       saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
       focus: s.focus,
       setSelection: s.setSelection,
+      setPosition: s.setPosition,
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
       executeEdits: s.executeEdits,
@@ -716,6 +722,10 @@ describe("KeikoCodeEditor — reference reveal", () => {
     };
     expect(captured.editor?.focus).toHaveBeenCalled();
     expect(captured.editor?.setSelection).toHaveBeenCalledWith(expectedRange);
+    expect(captured.editor?.setPosition).toHaveBeenCalledWith({
+      lineNumber: expectedRange.startLineNumber,
+      column: expectedRange.startColumn,
+    });
     expect(captured.editor?.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(
       expectedRange,
     );
@@ -749,6 +759,10 @@ describe("KeikoCodeEditor — reference reveal", () => {
       startColumn: 1,
       endLineNumber: 10,
       endColumn: 1,
+    });
+    expect(captured.editor?.setPosition).toHaveBeenLastCalledWith({
+      lineNumber: 10,
+      column: 1,
     });
   });
 });
@@ -856,6 +870,10 @@ describe("KeikoCodeEditor — diagnostic overview markers", () => {
     };
     expect(captured.editor?.focus).toHaveBeenCalled();
     expect(captured.editor?.setSelection).toHaveBeenCalledWith(expectedRange);
+    expect(captured.editor?.setPosition).toHaveBeenCalledWith({
+      lineNumber: expectedRange.startLineNumber,
+      column: expectedRange.startColumn,
+    });
     expect(captured.editor?.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(
       expectedRange,
     );

@@ -19,6 +19,7 @@ const hotExitApi = vi.hoisted(() => {
   const encoder = new TextEncoder();
   let seq = 0;
   const records = new Map<string, unknown>();
+  const snapshotRef = (value: number): string => `hot-exit:${value.toString(16).padStart(64, "0")}`;
   return {
     records,
     reset(): void {
@@ -27,8 +28,8 @@ const hotExitApi = vi.hoisted(() => {
     },
     write: vi.fn((snapshot: EditorHotExitSnapshotV1) => {
       seq += 1;
-      const snapshotRef = `hot-exit-ref-${String(seq)}`;
-      records.set(snapshotRef, {
+      const ref = snapshotRef(seq);
+      records.set(ref, {
         schemaVersion: 1,
         content: snapshot.content,
         baseVersion: snapshot.baseVersion,
@@ -40,7 +41,7 @@ const hotExitApi = vi.hoisted(() => {
         windowId: snapshot.windowId,
       });
       return Promise.resolve({
-        snapshotRef,
+        snapshotRef: ref,
         contentSizeBytes: encoder.encode(snapshot.content).length,
       });
     }),
@@ -391,7 +392,7 @@ describe("editorHotExitStore", () => {
     expect(serialized).not.toContain("secrets/.env");
     expect(serialized).not.toContain("API_KEY");
     expect(serialized).not.toContain("ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    expect(serialized).toContain("hot-exit-ref-1");
+    expect(serialized).toContain(`hot-exit:${"0".repeat(63)}1`);
   });
 
   it("clears the IndexedDB recovery index when the server suppresses secret-shaped content", async () => {
@@ -402,7 +403,7 @@ describe("editorHotExitStore", () => {
     expect(indexedDb.records("keiko-editor-hot-exit", "snapshots").size).toBe(1);
 
     vi.mocked(writeEditorHotExitContent).mockResolvedValueOnce({
-      snapshotRef: "hot-exit-ref-suppressed",
+      snapshotRef: `hot-exit:${"f".repeat(64)}`,
       contentSizeBytes: 0,
       suppressed: true,
     });
@@ -416,6 +417,36 @@ describe("editorHotExitStore", () => {
 
     expect(indexedDb.records("keiko-editor-hot-exit", "snapshots").size).toBe(0);
     await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 2_001)).resolves.toBeNull();
+  });
+
+  it("purges malformed local index records without sending a remote delete", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    await writeEditorHotExitSnapshot(snapshot());
+    const records = indexedDb.records("keiko-editor-hot-exit", "snapshots");
+    const entry = [...records.entries()][0];
+    if (entry === undefined) throw new Error("Expected a local hot-exit index record.");
+    const [hash, raw] = entry;
+    records.set(hash, { ...(raw as Record<string, unknown>), snapshotRef: undefined });
+    vi.mocked(deleteEditorHotExitContent).mockClear();
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 1_001)).resolves.toBeNull();
+
+    expect(deleteEditorHotExitContent).not.toHaveBeenCalled();
+    expect(records.size).toBe(0);
+  });
+
+  it("removes the local recovery index even when the server delete fails", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    await writeEditorHotExitSnapshot(snapshot());
+    const remoteError = new Error("remote delete unavailable");
+    vi.mocked(deleteEditorHotExitContent).mockRejectedValueOnce(remoteError);
+
+    await expect(deleteEditorHotExitSnapshot("/repo", "src/app.ts")).rejects.toBe(remoteError);
+
+    expect(indexedDb.records("keiko-editor-hot-exit", "snapshots").size).toBe(0);
+    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 1_001)).resolves.toBeNull();
   });
 
   it("purges legacy v1 plaintext IndexedDB records during the v2 upgrade", async () => {

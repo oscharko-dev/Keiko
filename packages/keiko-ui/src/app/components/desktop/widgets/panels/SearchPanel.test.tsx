@@ -25,6 +25,36 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("../cards/EditorDiffSurface", () => ({
+  buildWorkspaceReplacePatchModel: (response: {
+    readonly files: readonly { readonly path: string }[];
+    readonly fileCount: number;
+    readonly omittedFileCount: number;
+    readonly truncated: boolean;
+  }) => ({
+    patchId: "workspace-replace-preview",
+    status: "previewed",
+    provenance: { origin: "applied-patch" },
+    files: response.files.map((file) => ({
+      uri: file.path,
+      displayPath: file.path,
+      status: "modified",
+      diffable: true,
+      original: "before",
+      modified: "after",
+      language: "typescript",
+      hasChanges: true,
+      truncated: false,
+    })),
+    fileCount: response.files.length,
+    totalFileCount: response.fileCount + response.omittedFileCount,
+    omittedFileCount: response.omittedFileCount,
+    createdCount: 0,
+    modifiedCount: response.files.length,
+    deletedCount: 0,
+    binaryCount: 0,
+    unsupportedCount: 0,
+    truncated: response.truncated,
+  }),
   default: ({ onApply }: { readonly onApply?: (() => void) | undefined }) => (
     <div data-testid="replace-diff">
       <button type="button" onClick={onApply}>
@@ -315,6 +345,56 @@ describe("SearchPanel", () => {
         expect.objectContaining({ path: "src/app.ts", baseContentHash: "a".repeat(64) }),
       ]),
     });
+  });
+
+  it("surfaces replace preview failures without keeping a stale diff", async () => {
+    fetchWorkspaceReplacePreviewMock.mockRejectedValueOnce(new Error("Replace preview denied."));
+    renderPanel();
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+
+    await screen.findByText("Replace preview denied.");
+    expect(screen.queryByTestId("replace-diff")).toBeNull();
+  });
+
+  it("surfaces structured replace apply conflicts by file", async () => {
+    applyWorkspaceReplaceMock.mockResolvedValueOnce({
+      appliedCount: 0,
+      conflictCount: 1,
+      conflicts: [
+        {
+          path: "src/app.ts",
+          reason: "write-conflict",
+          detail: "content changed after preview",
+        },
+      ],
+    });
+    renderPanel();
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByTestId("replace-diff");
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace" }));
+
+    await screen.findByText(
+      "0 files applied. 1 files reported conflicts. Conflicts: src/app.ts (write-conflict).",
+    );
+  });
+
+  it("surfaces replace apply route failures", async () => {
+    applyWorkspaceReplaceMock.mockRejectedValueOnce(new Error("Replace apply unavailable."));
+    renderPanel();
+    await searchFor("needle");
+    fireEvent.change(screen.getByLabelText("Replacement"), { target: { value: "thread" } });
+    fireEvent.click(screen.getByRole("button", { name: "Preview replace" }));
+    await screen.findByTestId("replace-diff");
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace" }));
+
+    await screen.findByText("Replace apply unavailable.");
   });
 
   it("applies reviewed replacements to open buffers before writing closed files", async () => {

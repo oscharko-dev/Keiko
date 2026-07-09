@@ -35,7 +35,11 @@ import {
   type SearchScope,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { createContainedNodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
+import { applyPatch, validatePatch } from "@oscharko-dev/keiko-tools";
+import {
+  createContainedNodeWorkspaceWriter,
+  type WorkspaceWriter,
+} from "@oscharko-dev/keiko-tools/internal/writer";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
@@ -47,6 +51,12 @@ const MAX_WORKSPACE_SEARCH_BODY_BYTES = 64 * 1024;
 const MAX_WORKSPACE_REPLACE_APPLY_BODY_BYTES = 2 * 1024 * 1024;
 const WORKSPACE_SEARCH_SCOPE_ID = "editor-workspace-search";
 const WORKSPACE_SEARCH_SNIPPET_BYTES = 8 * 1024;
+const PREFLIGHT_WRITER: WorkspaceWriter = {
+  writeFileUtf8: () => undefined,
+  mkdirp: () => undefined,
+  remove: () => undefined,
+  rename: () => undefined,
+};
 
 function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
@@ -73,11 +83,11 @@ function clientAbortSignal(ctx: RouteContext): AbortSignal {
   return controller.signal;
 }
 
-function buildSearchScope(realRoot: string): SearchScope {
+function buildSearchScope(realRoot: string, relativePaths: readonly string[] = []): SearchScope {
   return {
     workspace: detectWorkspaceAt(realRoot, nodeWorkspaceFs),
     scopeId: WORKSPACE_SEARCH_SCOPE_ID,
-    relativePaths: [],
+    relativePaths,
   };
 }
 
@@ -96,6 +106,12 @@ function assertAllowedApplyFiles(request: WorkspaceReplaceApplyRequest): void {
     if (pathIsDenied(file.path)) {
       throw new PathDeniedError(file.path, DENIED_MESSAGE);
     }
+  }
+}
+
+function assertAllowedSymbolScope(request: WorkspaceSymbolSearchRequest): void {
+  if (request.scopePath !== undefined && pathIsDenied(request.scopePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
 }
 
@@ -399,6 +415,7 @@ function parseWorkspaceSymbolSearchRequest(
     root: rootFieldOf(body) ?? "",
     query: body.query as string,
     maxResults: body.maxResults as number,
+    ...(typeof body.scopePath === "string" ? { scopePath: body.scopePath } : {}),
   };
 }
 
@@ -524,6 +541,75 @@ function conflictFor(
   return { path: file.path, reason: "write-conflict", detail };
 }
 
+function diffLines(content: string): readonly string[] {
+  if (content.length === 0) return [];
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+function renderFullFileModifyDiff(path: string, original: string, next: string): string {
+  const oldLines = diffLines(original);
+  const newLines = diffLines(next);
+  return [
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -1,${String(oldLines.length)} +1,${String(newLines.length)} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+    "",
+  ].join("\n");
+}
+
+function validationReason(
+  validation: ReturnType<typeof validatePatch>,
+): WorkspaceReplaceApplyConflict["reason"] {
+  if (validation.conflicts.length > 0) return "write-conflict";
+  if (validation.files.length === 0 && validation.reasons.length === 0) return "empty-patch";
+  const code = validation.reasons[0]?.code;
+  if (code === "path-denied" || code === "path-unsafe") return "out-of-scope";
+  return "invalid-patch";
+}
+
+function validationDetail(validation: ReturnType<typeof validatePatch>): string {
+  const conflict = validation.conflicts[0];
+  if (conflict !== undefined) return conflict.reason;
+  return validation.reasons[0]?.message ?? "replace patch validation failed";
+}
+
+function validateReplacePatchPreflight(
+  scope: SearchScope,
+  file: WorkspaceReplaceApplyFile,
+  original: string,
+  next: string,
+): WorkspaceReplaceApplyConflict | null {
+  // Preflight through keiko-tools for scope/conflict semantics, then write the exact range-applied
+  // text below so no-final-newline files are not normalized by the hunk applier.
+  const diff = renderFullFileModifyDiff(file.path, original, next);
+  const validation = validatePatch(scope.workspace, diff, { fs: nodeWorkspaceFs });
+  if (!validation.ok) {
+    return {
+      path: file.path,
+      reason: validationReason(validation),
+      detail: validationDetail(validation),
+    };
+  }
+  try {
+    applyPatch(scope.workspace, diff, {
+      applyEnabled: true,
+      signal: new AbortController().signal,
+      fs: nodeWorkspaceFs,
+      writer: PREFLIGHT_WRITER,
+    });
+    return null;
+  } catch (error) {
+    return conflictFor(
+      file,
+      error instanceof Error ? error.message : "replace patch preflight failed",
+    );
+  }
+}
+
 function applyReplaceFile(
   scope: SearchScope,
   file: WorkspaceReplaceApplyFile,
@@ -539,6 +625,8 @@ function applyReplaceFile(
   }
   const next = applyReplaceEditsToText(content.text, file.edits);
   if (next === null) return conflictFor(file, "preview edits no longer match current content");
+  const patchConflict = validateReplacePatchPreflight(scope, file, content.text, next);
+  if (patchConflict !== null) return patchConflict;
   const writer = createContainedNodeWorkspaceWriter(scope.workspace.root);
   writer.writeFileUtf8(join(scope.workspace.root, file.path), next);
   return null;
@@ -601,7 +689,11 @@ export async function handleEditorWorkspaceSymbols(
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
-    const scope = buildSearchScope(root.realRoot);
+    assertAllowedSymbolScope(request);
+    const scope = buildSearchScope(
+      root.realRoot,
+      request.scopePath === undefined ? [] : [request.scopePath],
+    );
     const response = await buildSymbolSearchResponse(scope, request);
     return { status: 200, body: deps.redactor(response) };
   });
