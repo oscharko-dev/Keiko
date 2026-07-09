@@ -22,6 +22,10 @@ permissions:
 jobs:
   stage:
     name: Stage portable asset (${{ matrix.platform_target }})
+    # Portable v1 is stable-only by contract (stage-portable-runtime.mjs rejects prerelease
+    # root versions), so prerelease tags such as v0.2.15-beta.0 skip staging instead of
+    # failing; beta publishes ship without portable assets.
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-') }}
     strategy:
       fail-fast: false
       matrix:
