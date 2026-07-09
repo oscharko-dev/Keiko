@@ -141,7 +141,7 @@ test("autonomous confirmed and completed states show governed gateway handoff @s
   ).toBeVisible();
   await expect(page.getByText("Draft PR created through governed PR gateway")).toBeVisible();
   await expect(page.getByText("All closeout gates passed")).toBeVisible();
-  await expect(page.getByText("governed-pr-gateway-handoff")).toBeVisible();
+  await expect(page.getByText("pull", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop sidecar" })).toBeDisabled();
   await expectRedactedSurface(page);
   await page.screenshot({

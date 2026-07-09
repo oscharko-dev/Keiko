@@ -8,7 +8,7 @@ import type {
   CodingWorkbenchProjection,
 } from "./codingWorkbenchProjection";
 
-const RUN_ID = "cw-issue-1991";
+const RUN_ID = "run-1991";
 
 const MODE_OPTIONS: readonly CodingWorkbenchModeOption[] = Object.freeze([
   { mode: "governed-assist", enabled: true },
@@ -24,17 +24,17 @@ const AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
   runId: RUN_ID,
   localUser: "local-operator",
-  taskRefs: ["issue/1991"],
+  taskRefs: ["issue-1991"],
   workspace: {
-    workspaceId: "workspace-keiko-redacted",
-    rootLabel: "Keiko",
+    workspaceId: "workspace-keiko",
+    rootLabel: "keiko-workspace",
     rootDigest: "d".repeat(64),
   },
   branch: {
-    baseRef: "epic/coding-workbench-opencode-codex",
-    headRef: "issue/1991-governed-assist-mode",
+    baseRef: "dev",
+    headRef: "issue/1991-governed",
     allowDetachedHead: false,
-    allowedPrefixes: ["issue/", "epic/"],
+    allowedPrefixes: ["issue/", "codex/"],
   },
   requestedMode: "governed-assist",
   deploymentCeiling: "governed-assist",
@@ -51,7 +51,7 @@ const AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   commandPolicy: {
     mode: "deny",
     allow: [],
-    deny: ["workspace-write", "command-execution", "network-egress", "delivery-substrate"],
+    deny: ["curl"],
     maxCommandTimeoutMs: 600_000,
     requirePerCommandApproval: true,
   },
@@ -76,26 +76,29 @@ function event(
   kind: CodingWorkbenchRuntimeEvent["kind"],
   patch: Partial<CodingWorkbenchRuntimeEvent> = {},
 ): CodingWorkbenchRuntimeEvent {
-  return {
+  const baseEvent = {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
-    eventId: `cw-1991-${String(sequence)}`,
+    eventId: `evt-1991-${String(sequence)}`,
     runId: RUN_ID,
     occurredAt: `2026-07-07T20:${String(10 + sequence).padStart(2, "0")}:00.000Z`,
     kind,
-    sequence,
-    ...patch,
   };
+  return kind === "observation-streamed"
+    ? { ...baseEvent, sequence, ...patch }
+    : { ...baseEvent, ...patch };
 }
 
 const TIMELINE: readonly CodingWorkbenchRuntimeEvent[] = Object.freeze([
   event(1, "task-submitted", {
-    taskRef: "github:issue/1991",
+    taskRef: "issue-1991",
     requestedMode: "governed-assist",
     effectiveMode: "governed-assist",
   }),
   event(2, "runtime-started", {
     runtimeSource: "codex-cli-adapter",
     modelSource: "chatgpt-codex-subscription-profile",
+    requestedMode: "governed-assist",
+    effectiveMode: "governed-assist",
   }),
   event(3, "diff-summarized", { fileCount: 3, addedLines: 120, deletedLines: 14 }),
 ]);

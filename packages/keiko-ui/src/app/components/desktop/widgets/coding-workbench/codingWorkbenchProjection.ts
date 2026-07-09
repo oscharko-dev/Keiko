@@ -66,7 +66,8 @@ export interface CodingWorkbenchProjection {
   readonly permissionRequest?: CodingWorkbenchPermissionRequest;
 }
 
-const RUN_ID = "cw-issue-1990";
+const RUN_ID = "run-1990";
+const SUPERVISED_RUN_ID = "run-1992";
 
 const MODE_OPTIONS: readonly CodingWorkbenchModeOption[] = Object.freeze([
   { mode: "governed-assist", enabled: true },
@@ -82,23 +83,29 @@ const AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
   runId: RUN_ID,
   localUser: "local-operator",
-  taskRefs: ["github:issue/1990"],
+  taskRefs: ["issue-1990"],
   workspace: {
-    workspaceId: "workspace-keiko-redacted",
-    rootLabel: "Keiko",
-    rootDigest: "root-digest-redacted",
+    workspaceId: "workspace-keiko",
+    rootLabel: "keiko-workspace",
+    rootDigest: "a".repeat(64),
   },
   branch: {
-    baseRef: "epic/coding-workbench-opencode-codex",
+    baseRef: "dev",
     headRef: "issue/1990-coding-workbench-ui",
     allowDetachedHead: false,
-    allowedPrefixes: ["issue/", "epic/"],
+    allowedPrefixes: ["issue/", "codex/"],
   },
   requestedMode: "supervised-coding",
   deploymentCeiling: "supervised-coding",
   effectiveMode: "supervised-coding",
   runtimeSource: "codex-cli-adapter",
-  actionClasses: ["workspace-read", "workspace-write", "command-execution", "verification"],
+  actionClasses: [
+    "workspace-read",
+    "workspace-write",
+    "command-execution",
+    "verification",
+    "connector-access",
+  ],
   connectorScopes: ["source-control.read", "issue-tracker.read"],
   modelProfile: {
     profileId: "profile-codex-subscription-redacted",
@@ -108,15 +115,15 @@ const AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   },
   commandPolicy: {
     mode: "governed",
-    allow: ["npm run typecheck", "npm run lint", "npm test"],
-    deny: ["unguarded-secret-read", "unscoped-network-egress"],
+    allow: ["npm", "node"],
+    deny: ["curl"],
     maxCommandTimeoutMs: 600_000,
     requirePerCommandApproval: true,
   },
   networkPolicy: {
-    mode: "connector-scoped-egress",
-    allowLoopback: true,
-    connectorScopes: ["source-control.read", "issue-tracker.read"],
+    mode: "deny-all",
+    allowLoopback: false,
+    connectorScopes: [],
   },
   gates: ["human-approval", "branch-allowlist", "verification-green", "policy-review"],
   budget: {
@@ -126,20 +133,20 @@ const AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
     maxPatchBytes: 500_000,
   },
   expiresAt: "2026-07-08T00:00:00.000Z",
-  approvalProofDigest: "approval-proof-redacted",
+  approvalProofDigest: "d".repeat(64),
 };
 
 const SUPERVISED_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   ...AUTHORITY,
-  runId: "cw-issue-1992",
-  taskRefs: ["github:issue/1992"],
+  runId: SUPERVISED_RUN_ID,
+  taskRefs: ["issue-1992"],
   branch: {
     ...AUTHORITY.branch,
-    headRef: "issue/1992-supervised-coding-mode",
+    headRef: "issue/1992-supervised-coding",
   },
   commandPolicy: {
     mode: "allowlisted",
-    allow: ["typecheck", "lint", "test", "format-check", "arch-check"],
+    allow: ["npm", "node"],
     deny: ["unknown-command-denied", "mutating-command-denied"],
     maxCommandTimeoutMs: 600_000,
     requirePerCommandApproval: false,
@@ -147,31 +154,53 @@ const SUPERVISED_AUTHORITY: CodingWorkbenchAuthorityEnvelope = {
   approvalProofDigest: "f".repeat(64),
 };
 
+function eventForRun(
+  runId: string,
+  eventPrefix: string,
+  hour: string,
+  sequence: number,
+  kind: CodingWorkbenchRuntimeEvent["kind"],
+  patch: Partial<CodingWorkbenchRuntimeEvent> = {},
+): CodingWorkbenchRuntimeEvent {
+  const baseEvent = {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    eventId: `${eventPrefix}-${String(sequence)}`,
+    runId,
+    occurredAt: `2026-07-07T${hour}:${String(10 + sequence).padStart(2, "0")}:00.000Z`,
+    kind,
+  };
+  return kind === "observation-streamed"
+    ? { ...baseEvent, sequence, ...patch }
+    : { ...baseEvent, ...patch };
+}
+
 function event(
   sequence: number,
   kind: CodingWorkbenchRuntimeEvent["kind"],
   patch: Partial<CodingWorkbenchRuntimeEvent> = {},
 ): CodingWorkbenchRuntimeEvent {
-  return {
-    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
-    eventId: `cw-1990-${String(sequence)}`,
-    runId: RUN_ID,
-    occurredAt: `2026-07-07T18:${String(10 + sequence).padStart(2, "0")}:00.000Z`,
-    kind,
-    sequence,
-    ...patch,
-  };
+  return eventForRun(RUN_ID, "evt-1990", "18", sequence, kind, patch);
+}
+
+function supervisedEvent(
+  sequence: number,
+  kind: CodingWorkbenchRuntimeEvent["kind"],
+  patch: Partial<CodingWorkbenchRuntimeEvent> = {},
+): CodingWorkbenchRuntimeEvent {
+  return eventForRun(SUPERVISED_RUN_ID, "evt-1992", "21", sequence, kind, patch);
 }
 
 const RUNNING_TIMELINE: readonly CodingWorkbenchRuntimeEvent[] = Object.freeze([
   event(1, "task-submitted", {
-    taskRef: "github:issue/1990",
+    taskRef: "issue-1990",
     requestedMode: "supervised-coding",
     effectiveMode: "supervised-coding",
   }),
   event(2, "runtime-started", {
     runtimeSource: "codex-cli-adapter",
     modelSource: "chatgpt-codex-subscription-profile",
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
   }),
   event(3, "observation-streamed", {
     channel: "status",
@@ -185,16 +214,40 @@ const RUNNING_TIMELINE: readonly CodingWorkbenchRuntimeEvent[] = Object.freeze([
   }),
 ]);
 
+const SUPERVISED_TIMELINE: readonly CodingWorkbenchRuntimeEvent[] = Object.freeze([
+  supervisedEvent(1, "task-submitted", {
+    taskRef: "issue-1992",
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+  }),
+  supervisedEvent(2, "runtime-started", {
+    runtimeSource: "codex-cli-adapter",
+    modelSource: "chatgpt-codex-subscription-profile",
+    requestedMode: "supervised-coding",
+    effectiveMode: "supervised-coding",
+  }),
+  supervisedEvent(3, "observation-streamed", {
+    channel: "status",
+    byteCount: 0,
+    truncated: false,
+  }),
+  supervisedEvent(4, "diff-summarized", {
+    fileCount: 4,
+    addedLines: 180,
+    deletedLines: 12,
+  }),
+]);
+
 const PERMISSION_REQUEST: CodingWorkbenchPermissionRequest = Object.freeze({
   requestId: "perm-1990-write",
   kind: "workspace-write",
   actionClass: "workspace-write",
-  reasonCode: "apply-redacted-ui-patch",
+  reasonCode: "approval-required",
   actionKind: "file-edit",
   scopeLabel: "workspace-scope",
   risk: "medium",
   policyReason: "approval-required",
-  commandLabel: "workspace patch",
+  commandLabel: "workspace-write",
   expiresAt: "2026-07-07T19:30:00.000Z",
 });
 
@@ -309,15 +362,15 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     policyDenials: [],
     permissionRequest: SUPERVISED_DELIVERY_PERMISSION_REQUEST,
     timeline: [
-      ...RUNNING_TIMELINE,
-      event(5, "verification-summarized", {
-        verificationKind: "typecheck",
+      ...SUPERVISED_TIMELINE,
+      supervisedEvent(5, "verification-summarized", {
+        verificationKind: "verification",
         verificationStatus: "passed",
         passedCount: 18,
         failedCount: 0,
         skippedCount: 0,
       }),
-      event(6, "permission-requested", {
+      supervisedEvent(6, "permission-requested", {
         permissionRequest: SUPERVISED_DELIVERY_PERMISSION_REQUEST,
       }),
     ],
@@ -340,8 +393,8 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     deliveryStatus: "Approved once for this scope",
     policyDenials: [],
     timeline: [
-      ...RUNNING_TIMELINE,
-      event(5, "artifact-produced", {
+      ...SUPERVISED_TIMELINE,
+      supervisedEvent(5, "artifact-produced", {
         artifactKind: "approval",
         artifactLabel: "approval-proof-accepted",
         artifactDigest: "f".repeat(64),
@@ -367,8 +420,8 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     deliveryStatus: "Denied before mutation",
     policyDenials: ["operator-denied"],
     timeline: [
-      ...RUNNING_TIMELINE,
-      event(5, "failure-redacted", {
+      ...SUPERVISED_TIMELINE,
+      supervisedEvent(5, "failure-redacted", {
         failureCode: "operator-denied",
         failureSummary: "operator-denied",
         retryable: false,
@@ -393,8 +446,8 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     deliveryStatus: "Stopped before mutation",
     policyDenials: ["operator-stopped"],
     timeline: [
-      ...RUNNING_TIMELINE,
-      event(5, "runtime-stopped", {
+      ...SUPERVISED_TIMELINE,
+      supervisedEvent(5, "runtime-stopped", {
         runtimeSource: "codex-cli-adapter",
         modelSource: "chatgpt-codex-subscription-profile",
         health: "stopped",
@@ -420,15 +473,15 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     deliveryStatus: "Delivery blocked by verification",
     policyDenials: ["redacted-failure"],
     timeline: [
-      ...RUNNING_TIMELINE,
-      event(5, "verification-summarized", {
-        verificationKind: "test",
+      ...SUPERVISED_TIMELINE,
+      supervisedEvent(5, "verification-summarized", {
+        verificationKind: "verification",
         verificationStatus: "failed",
         passedCount: 17,
         failedCount: 1,
         skippedCount: 0,
       }),
-      event(6, "failure-redacted", {
+      supervisedEvent(6, "failure-redacted", {
         failureCode: "redacted-failure",
         failureSummary: "redacted-failure",
         retryable: true,
@@ -456,7 +509,7 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
       ...RUNNING_TIMELINE,
       event(5, "failure-redacted", {
         failureCode: "policy-denied",
-        failureSummary: "Governance policy denied a privileged request.",
+        failureSummary: "policy-denied",
         retryable: true,
       }),
     ],
@@ -487,7 +540,7 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     timeline: [
       ...RUNNING_TIMELINE,
       event(5, "verification-summarized", {
-        verificationKind: "ui",
+        verificationKind: "verification",
         verificationStatus: "failed",
         passedCount: 10,
         failedCount: 1,
@@ -515,16 +568,16 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
     timeline: [
       ...RUNNING_TIMELINE,
       event(5, "verification-summarized", {
-        verificationKind: "ui",
+        verificationKind: "verification",
         verificationStatus: "passed",
         passedCount: 12,
         failedCount: 0,
         skippedCount: 0,
       }),
       event(6, "artifact-produced", {
-        artifactKind: "evidence",
-        artifactLabel: "content-free verification receipt",
-        artifactDigest: "artifact-digest-redacted",
+        artifactKind: "artifact",
+        artifactLabel: "verification-green",
+        artifactDigest: "8".repeat(64),
         artifactBytes: 2048,
       }),
     ],

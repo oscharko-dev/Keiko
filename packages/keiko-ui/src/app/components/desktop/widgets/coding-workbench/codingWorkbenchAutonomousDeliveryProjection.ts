@@ -8,7 +8,7 @@ import type {
   CodingWorkbenchProjection,
 } from "./codingWorkbenchProjection";
 
-const RUN_ID = "cw-issue-1994";
+const RUN_ID = "run-1994";
 const DIGEST = "9".repeat(64);
 
 const AUTONOMOUS_MODE_OPTIONS: readonly CodingWorkbenchModeOption[] = Object.freeze([
@@ -21,15 +21,15 @@ const AUTONOMOUS_AUTHORITY = {
   schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
   runId: RUN_ID,
   localUser: "local-operator",
-  taskRefs: ["github:issue/1994"],
+  taskRefs: ["issue-1994"],
   workspace: {
-    workspaceId: "workspace-keiko-redacted",
-    rootLabel: "Keiko",
+    workspaceId: "workspace-keiko",
+    rootLabel: "keiko-workspace",
     rootDigest: DIGEST,
   },
   branch: {
-    baseRef: "epic/coding-workbench-opencode-codex",
-    headRef: "issue/1994-coding-autonomy-qa-matrix",
+    baseRef: "dev",
+    headRef: "issue/1994-coding-workbench",
     allowDetachedHead: false,
     allowedPrefixes: ["issue/"],
   },
@@ -55,8 +55,8 @@ const AUTONOMOUS_AUTHORITY = {
   },
   commandPolicy: {
     mode: "governed",
-    allow: ["typecheck", "lint", "test", "arch-check"],
-    deny: ["unknown-command-denied", "unguarded-secret-read"],
+    allow: ["npm", "node"],
+    deny: ["unknown-command-denied"],
     maxCommandTimeoutMs: 600_000,
     requirePerCommandApproval: false,
   },
@@ -81,26 +81,29 @@ function event(
   kind: CodingWorkbenchRuntimeEvent["kind"],
   patch: Partial<CodingWorkbenchRuntimeEvent> = {},
 ): CodingWorkbenchRuntimeEvent {
-  return {
+  const baseEvent = {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
-    eventId: `cw-1994-${String(sequence)}`,
+    eventId: `evt-1994-${String(sequence)}`,
     runId: RUN_ID,
     occurredAt: `2026-07-08T10:${String(10 + sequence).padStart(2, "0")}:00.000Z`,
     kind,
-    sequence,
-    ...patch,
   };
+  return kind === "observation-streamed"
+    ? { ...baseEvent, sequence, ...patch }
+    : { ...baseEvent, ...patch };
 }
 
 const BASE_TIMELINE: readonly CodingWorkbenchRuntimeEvent[] = Object.freeze([
   event(1, "task-submitted", {
-    taskRef: "github:issue/1994",
+    taskRef: "issue-1994",
     requestedMode: "autonomous-delivery",
     effectiveMode: "autonomous-delivery",
   }),
   event(2, "runtime-started", {
     runtimeSource: "delivery-runner",
     modelSource: "keiko-model-gateway",
+    requestedMode: "autonomous-delivery",
+    effectiveMode: "autonomous-delivery",
   }),
   event(3, "observation-streamed", {
     channel: "status",
@@ -141,7 +144,7 @@ export const AUTONOMOUS_DELIVERY_PROJECTIONS = Object.freeze({
       ...BASE_TIMELINE,
       event(4, "diff-summarized", { fileCount: 5, addedLines: 260, deletedLines: 18 }),
       event(5, "verification-summarized", {
-        verificationKind: "matrix",
+        verificationKind: "verification",
         verificationStatus: "partial",
         passedCount: 24,
         failedCount: 0,
@@ -169,8 +172,8 @@ export const AUTONOMOUS_DELIVERY_PROJECTIONS = Object.freeze({
     timeline: [
       ...BASE_TIMELINE,
       event(4, "failure-redacted", {
-        failureCode: "authority-expired",
-        failureSummary: "authority-expired",
+        failureCode: "approval-expired",
+        failureSummary: "approval-expired",
         retryable: true,
       }),
     ],
@@ -195,7 +198,7 @@ export const AUTONOMOUS_DELIVERY_PROJECTIONS = Object.freeze({
     timeline: [
       ...BASE_TIMELINE,
       event(4, "verification-summarized", {
-        verificationKind: "test",
+        verificationKind: "verification",
         verificationStatus: "failed",
         passedCount: 31,
         failedCount: 1,
@@ -228,15 +231,15 @@ export const AUTONOMOUS_DELIVERY_PROJECTIONS = Object.freeze({
     timeline: [
       ...BASE_TIMELINE,
       event(4, "verification-summarized", {
-        verificationKind: "matrix",
+        verificationKind: "verification",
         verificationStatus: "passed",
         passedCount: 42,
         failedCount: 0,
         skippedCount: 0,
       }),
       event(5, "artifact-produced", {
-        artifactKind: "pull-request",
-        artifactLabel: "governed-pr-gateway-handoff",
+        artifactKind: "artifact",
+        artifactLabel: "pull",
         artifactDigest: DIGEST,
         artifactBytes: 0,
       }),

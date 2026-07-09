@@ -4,6 +4,8 @@ import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
+  validateCodingWorkbenchAuthorityEnvelope,
+  validateCodingWorkbenchRuntimeEvent,
   type CodingWorkbenchCodexSubscriptionProfile,
   type CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -56,6 +58,36 @@ function api(): CodingWorkbenchWindowApi {
 }
 
 describe("CodingWorkbenchWindow", () => {
+  it("keeps every preview Authority Envelope aligned with the shared contract", () => {
+    for (const [name, projection] of Object.entries(CODING_WORKBENCH_PROJECTIONS)) {
+      const validation = validateCodingWorkbenchAuthorityEnvelope(projection.authority);
+      expect(validation.ok ? [] : validation.errors, name).toEqual([]);
+      expect(validation, name).toMatchObject({ ok: true });
+    }
+  });
+
+  it("keeps every preview runtime event aligned with the shared contract", () => {
+    for (const [name, projection] of Object.entries(CODING_WORKBENCH_PROJECTIONS)) {
+      for (const event of projection.timeline) {
+        const validation = validateCodingWorkbenchRuntimeEvent(event);
+        expect(validation.ok ? [] : validation.errors, `${name}:${event.eventId}`).toEqual([]);
+        expect(validation, `${name}:${event.eventId}`).toMatchObject({ ok: true });
+      }
+    }
+  });
+
+  it("keeps preview task events inside the Authority Envelope scope", () => {
+    for (const [name, projection] of Object.entries(CODING_WORKBENCH_PROJECTIONS)) {
+      for (const event of projection.timeline) {
+        if (event.kind === "task-submitted") {
+          expect(projection.authority.taskRefs, `${name}:${event.eventId}`).toContain(
+            event.taskRef,
+          );
+        }
+      }
+    }
+  });
+
   it("renders a usable empty workbench surface with visible mode authority", async () => {
     render(<CodingWorkbenchWindow api={api()} />);
 
@@ -101,10 +133,10 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(screen.getByRole("radio", { name: /Supervised Coding/u })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Stop sidecar" }));
-    expect(onStopRun).toHaveBeenCalledWith("cw-issue-1990");
+    expect(onStopRun).toHaveBeenCalledWith("run-1990");
     expect(screen.getByRole("status")).toHaveTextContent("Stop requested");
     await user.click(screen.getByRole("button", { name: "Take over manually" }));
-    expect(onTakeOver).toHaveBeenCalledWith("cw-issue-1990");
+    expect(onTakeOver).toHaveBeenCalledWith("run-1990");
     expect(screen.getByRole("status")).toHaveTextContent("Manual takeover requested");
   });
 
@@ -219,7 +251,7 @@ describe("CodingWorkbenchWindow", () => {
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Stop sidecar" }));
-    expect(onStopRun).toHaveBeenCalledWith("cw-issue-1992");
+    expect(onStopRun).toHaveBeenCalledWith("run-1992");
     expect(screen.getByRole("status")).toHaveTextContent("Stop requested");
 
     rerender(
@@ -303,7 +335,7 @@ describe("CodingWorkbenchWindow", () => {
       />,
     );
     expect(screen.getByText("Draft PR created through governed PR gateway")).toBeInTheDocument();
-    expect(screen.getByText("governed-pr-gateway-handoff")).toBeInTheDocument();
+    expect(screen.getByText("pull")).toBeInTheDocument();
   });
 
   it("distinguishes managed gateway, OpenAI-through-gateway, and Codex subscription sources", async () => {
