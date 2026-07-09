@@ -46,7 +46,7 @@ import {
 
 describe("keiko-security package surface", () => {
   it("exposes the version constant pinned at 0.1.0", () => {
-    expect(KEIKO_SECURITY_VERSION).toBe("0.2.14");
+    expect(KEIKO_SECURITY_VERSION).toBe("0.2.15-beta.0");
   });
 
   it("exposes the redaction primitives as callable functions", () => {

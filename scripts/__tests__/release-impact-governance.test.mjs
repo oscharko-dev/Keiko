@@ -128,6 +128,46 @@ describe("release-impact governance", () => {
     expect(result).toEqual({ failures: [], ok: true });
   });
 
+  it("accepts a prerelease package version with a beta dist-tag entry", () => {
+    const beta = entry({
+      distTag: "beta",
+      id: "2026-07-09-keiko-0.2.15-beta.0-fixture",
+      oneClickEligible: false,
+      packageVersion: "0.2.15-beta.0",
+      releaseNoteBullets: ["Beta preview of the governed Coding Workbench autonomy modes."],
+      releaseTag: "v0.2.15-beta.0",
+    });
+    const result = validateReleaseImpactCatalog(
+      catalog([entry(), beta]),
+      rootManifest({ version: "0.2.15-beta.0" }),
+    );
+
+    expect(result).toEqual({ failures: [], ok: true });
+  });
+
+  it("rejects a prerelease entry that claims the latest dist-tag", () => {
+    const wrongTag = entry({
+      id: "2026-07-09-keiko-0.2.15-beta.0-fixture",
+      packageVersion: "0.2.15-beta.0",
+      releaseTag: "v0.2.15-beta.0",
+    });
+    const result = validateReleaseImpactCatalog(
+      catalog([entry(), wrongTag]),
+      rootManifest({ version: "0.2.15-beta.0" }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain("distTag must be beta");
+  });
+
+  it("rejects a stable entry that claims the beta dist-tag", () => {
+    const wrongTag = entry({ distTag: "beta" });
+    const result = validateReleaseImpactCatalog(catalog([wrongTag]), rootManifest());
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain("distTag must be latest");
+  });
+
   it("reports missing manifests without throwing", () => {
     tempRoot = mkdtempSync(join(tmpdir(), "keiko-release-impact-"));
     writeJson(tempRoot, "release-impact.catalog.json", catalog());
