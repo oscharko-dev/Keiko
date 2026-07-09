@@ -147,6 +147,13 @@ workspace-index-*.json.*.tmp
 # staged payloads and runtime archives are generated artifacts and must never be committed.
 /.portable-runtime/
 
+# Digest-verified sidecar payloads materialized from portable-runtime-approvals.json by
+# scripts/prepare-approved-sidecar-payloads.mjs. Generated release inputs; never committed.
+/.portable-sidecar-payloads/
+
+# Downloaded reviewed portable asset bundle staged for release publication.
+/.portable-release-assets/
+
 # Per-run tmp copy of the unit-test-generation integration fixture (ADR-0008 D11). Created under
 # the repo root so `npx vitest` resolves vitest from the repo's node_modules; cleaned up per test.
 .keiko-itest-*/

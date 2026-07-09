@@ -229,11 +229,18 @@ without Coding Workbench enabled. When present, the contract is generic: it can 
 more Keiko-owned coding runtimes. `opencode-compatible` is the first fixture shape, not a hard-coded
 single-runtime limit.
 
-Sidecar payloads are staged from controlled Keiko release inputs by the release pipeline. They must
+Sidecar payloads are staged from controlled Keiko release inputs by the release pipeline. The
+controlled release input is the committed
+[`portable-runtime-approvals.json`](../../portable-runtime-approvals.json): it pins the approved
+sidecar runtime version with per-target archive URLs, SHA-256 digests, sizes, and license
+evidence, and `scripts/prepare-approved-sidecar-payloads.mjs` materializes the payloads from those
+pins with digest verification before staging. Sidecar payloads must
 not be acquired by customer machines through postinstall scripts, first-run downloads, app-launch
 downloads, updater-time side downloads, global npm installs, curl installers, or any other
 customer-side tool installation path. Refreshing a frozen sidecar payload is a Keiko release
-decision: update the controlled release input, regenerate all three portable artifacts, verify the
+decision: update the approvals file (for example with
+`npm run portable:approve-runtimes -- --opencode-version <v>`), review and merge that diff,
+regenerate all three portable artifacts, verify the
 new digests/evidence/signing status, and ship through the normal reviewed release flow.
 
 Sidecar metadata remains content-free. It may record runtime identity, kind, upstream version,

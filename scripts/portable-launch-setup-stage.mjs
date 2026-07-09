@@ -79,7 +79,19 @@ function stageEvidence(target, manifest) {
 }
 
 export function validateStageRoot(stageRoot) {
+  return validateStageTargets(
+    stageRoot,
+    PORTABLE_TARGETS.map((target) => target.platformTarget),
+  );
+}
+
+export function validateStageTargets(stageRoot, targetNames) {
   if (!existsSync(stageRoot) || !statSync(stageRoot).isDirectory())
     fail("stage root is not a directory");
-  return PORTABLE_TARGETS.map((target) => validateStageTarget(stageRoot, target));
+  if (targetNames.length === 0) fail("at least one stage target is required");
+  return targetNames.map((name) => {
+    const target = PORTABLE_TARGETS.find((candidate) => candidate.platformTarget === name);
+    if (target === undefined) fail(`unknown stage target ${name}`);
+    return validateStageTarget(stageRoot, target);
+  });
 }

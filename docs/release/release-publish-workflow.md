@@ -91,7 +91,37 @@ payload paths, digests, size, license/SBOM evidence, adapter compatibility, plat
 signing/notarization status are written to portable manifests/evidence. A sidecar refresh requires a
 Keiko release decision and regenerated Windows x64, macOS arm64, and macOS x64 artifacts. It must
 not be implemented as a customer-side download during install, first run, app launch, or update.
-Sidecar execution authority remains deferred to later Coding Workbench runtime-adapter work.
+Sidecar execution authority is owned by the Coding Workbench runtime manager under ADR-0124: the
+manager launches only manifest-verified sidecar payloads from the attested managed install root.
+
+## Automated portable asset staging
+
+The `Portable assets` workflow (`.github/workflows/portable-assets.yml`) automates the
+build-and-test half of the portable release path. On every `v*` tag push (and on manual dispatch)
+it:
+
+1. Validates the committed approved runtime inputs with `npm run check:portable-approvals`.
+2. Downloads and digest-verifies the approved coding sidecar payloads with
+   `npm run portable:prepare-sidecars` on each native target runner.
+3. Stages all three portable targets from those approvals with
+   `scripts/run-portable-assets-stage.mjs` (Windows x64 on a Windows runner, both macOS targets on
+   a macOS runner, native launcher compiled in place).
+4. Smoke-tests every staged artifact on its native platform via
+   `npm run smoke:portable-launch-setup -- --stage-root … --stage-target <target>`.
+5. Assembles the digest-cross-checked `portable-release-assets` bundle (with
+   `portable-assets.json`) via `scripts/assemble-portable-release-assets.mjs` in exactly the layout
+   the Release workflow consumes through `portable_assets_run_id`.
+
+Version approval is a pull request: [`portable-runtime-approvals.json`](../../portable-runtime-approvals.json)
+pins the Node.js runtime version and the coding sidecar runtime version with per-target URLs and
+SHA-256 digests. `npm run portable:approve-runtimes -- --node-version <v> --opencode-version <v>`
+regenerates the pins from the official upstream sources; reviewing and merging that diff is the
+release approval act. The staging pipeline never downloads unpinned or `latest` inputs.
+
+Publishing remains a human decision. The workflow uploads a reviewed-candidate bundle artifact
+only; `release.yml` still requires an operator dispatch (with `portable_assets_run_id` pointing at
+a green `Portable assets` run), and production signing verification stays an operator-owned step —
+CI-staged artifacts intentionally carry staging (unverified) signing status.
 
 ## Triggering
 

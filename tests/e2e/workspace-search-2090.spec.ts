@@ -10,6 +10,7 @@ import {
   EDITOR_SELECTORS,
   firstPane,
   openEditorWorkspace,
+  paneCount,
   typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
 
@@ -158,6 +159,21 @@ async function openQuickAccess(page: Page): Promise<Locator> {
   return quickInput;
 }
 
+// Monaco tags its two side-by-side panes `.original-in-monaco-diff-editor` / `-modified-`, so the
+// before/after text can be asserted directly instead of depending on which file is selected first.
+async function expectReplacePreviewDiff(diffEditor: Locator): Promise<void> {
+  const page = diffEditor.page();
+  await expect(diffEditor).toBeVisible();
+  await expect(page.getByTestId("keiko-diff-file")).toHaveCount(2);
+  await page.getByTestId("keiko-diff-file").filter({ hasText: "replace-target.ts" }).click();
+  await expect(
+    diffEditor.locator(".original-in-monaco-diff-editor .view-line", { hasText: "replaceNeedle" }),
+  ).toBeVisible();
+  await expect(
+    diffEditor.locator(".modified-in-monaco-diff-editor .view-line", { hasText: "replaceDone" }),
+  ).toBeVisible();
+}
+
 test.afterAll(() => {
   cleanupEditorWorkspaces();
   while (tempProjects.length > 0) {
@@ -273,6 +289,7 @@ export const unsavedOnly = true;
   await expect(page.getByText("2 replacements across 2 files.")).toBeVisible();
   expect(readFileSync(join(root, "src", "replace-target.ts"), "utf8")).toContain("replaceNeedle");
   expect(readFileSync(join(root, "src", "closed-replace.ts"), "utf8")).toContain("replaceNeedle");
+  await expectReplacePreviewDiff(page.getByTestId("keiko-diff-editor"));
   await page.getByRole("button", { name: "Apply reviewed replace" }).click();
   await expect(page.getByText("2 files applied.")).toBeVisible();
   await expect(
@@ -307,5 +324,47 @@ test("workspace symbols and quick access route through the unified reveal-at-lin
   await fileInput.fill("searchTarget");
   await page.getByRole("option").filter({ hasText: "searchTarget" }).first().click();
   await expect(page.getByRole("tab", { name: /search-target\.ts/ })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+});
+
+test("editor-scoped commands run through the unified quick-access palette's command mode", async ({
+  page,
+  request,
+}) => {
+  const root = createWorkspace("quick-access-editor");
+  await ensureProject(request, root);
+  const pageErrors = collectPageErrors(page);
+  await seedWindows(page, [
+    {
+      id: "editor-2090-commands",
+      type: "editor",
+      x: 24,
+      y: 24,
+      w: 760,
+      h: 620,
+      z: 10,
+      // Splitting moves the active file into a new pane, so at least two open tabs are required —
+      // a single-tab pane has nothing left to leave behind and the split is a documented no-op
+      // (`splitPane` in `editor-layout.ts`).
+      cfg: {
+        root,
+        file: "src/search-target.ts",
+        openFiles: ["src/search-target.ts", "src/quick.ts"],
+      },
+      max: false,
+    },
+  ]);
+  await page.goto("/");
+  const workspace = await openEditorWorkspace(page);
+  expect(await paneCount(workspace)).toBe(1);
+  const quickInput = await openQuickAccess(page);
+  await quickInput.fill(">");
+  await expect(
+    page.getByRole("option").filter({ hasText: "Toggle light / dark theme" }).first(),
+  ).toBeVisible();
+  const splitOption = page.getByRole("option").filter({ hasText: "Split Editor Right" }).first();
+  await expect(splitOption).toBeVisible();
+  await splitOption.click();
+  await expect(workspace.locator(EDITOR_SELECTORS.pane)).toHaveCount(2);
   expect(pageErrors).toEqual([]);
 });

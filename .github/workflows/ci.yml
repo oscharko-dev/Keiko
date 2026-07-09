@@ -84,6 +84,7 @@ jobs:
       - run: npm run check:version-consistency
       - run: npm run check:dependency-hygiene
       - run: npm run check:release-required-workflows
+      - run: npm run check:portable-approvals
       - run: npm run check:git-client-evidence
       - run: npm run lint
         env:

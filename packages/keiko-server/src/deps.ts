@@ -164,6 +164,8 @@ import {
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
 import type { AutonomousDeliveryConnectorExecutor } from "./coding-runtime/autonomousDeliveryPolicy.js";
+import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
+import type { JiraCodeContextHttpPort } from "./coding-context/jiraCodeContextConnector.js";
 import {
   createAutonomousDeliveryApprovalStore,
   type AutonomousDeliveryApprovalStore,
@@ -266,6 +268,10 @@ export interface UiHandlerDeps {
   // operatorStopped:true, but it cannot hide a server-recorded stop for the run.
   readonly autonomousDeliveryStopState?:
     { readonly isStopped: (runId: string) => boolean } | undefined;
+  // Optional injectable ports for the coding-context intake route (#1989 wiring). Production
+  // composes real ports from env/workspace when absent; tests inject deterministic fakes.
+  readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
+  readonly codingContextJiraPort?: JiraCodeContextHttpPort | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
