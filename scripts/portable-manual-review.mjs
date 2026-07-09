@@ -64,9 +64,16 @@ function fail(message) {
 }
 
 function nextPatchVersion(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
-  if (match === null) fail(`root version is not stable semver: ${version}`);
-  return `${match[1]}.${match[2]}.${String(Number(match[3]) + 1)}`;
+  const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
+  if (stable !== null) {
+    return `${stable[1]}.${stable[2]}.${String(Number(stable[3]) + 1)}`;
+  }
+  // Prerelease root (for example 0.2.15-beta.0 during release-branch stabilization): the
+  // simulated next portable release is that version's stable base, and importing this module
+  // must not throw at load time.
+  const prerelease = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z.-]+$/u.exec(version);
+  if (prerelease === null) fail(`root version is not semver: ${version}`);
+  return `${prerelease[1]}.${prerelease[2]}.${prerelease[3]}`;
 }
 
 function parseArgs(argv) {

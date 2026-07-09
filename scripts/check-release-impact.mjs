@@ -383,8 +383,14 @@ function validateReleaseBinding(entry, index, failures) {
   if (entry.releaseTag !== `v${entry.packageVersion}`) {
     failures.push(failure(`entries[${String(index)}].releaseTag must equal v<packageVersion>.`));
   }
-  if (entry.distTag !== "latest") {
-    failures.push(failure(`entries[${String(index)}].distTag must be latest for v1 updates.`));
+  const expectedTag = expectedDistTagForVersion(entry.packageVersion);
+  if (entry.distTag !== expectedTag) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].distTag must be ${expectedTag} for ` +
+          `${expectedTag === "beta" ? "prerelease versions" : "v1 updates"}.`,
+      ),
+    );
   }
   if (entry.registry !== "https://registry.npmjs.org/") {
     failures.push(
@@ -607,7 +613,10 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
   const primary = current.filter((entry) => !correctionEntry(entry));
   if (primary.length === 0) {
     failures.push(
-      failure(`${rootManifest.name}@${rootManifest.version} has no latest catalog entry.`),
+      failure(
+        `${rootManifest.name}@${rootManifest.version} has no ` +
+          `${expectedDistTagForVersion(rootManifest.version)} catalog entry.`,
+      ),
     );
     return;
   }
@@ -616,12 +625,18 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
   }
 }
 
+// Stable versions publish under the latest dist-tag; prerelease versions (semver with a
+// prerelease suffix, e.g. 0.2.15-beta.0) publish under beta per the release/publish workflow.
+function expectedDistTagForVersion(version) {
+  return typeof version === "string" && version.includes("-") ? "beta" : "latest";
+}
+
 function currentPackageEntry(entry, rootManifest) {
   return (
     objectRecord(entry) &&
     entry.packageName === rootManifest.name &&
     entry.packageVersion === rootManifest.version &&
-    entry.distTag === "latest"
+    entry.distTag === expectedDistTagForVersion(rootManifest.version)
   );
 }
 

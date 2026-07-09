@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-sdk",
-  "version": "0.2.14",
+  "version": "0.2.15-beta.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal SDK package: public agent, workflow, verification, workspace, evidence, and evaluation surface that the root product facade re-exports (Issue #426, ADR-0019). Not published independently.",
@@ -25,14 +25,14 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.14",
-    "@oscharko-dev/keiko-evaluations": "0.2.14",
-    "@oscharko-dev/keiko-evidence": "0.2.14",
-    "@oscharko-dev/keiko-harness": "0.2.14",
-    "@oscharko-dev/keiko-model-gateway": "0.2.14",
-    "@oscharko-dev/keiko-verification": "0.2.14",
-    "@oscharko-dev/keiko-workflows": "0.2.14",
-    "@oscharko-dev/keiko-workspace": "0.2.14"
+    "@oscharko-dev/keiko-contracts": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-evaluations": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-evidence": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-harness": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-model-gateway": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-verification": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-workflows": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-workspace": "0.2.15-beta.0"
   },
   "private": true
 }
