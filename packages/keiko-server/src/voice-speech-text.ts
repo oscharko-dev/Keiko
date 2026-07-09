@@ -7,6 +7,8 @@ const AUTOLINK_URL = /<https?:\/\/[^\s<>]+>/giu;
 const BARE_URL = /https?:\/\/[^\s<>]+/giu;
 const CITATION_MARKER = /\s*\[(?:\^?\d+|[A-Za-z]+-?\d+)\]/gu;
 const REFERENCE_DEFINITION = /^\s*\[(?:\^?\d+|[^\]]+)\]:\s+/u;
+const HTML_RAW_CONTENT = /<(?:script|style)\b[^>]*>.*?(?:<\/(?:script|style)\s*>|$)/giu;
+const HTML_TAG = /<\/?[A-Za-z][^>\n]*(?:>|$)/gu;
 
 function stripMarkdown(line: string): string {
   return line
@@ -18,7 +20,10 @@ function stripMarkdown(line: string): string {
     .replace(/`([^`\n]+)`/gu, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/u, "")
     .replace(/^\s*(?:[-+*]|\d+[.)])\s+/u, "")
-    .replace(/<[^>]+>/gu, "")
+    .replace(HTML_RAW_CONTENT, "")
+    .replace(HTML_TAG, "")
+    .replaceAll("<", "")
+    .replaceAll(">", "")
     .replace(/[*_~]+/gu, "");
 }
 

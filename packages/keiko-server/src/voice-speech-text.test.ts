@@ -42,6 +42,21 @@ describe("toSpeakableText", () => {
     ).toBe("Details: Bitte im Chat öffnen.");
   });
 
+  it("removes complete and unterminated HTML without leaving injection delimiters", () => {
+    const markdown = [
+      "Hallo <strong>Kollege</strong>.",
+      "<script>alert('must-not-be-spoken')</script> Danach weiter.",
+      "Sicher. <script data-value='unterminated'",
+    ].join("\n");
+
+    const spoken = toSpeakableText(markdown);
+
+    expect(spoken).toBe("Hallo Kollege. Danach weiter. Sicher.");
+    expect(spoken).not.toMatch(/[<>]/u);
+    expect(spoken).not.toContain("must-not-be-spoken");
+    expect(spoken).not.toContain("unterminated");
+  });
+
   it("returns an empty string when the input contains no speakable content", () => {
     expect(toSpeakableText("### Sources\n- <https://example.invalid>")).toBe("");
   });
