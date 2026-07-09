@@ -953,7 +953,7 @@ export function Workspace({
     <main
       className="workspace"
       ref={wsRef}
-      aria-label="Workspace surface"
+      aria-label={t("workspace.surface")}
       tabIndex={0}
       data-window-maxed={hasMaximizedWindow ? "true" : undefined}
       data-canvas-overlays-hidden={hasMaximizedWindow ? "true" : "false"}
@@ -998,7 +998,7 @@ export function Workspace({
         // (Escape, background click) undiscoverable (audit F052/C411).
         // aria-hidden: the live region above already announces this.
         <div className="ws-connect-hint" aria-hidden="true">
-          Click a highlighted window to connect — Esc to cancel
+          {t("workspace.connectHint")}
         </div>
       ) : null}
       {empty ? (
@@ -1040,8 +1040,8 @@ export function Workspace({
           className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, -0.2))}
           disabled={view.zoom <= MIN_ZOOM}
-          aria-label="Zoom out"
-          data-tip="Zoom out"
+          aria-label={t("workspace.zoomOut")}
+          data-tip={t("workspace.zoomOut")}
         >
           <Icons.zoomOut size={15} />
         </button>
@@ -1050,8 +1050,8 @@ export function Workspace({
           className="ws-zoom-btn ui-tip cmp-tip-start"
           onClick={api.fitView}
           disabled={visibleWins === null || visibleWins.length === 0}
-          aria-label="Fit workspace to windows"
-          data-tip="Fit workspace to windows"
+          aria-label={t("workspace.fitToWindows")}
+          data-tip={t("workspace.fitToWindows")}
         >
           <Icons.expand size={15} />
         </button>
@@ -1059,8 +1059,8 @@ export function Workspace({
           type="button"
           className="ws-zoom-pct mono ui-tip"
           onClick={api.resetView}
-          aria-label={`${String(Math.round(view.zoom * 100))}% — reset`}
-          data-tip="Reset"
+          aria-label={t("workspace.zoomReset", { percent: Math.round(view.zoom * 100) })}
+          data-tip={t("workspace.reset")}
         >
           {Math.round(view.zoom * 100)}%
         </button>
@@ -1069,8 +1069,8 @@ export function Workspace({
           className="ws-zoom-btn ui-tip cmp-tip-end"
           onClick={() => api.zoomTo(stepViewZoom(view.zoom, 0.2))}
           disabled={view.zoom >= MAX_ZOOM}
-          aria-label="Zoom in"
-          data-tip="Zoom in"
+          aria-label={t("workspace.zoomIn")}
+          data-tip={t("workspace.zoomIn")}
         >
           <Icons.zoomIn size={15} />
         </button>
@@ -1081,8 +1081,8 @@ export function Workspace({
         className="ws-fab ui-tip cmp-tip-end"
         onPointerDown={(event) => event.stopPropagation()}
         onClick={openPalette}
-        aria-label="New window"
-        data-tip="New window"
+        aria-label={t("workspace.newWindow")}
+        data-tip={t("workspace.newWindow")}
       >
         <Icons.add size={20} />
       </button>

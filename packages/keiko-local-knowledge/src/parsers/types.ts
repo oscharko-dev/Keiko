@@ -12,6 +12,7 @@ import type {
   ParserDependencyVersion,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts";
 
 // ─── Limits + cancellation ───────────────────────────────────────────────────
 
@@ -37,11 +38,11 @@ export interface ParserOptions {
   readonly now: () => number;
 }
 
-export const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024;
+export const DEFAULT_MAX_BYTES = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.maxRawFileBytes;
 export const DEFAULT_MAX_UNITS = 50_000;
 export const DEFAULT_MAX_NESTING_DEPTH = 128;
-export const DEFAULT_MAX_OBJECTS = 25_000_000;
-export const DEFAULT_TIMEOUT_MS = 60 * 60 * 1000;
+export const DEFAULT_MAX_OBJECTS = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.maxParserObjects;
+export const DEFAULT_TIMEOUT_MS = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.maxWallClockMs;
 
 // ─── Input + capability ──────────────────────────────────────────────────────
 

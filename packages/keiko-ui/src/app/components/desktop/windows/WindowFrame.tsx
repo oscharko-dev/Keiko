@@ -19,7 +19,7 @@ import type {
   QualityIntelligenceImageSource,
   WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons, type IconName } from "../Icons";
 import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import {
@@ -80,20 +80,21 @@ interface WindowFrameProps {
 
 interface TooSmallProps {
   readonly icon: IconName;
-  readonly label: string;
+  readonly title: string;
+  readonly body: string;
 }
 
-function TooSmall({ icon, label }: TooSmallProps): ReactNode {
+function TooSmall({ icon, title, body }: TooSmallProps): ReactNode {
   const Icon = Icons[icon];
   return (
     <div className="too-small">
       <div className="ts-ico">
         <Icon size={28} />
       </div>
-      <div className="ts-title">Too small to show {label}</div>
+      <div className="ts-title">{title}</div>
       {/* Tiny mode depends on window size and *content* zoom only — point at the
           content-zoom control, not the workspace "Zoom out" button (audit C300). */}
-      <div className="ts-sub">Enlarge the window or zoom its content out</div>
+      <div className="ts-sub">{body}</div>
       <div className="ts-arrow" aria-hidden="true">
         <svg
           width="22"
@@ -151,6 +152,7 @@ function selectBody(
   restoreWindow: ((id: string) => void) | undefined,
   updateWindow: (id: string, patch: Partial<AppWindow>) => void,
   openEditorFile: WorkspaceApi["openEditorFile"],
+  t: I18nTranslate,
 ): BodySelection {
   const def = WIN_TYPES[type];
   const typedCfg = cfg as WindowCfgByType[typeof type];
@@ -192,7 +194,16 @@ function selectBody(
     };
   }
   if (ew < def.tiny.w || eh < def.tiny.h) {
-    return { mode: "tiny", node: <TooSmall icon={def.icon} label={def.title} /> };
+    return {
+      mode: "tiny",
+      node: (
+        <TooSmall
+          icon={def.icon}
+          title={t("window.tooSmall.title", { label: def.title })}
+          body={t("window.tooSmall.body")}
+        />
+      ),
+    };
   }
   return {
     mode: "full",
@@ -698,6 +709,7 @@ function WindowFrameImpl({
         restoreWindow,
         updateWindow,
         openEditorFile,
+        t,
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ew/eh intentionally excluded; bodyBreakpoints is their discrete-crossing proxy (GEN-PERF-RENDER-003) so a same-band resize does not rebuild the body
     [
@@ -714,6 +726,7 @@ function WindowFrameImpl({
       restoreWindow,
       updateWindow,
       openEditorFile,
+      t,
     ],
   );
 
@@ -1293,8 +1306,18 @@ function WindowFrameImpl({
               key={`p${d}`}
               type="button"
               className={`win-port wp-${d}`}
-              title="Click to connect to another window"
-              aria-label={`Connect ${def.title} from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
+              title={t("window.connectPort.title")}
+              aria-label={t("window.connectPort.aria", {
+                title: def.title,
+                edge:
+                  d === "t"
+                    ? t("window.edge.top")
+                    : d === "r"
+                      ? t("window.edge.right")
+                      : d === "b"
+                        ? t("window.edge.bottom")
+                        : t("window.edge.left"),
+              })}
               onPointerDown={onPortPointerDown}
               onKeyDown={onPortKeyDown}
             />

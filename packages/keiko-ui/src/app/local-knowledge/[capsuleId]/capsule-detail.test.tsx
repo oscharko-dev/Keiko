@@ -156,6 +156,14 @@ function resolveDetail(detail: CapsuleDetailData = FULL_DETAIL): () => Promise<C
   return () => Promise.resolve(detail);
 }
 
+async function openAdvanced(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(await screen.findByText("Status, sources, and diagnostics"));
+}
+
+async function openMaintenance(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByText("Maintenance and deletion"));
+}
+
 // ---------------------------------------------------------------------------
 // Overview section
 // ---------------------------------------------------------------------------
@@ -203,7 +211,9 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders capsule description in the overview", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("A capsule for testing")).toBeInTheDocument();
@@ -211,7 +221,9 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders tags", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("docs")).toBeInTheDocument();
@@ -221,7 +233,9 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders lifecycle status badge with the shared human-readable label", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     // STATUS_LABELS maps "ready" → "Indexed" — same terminology as the
     // connector-graph capsule list (uiux-fix F033, C006).
@@ -233,7 +247,9 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders storage size formatted as MB", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("1.0 MB")).toBeInTheDocument();
@@ -241,6 +257,7 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders multi-gibibyte storage size as GB, not a capped MB value", async () => {
+    const user = userEvent.setup();
     // Regression (GEN-DUP-SEMANTIC-001): the local formatBytes capped at MB and had no
     // GB branch, so a 2 GiB capsule rendered "2048.0 MB". The canonical presenter rolls over.
     const detail: CapsuleDetailData = {
@@ -248,6 +265,7 @@ describe("CapsuleDetail — overview section", () => {
       health: { ...FULL_DETAIL.health, storageSizeBytes: 2 * 1024 ** 3 },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("2.0 GB")).toBeInTheDocument();
@@ -256,7 +274,9 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders embedding model identity", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(
@@ -266,6 +286,7 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders unsupported-document count and guidance when present", async () => {
+    const user = userEvent.setup();
     const detail: CapsuleDetailData = {
       ...FULL_DETAIL,
       health: {
@@ -277,6 +298,7 @@ describe("CapsuleDetail — overview section", () => {
       },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("2")).toBeInTheDocument();
@@ -288,7 +310,9 @@ describe("CapsuleDetail — overview section", () => {
   });
 
   it("renders privacy and deletion disclosure copy", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("Privacy and deletion")).toBeInTheDocument();
@@ -345,6 +369,23 @@ describe("CapsuleDetail — index status section", () => {
     expect(screen.getByText("76 / 80")).toBeInTheDocument();
     expect(screen.getByText("0 failed, 4 skipped")).toBeInTheDocument();
   });
+
+  it("shows a plain-language explanation for index metrics on hover", async () => {
+    const user = userEvent.setup();
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+
+    const label = await screen.findByText("Indexed documents");
+    await user.hover(label);
+
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Shows how many documents Keiko could read and add to the index.",
+    );
+
+    await user.unhover(label);
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -353,7 +394,9 @@ describe("CapsuleDetail — index status section", () => {
 
 describe("CapsuleDetail — embedding compatibility section", () => {
   it("renders compatible pinned and current embedding models", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Embedding compatibility" })).toBeInTheDocument();
@@ -368,6 +411,7 @@ describe("CapsuleDetail — embedding compatibility section", () => {
   });
 
   it("renders unknown model compatibility when Gateway config is missing", async () => {
+    const user = userEvent.setup();
     const detail: CapsuleDetailData = {
       ...FULL_DETAIL,
       health: {
@@ -386,6 +430,7 @@ describe("CapsuleDetail — embedding compatibility section", () => {
       },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getAllByText("Unknown").length).toBeGreaterThan(0);
@@ -401,7 +446,9 @@ describe("CapsuleDetail — embedding compatibility section", () => {
 
 describe("CapsuleDetail — contextual retrieval section", () => {
   it("renders disabled contextual retrieval controls and the re-index cost hint by default", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Contextual retrieval" })).toBeInTheDocument();
@@ -429,6 +476,7 @@ describe("CapsuleDetail — contextual retrieval section", () => {
       />,
     );
 
+    await openAdvanced(user);
     await screen.findByRole("heading", { name: "Contextual retrieval" });
     await user.click(
       screen.getByRole("checkbox", { name: /generate retrieval context at index time/i }),
@@ -454,6 +502,7 @@ describe("CapsuleDetail — contextual retrieval section", () => {
   });
 
   it("renders stored contextual retrieval settings", async () => {
+    const user = userEvent.setup();
     const detail: CapsuleDetailData = {
       ...FULL_DETAIL,
       capsule: {
@@ -468,6 +517,7 @@ describe("CapsuleDetail — contextual retrieval section", () => {
       },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    await openAdvanced(user);
 
     await screen.findByRole("heading", { name: "Contextual retrieval" });
 
@@ -480,6 +530,7 @@ describe("CapsuleDetail — contextual retrieval section", () => {
   });
 
   it("surfaces contextual rebuild-needed health and the rebuild action", async () => {
+    const user = userEvent.setup();
     const detail: CapsuleDetailData = {
       ...FULL_DETAIL,
       health: {
@@ -501,6 +552,8 @@ describe("CapsuleDetail — contextual retrieval section", () => {
       },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    await openAdvanced(user);
+    await openMaintenance(user);
 
     await waitFor(() => {
       expect(screen.getAllByText("Rebuild required").length).toBeGreaterThan(0);
@@ -520,7 +573,9 @@ describe("CapsuleDetail — contextual retrieval section", () => {
 
 describe("CapsuleDetail — sources section", () => {
   it("renders source display name and scope kind", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("Project Docs")).toBeInTheDocument();
@@ -530,7 +585,9 @@ describe("CapsuleDetail — sources section", () => {
   });
 
   it("renders indexed / failed / skipped counts", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("8 indexed")).toBeInTheDocument();
@@ -541,8 +598,10 @@ describe("CapsuleDetail — sources section", () => {
   });
 
   it("renders empty-sources placeholder when sources array is empty", async () => {
+    const user = userEvent.setup();
     const noSources: CapsuleDetailData = { ...FULL_DETAIL, sources: [] };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(noSources)} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("No sources attached to this pod.")).toBeInTheDocument();
@@ -566,6 +625,7 @@ describe("CapsuleDetail — sources section", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<CapsuleDetail fetchDetailImpl={fetchDetail} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("Project Docs")).toBeInTheDocument();
@@ -593,7 +653,9 @@ describe("CapsuleDetail — sources section", () => {
 
 describe("CapsuleDetail — health diagnostics section", () => {
   it("renders the empty-diagnostics placeholder when there are no diagnostics", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByTestId("diag-empty")).toBeInTheDocument();
@@ -603,6 +665,7 @@ describe("CapsuleDetail — health diagnostics section", () => {
   });
 
   it("renders diagnostics with severity, code, and message — never raw text content", async () => {
+    const user = userEvent.setup();
     const withDiag: CapsuleDetailData = {
       ...FULL_DETAIL,
       parserDiagnostics: [
@@ -621,6 +684,7 @@ describe("CapsuleDetail — health diagnostics section", () => {
     };
 
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(withDiag)} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getAllByText("PARSE_WARN_001").length).toBeGreaterThan(0);
@@ -634,6 +698,7 @@ describe("CapsuleDetail — health diagnostics section", () => {
   });
 
   it("LK-01: renders severity label text in each diagnostic group row (non-color cue)", async () => {
+    const user = userEvent.setup();
     const withDiag: CapsuleDetailData = {
       ...FULL_DETAIL,
       parserDiagnostics: [
@@ -644,6 +709,7 @@ describe("CapsuleDetail — health diagnostics section", () => {
     };
 
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(withDiag)} />);
+    await openAdvanced(user);
 
     // Wait for the grouped list to render
     const groupList = await screen.findByRole("list", { name: /grouped parser diagnostics/i });
@@ -673,6 +739,7 @@ describe("CapsuleDetail — health diagnostics section", () => {
         fetchDetailImpl={resolveDetail({ ...FULL_DETAIL, parserDiagnostics: diagnostics })}
       />,
     );
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getAllByText("Diagnostic 24").length).toBeGreaterThan(0);
@@ -690,7 +757,9 @@ describe("CapsuleDetail — health diagnostics section", () => {
 
 describe("CapsuleDetail — indexing jobs section", () => {
   it("renders job status and document counts", async () => {
+    const user = userEvent.setup();
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getAllByText("Succeeded").length).toBeGreaterThan(0);
@@ -703,8 +772,10 @@ describe("CapsuleDetail — indexing jobs section", () => {
   });
 
   it("renders empty-jobs placeholder when jobs array is empty", async () => {
+    const user = userEvent.setup();
     const noJobs: CapsuleDetailData = { ...FULL_DETAIL, indexingJobs: [] };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(noJobs)} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText("No indexing jobs recorded yet.")).toBeInTheDocument();
@@ -727,6 +798,7 @@ describe("CapsuleDetail — indexing jobs section", () => {
     render(
       <CapsuleDetail fetchDetailImpl={resolveDetail({ ...FULL_DETAIL, indexingJobs: jobs })} />,
     );
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getAllByText("Succeeded")).toHaveLength(26);
@@ -789,6 +861,7 @@ describe("CapsuleDetail — error state", () => {
 
 describe("CapsuleDetail — vectorCompatible=false", () => {
   it("renders the incompatible fallback when vectorCompatible is false", async () => {
+    const user = userEvent.setup();
     const { embeddingCompatibility: _embeddingCompatibility, ...legacyHealth } = BASE_HEALTH;
     void _embeddingCompatibility;
     const detail: CapsuleDetailData = {
@@ -800,6 +873,8 @@ describe("CapsuleDetail — vectorCompatible=false", () => {
       },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    await openAdvanced(user);
+    await openMaintenance(user);
 
     await waitFor(() => {
       expect(screen.getAllByText(/Incompatible/i).length).toBeGreaterThan(0);
@@ -808,12 +883,14 @@ describe("CapsuleDetail — vectorCompatible=false", () => {
   });
 
   it("renders stale-reason list items when staleReasons is non-empty", async () => {
+    const user = userEvent.setup();
     const staleReason = "The configured embedding model no longer matches this pod.";
     const detail: CapsuleDetailData = {
       ...FULL_DETAIL,
       health: { ...BASE_HEALTH, vectorCompatible: false, staleReasons: [staleReason] },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+    await openAdvanced(user);
 
     await waitFor(() => {
       expect(screen.getByText(staleReason)).toBeInTheDocument();

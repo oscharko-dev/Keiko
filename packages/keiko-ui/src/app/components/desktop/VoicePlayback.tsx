@@ -19,16 +19,11 @@
 // always comes from the button's `aria-label`.
 
 import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useVoiceTranslate as useTranslate, type I18nTranslate } from "./voice-i18n";
 import type { VoicePlaybackSnapshot } from "./hooks/voice-playback-state";
 
 // Stable id for the local-only disclosure on the mute button.
 export const PLAYBACK_PRIVACY_HINT_ID = "cmp-voice-playback-privacy-hint";
-
-const PLAYBACK_PRIVACY_MESSAGE =
-  "Assistant speech is optional. The full response is always available as text in the conversation.";
-
-const TEXT_FALLBACK_MESSAGE =
-  "The assistant's full response is available as text in the conversation.";
 
 // Decorative speaker glyph; `aria-hidden` so the accessible name comes from the button label. A muted
 // glyph adds a slash. Kept inline so the component depends on no audio-specific icon asset.
@@ -81,7 +76,8 @@ export function VoicePlaybackMuteButton({
   buttonRef,
   compact = false,
 }: VoicePlaybackMuteButtonProps): ReactNode {
-  const label = muted ? "Unmute assistant voice" : "Mute assistant voice";
+  const t = useTranslate();
+  const label = muted ? t("voice.playback.unmute") : t("voice.playback.mute");
   return (
     <button
       type="button"
@@ -96,29 +92,29 @@ export function VoicePlaybackMuteButton({
     >
       <SpeakerGlyph muted={muted} />
       <span id={PLAYBACK_PRIVACY_HINT_ID} className="sr-only">
-        {PLAYBACK_PRIVACY_MESSAGE}
+        {t("voice.playback.privacy")}
       </span>
     </button>
   );
 }
 
 // The announced headline for each playback phase. `unavailable` is never announced (the strip is absent).
-function playbackHeadline(phase: VoicePlaybackSnapshot["phase"]): string {
+function playbackHeadline(phase: VoicePlaybackSnapshot["phase"], t: I18nTranslate): string {
   switch (phase) {
     case "preparing":
-      return "Preparing the spoken response…";
+      return t("voice.playback.preparing");
     case "speaking":
-      return "The assistant is speaking.";
+      return t("voice.playback.speaking");
     case "paused":
-      return "Spoken response paused.";
+      return t("voice.playback.paused");
     case "interrupted":
-      return "Spoken response interrupted.";
+      return t("voice.playback.interrupted");
     case "canceled":
-      return "Spoken response stopped.";
+      return t("voice.playback.stopped");
     case "failed":
-      return "The spoken response could not be played. The full reply is shown as text.";
+      return t("voice.playback.failed");
     case "complete":
-      return "Spoken response finished.";
+      return t("voice.playback.finished");
     case "unavailable":
       return "";
   }
@@ -139,6 +135,7 @@ export function VoicePlaybackStatus({
   onStop,
   onReplay,
 }: VoicePlaybackStatusProps): ReactNode {
+  const t = useTranslate();
   const { available, phase } = snapshot;
   const replayRef = useRef<HTMLButtonElement>(null);
 
@@ -156,7 +153,7 @@ export function VoicePlaybackStatus({
     return null;
   }
 
-  const headline = playbackHeadline(phase);
+  const headline = playbackHeadline(phase, t);
   const isFailure = phase === "failed";
   const showPause = phase === "speaking";
   const showResume = phase === "paused";
@@ -182,26 +179,26 @@ export function VoicePlaybackStatus({
       <div className="cmp-voice-actions">
         {showPause ? (
           <button type="button" className="cmp-voice-btn" onClick={onPause}>
-            Pause
+            {t("voice.playback.pause")}
           </button>
         ) : null}
         {showResume ? (
           <button type="button" className="cmp-voice-btn" onClick={onResume}>
-            Resume
+            {t("voice.playback.resume")}
           </button>
         ) : null}
         {showStop ? (
           <button type="button" className="cmp-voice-btn" onClick={onStop}>
-            Stop
+            {t("voice.playback.stop")}
           </button>
         ) : null}
         {showReplay ? (
           <button type="button" ref={replayRef} className="cmp-voice-btn" onClick={onReplay}>
-            Replay
+            {t("voice.playback.replay")}
           </button>
         ) : null}
       </div>
-      <span className="sr-only">{TEXT_FALLBACK_MESSAGE}</span>
+      <span className="sr-only">{t("voice.playback.textFallback")}</span>
     </div>
   );
 }

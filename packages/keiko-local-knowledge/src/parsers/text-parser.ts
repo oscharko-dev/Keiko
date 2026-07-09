@@ -8,6 +8,7 @@
 // / cancellation / unit count) trips.
 
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 
 import {
   decodeUtf8,
@@ -30,51 +31,7 @@ const PARSER_VERSION = "1";
 // binary extensions fall through to the unsupported adapter rather than being mis-parsed as
 // "plain text". `languageHint` is emitted for source / config files so #195 (chunker) can
 // route them through code-aware splitters when those land.
-const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
-  "txt",
-  "log",
-  "md",
-  "markdown",
-  "rst",
-  "adoc",
-  "asciidoc",
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mjs",
-  "cjs",
-  "py",
-  "rb",
-  "go",
-  "rs",
-  "java",
-  "kt",
-  "swift",
-  "c",
-  "cc",
-  "cpp",
-  "h",
-  "hpp",
-  "cs",
-  "php",
-  "sh",
-  "bash",
-  "zsh",
-  "fish",
-  "ps1",
-  "yaml",
-  "yml",
-  "toml",
-  "ini",
-  "cfg",
-  "conf",
-  "env",
-  "properties",
-  "sql",
-  "graphql",
-  "gql",
-]);
+const TEXT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS);
 
 const TEXT_MEDIA_PREFIXES: readonly string[] = ["text/"];
 

@@ -1,0 +1,170 @@
+/* Create Knowledge Pod access chooser.
+   Component-scoped because globals.css is behind the SHA-pinned design-system proof gate. */
+
+.accessField {
+  min-inline-size: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  border: 0;
+  gap: 8px;
+}
+
+.accessField > legend {
+  padding: 0;
+  margin: 0 0 2px;
+}
+
+.accessHeading {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.accessHint {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.accessHelp {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+}
+
+.accessHelpButton {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-sm);
+  background: var(--button-secondary-surface);
+  color: var(--text-accent);
+  cursor: pointer;
+}
+
+.accessHelpButton:hover {
+  background: var(--button-secondary-surface-hover);
+  color: var(--text-primary);
+}
+
+.accessHelpButton:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.accessTooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 100120;
+  width: min(300px, calc(100vw - 64px));
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  box-shadow: 0 12px 28px color-mix(in oklch, black 34%, transparent);
+  font-size: 11.5px;
+  line-height: 1.45;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(-50% - 3px));
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+}
+
+.accessHelp:hover .accessTooltip,
+.accessHelp:focus-within .accessTooltip,
+.accessTooltip[data-open="true"] {
+  opacity: 1;
+  transform: translateY(-50%);
+}
+
+.accessOptions {
+  display: grid;
+  gap: 8px;
+}
+
+.accessOption {
+  min-height: 46px;
+  align-items: flex-start;
+  padding: 8px 9px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+}
+
+.accessOption:hover {
+  border-color: var(--input-border-hover);
+  background: color-mix(in oklch, var(--surface-inset) 84%, var(--surface-secondary));
+}
+
+.accessOption:has(input:checked) {
+  border-color: color-mix(in oklch, var(--accent) 54%, var(--input-border));
+  background: color-mix(in oklch, var(--accent) 12%, var(--surface-inset));
+}
+
+.accessOptionDisabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.accessOptionDisabled:hover,
+.accessOptionDisabled:focus-visible {
+  border-color: color-mix(in oklch, var(--accent) 30%, var(--input-border));
+  background: color-mix(in oklch, var(--surface-inset) 82%, var(--surface-secondary));
+}
+
+.accessOptionDisabled:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.accessOptionCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.accessOptionTitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.accessOptionDescription {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.accessOptionBadge {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accessTooltip {
+    transition: none;
+  }
+}

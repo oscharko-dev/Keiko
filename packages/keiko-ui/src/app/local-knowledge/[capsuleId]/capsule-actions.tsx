@@ -1,7 +1,7 @@
 "use client";
 
 // Issue #198 — Destructive-action buttons for the capsule detail page.
-// Issue #189 / #682 — SOURCE-CONNECT: connect folder/repository/files scopes + Index now actions.
+// Issue #189 / #682 — SOURCE-CONNECT: connect folder/file scopes + Index now actions.
 // Three modal actions: Delete, Refresh changed files, Repair failed files.
 // Two inline actions: Connect a source (manual scope input), Index now (button).
 // Delete requires typing the capsule display name before confirming (Foundry IQ pattern).
@@ -12,7 +12,13 @@
 
 import { useEffect, useId, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+  LocalKnowledgeFileFilterId,
+  NativeFileDialogFilter,
+} from "@oscharko-dev/keiko-contracts";
 import {
   connectCapsuleSource,
   deleteCapsule,
@@ -37,8 +43,15 @@ import {
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
 import { nativePathsToRootAndFiles, pickWithNativeDialog } from "@/lib/native-file-dialog";
-import KeikoSelect from "@/app/components/desktop/KeikoSelect";
+import { useLocale } from "@/lib/i18n";
+import {
+  useLocalKnowledgeTranslate as useTranslate,
+  type I18nTranslate,
+  type LocalKnowledgeMessageKey,
+} from "../local-knowledge-i18n";
 import { formatError } from "../format-error";
+import detailStyles from "../capsule-detail.module.css";
+import { Explainable } from "../detail-help";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,37 +76,37 @@ interface ProgressState {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function actionTitle(kind: ActionKind): string {
-  if (kind === "delete") return "Delete Knowledge Pod";
-  if (kind === "reembed") return "Full re-embed for current model";
-  if (kind === "rebuild") return "Full rebuild / rechunk";
-  if (kind === "refresh") return "Refresh changed files";
-  return "Repair failed files";
+function actionTitle(kind: ActionKind, t: I18nTranslate): string {
+  if (kind === "delete") return t("localKnowledge.detail.actions.delete.title");
+  if (kind === "reembed") return t("localKnowledge.detail.actions.reembed.title");
+  if (kind === "rebuild") return t("localKnowledge.detail.actions.rebuild.title");
+  if (kind === "refresh") return t("localKnowledge.detail.actions.refresh.title");
+  return t("localKnowledge.detail.actions.repair.title");
 }
 
-function actionDescription(kind: ActionKind, capsuleDisplayName: string): string {
+function actionDescription(kind: ActionKind, capsuleDisplayName: string, t: I18nTranslate): string {
   if (kind === "delete") {
-    return `This permanently deletes the pod index. The source files on disk are NOT deleted. Type "${capsuleDisplayName}" to confirm.`;
+    return t("localKnowledge.detail.actions.delete.description", { name: capsuleDisplayName });
   }
   if (kind === "refresh") {
-    return "This runs an incremental refresh. Unchanged files stay in place, changed files are re-indexed, and removed files are cleaned up.";
+    return t("localKnowledge.detail.actions.refresh.description");
   }
   if (kind === "reembed") {
-    return "This rebuilds every vector for the current embedding model. Use it after changing the configured embedding model or gateway.";
+    return t("localKnowledge.detail.actions.reembed.description");
   }
   if (kind === "rebuild") {
-    return "This reprocesses every source, rebuilds chunks and retrieval text, and embeds with the current model. Use it after tokenizer, analyzer, or contextual retrieval changes.";
+    return t("localKnowledge.detail.actions.rebuild.description");
   }
-  return "This retries files that previously failed indexing and also picks up any newly changed files in the same incremental pass.";
+  return t("localKnowledge.detail.actions.repair.description");
 }
 
-function confirmButtonLabel(kind: ActionKind, busy: boolean): string {
-  if (busy) return "Working…";
-  if (kind === "delete") return "Delete";
-  if (kind === "reembed") return "Re-embed";
-  if (kind === "rebuild") return "Rebuild";
-  if (kind === "refresh") return "Refresh";
-  return "Repair";
+function confirmButtonLabel(kind: ActionKind, busy: boolean, t: I18nTranslate): string {
+  if (busy) return t("common.working");
+  if (kind === "delete") return t("common.delete");
+  if (kind === "reembed") return t("localKnowledge.detail.actions.reembed.confirm");
+  if (kind === "rebuild") return t("localKnowledge.detail.actions.rebuild.confirm");
+  if (kind === "refresh") return t("localKnowledge.detail.actions.refresh.confirm");
+  return t("localKnowledge.detail.actions.repair.confirm");
 }
 
 function formatPercent(value: number): string {
@@ -121,8 +134,31 @@ function formatLimitDuration(ms: number): string {
   return `${hours.toString()} h`;
 }
 
-function localKnowledgeLimitSummary(): string {
-  return `Maximum single file size: ${formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES)}. Parser budget: ${LOCAL_KNOWLEDGE_MAX_OBJECTS_PER_DOCUMENT.toLocaleString("en-US")} objects, ${formatLimitDuration(LOCAL_KNOWLEDGE_PARSER_TIMEOUT_MS)} per document.`;
+function localKnowledgeLimitSummary(t: I18nTranslate, locale: string): string {
+  return t("localKnowledge.detail.connect.limitSummary", {
+    size: formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES, locale),
+    objects: LOCAL_KNOWLEDGE_MAX_OBJECTS_PER_DOCUMENT.toLocaleString(locale),
+    duration: formatLimitDuration(LOCAL_KNOWLEDGE_PARSER_TIMEOUT_MS),
+  });
+}
+
+const FILE_FILTER_LABEL_KEYS: Readonly<
+  Record<LocalKnowledgeFileFilterId, LocalKnowledgeMessageKey>
+> = Object.freeze({
+  documents: "localKnowledge.detail.connect.filter.documents",
+  structuredData: "localKnowledge.detail.connect.filter.structuredData",
+  textDocuments: "localKnowledge.detail.connect.filter.textDocuments",
+  webDocuments: "localKnowledge.detail.connect.filter.webDocuments",
+  scripts: "localKnowledge.detail.connect.filter.scripts",
+  sourceCode: "localKnowledge.detail.connect.filter.sourceCode",
+  configuration: "localKnowledge.detail.connect.filter.configuration",
+});
+
+function nativeDocumentFilters(t: I18nTranslate): readonly NativeFileDialogFilter[] {
+  return LOCAL_KNOWLEDGE_FILE_FILTERS.map((filter) => ({
+    name: t(FILE_FILTER_LABEL_KEYS[filter.id]),
+    extensions: filter.extensions,
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -146,99 +182,97 @@ function parseFilesInput(value: string): readonly string[] {
   );
 }
 
-function rootPathPlaceholder(kind: ConnectCapsuleSourceScope["kind"]): string {
-  if (kind === "repository") return "/absolute/path/to/repository";
-  if (kind === "files") return "/absolute/path/to/root";
-  return "/absolute/path/to/folder";
-}
-
-function rootPathLabel(kind: ConnectCapsuleSourceScope["kind"]): string {
-  if (kind === "repository") return "Absolute repository path to connect";
-  if (kind === "files") return "Absolute root path for the selected files";
-  return "Absolute folder path to connect";
-}
-
-function buildScope(
-  kind: ConnectCapsuleSourceScope["kind"],
-  rootPath: string,
-  filesInput: string,
-): ConnectCapsuleSourceScope | null {
+function buildScope(rootPath: string, filesInput: string): ConnectCapsuleSourceScope | null {
   const trimmedRoot = rootPath.trim();
   if (trimmedRoot === "") return null;
-  if (kind === "folder") {
+  const files = parseFilesInput(filesInput);
+  if (files.length === 0) {
     return { kind: "folder", rootPath: trimmedRoot, recursive: true };
   }
-  if (kind === "repository") {
-    return { kind: "repository", repositoryRoot: trimmedRoot };
-  }
-  const files = parseFilesInput(filesInput);
-  if (files.length === 0) return null;
   return { kind: "files", rootPath: trimmedRoot, files };
 }
 
-const SOURCE_KIND_OPTIONS = [
-  {
-    value: "folder",
-    label: "Folder",
-    description: "Index every supported document under one folder.",
-  },
-  {
-    value: "repository",
-    label: "Repository",
-    description: "Connect a repository root as a pod source.",
-  },
-  {
-    value: "files",
-    label: "Files",
-    description: "Choose specific files below a shared root.",
-  },
-] as const;
+function selectedSourceSummary(
+  rootPath: string,
+  filesInput: string,
+  t: I18nTranslate,
+): string | null {
+  const trimmedRoot = rootPath.trim();
+  if (trimmedRoot === "") return null;
+  const fileCount = parseFilesInput(filesInput).length;
+  if (fileCount > 0) {
+    return t("localKnowledge.detail.connect.selectedDocuments", {
+      count: fileCount.toString(),
+      root: trimmedRoot,
+    });
+  }
+  return t("localKnowledge.detail.connect.selectedSource", { path: trimmedRoot });
+}
 
 function ConnectSourceForm({
   capsuleId,
   onConnected,
   connectImpl = connectCapsuleSource,
 }: ConnectSourceFormProps): ReactNode {
-  const [scopeKind, setScopeKind] = useState<ConnectCapsuleSourceScope["kind"]>("folder");
+  const t = useTranslate();
+  const locale = useLocale();
   const [rootPath, setRootPath] = useState("");
   const [filesInput, setFilesInput] = useState("");
+  const [specificFilesExpanded, setSpecificFilesExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const sourceKindLabelId = useId();
   const nativeNoteId = useId();
   const nativeDialogSupported = useNativeFileDialogCapability();
-  const scope = buildScope(scopeKind, rootPath, filesInput);
+  const scope = buildScope(rootPath, filesInput);
+  const selectedSource = selectedSourceSummary(rootPath, filesInput, t);
+  const documentFilters = nativeDocumentFilters(t);
 
-  // Epic #1941 (ADR-0118) — the chosen scope decides what the native dialog picks: file scopes
-  // multi-select files (folded into shared root + relative paths), folder/repository scopes pick
-  // one folder. Manual entry in the inputs below stays the fallback everywhere.
-  function openNativeSourcePicker(): void {
-    const wantsFiles = scopeKind === "files";
+  function handleNativeOutcome(
+    outcome: Awaited<ReturnType<typeof pickWithNativeDialog>>,
+    onPicked: (paths: readonly string[]) => void,
+  ): void {
+    if (outcome.kind === "picked") {
+      onPicked(outcome.paths);
+      setConnectError(null);
+      return;
+    }
+    if (outcome.kind === "busy") setConnectError(t("localKnowledge.nativeDialog.busy"));
+    if (outcome.kind === "unsupported") {
+      setConnectError(t("localKnowledge.nativeDialog.unavailable"));
+    }
+    if (outcome.kind === "error") setConnectError(outcome.message);
+  }
+
+  // ADR-0118 keeps file and directory native-dialog modes separate. The UI presents both as
+  // Knowledgequelle actions and normalizes the selected paths into the single source contract.
+  function openNativeFolderPicker(): void {
     void pickWithNativeDialog({
-      mode: wantsFiles ? "open-files" : "open-directory",
-      title: wantsFiles ? "Choose files for this pod" : "Choose a folder for this pod",
+      mode: "open-directory",
+      title: t("localKnowledge.detail.connect.chooseFolder"),
       ...(rootPath.trim().length > 0 ? { defaultPath: rootPath.trim() } : {}),
     }).then((outcome) => {
-      if (outcome.kind === "picked") {
-        if (wantsFiles) {
-          const mapped = nativePathsToRootAndFiles(outcome.paths);
-          setRootPath(mapped.rootPath);
-          setFilesInput(mapped.files.join("\n"));
-        } else {
-          const picked = outcome.paths[0];
-          if (picked !== undefined) setRootPath(picked);
-        }
-        setConnectError(null);
-        return;
-      }
-      if (outcome.kind === "busy")
-        setConnectError("A native dialog is already open. Close it first.");
-      if (outcome.kind === "unsupported") {
-        setConnectError(
-          "Native dialogs are unavailable on this platform. Enter the path manually.",
-        );
-      }
-      if (outcome.kind === "error") setConnectError(outcome.message);
+      handleNativeOutcome(outcome, (paths) => {
+        const picked = paths[0];
+        if (picked !== undefined) setRootPath(picked);
+        setFilesInput("");
+        setSpecificFilesExpanded(false);
+      });
+    });
+  }
+
+  function openNativeFilesPicker(): void {
+    void pickWithNativeDialog({
+      mode: "open-files",
+      title: t("localKnowledge.detail.connect.chooseFiles"),
+      filters: documentFilters,
+      ...(rootPath.trim().length > 0 ? { defaultPath: rootPath.trim() } : {}),
+    }).then((outcome) => {
+      handleNativeOutcome(outcome, (paths) => {
+        const mapped = nativePathsToRootAndFiles(paths);
+        setRootPath(mapped.rootPath);
+        setFilesInput(mapped.files.join("\n"));
+        setSpecificFilesExpanded(true);
+      });
     });
   }
 
@@ -250,38 +284,69 @@ function ConnectSourceForm({
       await connectImpl(capsuleId, scope);
       setRootPath("");
       setFilesInput("");
+      setSpecificFilesExpanded(false);
       onConnected();
     } catch (error) {
-      setConnectError(formatError(error));
+      setConnectError(formatError(error, t));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="lkd-connect-form" aria-label="Connect a source">
-      <span id={sourceKindLabelId} className="lkd-connect-label">
-        Connect source
-      </span>
-      <div className="lkd-connect-row">
-        <KeikoSelect
-          value={scopeKind}
-          sections={[{ options: SOURCE_KIND_OPTIONS }]}
-          onValueChange={(next) => {
-            setScopeKind(next as ConnectCapsuleSourceScope["kind"]);
-            setConnectError(null);
-          }}
-          disabled={busy}
-          ariaLabelledBy={sourceKindLabelId}
-          triggerClassName="lkd-source-kind-select"
-          menuClassName="lkd-source-kind-menu"
-          menuTitle="Source type"
-          showMenuHeader={false}
-        />
+    <div className="lkd-connect-form" aria-label={t("localKnowledge.detail.connect.region")}>
+      <div className={detailStyles.sourcePickerPanel}>
+        <div className={detailStyles.sourcePickerCopy}>
+          <Explainable description={t("localKnowledge.detail.help.sourceSetup")}>
+            <span className={detailStyles.sourcePickerTitle}>
+              {t("localKnowledge.detail.connect.sourcePickerTitle")}
+            </span>
+          </Explainable>
+          <span className={detailStyles.sourcePickerDescription}>
+            {t("localKnowledge.detail.connect.sourcePickerDescription")}
+          </span>
+          <span className={detailStyles.sourcePickerFormats}>
+            {t("localKnowledge.detail.connect.supportedFormats", {
+              size: formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES, locale),
+            })}
+          </span>
+        </div>
+        <div className={detailStyles.sourcePickerActions}>
+          <button
+            type="button"
+            className="lk-btn lk-btn-primary"
+            disabled={busy || !nativeDialogSupported}
+            aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
+            title={t("localKnowledge.detail.help.sourceSetup")}
+            onClick={openNativeFolderPicker}
+          >
+            {t("localKnowledge.detail.connect.pickFolderSource")}
+          </button>
+          <button
+            type="button"
+            className="lk-btn lk-btn-primary"
+            disabled={busy || !nativeDialogSupported}
+            aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
+            title={t("localKnowledge.detail.help.sourceSetup")}
+            onClick={openNativeFilesPicker}
+          >
+            {t("localKnowledge.detail.connect.pickDocumentSource")}
+          </button>
+        </div>
       </div>
+      {selectedSource !== null ? (
+        <p className={detailStyles.selectedSourceNote}>{selectedSource}</p>
+      ) : null}
+      {!nativeDialogSupported ? (
+        <span id={nativeNoteId} className="dlg-note">
+          {t("localKnowledge.nativeDialog.unavailable")}
+        </span>
+      ) : null}
       <div className="lkd-connect-row">
         <label htmlFor="lkd-connect-path-input" className="dlg-label">
-          {rootPathLabel(scopeKind)}
+          <Explainable description={t("localKnowledge.detail.help.sourcePath")}>
+            {t("localKnowledge.detail.connect.sourcePath")}
+          </Explainable>
         </label>
         <div className="lkd-connect-path-group">
           <input
@@ -290,56 +355,52 @@ function ConnectSourceForm({
             className="dlg-input lkd-connect-input"
             value={rootPath}
             disabled={busy}
-            placeholder={rootPathPlaceholder(scopeKind)}
+            placeholder="/absolute/path/to/source"
             autoComplete="off"
             onChange={(e: ChangeEvent<HTMLInputElement>) => setRootPath(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && scopeKind !== "files") void handleConnect();
+              if (e.key === "Enter") void handleConnect();
             }}
           />
           <button
             type="button"
-            className="lk-btn lk-btn-ghost"
-            disabled={busy || !nativeDialogSupported}
-            aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
-            onClick={openNativeSourcePicker}
+            className="lk-btn lk-btn-primary"
+            disabled={busy || scope === null}
+            aria-busy={busy}
+            onClick={() => void handleConnect()}
           >
-            Browse
+            {busy
+              ? t("localKnowledge.detail.connect.connecting")
+              : t("localKnowledge.detail.connect.connect")}
           </button>
         </div>
-        {!nativeDialogSupported ? (
-          <span id={nativeNoteId} className="dlg-note">
-            Native dialogs are unavailable on this platform. Enter the path manually.
+      </div>
+      <details
+        className={detailStyles.specificFilesDisclosure}
+        open={specificFilesExpanded}
+        onToggle={(event) => setSpecificFilesExpanded(event.currentTarget.open)}
+      >
+        <summary className={detailStyles.specificFilesSummary}>
+          <span>
+            <Explainable description={t("localKnowledge.detail.help.specificFiles")}>
+              {t("localKnowledge.detail.connect.specificFiles")}
+            </Explainable>
           </span>
-        ) : null}
-      </div>
-      {scopeKind === "files" ? (
-        <div className="lkd-connect-row">
-          <label htmlFor="lkd-connect-files-input" className="dlg-label">
-            Relative files to connect
-          </label>
-          <textarea
-            id="lkd-connect-files-input"
-            className="dlg-input lkd-connect-input"
-            value={filesInput}
-            disabled={busy}
-            placeholder={"src/app.ts\nREADME.md"}
-            rows={4}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFilesInput(e.target.value)}
-          />
-        </div>
-      ) : null}
-      <div className="lkd-connect-row">
-        <button
-          type="button"
-          className="lk-btn lk-btn-ghost"
-          disabled={busy || scope === null}
-          aria-busy={busy}
-          onClick={() => void handleConnect()}
-        >
-          {busy ? "Connecting…" : "Connect"}
-        </button>
-      </div>
+          <span className={detailStyles.disclosureIcon} aria-hidden="true" />
+        </summary>
+        <label htmlFor="lkd-connect-files-input" className="dlg-label">
+          {t("localKnowledge.detail.connect.relativeFiles")}
+        </label>
+        <textarea
+          id="lkd-connect-files-input"
+          className="dlg-input lkd-connect-input"
+          value={filesInput}
+          disabled={busy}
+          placeholder={"src/app.ts\nREADME.md"}
+          rows={4}
+          onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFilesInput(e.target.value)}
+        />
+      </details>
       {connectError !== null ? (
         <div role="alert" aria-live="assertive" className="lk-alert">
           {connectError}
@@ -441,9 +502,11 @@ interface ConfirmModalProps {
 function ActionProgress({
   kind,
   progress,
+  t,
 }: {
   kind: ProgressActionKind;
   progress: ProgressState;
+  t: I18nTranslate;
 }): ReactNode {
   const detail = progress.detail;
   const latestJob = detail?.indexingJobs[0];
@@ -459,37 +522,51 @@ function ActionProgress({
   const statusLabel = latestJob?.status ?? detail?.capsule.lifecycleState ?? "starting";
   const actionLabel =
     kind === "index"
-      ? "Indexing documents"
+      ? t("localKnowledge.detail.progress.indexing")
       : kind === "reembed"
-        ? "Re-indexing for current embedding model"
+        ? t("localKnowledge.detail.progress.reembedding")
         : kind === "refresh"
-          ? "Refreshing changed files"
-          : "Repairing failed files";
+          ? t("localKnowledge.detail.progress.refreshing")
+          : t("localKnowledge.detail.progress.repairing");
   const etaLabel =
     docsPerMs > 0 && totalDocuments > completed
-      ? `Estimated remaining ${formatDuration(etaMs)}`
-      : "Estimating remaining time";
+      ? t("localKnowledge.detail.progress.remaining", { duration: formatDuration(etaMs) })
+      : t("localKnowledge.detail.progress.estimating");
 
   return (
-    <div className="lkd-action-progress" role="status" aria-live="polite">
+    <div
+      className="lkd-action-progress"
+      role="status"
+      aria-live="polite"
+      title={t("localKnowledge.detail.help.actionProgress")}
+    >
       <div className="lkd-action-progress-head">
         <span>{actionLabel}</span>
         <span>{statusLabel}</span>
       </div>
       <div className="lkd-action-progress-note">
-        Still working. Elapsed {formatDuration(elapsedMs)}. {etaLabel}.
+        {t("localKnowledge.detail.progress.elapsed", {
+          duration: formatDuration(elapsedMs),
+          eta: etaLabel,
+        })}
       </div>
       <div className="lkd-status-bars">
-        <div className="lkd-status-bar-row">
-          <span>Documents</span>
-          <ProgressBar value={documentProgress} label="Action document progress" />
+        <div className="lkd-status-bar-row" title={t("localKnowledge.detail.help.actionDocuments")}>
+          <span>{t("localKnowledge.detail.progress.documents")}</span>
+          <ProgressBar
+            value={documentProgress}
+            label={t("localKnowledge.detail.progress.documentProgress")}
+          />
           <span>
             {completed.toString()} / {totalDocuments.toString()}
           </span>
         </div>
-        <div className="lkd-status-bar-row">
-          <span>Vectors</span>
-          <ProgressBar value={vectorProgress} label="Action vector progress" />
+        <div className="lkd-status-bar-row" title={t("localKnowledge.detail.help.actionVectors")}>
+          <span>{t("localKnowledge.detail.progress.vectors")}</span>
+          <ProgressBar
+            value={vectorProgress}
+            label={t("localKnowledge.detail.progress.vectorProgress")}
+          />
           <span>
             {vectorCount.toString()} / {chunkCount.toString()}
           </span>
@@ -497,7 +574,7 @@ function ActionProgress({
       </div>
       {progress.pollError !== null ? (
         <div className="lkd-action-progress-note">
-          Progress refresh is delayed: {progress.pollError}
+          {t("localKnowledge.detail.progress.delayed", { error: progress.pollError })}
         </div>
       ) : null}
     </div>
@@ -523,6 +600,7 @@ function ConfirmModal({
   onConfirm,
   onCancel,
 }: ConfirmModalProps): ReactNode {
+  const t = useTranslate();
   const dialogRef = useRef<HTMLDivElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
   useModalInteractionLock();
@@ -580,10 +658,10 @@ function ConfirmModal({
         <div className="dlg-head">
           <div className="dlg-htext">
             <div id={titleId} className="dlg-title">
-              {actionTitle(kind)}
+              {actionTitle(kind, t)}
             </div>
             <div id={descId} className="dlg-sub">
-              {actionDescription(kind, capsuleDisplayName)}
+              {actionDescription(kind, capsuleDisplayName, t)}
             </div>
           </div>
         </div>
@@ -592,7 +670,7 @@ function ConfirmModal({
           <div className="dlg-body">
             <div className="dlg-field">
               <label htmlFor="lkd-confirm-name-input" className="dlg-label">
-                Type the pod name to confirm
+                {t("localKnowledge.detail.actions.delete.confirmName")}
               </label>
               <input
                 id="lkd-confirm-name-input"
@@ -614,7 +692,9 @@ function ConfirmModal({
           </div>
         ) : (
           <div className="dlg-body">
-            {busy && progress !== null ? <ActionProgress kind={kind} progress={progress} /> : null}
+            {busy && progress !== null ? (
+              <ActionProgress kind={kind} progress={progress} t={t} />
+            ) : null}
             {error !== null ? (
               <div role="alert" className="lk-alert">
                 {error}
@@ -625,7 +705,7 @@ function ConfirmModal({
 
         <div className="dlg-foot">
           <button type="button" className="dlg-btn" disabled={busy} onClick={onCancel}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="button"
@@ -634,7 +714,7 @@ function ConfirmModal({
             aria-disabled={!confirmEnabled}
             onClick={onConfirm}
           >
-            {confirmButtonLabel(kind, busy)}
+            {confirmButtonLabel(kind, busy, t)}
           </button>
         </div>
       </div>
@@ -657,6 +737,7 @@ function AffectedSetsNotice({
   readonly affectedCapsuleSetCount: number;
   readonly onContinue: () => void;
 }): ReactNode {
+  const t = useTranslate();
   const dialogRef = useRef<HTMLDivElement>(null);
   useModalInteractionLock();
   useFocusTrap(dialogRef, true, onContinue);
@@ -678,16 +759,21 @@ function AffectedSetsNotice({
         <div className="dlg-head">
           <div className="dlg-htext">
             <div id={titleId} className="dlg-title">
-              Knowledge Pod Set membership changed
+              {t("localKnowledge.detail.deleteAffectedSets.title")}
             </div>
             <div id={descId} className="dlg-sub">
-              {`This Knowledge Pod was removed from ${affectedCapsuleSetCount.toString()} Knowledge Pod Set${affectedCapsuleSetCount === 1 ? "" : "s"} it belonged to.`}
+              {t(
+                affectedCapsuleSetCount === 1
+                  ? "localKnowledge.detail.deleteAffectedSets.description.one"
+                  : "localKnowledge.detail.deleteAffectedSets.description.many",
+                { count: affectedCapsuleSetCount },
+              )}
             </div>
           </div>
         </div>
         <div className="dlg-foot">
           <button type="button" className="dlg-btn" onClick={onContinue}>
-            Continue
+            {t("common.continue")}
           </button>
         </div>
       </div>
@@ -738,6 +824,8 @@ export function CapsuleActions({
   startIndexingImpl = startIndexing,
   fetchCapsuleDetailImpl = fetchCapsuleDetail,
 }: CapsuleActionsProps): ReactNode {
+  const t = useTranslate();
+  const locale = useLocale();
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -782,7 +870,7 @@ export function CapsuleActions({
         setProgress((current) =>
           current === null
             ? current
-            : { ...current, now: Date.now(), pollError: formatError(error) },
+            : { ...current, now: Date.now(), pollError: formatError(error, t) },
         );
       }
     }
@@ -794,7 +882,7 @@ export function CapsuleActions({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [capsuleId, fetchCapsuleDetailImpl, progressActive]);
+  }, [capsuleId, fetchCapsuleDetailImpl, progressActive, t]);
 
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
@@ -806,7 +894,7 @@ export function CapsuleActions({
       setProgress(null);
       onActionComplete();
     } catch (error) {
-      setIndexError(formatError(error));
+      setIndexError(formatError(error, t));
     } finally {
       setIndexBusy(false);
     }
@@ -852,7 +940,7 @@ export function CapsuleActions({
         onActionComplete();
       }
     } catch (error) {
-      setActionError(formatError(error));
+      setActionError(formatError(error, t));
     } finally {
       setBusy(false);
     }
@@ -892,25 +980,42 @@ export function CapsuleActions({
   // the multi-line connect form used to be squeezed into the header flex row
   // next to the H1 (uiux-fix F033, C104).
   return (
-    <section className="lkd-tools" aria-label="Knowledge Pod tools">
+    <section
+      className={`lkd-tools ${detailStyles.sourceSetup}`}
+      aria-labelledby="lkd-source-setup-heading"
+    >
+      <div className={detailStyles.sourceSetupHeader}>
+        <div>
+          <h2 id="lkd-source-setup-heading" className={detailStyles.sourceSetupTitle}>
+            <Explainable description={t("localKnowledge.detail.help.sourceSetup")}>
+              {t("localKnowledge.detail.connect.title")}
+            </Explainable>
+          </h2>
+          <p className={detailStyles.sourceSetupDescription}>
+            {t("localKnowledge.detail.connect.description")}
+          </p>
+        </div>
+      </div>
       <ConnectSourceForm
         capsuleId={capsuleId}
         onConnected={onActionComplete}
         connectImpl={connectCapsuleSourceImpl}
       />
-      <p className="lkd-limit-note">{localKnowledgeLimitSummary()}</p>
 
       {showIndexButton ? (
-        <div className="lkd-index-row">
+        <div className={`lkd-index-row ${detailStyles.indexPrompt}`}>
           <button
             type="button"
-            className="lk-btn lk-btn-ghost"
-            aria-label="Index this Knowledge Pod now"
+            className="lk-btn lk-btn-primary"
+            aria-label={t("localKnowledge.detail.actions.index.aria")}
             aria-busy={indexBusy}
             disabled={indexBusy}
+            title={t("localKnowledge.detail.help.indexNow")}
             onClick={() => void handleIndex()}
           >
-            {indexBusy ? "Indexing…" : "Index now"}
+            {indexBusy
+              ? t("localKnowledge.detail.actions.index.busy")
+              : t("localKnowledge.detail.actions.index.button")}
           </button>
           {indexError !== null ? (
             <div role="alert" aria-live="assertive" className="lk-alert">
@@ -918,67 +1023,96 @@ export function CapsuleActions({
             </div>
           ) : null}
           {indexBusy && progress !== null ? (
-            <ActionProgress kind="index" progress={progress} />
+            <ActionProgress kind="index" progress={progress} t={t} />
           ) : null}
         </div>
       ) : null}
 
-      <div
-        role="group"
-        aria-label={`Actions for Knowledge Pod ${capsuleDisplayName}`}
-        className="lkd-actions-group"
-      >
-        {showReembedButton ? (
+      <details className={detailStyles.maintenanceDisclosure}>
+        <summary className={detailStyles.disclosureSummary}>
+          <span>
+            <Explainable description={t("localKnowledge.detail.help.maintenance")}>
+              {t("localKnowledge.detail.actions.maintenance")}
+            </Explainable>
+          </span>
+          <span>{t("localKnowledge.detail.actions.maintenanceHint")}</span>
+          <span className={detailStyles.disclosureIcon} aria-hidden="true" />
+        </summary>
+        <p className="lkd-limit-note" title={t("localKnowledge.detail.help.maintenanceLimits")}>
+          {localKnowledgeLimitSummary(t, locale)}
+        </p>
+        <div
+          role="group"
+          aria-label={t("localKnowledge.detail.actions.group", { name: capsuleDisplayName })}
+          className="lkd-actions-group"
+        >
+          {showReembedButton ? (
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost"
+              data-recommended={reembedRecommended ? "true" : "false"}
+              aria-label={t("localKnowledge.detail.actions.reembed.aria", {
+                name: capsuleDisplayName,
+              })}
+              title={t("localKnowledge.detail.help.actionReembed")}
+              disabled={actionDisabled}
+              onClick={() => openModal("reembed")}
+            >
+              {t("localKnowledge.detail.actions.reembed.button")}
+            </button>
+          ) : null}
+          {showRebuildButton ? (
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost"
+              data-recommended={contextualRebuildRequired ? "true" : "false"}
+              aria-label={t("localKnowledge.detail.actions.rebuild.aria", {
+                name: capsuleDisplayName,
+              })}
+              title={t("localKnowledge.detail.help.actionRebuild")}
+              disabled={actionDisabled}
+              onClick={() => openModal("rebuild")}
+            >
+              {t("localKnowledge.detail.actions.rebuild.button")}
+            </button>
+          ) : null}
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            data-recommended={reembedRecommended ? "true" : "false"}
-            aria-label={`Full re-embed Knowledge Pod ${capsuleDisplayName} for current embedding model`}
+            aria-label={t("localKnowledge.detail.actions.refresh.aria", {
+              name: capsuleDisplayName,
+            })}
+            title={t("localKnowledge.detail.help.actionRefresh")}
             disabled={actionDisabled}
-            onClick={() => openModal("reembed")}
+            onClick={() => openModal("refresh")}
           >
-            Full re-embed current model
+            {t("localKnowledge.detail.actions.refresh.button")}
           </button>
-        ) : null}
-        {showRebuildButton ? (
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            data-recommended={contextualRebuildRequired ? "true" : "false"}
-            aria-label={`Full rebuild Knowledge Pod ${capsuleDisplayName}`}
+            aria-label={t("localKnowledge.detail.actions.repair.aria", {
+              name: capsuleDisplayName,
+            })}
+            title={t("localKnowledge.detail.help.actionRepair")}
             disabled={actionDisabled}
-            onClick={() => openModal("rebuild")}
+            onClick={() => openModal("repair")}
           >
-            Full rebuild / rechunk
+            {t("localKnowledge.detail.actions.repair.button")}
           </button>
-        ) : null}
-        <button
-          type="button"
-          className="lk-btn lk-btn-ghost"
-          aria-label={`Refresh changed files for Knowledge Pod ${capsuleDisplayName}`}
-          disabled={actionDisabled}
-          onClick={() => openModal("refresh")}
-        >
-          Refresh changed files
-        </button>
-        <button
-          type="button"
-          className="lk-btn lk-btn-ghost"
-          aria-label={`Repair failed files for Knowledge Pod ${capsuleDisplayName}`}
-          disabled={actionDisabled}
-          onClick={() => openModal("repair")}
-        >
-          Repair failed files
-        </button>
-        <button
-          type="button"
-          className="lk-btn lk-btn-danger"
-          aria-label={`Delete Knowledge Pod ${capsuleDisplayName}`}
-          onClick={() => openModal("delete")}
-        >
-          Delete
-        </button>
-      </div>
+          <button
+            type="button"
+            className="lk-btn lk-btn-danger"
+            aria-label={t("localKnowledge.detail.actions.delete.aria", {
+              name: capsuleDisplayName,
+            })}
+            title={t("localKnowledge.detail.help.actionDelete")}
+            onClick={() => openModal("delete")}
+          >
+            {t("common.delete")}
+          </button>
+        </div>
+      </details>
 
       {confirm !== null ? (
         <ConfirmModal

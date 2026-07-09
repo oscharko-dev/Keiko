@@ -12,6 +12,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { updateChatConnectedScopes } from "@/lib/api";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import type { GroundedAnswerContextPackSummary } from "@/lib/types";
 import { effectiveScopes } from "./hooks/workspaceActions";
@@ -45,6 +46,8 @@ export interface LastGroundedBudgetStatus {
   readonly pressure: GroundedBudgetPressure;
   readonly label: string;
   readonly summary: string;
+  readonly totalTokens: number;
+  readonly filesRead: number;
 }
 
 function formatTokenCount(tokens: number): string {
@@ -85,6 +88,8 @@ export function buildLastGroundedBudgetStatus(
     pressure,
     label: PRESSURE_LABEL[pressure],
     summary: `Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files`,
+    totalTokens,
+    filesRead: usage.filesRead,
   };
 }
 
@@ -96,36 +101,42 @@ function lastSegment(path: string): string {
 
 // Epic #532 — when a source carries its own external root, label it by the folder name so several
 // connected folders stay distinguishable. Otherwise fall back to the Issue #184 kind-based label.
-function pillLabel(scope: ChatConnectedScope): string {
+function pillLabel(scope: ChatConnectedScope, t: I18nTranslate): string {
   if (typeof scope.root === "string" && scope.root.length > 0) {
     const segment = lastSegment(scope.root);
-    return segment.length === 0 ? "Connected folder" : `Folder: ${segment}`;
+    return segment.length === 0
+      ? t("scope.pill.connectedFolder")
+      : t("scope.pill.folder", { name: segment });
   }
-  if (scope.kind === "workspace-root") return "Repository scope";
+  if (scope.kind === "workspace-root") return t("scope.pill.repositoryScope");
   if (scope.kind === "directory") {
     const segment = lastSegment(scope.relativePaths[0] ?? "");
-    return segment.length === 0 ? "Connected folder" : `Folder: ${segment}`;
+    return segment.length === 0
+      ? t("scope.pill.connectedFolder")
+      : t("scope.pill.folder", { name: segment });
   }
   if (scope.relativePaths.length === 1) {
     const segment = lastSegment(scope.relativePaths[0] ?? "");
-    return segment.length === 0 ? "Connected file" : `File: ${segment}`;
+    return segment.length === 0
+      ? t("scope.pill.connectedFile")
+      : t("scope.pill.file", { name: segment });
   }
-  return `${String(scope.relativePaths.length)} files connected`;
+  return t("scope.pill.filesConnected", { count: scope.relativePaths.length });
 }
 
-function scopeBoundaryText(scope: ChatConnectedScope): string {
+function scopeBoundaryText(scope: ChatConnectedScope, t: I18nTranslate): string {
   const noun =
     scope.kind === "workspace-root"
-      ? "the connected repository"
+      ? t("scope.boundary.noun.repository")
       : scope.kind === "directory"
-        ? "the connected folder"
-        : "the connected file scope";
-  return `Keiko may inspect only ${noun}; safe-read exclusions and context budget limits apply before each answer.`;
+        ? t("scope.boundary.noun.folder")
+        : t("scope.boundary.noun.fileScope");
+  return t("scope.boundary.description", { noun });
 }
 
-function formatErrorMessage(error: unknown): string {
+function formatErrorMessage(error: unknown, t: I18nTranslate): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
-  return formatUserError(error, "Unable to disconnect scope.");
+  return formatUserError(error, t("scope.disconnect.error"));
 }
 
 // uiux-fix F010 (C169, WCAG 2.4.3): after a successful disconnect the focused × button
@@ -152,6 +163,7 @@ interface ScopePillItemProps {
   readonly allScopes: readonly ChatConnectedScope[];
   readonly onDisconnect?: ((chat: Chat) => void) | undefined;
   readonly updateScopes: typeof updateChatConnectedScopes;
+  readonly t: I18nTranslate;
 }
 
 function ScopePillItem({
@@ -161,16 +173,18 @@ function ScopePillItem({
   allScopes,
   onDisconnect,
   updateScopes,
+  t,
 }: ScopePillItemProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const disconnectRef = useRef<HTMLButtonElement | null>(null);
-  const label = pillLabel(scope);
+  const label = pillLabel(scope, t);
   // uiux-fix F010 (C174): the basename label collides for same-named folders
   // (~/kunde-a/docs vs ~/kunde-b/docs) — surface the full path via title so it
   // stays reachable on both the label and the disconnect target.
   const fullPath = scope.root ?? scope.relativePaths[0];
-  const accessibleLabel = fullPath === undefined ? label : `${label} (${fullPath})`;
+  const accessibleLabel =
+    fullPath === undefined ? label : t("scope.pill.accessibleWithPath", { label, path: fullPath });
 
   async function handleDisconnect(): Promise<void> {
     if (busy) return;
@@ -185,7 +199,7 @@ function ScopePillItem({
       onDisconnect?.(response.chat);
       restoreScopeHeaderFocus(header);
     } catch (caught) {
-      setError(formatErrorMessage(caught));
+      setError(formatErrorMessage(caught, t));
     } finally {
       setBusy(false);
     }
@@ -211,11 +225,11 @@ function ScopePillItem({
           ref={disconnectRef}
           className="scope-pill-disconnect"
           aria-disabled={busy}
-          aria-label={`Disconnect ${accessibleLabel} from chat`}
+          aria-label={t("scope.disconnect.aria", { label: accessibleLabel })}
           title={
             fullPath === undefined
-              ? `Disconnect ${label} from chat`
-              : `Disconnect ${label} from chat (${fullPath})`
+              ? t("scope.disconnect.title", { label })
+              : t("scope.disconnect.titleWithPath", { label, path: fullPath })
           }
           onClick={() => {
             void handleDisconnect();
@@ -225,7 +239,7 @@ function ScopePillItem({
           <span aria-hidden="true">×</span>
         </button>
       </span>
-      <span className="scope-pill-detail">{scopeBoundaryText(scope)}</span>
+      <span className="scope-pill-detail">{scopeBoundaryText(scope, t)}</span>
       {error !== null ? (
         <span role="alert" className="scope-connect-error">
           {error}
@@ -238,8 +252,15 @@ function ScopePillItem({
 // Content-free signature of the connected-scope set: the ordered visible pill labels. Two chats that
 // bind the same-shaped scopes produce the same signature, so switching between them is a routine
 // re-render and does not re-announce; a connect/disconnect changes the label set and does.
-function scopesSignature(scopes: readonly ChatConnectedScope[]): string {
-  return scopes.map((scope) => pillLabel(scope)).join(" ");
+function scopesSignature(scopes: readonly ChatConnectedScope[], t: I18nTranslate): string {
+  return scopes.map((scope) => pillLabel(scope, t)).join(" ");
+}
+
+function pressureLabel(pressure: GroundedBudgetPressure, t: I18nTranslate): string {
+  if (pressure === "low") return t("scope.budget.pressure.low");
+  if (pressure === "moderate") return t("scope.budget.pressure.moderate");
+  if (pressure === "high") return t("scope.budget.pressure.high");
+  return t("scope.budget.pressure.exceeded");
 }
 
 export function ConnectedScopePill({
@@ -248,8 +269,9 @@ export function ConnectedScopePill({
   lastGroundedBudgetStatus,
   updateScopes = updateChatConnectedScopes,
 }: ConnectedScopePillProps): ReactNode {
+  const t = useTranslate();
   const scopes = effectiveScopes(chat);
-  const signature = scopesSignature(scopes);
+  const signature = scopesSignature(scopes, t);
 
   // GEN-UI-STATE-001 (WCAG 4.1.3): ONE always-mounted sr-only polite region announces a genuine
   // binding change (connect / disconnect). It stays empty until the scope signature actually changes
@@ -262,11 +284,11 @@ export function ConnectedScopePill({
       prevSignatureRef.current = signature;
       setAnnouncement(
         scopes.length === 0
-          ? "Connected scope removed."
-          : `Connected scope updated: ${String(scopes.length)} ${scopes.length === 1 ? "source" : "sources"}.`,
+          ? t("scope.announcement.removed")
+          : t("scope.announcement.updated", { count: scopes.length }),
       );
     }
-  }, [signature, scopes.length]);
+  }, [signature, scopes.length, t]);
 
   const announcer = (
     <span
@@ -298,6 +320,7 @@ export function ConnectedScopePill({
           allScopes={scopes}
           onDisconnect={onDisconnect}
           updateScopes={updateScopes}
+          t={t}
         />
       ))}
       {lastGroundedBudgetStatus !== undefined ? (
@@ -307,9 +330,14 @@ export function ConnectedScopePill({
             style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
           >
             <span className={PRESSURE_CLASS[lastGroundedBudgetStatus.pressure]}>
-              {lastGroundedBudgetStatus.label}
+              {pressureLabel(lastGroundedBudgetStatus.pressure, t)}
             </span>
-            <span>{lastGroundedBudgetStatus.summary}</span>
+            <span>
+              {t("scope.budget.summary", {
+                tokens: formatTokenCount(lastGroundedBudgetStatus.totalTokens),
+                files: lastGroundedBudgetStatus.filesRead,
+              })}
+            </span>
           </span>
         </span>
       ) : null}

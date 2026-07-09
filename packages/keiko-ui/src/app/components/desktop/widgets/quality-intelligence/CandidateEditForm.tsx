@@ -15,6 +15,7 @@ import {
   type QualityIntelligenceRiskClass,
 } from "@oscharko-dev/keiko-contracts";
 import { formatError } from "./qiShared";
+import { useQiTranslate } from "./qi-i18n";
 
 const QUALITY_INTELLIGENCE_PRIORITIES = QualityIntelligence.QUALITY_INTELLIGENCE_PRIORITIES;
 const QUALITY_INTELLIGENCE_RISK_CLASSES = QualityIntelligence.QUALITY_INTELLIGENCE_RISK_CLASSES;
@@ -188,9 +189,13 @@ function SelectField<T extends string>({
 function EditActions({
   onCancel,
   saving,
+  saveLabel,
+  cancelLabel,
 }: {
   readonly onCancel: () => void;
   readonly saving: boolean;
+  readonly saveLabel: string;
+  readonly cancelLabel: string;
 }): ReactNode {
   return (
     <div className="qi-edit-actions">
@@ -199,7 +204,7 @@ function EditActions({
         className="qi-btn qi-btn-approve qi-edit-save"
         aria-disabled={saving || undefined}
       >
-        Save
+        {saveLabel}
       </button>
       <button
         type="button"
@@ -209,7 +214,7 @@ function EditActions({
           if (!saving) onCancel();
         }}
       >
-        Cancel
+        {cancelLabel}
       </button>
     </div>
   );
@@ -226,6 +231,7 @@ export function CandidateEditForm({
   onSave,
   onCancel,
 }: CandidateEditFormProps): ReactNode {
+  const t = useQiTranslate();
   const [state, setState] = useState<FormState>(() => initialState(candidate));
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -286,7 +292,7 @@ export function CandidateEditForm({
     <form
       ref={formRef}
       className="qi-edit-form"
-      aria-label={`Edit ${candidate.title}`}
+      aria-label={t("qi.edit.formAria", { title: candidate.title })}
       aria-busy={saving}
       onSubmit={(e) => {
         e.preventDefault();
@@ -295,10 +301,15 @@ export function CandidateEditForm({
     >
       <div className="qi-edit-head">
         <div className="qi-edit-head-copy">
-          <p className="qi-edit-eyebrow">Edit test case</p>
+          <p className="qi-edit-eyebrow">{t("qi.edit.eyebrow")}</p>
           <h3 className="qi-edit-heading">{candidate.title}</h3>
         </div>
-        <EditActions onCancel={requestCancel} saving={saving} />
+        <EditActions
+          onCancel={requestCancel}
+          saving={saving}
+          saveLabel={t("qi.edit.save")}
+          cancelLabel={t("common.cancel")}
+        />
       </div>
       {saveError !== null ? (
         <p className="qi-edit-error" role="alert" aria-live="assertive">
@@ -309,15 +320,13 @@ export function CandidateEditForm({
           unreliably announced by AT, so mount it always (empty, no visible box) and toggle the
           text when a discard is pending. */}
       <p className="qi-edit-discard-note" role="status" aria-live="polite">
-        {confirmDiscard
-          ? "Unsaved changes — press Escape or activate Cancel again to discard them."
-          : ""}
+        {confirmDiscard ? t("qi.edit.discardConfirm") : ""}
       </p>
       <div className="qi-edit-layout">
         <div className="qi-edit-main">
           <InputField
             id={`${id}-title`}
-            label="Title"
+            label={t("qi.edit.title")}
             value={state.title}
             disabled={saving}
             required
@@ -327,7 +336,7 @@ export function CandidateEditForm({
           />
           <TextAreaField
             id={`${id}-preconditions`}
-            label="Preconditions (one per line)"
+            label={t("qi.edit.preconditions")}
             value={state.preconditions}
             disabled={saving}
             onChange={(v) => {
@@ -336,7 +345,7 @@ export function CandidateEditForm({
           />
           <TextAreaField
             id={`${id}-steps`}
-            label="Steps (one per line)"
+            label={t("qi.edit.steps")}
             value={state.steps}
             disabled={saving}
             onChange={(v) => {
@@ -345,7 +354,7 @@ export function CandidateEditForm({
           />
           <TextAreaField
             id={`${id}-expected`}
-            label="Expected results (one per line)"
+            label={t("qi.edit.expectedResults")}
             value={state.expectedResults}
             disabled={saving}
             onChange={(v) => {
@@ -356,7 +365,7 @@ export function CandidateEditForm({
         <div className="qi-edit-side">
           <SelectField
             id={`${id}-priority`}
-            label="Priority"
+            label={t("qi.edit.priority")}
             value={state.priority}
             options={QUALITY_INTELLIGENCE_PRIORITIES}
             disabled={saving}
@@ -366,7 +375,7 @@ export function CandidateEditForm({
           />
           <SelectField
             id={`${id}-risk`}
-            label="Risk class"
+            label={t("qi.edit.riskClass")}
             value={state.riskClass}
             options={QUALITY_INTELLIGENCE_RISK_CLASSES}
             disabled={saving}
@@ -376,7 +385,7 @@ export function CandidateEditForm({
           />
           <InputField
             id={`${id}-tags`}
-            label="Tags (comma-separated)"
+            label={t("qi.edit.tags")}
             value={state.tags}
             disabled={saving}
             onChange={(v) => {
