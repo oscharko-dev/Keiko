@@ -8,7 +8,7 @@ Accepted (Issue #497, Epic #491, 2026-06-24)
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Context
 
@@ -57,6 +57,19 @@ credential — neither the long-lived key nor an ephemeral token. The contract's
 `direct-ephemeral` mode (browser holds a short-lived minted token) remains a supported protocol value
 but is **not** the default and is **not** wired browser-direct in #497, so no CSP relaxation for
 browser-direct provider/STUN/TURN traffic is required.
+
+For standard server API-key authentication, the adapter uses the GA unified WebRTC call: one
+`multipart/form-data` request carries the `sdp` offer and the complete `session` JSON. Instructions,
+voice, input transcription, turn detection, grounding tools, tool posture, current chat context, and
+MemoriaViva priming are therefore applied atomically before media starts. For providers configured with
+`realtimeAuthMode: "ephemeral-session"`, the host first mints a client secret with the same server-owned
+session JSON and then submits the SDP with that short-lived token. Neither path exposes a credential to
+the browser.
+
+The server is the single owner of session persona, tools, memory, grounding, transcription, and default
+turn detection. The browser may send a narrow `session.update` only for an explicitly selected acoustic
+turn-detection profile. It never re-advertises tools or replaces server instructions, preventing client
+state from erasing governance and retrieval context after negotiation.
 
 ### D3 — Security posture for the re-opened upgrade (ADR-0100 D6)
 

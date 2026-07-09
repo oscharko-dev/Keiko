@@ -74,6 +74,7 @@ import { reinforcementAccessIds } from "./memory-reinforcement.js";
 import { memoryCapturePolicyForDeps } from "./memory-capture-policy.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 // The single loopback path the BFF WebSocket upgrade is re-opened for. Every other upgrade keeps the
 // hard 404 + socket.destroy() default (server.ts).
@@ -239,8 +240,17 @@ function resolveRealtimeProvider(config: GatewayConfig): ModelProviderConfig | u
 // witty, and friendly AI … Talk quickly … knowledge cutoff 2023-10"), which would otherwise make the
 // realtime voice a separate, ungrounded assistant — a direct violation of the dialogue-mode invariant.
 const REALTIME_SPOKEN_ADDENDUM =
-  " You are speaking with the user by voice. Keep replies short, natural, and conversational. " +
-  "Do not read code, file paths, or long identifiers aloud verbatim; summarize them in words.";
+  " You are speaking with the user by voice. Reply in the same language as the user unless they " +
+  "ask otherwise. Sound like a thoughtful colleague: warm, attentive, natural, and concise, with " +
+  "subtle emotion and varied pacing rather than a scripted assistant. Do not read URLs, Markdown, " +
+  "citation markers, source lists, code, file paths, or long identifiers aloud; keep those details " +
+  "in chat and summarize them in speech. Use brief verbal acknowledgements sparingly when they help " +
+  "the user feel heard, but never as agreement, confirmation, or a guess. If the user asks you to " +
+  "keep listening, remain silent until they explicitly invite a response. Treat hesitation and short " +
+  "pauses as thinking time; do not complete the user's thought. When asked to repeat or clarify, " +
+  "articulate key words and slow slightly instead of getting louder. Never add sound effects or " +
+  "stage directions. When the request is ambiguous or an important detail is missing, ask a short " +
+  "clarifying question instead of guessing.";
 
 const REALTIME_GROUNDED_VOICE_ADDENDUM =
   " This voice session is connected to Keiko grounding sources. For any substantive question about " +
@@ -595,7 +605,17 @@ async function realtimeMemoryContext(
         : {}),
     });
     return recall?.contextText ?? "";
-  } catch {
+  } catch (error) {
+    emitServerDiagnostic(
+      deps.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: chatContext.chatId,
+        operation: "voice.realtime.memory-prime",
+        source: "voice.realtime",
+        error,
+        redact: (message: string): string => String(deps.redactor(message)),
+      }),
+    );
     return "";
   }
 }
@@ -727,7 +747,28 @@ function realtimeSessionTools(
 
 export const _realtimeSessionToolsForTests = realtimeSessionTools;
 
+function realtimeSessionTuning(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+): Pick<RealtimeNegotiationRequest, "transcriptionModel" | "turnDetection"> {
+  const capability = findConfiguredCapability(config, provider.modelId);
+  return {
+    transcriptionModel:
+      capability?.realtimeTranscriptionModel ?? DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    ...(capability?.supportsSemanticTurnDetection === true
+      ? {
+          turnDetection: {
+            type: "semantic_vad",
+            eagerness: "auto",
+            interrupt_response: true,
+          },
+        }
+      : {}),
+  };
+}
+
 function buildNegotiationRequest(
+  config: GatewayConfig,
   provider: ModelProviderConfig,
   offerSdp: string,
   persona: VoicePersona | undefined,
@@ -752,7 +793,7 @@ function buildNegotiationRequest(
     modelId: provider.modelId,
     instructions,
     voiceId: resolveRealtimeVoiceId(provider, persona),
-    transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    ...realtimeSessionTuning(config, provider),
     ...realtimeSessionTools(
       groundingEnabled && toolsSupported,
       memoryToolEnabled && toolsSupported,
@@ -1254,6 +1295,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         chatContext === undefined ? undefined : realtimeSafetyIdentifier(chatContext.chatId);
       return negotiate(
         buildNegotiationRequest(
+          config,
           provider,
           offerSdp,
           persona,

@@ -145,11 +145,20 @@ export interface ModelCapability {
    */
   readonly supportsSpeechOutput?: boolean | undefined;
   /**
+   * Whether speech synthesis accepts delivery instructions for tone, pacing, and intonation.
+   * Only meaningful when speech output is supported; absent means fail-safe plain synthesis.
+   */
+  readonly supportsSpeechSynthesisInstructions?: boolean | undefined;
+  /**
    * Whether the voice provider advertises realtime, full-duplex speech (interruptible,
    * colleague-like conversation / speech-in-speech-out). Only meaningful for `kind: "voice"`.
    * Realtime is the gate for the full-conversation profile (Issue #493 AC3, ADR-0100 D2).
    */
   readonly supportsRealtimeVoice?: boolean | undefined;
+  /** Whether the realtime provider supports semantic end-of-turn detection. */
+  readonly supportsSemanticTurnDetection?: boolean | undefined;
+  /** Provider-specific input transcription model used for realtime dialogue. */
+  readonly realtimeTranscriptionModel?: string | undefined;
   /**
    * Where a `kind: "voice"` provider runs (Issue #493, ADR-0100 D7). Declared explicitly, never
    * inferred from the endpoint URL or environment name. Required when `kind === "voice"`.
