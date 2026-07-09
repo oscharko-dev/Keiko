@@ -23,6 +23,7 @@ import {
 import { resolveConversationMemoryContext } from "./memory-conversation-context.js";
 import { runGroundedAskInput } from "./grounded-qa.js";
 import type { Chat, ChatMessage } from "./store/index.js";
+import { toSpeakableText } from "./voice-speech-text.js";
 
 const MAX_BODY_BYTES = 128_000;
 const MAX_TEXT_CHARS = 16_000;
@@ -49,6 +50,7 @@ interface RealtimeGroundedToolRequest {
 interface RealtimeGroundedToolOutput {
   readonly status: "ok";
   readonly answer: string;
+  readonly spokenAnswer: string;
   readonly groundingKind: GroundedAnswer["groundingKind"];
   readonly elapsedMs: number;
   readonly citations: readonly {
@@ -309,26 +311,35 @@ function isGroundedNoEvidence(answer: GroundedAnswer): boolean {
 // that nothing was found; when reconciliation flagged unsupported/incomplete claims it speaks with
 // an explicit uncertainty caveat; otherwise it speaks the answer faithfully.
 function voiceInstructionFor(answer: GroundedAnswer): string {
+  const delivery =
+    " Speak only the spokenAnswer field; the full answer and clickable sources stay in chat. " +
+    "Do not read URLs, Markdown, citation markers, source labels, or file paths aloud.";
   if (isGroundedNoEvidence(answer)) {
     return (
       "State clearly that no supporting repository evidence was found for this question and that " +
-      "you cannot answer it from the connected sources. Do not invent or guess an answer."
+      "you cannot answer it from the connected sources. Do not invent or guess an answer." +
+      delivery
     );
   }
   if (answer.uncertainty.length > 0) {
     return (
       "Speak this answer faithfully and concisely, but it contains unverified or incomplete claims " +
       "(see the uncertainty notes). Make clear which parts are uncertain and do not present them " +
-      "as confirmed fact. Do not add facts that are not in the answer."
+      "as confirmed fact. Do not add facts that are not in the answer." +
+      delivery
     );
   }
-  return "Speak this answer faithfully in a concise voice-friendly way. Do not add facts that are not in the answer.";
+  return (
+    "Speak this answer faithfully in a concise voice-friendly way. Do not add facts that are not " +
+    `in the answer.${delivery}`
+  );
 }
 
 function buildToolOutput(answer: GroundedAnswer): RealtimeGroundedToolOutput {
   return {
     status: "ok",
     answer: answer.content,
+    spokenAnswer: toSpeakableText(answer.content),
     groundingKind: answer.groundingKind,
     elapsedMs: answer.elapsedMs,
     citations: summarizeCitations(answer),

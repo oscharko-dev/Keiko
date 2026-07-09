@@ -24,7 +24,32 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 | STT `keiko-stt`                          | ~1.2s round-trip; rejects audio without a recognized file extension                                 |
 | Realtime `keiko-realtime` session create | HTTP 200 ~0.3s; **default session ran the provider demo persona**; voice `nova` rejected (HTTP 400) |
 
-## Fixed in this change
+## Current hardening pass (2026-07-09)
+
+- **Atomic server-owned Realtime session:** standard-key WebRTC negotiation now sends GA multipart
+  `sdp` + complete `session` configuration in one call. Ephemeral-session negotiation applies the same
+  configuration while minting the token. Keiko's persona, recent chat, MemoriaViva priming, grounding
+  tools, transcription, voice, and VAD are active before media starts.
+- **No client configuration rollback:** the browser no longer sends duplicate instructions, tools,
+  `tool_choice`, or transcription settings after connection. A narrow `session.update` carries only an
+  explicitly selected acoustic turn-detection profile, so it cannot erase server grounding or memory.
+- **Single-copy memory priming:** initial MemoriaViva context is sent in server instructions only. Later
+  memory changes can still be injected mid-session; a priming failure emits a redacted operator diagnostic
+  instead of silently disappearing.
+- **Recognition and endpointing:** dialogue transcription defaults to `gpt-realtime-whisper`. Providers can
+  explicitly advertise `supportsSemanticTurnDetection` and a `realtimeTranscriptionModel`; unsupported
+  endpoints retain the conservative server-VAD path.
+- **No cut-off PCM on backpressure:** `ServerResponse.write() === false` now waits for `drain` instead of
+  aborting and destroying the stream. Only a real client close cancels synthesis. Mid-stream failures are
+  correlation-keyed in redacted diagnostics.
+- **Speech-safe grounded answers:** visible Markdown keeps clickable links and citations, while synthesis
+  and Realtime response instructions receive a deterministic `spokenAnswer` without URLs, Markdown,
+  citation markers, source appendices, or fenced code.
+- **Natural delivery where supported:** `supportsSpeechSynthesisInstructions` enables language-preserving,
+  warm colleague-like delivery guidance with natural pacing, subtle emotion, varied intonation, and clear
+  pronunciation. Older endpoints receive no speculative field.
+
+## Earlier foundations
 
 ### Realtime dialogue (Wave A) — `fix(voice): make realtime dialogue audible and grounded`
 
@@ -54,33 +79,19 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
   the base64 inflation of the JSON envelope. opus output is a valid, browser-playable Ogg/Opus
   container, and the MIME stays inside the existing server allowlist.
 
-## Prioritized follow-ups (identified, deliberately deferred)
+## Current residual validation
 
-These were confirmed real but are deferred to keep this change contained, well-tested, and within the
-shipped subsystem's invariants. They are ordered by perceived-fluidity value.
-
-1. **Turn-based VAD end-of-turn + voice-activated barge-in.** The shipped dialogue mode (STT+TTS)
-   ends a user turn only when the user manually taps the mic again, and barge-in is button-driven.
-   A WebAudio `AnalyserNode` on the dictation `MediaStream` (trailing-silence end-of-turn + energy-
-   onset barge-in) would make turns feel natural. Deferred because it requires exposing the shared
-   dictation recorder's stream and WebAudio test infrastructure (regression surface on composer
-   dictation, #495). _Files: `useVoiceDialogueSession.ts`, `voice-dialogue-session.ts`,
-   `dictation-recorder.ts`._ Note: realtime mode already gets natural turn-taking via `server_vad`.
-2. **Streaming assistant-speech playout (MSE/Web Audio).** Start playback on the first audio chunk
-   instead of buffering the whole clip. With opus the whole-clip wait is already ~1.1s versus a
-   ~0.9s time-to-first-audio floor, so the remaining benefit is ~0.2s; it is a larger architectural
-   change to the audible path and warrants its own change with perceptual sign-off. _Files:
-   `useAssistantSpeech.ts`, `voice-handlers.ts` (reuse the existing SSE seam), `lib/api.ts`._
-3. **Control-plane WS heartbeat + client negotiate() timeout.** Ping/pong liveness and a browser-side
-   handshake timeout so a half-open connection cannot stall on "negotiating". _Files:
-   `voice-realtime.ts`, `voice-realtime-client.ts`._
-4. **Per-user persona selection for realtime.** Plumb the selected `male`/`female`/`neutral` persona
-   through the control protocol so realtime honors it (today it uses the configured neutral default).
-5. **Live interrupt offset.** Source the barge-in offset from the live media position rather than the
-   previous interrupt's stored offset. _File: `useVoiceDialogueSession.ts`._
-6. **STT interim/verbose_json.** Request `verbose_json` for real duration (the current `json` path
-   parses `confidence`/`duration` that are never returned) and surface interim transcripts. _File:
-   `speech-to-text-adapter.ts`._
+1. **Provider perceptual sign-off.** Automated tests prove transport, ordering, interruption, retrieval,
+   memory, and redaction behavior, but timbre and emotional naturalness still require a short human listening
+   matrix for each configured model / voice / language combination.
+2. **Deployment capability accuracy.** Operators must advertise synthesis instructions and semantic VAD
+   only for endpoints that support them. The parser fails closed on inconsistent declarations, but it cannot
+   remotely probe a regulated provider during startup.
+3. **Real network media evidence.** CI remains hermetic and cannot prove customer WebRTC routing, acoustic
+   echo behavior, or provider latency. Those remain deployment acceptance checks using content-free timing
+   marks and the existing voice evaluation runbook.
+4. **Turn-based STT+TTS mode.** The non-Realtime degradation path remains push-to-talk by design. Natural
+   provider VAD, continuous barge-in, and semantic endpointing apply to the full Realtime mode.
 
 ## Invariants preserved
 

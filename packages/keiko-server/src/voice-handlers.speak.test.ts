@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { handleVoiceSpeak, handleVoiceSpeakStream } from "./voice-handlers.js";
@@ -47,6 +48,7 @@ const SPEECH_OUTPUT_CONFIG: GatewayConfig = {
       supportsImageInput: false,
       supportsDocumentInput: false,
       supportsSpeechOutput: true,
+      supportsSpeechSynthesisInstructions: true,
       supportedVoicePersonas: ["female", "male"],
       voiceProviderLocality: "azure-foundry",
       workflowEligible: false,
@@ -269,9 +271,23 @@ describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
     expect(seen[0]?.apiKey).toBe(PROVIDER_SECRET);
     expect(seen[0]?.modelId).toBe("keiko-tts");
     expect(seen[0]?.input).toBe(answer);
+    expect(seen[0]?.instructions).toContain("thoughtful colleague");
     // The interactive speak path requests opus (audio/ogg): faster to first audio and ~4x smaller
     // than the previous mp3 default (measured against the live endpoint).
     expect(seen[0]?.responseFormat).toBe("opus");
+  });
+
+  it("sends speech-friendly prose while the visible answer keeps clickable Markdown sources", async () => {
+    const { deps, seen } = speakDeps();
+    const visible =
+      "See [the runbook](https://example.invalid/runbook?token=secret) [1].\n\n### Sources\n- [1] [Runbook](https://example.invalid/runbook)";
+
+    const result = await handleVoiceSpeak(ctx({ text: visible }), deps);
+
+    expect(result.status).toBe(200);
+    expect(seen[0]?.input).toBe("See the runbook.");
+    expect(seen[0]?.input).not.toContain("https://");
+    expect(seen[0]?.input).not.toContain("[1]");
   });
 
   it("resolves the persona → voice id server-side and never returns the voice id (content-free)", async () => {
@@ -363,12 +379,17 @@ describe("POST /api/voice/speak — provider failure mapping (AC4)", () => {
 });
 
 // A minimal ServerResponse fake capturing the streaming write path.
-class FakeRes {
+class FakeRes extends EventEmitter {
   statusCode: number | undefined;
   headers: Record<string, string> | undefined;
   readonly chunks: Uint8Array[] = [];
   ended = false;
   destroyed = false;
+  private writeCount = 0;
+
+  constructor(private readonly backpressureAt?: number) {
+    super();
+  }
   writeHead(status: number, headers?: Record<string, string>): this {
     this.statusCode = status;
     this.headers = headers;
@@ -376,13 +397,15 @@ class FakeRes {
   }
   write(chunk: Uint8Array): boolean {
     this.chunks.push(chunk);
+    this.writeCount += 1;
+    if (this.writeCount === this.backpressureAt) {
+      queueMicrotask(() => this.emit("drain"));
+      return false;
+    }
     return true;
   }
   end(): void {
     this.ended = true;
-  }
-  on(): this {
-    return this;
   }
   destroy(): void {
     this.destroyed = true;
@@ -410,6 +433,7 @@ function streamCtx(body: unknown, res: FakeRes): RouteContext {
     res: res as unknown as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/voice/speak/stream"),
+    correlationId: "voice-stream-test",
   };
 }
 
@@ -450,6 +474,25 @@ describe("POST /api/voice/speak/stream", () => {
     expect(seen[0]?.signal).toBeDefined();
   });
 
+  it("waits for response drain under backpressure without truncating the PCM stream", async () => {
+    const res = new FakeRes(1);
+    const deps = depsWith({
+      config: SPEECH_OUTPUT_CONFIG,
+      configPresent: true,
+      voiceSpeechStreamRequest: (): Promise<TextToSpeechStreamOutcome> =>
+        Promise.resolve(streamOk(streamOf([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]))),
+    });
+
+    const outcome = await handleVoiceSpeakStream(streamCtx({ text: "spoken answer" }, res), deps);
+
+    expect(outcome).toBe(STREAMING);
+    expect(Buffer.concat(res.chunks.map((chunk) => Buffer.from(chunk)))).toEqual(
+      Buffer.from([1, 2, 3, 4, 5, 6]),
+    );
+    expect(res.destroyed).toBe(false);
+    expect(res.ended).toBe(true);
+  });
+
   it("returns a coded error RouteResult BEFORE any headers when synthesis fails", async () => {
     const res = new FakeRes();
     const deps = depsWith({
@@ -463,6 +506,34 @@ describe("POST /api/voice/speak/stream", () => {
     expect((outcome as RouteResult).status).toBe(429);
     expect(res.statusCode).toBeUndefined(); // never committed a 200 + audio headers
     expect(res.ended).toBe(false);
+  });
+
+  it("emits a redacted diagnostic when a committed provider stream fails", async () => {
+    const res = new FakeRes();
+    const diagnostics: string[] = [];
+    const failed = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(new Uint8Array([1, 2]));
+        controller.error(new Error("stream transport failed"));
+      },
+    });
+    const deps = depsWith({
+      config: SPEECH_OUTPUT_CONFIG,
+      configPresent: true,
+      diagnostics: {
+        record: (record): void => {
+          diagnostics.push(record.operation);
+        },
+      },
+      voiceSpeechStreamRequest: (): Promise<TextToSpeechStreamOutcome> =>
+        Promise.resolve(streamOk(failed)),
+    });
+
+    const outcome = await handleVoiceSpeakStream(streamCtx({ text: "spoken answer" }, res), deps);
+
+    expect(outcome).toBe(STREAMING);
+    expect(diagnostics).toEqual(["voice.speech.stream"]);
+    expect(res.ended).toBe(true);
   });
 
   it("returns 503 VOICE_UNAVAILABLE for an STT-only deployment (no streaming)", async () => {

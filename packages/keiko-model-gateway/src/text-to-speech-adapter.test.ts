@@ -44,7 +44,7 @@ function bodyText(init: RequestInit): string {
 }
 
 describe("requestTextToSpeech", () => {
-  it("POSTs JSON to /audio/speech with model, input, voice, response_format, and auth header", async () => {
+  it("POSTs JSON to /audio/speech with model, input, voice, instructions, response_format, and auth header", async () => {
     let seenUrl = "";
     let seenMethod = "";
     let seenContentType = "";
@@ -66,6 +66,7 @@ describe("requestTextToSpeech", () => {
       modelId: "keiko-tts",
       input: ANSWER,
       voice: "verse",
+      instructions: "Speak warmly with natural pacing.",
       fetchImpl,
     });
 
@@ -83,6 +84,7 @@ describe("requestTextToSpeech", () => {
       model: "keiko-tts",
       input: ANSWER,
       voice: "verse",
+      instructions: "Speak warmly with natural pacing.",
       response_format: "mp3",
     });
   });
