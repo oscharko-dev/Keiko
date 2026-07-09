@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-tools",
-  "version": "0.2.15-beta.0",
+  "version": "0.2.15",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal tools package: Keiko safe tool-execution layer — terminal-policy command allowlist, env-isolated no-shell spawn, atomic patch workflow, browser CDP adapter, and the WorkspaceWriter boundary (ADR-0006 / ADR-0017). Not published independently.",
@@ -37,10 +37,10 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-sandbox": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-security": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-workspace": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-contracts": "0.2.15",
+    "@oscharko-dev/keiko-sandbox": "0.2.15",
+    "@oscharko-dev/keiko-security": "0.2.15",
+    "@oscharko-dev/keiko-workspace": "0.2.15",
     "ws": "^8.21.0"
   },
   "private": true

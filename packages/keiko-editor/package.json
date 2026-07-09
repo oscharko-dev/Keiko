@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-editor",
-  "version": "0.2.15-beta.0",
+  "version": "0.2.15",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: browser-tier Keiko Editor surface (Epic #1189, Issue #1191). Owns the Monaco editor/diff lifecycle, editor UI contracts, and the typed host-integration port surface; it computes no completion, diagnostics, retrieval, or model routing itself and never imports keiko-ui internals (ADR-0042; ADR-0019 browser tier, direction rule 8). v1 ships only a minimal typed public API. Monaco runtime wiring, UI card integration, and server completion endpoints are out of scope and land in #1193+. Not published independently.",
@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
-    "@oscharko-dev/keiko-contracts": "0.2.15-beta.0",
+    "@oscharko-dev/keiko-contracts": "0.2.15",
     "monaco-editor": "0.55.1"
   },
   "devDependencies": {

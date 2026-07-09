@@ -628,7 +628,7 @@
       "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
-      "defaultPatchNotes": true,
+      "defaultPatchNotes": false,
       "oneClickEligible": false,
       "publishGates": [
         "version-consistency",
@@ -672,6 +672,108 @@
         "humanApproved": true,
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
         "rationale": "The maintainer explicitly ordered this beta in the local session (epic #1982 audit; PR #2152 checks, admin merge, and beta publication each explicitly authorized in-session). Release-owner authority is recorded in PR review #4618551973, following the 0.2.14 locally-authorized precedent. Beta previews the Coding Workbench epic (PR #2126) plus the #2152 release-automation and connector-wiring follow-up; publication uses the beta dist-tag only and does not affect latest."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.15",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.15",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-07-10-keiko-0.2.15-coding-workbench-stable",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Stable release of the governed Coding Workbench with Governed Assist, Supervised Coding, and Autonomous Delivery autonomy modes, managed OpenCode-compatible sidecar runtime support, governed GitHub/Jira coding-context intake, and automated portable asset staging from approved Node.js and OpenCode runtime versions.",
+      "affectedStateStores": [
+        "coding-runtime",
+        "authority-envelope-evidence",
+        "task-worktree-bindings",
+        "governed-git-delivery",
+        "connector-scopes"
+      ],
+      "stateImpact": [
+        {
+          "store": "coding-runtime",
+          "description": "Introduces content-free coding run, Authority Envelope, and connector-context evidence state for Coding Workbench runs. No existing store is migrated or rewritten.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "releaseNoteBullets": [
+        "Added a governed Coding Workbench with Governed Assist, Supervised Coding, and Autonomous Delivery autonomy modes, managed OpenCode-compatible sidecar runtime support, and optional ChatGPT/Codex subscription profiles.",
+        "Added governed GitHub and Jira coding-context intake behind default-false connector authorization with content-free evidence.",
+        "Added automated portable asset staging: release artifacts are built from committed approved Node.js and OpenCode runtime versions and smoke-tested per platform in CI, so customers receive a bundled zero-install product."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-10",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
+        "rationale": "The maintainer explicitly authorized the stable 0.2.15 release in the local session (epic #1982; beta 0.2.15-beta.0 was published and validated first, then promotion to stable was explicitly chosen). Stable promotes the Coding Workbench epic (PR #2126) plus the #2152 release-automation and connector-wiring follow-up; release-owner authority is recorded in PR review #4618551973 per the 0.2.14 precedent."
+      }
+    },
+    {
+      "id": "2026-07-06-keiko-0.2.15-portable-runtime-staging-contract",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.15",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.15",
+      "releaseNoteCategory": "internal-only",
+      "releaseNotePriority": "internal",
+      "userVisibleChange": "none",
+      "userVisibleSummary": "Portable runtime staging metadata binds the packed Keiko package, bundled Node runtime, target artifacts, and reviewed manifest contract before public release upload.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Portable runtime staging metadata now binds reviewed package and runtime artifact evidence before release upload."
+      ],
+      "internalOnly": true,
+      "observableImpact": false,
+      "defaultPatchNotes": false,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-10",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.14 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
       }
     }
   ]

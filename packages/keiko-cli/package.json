@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-cli",
-  "version": "0.2.15-beta.0",
+  "version": "0.2.15",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal CLI package: command modules for the `keiko` binary shipped via the root product package (ADR-0019). Not published independently.",
@@ -25,19 +25,19 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-security": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-model-gateway": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-workspace": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-tools": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-evaluations": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-evidence": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-verification": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-harness": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-sdk": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-workflows": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-server": "0.2.15-beta.0",
-    "@oscharko-dev/keiko-memory-vault": "0.2.15-beta.0"
+    "@oscharko-dev/keiko-contracts": "0.2.15",
+    "@oscharko-dev/keiko-security": "0.2.15",
+    "@oscharko-dev/keiko-model-gateway": "0.2.15",
+    "@oscharko-dev/keiko-workspace": "0.2.15",
+    "@oscharko-dev/keiko-tools": "0.2.15",
+    "@oscharko-dev/keiko-evaluations": "0.2.15",
+    "@oscharko-dev/keiko-evidence": "0.2.15",
+    "@oscharko-dev/keiko-verification": "0.2.15",
+    "@oscharko-dev/keiko-harness": "0.2.15",
+    "@oscharko-dev/keiko-sdk": "0.2.15",
+    "@oscharko-dev/keiko-workflows": "0.2.15",
+    "@oscharko-dev/keiko-server": "0.2.15",
+    "@oscharko-dev/keiko-memory-vault": "0.2.15"
   },
   "private": true
 }
