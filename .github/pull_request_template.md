@@ -33,6 +33,7 @@ Refs #<issue_number>
 ## Product Impact
 
 - [ ] UI or user workflow
+- [ ] UI text uses the i18n API and includes English and German catalog entries.
 - [ ] CLI or developer workflow
 - [ ] Core generation engine
 - [ ] Evidence, audit, or compliance artifact
@@ -60,6 +61,7 @@ Refs #<issue_number>
 Required:
 
 - [ ] Required GitHub checks pass before merge.
+- [ ] `npm run check:ui-i18n` passes, or no UI production source changed.
 - [ ] Local verification commands or rationale are listed below.
 - [ ] Reuse/extension/generalization evidence or gap rationale is listed below.
 
