@@ -15,8 +15,6 @@ function fakeHost(overrides: Partial<EditorPaletteHost> = {}): EditorPaletteHost
     activeFile: "src/a.ts",
     closedTabCount: 0,
     dirtyCount: 0,
-    openQuickOpen: vi.fn(),
-    openCommandPalette: vi.fn(),
     splitActive: vi.fn(),
     closeActiveSplit: vi.fn(),
     closeActiveTab: vi.fn(),

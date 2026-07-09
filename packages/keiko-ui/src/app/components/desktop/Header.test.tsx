@@ -9,7 +9,6 @@ import { Header } from "./Header";
 
 function renderHeader(overrides: Partial<Parameters<typeof Header>[0]> = {}) {
   const props = {
-    openPalette: vi.fn(),
     openCommandPalette: vi.fn(),
     onTileAll: vi.fn(),
     onSplitFront: vi.fn(),
@@ -96,7 +95,6 @@ describe("Header split action wording (F039 C401)", () => {
     render(
       <I18nProvider>
         <Header
-          openPalette={vi.fn()}
           openCommandPalette={vi.fn()}
           onTileAll={vi.fn()}
           onSplitFront={vi.fn()}
@@ -128,7 +126,6 @@ describe("Header brand (C399)", () => {
   it("keeps the logo decorative next to the visible wordmark (no 'Keiko Keiko')", () => {
     const { container } = render(
       <Header
-        openPalette={vi.fn()}
         openCommandPalette={vi.fn()}
         onTileAll={vi.fn()}
         onSplitFront={vi.fn()}

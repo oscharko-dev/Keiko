@@ -5,8 +5,6 @@ import { join } from "node:path";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32209");
-const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32210");
-const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32211");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-2090-${String(process.pid)}`;
 const stateDir =
   process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
@@ -43,16 +41,14 @@ export default defineConfig({
     cwd: root,
     command:
       `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
-      "npm run build:packages && node scripts/dev-runner.mjs",
+      "npm run build && npm run prepare:bin && npm run build:ui && " +
+      `node dist/cli/index.js ui --port ${String(publicPort)} ` +
+      `--config ${runtimeConfigPath} ` +
+      `--ui-db ${join(stateDir, "ui", "ui.sqlite")}`,
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,
-    timeout: 120_000,
+    timeout: 240_000,
     env: {
-      KEIKO_DEV_UI_PORT: String(publicPort),
-      KEIKO_DEV_BFF_PORT: String(bffPort),
-      KEIKO_DEV_NEXT_PORT: String(nextPort),
-      KEIKO_DEV_MAX_RESTARTS: "0",
-      KEIKO_DEV_NEXT_BUNDLER: "webpack",
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),

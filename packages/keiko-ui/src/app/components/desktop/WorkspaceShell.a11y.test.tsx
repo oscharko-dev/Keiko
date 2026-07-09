@@ -96,7 +96,6 @@ describe("Workspace shell accessibility", () => {
     const { container } = render(
       <div className="app">
         <Header
-          openPalette={vi.fn()}
           openCommandPalette={vi.fn()}
           onTileAll={vi.fn()}
           onSplitFront={vi.fn()}
@@ -158,7 +157,6 @@ describe("Workspace shell accessibility", () => {
       const { container } = render(
         <div className="app" data-theme="light">
           <Header
-            openPalette={vi.fn()}
             openCommandPalette={vi.fn()}
             onTileAll={vi.fn()}
             onSplitFront={vi.fn()}
@@ -241,7 +239,6 @@ describe("Workspace shell accessibility", () => {
     render(
       <div className="app">
         <Header
-          openPalette={openPalette}
           openCommandPalette={openCommandPalette}
           onTileAll={onTileAll}
           onSplitFront={onSplitFront}

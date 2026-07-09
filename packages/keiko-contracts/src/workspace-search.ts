@@ -149,7 +149,13 @@ function utf8ByteLength(value: string): number {
   return TEXT_ENCODER.encode(value).length;
 }
 
-function regexSafetyIssue(source: string): string | undefined {
+/**
+ * Canonical ReDoS gate for every regex constructed from user-supplied search/replace input.
+ * `keiko-workspace`'s `repoSearchRegexSafety.ts` re-exports this function rather than keeping
+ * a second copy, so the two search surfaces (agent-context `repoSearch` and this user-facing
+ * workspace search) cannot drift apart on catastrophic-backtracking detection.
+ */
+export function regexSafetyIssue(source: string): string | undefined {
   if (source.length > MAX_QUERY_LENGTH) return "query regex too long";
   if (DANGEROUS_GROUP_OR_CLASS_REPETITION.test(source)) return "query regex unsafe";
   if (ADJACENT_QUANTIFIED_ATOMS.test(source)) return "query regex unsafe";

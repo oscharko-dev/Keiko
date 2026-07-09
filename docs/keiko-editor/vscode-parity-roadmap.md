@@ -76,9 +76,9 @@ Legend: ✅ present · 🟧 partial · ⬜ absent · 🚫 out of scope.
 | Diagnostics / hover / symbols / formatting / completion |  ✅   | Deterministic TS/JS language service; degrades gracefully.                                                                                                                                   |
 | Inline (ghost-text) completion                          |  ✅   | Governed, content-free.                                                                                                                                                                      |
 | Language intelligence beyond TS/JS                      |  🟧   | Governed LSP process-manager foundation exists; host provider pilots (Java/Python/Go/Rust/Shell) are not yet wired into the surface.                                                         |
-| Quick-open (`Ctrl/Cmd+P` fuzzy file open)               |  ✅   | Wave 2: `EditorCommandPalette` over `/api/files/search`.                                                                                                                                     |
-| Command palette (`Ctrl/Cmd+Shift+P`)                    |  ✅   | Wave 2: host command registry surfaced in the same palette (`>` toggle) + browser-safe keybindings.                                                                                          |
-| Find in files / replace across files                    |  ⬜   | Single-file search only.                                                                                                                                                                     |
+| Quick-open (`Ctrl/Cmd+P` fuzzy file open)               |  ✅   | Epic #2090: unified quick-access palette (`UnifiedQuickAccessPalette`) over `/api/files/search`, reachable from anywhere in the workspace, including while editing.                          |
+| Command palette (`Ctrl/Cmd+Shift+P`)                    |  ✅   | Epic #2090: app + host command registries surfaced in the same unified palette (`>` toggle) + browser-safe keybindings.                                                                      |
+| Find in files / replace across files                    |  ✅   | Epic #2090: workspace-wide search (`Ctrl/Cmd+Shift+F`) with literal/regex/case modes and glob filters, plus reviewable per-file replace with diff preview before any write.                  |
 | Go-to-definition / find-references / rename-symbol      |  ✅   | Project-aware TypeScript navigation supports F12, Shift+F12, and host-owned F2 rename review for TS/JS workspaces.                                                                           |
 | Breadcrumbs / outline view / sticky scroll / minimap    |  🟧   | Breadcrumbs and the outline panel are enabled from shared symbol data; sticky scroll and minimap remain future work.                                                                         |
 | Source control (stage / commit / branch UI)             |  🟧   | A separate governed **Git Delivery** surface owns commit/push/PR; the editor shows status + diff and links into it.                                                                          |
@@ -131,15 +131,17 @@ is at risk. (A host-cache view-state seed for that remaining remount is a small 
 ### 2.3 Quick-open and command palette — ✅ delivered
 
 `Ctrl/Cmd+P` fuzzy file open (over the existing `/api/files/search` endpoint) and `Ctrl/Cmd+Shift+P`
-command palette over a new host command registry. One `EditorCommandPalette` overlay with both modes
-(a leading `>` toggles command mode), reusing the existing `.ed-dialog-*` / `.edm-item` /
-`.files-root-input` classes + popover tokens — no `globals.css` change.
+command palette over the host command registry. Epic #2090 consolidated the original per-editor
+`EditorCommandPalette` overlay and the app-level command palettes into one global
+`UnifiedQuickAccessPalette` (a leading `>` toggles command mode), reachable from anywhere in the
+workspace — including while the cursor is inside the editor, via
+`EditorQuickAccessTriggerContext`'s capture-phase chord handling.
 
 ### 2.4 Native editor keybinding layer — ✅ delivered
 
 A container-level capturing keydown listener on `.editor-workspace` (mirrors the on-mount save
 backstop) maps browser-safe chords to the command registry: `Ctrl/Cmd+P` / `Ctrl/Cmd+Shift+P`
-(palette), `Ctrl/Cmd+Alt+→/←` (next/prev tab), `Ctrl/Cmd+Alt+T` (reopen), `Ctrl/Cmd+Alt+\` (split),
+(unified quick-access palette), `Ctrl/Cmd+Alt+→/←` (next/prev tab), `Ctrl/Cmd+Alt+T` (reopen), `Ctrl/Cmd+Alt+\` (split),
 `Ctrl/Cmd+Alt+S` (save-all). `Ctrl/Cmd+W` and `Ctrl/Cmd+Shift+T` remain unbound (browser-reserved) —
 close stays on ×/middle-click/palette; deferred to a future desktop shell.
 

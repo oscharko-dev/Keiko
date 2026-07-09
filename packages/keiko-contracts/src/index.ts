@@ -1487,6 +1487,7 @@ export {
   validateWorkspaceReplaceApplyRequest,
   validateWorkspaceReplacePreviewRequest,
   isWorkspaceSearchResultMatch,
+  regexSafetyIssue,
 } from "./workspace-search.js";
 
 // ─── Deterministic context-engineering layer (ADR-0052, context-engineering milestone) ──
