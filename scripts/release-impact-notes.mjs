@@ -92,13 +92,19 @@ function extractTraceReferences(value) {
   return [...references];
 }
 
+// Stable versions publish under latest; prerelease versions (semver with a prerelease
+// suffix) publish under beta, so their notes come from the beta catalog entry.
+function expectedDistTagForVersion(version) {
+  return typeof version === "string" && version.includes("-") ? "beta" : "latest";
+}
+
 function currentReleaseEntries(catalog, rootManifest) {
   return catalog.entries.filter(
     (entry) =>
       objectRecord(entry) &&
       entry.packageName === rootManifest.name &&
       entry.packageVersion === rootManifest.version &&
-      entry.distTag === "latest",
+      entry.distTag === expectedDistTagForVersion(rootManifest.version),
   );
 }
 

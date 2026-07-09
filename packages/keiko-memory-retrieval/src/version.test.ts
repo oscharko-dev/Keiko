@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { KEIKO_MEMORY_RETRIEVAL_VERSION } from "./version.js";
 
 describe("KEIKO_MEMORY_RETRIEVAL_VERSION", () => {
-  it("is the pinned literal 0.2.14", () => {
-    expect(KEIKO_MEMORY_RETRIEVAL_VERSION).toBe("0.2.14");
+  it("is the pinned literal 0.2.15-beta.0", () => {
+    expect(KEIKO_MEMORY_RETRIEVAL_VERSION).toBe("0.2.15-beta.0");
   });
 
   it("has a semver-shaped value", () => {

@@ -1,7 +1,25 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { renderReleaseImpactNotes } from "../release-impact-notes.mjs";
+
+function currentRepoVersion() {
+  return JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version;
+}
+
+function currentCatalogBullet(version) {
+  const catalog = JSON.parse(
+    readFileSync(join(process.cwd(), "release-impact.catalog.json"), "utf8"),
+  );
+  const catalogEntry = catalog.entries.find((candidate) => candidate.packageVersion === version);
+  const bullet = catalogEntry?.releaseNoteBullets?.[0];
+  if (typeof bullet !== "string" || bullet.length === 0) {
+    throw new Error(`release-impact catalog has no note bullet for ${version}`);
+  }
+  return bullet;
+}
 
 function rootManifest(overrides = {}) {
   return {
@@ -241,22 +259,32 @@ describe("release-impact release notes", () => {
   });
 
   it("prints generated notes during plan-only release proof without publishing", () => {
+    // Version-agnostic repo-state proof: the plan-only run must render the notes for the
+    // CURRENT package version from its committed catalog entry, whatever that version is.
+    const version = currentRepoVersion();
     const result = releasePublish(["--plan-only", "--tag", "beta"]);
     const output = `${result.stdout}\n${result.stderr}`;
 
     expect(result.status).toBe(0);
     expect(output).toContain("-----BEGIN KEIKO RELEASE NOTES-----");
-    expect(output).toContain("## Keiko 0.2.14 Release Notes");
-    expect(output).toContain(
-      "Fixes Local Knowledge startup for encrypted stores created with the previous v2 content-encryption scope by upgrading them to the current v3 scope instead of surfacing LOCAL_KNOWLEDGE_UNAVAILABLE.",
-    );
+    expect(output).toContain(`## Keiko ${version} Release Notes`);
+    expect(output).toContain(currentCatalogBullet(version));
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
   }, 60_000);
 
-  it("prints portable-first latest release notes during plan-only proof", () => {
+  it("proves the latest dist-tag path during plan-only proof", () => {
+    const version = currentRepoVersion();
     const result = releasePublish(["--plan-only", "--tag", "latest"]);
     const output = `${result.stdout}\n${result.stderr}`;
 
+    if (version.includes("-")) {
+      // Prerelease repo state: the latest dist-tag must be rejected, never planned.
+      expect(result.status).not.toBe(0);
+      expect(output).toContain(
+        "prerelease versions must not be published with the latest dist-tag.",
+      );
+      return;
+    }
     expect(result.status).toBe(0);
     expect(output).toContain(
       "Keiko now ships first-class portable downloads for Windows x64, macOS arm64, and macOS x64",

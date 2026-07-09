@@ -565,210 +565,222 @@ const isView = (line) => line.startsWith('npm ["view"');
 const isVersionView = (line) => isView(line) && line.includes('"version"');
 const isDistTagView = (line) => isView(line) && line.includes("dist-tags.");
 
-describe("release-publish pipeline (real orchestrator, stubbed npm/gh/git)", () => {
-  let lastRun;
+// The pipeline suite drives the real orchestrator against the CURRENT root package version
+// and models the stable latest flow (portable uploads, dist-tag resolution). With a prerelease
+// root version (release-branch beta stabilization) that flow is rejected up front by design —
+// the always-on "proves the latest dist-tag path" test in release-impact-notes.test.mjs pins
+// that rejection — so the stable-flow suite runs only on stable versions (dev).
+const RELEASE_VERSION_IS_PRERELEASE = RELEASE_VERSION.includes("-");
 
-  afterEach(() => {
-    lastRun = undefined;
-  });
+describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
+  "release-publish pipeline (real orchestrator, stubbed npm/gh/git)",
+  () => {
+    let lastRun;
 
-  it("fails stable latest publishing before npm publish when portable assets are missing", () => {
-    const viewBody = [
-      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-    ].join("\n");
-
-    lastRun = runPublish({
-      npmBody: npmStub(viewBody, { failOnPublish: true }),
-      initState: { published: true, tagged: true },
-      portableAssets: false,
+    afterEach(() => {
+      lastRun = undefined;
     });
 
-    expect(lastRun.status).toBe(1);
-    expect(lastRun.stderr).toContain("stable latest publishes require --portable-assets-manifest");
-    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-    expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
-  });
+    it("fails stable latest publishing before npm publish when portable assets are missing", () => {
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
 
-  it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {
-    // `npm view <spec> version` fails with E404 until a publish has happened; the
-    // dist-tag view reports the wrong version until `npm dist-tag add` runs.
-    const viewBody = [
-      "  const s = state();",
-      '  if (argv.includes("version")) {',
-      "    if (!s.published) {",
-      // Real npm E404 shape; the heuristic scans for "E404" / "No match found".
-      '      process.stderr.write("npm error code E404\\nnpm error 404 Not Found - GET " + argv[1] + "\\n");',
-      "      process.exit(1);",
-      "    }",
-      '    process.stdout.write(VERSION + "\\n");',
-      "    process.exit(0);",
-      "  }",
-      '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
-      '    process.stdout.write((s.tagged ? VERSION : "0.0.0-stale") + "\\n");',
-      "    process.exit(0);",
-      "  }",
-    ].join("\n");
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableAssets: false,
+      });
 
-    lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
-
-    expect(lastRun.status).toBe(0);
-    expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
-    expect(lastRun.stdout).toContain("portable assets uploaded and verified");
-    expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
-    // It must NOT have short-circuited as already-present.
-    expect(lastRun.stdout).not.toContain(`SKIP ${RELEASE_SPEC} already exists`);
-
-    // Decision order: check existence -> publish -> add dist-tag -> re-verify existence -> re-verify dist-tag.
-    const firstVersionView = indexOfCall(lastRun.calls, isVersionView);
-    const publishCall = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["publish"'));
-    const distTagAdd = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["dist-tag","add"'));
-
-    expect(firstVersionView).toBeGreaterThanOrEqual(0);
-    expect(publishCall).toBeGreaterThan(firstVersionView);
-    expect(distTagAdd).toBeGreaterThan(publishCall);
-
-    // Publish carries the release-safety flags on the real command line.
-    const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
-    expect(publishLine).toContain('"--access","public"');
-    expect(publishLine).toContain('"--tag","latest"');
-    expect(publishLine).toContain('"--provenance"');
-    expect(publishLine).toContain('"--ignore-scripts"');
-    expect(publishLine).not.toContain('"--dry-run"');
-
-    // The post-publish verification pass re-reads BOTH the version and the dist-tag.
-    const versionViews = lastRun.calls.filter(isVersionView).length;
-    const distTagViews = lastRun.calls.filter(isDistTagView).length;
-    expect(versionViews).toBeGreaterThanOrEqual(2);
-    expect(distTagViews).toBeGreaterThanOrEqual(2);
-
-    const uploadLine = lastRun.calls.find(
-      (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),
-    );
-    expect(uploadLine).toContain("keiko-windows-x64.zip");
-    expect(uploadLine).toContain("keiko-macos-arm64.zip");
-    expect(uploadLine).toContain("keiko-macos-x64.zip");
-    expect(indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"'))).toBeLessThan(
-      publishCall,
-    );
-    expect(lastRun.calls.filter((l) => l.startsWith("curl [")).length).toBeGreaterThanOrEqual(3);
-  });
-
-  it("fails before npm publish when portable upload verification fails", () => {
-    const viewBody = [
-      "  const s = state();",
-      '  if (argv.includes("version")) {',
-      '    if (!s.published) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
-      '    process.stdout.write(VERSION + "\\n");',
-      "    process.exit(0);",
-      "  }",
-      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-    ].join("\n");
-
-    lastRun = runPublish({
-      npmBody: npmStub(viewBody),
-      initState: { failGhUpload: true, published: false },
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "stable latest publishes require --portable-assets-manifest",
+      );
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
     });
 
-    expect(lastRun.status).toBe(1);
-    expect(lastRun.stderr).toContain("portable upload failed");
-    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-  });
+    it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {
+      // `npm view <spec> version` fails with E404 until a publish has happened; the
+      // dist-tag view reports the wrong version until `npm dist-tag add` runs.
+      const viewBody = [
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        "    if (!s.published) {",
+        // Real npm E404 shape; the heuristic scans for "E404" / "No match found".
+        '      process.stderr.write("npm error code E404\\nnpm error 404 Not Found - GET " + argv[1] + "\\n");',
+        "      process.exit(1);",
+        "    }",
+        '    process.stdout.write(VERSION + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+        '    process.stdout.write((s.tagged ? VERSION : "0.0.0-stale") + "\\n");',
+        "    process.exit(0);",
+        "  }",
+      ].join("\n");
 
-  it("rejects symlinked portable evidence before upload or npm publish", () => {
-    const viewBody = [
-      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-    ].join("\n");
+      lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
 
-    lastRun = runPublish({
-      npmBody: npmStub(viewBody, { failOnPublish: true }),
-      initState: { published: true, tagged: true },
-      portableFixtureOptions: { symlinkEvidenceOutsideRoot: true },
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
+      expect(lastRun.stdout).toContain("portable assets uploaded and verified");
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      // It must NOT have short-circuited as already-present.
+      expect(lastRun.stdout).not.toContain(`SKIP ${RELEASE_SPEC} already exists`);
+
+      // Decision order: check existence -> publish -> add dist-tag -> re-verify existence -> re-verify dist-tag.
+      const firstVersionView = indexOfCall(lastRun.calls, isVersionView);
+      const publishCall = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["publish"'));
+      const distTagAdd = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["dist-tag","add"'));
+
+      expect(firstVersionView).toBeGreaterThanOrEqual(0);
+      expect(publishCall).toBeGreaterThan(firstVersionView);
+      expect(distTagAdd).toBeGreaterThan(publishCall);
+
+      // Publish carries the release-safety flags on the real command line.
+      const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
+      expect(publishLine).toContain('"--access","public"');
+      expect(publishLine).toContain('"--tag","latest"');
+      expect(publishLine).toContain('"--provenance"');
+      expect(publishLine).toContain('"--ignore-scripts"');
+      expect(publishLine).not.toContain('"--dry-run"');
+
+      // The post-publish verification pass re-reads BOTH the version and the dist-tag.
+      const versionViews = lastRun.calls.filter(isVersionView).length;
+      const distTagViews = lastRun.calls.filter(isDistTagView).length;
+      expect(versionViews).toBeGreaterThanOrEqual(2);
+      expect(distTagViews).toBeGreaterThanOrEqual(2);
+
+      const uploadLine = lastRun.calls.find(
+        (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),
+      );
+      expect(uploadLine).toContain("keiko-windows-x64.zip");
+      expect(uploadLine).toContain("keiko-macos-arm64.zip");
+      expect(uploadLine).toContain("keiko-macos-x64.zip");
+      expect(
+        indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"')),
+      ).toBeLessThan(publishCall);
+      expect(lastRun.calls.filter((l) => l.startsWith("curl [")).length).toBeGreaterThanOrEqual(3);
     });
 
-    expect(lastRun.status).toBe(1);
-    expect(lastRun.stderr).toContain("must not be a symbolic link");
-    expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
-    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-  });
+    it("fails before npm publish when portable upload verification fails", () => {
+      const viewBody = [
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        '    if (!s.published) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
+        '    process.stdout.write(VERSION + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
 
-  it("skips publishing when `npm view … version` already reports the target version, yet still verifies the dist-tag", () => {
-    // Version is already present and the dist-tag already points at it. A correct
-    // orchestrator must NOT publish again; the stub publish path fails hard if it does.
-    const viewBody = [
-      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-    ].join("\n");
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { failGhUpload: true, published: false },
+      });
 
-    lastRun = runPublish({
-      npmBody: npmStub(viewBody, { failOnPublish: true }),
-      initState: { published: true, tagged: true },
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("portable upload failed");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
-    expect(lastRun.status).toBe(0);
-    expect(lastRun.stdout).toContain(`SKIP ${RELEASE_SPEC} already exists`);
-    expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+    it("rejects symlinked portable evidence before upload or npm publish", () => {
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
 
-    // Proof the skip actually held: `npm publish` was never invoked.
-    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: { symlinkEvidenceOutsideRoot: true },
+      });
 
-    // Verification still runs: the dist-tag is re-read even on the skip path.
-    expect(lastRun.calls.some(isDistTagView)).toBe(true);
-  });
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("must not be a symbolic link");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
 
-  it("retries post-publish registry visibility before failing the release", () => {
-    // Real npm can accept the publish and dist-tag update before every registry view
-    // endpoint sees the new version. The release must wait for propagation instead of
-    // turning a successful publish into a red workflow.
-    const viewBody = [
-      "  const s = state();",
-      '  if (argv.includes("version")) {',
-      "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
-      "    const attempts = s.versionVerifyAttempts ?? 0;",
-      "    if (attempts === 0) {",
-      "      setState({ versionVerifyAttempts: attempts + 1 });",
-      "      process.stderr.write('npm error code E404\\n');",
-      "      process.exit(1);",
-      "    }",
-      '    process.stdout.write(VERSION + "\\n");',
-      "    process.exit(0);",
-      "  }",
-      '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
-      '    process.stdout.write(VERSION + "\\n");',
-      "    process.exit(0);",
-      "  }",
-    ].join("\n");
+    it("skips publishing when `npm view … version` already reports the target version, yet still verifies the dist-tag", () => {
+      // Version is already present and the dist-tag already points at it. A correct
+      // orchestrator must NOT publish again; the stub publish path fails hard if it does.
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
 
-    lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+      });
 
-    expect(lastRun.status).toBe(0);
-    expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
-    expect(lastRun.stdout).toContain(`VERIFY pending ${RELEASE_SPEC}`);
-    expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
-    expect(lastRun.calls.filter(isVersionView).length).toBeGreaterThanOrEqual(3);
-  });
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain(`SKIP ${RELEASE_SPEC} already exists`);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
 
-  it("fails the release when the dist-tag never resolves to the published version", () => {
-    // Version publishes fine, but `npm view <name> dist-tags.latest` keeps pointing at a
-    // different version — verifyPackage() must reject this and exit non-zero.
-    const viewBody = [
-      "  const s = state();",
-      '  if (argv.includes("version")) {',
-      '    if (!s.published) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
-      '    process.stdout.write(VERSION + "\\n");',
-      "    process.exit(0);",
-      "  }",
-      // Deliberately wrong dist-tag forever, even after `dist-tag add`.
-      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write("9.9.9-wrong\\n"); process.exit(0); }',
-    ].join("\n");
+      // Proof the skip actually held: `npm publish` was never invoked.
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
 
-    lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+      // Verification still runs: the dist-tag is re-read even on the skip path.
+      expect(lastRun.calls.some(isDistTagView)).toBe(true);
+    });
 
-    expect(lastRun.status).toBe(1);
-    expect(lastRun.stderr).toContain(`${RELEASE_NAME}@latest points to 9.9.9-wrong`);
-    expect(lastRun.stderr).toContain(`expected ${RELEASE_VERSION}`);
-    // It must not have reported success.
-    expect(lastRun.stdout).not.toContain("PASS -");
-  });
-});
+    it("retries post-publish registry visibility before failing the release", () => {
+      // Real npm can accept the publish and dist-tag update before every registry view
+      // endpoint sees the new version. The release must wait for propagation instead of
+      // turning a successful publish into a red workflow.
+      const viewBody = [
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
+        "    const attempts = s.versionVerifyAttempts ?? 0;",
+        "    if (attempts === 0) {",
+        "      setState({ versionVerifyAttempts: attempts + 1 });",
+        "      process.stderr.write('npm error code E404\\n');",
+        "      process.exit(1);",
+        "    }",
+        '    process.stdout.write(VERSION + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+        '    process.stdout.write(VERSION + "\\n");',
+        "    process.exit(0);",
+        "  }",
+      ].join("\n");
+
+      lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
+      expect(lastRun.stdout).toContain(`VERIFY pending ${RELEASE_SPEC}`);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.calls.filter(isVersionView).length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("fails the release when the dist-tag never resolves to the published version", () => {
+      // Version publishes fine, but `npm view <name> dist-tags.latest` keeps pointing at a
+      // different version — verifyPackage() must reject this and exit non-zero.
+      const viewBody = [
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        '    if (!s.published) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
+        '    process.stdout.write(VERSION + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        // Deliberately wrong dist-tag forever, even after `dist-tag add`.
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write("9.9.9-wrong\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(`${RELEASE_NAME}@latest points to 9.9.9-wrong`);
+      expect(lastRun.stderr).toContain(`expected ${RELEASE_VERSION}`);
+      // It must not have reported success.
+      expect(lastRun.stdout).not.toContain("PASS -");
+    });
+  },
+);
