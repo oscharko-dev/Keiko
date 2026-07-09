@@ -95,6 +95,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "fs-reference",
   },
+  // Epic #1982, Issue #1990 — Coding Workbench renders only server/contract projections, but its
+  // controls represent model/runtime/tool/evidence boundaries and therefore require explicit user
+  // confirmation for privileged transitions. Browser state remains durable UI only.
+  coding: {
+    lifecycle: ["idle", "running", "blocked", "needs-review", "verified", "failed", "cancelled"],
+    trustBoundary: ["ui", "tool", "model", "evidence"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
   // Issue #1388 (ADR-0070) — container engine status surface. Read-mostly: probes the host engine on
   // demand and, when available, runs a server-frozen diagnostic through the keiko-tools spawn
   // boundary (user-confirm authority for that crossing). Holds no durable state of its own — the

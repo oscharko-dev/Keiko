@@ -44,6 +44,7 @@ import {
   retryUpdateSession,
   runUpdateRemediationAction,
   startUpdateSession,
+  fetchCodingWorkbenchSidecarGatewayProfile,
   requestEditorCodeActions,
   requestEditorCompletion,
   requestEditorDefinition,
@@ -71,6 +72,62 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts a valid sidecar gateway profile response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: "available",
+        profileId: "coding-safe-openai-compatible",
+        modelAlias: "azure-coding-model",
+        localEndpointPath: "/api/coding-sidecar/gateway",
+        supportsStreaming: false,
+        supportsToolCalling: true,
+        runMetadata: {
+          maxPromptTokens: 128_000,
+          maxOutputTokens: 4_096,
+          maxInputMessages: 64,
+          maxRequestBytes: 64_000,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
+      status: "available",
+      modelAlias: "azure-coding-model",
+    });
+  });
+
+  it("rejects malformed sidecar gateway profile responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: "available",
+        profileId: "coding-safe-openai-compatible",
+        modelAlias: "azure-coding-model",
+        localEndpointPath: "/api/coding-sidecar/gateway",
+        supportsStreaming: false,
+        supportsToolCalling: true,
+        runMetadata: {
+          maxPromptTokens: 128_000,
+          maxOutputTokens: 4_096,
+          maxInputMessages: "64",
+          maxRequestBytes: 64_000,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+});
 
 describe("requestEditorCompletion (Issue #1199)", () => {
   afterEach(() => {

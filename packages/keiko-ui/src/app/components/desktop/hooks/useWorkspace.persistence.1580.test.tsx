@@ -90,6 +90,25 @@ function trackLocalStorageWrites(): {
   };
 }
 
+async function flushAsyncEffects(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+async function advanceTimersUntil(predicate: () => boolean): Promise<void> {
+  for (let elapsedMs = 0; elapsedMs <= 1_000; elapsedMs += 25) {
+    await flushAsyncEffects();
+    if (predicate()) return;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(25);
+    });
+  }
+  expect(predicate()).toBe(true);
+}
+
 describe("Issue #1580 — debounced workspace persistence", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -147,9 +166,7 @@ describe("Issue #1580 — debounced workspace persistence", () => {
       expect(window.localStorage.getItem(WS_LS)).toBe(baseline);
       expect(storageWrites.keys.filter((key) => key === WS_LS)).toHaveLength(0);
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(400);
-      });
+      await advanceTimersUntil(() => window.localStorage.getItem(WS_LS) !== baseline);
       const flushed = window.localStorage.getItem(WS_LS);
       expect(flushed).not.toBe(baseline);
       expect(flushed).toContain('"minimized":true');
@@ -175,7 +192,7 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     });
     const baseline = window.localStorage.getItem(VIEW_LS);
     expect(JSON.parse(baseline ?? "null")).toEqual({ zoom: 1, x: 0, y: 0 });
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const setItemSpy = vi.spyOn(window.localStorage, "setItem");
 
     act(() => {
       getByTestId("pan").click();
@@ -254,14 +271,6 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     return fetchMock.mock.calls.filter(
       ([, init]) => (init as RequestInit | undefined)?.method === "PUT",
     ) as [unknown, RequestInit | undefined][];
-  }
-
-  async function flushAsyncEffects(): Promise<void> {
-    await act(async () => {
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
   }
 
   it("stops polling while hidden and catches up on return to visible", async () => {

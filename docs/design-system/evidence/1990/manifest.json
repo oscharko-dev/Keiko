@@ -1,0 +1,26 @@
+{
+  "issue": 1990,
+  "epic": 1982,
+  "generatedAt": "2026-07-08T12:14:15Z",
+  "harness": "tests/e2e/config/playwright.issue-1990-coding-workbench.config.ts",
+  "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-1990",
+  "result": "PASS",
+  "artifacts": [
+    "01-empty-desktop.png",
+    "02-approval-required.png",
+    "03-running-narrow.png",
+    "04-empty-light.png",
+    "05-empty-high-contrast.png",
+    "coding-workbench-fidelity-proof.json",
+    "a11y-proof.json"
+  ],
+  "redactionBoundary": {
+    "customerRepositoryFilesIncluded": false,
+    "secretsIncluded": false,
+    "privatePathsIncluded": false,
+    "rawDiffsIncluded": false,
+    "rawModelPromptsIncluded": false,
+    "rawModelOutputsIncluded": false,
+    "tokensIncluded": false
+  }
+}

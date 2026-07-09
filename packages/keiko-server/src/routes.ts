@@ -86,6 +86,15 @@ import { handleRealtimeMemoryVoiceTool } from "./voice-realtime-memory-tool.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
+import {
+  handleCodingSidecarGatewayChatCompletions,
+  handleCodingSidecarGatewayProfile,
+} from "./coding-sidecar-gateway.js";
+import {
+  handleCodingCodexSubscriptionProfile,
+  handleCodingCodexSubscriptionSetup,
+} from "./coding-codex-subscription.js";
+import { AUTONOMOUS_DELIVERY_ROUTE_GROUP } from "./coding-runtime/autonomousDeliveryRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -351,6 +360,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
+  {
+    method: "GET",
+    pattern: "/api/coding-sidecar/gateway/profile",
+    handler: handleCodingSidecarGatewayProfile,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-sidecar/gateway/chat/completions",
+    handler: handleCodingSidecarGatewayChatCompletions,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/codex-subscription/profile",
+    handler: handleCodingCodexSubscriptionProfile,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/codex-subscription/setup",
+    handler: handleCodingCodexSubscriptionSetup,
+  },
   { method: "GET", pattern: "/api/update/preflight", handler: handleGetUpdatePreflight },
   {
     method: "POST",
@@ -1077,6 +1106,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #1577 agent repository operations: typed facade over existing Git read and governed delivery
   // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
   ...GIT_AGENT_OPERATION_ROUTE_GROUP,
+  // #1993 autonomous delivery: confirmed Authority Envelope gate over the existing typed repository
+  // operation facade. This route never shells out directly and returns content-free execution evidence.
+  ...AUTONOMOUS_DELIVERY_ROUTE_GROUP,
 ];
 
 interface PreparedRoute {

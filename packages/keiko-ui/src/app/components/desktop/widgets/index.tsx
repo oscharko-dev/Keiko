@@ -1,5 +1,6 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useTranslate } from "@/lib/i18n";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { useChatSessionContext } from "../context/ChatSessionContext";
@@ -13,7 +14,12 @@ import {
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import type { ChatMessage } from "@/lib/types";
 
-const windowChunkFallback = (): ReactNode => <div className="lk-loading">Loading...</div>;
+function WindowChunkFallback(): ReactNode {
+  const t = useTranslate();
+  return <div className="lk-loading">{t("common.loading")}</div>;
+}
+
+const windowChunkFallback = WindowChunkFallback;
 const ChatWindow = dynamic(() => import("../ChatWindow").then((mod) => mod.ChatWindow), {
   ssr: false,
   loading: windowChunkFallback,
@@ -100,6 +106,10 @@ const CommandsWidget = dynamic(
 );
 const RuntimeHubWidget = dynamic(
   () => import("./cards/RuntimeHubWidget").then((mod) => mod.RuntimeHubWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const CodingWorkbenchWindow = dynamic(
+  () => import("./coding-workbench/CodingWorkbenchWindow").then((mod) => mod.CodingWorkbenchWindow),
   { ssr: false, loading: windowChunkFallback },
 );
 const GitClientWindow = dynamic(
@@ -620,6 +630,7 @@ registerWindowRender("runtime", (cfg, ctx) => {
     />
   );
 });
+registerWindowRender("coding", (cfg) => <CodingWorkbenchWindow state={str(cfg, "state")} />);
 // Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
 // Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
 // Files/Editor window root; an empty state renders when none is available. The shell persists the

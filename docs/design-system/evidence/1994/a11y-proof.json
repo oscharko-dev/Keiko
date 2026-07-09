@@ -1,0 +1,23 @@
+{
+  "issue": 1994,
+  "epic": 1982,
+  "verdict": "PASS",
+  "tool": "axe-core via tests/e2e/support/axe.ts",
+  "cssSha256": "33e4101301e6a08a98496a2afb2fbdf3a4421f671a0cee3cdebd1f7df2dfc83f",
+  "generatedAt": "2026-07-08T08:30:00Z",
+  "gate": "zero serious/critical axe violations for the Autonomous Delivery confirmed narrow state",
+  "captures": [
+    {
+      "file": "05-autonomous-narrow.png",
+      "violations": []
+    }
+  ],
+  "deterministicChecks": {
+    "autonomousDeliverySelected": true,
+    "confirmedEnvelopeVisible": true,
+    "deliveryRunnerVisible": true,
+    "gatewayProviderProjectionVisible": true,
+    "policyAndVerificationFailuresRemainDistinct": true,
+    "narrowViewportHasNoHorizontalOverflow": true
+  }
+}

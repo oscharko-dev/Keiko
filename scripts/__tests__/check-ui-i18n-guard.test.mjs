@@ -48,6 +48,7 @@ test("recognizes production UI source under the Keiko UI app tree", () => {
     isUiProductionSource("packages/keiko-ui/src/app/components/NewFeature.test.tsx"),
     false,
   );
+  assert.equal(isUiProductionSource("packages/keiko-ui/src/app/components/copy.ts"), false);
   assert.equal(isUiProductionSource(EN_CATALOG), false);
   assert.equal(isUiProductionSource("src/server.ts"), false);
 });
@@ -112,28 +113,25 @@ test("detects changed files from the push event before SHA", () => {
   assert.equal(calls[0], "abc1234..HEAD");
 });
 
-test("fails closed when the push event before SHA is unreachable", () => {
+test("falls back to the dev diff when the push event before SHA is unreachable", () => {
   const calls = [];
 
-  assert.throws(
-    () =>
-      changedFilesFromGit(
-        "repo",
-        (_repoRoot, range) => {
-          calls.push(range);
-          return range === "origin/dev...HEAD"
-            ? { ok: true, error: "", files: [] }
-            : { ok: false, error: "missing range", files: [] };
-        },
-        {
-          GITHUB_EVENT_NAME: "push",
-          KEIKO_I18N_GUARD_BASE_SHA: "deadbee",
-        },
-      ),
-    /could not determine changed files/,
+  const files = changedFilesFromGit(
+    "repo",
+    (_repoRoot, range) => {
+      calls.push(range);
+      return range === "origin/dev...HEAD"
+        ? { ok: true, error: "", files: [UI_FILE] }
+        : { ok: false, error: "missing range", files: [] };
+    },
+    {
+      GITHUB_EVENT_NAME: "push",
+      KEIKO_I18N_GUARD_BASE_SHA: "deadbee",
+    },
   );
 
-  assert.deepEqual(calls, ["deadbee..HEAD", "deadbee...HEAD"]);
+  assert.deepEqual(files, [UI_FILE]);
+  assert.deepEqual(calls, ["deadbee..HEAD", "deadbee...HEAD", "origin/dev...HEAD"]);
 });
 
 test("detects changed files from workflow_dispatch base ref safely", () => {

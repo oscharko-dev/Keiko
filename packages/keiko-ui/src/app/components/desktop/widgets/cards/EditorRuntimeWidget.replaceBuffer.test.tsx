@@ -11,7 +11,7 @@
  * `WorkspaceReplaceBufferProvider` registry, mirroring the harness pattern already used by
  * `EditorRuntimeWidget.formatting.test.tsx` (mocked Monaco surface via next/dynamic, mocked API).
  */
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FilesContentResponse } from "../../../../../lib/types";
@@ -137,6 +137,22 @@ function replaceEdit(): WorkspaceReplaceApplyFile {
   };
 }
 
+async function applyWhenReady(
+  file: WorkspaceReplaceApplyFile,
+  expectedStatus: WorkspaceReplaceOpenBufferResult["status"],
+): Promise<WorkspaceReplaceOpenBufferResult> {
+  let result: WorkspaceReplaceOpenBufferResult | undefined;
+  await waitFor(async () => {
+    if (applyRef === null) throw new Error("replace buffer registry did not register");
+    await act(async () => {
+      result = await applyRef?.(file);
+    });
+    expect(result?.status).toBe(expectedStatus);
+  });
+  if (result === undefined) throw new Error("replace buffer registry did not return a result");
+  return result;
+}
+
 beforeEach(() => {
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
 });
@@ -149,20 +165,17 @@ afterEach(() => {
 describe("EditorRuntimeWidget — open-buffer replace apply (issue #2110)", () => {
   it("applies a reviewed replace edit to the live buffer and marks it dirty", async () => {
     await renderOpenBuffer();
-    if (applyRef === null) throw new Error("replace buffer registry did not register");
 
-    let result: WorkspaceReplaceOpenBufferResult | undefined;
-    await act(async () => {
-      result = await applyRef?.(replaceEdit());
-    });
+    const result = await applyWhenReady(replaceEdit(), "applied");
 
     expect(result).toEqual({ status: "applied", path: "src/app.ts" });
-    expect(screen.getByTestId("editor-surface")).toHaveTextContent("const value = readConfig;");
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-surface")).toHaveTextContent("const value = readConfig;"),
+    );
   });
 
   it("reports a write-conflict instead of silently applying when the buffer no longer matches the preview", async () => {
     await renderOpenBuffer();
-    if (applyRef === null) throw new Error("replace buffer registry did not register");
 
     // Simulate the user having edited the buffer since the replace preview was computed: the
     // previewed originalText ("parseConfig") no longer appears at the previewed range.
@@ -177,10 +190,7 @@ describe("EditorRuntimeWidget — open-buffer replace apply (issue #2110)", () =
       ],
     };
 
-    let result: WorkspaceReplaceOpenBufferResult | undefined;
-    await act(async () => {
-      result = await applyRef?.(staleEdit);
-    });
+    const result = await applyWhenReady(staleEdit, "conflict");
 
     expect(result).toEqual({
       status: "conflict",

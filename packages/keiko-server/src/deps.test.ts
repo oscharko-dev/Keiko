@@ -163,6 +163,13 @@ function chatCapability(
   };
 }
 
+function codingCapability(modelId: string): ModelCapability {
+  return {
+    ...chatCapability(modelId, 128_000, 4_096),
+    preferredUseCases: ["Coding"],
+  };
+}
+
 function gatewayConfigWithCapabilities(
   capabilities: readonly ReturnType<typeof chatCapability>[],
 ): string {
@@ -399,6 +406,93 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     ).toEqual([]);
     deps.store.close();
     deps.memoryVault?.close();
+  });
+});
+
+describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
+  it("creates a dedicated coding-workbench evidence store by default", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-sidecar-store-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+
+    expect(deps.codingWorkbenchEvidenceStore).toBeDefined();
+    expect(deps.codingWorkbenchEvidenceStore).not.toBe(deps.evidenceStore);
+  });
+
+  it("creates a server-owned autonomous delivery approval store by default", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-autonomous-store-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+
+    expect(deps.autonomousDeliveryApprovalStore).toBeDefined();
+    expect(deps.autonomousDeliveryDeploymentCeiling).toBeUndefined();
+  });
+
+  it("derives the OpenAI API-key-through-gateway model source from the selected coding-safe provider", () => {
+    const configPath = join(tmp("ev-sidecar-openai-"), "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "gpt-4.1-mini",
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 30000,
+            maxRetries: 2,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+        capabilities: [codingCapability("gpt-4.1-mini")],
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir: tmp("ev-sidecar-openai-store-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+
+    expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("openai-api-key-through-gateway");
+  });
+
+  it("tracks runtime gateway config updates instead of freezing the initial sidecar model source", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-sidecar-runtime-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+
+    expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("keiko-model-gateway");
+
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          {
+            modelId: "gpt-4.1-mini",
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 30000,
+            maxRetries: 2,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+        capabilities: [codingCapability("gpt-4.1-mini")],
+      }),
+      true,
+    );
+
+    expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("openai-api-key-through-gateway");
   });
 });
 

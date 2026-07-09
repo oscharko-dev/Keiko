@@ -131,6 +131,18 @@ function LeftRailImpl({
           type="button"
           className="rail-btn"
           data-side="left"
+          data-active={openTools.has("coding") ? "true" : "false"}
+          aria-label={t("rail.coding")}
+          aria-pressed={openTools.has("coding")}
+          data-tip={t("rail.coding")}
+          onClick={() => onTool("coding")}
+        >
+          <Icons.code size={19} />
+        </button>
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
           data-active={openTools.has("governedGit") ? "true" : "false"}
           aria-label="Git"
           aria-pressed={openTools.has("governedGit")}

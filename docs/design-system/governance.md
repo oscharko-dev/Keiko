@@ -52,6 +52,7 @@ records whether each family has full, partial, or worked-example coverage agains
 | AI & Agent surfaces            | Ready      | @agent-ux | v0.4                            | #1296       | Done         |
 | Data Visualisation             | Ready      | @data-ui  | v0.4                            | #1297       | Done         |
 | Update experience window       | Draft      | @core-ui  | v0.2.11 candidate               | #1696       | In Progress  |
+| Coding Workbench               | Draft      | @agent-ux | v0.2.12 candidate               | #1990-#1994 | In Progress  |
 | Legacy 2-way theme toggle      | Deprecated | @core-ui  | migration target: theme-control | replaced    | Done         |
 
 **Draft** is a defined status, but no current component uses it — every shipped family is Ready, and the one

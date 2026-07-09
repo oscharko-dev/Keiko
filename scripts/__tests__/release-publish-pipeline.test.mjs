@@ -416,23 +416,6 @@ function makeStub(binDir, name, body, logFile, stateFile) {
   chmodSync(path, 0o755);
 }
 
-function releaseImpactCatalogForPublishTest() {
-  return {
-    ...RELEASE_IMPACT_CATALOG,
-    entries: RELEASE_IMPACT_CATALOG.entries.map((entry) =>
-      entry.packageName === RELEASE_NAME && entry.packageVersion === RELEASE_VERSION
-        ? {
-            ...entry,
-            review: {
-              ...entry.review,
-              approvalReference: "github-pr-review:oscharko-dev/Keiko#999#888",
-            },
-          }
-        : entry,
-    ),
-  };
-}
-
 function curlStubBody() {
   return ['log("curl");', "process.exit(0);"].join("\n");
 }
@@ -477,6 +460,23 @@ function writePortableEvidence(targetRoot, manifest, provenanceText) {
     JSON.stringify({ status: "verified-production" }) + "\n",
   );
   writeFileSync(join(targetRoot, "evidence", "provenance.intoto.jsonl"), provenanceText);
+}
+
+function releaseImpactCatalogForPublishTest() {
+  return {
+    ...RELEASE_IMPACT_CATALOG,
+    entries: RELEASE_IMPACT_CATALOG.entries.map((entry) =>
+      entry.packageName === RELEASE_NAME && entry.packageVersion === RELEASE_VERSION
+        ? {
+            ...entry,
+            review: {
+              ...entry.review,
+              approvalReference: "github-pr-review:oscharko-dev/Keiko#999#888",
+            },
+          }
+        : entry,
+    ),
+  };
 }
 
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.

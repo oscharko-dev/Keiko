@@ -61,4 +61,28 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.pdfCitationPreview.trustBoundary).toEqual(["ui", "network"]);
     expect(WIN_META.pdfCitationPreview.authority).toBe("user-confirm");
   });
+
+  it("Coding Workbench config exposes supervised and autonomous preview states", () => {
+    const stateField = WIN_TYPES.coding.config?.find((field) => field.key === "state");
+
+    expect(stateField?.options).toEqual([
+      "empty",
+      "running",
+      "approval-required",
+      "blocked",
+      "governed-assist",
+      "governed-assist-blocked",
+      "supervised-approval-required",
+      "supervised-approved",
+      "supervised-denied",
+      "supervised-stopped",
+      "supervised-failed",
+      "autonomous-confirmed",
+      "autonomous-policy-blocked",
+      "autonomous-verification-failed",
+      "autonomous-completed",
+      "failed",
+      "completed",
+    ]);
+  });
 });

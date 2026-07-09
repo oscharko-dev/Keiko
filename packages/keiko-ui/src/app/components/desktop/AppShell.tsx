@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
@@ -23,7 +24,6 @@ import {
 import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
 import { Palette } from "./modals/Palette";
-import { UnifiedQuickAccessPalette } from "./modals/UnifiedQuickAccessPalette";
 import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
@@ -76,6 +76,10 @@ import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
+const UnifiedQuickAccessPalette = dynamic(
+  () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
+  { ssr: false, loading: () => null },
+);
 
 function clearAppBootRecoveryReloadMarker(): void {
   try {

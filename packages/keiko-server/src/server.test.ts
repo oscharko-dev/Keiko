@@ -6,6 +6,11 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type {
+  GatewayConfig,
+  GatewayRequest,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import {
   buildRedactor,
@@ -520,6 +525,221 @@ describe("unknown API routes", () => {
     });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
+  });
+
+  it("allows POST /api/coding-sidecar/gateway/chat/completions without X-Keiko-CSRF when JSON is used", async () => {
+    const store = createInMemoryUiStore();
+    const handlerDeps: UiHandlerDeps = {
+      config: {
+        providers: [
+          {
+            modelId: "azure-coding-model",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "provider-secret",
+            apiKeyHeaderName: "api-key",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2024-06-01",
+            timeoutMs: 30_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: "azure-coding-model",
+            kind: "chat",
+            contextWindow: 128_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "coding-sidecar",
+            preferredUseCases: ["Coding"],
+            knownLimitations: [],
+          },
+        ],
+      } satisfies GatewayConfig,
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      codingSidecarGatewayChatFactory: (
+        _config: GatewayConfig,
+        modelId: string,
+      ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
+        return (request: GatewayRequest): Promise<NormalizedResponse> => {
+          expect(request.messages).toEqual([{ role: "user", content: "continue" }]);
+          return Promise.resolve({
+            modelId,
+            content: "assistant-content",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "req-1",
+              promptTokens: 12,
+              completionTokens: 8,
+              latencyMs: 1,
+              costClass: "medium",
+            },
+          });
+        };
+      },
+      store,
+    };
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps,
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    try {
+      const response = await fetch(`${baseUrl()}/api/coding-sidecar/gateway/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: "continue" }],
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        model: "azure-coding-model",
+        choices: [{ message: { role: "assistant", content: "assistant-content" } }],
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it("returns an opaque sidecar failure without top-level raw-error diagnostics", async () => {
+    const hostilePath = "/Users/customer/private-repo/secret-tool";
+    const hostileMessage = `tool call '${hostilePath}' has non-JSON arguments`;
+    const records: ServerDiagnosticRecord[] = [];
+    const store = createInMemoryUiStore();
+    const handlerDeps: UiHandlerDeps = {
+      config: {
+        providers: [
+          {
+            modelId: "azure-coding-model",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "provider-secret",
+            apiKeyHeaderName: "api-key",
+            endpointStyle: "azure-openai-deployment",
+            apiVersion: "2024-06-01",
+            timeoutMs: 30_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: "azure-coding-model",
+            kind: "chat",
+            contextWindow: 128_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "coding-sidecar",
+            preferredUseCases: ["Coding"],
+            knownLimitations: [],
+          },
+        ],
+      } satisfies GatewayConfig,
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      diagnostics: { record: (record) => records.push(record) },
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      codingSidecarGatewayChatFactory: () => {
+        return async (): Promise<NormalizedResponse> => Promise.reject(new Error(hostileMessage));
+      },
+      codingWorkbenchEvidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      store,
+    };
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps,
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    try {
+      const response = await fetch(`${baseUrl()}/api/coding-sidecar/gateway/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: "continue" }],
+        }),
+      });
+      const responseText = await response.text();
+      const headerBlob = Array.from(response.headers.entries())
+        .map(([key, value]) => `${key}: ${value}`)
+        .join("\n");
+
+      expect(response.status).toBe(503);
+      expect(JSON.parse(responseText)).toEqual({
+        error: {
+          code: "CODING_SIDECAR_UNAVAILABLE",
+          message: "Coding sidecar gateway is unavailable.",
+        },
+      });
+      expect(responseText).not.toContain(hostileMessage);
+      expect(responseText).not.toContain(hostilePath);
+      expect(headerBlob).not.toContain(hostileMessage);
+      expect(headerBlob).not.toContain(hostilePath);
+
+      expect(records).toHaveLength(1);
+      expect(records).toEqual([
+        expect.objectContaining({
+          source: "coding-sidecar-gateway.chat",
+          errorClass: "CodingSidecarGatewayFailure",
+          message: "sidecar-gateway-failed",
+        }),
+      ]);
+      expect(records.some((record) => record.source === "server.top-level-catch")).toBe(false);
+      const diagnosticsJson = JSON.stringify(records);
+      expect(diagnosticsJson).not.toContain(hostileMessage);
+      expect(diagnosticsJson).not.toContain(hostilePath);
+    } finally {
+      store.close();
+    }
   });
 
   it("serves POST /api/editor/language through the live BFF dispatch path (#1198)", async () => {

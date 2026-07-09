@@ -256,6 +256,9 @@ vi.mock("./cards/RuntimeHubWidget", () => ({
     </div>
   ),
 }));
+vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
+  CodingWorkbenchWindow: () => <div data-testid="coding-workbench-window">Coding Workbench</div>,
+}));
 vi.mock("./cards/ReviewWidget", () => ({
   ReviewWidget: ({
     runId,
@@ -572,6 +575,15 @@ describe("workspace widget renderer registry", () => {
     expect(ctx.openWindow).toHaveBeenCalledWith("governedPullRequest", { projectPath: "/repo" });
     fireEvent.click(screen.getByRole("button", { name: "Runtime merge" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("governedMerge", { projectPath: "/repo" });
+  });
+
+  it("renders the Coding Workbench singleton through the workspace registry", async () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+
+    expect(await screen.findByTestId("coding-workbench-window")).toHaveTextContent(
+      "Coding Workbench",
+    );
   });
 
   it("wires hub callbacks for quality, regenerated runs, connector management, figma, and chat history", async () => {

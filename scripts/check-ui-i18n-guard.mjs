@@ -23,7 +23,7 @@ export function isUiProductionSource(file) {
   const normalized = normalizePath(file);
   const name = basename(normalized);
 
-  if (!/\.(tsx|ts)$/.test(normalized)) {
+  if (!/\.tsx$/.test(normalized)) {
     return false;
   }
 
@@ -161,15 +161,31 @@ function validateBaseRef(baseRef) {
   }
 }
 
+function pushRange(ranges, range) {
+  if (!ranges.includes(range)) {
+    ranges.push(range);
+  }
+}
+
 function pushBaseShaRanges(ranges, baseSha) {
   if (baseSha && !isZeroSha(baseSha)) {
-    ranges.push(`${baseSha}..HEAD`, `${baseSha}...HEAD`);
+    pushRange(ranges, `${baseSha}..HEAD`);
+    pushRange(ranges, `${baseSha}...HEAD`);
   }
 }
 
 function pushBaseRefRanges(ranges, baseRef) {
   if (baseRef) {
-    ranges.push(`origin/${baseRef}...HEAD`, `${baseRef}...HEAD`);
+    pushRange(ranges, `origin/${baseRef}...HEAD`);
+    pushRange(ranges, `${baseRef}...HEAD`);
+  }
+}
+
+function pushEventFallbackRanges(ranges, eventName, baseRef) {
+  if (eventName === "push" && !baseRef) {
+    pushRange(ranges, "origin/dev...HEAD");
+    pushRange(ranges, "HEAD^1..HEAD");
+    return;
   }
 }
 
@@ -183,13 +199,15 @@ function diffRangesFromEnv(env) {
   validateBaseRef(baseRef);
   pushBaseRefRanges(ranges, baseRef);
   pushBaseShaRanges(ranges, baseSha);
+  pushEventFallbackRanges(ranges, eventName, baseRef);
 
   if (ranges.length === 0 && eventName) {
-    ranges.push("HEAD^1..HEAD");
+    pushRange(ranges, "HEAD^1..HEAD");
   }
 
   if (ranges.length === 0) {
-    ranges.push("origin/dev...HEAD", "HEAD^1..HEAD");
+    pushRange(ranges, "origin/dev...HEAD");
+    pushRange(ranges, "HEAD^1..HEAD");
   }
 
   return ranges;
