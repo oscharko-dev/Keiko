@@ -31,6 +31,7 @@ import type { DensityMode } from "../components/desktop/widgets/panels/Relations
 import { useRelationshipActivityStream } from "../components/desktop/widgets/panels/useRelationshipActivityStream";
 import { RelationshipHealthPanel } from "../components/desktop/widgets/panels/RelationshipHealthPanel";
 import { RelationshipCreateDialog } from "../components/desktop/modals/RelationshipCreateDialog";
+import { useTranslate } from "@/lib/i18n";
 import type { ApiRelationship } from "./api";
 
 const EMPTY_FILTERS: RelationshipFilters = {};
@@ -38,6 +39,7 @@ const EMPTY_FILTERS: RelationshipFilters = {};
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export function RelationshipsView(): ReactNode {
+  const t = useTranslate();
   const { activityMap, throughputMap, animate } = useRelationshipActivityStream();
   const [highContrast, setHighContrast] = useState(false);
 
@@ -185,21 +187,21 @@ export function RelationshipsView(): ReactNode {
             className="arun-btn"
             onClick={() => setShowHealth((v) => !v)}
             aria-pressed={showHealth}
-            aria-label="Toggle the graph health view"
+            aria-label={t("relationships.health.toggleAria")}
             style={{ flex: "0 0 auto", minHeight: 24, marginRight: "auto" }}
           >
-            {showHealth ? "Hide health" : "Graph health"}
+            {showHealth ? t("relationships.health.hide") : t("relationships.health.show")}
           </button>
           <button
             ref={createButtonRef}
             type="button"
             className="arun-btn primary"
             onClick={() => setCreateDialogOpen(true)}
-            aria-label="Create new relationship"
+            aria-label={t("relationships.create.aria")}
             // Override .arun-btn.primary { flex: 1 } so the action stays compact in this toolbar.
             style={{ flex: "0 0 auto", minWidth: 24, minHeight: 24 }}
           >
-            + New relationship
+            {t("relationships.create.button")}
           </button>
         </header>
 

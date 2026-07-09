@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import type { ParsedUnit, ParserDiagnostic, ParserResult } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 import yauzl from "yauzl";
 
 import {
@@ -30,6 +31,7 @@ const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.
 const MAX_XML_INFLATED_BYTES = 32 * 1024 * 1024;
 const MAX_XML_INFLATE_RATIO = 100;
 const SHEET_ENTRY_PREFIX = "xl/worksheets/";
+const XLSX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS);
 
 interface ZipFileLike {
   readonly readEntry: () => void;
@@ -82,7 +84,7 @@ interface XlsxStyles {
 function isXlsx(input: ParserSelectionInput): boolean {
   const ext = input.extension.toLowerCase();
   const media = input.mediaType.toLowerCase();
-  return ext === "xlsx" || media === XLSX_MEDIA;
+  return XLSX_EXTENSIONS.has(ext) || media === XLSX_MEDIA;
 }
 
 function cancelled(

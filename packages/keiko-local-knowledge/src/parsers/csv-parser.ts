@@ -22,6 +22,10 @@ import {
   shouldStop,
 } from "./_internal.js";
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import {
+  LOCAL_KNOWLEDGE_CSV_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_TSV_FILE_EXTENSIONS,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -32,8 +36,8 @@ import type {
 const PARSER_ID = "csv";
 const PARSER_VERSION = "1";
 
-const CSV_EXTENSIONS: ReadonlySet<string> = new Set(["csv"]);
-const TSV_EXTENSIONS: ReadonlySet<string> = new Set(["tsv", "tab"]);
+const CSV_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_CSV_FILE_EXTENSIONS);
+const TSV_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_TSV_FILE_EXTENSIONS);
 
 function selectDelimiter(input: ParserSelectionInput): string | null {
   const ext = input.extension.toLowerCase();

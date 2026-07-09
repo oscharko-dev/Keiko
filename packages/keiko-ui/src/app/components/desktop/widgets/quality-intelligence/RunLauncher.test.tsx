@@ -1915,10 +1915,10 @@ describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () 
     );
   });
 
-  it("renders the connected-source banner with 'Connected figma snapshot' and the run id", () => {
+  it("renders the connected-source banner with 'Connected Figma snapshot' and the run id", () => {
     render(<RunLauncher connectedFigmaSnapshotRunIds={[RUN_ID]} />);
     const banner = screen.getByTestId("qi-connected-source");
-    expect(banner).toHaveTextContent("Connected figma snapshot");
+    expect(banner).toHaveTextContent("Connected Figma snapshot");
     expect(banner).toHaveTextContent(RUN_ID);
   });
 

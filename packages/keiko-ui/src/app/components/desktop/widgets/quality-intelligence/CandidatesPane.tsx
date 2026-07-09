@@ -15,6 +15,7 @@ import type {
   QualityIntelligenceReviewAction,
 } from "@oscharko-dev/keiko-contracts";
 import { isTerminalReviewState } from "@oscharko-dev/keiko-contracts";
+import { useQiTranslate as useTranslate } from "./qi-i18n";
 import { CandidateEditForm } from "./CandidateEditForm";
 import {
   CandidateQualityVerdictNote,
@@ -87,19 +88,20 @@ function CandidateMeta({
 }: {
   readonly candidate: CandidateWithQualityVerdict;
 }): ReactNode {
+  const t = useTranslate();
   return (
-    <dl className="qi-cand-meta" aria-label="Test case metadata">
+    <dl className="qi-cand-meta" aria-label={t("qi.candidate.metadata")}>
       <div>
-        <dt>Steps</dt>
+        <dt>{t("qi.candidate.steps")}</dt>
         <dd>{candidate.steps.length.toString()}</dd>
       </div>
       <div>
-        <dt>Expected</dt>
+        <dt>{t("qi.candidate.expected")}</dt>
         <dd>{candidate.expectedResults.length.toString()}</dd>
       </div>
       {candidate.qualityVerdict !== undefined ? (
         <div>
-          <dt>Quality</dt>
+          <dt>{t("qi.candidate.quality")}</dt>
           <dd>{Math.round(candidate.qualityVerdict.score).toString()}</dd>
         </div>
       ) : null}
@@ -129,11 +131,12 @@ function CandidateScenario({
 }: {
   readonly candidate: QualityIntelligenceUiCandidate;
 }): ReactNode {
+  const t = useTranslate();
   return (
-    <CandidateAccordion title="Scenario">
-      <StringList items={candidate.preconditions} label="Preconditions" />
-      <StringList items={candidate.steps} label="Steps" />
-      <StringList items={candidate.expectedResults} label="Expected results" />
+    <CandidateAccordion title={t("qi.candidate.scenario")}>
+      <StringList items={candidate.preconditions} label={t("qi.candidate.preconditions")} />
+      <StringList items={candidate.steps} label={t("qi.candidate.steps")} />
+      <StringList items={candidate.expectedResults} label={t("qi.candidate.expectedResults")} />
     </CandidateAccordion>
   );
 }
@@ -143,6 +146,7 @@ function CandidateEvidence({
 }: {
   readonly candidate: CandidateWithQualityVerdict;
 }): ReactNode {
+  const t = useTranslate();
   if (
     candidate.tags.length === 0 &&
     candidate.qualityVerdict === undefined &&
@@ -151,13 +155,13 @@ function CandidateEvidence({
     return null;
   }
   return (
-    <CandidateAccordion title="Evidence">
+    <CandidateAccordion title={t("qi.candidate.evidence")}>
       {candidate.weakTestFlag !== undefined ? <WeakTestFlag flag={candidate.weakTestFlag} /> : null}
       {candidate.qualityVerdict !== undefined ? (
         <CandidateQualityVerdictNote verdict={candidate.qualityVerdict} />
       ) : null}
       {candidate.tags.length > 0 ? (
-        <ul className="qi-cand-tags" aria-label="Tags">
+        <ul className="qi-cand-tags" aria-label={t("qi.candidate.tags")}>
           {candidate.tags.map((t) => (
             <li key={t} className="qi-cand-tag">
               {t}
@@ -220,6 +224,7 @@ function ReviewControls({
   readonly describedBy?: string | undefined;
   readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
+  const t = useTranslate();
   // While any review request is in flight, every review button is locked (aria-disabled keeps them
   // focusable) and the clicked one is relabelled "Saving…" so the round-trip has visible feedback.
   const reviewBusy = pendingReview !== null && pendingReview !== undefined;
@@ -239,17 +244,17 @@ function ReviewControls({
   const primaryDescribedBy = isTerminal ? finalNoteId : describedBy;
 
   return (
-    <div className="qi-cand-actions" role="group" aria-label="Review decision">
+    <div className="qi-cand-actions" role="group" aria-label={t("qi.review.decision")}>
       {/* Final-state note: always mounted when terminal so aria-describedby resolves reliably.
           Visually reuses the governance-note style (same role="note", same padding/colour token). */}
       {isTerminal ? (
         <p id={finalNoteId} className="qi-cand-governance-note" role="note">
-          This review decision is final — reopen to change it.
+          {t("qi.review.finalNote")}
         </p>
       ) : null}
       <GovernedActionButton
         className="qi-btn qi-btn-approve"
-        label={isSaving("approve") ? "Saving…" : "Approve"}
+        label={isSaving("approve") ? t("common.saving") : t("qi.review.approve")}
         pressed={state === "approved"}
         disabled={disabled || reviewBusy || isTerminal}
         describedBy={primaryDescribedBy}
@@ -259,7 +264,7 @@ function ReviewControls({
       />
       <GovernedActionButton
         className="qi-btn qi-btn-reject"
-        label={isSaving("reject") ? "Saving…" : "Reject"}
+        label={isSaving("reject") ? t("common.saving") : t("qi.review.reject")}
         pressed={state === "rejected"}
         disabled={disabled || reviewBusy || isTerminal}
         describedBy={primaryDescribedBy}
@@ -269,7 +274,7 @@ function ReviewControls({
       />
       <GovernedActionButton
         className="qi-btn qi-btn-secondary"
-        label={isSaving("request-changes") ? "Saving…" : "Request changes"}
+        label={isSaving("request-changes") ? t("common.saving") : t("qi.review.requestChanges")}
         pressed={state === "changes-requested"}
         disabled={disabled || reviewBusy || isTerminal}
         describedBy={primaryDescribedBy}
@@ -279,7 +284,7 @@ function ReviewControls({
       />
       <GovernedActionButton
         className="qi-btn qi-btn-secondary"
-        label={isSaving("withdraw") ? "Saving…" : "Withdraw"}
+        label={isSaving("withdraw") ? t("common.saving") : t("qi.review.withdraw")}
         pressed={state === "withdrawn"}
         disabled={disabled || reviewBusy || isTerminal}
         describedBy={primaryDescribedBy}
@@ -293,7 +298,7 @@ function ReviewControls({
       {isTerminal ? (
         <GovernedActionButton
           className="qi-btn qi-btn-secondary"
-          label={isSaving("reopen") ? "Saving…" : "Reopen"}
+          label={isSaving("reopen") ? t("common.saving") : t("qi.review.reopen")}
           disabled={disabled || reviewBusy}
           describedBy={disabled ? describedBy : undefined}
           onActivate={() => {
@@ -324,6 +329,7 @@ function CandidateView({
   readonly editButtonRef?: Ref<HTMLButtonElement> | undefined;
   readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
+  const t = useTranslate();
   const localDisabledReasonId = useId();
   const actionDescribedBy =
     actionsDisabled && actionsDisabledReason !== undefined
@@ -368,7 +374,7 @@ function CandidateView({
                 onStartEdit();
               }}
             >
-              Edit
+              {t("common.edit")}
             </button>
           ) : null}
           {onReview !== undefined ? (
@@ -467,14 +473,15 @@ export function CandidatesPane({
   actionsDisabledReason,
   pendingReview,
 }: CandidatesPaneProps): ReactNode {
+  const t = useTranslate();
   const [visible, setVisible] = useState(INITIAL_VISIBLE);
   const governanceNoteId = useId();
   const showGovernanceNote = actionsDisabled && actionsDisabledReason !== undefined;
   if (candidates.length === 0) {
     return (
       <div className="lk-empty">
-        <p className="lk-empty-title">No test cases</p>
-        <p className="lk-empty-body">This run produced no generated test cases.</p>
+        <p className="lk-empty-title">{t("qi.candidate.empty.title")}</p>
+        <p className="lk-empty-body">{t("qi.candidate.empty.body")}</p>
       </div>
     );
   }
@@ -490,7 +497,7 @@ export function CandidatesPane({
       ) : null}
       {/* a11y m-04: the wrapping <section> in QiRunCard already names this "Generated test cases";
           a more specific list label avoids AT announcing the same name twice. */}
-      <ul className="qi-cand-cards" aria-label="Test case list">
+      <ul className="qi-cand-cards" aria-label={t("qi.candidate.list")}>
         {shown.map((c) => (
           <CandidateCard
             key={c.id}
@@ -512,7 +519,7 @@ export function CandidatesPane({
             setVisible((v) => v + INITIAL_VISIBLE);
           }}
         >
-          Show more test cases ({(candidates.length - visible).toString()} remaining)
+          {t("qi.candidate.showMore", { count: candidates.length - visible })}
         </button>
       ) : null}
     </div>

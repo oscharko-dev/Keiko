@@ -4,6 +4,7 @@ import type {
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 
 import {
   diagnostic,
@@ -30,6 +31,7 @@ const DEPENDENCY_VERSIONS = Object.freeze([
   Object.freeze({ packageName: "@napi-rs/canvas", version: "1.0.0" }),
 ]);
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46] as const;
+const PDF_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS);
 
 export interface PdfTextItem {
   readonly str?: string;
@@ -233,7 +235,7 @@ function hasPdfMagic(bytes: Uint8Array): boolean {
 
 function isPdf(input: ParserSelectionInput): boolean {
   return (
-    input.extension.toLowerCase() === "pdf" ||
+    PDF_EXTENSIONS.has(input.extension.toLowerCase()) ||
     input.mediaType.toLowerCase() === "application/pdf" ||
     hasPdfMagic(input.bytes)
   );

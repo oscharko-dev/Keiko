@@ -24,6 +24,7 @@ import {
   type TaskWorkspaceHealth,
   type WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useActiveWorkspace } from "./context/ActiveWorkspaceContext";
 import { Icons } from "./Icons";
 
@@ -86,7 +87,13 @@ function badge(label: string, tone: Tone, title?: string): ReactNode {
   );
 }
 
-function ActiveDetails({ instance }: { readonly instance: WorkspaceInstance }): ReactNode {
+function ActiveDetails({
+  instance,
+  t,
+}: {
+  readonly instance: WorkspaceInstance;
+  readonly t: I18nTranslate;
+}): ReactNode {
   const dirty = isWorkspaceDirty(instance);
   return (
     <div className="tw-switcher-active">
@@ -103,13 +110,21 @@ function ActiveDetails({ instance }: { readonly instance: WorkspaceInstance }): 
         className="tw-switcher-badges"
         style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem" }}
       >
-        {badge(instance.lifecycleState, "info", "Lifecycle state")}
-        {badge(instance.health, HEALTH_TONE[instance.health], "Workspace health")}
+        {badge(instance.lifecycleState, "info", t("taskWorkspace.lifecycleState"))}
+        {badge(instance.health, HEALTH_TONE[instance.health], t("taskWorkspace.health"))}
         {dirty
-          ? badge("uncommitted", "warning", "The worktree has uncommitted changes")
-          : badge("clean", "success", "The worktree is clean")}
+          ? badge(
+              t("taskWorkspace.dirty.uncommitted"),
+              "warning",
+              t("taskWorkspace.dirty.uncommittedTitle"),
+            )
+          : badge(t("taskWorkspace.dirty.clean"), "success", t("taskWorkspace.dirty.cleanTitle"))}
         {instance.lock !== null
-          ? badge(`locked: ${instance.lock.reason}`, "danger", `Held by ${instance.lock.owner}`)
+          ? badge(
+              t("taskWorkspace.locked", { reason: instance.lock.reason }),
+              "danger",
+              t("taskWorkspace.lockedTitle", { owner: instance.lock.owner }),
+            )
           : null}
       </div>
       <p className="tw-switcher-path" style={{ fontSize: "0.72rem", color: TONE_VAR.muted }}>
@@ -118,16 +133,18 @@ function ActiveDetails({ instance }: { readonly instance: WorkspaceInstance }): 
         </span>
       </p>
       <p className="tw-switcher-activity" style={{ fontSize: "0.7rem", color: TONE_VAR.muted }}>
-        Updated {instance.updatedAt}
+        {t("taskWorkspace.updatedAt", { value: instance.updatedAt })}
       </p>
       {instance.recoveryHints.length > 0 ? (
         <details className="tw-switcher-recovery">
-          <summary>Recovery hints ({instance.recoveryHints.length})</summary>
+          <summary>
+            {t("taskWorkspace.recoveryHints", { count: instance.recoveryHints.length })}
+          </summary>
           <ul>
             {instance.recoveryHints.map((hint, index) => (
               <li key={`${hint.marker}-${String(index)}`}>
                 {hint.marker}: {hint.strategy}
-                {hint.operatorActionRequired ? " (operator action required)" : ""}
+                {hint.operatorActionRequired ? t("taskWorkspace.operatorActionRequired") : ""}
               </li>
             ))}
           </ul>
@@ -160,6 +177,7 @@ function actionButton(props: {
 }
 
 function TaskWorkspaceSwitcherImpl(): ReactNode {
+  const t = useTranslate();
   const api = useActiveWorkspace();
   const [open, setOpen] = useState(false);
   const [taskId, setTaskId] = useState("");
@@ -209,12 +227,17 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
   const canHandoff = active !== null && legalNext.includes("handoff-ready");
   const statusText =
     active === null
-      ? "No active task workspace"
-      : `Active: ${active.taskId} on ${active.taskBranch} (${active.lifecycleState}, ${active.health})`;
+      ? t("taskWorkspace.status.none")
+      : t("taskWorkspace.status.active", {
+          taskId: active.taskId,
+          branch: active.taskBranch,
+          lifecycle: active.lifecycleState,
+          health: active.health,
+        });
   const triggerLabel =
     active === null
-      ? "Task workspace context: no active workspace"
-      : `Task workspace context: ${active.taskId}`;
+      ? t("taskWorkspace.trigger.noActive")
+      : t("taskWorkspace.trigger.active", { taskId: active.taskId });
 
   const repositoryRoot =
     api.activeInstance?.repositoryRoot ?? api.instances[0]?.repositoryRoot ?? null;
@@ -239,7 +262,7 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
       >
         <Icons.branch size={14} />
         <span className="tw-switcher-trigger-label">
-          {active === null ? "Task workspace" : active.taskId}
+          {active === null ? t("taskWorkspace.title") : active.taskId}
         </span>
         {api.switching ? <span aria-hidden="true">…</span> : null}
       </button>
@@ -254,11 +277,11 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
           id={panelId}
           className="tw-switcher-panel"
           role="group"
-          aria-label="Task workspace context"
+          aria-label={t("taskWorkspace.panel.aria")}
         >
           <div className="tw-switcher-panel-head">
-            <span className="tw-switcher-kicker">Task workspace</span>
-            <strong>{active === null ? "No workspace bound" : active.taskId}</strong>
+            <span className="tw-switcher-kicker">{t("taskWorkspace.title")}</span>
+            <strong>{active === null ? t("taskWorkspace.noWorkspaceBound") : active.taskId}</strong>
           </div>
           {api.error !== null ? (
             <p role="alert" className="tw-switcher-error" style={{ color: TONE_VAR.danger }}>
@@ -268,25 +291,25 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
 
           {active !== null ? (
             <>
-              <ActiveDetails instance={active} />
+              <ActiveDetails instance={active} t={t} />
               <div
                 className="tw-switcher-actions"
                 style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", marginTop: "0.4rem" }}
               >
                 {actionButton({
-                  label: "Pause",
+                  label: t("taskWorkspace.action.pause"),
                   onClick: () => void api.pause(active.workspaceId),
                   enabled: canPause,
                   busy: api.switching,
                 })}
                 {actionButton({
-                  label: "Prepare handoff",
+                  label: t("taskWorkspace.action.prepareHandoff"),
                   onClick: () => void api.prepareHandoff(active.workspaceId),
                   enabled: canHandoff && !isWorkspaceDirty(active),
                   busy: api.switching,
                 })}
                 {actionButton({
-                  label: "Clear active",
+                  label: t("taskWorkspace.action.clearActive"),
                   onClick: () => void api.clearActive(),
                   enabled: true,
                   busy: api.switching,
@@ -299,25 +322,25 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
                 <Icons.branch size={16} />
               </span>
               <div>
-                <strong>No active task workspace</strong>
+                <strong>{t("taskWorkspace.empty.title")}</strong>
                 <p>
                   {repositoryRoot === null
-                    ? "Open a project before creating a managed task workspace."
-                    : "Switch to an existing workspace or create one for this repository."}
+                    ? t("taskWorkspace.empty.openProject")
+                    : t("taskWorkspace.empty.switchOrCreate")}
                 </p>
               </div>
             </div>
           )}
 
           <div className="tw-switcher-section">
-            <div className="tw-switcher-section-title">Available workspaces</div>
+            <div className="tw-switcher-section-title">{t("taskWorkspace.available")}</div>
 
             {api.instances.length === 0 ? (
               <p className="tw-switcher-list-empty">
-                {api.loading ? "Loading workspaces…" : "No managed task workspaces yet."}
+                {api.loading ? t("taskWorkspace.loading") : t("taskWorkspace.noneManaged")}
               </p>
             ) : (
-              <div className="tw-switcher-list" role="list" aria-label="Task workspaces">
+              <div className="tw-switcher-list" role="list" aria-label={t("taskWorkspace.list")}>
                 {api.instances.map((instance) => {
                   const isActive = active?.workspaceId === instance.workspaceId;
                   return (
@@ -329,10 +352,14 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
                       <span className="tw-switcher-list-label" title={instance.managedWorktreePath}>
                         <strong>{instance.taskId}</strong>
                         <span>{instance.lifecycleState}</span>
-                        {isWorkspaceDirty(instance) ? badge("dirty", "warning") : null}
+                        {isWorkspaceDirty(instance)
+                          ? badge(t("taskWorkspace.dirty.short"), "warning")
+                          : null}
                       </span>
                       {actionButton({
-                        label: isActive ? "Active" : "Switch",
+                        label: isActive
+                          ? t("taskWorkspace.action.active")
+                          : t("taskWorkspace.action.switch"),
                         onClick: () => void api.switchTo(instance.workspaceId),
                         enabled: !isActive && canSwitchTo(instance),
                         busy: api.switching,
@@ -346,7 +373,7 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
 
           {repositoryRoot !== null ? (
             <div className="tw-switcher-section">
-              <div className="tw-switcher-section-title">Create workspace</div>
+              <div className="tw-switcher-section-title">{t("taskWorkspace.create.title")}</div>
               <form
                 className="tw-switcher-create"
                 onSubmit={(event) => {
@@ -367,25 +394,25 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
                 }}
               >
                 <label className="tw-switcher-field">
-                  <span>Task id</span>
+                  <span>{t("taskWorkspace.create.taskId")}</span>
                   <input
                     type="text"
                     value={taskId}
                     onChange={(event) => {
                       setTaskId(event.target.value);
                     }}
-                    placeholder="e.g. 446-binding"
+                    placeholder={t("taskWorkspace.create.taskIdPlaceholder")}
                   />
                 </label>
                 <label className="tw-switcher-field">
-                  <span>Base branch</span>
+                  <span>{t("taskWorkspace.create.baseBranch")}</span>
                   <input
                     type="text"
                     value={baseBranch}
                     onChange={(event) => {
                       setBaseBranch(event.target.value);
                     }}
-                    placeholder="e.g. dev"
+                    placeholder={t("taskWorkspace.create.baseBranchPlaceholder")}
                   />
                 </label>
                 <button
@@ -394,7 +421,7 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
                   disabled={createDisabled}
                   aria-disabled={createDisabled}
                 >
-                  Create task workspace
+                  {t("taskWorkspace.create.submit")}
                 </button>
               </form>
             </div>

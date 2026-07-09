@@ -14,6 +14,7 @@ import {
   exportQiRunTraceability,
   type QiTraceabilityFormat,
 } from "@/lib/quality-intelligence-api";
+import { useQiTranslate as useTranslate } from "./qi-i18n";
 import KeikoSelect from "../../KeikoSelect";
 import { formatError } from "./qiShared";
 
@@ -85,6 +86,7 @@ export function ExportBar({
   exportImpl = exportQiRun,
   traceabilityImpl = exportQiRunTraceability,
 }: ExportBarProps): ReactNode {
+  const t = useTranslate();
   const [adapter, setAdapter] = useState("csv");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,7 +114,10 @@ export function ExportBar({
       // "test case(s)", not the internal term "candidates" — the suite-wide object name
       // (uiux-fix F047 C388: ExportBar said "candidates", hub "cases", launcher "test cases").
       setPreview(
-        `${res.candidateCount.toString()} test case${res.candidateCount === 1 ? "" : "s"} · ${res.byteLen.toString()} bytes\n\n${res.preview}`,
+        `${t("qi.export.previewSummary", {
+          count: res.candidateCount,
+          bytes: res.byteLen,
+        })}\n\n${res.preview}`,
       );
     } else {
       // Binary formats (PDF / ZIP) arrive base64-encoded; forward the encoding so the Blob is built
@@ -120,7 +125,7 @@ export function ExportBar({
       triggerDownload(res.filename, res.contentType, res.body, res.encoding);
       setDownloaded(res.filename);
     }
-  }, [runId, adapter, isTms, approvedOnly, exportImpl, traceabilityImpl]);
+  }, [runId, adapter, isTms, approvedOnly, exportImpl, traceabilityImpl, t]);
 
   const handleExport = useCallback(async (): Promise<void> => {
     setBusy(true);
@@ -140,14 +145,12 @@ export function ExportBar({
     <div className="qi-export" data-testid="qi-export-bar">
       <div className="qi-export-head">
         <div className="qi-export-copy">
-          <p className="qi-export-title">Export</p>
+          <p className="qi-export-title">{t("qi.export.title")}</p>
           {/* Scope notice: always present for non-TMS adapters so users understand what they are
               about to download (AC3 governance visibility). */}
           {!isTms ? (
             <p className="qi-export-hint" role="note" data-testid="qi-export-scope-notice">
-              {approvedOnly
-                ? "Exports approved test cases only."
-                : "Exports all test cases, including unapproved."}
+              {approvedOnly ? t("qi.export.scopeApproved") : t("qi.export.scopeAll")}
             </p>
           ) : null}
         </div>
@@ -167,17 +170,17 @@ export function ExportBar({
               }}
               data-testid="qi-export-approved-only"
             />
-            <span>Approved only</span>
+            <span>{t("qi.export.approvedOnly")}</span>
           </label>
         ) : null}
       </div>
       <div className="qi-export-controls">
         <div className="qi-field qi-export-format">
-          <span className="qi-field-label">Format</span>
+          <span className="qi-field-label">{t("qi.export.format")}</span>
           <KeikoSelect
             triggerClassName="qi-select"
             value={adapter}
-            ariaLabel="Export"
+            ariaLabel={t("qi.export.title")}
             disabled={busy}
             // Issue #723 AC2 a11y: when a TMS (preview-only) adapter such as Quality Center is
             // selected, associate the "preview only — configure a connector" note with the picker so
@@ -185,7 +188,7 @@ export function ExportBar({
             // not only when reading sequentially. Omitted for local formats (no such note renders),
             // which keeps the reference from ever dangling.
             ariaDescribedBy={isTms ? "qi-export-connector-hint" : undefined}
-            menuTitle="Export"
+            menuTitle={t("qi.export.title")}
             sections={[
               {
                 options: ADAPTERS.map((adapterOption) => ({
@@ -212,7 +215,11 @@ export function ExportBar({
         >
           {/* Explicit busy label — a 40-candidate PDF/ZIP export takes a noticeable moment, and the
               neighbouring DriftPanel/RunLauncher both signal busy (uiux-fix F047 C155). */}
-          {busy ? "Exporting…" : isTms ? "Preview" : "Download"}
+          {busy
+            ? t("qi.export.exporting")
+            : isTms
+              ? t("qi.export.preview")
+              : t("qi.export.download")}
         </button>
       </div>
       {/* Persistent live region (uiux-fix F047 C155): exists before any result arrives so screen
@@ -221,9 +228,9 @@ export function ExportBar({
           preview below stay conditional and are no longer live regions themselves. */}
       <p className="sr-only" role="status" aria-live="polite">
         {downloaded !== null
-          ? `Downloaded ${downloaded}`
+          ? t("qi.export.downloaded", { filename: downloaded })
           : preview !== null
-            ? "Export preview ready below."
+            ? t("qi.export.previewReady")
             : ""}
       </p>
       {isTms ? (
@@ -234,13 +241,13 @@ export function ExportBar({
           data-testid="qi-export-connector-hint"
         >
           {selected?.id === "quality-center"
-            ? "Quality Center is preview-only. Configure a connector to enable live export."
-            : "External target — preview only. Configure a connector to enable live export."}
+            ? t("qi.export.qualityCenterPreviewOnly")
+            : t("qi.export.externalPreviewOnly")}
         </p>
       ) : null}
       {downloaded !== null ? (
         <p className="qi-export-success" data-testid="qi-export-success">
-          {`Downloaded ${downloaded}`}
+          {t("qi.export.downloaded", { filename: downloaded })}
         </p>
       ) : null}
       {preview !== null ? (
@@ -251,7 +258,7 @@ export function ExportBar({
         <pre
           className="qi-export-preview"
           role="region"
-          aria-label="Export preview"
+          aria-label={t("qi.export.previewAria")}
           tabIndex={0}
           data-testid="qi-export-preview"
         >

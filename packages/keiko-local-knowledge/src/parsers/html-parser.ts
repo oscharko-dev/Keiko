@@ -33,6 +33,7 @@ import {
   shouldStop,
 } from "./_internal.js";
 import type { DocumentId, ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -63,7 +64,7 @@ function collapseWhitespace(value: string): string {
 const PARSER_ID = "html";
 const PARSER_VERSION = "1";
 
-const HTML_EXTENSIONS: ReadonlySet<string> = new Set(["html", "htm", "xhtml"]);
+const HTML_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS);
 const HTML_MEDIA_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml+xml"]);
 
 function isHtml(input: ParserSelectionInput): boolean {
