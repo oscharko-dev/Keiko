@@ -58,7 +58,7 @@ function nextPatchVersion(version: string): string {
     }
     return `${major}.${minor}.${String(Number(patch) + 1)}`;
   }
-  // Prerelease SDK version (for example 0.2.15-beta.0 during release-branch stabilization):
+  // Prerelease SDK version (for example 0.2.15 during release-branch stabilization):
   // the synthetic "next" release is that version's stable base, which the updater must treat
   // as newer than the running prerelease.
   const prerelease = /^((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))-[0-9A-Za-z.-]+$/u.exec(version);

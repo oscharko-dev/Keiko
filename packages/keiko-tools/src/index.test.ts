@@ -93,7 +93,7 @@ import type {
 
 describe("keiko-tools public surface", () => {
   it("exposes the documented value barrel members", () => {
-    expect(tools.KEIKO_TOOLS_VERSION).toBe("0.2.15-beta.0");
+    expect(tools.KEIKO_TOOLS_VERSION).toBe("0.2.15");
     // Frozen default tables (re-exported from contracts):
     expect(tools.DEFAULT_COMMAND_RULES).toBeDefined();
     expect(tools.DEFAULT_ENV_ALLOWLIST).toBeDefined();
