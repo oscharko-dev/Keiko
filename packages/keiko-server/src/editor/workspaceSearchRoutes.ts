@@ -220,8 +220,13 @@ function searchRouteErrorResult(error: unknown): RouteResult | undefined {
   return undefined;
 }
 
+// Flags must match `regexSafetyIssue`'s validity check (`new RegExp(source)`, no flags) and
+// `buildRegexMatcher`'s actual matching flags (`repoSearchMatchers.ts`: "g" / "gi") exactly. A
+// stricter flag set here (e.g. "u") can make `new RegExp` throw on a pattern the shared validator
+// already approved as safe (for example an unescaped "{" that is valid Annex-B syntax without "u"
+// but a SyntaxError under it), crashing this route instead of previewing or cleanly rejecting.
 function buildMatchRegex(request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest): RegExp {
-  return new RegExp(patternForRequest(request), request.caseSensitive ? "gu" : "giu");
+  return new RegExp(patternForRequest(request), request.caseSensitive ? "g" : "gi");
 }
 
 async function snippetForMatch(
@@ -320,18 +325,22 @@ function editForMatch(
   };
 }
 
+// Scans every line of `content`, not just the lines `searchText`'s RAG-oriented "best
+// representative lines" heuristic (`collectBestLines`/`insertBestLine`, capped at
+// MAX_MATCHES_PER_FILE and prone to computing an enclosing range that excludes the very line that
+// matched) happened to keep. That heuristic exists to pick diverse, bounded context for LLM
+// evidence — it is not fit to decide which lines a human-confirmed replace is allowed to touch,
+// and using it here silently dropped edits. `content` is already bounded by the caller's
+// `maxBytesPerFileScanned` read, so an exhaustive re-scan stays within the same governed limits.
 function editsForContent(
   content: string,
   regex: RegExp,
   replacement: string,
-  lineNumbers: ReadonlySet<number>,
 ): readonly WorkspaceReplacePreviewEdit[] {
   const offsets = lineOffsets(content);
   const edits: WorkspaceReplacePreviewEdit[] = [];
   const lines = content.split("\n");
   for (const [lineIndex, line] of lines.entries()) {
-    const lineNumber = lineIndex + 1;
-    if (!lineNumbers.has(lineNumber)) continue;
     const lineStart = offsets[lineIndex] ?? 0;
     regex.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -348,7 +357,6 @@ function buildReplaceFileEdit(
   path: string,
   regex: RegExp,
   replacement: string,
-  lineNumbers: ReadonlySet<number>,
 ): WorkspaceReplacePreviewFileEdit | undefined {
   const content = readWorkspaceFile(
     scope.workspace,
@@ -356,39 +364,41 @@ function buildReplaceFileEdit(
     { maxBytes: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned },
     nodeWorkspaceFs,
   );
-  const edits = editsForContent(content.text, regex, replacement, lineNumbers);
+  const edits = editsForContent(content.text, regex, replacement);
   return edits.length === 0
     ? undefined
     : { path, baseContentHash: contentHash(content.text), edits };
 }
 
-function collectMatchedLines(
+// Returns the distinct file paths `searchText` found at least one match in, in ranked order.
+// This is used only to decide WHICH FILES to open for replace; `buildReplaceFileEdit` then
+// exhaustively re-scans each file's full (already bounded) content for every match rather than
+// trusting the search engine's per-line sampling.
+function collectMatchedPaths(
   atoms: Awaited<ReturnType<typeof searchText>>["atoms"],
   keepPath: (path: string) => boolean,
-): Map<string, Set<number>> {
-  const linesByPath = new Map<string, Set<number>>();
+): readonly string[] {
+  const seen = new Set<string>();
+  const paths: string[] = [];
   for (const atom of atoms) {
     if (atom.lineRange === undefined || !keepPath(atom.scopePath)) continue;
-    const lines = linesByPath.get(atom.scopePath) ?? new Set<number>();
-    for (let line = atom.lineRange.startLine; line <= atom.lineRange.endLine; line += 1) {
-      lines.add(line);
-    }
-    linesByPath.set(atom.scopePath, lines);
+    if (seen.has(atom.scopePath)) continue;
+    seen.add(atom.scopePath);
+    paths.push(atom.scopePath);
   }
-  return linesByPath;
+  return paths;
 }
 
 function buildReplacePreviewFiles(
   scope: SearchScope,
   request: WorkspaceReplacePreviewRequest,
-  linesByPath: ReadonlyMap<string, ReadonlySet<number>>,
+  paths: readonly string[],
 ): readonly WorkspaceReplacePreviewFileEdit[] {
   const regex = buildMatchRegex(request);
   const files: WorkspaceReplacePreviewFileEdit[] = [];
-  for (const path of linesByPath.keys()) {
+  for (const path of paths) {
     if (files.length >= request.maxFiles) break;
-    const lineNumbers = linesByPath.get(path) ?? new Set<number>();
-    const file = buildReplaceFileEdit(scope, path, regex, request.replacement, lineNumbers);
+    const file = buildReplaceFileEdit(scope, path, regex, request.replacement);
     if (file !== undefined) files.push(file);
   }
   return files;
@@ -402,10 +412,10 @@ async function buildReplacePreviewResponse(
   const query = queryForRequest(request, DEFAULT_SEARCH_LIMITS.maxMatchesReturned);
   const result = await searchText(scope, query, DEFAULT_SEARCH_LIMITS, { signal });
   const keepPath = await buildGlobFilter(scope, request, signal);
-  const linesByPath = collectMatchedLines(result.atoms, keepPath);
-  const files = buildReplacePreviewFiles(scope, request, linesByPath);
+  const paths = collectMatchedPaths(result.atoms, keepPath);
+  const files = buildReplacePreviewFiles(scope, request, paths);
   const editCount = files.reduce((total, file) => total + file.edits.length, 0);
-  const omittedFileCount = Math.max(0, linesByPath.size - files.length);
+  const omittedFileCount = Math.max(0, paths.length - files.length);
   return {
     files,
     fileCount: files.length,
