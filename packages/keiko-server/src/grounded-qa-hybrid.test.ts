@@ -1279,6 +1279,59 @@ describe("hybrid grounded ask — EmbeddingAdapterError is skipped, not aborted"
   });
 });
 
+// ─── Folder retrieval fans out with bounded concurrency (issue #2147) ─────────
+//
+// retrieveFolderPacks() must retrieve multiple connected folder scopes concurrently (bounded by
+// MAX_FOLDER_RETRIEVAL_CONCURRENCY), mirroring retrieveConnectors() in the same file and
+// retrieveAllSources() on the folders-only path. Before the fix, folders were retrieved one at a
+// time in a plain sequential loop, so wall-clock folder-retrieval latency scaled linearly with
+// folder count whenever the hybrid path was used (any folder+connector mix, or 2+ connectors).
+
+describe("hybrid grounded ask — folder retrieval concurrency", () => {
+  it("retrieves multiple folder sources concurrently, not one at a time", async () => {
+    const { capsuleId } = await seedReadyCapsule("Concurrency Connector");
+    const folders: ChatConnectedScope[] = Array.from({ length: 4 }, (_unused, i) => ({
+      kind: "directory" as const,
+      relativePaths: [`src/concurrent-${String(i)}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(`concurrent-folder-${String(i)}`),
+    }));
+    const chatId = makeHybridChat(folders, [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const retriever: GroundedRetriever = async (input) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      const key = input.scope.relativePaths[0] ?? "";
+      return {
+        pack: folderPack(key, 0.5, `atom-${key}`),
+        elapsedMs: 20,
+        plan: { state: "ready" } as never,
+      };
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "scan concurrently" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: retriever,
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    // mutation: reverting retrieveFolderPacks to a sequential for-loop → maxInFlight stays at 1
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+  });
+});
+
 // ─── Case 3c: Folder pack-validation failure is skipped, not aborted (Fix 3) ──
 //
 // When one folder's retrieved pack fails isValidGroundedPack, retrieveFolderPacks()
