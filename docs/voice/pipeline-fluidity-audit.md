@@ -93,6 +93,33 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 4. **Turn-based STT+TTS mode.** The non-Realtime degradation path remains push-to-talk by design. Natural
    provider VAD, continuous barge-in, and semantic endpointing apply to the full Realtime mode.
 
+## GPT-Live architecture review (2026-07-09)
+
+OpenAI's GPT-Live announcement validates the direction of Keiko's realtime path: continuous
+full-duplex interaction, interruption-aware turn taking, deliberate pauses, sparse backchannels, and
+delegation of deeper work while the interaction layer preserves conversational flow. Keiko already
+ships the applicable provider-neutral foundations: WebRTC media, semantic VAD, barge-in, a floor
+manager with a backchannel effect, grounding and Memoria Viva tools, and separate visible versus
+spoken grounded answers.
+
+The review produced two immediate changes that do not depend on an unreleased model API:
+
+- The realtime persona now treats hesitation and short pauses as thinking time, honors an explicit
+  request to keep listening, and permits only sparse non-committal verbal acknowledgements. An
+  acknowledgement is never agreement, confirmation, or permission to complete the user's thought.
+- The existing visible/spoken split remains the presentation contract: rich source-backed material
+  stays inspectable in chat while the voice renders a concise speech projection. This matches the
+  useful "visual answer while talking" pattern without sending links or source metadata to speech.
+
+GPT-Live model identifiers and wire behavior are deliberately not added yet. The announcement says
+API availability is forthcoming, so inventing capability names or transport fields would violate the
+provider-neutral gateway boundary. When a published API contract exists, evaluate one additional
+capability: an interaction-plane model that can issue a single acknowledgement, delegate governed
+retrieval or agent work asynchronously, remain interruptible while that work runs, and resume with a
+redacted result. The task lifecycle must be content-free in diagnostics and cancellation must preserve
+the user's current turn; no background worker may bypass Keiko's existing policy, evidence, or memory
+boundaries.
+
 ## Invariants preserved
 
 Model Gateway boundary intact; no new runtime media dependencies; no raw audio persisted; the browser

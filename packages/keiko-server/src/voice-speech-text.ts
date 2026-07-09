@@ -7,11 +7,56 @@ const AUTOLINK_URL = /<https?:\/\/[^\s<>]+>/giu;
 const BARE_URL = /https?:\/\/[^\s<>]+/giu;
 const CITATION_MARKER = /\s*\[(?:\^?\d+|[A-Za-z]+-?\d+)\]/gu;
 const REFERENCE_DEFINITION = /^\s*\[(?:\^?\d+|[^\]]+)\]:\s+/u;
-const HTML_RAW_CONTENT = /<(?:script|style)\b[^>]*>.*?(?:<\/(?:script|style)\s*>|$)/giu;
-const HTML_TAG = /<\/?[A-Za-z][^>\n]*(?:>|$)/gu;
+
+function isTagBoundary(value: string | undefined): boolean {
+  return value === undefined || value === ">" || value === "/" || value.trim().length === 0;
+}
+
+function rawElementStart(lowerText: string, tagName: string, from: number): number {
+  let cursor = from;
+  while (cursor < lowerText.length) {
+    const start = lowerText.indexOf(`<${tagName}`, cursor);
+    if (start < 0) return -1;
+    if (isTagBoundary(lowerText[start + tagName.length + 1])) return start;
+    cursor = start + 1;
+  }
+  return -1;
+}
+
+function stripRawElement(text: string, tagName: "script" | "style"): string {
+  const lowerText = text.toLowerCase();
+  const parts: string[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = rawElementStart(lowerText, tagName, cursor);
+    if (start < 0) {
+      parts.push(text.slice(cursor));
+      break;
+    }
+    parts.push(text.slice(cursor, start));
+    const close = lowerText.indexOf(`</${tagName}`, start + tagName.length + 1);
+    if (close < 0) break;
+    const closeEnd = text.indexOf(">", close + tagName.length + 2);
+    if (closeEnd < 0) break;
+    cursor = closeEnd + 1;
+  }
+  return parts.join("");
+}
+
+function stripHtml(text: string): string {
+  const withoutRawContent = stripRawElement(stripRawElement(text, "script"), "style");
+  const parts: string[] = [];
+  let inTag = false;
+  for (const character of withoutRawContent) {
+    if (character === "<") inTag = true;
+    else if (character === ">") inTag = false;
+    else if (!inTag) parts.push(character);
+  }
+  return parts.join("");
+}
 
 function stripMarkdown(line: string): string {
-  return line
+  const withoutMarkdown = line
     .replace(MARKDOWN_IMAGE, "")
     .replace(MARKDOWN_LINK, "$1")
     .replace(AUTOLINK_URL, "")
@@ -19,12 +64,8 @@ function stripMarkdown(line: string): string {
     .replace(CITATION_MARKER, "")
     .replace(/`([^`\n]+)`/gu, "$1")
     .replace(/^\s{0,3}#{1,6}\s+/u, "")
-    .replace(/^\s*(?:[-+*]|\d+[.)])\s+/u, "")
-    .replace(HTML_RAW_CONTENT, "")
-    .replace(HTML_TAG, "")
-    .replaceAll("<", "")
-    .replaceAll(">", "")
-    .replace(/[*_~]+/gu, "");
+    .replace(/^\s*(?:[-+*]|\d+[.)])\s+/u, "");
+  return stripHtml(withoutMarkdown).replace(/[*_~]+/gu, "");
 }
 
 function normalizeProse(text: string): string {

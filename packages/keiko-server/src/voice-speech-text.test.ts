@@ -45,7 +45,7 @@ describe("toSpeakableText", () => {
   it("removes complete and unterminated HTML without leaving injection delimiters", () => {
     const markdown = [
       "Hallo <strong>Kollege</strong>.",
-      "<script>alert('must-not-be-spoken')</script> Danach weiter.",
+      "<script>alert('must-not-be-spoken')</script\t odd-attribute> Danach weiter.",
       "Sicher. <script data-value='unterminated'",
     ].join("\n");
 

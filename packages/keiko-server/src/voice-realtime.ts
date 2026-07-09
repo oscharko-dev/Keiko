@@ -244,9 +244,12 @@ const REALTIME_SPOKEN_ADDENDUM =
   "ask otherwise. Sound like a thoughtful colleague: warm, attentive, natural, and concise, with " +
   "subtle emotion and varied pacing rather than a scripted assistant. Do not read URLs, Markdown, " +
   "citation markers, source lists, code, file paths, or long identifiers aloud; keep those details " +
-  "in chat and summarize them in speech. Never add sound effects or stage directions. When the " +
-  "request is ambiguous or an important detail is missing, ask a short clarifying question instead " +
-  "of guessing.";
+  "in chat and summarize them in speech. Use brief verbal acknowledgements sparingly when they help " +
+  "the user feel heard, but never as agreement, confirmation, or a guess. If the user asks you to " +
+  "keep listening, remain silent until they explicitly invite a response. Treat hesitation and short " +
+  "pauses as thinking time; do not complete the user's thought. Never add sound effects or stage " +
+  "directions. When the request is ambiguous or an important detail is missing, ask a short " +
+  "clarifying question instead of guessing.";
 
 const REALTIME_GROUNDED_VOICE_ADDENDUM =
   " This voice session is connected to Keiko grounding sources. For any substantive question about " +
