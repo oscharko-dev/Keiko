@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
-import { validateStageRoot } from "./portable-launch-setup-stage.mjs";
+import { validateStageRoot, validateStageTargets } from "./portable-launch-setup-stage.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -14,19 +14,31 @@ function fail(message) {
   throw new Error(`portable launch/setup smoke failed: ${message}`);
 }
 
+const SMOKE_ARG_SETTERS = Object.freeze({
+  "--evidence": (options, value) => {
+    options.evidence = resolve(value);
+  },
+  "--stage-root": (options, value) => {
+    options.stageRoot = resolve(value);
+  },
+  "--stage-target": (options, value) => {
+    options.stageTargets.push(value);
+  },
+});
+
 function parseArgs(argv) {
-  const options = { evidence: undefined, keepTemp: false, stageRoot: undefined };
+  const options = { evidence: undefined, keepTemp: false, stageRoot: undefined, stageTargets: [] };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--keep-temp") {
       options.keepTemp = true;
       continue;
     }
-    if (arg !== "--evidence" && arg !== "--stage-root") fail(`unsupported argument ${arg}`);
+    const setter = SMOKE_ARG_SETTERS[arg];
+    if (setter === undefined) fail(`unsupported argument ${arg}`);
     const value = argv[index + 1];
     if (value === undefined || value.startsWith("--")) fail(`${arg} requires a value`);
-    if (arg === "--evidence") options.evidence = resolve(value);
-    if (arg === "--stage-root") options.stageRoot = resolve(value);
+    setter(options, value);
     index += 1;
   }
   return options;
@@ -444,7 +456,9 @@ async function fixtureTargetEvidence(tempRoot, runPortableCli, now) {
 }
 
 function stagedArtifactEvidence(options) {
-  return options.stageRoot === undefined ? [] : validateStageRoot(options.stageRoot);
+  if (options.stageRoot === undefined) return [];
+  if (options.stageTargets.length === 0) return validateStageRoot(options.stageRoot);
+  return validateStageTargets(options.stageRoot, options.stageTargets);
 }
 
 function writeEvidenceFile(options, evidence) {

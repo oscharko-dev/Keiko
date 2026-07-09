@@ -1,0 +1,93 @@
+name: Portable assets
+
+# Builds the portable customer artifact for every supported target from the
+# committed approved runtime inputs (portable-runtime-approvals.json), smoke
+# tests each staged artifact on its native platform, and publishes ONE
+# reviewed-candidate bundle artifact ("portable-release-assets") in exactly the
+# layout that the Release workflow consumes via portable_assets_run_id.
+#
+# Publishing remains a human decision: this workflow never uploads release
+# assets or publishes to npm. Production signing stays an operator step; CI
+# artifacts carry staging (unverified) signing status by design.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    name: Stage portable asset (${{ matrix.platform_target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform_target: windows-x64
+            runner: windows-latest
+          - platform_target: macos-arm64
+            runner: macos-latest
+          - platform_target: macos-x64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: npm
+      - name: Configure MSVC environment for the native launcher
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set >> %GITHUB_ENV%
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate approved runtime inputs
+        run: npm run check:portable-approvals
+      - name: Prepare approved sidecar payloads
+        run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
+      - name: Stage portable runtime from approved inputs
+        run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
+      - name: Smoke test the staged artifact
+        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
+      - name: Upload staged target artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-stage-${{ matrix.platform_target }}
+          path: .portable-runtime/staging/${{ matrix.platform_target }}
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble:
+    name: Assemble reviewed portable asset bundle
+    needs: stage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Download staged target artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: portable-stage-*
+          path: .portable-release-assets/artifacts
+      - name: Assemble and validate the release asset bundle
+        run: node scripts/assemble-portable-release-assets.mjs
+      - name: Upload reviewed-candidate bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-release-assets
+          path: .portable-release-assets
+          if-no-files-found: error
+          retention-days: 90

@@ -103,5 +103,11 @@ npm run test:e2e:coding-workbench-1994
 - Autonomous Delivery still does not merge protected branches by default. Merge authority remains a
   future explicit policy decision.
 - Confluence coding context remains intentionally deferred; #1989 closes GitHub and Jira context only.
+- The GitHub/Jira coding-context connector layer (`packages/keiko-server/src/coding-context/`) is
+  implemented and fully tested behind injectable ports, but is not yet composed into a production
+  route, server dependency wiring, or a live port implementation (the `gh api` executor and a
+  Jira HTTP client behind the egress boundary). Coding runs therefore operate with
+  repository-only context until a follow-up wires the connector layer through connector policy
+  and the sandbox egress boundary. The layer fails closed by construction in the meantime.
 - Human visual review remains required on the final draft epic PR for subjective design-system
   fidelity; the Playwright gate covers deterministic UI/a11y assertions.
