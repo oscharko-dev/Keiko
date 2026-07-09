@@ -374,7 +374,17 @@ registerWindowRender("promptEnhancer", (_cfg, ctx) => (
     connectedRoots={ctx.linkedRoots}
   />
 ));
-registerWindowRender("search", () => <SearchPanel />);
+function SearchPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
+  const { activeProject } = useChatSessionContext();
+  return (
+    <SearchPanel
+      root={ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined}
+      openEditorFile={ctx.openEditorFile}
+    />
+  );
+}
+
+registerWindowRender("search", (_cfg, ctx) => <SearchPanelSessionHost ctx={ctx} />);
 registerWindowRender("plugins", () => <PluginsPanel />);
 registerWindowRender("automations", () => <AutomationsPanel />);
 registerWindowRender("mobile", () => <MobilePanel />);

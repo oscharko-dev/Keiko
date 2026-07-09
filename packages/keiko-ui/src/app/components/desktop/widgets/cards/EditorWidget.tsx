@@ -42,6 +42,7 @@ import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import { EditorEmptyState } from "./EditorEmptyState";
+import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
 import {
   sameEditorOutlineSnapshot,
   type EditorOutlineRevealRequest,
@@ -246,6 +247,7 @@ export function EditorWidget({
   openFiles: configuredOpenFiles,
   layoutJson,
   onWorkspaceChange,
+  windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
   const initialRoot = root?.trim() ?? "";
@@ -1268,6 +1270,7 @@ export function EditorWidget({
   );
   const commandHostRef = useRef(commandHost);
   commandHostRef.current = commandHost;
+  useRegisterEditorPaletteHost(windowId, commandHost);
 
   // Container-level capturing keydown for editor-chrome chords (mirrors the on-mount save backstop,
   // but scoped to the whole editor so it also fires from the sidebar/tab strip). Only browser-safe
@@ -1279,13 +1282,6 @@ export function EditorWidget({
       if (!(event.metaKey || event.ctrlKey)) return;
       const host = commandHostRef.current;
       const key = event.key.toLowerCase();
-      if (key === "p" && !event.altKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.shiftKey) host.openCommandPalette();
-        else host.openQuickOpen();
-        return;
-      }
       if (!event.altKey) return;
       const handled = (action: () => void): void => {
         event.preventDefault();
@@ -1399,7 +1395,7 @@ export function EditorWidget({
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
       openFiles: pane.openFiles,
       dirtyFiles: dirtyFileList,
-      windowId: `${props.windowId ?? "editor"}-${pane.id}`,
+      windowId: `${windowId ?? "editor"}-${pane.id}`,
       paneId: pane.id,
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,

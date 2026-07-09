@@ -165,6 +165,12 @@ import {
   handleEditorLocalKnowledgeRetrieve,
   handleEditorRepoSearch,
 } from "./editor/contextRoutes.js";
+import {
+  handleEditorWorkspaceReplaceApply,
+  handleEditorWorkspaceReplacePreview,
+  handleEditorWorkspaceSearch,
+  handleEditorWorkspaceSymbols,
+} from "./editor/workspaceSearchRoutes.js";
 import { handleEditorCompletion } from "./editor/completionRoutes.js";
 import {
   handleEditorInlineCompletion,
@@ -649,6 +655,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // retrieval references). No browser-side retrieval, embedding, or model access.
   { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
   { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-search",
+    handler: handleEditorWorkspaceSearch,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-symbols",
+    handler: handleEditorWorkspaceSymbols,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-search/replace-preview",
+    handler: handleEditorWorkspaceReplacePreview,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-search/replace-apply",
+    handler: handleEditorWorkspaceReplaceApply,
+  },
   // Editor hot-exit recovery: content is persisted only in the server-owned encrypted local store.
   // Browser IndexedDB keeps metadata and an opaque ref, never raw file contents or workspace paths.
   { method: "POST", pattern: "/api/editor/hot-exit/write", handler: handleEditorHotExitWrite },

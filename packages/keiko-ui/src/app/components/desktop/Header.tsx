@@ -19,6 +19,7 @@ interface HeaderProps {
 }
 
 function HeaderImpl({
+  openCommandPalette,
   onTileAll,
   onSplitFront,
   onCascade,
@@ -42,6 +43,15 @@ function HeaderImpl({
       <span className="spacer" />
 
       <div className="hd-tools">
+        <button
+          type="button"
+          className="hd-tool ui-tip"
+          onClick={openCommandPalette}
+          data-tip="Quick access"
+          aria-label="Open quick access"
+        >
+          <Icons.search size={16} />
+        </button>
         <button
           type="button"
           className="hd-tool ui-tip"

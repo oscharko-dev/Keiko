@@ -27,7 +27,7 @@ const stubDeps: UiHandlerDeps = {
 
 describe("API route contract", () => {
   it("declares the additive route contract while keeping workflow launches outside chat routes", () => {
-    expect(API_ROUTES.length).toBeGreaterThanOrEqual(97);
+    expect(API_ROUTES.length).toBeGreaterThanOrEqual(99);
     expect(
       API_ROUTES.find(
         (route) =>
@@ -61,6 +61,17 @@ describe("API route contract", () => {
       "/api/editor/hot-exit/write",
       "/api/editor/hot-exit/read",
       "/api/editor/hot-exit/delete",
+    ]) {
+      expect(matchRoute("POST", pattern)).toMatchObject({ definition: { pattern } });
+    }
+  });
+
+  it("includes the user-facing workspace search route pair (#2108)", () => {
+    for (const pattern of [
+      "/api/editor/workspace-search",
+      "/api/editor/workspace-symbols",
+      "/api/editor/workspace-search/replace-preview",
+      "/api/editor/workspace-search/replace-apply",
     ]) {
       expect(matchRoute("POST", pattern)).toMatchObject({ definition: { pattern } });
     }

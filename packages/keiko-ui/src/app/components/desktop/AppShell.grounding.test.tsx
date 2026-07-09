@@ -172,6 +172,10 @@ vi.mock("./modals/CommandPalette", () => ({
   CommandPalette: () => <div data-testid="command-palette" />,
 }));
 
+vi.mock("./modals/UnifiedQuickAccessPalette", () => ({
+  UnifiedQuickAccessPalette: () => <div data-testid="quick-access-palette" />,
+}));
+
 vi.mock("./modals/GatewaySetupDialog", () => ({
   GatewaySetupDialog: () => <div role="dialog" aria-label="Gateway setup" />,
 }));
@@ -190,7 +194,7 @@ vi.mock("./install/InstallBanner", () => ({
 
 vi.mock("./widgets", () => ({}));
 
-import { AppShell } from "./AppShell";
+import { AppShell, openOrFocusSearchWindow } from "./AppShell";
 
 function chat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -251,7 +255,11 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   };
 }
 
-function workspaceResult(wins: AppWindow[], conns: Connection[] = []): UseWorkspaceResult {
+function workspaceResult(
+  wins: AppWindow[],
+  conns: Connection[] = [],
+  api: WorkspaceApi = workspaceApi(),
+): UseWorkspaceResult {
   return {
     wins,
     winsById: new Map(wins.map((win) => [win.id, win])),
@@ -261,7 +269,7 @@ function workspaceResult(wins: AppWindow[], conns: Connection[] = []): UseWorksp
     conns,
     connecting: null,
     view: { x: 0, y: 0, zoom: 1 },
-    api: workspaceApi(),
+    api,
   };
 }
 
@@ -554,37 +562,75 @@ describe("AppShell grounding connections", () => {
     expect(screen.queryByTestId("right-rail")).toBeNull();
   });
 
-  it("dispatches undo, redo, and focus-status shortcuts through the shared shell handler", async () => {
+  it("dispatches undo, redo, focus-status, and search shortcuts through the shell handler", async () => {
+    const api = workspaceApi();
+    mocks.state.workspaceResult = workspaceResult([], [], api);
     await renderMounted();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
       { readonly dispatch?: (commandId: string) => void } | undefined;
     expect(keyboardProps?.dispatch).toBeTypeOf("function");
 
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
     const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
     keyboardProps?.dispatch?.("undo");
     keyboardProps?.dispatch?.("redo");
     keyboardProps?.dispatch?.("focus-status");
+    keyboardProps?.dispatch?.("focus-workspace-search");
 
     expect(mocks.undo).toHaveBeenCalledTimes(1);
     expect(mocks.redo).toHaveBeenCalledTimes(1);
     expect(statusSpy).toHaveBeenCalled();
+    expect(api.toggleTool).toHaveBeenCalledWith("search");
     statusSpy.mockRestore();
+    rafSpy.mockRestore();
+  });
+
+  it("focuses or restores an existing Search window without toggling it closed", () => {
+    const api = workspaceApi();
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
+
+    openOrFocusSearchWindow(api, [win("search", {}, "search")]);
+    openOrFocusSearchWindow(api, [{ ...win("search", {}, "search-min"), minimized: true }]);
+
+    expect(api.focus).toHaveBeenCalledWith("search");
+    expect(api.restore).toHaveBeenCalledWith("search-min");
+    expect(api.toggleTool).not.toHaveBeenCalled();
+    rafSpy.mockRestore();
   });
 
   it("does not open the command palette from the Cmd/Ctrl+K shell shortcut in this release", async () => {
     await renderMounted();
-    expect(screen.queryByTestId("command-palette")).toBeNull();
+    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
     });
-    expect(screen.queryByTestId("command-palette")).toBeNull();
+    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
 
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true }));
     });
-    expect(screen.queryByTestId("command-palette")).toBeNull();
+    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+  });
+
+  it("opens unified quick access from the Cmd/Ctrl+P shell shortcut", async () => {
+    await renderMounted();
+    expect(screen.queryByTestId("quick-access-palette")).toBeNull();
+
+    const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
+      { readonly dispatch?: (commandId: string) => void } | undefined;
+    await act(async () => {
+      keyboardProps?.dispatch?.("quick-access.files");
+    });
+
+    expect(screen.getByTestId("quick-access-palette")).toBeInTheDocument();
   });
 
   // GEN-UI-A11Y-004 — the shell always mounts one app-level status live-region pair (polite +

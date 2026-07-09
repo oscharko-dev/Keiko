@@ -97,17 +97,27 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 });
 
 describe("SHELL_SHORTCUT_BINDINGS — keyboard binding table", () => {
-  it("claims undo, redo, and footer-status focus chords", () => {
-    expect(SHELL_SHORTCUT_BINDINGS).toHaveLength(3);
+  it("claims undo, redo, footer-status, workspace search, and quick-access chords", () => {
+    expect(SHELL_SHORTCUT_BINDINGS).toHaveLength(6);
     const ids = SHELL_SHORTCUT_BINDINGS.map((b) => b.commandId);
-    expect(ids).toEqual(["undo", "redo", "focus-status"]);
+    expect(ids).toEqual([
+      "undo",
+      "redo",
+      "focus-status",
+      "focus-workspace-search",
+      "quick-access.files",
+      "quick-access.commands",
+    ]);
   });
 
-  it("uses Cmd+Z, Cmd+Shift+Z, and Alt+S", () => {
+  it("uses the governed shell chords", () => {
     const map = new Map(SHELL_SHORTCUT_BINDINGS.map((b) => [b.commandId, b.chord]));
     expect(map.get("undo")).toEqual({ key: "z", mod: ["cmd"] });
     expect(map.get("redo")).toEqual({ key: "z", mod: ["cmd", "shift"] });
     expect(map.get("focus-status")).toEqual({ key: "s", mod: ["alt"] });
+    expect(map.get("focus-workspace-search")).toEqual({ key: "f", mod: ["cmd", "shift"] });
+    expect(map.get("quick-access.files")).toEqual({ key: "p", mod: ["cmd"] });
+    expect(map.get("quick-access.commands")).toEqual({ key: "p", mod: ["cmd", "shift"] });
   });
 
   it("does NOT claim the Cmd+K chord that the inline palette handler owns", () => {
