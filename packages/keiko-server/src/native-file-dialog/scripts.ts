@@ -70,7 +70,9 @@ function run() {
 // File modes use System.Windows.Forms.OpenFileDialog (needs STA). The folder mode uses the modern
 // Explorer Common Item Dialog (IFileOpenDialog, FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM) — all COM
 // marshalling lives in the embedded C# helper compiled via Add-Type, so PowerShell itself only
-// hosts stdin/stdout and never touches [ref] interop.
+// hosts stdin/stdout and never touches [ref] interop. Both modes anchor the dialog to an invisible
+// top-most owner window (New-DialogOwner) so it opens in front of the browser rather than behind
+// it — the folder Common Item Dialog receives that owner's handle for IFileOpenDialog::Show.
 //
 // ConvertTo-Json on Windows PowerShell 5.1 escapes every non-ASCII character as \uXXXX, so the
 // stdout JSON is codepage-independent; OutputEncoding is still pinned to UTF-8 defensively.
@@ -143,7 +145,7 @@ namespace KeikoNativeFileDialog {
   internal class FileOpenDialogRcw { }
 
   public static class FolderPicker {
-    public static string[] Show(string title, string defaultPath) {
+    public static string[] Show(string title, string defaultPath, IntPtr owner) {
       IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogRcw();
       dialog.SetOptions(
         NativeConstants.FOS_PICKFOLDERS |
@@ -162,7 +164,10 @@ namespace KeikoNativeFileDialog {
           // Starting-location hint is best effort; an unresolvable hint must not break the dialog.
         }
       }
-      int hr = dialog.Show(IntPtr.Zero);
+      // Owner the modal to the caller-supplied top-most window so it opens in the foreground,
+      // in front of the browser, instead of behind it (issue #2151). IntPtr.Zero here would make
+      // the dialog ownerless and, from this background helper process, land it behind the browser.
+      int hr = dialog.Show(owner);
       if (hr == NativeConstants.ERROR_CANCELLED) {
         return null;
       }
@@ -245,7 +250,16 @@ function Show-KeikoFolderDialog {
   if ($null -ne $Config.title) { $title = [string]$Config.title }
   $defaultPath = ''
   if ($null -ne $Config.defaultPath) { $defaultPath = [string]$Config.defaultPath }
-  $paths = [KeikoNativeFileDialog.FolderPicker]::Show($title, $defaultPath)
+  # Anchor the Common Item Dialog to the same invisible top-most owner the file dialog uses, so
+  # the folder picker opens in the foreground instead of behind the browser that triggered it
+  # (issue #2151). The owner form's window handle is created on first access and torn down with
+  # the form once the pick settles.
+  $owner = New-DialogOwner
+  try {
+    $paths = [KeikoNativeFileDialog.FolderPicker]::Show($title, $defaultPath, $owner.Handle)
+  } finally {
+    $owner.Dispose()
+  }
   if ($null -eq $paths) {
     return $null
   }
