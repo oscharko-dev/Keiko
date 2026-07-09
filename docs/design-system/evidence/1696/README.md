@@ -10,6 +10,8 @@ update notification, and reusable governed update window added in issue #1696.
 - Update window normal/current/critical/manual/progress/restart/remediation/failure/success states.
 - Collapsed patch notes and collapsed technical details/log previews.
 - Plain-language remediation and affected-feature copy for state-impacting updates.
+- Portable-managed update state added by #1958, with GitHub Release Asset installability and no
+  npm/package-manager fallback in the primary user path.
 - Command-palette exclusion: Updates opens only from Settings or startup notification.
 
 ## Design-System Mapping
@@ -51,6 +53,7 @@ The Playwright harness writes these artifacts in this directory:
 - `09-settings-entrypoint.png`
 - `10-responsive-manual-path.png`
 - `11-progress-state.png`
+- `12-portable-managed-one-click.png`
 - `update-experience-fidelity-proof.json`
 - `a11y-proof.json`
 - `manifest.json`

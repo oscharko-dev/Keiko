@@ -67,7 +67,11 @@ vi.mock("./panels/ChatHistoryPanel", () => ({
     </button>
   ),
 }));
-vi.mock("./panels/SearchPanel", () => ({ SearchPanel: () => <div>SearchPanel</div> }));
+vi.mock("./panels/SearchPanel", () => ({
+  SearchPanel: ({ root }: { readonly root?: string }) => (
+    <div data-testid="search-panel">{root ?? "none"}</div>
+  ),
+}));
 vi.mock("./panels/PromptEnhancerPanel", () => ({
   PromptEnhancerPanel: ({
     connectedRoot,
@@ -737,5 +741,17 @@ describe("active workspace binding override (Issue #446)", () => {
     expect(b.key).toBe("/wt/b");
     expect(a.key).not.toBe(b.key);
     expect(unbound.key).toBe("unbound");
+  });
+
+  it("search renderer uses the active root before linked or active-project fallbacks", async () => {
+    render(
+      <>{WIN_TYPES.search.render({}, { ...boundCtx("/wt/active"), linkedRoot: "/linked" })}</>,
+    );
+    expect(await screen.findByTestId("search-panel")).toHaveTextContent("/wt/active");
+  });
+
+  it("search renderer falls back to the active project in unbound unlinked mode", async () => {
+    render(<>{WIN_TYPES.search.render({}, boundCtx(null))}</>);
+    expect(await screen.findByTestId("search-panel")).toHaveTextContent("/repo");
   });
 });

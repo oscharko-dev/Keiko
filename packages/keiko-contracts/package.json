@@ -67,6 +67,10 @@
       "types": "./dist/memory-consolidation-wire.d.ts",
       "import": "./dist/memory-consolidation-wire.js"
     },
+    "./memory-health-scan-wire": {
+      "types": "./dist/memory-health-scan-wire.d.ts",
+      "import": "./dist/memory-health-scan-wire.js"
+    },
     "./memory-workflow-port": {
       "types": "./dist/memory-workflow-port.d.ts",
       "import": "./dist/memory-workflow-port.js"

@@ -13,6 +13,8 @@ import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
 
+export const HTML_MANUAL_SOURCE_SCOPE_VERSION = 1 as const;
+
 interface HtmlManualSourceMetadataRow {
   readonly capsule_id: string;
   readonly source_id: string;
@@ -53,10 +55,9 @@ export interface HtmlManualSourceMetadata {
   // Approved crawl limits, present once the row has been written at schema v27+. Absent for a
   // legacy pre-v27 row (a refresh then falls back to the governed defaults). See #1890.
   readonly limits?: DocumentationManualScopeLimits;
-  // Reserved bookkeeping (AUDIT-E1856-005): always written as 1 by `persistHtmlManualSourceMetadata`
-  // and read back here, but no refresh-path or citation-path logic currently reads or branches on
-  // it — there is no version-bump-on-scope-change or refresh-time compatibility check yet. Treat
-  // this as inert until that enforcement is built; do not assume it gates anything today.
+  // Refresh-time compatibility gate for the approved crawl-scope shape. v27 legacy rows may omit
+  // it; known rows are written as HTML_MANUAL_SOURCE_SCOPE_VERSION and refresh fails closed on any
+  // future, unsupported value.
   readonly sourceScopeVersion?: number;
   // Additive refresh bookkeeping (#1856). Present only after at least one refresh has run.
   readonly lastRefreshedAt?: number;
@@ -140,10 +141,7 @@ export function persistHtmlManualSourceMetadata(
       // The governed limits contract pins followRedirects to false; a manual crawl never follows
       // redirects. Persist 0; the column exists for a possible future governed override.
       follow_redirects: 0,
-      // Always the literal 1 today (AUDIT-E1856-005): no code path bumps this on scope change or
-      // checks it at refresh time, so it is inert bookkeeping, not an enforced version gate. See
-      // the `sourceScopeVersion` field comment on `HtmlManualSourceMetadata` for the full note.
-      source_scope_version: 1,
+      source_scope_version: HTML_MANUAL_SOURCE_SCOPE_VERSION,
     });
 }
 

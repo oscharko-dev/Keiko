@@ -79,6 +79,7 @@ import {
   handleGetConsolidationJob,
 } from "./memory-consolidation-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
+import { handleGetMemoryHealthScan } from "./memory-health-scan-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleRealtimeMemoryVoiceTool } from "./voice-realtime-memory-tool.js";
@@ -142,7 +143,6 @@ import {
   handleFilesCopy,
   handleFilesCreate,
   handleFilesDelete,
-  handleFilesDirectories,
   handleFilesPreview,
   handleFilesPreviewImage,
   handleFilesRename,
@@ -150,6 +150,10 @@ import {
   handleFilesTree,
 } from "./files.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import {
+  handleNativeFileDialogCapability,
+  handleNativeFileDialogOpen,
+} from "./native-file-dialog/route.js";
 import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
 import {
   handleEditorLanguage,
@@ -161,6 +165,12 @@ import {
   handleEditorLocalKnowledgeRetrieve,
   handleEditorRepoSearch,
 } from "./editor/contextRoutes.js";
+import {
+  handleEditorWorkspaceReplaceApply,
+  handleEditorWorkspaceReplacePreview,
+  handleEditorWorkspaceSearch,
+  handleEditorWorkspaceSymbols,
+} from "./editor/workspaceSearchRoutes.js";
 import { handleEditorCompletion } from "./editor/completionRoutes.js";
 import {
   handleEditorInlineCompletion,
@@ -602,8 +612,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/containers/runs/:runId",
     handler: handleDeleteContainerRun,
   },
+  // Epic #1941 — native OS file/folder dialog (ADR-0118). The POST opens ONE dialog at a time
+  // (409 on concurrency) and validates every returned path through the Files policy before it
+  // reaches the browser; the GET reports whether the BFF host platform has an adapter.
+  {
+    method: "GET",
+    pattern: "/api/native-file-dialog/capability",
+    handler: handleNativeFileDialogCapability,
+  },
+  { method: "POST", pattern: "/api/native-file-dialog/open", handler: handleNativeFileDialogOpen },
   // Desktop files — selected-root browser, preview, and editor control plane.
-  { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/search", handler: handleFilesSearch },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
@@ -637,6 +655,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // retrieval references). No browser-side retrieval, embedding, or model access.
   { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
   { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-search",
+    handler: handleEditorWorkspaceSearch,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-symbols",
+    handler: handleEditorWorkspaceSymbols,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-search/replace-preview",
+    handler: handleEditorWorkspaceReplacePreview,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/workspace-search/replace-apply",
+    handler: handleEditorWorkspaceReplaceApply,
+  },
   // Editor hot-exit recovery: content is persisted only in the server-owned encrypted local store.
   // Browser IndexedDB keeps metadata and an opaque ref, never raw file contents or workspace paths.
   { method: "POST", pattern: "/api/editor/hot-exit/write", handler: handleEditorHotExitWrite },
@@ -817,6 +855,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Issues #209/#211 — MemoriaViva governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
+  { method: "GET", pattern: "/api/memory/health-scan", handler: handleGetMemoryHealthScan },
   { method: "POST", pattern: "/api/memory/forget", handler: handleForgetMemories },
   {
     method: "POST",

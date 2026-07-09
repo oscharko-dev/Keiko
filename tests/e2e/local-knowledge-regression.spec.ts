@@ -414,7 +414,8 @@ async function connectFiles(
     request,
     "post",
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/connection`,
-    { scope: { kind: "files", rootPath, files }, displayName: files.join(", ") },
+    // Evidence-safe source label: file names are rejected by the Knowledge Pod text policy.
+    { scope: { kind: "files", rootPath, files }, displayName: basename(rootPath) },
     201,
   );
 }
@@ -555,10 +556,11 @@ async function assertLargeDocumentResumeControl(
 
 async function openLocalKnowledge(page: Page): Promise<void> {
   await page.goto("/");
-  if ((await page.getByRole("heading", { name: "Local Knowledge Connector" }).count()) === 0) {
+  const heading = page.getByRole("heading", { name: "Knowledge Pods", level: 1 });
+  if ((await heading.count()) === 0) {
     await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();
   }
-  await expect(page.getByRole("heading", { name: "Local Knowledge Connector" })).toBeVisible();
+  await expect(heading).toBeVisible();
 }
 
 async function resetWorkspaceState(page: Page): Promise<void> {
@@ -570,75 +572,106 @@ async function resetWorkspaceState(page: Page): Promise<void> {
 }
 
 async function uiCreateCapsule(page: Page, displayName: string): Promise<void> {
-  await page.getByRole("button", { name: "Create a new knowledge capsule" }).click();
-  await page.getByRole("button", { name: "Create capsule", exact: true }).click();
-  await expect(page.getByText("Capsule display name is required.")).toBeVisible();
-  await page.getByLabel("Capsule display name").fill(displayName);
-  await page.getByRole("button", { name: "Create capsule", exact: true }).click();
-  await expect(page.getByRole("article", { name: `Capsule: ${displayName}` })).toBeVisible();
+  await page.getByRole("button", { name: "Create Knowledge Pod", exact: true }).click();
+  const createDialog = page.getByRole("dialog", { name: "Create Knowledge Pod" });
+  await createDialog.getByRole("button", { name: "Create Knowledge Pod" }).click();
+  await expect(page.getByText("Pod display name is required.")).toBeVisible();
+  await page.getByLabel("Knowledge Pod display name").fill(displayName);
+  await createDialog.getByRole("button", { name: "Create Knowledge Pod" }).click();
+  await expect(page.getByRole("article", { name: `Knowledge Pod: ${displayName}` })).toBeVisible();
 }
 
 async function uiRenameCapsule(page: Page, fromName: string, toName: string): Promise<void> {
-  await page.getByRole("button", { name: `Open details for capsule ${fromName}` }).click();
+  await page.getByRole("button", { name: `Open details for Knowledge Pod ${fromName}` }).click();
   await expect(page.getByRole("heading", { name: fromName })).toBeVisible();
-  await page.getByRole("button", { name: `Rename capsule ${fromName}` }).click();
+  await page.getByRole("button", { name: `Rename Knowledge Pod ${fromName}` }).click();
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("heading", { name: fromName })).toBeVisible();
-  await page.getByRole("button", { name: `Rename capsule ${fromName}` }).click();
-  const input = page.getByLabel("Capsule display name");
+  await page.getByRole("button", { name: `Rename Knowledge Pod ${fromName}` }).click();
+  const input = page.getByLabel("Display name");
   await input.fill("");
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Display name is required.")).toBeVisible();
   await input.fill(toName);
-  await page.getByRole("button", { name: "Save" }).click();
+  await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("heading", { name: toName })).toBeVisible();
-  await page.getByRole("button", { name: "Back to capsules" }).click();
-  await expect(page.getByRole("article", { name: `Capsule: ${toName}` })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Knowledge Pods" }).click();
+  await expect(page.getByRole("article", { name: `Knowledge Pod: ${toName}` })).toBeVisible();
 }
 
+// Epic #1941 (ADR-0118) — Browse opens the NATIVE OS dialog through the BFF. Real OS dialogs are
+// never allowed in deterministic CI, so both native-dialog endpoints are stubbed at the browser
+// network layer: the capability answers "supported" (CI runs on Linux where the real BFF answers
+// false), and the open route first reports a user cancellation, then a validated two-file pick.
+// This proves the UI contract end-to-end: cancellation mutates nothing, a pick folds into the
+// shared root + relative files, and Connect proceeds with exactly that state.
 async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> {
-  await page.getByRole("button", { name: `Open details for capsule ${capsuleName}` }).click();
-  await page.getByRole("combobox", { name: "Connect source" }).selectOption("files");
-  await page.getByRole("button", { name: "Browse" }).click();
-  const picker = page.getByRole("dialog", { name: "Choose local source" });
-  await expect(picker).toBeVisible();
-  await expect(picker.getByText("Maximum single file size: 1.0 GB")).toBeVisible();
-  await page.getByRole("button", { name: "Local Knowledge E2E" }).click();
-  await page.getByRole("button", { name: "oversize-picker" }).click();
-  await expect(page.getByText("too-large.pdf")).toBeVisible();
-  await expect(page.getByLabel(/too-large\.pdf/u)).toBeDisabled();
-  await page.getByRole("button", { name: "Up" }).click();
-  await page.getByRole("button", { name: "small-files" }).click();
-  await page.getByLabel("readme.md").check();
-  await page.getByLabel("notes.txt").check();
-  await page.getByRole("button", { name: "Use selection" }).click();
-  await expect(page.getByRole("combobox", { name: "Connect source" })).toHaveValue("files");
+  const smallFilesRoot = join(CORPUS_DATA_ROOT, "small-files");
+  await page.route("**/api/native-file-dialog/capability", async (route) => {
+    await route.fulfill({ json: { supported: true } });
+  });
+  let openCalls = 0;
+  await page.route("**/api/native-file-dialog/open", async (route) => {
+    openCalls += 1;
+    if (openCalls === 1) {
+      await route.fulfill({ json: { cancelled: true, selections: [] } });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        cancelled: false,
+        selections: [
+          { path: join(smallFilesRoot, "readme.md"), kind: "file" },
+          { path: join(smallFilesRoot, "notes.txt"), kind: "file" },
+        ],
+      },
+    });
+  });
+
+  await page.getByRole("button", { name: `Open details for Knowledge Pod ${capsuleName}` }).click();
+  await expect(page.getByText("Maximum single file size: 1.0 GB")).toBeVisible();
+  await page.getByRole("combobox", { name: "Connect source" }).click();
+  await page.getByRole("option", { name: /^Files\b/u }).click();
+
+  const browse = page.getByRole("button", { name: "Browse" });
+  await expect(browse).toBeEnabled();
+  // First Browse: the user cancels the native dialog — a non-event that changes no field.
+  await browse.click();
+  await expect(page.getByLabel("Absolute root path for the selected files")).toHaveValue("");
+
+  // Second Browse: the native dialog returns two validated files under one folder.
+  await browse.click();
   await expect(page.getByLabel("Absolute root path for the selected files")).toHaveValue(
-    CORPUS_DATA_ROOT,
+    smallFilesRoot,
   );
-  await expect(page.getByLabel("Relative files to connect")).toHaveValue(
-    /small-files\/readme\.md/u,
-  );
+  await expect(page.getByLabel("Relative files to connect")).toHaveValue(/readme\.md/u);
+  await expect(page.getByLabel("Relative files to connect")).toHaveValue(/notes\.txt/u);
+  await expect(page.getByRole("combobox", { name: "Connect source" })).toContainText("Files");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Index this capsule now" })).toBeVisible();
-  await page.getByRole("button", { name: "Back to capsules" }).click();
+  await expect(page.getByRole("button", { name: "Index this Knowledge Pod now" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to Knowledge Pods" }).click();
+  await page.unroute("**/api/native-file-dialog/open");
+  await page.unroute("**/api/native-file-dialog/capability");
 }
 
 async function uiDeleteCapsule(page: Page, displayName: string): Promise<void> {
-  await page.getByRole("button", { name: `Open details for capsule ${displayName}` }).click();
-  await page.getByRole("button", { name: `Delete capsule ${displayName}` }).click();
-  await expect(page.getByRole("dialog", { name: "Delete capsule" })).toBeVisible();
-  await page.getByLabel("Type the capsule name to confirm").fill("wrong name");
+  await page.getByRole("button", { name: `Open details for Knowledge Pod ${displayName}` }).click();
+  await page.getByRole("button", { name: `Delete Knowledge Pod ${displayName}` }).click();
+  await expect(page.getByRole("dialog", { name: "Delete Knowledge Pod" })).toBeVisible();
+  await page.getByLabel("Type the pod name to confirm").fill("wrong name");
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeDisabled();
-  await page.getByLabel("Type the capsule name to confirm").fill(displayName);
+  await page.getByLabel("Type the pod name to confirm").fill(displayName);
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByRole("heading", { name: displayName })).toBeVisible();
-  await page.getByRole("button", { name: `Delete capsule ${displayName}` }).click();
-  await page.getByLabel("Type the capsule name to confirm").fill(displayName);
+  await page.getByRole("button", { name: `Delete Knowledge Pod ${displayName}` }).click();
+  await page.getByLabel("Type the pod name to confirm").fill(displayName);
   await page.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Local Knowledge Connector" })).toBeVisible();
-  await expect(page.getByRole("article", { name: `Capsule: ${displayName}` })).toHaveCount(0);
+  // AUDIT-E1821-001: the pod is a set member at this call site, so the affected-sets notice
+  // gates navigation back to the list until acknowledged.
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Knowledge Pods", level: 1 })).toBeVisible();
+  await expect(page.getByRole("article", { name: `Knowledge Pod: ${displayName}` })).toHaveCount(0);
 }
 
 async function uiCombineCapsules(
@@ -647,33 +680,37 @@ async function uiCombineCapsules(
   firstCapsuleName: string,
   secondCapsuleName: string,
 ): Promise<void> {
-  await expect(page.getByRole("article", { name: `Capsule: ${firstCapsuleName}` })).toBeVisible();
-  await expect(page.getByRole("article", { name: `Capsule: ${secondCapsuleName}` })).toBeVisible();
-  const combineButton = page.getByRole("button", { name: "Combine capsules into a set" });
-  await expect(combineButton).toHaveAttribute("aria-disabled", "false");
+  await expect(
+    page.getByRole("article", { name: `Knowledge Pod: ${firstCapsuleName}` }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("article", { name: `Knowledge Pod: ${secondCapsuleName}` }),
+  ).toBeVisible();
+  const combineButton = page.getByRole("button", { name: "Create Knowledge Pod Set" });
+  await expect(combineButton).toBeEnabled();
   await combineButton.click();
-  const dialog = page.getByRole("dialog", { name: "Combine capsules into a set" });
+  const dialog = page.getByRole("dialog", { name: "Create Knowledge Pod Set" });
   await expect(dialog).toBeVisible();
-  await page.getByRole("button", { name: "Combine", exact: true }).click();
-  await expect(page.getByText("Set name is required.")).toBeVisible();
-  await page.getByLabel("Set name").fill(setName);
-  await page.getByRole("button", { name: "Combine", exact: true }).click();
-  await expect(page.getByText("Select at least one capsule to combine.")).toBeVisible();
+  await dialog.getByRole("button", { name: "Create Knowledge Pod Set" }).click();
+  await expect(page.getByText("Knowledge Pod Set name is required.")).toBeVisible();
+  await page.getByLabel("Knowledge Pod Set name").fill(setName);
+  await dialog.getByRole("button", { name: "Create Knowledge Pod Set" }).click();
+  await expect(page.getByText("Select at least one Knowledge Pod to combine.")).toBeVisible();
   await dialog
     .getByRole("checkbox", { name: new RegExp(`^${escapeRegex(firstCapsuleName)}\\b`, "u") })
     .check();
   await dialog
     .getByRole("checkbox", { name: new RegExp(`^${escapeRegex(secondCapsuleName)}\\b`, "u") })
     .check();
-  await page.getByRole("button", { name: "Combine", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Combine capsules into a set" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Create Knowledge Pod Set" }).click();
+  await expect(page.getByRole("dialog", { name: "Create Knowledge Pod Set" })).toHaveCount(0);
 }
 
 async function uiAddAndDragPayload(page: Page, capsuleName: string): Promise<void> {
-  await page.getByRole("button", { name: `Add capsule ${capsuleName} to workspace` }).click();
+  await page.getByRole("button", { name: `Add Knowledge Pod ${capsuleName} to workspace` }).click();
   await page.waitForTimeout(250);
   const payload = await page
-    .getByRole("button", { name: `Drag capsule ${capsuleName} to workspace` })
+    .getByRole("button", { name: `Drag Knowledge Pod ${capsuleName} to the workspace` })
     .evaluate((node) => {
       const event = new DragEvent("dragstart", {
         bubbles: true,
@@ -699,10 +736,7 @@ async function runRegressionPass(
   await resetWorkspaceState(page);
   await openLocalKnowledge(page);
   await expect(page.locator(".lk-pipeline")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Combine capsules into a set" })).toHaveAttribute(
-    "aria-disabled",
-    "true",
-  );
+  await expect(page.getByRole("button", { name: "Create Knowledge Pod Set" })).toBeDisabled();
 
   const uiCapsule = `E2E Pass ${passLabel} UI`;
   const renamedUiCapsule = `E2E Pass ${passLabel} UI Renamed`;
@@ -796,10 +830,14 @@ async function runRegressionPass(
   await expectIndexed(request, failureId);
 
   await openLocalKnowledge(page);
-  await expect(page.getByRole("article", { name: `Capsule: ${renamedUiCapsule}` })).toBeVisible();
+  await expect(
+    page.getByRole("article", { name: `Knowledge Pod: ${renamedUiCapsule}` }),
+  ).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Local Knowledge Connector" })).toBeVisible();
-  await expect(page.getByRole("article", { name: `Capsule: ${renamedUiCapsule}` })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Knowledge Pods", level: 1 })).toBeVisible();
+  await expect(
+    page.getByRole("article", { name: `Knowledge Pod: ${renamedUiCapsule}` }),
+  ).toBeVisible();
   await uiCombineCapsules(
     page,
     `E2E Pass ${passLabel} Set`,
@@ -819,9 +857,9 @@ async function runRegressionPass(
   await connectFolder(request, disconnectId, corpus.smallFiles);
   await openLocalKnowledge(page);
   await page
-    .getByRole("button", { name: `Disconnect capsule E2E Pass ${passLabel} Disconnect` })
+    .getByRole("button", { name: `Disconnect Knowledge Pod E2E Pass ${passLabel} Disconnect` })
     .click();
-  await expect(page.getByRole("dialog", { name: "Disconnect capsule" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Disconnect Knowledge Pod" })).toBeVisible();
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   await expect
     .poll(() => countRows("capsule_sources", disconnectId), {

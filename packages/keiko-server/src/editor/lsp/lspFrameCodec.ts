@@ -131,7 +131,7 @@ function createPendingBuffer(): PendingBuffer {
 
   const scanIncoming = (chunk: LspBytes): void => {
     const window = tail.length === 0 ? chunk : Buffer.concat([tail, chunk]);
-    if (window.indexOf(HEADER_DELIMITER) !== -1) {
+    if (window.includes(HEADER_DELIMITER)) {
       delimiterFound = true;
       return;
     }
@@ -154,7 +154,7 @@ function createPendingBuffer(): PendingBuffer {
       chunks = rest.length === 0 ? [] : [rest];
       totalBytes = rest.length;
       tail = EMPTY;
-      delimiterFound = rest.indexOf(HEADER_DELIMITER) !== -1;
+      delimiterFound = rest.includes(HEADER_DELIMITER);
     },
   };
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,7 @@ import type {
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
@@ -469,6 +470,60 @@ describe("local-knowledge handlers", () => {
 
     const body = second.body as { readonly sources: readonly unknown[] };
     expect(body.sources).toHaveLength(2);
+  });
+
+  it("connects a files-scope source when every file is comfortably under the size ceiling", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "alpha.md"), "# Alpha\n", "utf8");
+    writeFileSync(join(docsRoot, "beta.md"), "# Beta\n", "utf8");
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "files", rootPath: docsRoot, files: ["alpha.md", "beta.md"] },
+          displayName: "Docs",
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+  });
+
+  it("refuses a files-scope connect when one selected file exceeds the size ceiling", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "alpha.md"), "# Alpha\n", "utf8");
+    const oversizedPath = join(docsRoot, "oversized.bin");
+    // Sparse file: truncateSync extends via a hole, so statSync(...).size reports the full
+    // logical size without allocating real disk space.
+    writeFileSync(oversizedPath, "");
+    truncateSync(oversizedPath, DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.maxRawFileBytes + 1);
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "files", rootPath: docsRoot, files: ["alpha.md", "oversized.bin"] },
+          displayName: "Docs",
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    const bodyText = JSON.stringify(result.body);
+    expect(bodyText).toContain("maximum indexable file size");
+    expect(bodyText).not.toContain("oversized.bin");
+    expect(bodyText).not.toContain(docsRoot);
   });
 
   it("writes source-added audit history when a source is connected", async () => {

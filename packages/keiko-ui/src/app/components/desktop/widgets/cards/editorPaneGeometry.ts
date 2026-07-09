@@ -27,7 +27,7 @@ export const EDITOR_TAB_DRAG_MIME = "application/x-keiko-editor-tab";
 export const MIN_SIDEBAR_WIDTH = 180;
 export const DEFAULT_SIDEBAR_WIDTH = 260;
 export const MAX_SIDEBAR_WIDTH = 440;
-export const MAX_EDITOR_PANES = 2;
+export const MAX_EDITOR_PANES = 3;
 
 export interface DraggedTab {
   readonly paneId: string;

@@ -28,12 +28,8 @@ import type {
   QualityIntelligenceModelPreflightSummary,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
-import { fetchFilesTree, fetchProjects } from "@/lib/api";
-import {
-  dirname,
-  displayLocalPath,
-  LocalFileBrowserDialog,
-} from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
+import { pickWithNativeDialog } from "@/lib/native-file-dialog";
+import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import {
   fetchQiModelPolicy,
@@ -65,8 +61,6 @@ const PROFILES: ReadonlyArray<{ id: string; label: string }> = [
 type ManualSourceKind = "requirements" | "workspace" | "file" | "capsule" | "capsule-set";
 type FetchCapsulesFn = typeof fetchCapsules;
 type FetchCapsuleSetsFn = typeof fetchCapsuleSets;
-type FetchProjectsFn = typeof fetchProjects;
-type FetchFilesTreeFn = typeof fetchFilesTree;
 type FetchQiModelPolicyFn = typeof fetchQiModelPolicy;
 type SaveQiModelPolicyFn = typeof saveQiModelPolicy;
 type PreflightQiModelPolicyFn = typeof preflightQiModelPolicy;
@@ -255,8 +249,6 @@ export interface RunLauncherProps {
   readonly preflightQiModelPolicyImpl?: PreflightQiModelPolicyFn;
   readonly fetchCapsulesImpl?: FetchCapsulesFn;
   readonly fetchCapsuleSetsImpl?: FetchCapsuleSetsFn;
-  readonly fetchProjectsImpl?: FetchProjectsFn;
-  readonly fetchFilesTreeImpl?: FetchFilesTreeFn;
   /**
    * Folder bound via a Workspace relationship edge to a Files window (Epic #270 Slice 1). When
    * present it is the default "Generate" source — so a knowledge worker connects a Fachkonzept
@@ -424,8 +416,6 @@ export function RunLauncher({
   preflightQiModelPolicyImpl = preflightQiModelPolicy,
   fetchCapsulesImpl = fetchCapsules,
   fetchCapsuleSetsImpl = fetchCapsuleSets,
-  fetchProjectsImpl = fetchProjects,
-  fetchFilesTreeImpl = fetchFilesTree,
   connectedRoot = null,
   connectedFilePath = null,
   connectedRoots,
@@ -441,7 +431,6 @@ export function RunLauncher({
   const [path, setPath] = useState("");
   const [capsuleId, setCapsuleId] = useState("");
   const [capsuleSetId, setCapsuleSetId] = useState("");
-  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
   const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
   const [connectorLoading, setConnectorLoading] = useState(false);
@@ -549,15 +538,37 @@ export function RunLauncher({
   const sourceTypeLabelId = useId();
   const sourcePathLabelId = useId();
   const sourceGuidanceId = useId();
+  const nativeUnsupportedNoteId = useId();
+  const nativeDialogSupported = useNativeFileDialogCapability();
   const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
-  const pickerMode = sourceKind === "workspace" || sourceKind === "file" ? sourceKind : null;
-
   const chooseSourceKind = useCallback((next: ManualSourceKind): void => {
     setSourceKind(next);
-    setSourcePickerOpen(false);
     setError(null);
     setConnectorError(null);
   }, []);
+
+  // Epic #1941 (ADR-0118) — Browse opens the native OS dialog and the validated absolute path
+  // lands in the same `path` state that manual typing writes to (one state cell, no drift risk).
+  // Cancellation changes nothing; busy/unsupported/failure become launcher copy.
+  const openNativeSourcePicker = useCallback((): void => {
+    const isFile = sourceKind === "file";
+    void pickWithNativeDialog({
+      mode: isFile ? "open-file" : "open-directory",
+      title: isFile ? "Choose file source" : "Choose folder source",
+      ...(path.trim().length > 0 ? { defaultPath: path.trim() } : {}),
+    }).then((outcome) => {
+      if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
+        setPath(outcome.paths[0]);
+        setError(null);
+        return;
+      }
+      if (outcome.kind === "busy") setError("A native dialog is already open. Close it first.");
+      if (outcome.kind === "unsupported") {
+        setError("Native dialogs are unavailable on this platform.");
+      }
+      if (outcome.kind === "error") setError(outcome.message);
+    });
+  }, [path, sourceKind]);
 
   const onSourceKindPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLButtonElement>, next: ManualSourceKind): void => {
@@ -953,30 +964,34 @@ export function RunLauncher({
             {isFile ? "File path" : "Folder path"}
           </span>
           <div className="qi-path-picker">
-            {/* Display-only value, NOT an editor: the path is chosen via the Browse dialog, so this
-                must not masquerade as an interactive textbox (GEN-UI-A11Y-011). It stays associated
-                with its label (aria-labelledby) so AT reads "File path: <value>" as plain text. */}
-            <div
+            <input
+              type="text"
               className="qi-path-value qi-monospace"
               aria-labelledby={sourcePathLabelId}
               title={path}
-              data-empty={path.trim().length === 0 ? "true" : undefined}
-            >
-              {path.trim().length > 0
-                ? path
-                : isFile
-                  ? "Choose a local file…"
-                  : "Choose a local folder…"}
-            </div>
+              placeholder={isFile ? "Choose a local file…" : "Choose a local folder…"}
+              value={path}
+              disabled={running}
+              onChange={(e) => {
+                setPath(e.target.value);
+                setError(null);
+              }}
+            />
             <button
               type="button"
               className="qi-btn qi-btn-secondary qi-browse-btn"
-              disabled={running}
-              onClick={() => setSourcePickerOpen(true)}
+              disabled={running || !nativeDialogSupported}
+              aria-describedby={nativeDialogSupported ? undefined : nativeUnsupportedNoteId}
+              onClick={openNativeSourcePicker}
             >
               Browse
             </button>
           </div>
+          {!nativeDialogSupported ? (
+            <span id={nativeUnsupportedNoteId} className="qi-field-note">
+              Native dialogs are unavailable on this platform. Enter the path manually.
+            </span>
+          ) : null}
         </div>
       );
     }
@@ -1276,26 +1291,6 @@ export function RunLauncher({
           </p>
         ) : null}
       </div>
-      {sourcePickerOpen && pickerMode !== null ? (
-        <LocalFileBrowserDialog
-          mode={pickerMode === "file" ? "file" : "folder"}
-          title={`Choose ${pickerMode === "file" ? "file" : "folder"} source`}
-          description="Browse a registered local project or enter an absolute folder root."
-          initialRootPath={pickerMode === "file" ? dirname(path) : path}
-          fetchProjectsImpl={fetchProjectsImpl}
-          fetchFilesTreeImpl={fetchFilesTreeImpl}
-          onCancel={() => setSourcePickerOpen(false)}
-          onApply={(selection) => {
-            const nextPath =
-              pickerMode === "file"
-                ? displayLocalPath(selection.rootPath, selection.files[0] ?? null)
-                : selection.folderPath;
-            setPath(nextPath);
-            setSourcePickerOpen(false);
-            setError(null);
-          }}
-        />
-      ) : null}
     </section>
   );
 }

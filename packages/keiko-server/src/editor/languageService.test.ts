@@ -6,6 +6,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   EDITOR_LANGUAGE_MODE_IDS,
+  LANGUAGE_SERVICE_OPERATIONS,
   type LanguageServiceLimits,
   type LanguageServiceRequest,
 } from "@oscharko-dev/keiko-contracts";
@@ -18,6 +19,30 @@ import {
 import { createLanguageProviderRegistry, type LanguageProvider } from "./languageProvider.js";
 
 let root: string;
+
+const TYPESCRIPT_OPERATIONS = [
+  "diagnostics",
+  "completion",
+  "hover",
+  "symbols",
+  "formatting",
+  "definition",
+  "references",
+  "renamePrepare",
+  "renameApply",
+  "codeActions",
+  "signatureHelp",
+] as const;
+
+const NAVIGATION_REFACTORING_OPERATIONS = [
+  "definition",
+  "references",
+  "renamePrepare",
+  "renameApply",
+  "codeActions",
+  "signatureHelp",
+] as const;
+const NAVIGATION_REFACTORING_OPERATION_SET = new Set<string>(NAVIGATION_REFACTORING_OPERATIONS);
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-ls-")));
@@ -58,19 +83,20 @@ describe("describeLanguageCapabilities", () => {
       "javascript",
       "javascriptreact",
     ]);
-    expect(provider?.operations).toEqual([
-      "diagnostics",
-      "completion",
-      "hover",
-      "symbols",
-      "formatting",
-    ]);
+    expect(provider?.operations).toEqual(TYPESCRIPT_OPERATIONS);
     expect(capabilities.providers.find((entry) => entry.id === "json")?.availability).toBe(
       "available",
     );
     const pythonProvider = capabilities.providers.find((entry) => entry.id === "python-lsp");
     expect(pythonProvider?.availability).toBe("unavailable");
     expect(typeof pythonProvider?.unavailableReason).toBe("string");
+  });
+
+  it("keeps the TypeScript operation descriptor aligned with the contract operation table", () => {
+    const capabilities = describeLanguageCapabilities();
+    const provider = capabilities.providers.find((entry) => entry.id === "typescript");
+
+    expect(provider?.operations).toEqual(LANGUAGE_SERVICE_OPERATIONS);
   });
 });
 
@@ -472,6 +498,27 @@ describe("bounds and result caps", () => {
     expect(outcome).toMatchObject({ kind: "error", code: "DOCUMENT_TOO_LARGE" });
   });
 
+  it("fails closed when project discovery exceeds workspace caps", () => {
+    writeFileSync(
+      join(root, "tsconfig.json"),
+      JSON.stringify({ compilerOptions: { strict: true }, include: ["src/**/*.ts"] }),
+      "utf8",
+    );
+    const text = "export const value = 1;\n";
+    for (let index = 0; index < 6; index += 1) {
+      writeFileSync(join(root, "src", `many-${String(index)}.ts`), text, "utf8");
+    }
+
+    const outcome = runLanguageOperation(
+      { operation: "diagnostics", root, document: tsDocument("src/many-0.ts", text) },
+      options("src/many-0.ts", {
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, maxWorkspaceReadFiles: 2 },
+      }),
+    );
+
+    expect(outcome).toMatchObject({ kind: "error", code: "DOCUMENT_TOO_LARGE" });
+  });
+
   it("caps completion items and sets truncated", () => {
     const limits: LanguageServiceLimits = {
       ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
@@ -647,11 +694,18 @@ describe("describeLanguageCapabilities exhaustiveness (Issue #1379 AC2)", () => 
     // The TypeScript/JS provider stays available with its full operation set.
     const ts = capabilities.providers.find((entry) => entry.id === "typescript");
     expect(ts?.availability).toBe("available");
-    expect(ts?.operations).toEqual(["diagnostics", "completion", "hover", "symbols", "formatting"]);
+    expect(ts?.operations).toEqual(TYPESCRIPT_OPERATIONS);
     // JSON + builtin-text remain available; the external LSPs remain unavailable.
     expect(capabilities.providers.find((entry) => entry.id === "json")?.availability).toBe(
       "available",
     );
+    for (const provider of capabilities.providers.filter((entry) => entry.id !== "typescript")) {
+      expect(
+        provider.operations.some((operation) =>
+          NAVIGATION_REFACTORING_OPERATION_SET.has(operation),
+        ),
+      ).toBe(false);
+    }
     expect(capabilities.providers.find((entry) => entry.id === "python-lsp")?.availability).toBe(
       "unavailable",
     );

@@ -374,7 +374,17 @@ registerWindowRender("promptEnhancer", (_cfg, ctx) => (
     connectedRoots={ctx.linkedRoots}
   />
 ));
-registerWindowRender("search", () => <SearchPanel />);
+function SearchPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
+  const { activeProject } = useChatSessionContext();
+  return (
+    <SearchPanel
+      root={ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined}
+      openEditorFile={ctx.openEditorFile}
+    />
+  );
+}
+
+registerWindowRender("search", (_cfg, ctx) => <SearchPanelSessionHost ctx={ctx} />);
 registerWindowRender("plugins", () => <PluginsPanel />);
 registerWindowRender("automations", () => <AutomationsPanel />);
 registerWindowRender("mobile", () => <MobilePanel />);
@@ -529,6 +539,7 @@ registerWindowRender("editor", (cfg, ctx) => {
           layoutJson?: string | undefined;
         }) => void)
       | undefined;
+    openEditorFile?: typeof ctx.openEditorFile | undefined;
   } = {};
   if (root !== undefined) props.root = root;
   if (file !== undefined) props.file = file;
@@ -545,6 +556,7 @@ registerWindowRender("editor", (cfg, ctx) => {
   props.onWorkspaceChange = (patch) => {
     ctx.updateCfg(patch);
   };
+  props.openEditorFile = ctx.openEditorFile;
   // Issue #446 (AC4 / SC3) — remount on a workspace switch so no Monaco model or open document from
   // the previous workspace root survives into the new one. The #1491 dirty-buffer/hot-exit save fires
   // on unmount before the new tree mounts.

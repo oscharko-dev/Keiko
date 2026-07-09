@@ -26,6 +26,11 @@ import { handleEditorInlineCompletion } from "./inlineCompletionRoutes.js";
 import { handleEditorContext, handleEditorRepoSearch } from "./contextRoutes.js";
 import { handleEditorLanguage } from "./languageRoutes.js";
 import { handleEditorTestGeneration } from "./testGenerationRoutes.js";
+import {
+  handleEditorWorkspaceReplaceApply,
+  handleEditorWorkspaceReplacePreview,
+  handleEditorWorkspaceSearch,
+} from "./workspaceSearchRoutes.js";
 
 interface RouteResultLike {
   status: number;
@@ -129,6 +134,71 @@ const PATH_ACCEPTING_ROUTES: readonly PathAcceptingRoute[] = [
     expected: CONTAINMENT_FIRST,
   },
   {
+    name: "POST /api/editor/workspace-search",
+    path: "/api/editor/workspace-search",
+    handler: handleEditorWorkspaceSearch,
+    env: {},
+    bodyForPath: (p) => ({
+      root,
+      query: "x",
+      mode: "literal",
+      caseSensitive: false,
+      includeGlobs: [p],
+      excludeGlobs: [],
+      maxResults: 20,
+    }),
+    expected: {
+      denied: { status: 403, code: "DENIED" },
+      escape: { status: 400, code: "INVALID_REQUEST" },
+    },
+  },
+  {
+    name: "POST /api/editor/workspace-search/replace-preview",
+    path: "/api/editor/workspace-search/replace-preview",
+    handler: handleEditorWorkspaceReplacePreview,
+    env: {},
+    bodyForPath: (p) => ({
+      root,
+      query: "x",
+      mode: "literal",
+      caseSensitive: false,
+      includeGlobs: [p],
+      excludeGlobs: [],
+      replacement: "y",
+      maxFiles: 20,
+    }),
+    expected: {
+      denied: { status: 403, code: "DENIED" },
+      escape: { status: 400, code: "INVALID_REQUEST" },
+    },
+  },
+  {
+    name: "POST /api/editor/workspace-search/replace-apply",
+    path: "/api/editor/workspace-search/replace-apply",
+    handler: handleEditorWorkspaceReplaceApply,
+    env: {},
+    bodyForPath: (p) => ({
+      root,
+      files: [
+        {
+          path: p,
+          baseContentHash: "a".repeat(64),
+          edits: [
+            {
+              range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 },
+              originalText: "x",
+              newText: "y",
+            },
+          ],
+        },
+      ],
+    }),
+    expected: {
+      denied: { status: 403, code: "DENIED" },
+      escape: { status: 400, code: "INVALID_REQUEST" },
+    },
+  },
+  {
     name: "POST /api/editor/language",
     path: "/api/editor/language",
     handler: handleEditorLanguage,
@@ -206,6 +276,6 @@ describe("editor trust boundary (#1206): path containment is uniform across ever
   it("covers every path-accepting editor route (regression guard for new routes)", () => {
     // If a new editor route accepts a workspace path, add it to PATH_ACCEPTING_ROUTES so its
     // containment is proven here too. This count is the human-maintained completeness anchor.
-    expect(PATH_ACCEPTING_ROUTES).toHaveLength(6);
+    expect(PATH_ACCEPTING_ROUTES).toHaveLength(9);
   });
 });

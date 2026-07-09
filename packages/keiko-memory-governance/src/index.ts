@@ -41,6 +41,8 @@ export {
   buildConflictTransitions,
   type ConflictTransitionResult,
   detectConflictPair,
+  jaccardSimilarity,
+  scopeCoordinateKey,
 } from "./conflict.js";
 
 // ─── Forget ──────────────────────────────────────────────────────────────────
@@ -70,3 +72,21 @@ export {
   type MemoryMaintenancePolicy,
   type PlanMaintenanceOptions,
 } from "./maintenance.js";
+
+// ─── Health scan (#2129) ──────────────────────────────────────────────────────
+export {
+  boundedReason,
+  findDanglingReviewItems,
+  findMissingCrossReferences,
+  findOrphanMemories,
+  findStaleNotArchived,
+  scanMemoryHealth,
+  MEMORY_HEALTH_SCAN_DEFAULTS,
+  type HealthScanCategoryResult,
+  type HealthScanFinding,
+  type HealthScanFindingKind,
+  type HealthScanMemoryRef,
+  type HealthScanOptions,
+  type MemoryHealthScanPolicy,
+  type MemoryHealthScanResult,
+} from "./health-scan.js";

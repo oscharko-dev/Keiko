@@ -51,7 +51,7 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 | Footer + window palette                | `components/desktop/Footer.tsx`                                                                    | default / hover / disabled (0 windows) / palette-open / status tones ok·warn·danger / Alt+S focus target                                            |
 | Workspace canvas + shader + empty blob | `components/desktop/Workspace.tsx`, `WorkspaceShader.tsx`, `EmptyWorkspaceBlob.tsx`                | empty(blob) / default / panning / hand-tool / connecting(valid·invalid) / window-maxed / zoom 30–200%                                               |
 | Window frame chassis (31 window types) | `components/desktop/windows/WindowFrame.tsx`, `WindowsRegistry.ts`, `windows/ConnectionsLayer.tsx` | top/not-top, selected/not-selected, max, dragging, conn source·valid·invalid, **density full · mini(<430px) · tiny/TooSmall**, content-zoom 0.5–2.0 |
-| PWA install banner + boot recovery     | `components/desktop/install/InstallBanner.tsx`, `app/layout.tsx:46`                                | hidden(standalone·installed·dismissed·unsupported) / supported(CTA) / iOS add-to-home                                                               |
+| Browser boot recovery                  | `app/layout.tsx`, `components/desktop/install/registerSw.ts`                                       | portable-first shell starts without a browser-managed install prompt; boot placeholder/recovery remains visible and stable                          |
 
 ## 3. Window-type surfaces (rendered on the canvas)
 
@@ -91,14 +91,13 @@ global class names. The matrix is therefore a **class-name ⇄ component ⇄ des
 > `.mc-dialog-backdrop`, `.wf-dialog-overlay`, `.gw-setup-backdrop`) stay with **#1295** (shadow/scrim
 > tokenisation is a Light visual change).
 
-| Surface                                          | Key files                                                   | Primary states                                           |
-| ------------------------------------------------ | ----------------------------------------------------------- | -------------------------------------------------------- |
-| Command palette                                  | `components/desktop/modals/CommandPalette.tsx`              | open / filter / no-results                               |
-| Gateway setup dialog                             | `modals/GatewaySetupDialog.tsx`                             | idle / pending / success / error                         |
-| New window dialog (entry point for every window) | `modals/NewWindowDialog.tsx`                                | per-type config form / directory-note·error / validation |
-| Create picker (non-modal)                        | `modals/Palette.tsx`                                        | non-modal create picker (background stays interactive)   |
-| Permission control                               | `modals/PermControl.tsx`                                    | permission grant states                                  |
-| Local file browser                               | `components/desktop/local-files/LocalFileBrowserDialog.tsx` | loading / error / list / dialog                          |
+| Surface                                          | Key files                                                 | Primary states                                           |
+| ------------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------- |
+| Command palette                                  | `components/desktop/modals/UnifiedQuickAccessPalette.tsx` | open / filter / no-results                               |
+| Gateway setup dialog                             | `modals/GatewaySetupDialog.tsx`                           | idle / pending / success / error                         |
+| New window dialog (entry point for every window) | `modals/NewWindowDialog.tsx`                              | per-type config form / directory-note·error / validation |
+| Create picker (non-modal)                        | `modals/Palette.tsx`                                      | non-modal create picker (background stays interactive)   |
+| Permission control                               | `modals/PermControl.tsx`                                  | permission grant states                                  |
 
 ## 5. Shared controls / input atoms — owner #1294 · **shipped**
 

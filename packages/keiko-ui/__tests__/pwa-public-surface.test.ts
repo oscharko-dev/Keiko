@@ -52,8 +52,8 @@ function packDryRun(): readonly string[] {
   return entry === undefined ? [] : entry.files.map((f: PackEntry) => f.path);
 }
 
-describe("keiko-ui PWA public surface (ADR-0024, issue #123)", () => {
-  it("ships every required PWA public asset in `npm pack --dry-run`", () => {
+describe("keiko-ui browser branding public surface", () => {
+  it("ships every required browser branding/static shell asset in `npm pack --dry-run`", () => {
     const paths = packDryRun();
     for (const required of REQUIRED_PUBLIC_FILES) {
       expect(paths, `expected ${required} in pack output`).toContain(required);

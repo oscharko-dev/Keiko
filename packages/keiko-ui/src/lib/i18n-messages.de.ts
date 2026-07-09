@@ -13,6 +13,7 @@ export const DE_MESSAGES = {
   "rail.quality": "Quality Intelligence",
   "rail.promptEnhancer": "Prompt Enhancer",
   "rail.localKnowledge": "Lokales Wissen",
+  "rail.editor": "Editor",
   "rail.figma": "Figma-Snapshot",
   "rail.lightMode": "Heller Modus",
   "rail.darkMode": "Dunkler Modus",
@@ -362,6 +363,24 @@ export const DE_MESSAGES = {
   "memoria.consolidation.summary.configuredWithUpdates":
     "Modellgestuetzte Zusammenfassungen haben {count} vorgeschlagen{suffix}",
   "memoria.consolidation.summary.fallbackSuffix": "; {count} haben Quelltext erhalten.",
+  "memoria.consolidation.advisory.label": "KI-generierter Vorschlag:",
+  "memoria.consolidation.advisory.keep": "Behalten:",
+  "memoria.healthScan": "Health-Scan",
+  "memoria.healthScan.region": "Ergebnisse des Erinnerungs-Health-Scans",
+  "memoria.healthScan.loading": "Health-Scan-Ergebnisse werden geladen...",
+  "memoria.healthScan.findingsCount": "{count} Befunde",
+  "memoria.healthScan.emptyTitle": "Keine Probleme gefunden",
+  "memoria.healthScan.emptyBody":
+    "Der letzte Health-Scan hat keine verwaisten Erinnerungen, fehlenden Querverweise, Veraltungs- oder haengenden Review-Probleme gefunden.",
+  "memoria.healthScan.recordsInspected": "{count} Datensaetze geprueft",
+  "memoria.healthScan.truncated": "Ergebnisse gekuerzt",
+  "memoria.healthScan.reason": "Grund",
+  "memoria.healthScan.memories": "Erinnerungen",
+  "memoria.healthScan.viewMemory": "Erinnerung {id} anzeigen",
+  "memoria.healthScan.kind.orphanMemory": "Verwaiste Erinnerung",
+  "memoria.healthScan.kind.missingCrossReference": "Fehlender Querverweis",
+  "memoria.healthScan.kind.staleNotArchived": "Veraltet, nicht archiviert",
+  "memoria.healthScan.kind.danglingReviewItem": "Haengender Review-Eintrag",
   "chat.grounded.cancel": "Grounded-Anfrage abbrechen",
   "attachment.rejection.textOnly":
     "Das ausgewaehlte Modell kann diesen Anhangstyp nicht verarbeiten. Waehle ein Modell mit Bild- oder Dokumentunterstuetzung.",
@@ -465,13 +484,28 @@ export const DE_MESSAGES = {
   "updates.notice.aria": "Keiko-Update-Hinweis",
   "updates.notice.title": "Update verfuegbar",
   "updates.notice.criticalTitle": "Kritisches Update verfuegbar",
+  "updates.notice.releaseUnavailableTitle": "Update-Pruefung nicht verfuegbar",
   "updates.notice.body":
     "Version {version} kann geprueft werden. Keiko installiert sie nicht automatisch.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko konnte die Update-Download-Informationen gerade nicht pruefen. Es wird nichts installiert.",
+  "updates.notice.portableBody":
+    "Version {version} ist bereit. Oeffne Updates und klicke auf Update, wenn du bereit bist.",
+  "updates.notice.portableSetupBody":
+    "Portable Setup ist erforderlich, bevor Keiko App-interne Updates nutzen kann.",
+  "updates.notice.portableExternallyManagedBody":
+    "Diese Keiko-Installation wird ausserhalb der App verwaltet. Oeffne Updates fuer Details.",
   "updates.notice.review": "Update pruefen",
   "updates.notice.notNow": "Nicht jetzt",
   "updates.versionUnknown": "unbekannt",
   "updates.versionLine": "Aktuell {current} -> Ziel {target}",
   "updates.versionUnavailable": "Aktuell {current}; neueste Version konnte nicht geprueft werden.",
+  "updates.versionReleaseUnavailable":
+    "Aktuell {current}; Update-Download-Informationen konnten nicht geprueft werden.",
+  "updates.versionSetupRequired":
+    "Aktuell {current}; Portable Setup ist fuer App-interne Updates erforderlich.",
+  "updates.versionExternallyManaged":
+    "Aktuell {current}; Updates werden ausserhalb dieser App verwaltet.",
   "updates.versionInstalled": "Keiko laeuft jetzt mit {version}.",
   "updates.loading": "Update-Status wird geprueft...",
   "updates.error.title": "Update-Status nicht verfuegbar",
@@ -482,21 +516,36 @@ export const DE_MESSAGES = {
   "updates.status.critical": "Kritisches Update verfuegbar",
   "updates.status.degraded": "Update-Status eingeschraenkt",
   "updates.status.unavailable": "Update-Status nicht verfuegbar",
+  "updates.status.releaseUnavailable": "Update-Pruefung nicht verfuegbar",
   "updates.status.installing": "Update wird installiert",
   "updates.status.restart": "Neustart erforderlich",
   "updates.status.success": "Update installiert",
   "updates.status.failed": "Update fehlgeschlagen",
+  "updates.status.portableSetupRequired": "Portable Setup erforderlich",
+  "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
   "updates.primary.title": "Empfohlene Aktion",
   "updates.primary.available":
     "Pruefe die Statusauswirkungen und installiere, wenn du bereit bist.",
+  "updates.primary.portableAvailable":
+    "Klicke auf Update. Keiko laedt herunter, prueft, wendet an, startet neu und prueft die neue Version.",
   "updates.primary.current": "Kein Update verfuegbar. Du kannst jederzeit erneut pruefen.",
   "updates.primary.unavailable":
     "Update-Verfuegbarkeit konnte nicht geprueft werden. Pruefe erneut, wenn die Registry erreichbar ist.",
+  "updates.primary.releaseUnavailable":
+    "Keiko kann die Update-Download-Informationen gerade nicht pruefen. Nutze diese Version weiter und pruefe spaeter erneut.",
+  "updates.primary.portableSetupRequired":
+    "Fuehre den Portable-Setup-Ablauf vom Keiko-Launcher aus, bevor du App-interne Updates nutzt.",
+  "updates.primary.portableExternallyManaged":
+    "Nutze diese Version weiter. Updates fuer diese Installation muessen ueber den freigegebenen Rollout-Pfad erfolgen.",
+  "updates.primary.policyDisabled":
+    "Automatische Updates sind durch lokale Policy deaktiviert. Nutze diese Version weiter oder bitte deine Administration, Updates zu aktivieren.",
   "updates.primary.manual":
     "Automatische Installation ist nicht verfuegbar. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und pruefe erneut.",
   "updates.primary.manualReview": "Beachte das lokale Zustandsrisiko vor der Installation.",
   "updates.primary.installed":
     "Das Update ist installiert. Keine weitere Aktion ist erforderlich, ausser du moechtest nach einer neueren Version suchen.",
+  "updates.primary.followUp":
+    "Fuehre die Folgeaktion aus oder schiebe sie auf, bevor betroffene Workflows voll bereit sind.",
   "updates.primary.cancelled":
     "Das Update wurde abgebrochen. Versuche es erneut, wenn du bereit bist.",
   "updates.primary.failed":
@@ -504,6 +553,7 @@ export const DE_MESSAGES = {
   "updates.primary.restart": "Neustart und Pruefung schliessen das Update ab.",
   "updates.action.check": "Erneut pruefen",
   "updates.action.install": "Update installieren",
+  "updates.action.updatePortable": "Keiko aktualisieren",
   "updates.action.retry": "Update erneut versuchen",
   "updates.action.cancel": "Update abbrechen",
   "updates.action.verifyRestart": "Neustart pruefen",
@@ -523,6 +573,14 @@ export const DE_MESSAGES = {
   "updates.check.current": "Gerade geprueft. Kein neueres Update verfuegbar.",
   "updates.check.available": "Gerade geprueft. Ein neueres Update ist verfuegbar.",
   "updates.check.unavailable": "Gerade geprueft. Update-Status konnte nicht geprueft werden.",
+  "updates.check.releaseUnavailable":
+    "Gerade geprueft. Keiko kann die Update-Download-Informationen weiterhin nicht pruefen.",
+  "updates.check.portableSetupRequired":
+    "Gerade geprueft. Portable Setup ist weiterhin erforderlich, bevor App-interne Updates laufen koennen.",
+  "updates.check.portableExternallyManaged":
+    "Gerade geprueft. Diese Installation wird weiterhin ausserhalb von Keiko verwaltet, daher sind App-interne Updates nicht verfuegbar.",
+  "updates.check.policyDisabled":
+    "Gerade geprueft. Automatische Updates sind weiterhin durch lokale Policy deaktiviert.",
   "updates.check.manualStillRequired":
     "Manuelle Installation steht noch aus. Folge den freigegebenen manuellen Anweisungen, starte Keiko neu und pruefe erneut.",
   "updates.check.manualInstalled": "Update installiert. Keiko laeuft jetzt mit {version}.",
@@ -587,11 +645,62 @@ export const DE_MESSAGES = {
   "updates.manual.finish":
     "Nachdem das manuelle Update abgeschlossen ist und Keiko neu gestartet wurde, hier verifizieren.",
   "updates.manual.releaseLink": "Versionshinweise oeffnen",
+  "updates.portableManual.title": "Portables Update braucht Aufmerksamkeit",
+  "updates.portableManual.body":
+    "Keiko kann dieses portable Update gerade nicht automatisch abschliessen. Die aktuelle Version bleibt nutzbar.",
+  "updates.portableManual.retry":
+    "Versuche es erneut, nachdem Netzwerk-, Release-Metadaten- oder lokale Installationsort-Probleme geloest sind.",
+  "updates.portableManual.current":
+    "Nutze die aktuelle Keiko-Version weiter; dieses Update hat sie nicht ersetzt.",
+  "updates.portableManual.details":
+    "Oeffne unten die technischen Details fuer den redigierten Grund, warum Keiko das Update blockiert.",
+  "updates.portableManual.download":
+    "Falls noetig, lade auf der Release-Seite das passende Plattform-Artefakt manuell herunter.",
+  "updates.portableManual.integrityTitle": "Update aus Sicherheitsgruenden blockiert",
+  "updates.portableManual.integrityBody":
+    "Keiko konnte nicht nachweisen, dass diese Update-Datei die offizielle Release-Datei ist. Deine aktuelle Keiko-Version wurde nicht geaendert.",
+  "updates.portableManual.integrityKeepUsing": "Nutze Keiko normal weiter.",
+  "updates.portableManual.integrityRetry":
+    "Versuche es spaeter erneut, nachdem das Release korrigiert wurde.",
+  "updates.portableManual.integrityDoNotInstall":
+    "Installiere dieses heruntergeladene Update nicht manuell.",
+  "updates.portableManual.integrityDetails":
+    "Oeffne die technischen Details unten nur, wenn IT oder ein Release Owner den Verifizierungsgrund braucht.",
+  "updates.portableManual.finish": "Pruefe nach dem Beheben des Problems von hier aus erneut.",
+  "updates.portableManual.releaseLink": "Manuellen Download oeffnen",
+  "updates.portableSetup.title": "Portable Setup erforderlich",
+  "updates.portableSetup.body":
+    "Dieser Keiko-Ordner wird noch nicht vom Launcher verwaltet, daher kann Keiko sich nicht aus der App heraus aktualisieren.",
+  "updates.portableSetup.useLauncher":
+    "Starte Keiko ueber den Portable Launcher, damit das verwaltete Setup abgeschlossen werden kann.",
+  "updates.portableSetup.keepUsing":
+    "Nutze die aktuelle Keiko-Version weiter; dieses Update hat sie nicht ersetzt.",
+  "updates.portableSetup.checkAgain":
+    "Pruefe erneut, nachdem das Launcher-Setup abgeschlossen ist.",
+  "updates.portableExternallyManaged.title": "Updates werden durch deine Organisation verwaltet",
+  "updates.portableExternallyManaged.body":
+    "Diese Keiko-Installation wird ausserhalb der App verwaltet, daher ersetzt Keiko sie nicht von hier aus.",
+  "updates.portableExternallyManaged.keepUsing":
+    "Nutze die aktuelle Keiko-Version weiter; dieses Update hat sie nicht ersetzt.",
+  "updates.portableExternallyManaged.admin":
+    "Installiere eine neuere Version nur ueber den freigegebenen Software-Rollout oder deine Administration.",
+  "updates.portableExternallyManaged.checkAgain":
+    "Pruefe erneut, nachdem der freigegebene Rollout abgeschlossen ist.",
+  "updates.portablePolicy.title": "Automatische Updates durch Policy deaktiviert",
+  "updates.portablePolicy.body":
+    "Keiko kann dieses Update nicht anwenden, weil lokale Policy App-interne Update-Aenderungen deaktiviert. Die aktuelle Version bleibt nutzbar.",
+  "updates.portablePolicy.keepUsing":
+    "Nutze die aktuelle Keiko-Version weiter; dieses Update hat sie nicht ersetzt.",
+  "updates.portablePolicy.admin":
+    "Bitte deine Administration oder den Rollout-Verantwortlichen, Updates zu aktivieren oder den freigegebenen Rollout bereitzustellen.",
+  "updates.portablePolicy.checkAgain": "Pruefe erneut, nachdem sich die Policy geaendert hat.",
+  "updates.portablePolicy.finish": "Pruefe nach der Policy-Aenderung von hier aus erneut.",
   "updates.patchNotes.summary": "Patch Notes",
   "updates.details.summary": "Technische Details und Logs",
   "updates.details.registry": "Registry",
   "updates.details.releaseMetadata": "Release-Metadaten",
   "updates.details.installMode": "Installationsmodus",
+  "updates.details.installModePortableManaged": "portable-managed",
   "updates.details.remediation": "Reparatur",
   "updates.details.installLog": "Installer-Ausgabe",
   "updates.actionStatus.notNeeded": "Nicht erforderlich",

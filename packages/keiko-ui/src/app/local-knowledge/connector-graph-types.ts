@@ -1,6 +1,10 @@
 // Issue #197 — shared types for the connector graph surface.
 
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+  KnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type { CapsuleSetId } from "@oscharko-dev/keiko-contracts";
 import type {
   fetchCapsules,
@@ -62,7 +66,10 @@ export interface ConnectorGraphState {
   readonly handleCancelIndexing: (id: KnowledgeCapsuleId) => void;
   readonly handleDisconnect: (id: KnowledgeCapsuleId) => void;
   readonly handleOpenHealth: (id: KnowledgeCapsuleId) => void;
-  readonly handleCreateCapsule: (name: string) => Promise<void>;
+  readonly handleCreateCapsule: (
+    name: string,
+    modelUsePolicy: KnowledgePodModelUsePolicy,
+  ) => Promise<void>;
   readonly capsuleSetActionBusy: CapsuleSetId | null;
   readonly capsuleSetActionError: string | null;
   readonly clearCapsuleSetActionError: () => void;

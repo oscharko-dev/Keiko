@@ -103,6 +103,17 @@ function formattingRequest(
   };
 }
 
+function definitionRequest(
+  languageId: string,
+): Extract<LanguageServiceRequest, { operation: "definition" }> {
+  return {
+    operation: "definition",
+    root: workspaceRoot,
+    document: baseDocument(languageId, "main.ts"),
+    position: { line: 0, character: 1 },
+  };
+}
+
 function run(
   request: LanguageServiceRequest,
   rules: readonly CommandRule[],
@@ -182,6 +193,12 @@ describe("runHostLanguageOperation", () => {
 
   it("returns undefined when the host tool is missing so the normal language service can handle fallback", async () => {
     const outcome = await run(completionRequest("go"), [{ executable: "gopls" }], normalSpawn({}));
+
+    expect(outcome).toBeUndefined();
+  });
+
+  it("falls through for TypeScript navigation operations handled by the in-process provider", async () => {
+    const outcome = await run(definitionRequest("typescript"), [], normalSpawn({}));
 
     expect(outcome).toBeUndefined();
   });

@@ -47,7 +47,7 @@ It locks the production workspace UI on the **existing** desktop shell compositi
 | Drag overlay        | 800              | While dragging a window                                                             |
 | Notifications toast | 900              | Transient `aria-live="polite"`                                                      |
 | Modal backdrop      | 1000             | `CommandPalette`, `Palette`, `NewWindowDialog`, `GatewaySetupDialog`, `PermControl` |
-| Install banner      | 1100             | PWA install prompt                                                                  |
+| Portable install    | 1100             | No browser PWA prompt; install is owned by ZIP/native launcher flow                 |
 
 ## Panel, inspector, overlay, dialog, notification behavior
 
@@ -86,7 +86,7 @@ Panels are workspace windows classified as `tool` in `WindowsRegistry`. They are
 | `GatewaySetupDialog` | `modals/GatewaySetupDialog.tsx`   | Configure or repair the Model Gateway                               |
 | `PermControl`        | `modals/PermControl.tsx`          | Authority-moment confirmation (apply / verify / dismiss / escalate) |
 | `AgentGateCard`      | `widgets/cards/AgentGateCard.tsx` | Inline review surface (in `ReviewWidget`)                           |
-| `InstallBanner`      | `install/InstallBanner.tsx`       | PWA install prompt (ADR-0024)                                       |
+| Browser install path | `install/registerSw.ts`           | Static shell cache only; no promoted browser PWA install prompt     |
 
 ### Notifications
 

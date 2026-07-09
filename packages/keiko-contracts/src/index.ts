@@ -109,8 +109,12 @@ export type {
   UpdatePreflightBlockerCode,
   UpdatePreflightImpactEntry,
   UpdatePreflightImpactSummary,
+  UpdatePreflightInstallabilitySource,
   UpdatePreflightPatchNoteSection,
   UpdatePreflightPatchNotes,
+  UpdatePreflightPortableAssetStatus,
+  UpdatePreflightPortableAssetSummary,
+  UpdatePreflightPortableInstallability,
   UpdatePreflightRegistryStatus,
   UpdatePreflightReleaseMetadataStatus,
   UpdatePreflightReleaseSource,
@@ -121,6 +125,8 @@ export type {
 } from "./update-preflight.js";
 export {
   UPDATE_PREFLIGHT_BLOCKER_CODES,
+  UPDATE_PREFLIGHT_INSTALLABILITY_SOURCES,
+  UPDATE_PREFLIGHT_PORTABLE_ASSET_STATUSES,
   UPDATE_PREFLIGHT_REGISTRY_STATUSES,
   UPDATE_PREFLIGHT_RELEASE_METADATA_STATUSES,
   UPDATE_PREFLIGHT_RELEASE_SOURCES,
@@ -133,10 +139,25 @@ export {
 export type {
   UpdateCommandPreview,
   UpdateInstallMode,
+  UpdateInstallModeKind,
   UpdateInstallModeStatus,
   UpdateInstallPackageManager,
   UpdateMutationPolicy,
+  UpdatePortableActivationStatus,
+  UpdatePortableActivationSummary,
+  UpdatePortableAssetSummary,
+  UpdatePortableAssetVerificationStatus,
+  UpdatePortableInstallStatus,
+  UpdatePortableInstallSummary,
+  UpdatePortableManagedRootKind,
+  UpdatePortableSidecarFailureCode,
+  UpdatePortableSidecarSummary,
+  UpdatePortableSidecarVerificationStatus,
+  UpdatePortableStagingStatus,
+  UpdatePortableStagingSummary,
+  UpdatePortableTarget,
   UpdatePolicySource,
+  UpdateRecommendedAction,
   UpdateRestartCommandPreview,
   UpdateRestartVerificationRequest,
   UpdateRestartVerificationRequestParse,
@@ -154,10 +175,20 @@ export type {
   UpdateUnsupportedReason,
 } from "./update-session.js";
 export {
+  UPDATE_INSTALL_MODE_KINDS,
   parseUpdateRestartVerificationRequest,
   parseUpdateSessionStartRequest,
   UPDATE_INSTALL_MODE_STATUSES,
   UPDATE_INSTALL_PACKAGE_MANAGERS,
+  UPDATE_PORTABLE_ACTIVATION_STATUSES,
+  UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES,
+  UPDATE_PORTABLE_INSTALL_STATUSES,
+  UPDATE_PORTABLE_SIDECAR_FAILURE_CODES,
+  UPDATE_PORTABLE_SIDECAR_VERIFICATION_STATUSES,
+  UPDATE_PORTABLE_STAGING_STATUSES,
+  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
+  UPDATE_PORTABLE_TARGETS,
+  UPDATE_RECOMMENDED_ACTIONS,
   UPDATE_SESSION_FAILURE_REASONS,
   UPDATE_SESSION_PHASES,
   UPDATE_SESSION_SCHEMA_VERSION,
@@ -419,6 +450,19 @@ export type {
   LanguageTextEdit,
   LanguageFormattingOptions,
   LanguageFormattingResult,
+  LanguageLocation,
+  LanguageDefinitionResult,
+  LanguageReferencesResult,
+  LanguageRenamePrepareResult,
+  LanguageRenameChangesetFile,
+  LanguageRenameChangeset,
+  LanguageRenameApplyResult,
+  LanguageCodeActionKind,
+  LanguageCodeAction,
+  LanguageCodeActionsResult,
+  LanguageSignatureParameterInformation,
+  LanguageSignatureInformation,
+  LanguageSignatureHelpResult,
   LanguageProviderAvailability,
   LanguageProviderDescriptor,
   LanguageServiceCapabilities,
@@ -428,6 +472,12 @@ export type {
   LanguageHoverRequest,
   LanguageSymbolsRequest,
   LanguageFormattingRequest,
+  LanguageDefinitionRequest,
+  LanguageReferencesRequest,
+  LanguageRenamePrepareRequest,
+  LanguageRenameApplyRequest,
+  LanguageCodeActionsRequest,
+  LanguageSignatureHelpRequest,
   LanguageServiceRequest,
   LanguageServiceParseOk,
   LanguageServiceParseFail,
@@ -437,9 +487,12 @@ export {
   LANGUAGE_SERVICE_SCHEMA_VERSION,
   LANGUAGE_SERVICE_OPERATIONS,
   LANGUAGE_SERVICE_ERROR_CODES,
+  LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION,
   MAX_LANGUAGE_FORMATTING_TAB_SIZE,
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   isLanguagePosition,
+  isLanguageRange,
+  isLanguageDiagnostic,
   isLanguageDocumentOverlay,
   isLanguageFormattingOptions,
   parseLanguageServiceRequest,
@@ -1436,6 +1489,38 @@ export {
   validateConnectedContextPack,
 } from "./connected-context.js";
 
+// ─── Workspace search and replace preview (Epic #2090) ─────────────────────────
+export type {
+  WorkspaceSearchMode,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResultMatch,
+  WorkspaceSearchResponse,
+  WorkspaceSymbolSearchRequest,
+  WorkspaceSymbolSearchResult,
+  WorkspaceSymbolSearchResponse,
+  SymbolDefinitionKind,
+  WorkspaceReplacePreviewRequest,
+  WorkspaceReplacePreviewTextRange,
+  WorkspaceReplacePreviewEdit,
+  WorkspaceReplacePreviewFileEdit,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceReplaceApplyFile,
+  WorkspaceReplaceApplyRequest,
+  WorkspaceReplaceApplyConflict,
+  WorkspaceReplaceApplyResponse,
+} from "./workspace-search.js";
+export {
+  WORKSPACE_REPLACE_MAX_FILES,
+  WORKSPACE_SEARCH_MAX_RESULTS,
+  WORKSPACE_SEARCH_MODES,
+  validateWorkspaceSearchRequest,
+  validateWorkspaceSymbolSearchRequest,
+  validateWorkspaceReplaceApplyRequest,
+  validateWorkspaceReplacePreviewRequest,
+  isWorkspaceSearchResultMatch,
+  regexSafetyIssue,
+} from "./workspace-search.js";
+
 // ─── Deterministic context-engineering layer (ADR-0052, context-engineering milestone) ──
 export type {
   ContextLaneId,
@@ -2006,6 +2091,7 @@ export type {
   MemoryConsolidationEvidenceKindWire,
   MemoryConsolidationEvidenceWire,
   MemoryConsolidationReviewItemWire,
+  MemoryConsolidationSuggestedResolutionWire,
   MemoryConsolidationSummaryStatusWire,
   MemoryConsolidationResultWire,
   MemoryConsolidationJobWire,
@@ -2014,6 +2100,17 @@ export type {
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
 } from "./memory-consolidation-wire.js";
+
+export type {
+  MemoryHealthScanFindingKindWire,
+  MemoryHealthScanMemoryRefWire,
+  MemoryHealthScanFindingWire,
+  MemoryHealthScanResultWire,
+} from "./memory-health-scan-wire.js";
+export {
+  MEMORY_HEALTH_SCAN_REASON_MAX_CHARS,
+  MEMORY_HEALTH_SCAN_FINDING_KINDS,
+} from "./memory-health-scan-wire.js";
 
 // ─── Workflow memory port (Issue #213 / Epic #204) ──────────────────────────────
 // Optional read-only port that workflow packages compose with to inject scoped memory
@@ -3011,3 +3108,30 @@ export {
   validateWorkspaceHealthEntry,
   validateWorkspaceHealthReport,
 } from "./task-workspace.js";
+
+// ─── Native OS file/folder dialog (Epic #1941, ADR-0118) ───────────────────────────
+export type {
+  NativeFileDialogMode,
+  NativeFileDialogSelectionKind,
+  NativeFileDialogFilter,
+  NativeFileDialogRequest,
+  NativeFileDialogSelection,
+  NativeFileDialogResponse,
+  NativeFileDialogCapability,
+  NativeFileDialogErrorCode,
+  NativeFileDialogRequestValidation,
+} from "./native-file-dialog.js";
+export {
+  NATIVE_FILE_DIALOG_SCHEMA_VERSION,
+  NATIVE_FILE_DIALOG_MODES,
+  NATIVE_FILE_DIALOG_ERROR_CODES,
+  NATIVE_FILE_DIALOG_TITLE_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_DEFAULT_PATH_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_MAX_FILTERS,
+  NATIVE_FILE_DIALOG_FILTER_NAME_MAX_LENGTH,
+  NATIVE_FILE_DIALOG_MAX_EXTENSIONS_PER_FILTER,
+  NATIVE_FILE_DIALOG_MAX_SELECTIONS,
+  validateNativeFileDialogRequest,
+  nativeFileDialogSelectionBounds,
+  nativeFileDialogExpectedKind,
+} from "./native-file-dialog.js";

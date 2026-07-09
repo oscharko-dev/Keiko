@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 259
+    "fileCount": 269
   },
   "b1": {
     "firstLoadScriptCount": 13,
@@ -11,8 +11,8 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1172423,
-    "loadedTotalBytes": 1172423,
+    "shipsTotalBytes": 1180140,
+    "loadedTotalBytes": 1180140,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
@@ -40,7 +40,7 @@
     }
   ],
   "disabledLanguageWorkers": [],
-  "editorRuntimeChunkCount": 5,
+  "editorRuntimeChunkCount": 6,
   "editorRuntimeChunks": [
     {
       "path": "dist/ui/static/_next/static/chunks/2tklwylfuzj8q.js",
@@ -61,17 +61,23 @@
       "workerLabel": "editor"
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/3us1gpdrl_uxf.js",
-      "gzipBytes": 20490,
-      "rawBytes": 63552,
-      "workerLabel": null
-    },
-    {
       "path": "dist/ui/static/_next/static/chunks/1-p5yem7n8812.js",
       "gzipBytes": 17520,
       "rawBytes": 54017,
       "workerLabel": null
+    },
+    {
+      "path": "dist/ui/static/_next/static/chunks/3upg_hi1chrde.js",
+      "gzipBytes": 15155,
+      "rawBytes": 45880,
+      "workerLabel": null
+    },
+    {
+      "path": "dist/ui/static/_next/static/chunks/1aggh7uo8r_su.js",
+      "gzipBytes": 13052,
+      "rawBytes": 38673,
+      "workerLabel": null
     }
   ],
-  "measurementSha256": "8e39300b5a056f7eb72665e053d5785840475164826f8fa6c5551ae7eac531d6"
+  "measurementSha256": "ba49c1483866b583330343f2e5c72451928540aa958a5c493c6626e29f5a66a8"
 }

@@ -51,6 +51,7 @@ export const EDITOR_COMMAND_KEYBINDINGS: Readonly<
   "editor.acceptInlineCompletion": { mac: "Tab", pc: "Tab" },
   "editor.rejectInlineCompletion": { mac: "Esc", pc: "Esc" },
   "editor.generateTests": { mac: "⌘⌥T", pc: "Ctrl+Alt+T" },
+  "editor.renameSymbol": { mac: "F2", pc: "F2" },
 };
 
 /** Stable id and label for the host-owned Generate Tests action (palette + context-menu entry). */

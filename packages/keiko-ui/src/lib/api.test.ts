@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
+  applyWorkspaceReplace,
   cloneRepository,
   clearConfigCacheForTests,
   clearModelCacheForTests,
@@ -9,10 +10,12 @@ import {
   deleteProject,
   closePdfCitationPreviewSession,
   fetchFilesContent,
-  fetchFilesDirectories,
   fetchFilesPreview,
   fetchFilesSearch,
   fetchFilesTree,
+  fetchWorkspaceSearch,
+  fetchWorkspaceSymbols,
+  fetchWorkspaceReplacePreview,
   fetchGitBranches,
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
@@ -23,8 +26,10 @@ import {
   fetchGitStatus,
   fetchConfig,
   fetchModels,
+  fetchNativeFileDialogCapability,
   fetchPdfCitationPreviewDocument,
   fetchProjects,
+  openNativeFileDialog,
   regenerateDesktopChat,
   fetchStartupUpdatePreflight,
   fetchUpdateRemediationStatus,
@@ -39,10 +44,16 @@ import {
   retryUpdateSession,
   runUpdateRemediationAction,
   startUpdateSession,
+  requestEditorCodeActions,
   requestEditorCompletion,
+  requestEditorDefinition,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
+  requestEditorReferences,
+  requestEditorRenameApply,
+  requestEditorRenamePrepare,
+  requestEditorSignatureHelp,
   requestEditorSymbols,
   saveFilesContent,
   sendDesktopChatStream,
@@ -525,6 +536,206 @@ describe("language-intelligence helpers (Issue #1201)", () => {
       }),
     );
   });
+
+  it("requestEditorDefinition posts a definition operation with the cursor position", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "definition", result: { locations: [], truncated: false } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorDefinition({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo();\n",
+      position: { line: 0, character: 1 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "definition",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo();\n" },
+          position: { line: 0, character: 1 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorReferences posts a references operation with the cursor position", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "references",
+        result: { locations: [], includesDeclaration: true, truncated: false },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorReferences({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo();\n",
+      position: { line: 0, character: 1 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "references",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo();\n" },
+          position: { line: 0, character: 1 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorCodeActions posts a codeActions operation with range and diagnostics", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "codeActions",
+        result: { actions: [], truncated: false, returnedCount: 0, totalCount: 0 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } };
+
+    await requestEditorCodeActions({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo",
+      range,
+      diagnostics: [{ range, severity: "error", message: "x", source: "typescript" }],
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "codeActions",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo" },
+          range,
+          diagnostics: [{ range, severity: "error", message: "x", source: "typescript" }],
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorSignatureHelp posts a signatureHelp operation with the cursor position", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "signatureHelp",
+        result: {
+          signatures: [],
+          activeSignature: null,
+          activeParameter: null,
+          truncated: false,
+          returnedCount: 0,
+          totalCount: 0,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorSignatureHelp({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo(",
+      position: { line: 0, character: 4 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "signatureHelp",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo(" },
+          position: { line: 0, character: 4 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorRenamePrepare posts a renamePrepare operation", async () => {
+    const range = { start: { line: 0, character: 1 }, end: { line: 0, character: 4 } };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ operation: "renamePrepare", result: { range, placeholder: "foo" } }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorRenamePrepare({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo",
+      position: { line: 0, character: 1 },
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "renamePrepare",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo" },
+          position: { line: 0, character: 1 },
+        }),
+      }),
+    );
+  });
+
+  it("requestEditorRenameApply posts a renameApply operation with the new name", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        operation: "renameApply",
+        result: {
+          schemaVersion: "1",
+          files: [],
+          truncated: false,
+          filesTruncated: false,
+          returnedFileCount: 0,
+          totalFileCount: 0,
+          returnedEditCount: 0,
+          totalEditCount: 0,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorRenameApply({
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo",
+      position: { line: 0, character: 1 },
+      newName: "bar",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language",
+      expect.objectContaining({
+        body: JSON.stringify({
+          operation: "renameApply",
+          root: "/repo",
+          document: { path: "src/a.ts", languageId: "typescript", text: "foo" },
+          position: { line: 0, character: 1 },
+          newName: "bar",
+        }),
+      }),
+    );
+  });
 });
 
 describe("fetchWorkspaceSummary", () => {
@@ -573,12 +784,9 @@ describe("files API helpers", () => {
     vi.unstubAllGlobals();
   });
 
-  it("encodes directory picker, tree, preview, and editor requests", async () => {
+  it("encodes tree, preview, and editor requests", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({ path: "/repo space", parent: null, entries: [], roots: [] }),
-      )
       .mockResolvedValueOnce(
         jsonResponse({ root: "/repo space", path: "src/app.ts", entries: [], truncated: false }),
       )
@@ -636,7 +844,6 @@ describe("files API helpers", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchFilesDirectories("/repo space");
     await fetchFilesTree("/repo space", "src/app.ts");
     await fetchFilesPreview("/repo space", "src/app.ts");
     await fetchFilesContent("/repo space", "src/app.ts");
@@ -649,34 +856,27 @@ describe("files API helpers", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/files/directories?root=%2Frepo+space",
-      expect.objectContaining({
-        headers: expect.objectContaining({ Accept: "application/json" }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
       "/api/files/tree?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      2,
       "/api/files/preview?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      4,
+      3,
       "/api/files/content?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      5,
+      4,
       "/api/files/content",
       expect.objectContaining({
         method: "PATCH",
@@ -691,6 +891,53 @@ describe("files API helpers", () => {
           content: "const x = 2;\n",
           expectedModifiedAt: 1,
         }),
+      }),
+    );
+  });
+
+  it("posts native dialog requests with the CSRF envelope and never logs paths", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        cancelled: false,
+        selections: [{ path: "/repo space/docs", kind: "directory" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await openNativeFileDialog({
+      mode: "open-directory",
+      title: "Ordner wählen",
+      defaultPath: "/repo space",
+    });
+
+    expect(response.selections[0]?.path).toBe("/repo space/docs");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/native-file-dialog/open",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          mode: "open-directory",
+          title: "Ordner wählen",
+          defaultPath: "/repo space",
+        }),
+      }),
+    );
+  });
+
+  it("fetches the native dialog capability", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ supported: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchNativeFileDialogCapability()).resolves.toEqual({ supported: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/native-file-dialog/capability",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
   });
@@ -713,6 +960,132 @@ describe("files API helpers", () => {
       "/api/files/search?root=%2Frepo+space&q=coding+context&limit=12",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("posts workspace search requests to the user-facing editor search route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        results: [],
+        truncated: false,
+        filesScanned: 0,
+        elapsedMs: 3,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkspaceSearch({
+      root: "/repo",
+      query: "needle",
+      mode: "literal",
+      caseSensitive: false,
+      includeGlobs: ["src/**/*.ts"],
+      excludeGlobs: ["dist/**"],
+      maxResults: 25,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/workspace-search",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          root: "/repo",
+          query: "needle",
+          mode: "literal",
+          caseSensitive: false,
+          includeGlobs: ["src/**/*.ts"],
+          excludeGlobs: ["dist/**"],
+          maxResults: 25,
+        }),
+      }),
+    );
+  });
+
+  it("posts workspace replace preview and apply requests to the governed routes", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          files: [],
+          fileCount: 0,
+          editCount: 0,
+          truncated: false,
+          omittedFileCount: 0,
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ appliedCount: 1, conflictCount: 0, conflicts: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkspaceReplacePreview({
+      root: "/repo",
+      query: "needle",
+      mode: "literal",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      replacement: "thread",
+      maxFiles: 20,
+    });
+    await applyWorkspaceReplace({
+      root: "/repo",
+      files: [
+        {
+          path: "src/app.ts",
+          baseContentHash: "a".repeat(64),
+          edits: [
+            {
+              range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 7 },
+              originalText: "needle",
+              newText: "thread",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/editor/workspace-search/replace-preview",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/workspace-search/replace-apply",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+  });
+
+  it("posts workspace symbol search requests to the governed symbol route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        results: [],
+        truncated: false,
+        filesScanned: 0,
+        elapsedMs: 1,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchWorkspaceSymbols({ root: "/repo", query: "parseConfig", maxResults: 20 });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/workspace-symbols",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+        body: JSON.stringify({ root: "/repo", query: "parseConfig", maxResults: 20 }),
       }),
     );
   });

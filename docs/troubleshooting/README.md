@@ -24,6 +24,11 @@ For contributors adding new entries, use the
 [troubleshooting entry template](./_template.md). Do not include API
 keys, customer data, internal endpoints, or private logs in examples.
 
+Portable launch/setup issues are covered in the dedicated
+[Portable Launch And Setup Troubleshooting](portable-launch-setup.md) entry. Use that page for
+Windows SmartScreen, macOS Gatekeeper, managed install root, proxy, firewall, local port, and
+organization-managed rollout blockers.
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a
@@ -734,5 +739,6 @@ behaviour, and empty-crawl handling.
 - [Local runtime state contract](../local-runtime-state-contract.md) — files written under `.keiko/` and `~/.keiko/`.
 - [Keiko Editor troubleshooting](../keiko-editor/troubleshooting.md) — Monaco workers, CSP, unsupported files, completion, and verification failures.
 - [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) — refresh-specific troubleshooting and operational guidance.
+- [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
 
 For new entries, follow the [troubleshooting entry template](./_template.md).

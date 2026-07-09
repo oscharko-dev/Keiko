@@ -222,6 +222,8 @@ function useEditorConstructionOptions(
   const { ariaLabel } = props;
   const inlineCompletionEnabled = props.provideInlineCompletions !== undefined;
   const hoverEnabled = props.provideHover !== undefined;
+  const codeActionsEnabled = props.provideCodeActions !== undefined;
+  const signatureHelpEnabled = props.provideSignatureHelp !== undefined;
   // Large-file degraded mode (Issue #1207, ADR-0042 D3.6). Recomputed only when the buffer size or
   // text changes; the byte check short-circuits before the bounded line scan so the derivation never
   // dominates a keystroke.
@@ -238,9 +240,20 @@ function useEditorConstructionOptions(
         ariaLabel,
         inlineCompletionEnabled,
         hoverEnabled,
+        codeActionsEnabled,
+        signatureHelpEnabled,
         degraded,
       }),
-    [readOnly, relativePath, ariaLabel, inlineCompletionEnabled, hoverEnabled, degraded],
+    [
+      readOnly,
+      relativePath,
+      ariaLabel,
+      inlineCompletionEnabled,
+      hoverEnabled,
+      codeActionsEnabled,
+      signatureHelpEnabled,
+      degraded,
+    ],
   );
   const monacoLanguage = useMemo(() => inferMonacoLanguageId(relativePath), [relativePath]);
   return { options, monacoLanguage };

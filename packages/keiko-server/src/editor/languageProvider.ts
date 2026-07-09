@@ -6,13 +6,21 @@
 
 import type {
   LanguageCompletionResult,
+  LanguageCodeActionsResult,
+  LanguageDefinitionResult,
   LanguageDiagnostic,
   LanguageDocumentSymbol,
   LanguageFormattingOptions,
   LanguageHoverResult,
   LanguagePosition,
   LanguageProviderDescriptor,
+  LanguageRange,
+  LanguageReferencesResult,
+  LanguageRenameApplyResult,
+  LanguageRenamePrepareResult,
+  LanguageServiceErrorCode,
   LanguageServiceLimits,
+  LanguageSignatureHelpResult,
   LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -50,7 +58,53 @@ export interface LanguageProvider {
     ctx: LanguageProviderContext,
     options: LanguageFormattingOptions | undefined,
   ): LanguageFormattingRaw;
+  getDefinition?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+  ): LanguageDefinitionResult;
+  getReferences?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+  ): LanguageReferencesResult;
+  getRenamePrepare?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+  ): LanguageRenamePrepareResult;
+  getRenameApply?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+    newName: string,
+  ): LanguageRenameApplyRaw;
+  getCodeActions?(
+    ctx: LanguageProviderContext,
+    range: LanguageRange,
+    diagnostics: readonly LanguageDiagnostic[],
+  ): LanguageCodeActionsResult;
+  getSignatureHelp?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+  ): LanguageSignatureHelpResult;
 }
+
+export interface LanguageProviderFailure {
+  readonly kind: "error";
+  readonly code: LanguageServiceErrorCode;
+  readonly message: string;
+}
+
+export class LanguageProviderFailureError extends Error implements LanguageProviderFailure {
+  public readonly kind = "error" as const;
+
+  public constructor(
+    public readonly code: LanguageServiceErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "LanguageProviderFailureError";
+  }
+}
+
+export type LanguageRenameApplyRaw = LanguageRenameApplyResult | LanguageProviderFailure;
 
 export interface LanguageDiagnosticsRaw {
   readonly diagnostics: readonly LanguageDiagnostic[];

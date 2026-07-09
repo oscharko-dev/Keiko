@@ -3,7 +3,8 @@
 import { useId, useState, type ChangeEvent, type ReactNode } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { rebindCapsuleSourceRoot, type SourceIndexStats } from "@/lib/local-knowledge-api";
-import { LocalFileBrowserDialog } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
+import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
+import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { formatError } from "../format-error";
 
 interface SourceRebindControlProps {
@@ -36,8 +37,30 @@ export function SourceRebindControl({
   const [rootPath, setRootPath] = useState(currentRoot);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const nativeNoteId = useId();
+  const nativeDialogSupported = useNativeFileDialogCapability();
   const trimmedRoot = rootPath.trim();
+
+  // Epic #1941 (ADR-0118) — rebinding always targets a folder root (the old in-app picker's file
+  // branch also collapsed to the shared root), so the native dialog is a plain folder pick.
+  function openNativeRootPicker(): void {
+    void pickWithNativeDialog({
+      mode: "open-directory",
+      title: "Choose replacement root",
+      ...(trimmedRoot.length > 0 ? { defaultPath: trimmedRoot } : {}),
+    }).then((outcome) => {
+      if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
+        setRootPath(outcome.paths[0]);
+        setError(null);
+        return;
+      }
+      if (outcome.kind === "busy") setError("A native dialog is already open. Close it first.");
+      if (outcome.kind === "unsupported") {
+        setError("Native dialogs are unavailable on this platform. Enter the path manually.");
+      }
+      if (outcome.kind === "error") setError(outcome.message);
+    });
+  }
 
   function openEditor(): void {
     setRootPath(currentRoot);
@@ -49,7 +72,6 @@ export function SourceRebindControl({
     if (busy) return;
     setEditing(false);
     setError(null);
-    setPickerOpen(false);
   }
 
   async function submit(): Promise<void> {
@@ -94,12 +116,18 @@ export function SourceRebindControl({
             <button
               type="button"
               className="lk-btn lk-btn-ghost"
-              disabled={busy}
-              onClick={() => setPickerOpen(true)}
+              disabled={busy || !nativeDialogSupported}
+              aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
+              onClick={openNativeRootPicker}
             >
               Browse
             </button>
           </div>
+          {!nativeDialogSupported ? (
+            <span id={nativeNoteId} className="dlg-note">
+              Native dialogs are unavailable on this platform. Enter the path manually.
+            </span>
+          ) : null}
           <div className="lkd-rebind-actions">
             <button
               type="button"
@@ -126,21 +154,6 @@ export function SourceRebindControl({
           ) : null}
         </div>
       )}
-      {pickerOpen ? (
-        <LocalFileBrowserDialog
-          mode="folder-or-files"
-          title="Choose replacement root"
-          description="Select the folder that now contains this source."
-          initialRootPath={rootPath}
-          initialFiles={[]}
-          onApply={(selection) => {
-            setRootPath(selection.files.length > 0 ? selection.rootPath : selection.folderPath);
-            setError(null);
-            setPickerOpen(false);
-          }}
-          onCancel={() => setPickerOpen(false)}
-        />
-      ) : null}
     </div>
   );
 }

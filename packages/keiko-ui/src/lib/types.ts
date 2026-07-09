@@ -130,6 +130,17 @@ export type {
   EditorCompletionContextSelectors,
   EditorCompletionWireRequest,
 } from "@oscharko-dev/keiko-contracts";
+// ─── Native OS file/folder dialog (Epic #1941, ADR-0118, contracts root barrel) ─────
+export type {
+  NativeFileDialogMode,
+  NativeFileDialogSelectionKind,
+  NativeFileDialogFilter,
+  NativeFileDialogRequest,
+  NativeFileDialogSelection,
+  NativeFileDialogResponse,
+  NativeFileDialogCapability,
+} from "@oscharko-dev/keiko-contracts";
+
 export { EDITOR_COMPLETION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
 // ─── Editor inline-completion (ghost text) wire shapes (Issue #1200, contracts root barrel) ─────
@@ -191,6 +202,19 @@ export type {
   LanguageTextEdit,
   LanguageFormattingOptions,
   LanguageFormattingResult,
+  LanguageLocation,
+  LanguageDefinitionResult,
+  LanguageReferencesResult,
+  LanguageRenamePrepareResult,
+  LanguageRenameChangesetFile,
+  LanguageRenameChangeset,
+  LanguageRenameApplyResult,
+  LanguageCodeActionKind,
+  LanguageCodeAction,
+  LanguageCodeActionsResult,
+  LanguageSignatureParameterInformation,
+  LanguageSignatureInformation,
+  LanguageSignatureHelpResult,
   LanguageProviderDescriptor,
   LanguageServiceCapabilities,
 } from "@oscharko-dev/keiko-contracts";
@@ -361,9 +385,6 @@ export type {
   TerminalExecutionResult,
   TerminalEventKind,
   TerminalEventEnvelope,
-  FilesDirectoryRoot,
-  FilesDirectoryEntry,
-  FilesDirectoryListing,
   FilesEntryKind,
   FilesTreeEntry,
   FilesTreeResponse,

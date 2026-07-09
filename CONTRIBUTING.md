@@ -33,6 +33,11 @@ The rationale for the package architecture, workspace gate, bundled publish mode
 [ADR-0021](docs/adr/ADR-0021-publish-strategy-bundled-monorepo-product.md), and
 [ADR-0025](docs/adr/ADR-0025-forward-only-0-2-0-modular-baseline.md).
 
+UI-facing features must use the existing i18n API instead of hard-coded user-visible strings, and every UI change
+must update both `packages/keiko-ui/src/lib/i18n-messages.en.ts` and
+`packages/keiko-ui/src/lib/i18n-messages.de.ts` with matching keys. Pull request CI runs
+`npm run check:ui-i18n` to enforce this guard before review and merge.
+
 Published release notes live in GitHub Releases. This repository intentionally does not maintain a root `CHANGELOG.md`.
 
 ## Troubleshooting documentation

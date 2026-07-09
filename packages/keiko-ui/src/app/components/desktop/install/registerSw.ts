@@ -1,17 +1,15 @@
 "use client";
 
 /**
- * Service worker registration helper (issue #126, ADR-0024 D6).
+ * Static-shell service worker registration helper.
  *
- * Registers `/sw.js` at scope `"/"` so Chrome's `beforeinstallprompt` event can fire,
- * completing the #124 install banner's install path. Designed to be invoked from a
+ * Registers `/sw.js` at scope `"/"` for static shell cache/update recovery. Designed to be invoked from a
  * `useEffect(() => { registerSw(); }, [])` once per client mount — calling it from outside
  * the browser (SSR, prerender) is a no-op.
  *
  * Failure mode is intentionally silent: a service worker is a progressive-enhancement layer.
- * If registration fails (CSP rejected the worker, browser does not support SW, user
- * disabled SW in settings), the page continues to function normally and the install banner
- * falls back to the manual instructions shipped in #124.
+ * If registration fails (CSP rejected the worker, browser does not support SW, user disabled
+ * SW in settings), the page continues to function normally.
  */
 
 const ACTIVATE_WAITING_MESSAGE_TYPE = "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER";
@@ -159,10 +157,10 @@ export function registerSw(): void {
         handleRegisteredServiceWorker(sw, registration);
       })
       .catch((_error: unknown) => {
-        // Silent failure by design. See ADR-0024 D6.
+        // Silent failure by design. Static shell caching must never break app startup.
         return undefined;
       });
   } catch {
-    // Silent failure by design. See ADR-0024 D6.
+    // Silent failure by design. Static shell caching must never break app startup.
   }
 }

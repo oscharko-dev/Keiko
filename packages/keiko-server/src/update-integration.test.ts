@@ -10,6 +10,8 @@ import {
   UPDATE_SESSION_SCHEMA_VERSION,
   type ReleaseImpactCatalog,
   type UpdateInstallMode,
+  type UpdatePortableActivationSummary,
+  type UpdatePortableStagingSummary,
   type UpdateRemediationStatusReport,
   type UpdatePreflightReport,
   type UpdateSession,
@@ -24,7 +26,10 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { detectUpdateInstallMode } from "./update-install-mode.js";
 import { createUpdateSessionManager, type UpdateSessionManagerOptions } from "./update-session.js";
 import { createUpdatePreflightService } from "./update-preflight.js";
-import { createUpdateLocalStateManager } from "./update-local-state.js";
+import {
+  createUpdateLocalStateManager,
+  type UpdateLocalStateManager,
+} from "./update-local-state.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import type {
   LocalKnowledgeRemediationPort,
@@ -142,6 +147,76 @@ function manualInstallMode(): UpdateInstallMode {
     manualInstructions:
       "Automatic update is unavailable: this simulated state requires a manual package install. Use your package manager outside Keiko, then restart Keiko.",
   };
+}
+
+function portableManagedMode(): UpdateInstallMode {
+  return {
+    schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
+    status: "supported",
+    packageName: PACKAGE_NAME,
+    installKind: "portable-managed",
+    portable: {
+      status: "managed",
+      target: "windows-x64",
+      updateEligible: true,
+      packageVersion: SDK_VERSION,
+      stable: true,
+    },
+    recommendedAction: "portable-managed-update",
+  };
+}
+
+function portableStageSummary(targetVersion: string): UpdatePortableStagingSummary {
+  return {
+    stageId: "portable-stage-1",
+    status: "staged",
+    target: "windows-x64",
+    packageVersion: targetVersion,
+    assetName: "keiko-windows-x64.zip",
+    assetId: 1001,
+    releaseId: 2002,
+    sizeBytes: 3003,
+    sha256: "a".repeat(64),
+    manifestSha256: "b".repeat(64),
+  };
+}
+
+function portableActivationSummary(targetVersion: string): UpdatePortableActivationSummary {
+  return {
+    activationId: "portable-activation-1",
+    status: "activated",
+    stageId: "portable-stage-1",
+    target: "windows-x64",
+    packageVersion: targetVersion,
+    registrationRefreshed: true,
+    shortcutRefreshed: true,
+    relaunchRequested: true,
+    versionVerified: true,
+  };
+}
+
+function persistPortableStage(
+  localState: UpdateLocalStateManager,
+  summary: UpdatePortableStagingSummary,
+): void {
+  const current = localState.readRuntimeState();
+  localState.writeRuntimeState({
+    ...current,
+    targetVersion: summary.packageVersion,
+    portableStage: summary,
+  });
+}
+
+function persistPortableActivation(
+  localState: UpdateLocalStateManager,
+  summary: UpdatePortableActivationSummary,
+): void {
+  const current = localState.readRuntimeState();
+  localState.writeRuntimeState({
+    ...current,
+    targetVersion: summary.packageVersion,
+    portableActivation: summary,
+  });
 }
 
 function syntheticPreflightReport(
@@ -674,6 +749,153 @@ describe("governed updater integration", () => {
     });
     expect(finalStatus.activeSession).toBeUndefined();
     expect(finalStatus.lastSession).toMatchObject({ targetVersion, phase: "succeeded" });
+  });
+
+  it("finishes portable activation while release-impact remediation remains pending", async () => {
+    const targetVersion = nextPatchVersion(SDK_VERSION);
+    const preflight = syntheticPreflightReport(targetVersion, {
+      localKnowledgeReindexRequired: true,
+    });
+    const stateDir = join(staticRoot, ".keiko-portable-state");
+    await mkdir(stateDir, { recursive: true });
+    const updateLocalState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => FIXED_NOW,
+      idFactory: () => "portable-remediation-event",
+    });
+    const localKnowledge = fakeLocalKnowledgeRemediation();
+    const updateRemediation = createUpdateRemediationManager({
+      localState: updateLocalState,
+      localKnowledge,
+      now: () => FIXED_NOW,
+    });
+    const stage = vi.fn(() => {
+      const summary = portableStageSummary(targetVersion);
+      persistPortableStage(updateLocalState, summary);
+      return Promise.resolve(summary);
+    });
+    const activate = vi.fn(() => {
+      const summary = portableActivationSummary(targetVersion);
+      persistPortableActivation(updateLocalState, summary);
+      return Promise.resolve(summary);
+    });
+    const updateSession = createUpdateSessionManager({
+      processEnv: {},
+      detector: () => portableManagedMode(),
+      currentVersion: () => targetVersion,
+      facts: () => ({
+        packageRoot: "/Users/alice/Applications/Keiko/app",
+        packageName: PACKAGE_NAME,
+        portableStateDir: stateDir,
+      }),
+      idFactory: () => "portable-remediation-session",
+      now: () => FIXED_NOW,
+      portableStager: { stage },
+      portableActivator: { activate },
+      portableCompletionGate: (session) => {
+        updateRemediation.completeRestart(session.targetVersion);
+        return updateRemediation.updateCanComplete(session.targetVersion);
+      },
+    });
+    await buildServer({
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: (): string => "",
+        list: (): readonly string[] => [],
+        get: (): string | undefined => undefined,
+        delete: (): void => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: (): undefined => undefined,
+      store: createInMemoryUiStore(),
+      updatePreflight: fixedUpdatePreflight(preflight),
+      updateLocalState,
+      updateRemediation,
+      updateSession,
+    });
+
+    const preflightResponse = await fetch(`${baseUrl()}/api/update/preflight`);
+    const loadedPreflight = await readJson<UpdatePreflightReport>(preflightResponse);
+    const impact = impactInput(loadedPreflight);
+    const remediationStatusResponse = await fetch(`${baseUrl()}/api/update/remediation/status`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion, impact, persist: true }),
+    });
+    const remediationStatus =
+      await readJson<UpdateRemediationStatusReport>(remediationStatusResponse);
+
+    expect(remediationStatus).toMatchObject({
+      targetVersion,
+      overallStatus: "pending",
+      updateCanComplete: false,
+    });
+
+    const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion, requestId: "portable-remediation-test" }),
+    });
+    expect(startedResponse.status).toBe(202);
+
+    const completedStatus = await waitForPhase("succeeded");
+    expect(stage).toHaveBeenCalledOnce();
+    expect(activate).toHaveBeenCalledOnce();
+    expect(completedStatus.activeSession).toBeUndefined();
+    expect(completedStatus.lastSession).toMatchObject({
+      targetVersion,
+      phase: "succeeded",
+      restartRequired: false,
+      portableActivation: { activationId: "portable-activation-1", status: "activated" },
+    });
+    expect(completedStatus.lastSession?.message).toContain("Complete remaining follow-up action");
+    expect(updateLocalState.readRuntimeState()).toMatchObject({
+      targetVersion,
+      portableStage: { stageId: "portable-stage-1" },
+      portableActivation: { activationId: "portable-activation-1" },
+      remediations: [
+        {
+          store: "local-knowledge",
+          remediation: "local-knowledge-reindex-required",
+          status: "pending",
+        },
+      ],
+    });
+    const persisted = JSON.stringify(updateLocalState.readRuntimeState());
+    expect(persisted).not.toContain("/Users/alice");
+    expect(persisted).not.toContain("https://github.com");
+    expect(persisted).not.toContain("SECRET");
+
+    const actionResponse = await fetch(`${baseUrl()}/api/update/remediation/actions`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion,
+        impact,
+        decision: "run",
+      }),
+    });
+    const completedRemediation = await readJson<UpdateRemediationStatusReport>(actionResponse);
+    expect(completedRemediation.updateCanComplete).toBe(true);
+
+    const verifiedResponse = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion }),
+    });
+    const verified = await readJson<{ readonly error: { readonly code: string } }>(
+      verifiedResponse,
+    );
+
+    expect(verifiedResponse.status).toBe(409);
+    expect(verified).toMatchObject({
+      error: { code: "UPDATE_RESTART_NOT_PENDING" },
+    });
+    expect(localKnowledge.runs()).toBe(1);
   });
 
   it("uses explicit injected updater seams when automatic update is unsupported", async () => {

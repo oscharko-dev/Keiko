@@ -63,6 +63,7 @@ export type {
   EditorRange,
   EditorTextEdit,
   EditorChangeOrigin,
+  EditorHostEditRequest,
   EditorDocumentIdentity,
   EditorFileModel,
   EditorSaveRequest,
@@ -110,6 +111,27 @@ export type {
   EditorFormattingQuery,
   EditorFormattingResponse,
   EditorFormattingResolver,
+  EditorLocation,
+  EditorDefinitionRequest,
+  EditorDefinitionQuery,
+  EditorDefinitionResponse,
+  EditorDefinitionResolver,
+  EditorReferencesRequest,
+  EditorReferencesQuery,
+  EditorReferencesResponse,
+  EditorReferencesResolver,
+  EditorCodeActionKind,
+  EditorCodeAction,
+  EditorCodeActionsRequest,
+  EditorCodeActionsQuery,
+  EditorCodeActionsResponse,
+  EditorCodeActionsResolver,
+  EditorSignatureParameterInformation,
+  EditorSignatureInformation,
+  EditorSignatureHelpRequest,
+  EditorSignatureHelpQuery,
+  EditorSignatureHelpResponse,
+  EditorSignatureHelpResolver,
   EditorSymbolRef,
   EditorTestGenerationContext,
   EditorTestGenerationRequest,
@@ -384,6 +406,92 @@ export type {
   MonacoFormattingOptions,
   MonacoTextEdit,
 } from "./components/formatting-bridge.js";
+export {
+  createKeikoDefinitionProvider,
+  registerKeikoDefinitionProvider,
+  locationToMonacoLocation,
+  definitionResponseToMonaco,
+  DEFINITION_ELIGIBLE_LANGUAGES,
+} from "./components/definition-bridge.js";
+export type {
+  KeikoDefinitionProviderDeps,
+  RegisterKeikoDefinitionProviderArgs,
+  MonacoDefinitionProvider,
+  MonacoDefinitionRegistrar,
+  MonacoDefinitionModel,
+  MonacoLocation,
+  MonacoUriLike,
+  MonacoUriForPath,
+} from "./components/definition-bridge.js";
+export {
+  createKeikoReferencesProvider,
+  registerKeikoReferencesProvider,
+  referenceToMonacoLocation,
+  referencesResponseToMonaco,
+  REFERENCES_ELIGIBLE_LANGUAGES,
+} from "./components/references-bridge.js";
+export type {
+  KeikoReferencesProviderDeps,
+  RegisterKeikoReferencesProviderArgs,
+  MonacoReferenceProvider,
+  MonacoReferenceRegistrar,
+  MonacoReferencesModel,
+  MonacoReferenceContext,
+  MonacoReferenceLocation,
+} from "./components/references-bridge.js";
+export {
+  createKeikoCodeActionProvider,
+  registerKeikoCodeActionProvider,
+  monacoRangeToEditor,
+  markerToEditorDiagnostic,
+  actionKindToMonaco,
+  actionToMonaco,
+  codeActionsResponseToMonaco,
+  CODE_ACTION_ELIGIBLE_LANGUAGES,
+} from "./components/code-action-bridge.js";
+export type {
+  KeikoCodeActionProviderDeps,
+  RegisterKeikoCodeActionProviderArgs,
+  MonacoCodeActionProvider,
+  MonacoCodeActionRegistrar,
+  MonacoCodeActionModel,
+  MonacoCodeActionContext,
+  MonacoCodeActionKinds,
+  MonacoCodeActionList,
+  MonacoCodeAction,
+  MonacoMarkerLike,
+  MonacoResourceTextEdit,
+  MonacoWorkspaceEdit,
+  MonacoCodeActionProviderMetadata,
+} from "./components/code-action-bridge.js";
+export {
+  createKeikoSignatureHelpProvider,
+  registerKeikoSignatureHelpProvider,
+  signatureToMonaco,
+  signatureHelpResponseToMonaco,
+  DEFAULT_SIGNATURE_HELP_TRIGGER_CHARACTERS,
+  DEFAULT_SIGNATURE_HELP_RETRIGGER_CHARACTERS,
+  SIGNATURE_HELP_ELIGIBLE_LANGUAGES,
+} from "./components/signature-help-bridge.js";
+export type {
+  KeikoSignatureHelpProviderDeps,
+  RegisterKeikoSignatureHelpProviderArgs,
+  MonacoSignatureHelpProvider,
+  MonacoSignatureHelpRegistrar,
+  MonacoSignatureHelpModel,
+  MonacoSignatureHelpContext,
+  MonacoParameterInformation,
+  MonacoSignatureInformation,
+  MonacoSignatureHelp,
+  MonacoSignatureHelpResult,
+} from "./components/signature-help-bridge.js";
+export {
+  EDITOR_RENAME_SYMBOL_ACTION_ID,
+  EDITOR_RENAME_SYMBOL_ACTION_LABEL,
+  buildRenameSymbolActionDescriptor,
+  buildRenameSymbolKeybinding,
+} from "./components/rename-bridge.js";
+export type { RenameActionArgs, RenameCommandActionKeys } from "./components/rename-bridge.js";
 
 // ─── Runtime: large-file degraded-mode policy (#1207) ───
 // Pure derivation of the editor render mode from buffer size (ADR-0042 D3.6: > 500 KB or > 10,000
@@ -426,6 +534,8 @@ export type {
   PatchPreviewModel,
   PatchPreviewSource,
 } from "./patch-preview.js";
+export { buildRenamePreview } from "./rename-preview.js";
+export type { BuildRenamePreviewInput } from "./rename-preview.js";
 
 // ─── Runtime: KeikoDiffEditor React component (#1195) ───
 export { KeikoDiffEditor } from "./components/KeikoDiffEditor.js";

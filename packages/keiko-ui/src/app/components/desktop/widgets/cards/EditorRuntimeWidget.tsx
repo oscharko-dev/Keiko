@@ -41,6 +41,7 @@ import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   applyTextEditsToText,
   buildTestGenerationPreview,
+  buildRenamePreview,
   createEditorRequestId,
   createFileModel,
   DEFAULT_COMPLETION_TRIGGER_CHARACTERS,
@@ -60,9 +61,15 @@ import {
   testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCodeActionsQuery,
+  type EditorCodeActionsResolver,
   type EditorCompletionQuery,
   type EditorCompletionResolver,
   type EditorContentDelta,
+  type EditorDefinitionQuery,
+  type EditorDefinitionResolver,
+  type EditorDiagnostic,
+  type EditorDocumentSymbol,
   type EditorDiagnosticsResolver,
   type EditorDiagnosticsQuery,
   type EditorDiagnosticsSummary,
@@ -71,27 +78,40 @@ import {
   type EditorHotExitSnapshotV1,
   type EditorFormattingResolver,
   type EditorFormattingQuery,
+  type EditorHostEditRequest,
   type EditorHoverResolver,
   type EditorHoverQuery,
   type EditorInlineCompletionResolver,
   type EditorInlineCompletionQuery,
   type EditorLanguageId,
+  type EditorLocation,
   type EditorPosition,
   type EditorRange,
+  type EditorReferencesQuery,
+  type EditorReferencesResolver,
   type EditorRequestIdentity,
   type EditorSaveRequest,
   type EditorSaveStatus,
+  type EditorSignatureHelpQuery,
+  type EditorSignatureHelpResolver,
   type EditorStatusRun,
+  type EditorSymbolsResponse,
   type EditorSymbolsResolver,
   type EditorSymbolsQuery,
+  type EditorTextEdit,
   type InlineCompletionTelemetrySnapshot,
   type KeikoEditorLoadState,
   type PatchPreviewModel,
+  type PatchPreviewSource,
   type TestGenerationFlowAction,
   type TestGenerationFlowState,
   type TestGenerationPreview,
 } from "@oscharko-dev/keiko-editor";
-import { editorBuiltinDocumentFormatting } from "@oscharko-dev/keiko-contracts";
+import {
+  editorBuiltinDocumentFormatting,
+  type WorkspaceReplaceApplyFile,
+  type WorkspaceReplacePreviewTextRange,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
@@ -99,10 +119,16 @@ import {
   fetchFilesContent,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
+  requestEditorCodeActions,
+  requestEditorDefinition,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
   requestEditorInlineCompletion,
+  requestEditorReferences,
+  requestEditorRenameApply,
+  requestEditorRenamePrepare,
+  requestEditorSignatureHelp,
   requestEditorSymbols,
   requestEditorTestGeneration,
   saveFilesContent,
@@ -112,8 +138,12 @@ import { mapWireToEditorInlineCompletionResponse } from "../../../../../lib/edit
 import { mapWireToEditorTestGenerationOutcome } from "../../../../../lib/editor-test-generation";
 import {
   mapWireToEditorDiagnosticsResponse,
+  mapWireToEditorDefinitionResponse,
   mapWireToEditorFormattingResponse,
   mapWireToEditorHoverResponse,
+  mapWireToEditorCodeActionsResponse,
+  mapWireToEditorReferencesResponse,
+  mapWireToEditorSignatureHelpResponse,
   mapWireToEditorSymbolsResponse,
 } from "../../../../../lib/editor-language";
 import type {
@@ -121,13 +151,21 @@ import type {
   EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
+  FilesContentResponse,
   LanguageProviderDescriptor,
+  LanguageRenameChangeset,
+  LanguageRenameChangesetFile,
   LanguageServiceCapabilities,
   EditorTestGenerationWireTarget,
 } from "../../../../../lib/types";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
+import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
+import {
+  useRegisterWorkspaceReplaceBuffer,
+  type WorkspaceReplaceOpenBufferResult,
+} from "../../WorkspaceReplaceBufferContext";
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
@@ -138,6 +176,13 @@ import {
 } from "./editorAgentBridge";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
+import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
+import {
+  buildEditorOutlineTree,
+  findContainingOutlinePath,
+  type EditorOutlineRevealRequest,
+  type EditorOutlineSnapshot,
+} from "./editorOutlineModel";
 import {
   deleteEditorHotExitSnapshot,
   readEditorHotExitSnapshot,
@@ -145,7 +190,13 @@ import {
 } from "./editorHotExitStore";
 import { LruSessionCache } from "./editorSessionCache";
 import { readableTabCapacity, visibleTabsForCapacity } from "./editorTabViewport";
-import { documentSessionKey, documentUri, rootHash, safeDomIdSegment } from "./editorDocumentUri";
+import {
+  documentSessionKey,
+  documentUri,
+  encodePathSegments,
+  rootHash,
+  safeDomIdSegment,
+} from "./editorDocumentUri";
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
@@ -156,6 +207,73 @@ const EditorDiffSurface = dynamic<EditorDiffSurfaceProps>(() => import("./Editor
   ssr: false,
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
 });
+
+interface MonacoCompatibleEditorUri {
+  readonly scheme: string;
+  readonly authority: string;
+  readonly path: string;
+  readonly query: string;
+  readonly fragment: string;
+  readonly fsPath: string;
+  with(
+    change: Partial<Pick<MonacoCompatibleEditorUri, "authority" | "path" | "query" | "fragment">>,
+  ): MonacoCompatibleEditorUri;
+  toString(): string;
+  toJSON(): {
+    readonly scheme: string;
+    readonly authority: string;
+    readonly path: string;
+    readonly query: string;
+    readonly fragment: string;
+  };
+}
+
+function monacoUriString(parts: {
+  readonly scheme: string;
+  readonly authority: string;
+  readonly path: string;
+  readonly query: string;
+  readonly fragment: string;
+}): string {
+  const query = parts.query.length > 0 ? `?${parts.query}` : "";
+  const fragment = parts.fragment.length > 0 ? `#${parts.fragment}` : "";
+  return `${parts.scheme}://${parts.authority}${parts.path}${query}${fragment}`;
+}
+
+function monacoCompatibleUri(parts: {
+  readonly scheme: string;
+  readonly authority: string;
+  readonly path: string;
+  readonly query?: string | undefined;
+  readonly fragment?: string | undefined;
+}): MonacoCompatibleEditorUri {
+  const complete = {
+    scheme: parts.scheme,
+    authority: parts.authority,
+    path: parts.path,
+    query: parts.query ?? "",
+    fragment: parts.fragment ?? "",
+  };
+  return {
+    ...complete,
+    fsPath: complete.path,
+    with: (change): MonacoCompatibleEditorUri => monacoCompatibleUri({ ...complete, ...change }),
+    toString: (): string => monacoUriString(complete),
+    toJSON: () => complete,
+  };
+}
+
+function monacoDocumentUri(
+  root: string,
+  path: string,
+  modelScope: string,
+): MonacoCompatibleEditorUri {
+  return monacoCompatibleUri({
+    scheme: "keiko-editor",
+    authority: "workspace",
+    path: `/${modelScope}/${rootHash(root)}/${encodePathSegments(path)}`,
+  });
+}
 
 // Issue #1202: advisory coding-context budget for a test-generation run; the BFF clamps it to the
 // server-owned `test-generation` purpose budget.
@@ -184,7 +302,19 @@ const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
     {
       id: "typescript",
       languages: ["typescript", "typescriptreact", "javascript", "javascriptreact"],
-      operations: ["diagnostics", "completion", "hover", "symbols", "formatting"],
+      operations: [
+        "diagnostics",
+        "completion",
+        "hover",
+        "symbols",
+        "formatting",
+        "definition",
+        "references",
+        "renamePrepare",
+        "renameApply",
+        "codeActions",
+        "signatureHelp",
+      ],
       availability: "available",
     },
   ],
@@ -226,6 +356,7 @@ export interface EditorRuntimeWidgetProps {
   readonly onMoveTab?: ((fromPaneId: string, file: string, toPaneId: string) => void) | undefined;
   readonly onCloseOpenFile?: ((file: string) => Promise<boolean> | boolean | void) | undefined;
   readonly onDirtyChange?: ((file: string, dirty: boolean) => void) | undefined;
+  readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
   readonly onExternalSaveComplete?:
     ((requestId: number, paneId: string, file: string, ok: boolean) => void) | undefined;
@@ -250,6 +381,9 @@ export interface EditorRuntimeWidgetProps {
   readonly linkedFilePath?: string | undefined;
   readonly linkedCapsuleIds?: readonly string[] | undefined;
   readonly linkedCapsuleSetIds?: readonly string[] | undefined;
+  readonly onOutlineStateChange?:
+    ((paneId: string, snapshot: EditorOutlineSnapshot) => void) | undefined;
+  readonly outlineRevealRequest?: EditorOutlineRevealRequest | undefined;
 }
 
 export interface EditorExternalSaveRequest {
@@ -261,6 +395,61 @@ export interface EditorExternalSaveRequest {
 function errorMessage(error: unknown): string {
   if (error instanceof ApiError) return error.message;
   return error instanceof Error ? error.message : "The file could not be loaded.";
+}
+
+function lineStartOffsets(text: string): readonly number[] {
+  const starts: number[] = [0];
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\r") {
+      if (text[index + 1] === "\n") index += 1;
+      starts.push(index + 1);
+    } else if (char === "\n") {
+      starts.push(index + 1);
+    }
+  }
+  return starts;
+}
+
+function lineContentEnd(text: string, starts: readonly number[], lineIndex: number): number {
+  const nextStart = starts[lineIndex + 1];
+  if (nextStart === undefined) return text.length;
+  if (nextStart >= 2 && text[nextStart - 2] === "\r" && text[nextStart - 1] === "\n") {
+    return nextStart - 2;
+  }
+  return nextStart - 1;
+}
+
+function oneBasedPositionOffset(
+  text: string,
+  starts: readonly number[],
+  line: number,
+  column: number,
+): number | null {
+  const lineIndex = line - 1;
+  if (lineIndex < 0 || lineIndex >= starts.length || column < 1) return null;
+  const lineStart = starts[lineIndex] ?? 0;
+  const contentEnd = lineContentEnd(text, starts, lineIndex);
+  const offset = lineStart + column - 1;
+  return offset <= contentEnd + 1 ? offset : null;
+}
+
+function textForRange(text: string, range: WorkspaceReplacePreviewTextRange): string | null {
+  const starts = lineStartOffsets(text);
+  const start = oneBasedPositionOffset(text, starts, range.startLine, range.startColumn);
+  const end = oneBasedPositionOffset(text, starts, range.endLine, range.endColumn);
+  if (start === null || end === null || end < start) return null;
+  return text.slice(start, end);
+}
+
+function replaceEditToEditorEdit(edit: WorkspaceReplaceApplyFile["edits"][number]): EditorTextEdit {
+  return {
+    range: {
+      start: { line: edit.range.startLine - 1, column: edit.range.startColumn - 1 },
+      end: { line: edit.range.endLine - 1, column: edit.range.endColumn - 1 },
+    },
+    newText: edit.newText,
+  };
 }
 
 /** Map a workspace path to a renderable editor language; intelligence is registry/capability-gated below. */
@@ -309,6 +498,91 @@ function rangeToAgentRange(range: EditorRange | null): {
   };
 }
 
+function editorRangeToWire(range: EditorRange): {
+  readonly start: { readonly line: number; readonly character: number };
+  readonly end: { readonly line: number; readonly character: number };
+} {
+  return {
+    start: { line: range.start.line, character: range.start.column },
+    end: { line: range.end.line, character: range.end.column },
+  };
+}
+
+function editorDiagnosticToWire(diagnostic: EditorDiagnostic): {
+  readonly range: ReturnType<typeof editorRangeToWire>;
+  readonly severity: EditorDiagnostic["severity"];
+  readonly message: string;
+  readonly source: string;
+  readonly code?: string;
+} {
+  return {
+    range: editorRangeToWire(diagnostic.range),
+    severity: diagnostic.severity,
+    message: diagnostic.message,
+    source: diagnostic.source ?? "monaco",
+    ...(diagnostic.code === undefined ? {} : { code: diagnostic.code }),
+  };
+}
+
+function revealRequestForLocation(location: EditorLocation): {
+  readonly path: string;
+  readonly lineStart: number;
+  readonly lineEnd: number;
+} {
+  return {
+    path: location.path,
+    lineStart: location.range.start.line + 1,
+    lineEnd: location.range.end.line + 1,
+  };
+}
+
+function openCrossFileLocation(input: {
+  readonly root: string | undefined;
+  readonly file: string | undefined;
+  readonly location: EditorLocation;
+  readonly openEditorFile: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
+}): void {
+  if (
+    input.root === undefined ||
+    input.file === undefined ||
+    input.openEditorFile === undefined ||
+    input.location.path === input.file
+  ) {
+    return;
+  }
+  input.openEditorFile({ root: input.root, ...revealRequestForLocation(input.location) });
+}
+
+function locationIsOpen(input: {
+  readonly path: string;
+  readonly file: string | undefined;
+  readonly openFiles: readonly string[] | undefined;
+  readonly layoutPanes: readonly EditorAgentPaneSnapshot[] | undefined;
+}): boolean {
+  if (input.path === input.file) return true;
+  if (input.openFiles?.includes(input.path) === true) return true;
+  return input.layoutPanes?.some((pane) => pane.openFiles.includes(input.path)) === true;
+}
+
+function renameEditsToEditor(fileChange: LanguageRenameChangesetFile): readonly EditorTextEdit[] {
+  return fileChange.edits.map((edit) => ({
+    range: {
+      start: { line: edit.range.start.line, column: edit.range.start.character },
+      end: { line: edit.range.end.line, column: edit.range.end.character },
+    },
+    newText: edit.newText,
+  }));
+}
+
+function promptRenameSymbol(placeholder: string): string | null {
+  const prompt = globalThis.window?.prompt;
+  if (typeof prompt !== "function") return null;
+  const value = prompt("Rename symbol", placeholder);
+  if (value === null) return null;
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? null : trimmed;
+}
+
 interface EditorFileSessionSnapshot {
   readonly content: string;
   readonly fileModel: EditorFileModel | null;
@@ -321,6 +595,139 @@ interface EditorFileSessionSnapshot {
   readonly cursor: EditorPosition | null;
   readonly currentSelection: EditorRange | null;
   readonly diagnosticsSummary: EditorDiagnosticsSummary | null;
+}
+
+interface RenameApplyTarget {
+  readonly path: string;
+  readonly content: string;
+  readonly fileModel: EditorFileModel | null;
+  readonly version: EditorDocumentVersion | null;
+  readonly active: boolean;
+  readonly cached?: EditorFileSessionSnapshot | undefined;
+}
+
+interface RenameApplyPlan {
+  readonly target: RenameApplyTarget;
+  readonly nextContent: string;
+}
+
+interface RenameApplyConflict {
+  readonly code: AgentConflictCode;
+  readonly message: string;
+}
+
+interface SymbolCacheEntry {
+  readonly root: string;
+  readonly path: string;
+  readonly language: EditorLanguageId;
+  readonly text: string;
+  readonly symbols: readonly EditorDocumentSymbol[];
+}
+
+type RenameSourcesResult =
+  | {
+      readonly status: "ready";
+      readonly sources: Readonly<Record<string, PatchPreviewSource>>;
+      readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
+    }
+  | {
+      readonly status: "conflict";
+      readonly conflict: RenameApplyConflict;
+    };
+
+function patchPreviewSourceFromText(path: string, text: string): PatchPreviewSource {
+  return {
+    content: {
+      relativePath: path,
+      text,
+      sizeBytes: UTF8_ENCODER.encode(text).length,
+      truncated: false,
+    },
+  };
+}
+
+function cleanEditorSessionSnapshot(input: {
+  readonly root: string;
+  readonly path: string;
+  readonly modelScope: string;
+  readonly response: FilesContentResponse;
+}): EditorFileSessionSnapshot {
+  const identity: EditorDocumentIdentity = {
+    uri: documentUri(input.root, input.path, input.modelScope),
+    language: inferEditorLanguage(input.path),
+    version: 0,
+  };
+  return {
+    content: input.response.content,
+    fileModel: createFileModel(identity),
+    modifiedAt: input.response.modifiedAt,
+    version: input.response.session.version,
+    maxBytes: input.response.maxBytes,
+    loadState: { status: "ready" },
+    saveStatus: "idle",
+    saveError: undefined,
+    cursor: null,
+    currentSelection: null,
+    diagnosticsSummary: null,
+  };
+}
+
+function symbolCacheMatches(
+  entry: SymbolCacheEntry | null,
+  input: {
+    readonly root: string;
+    readonly path: string;
+    readonly language: EditorLanguageId;
+    readonly text: string;
+  },
+): entry is SymbolCacheEntry {
+  return (
+    entry !== null &&
+    entry.root === input.root &&
+    entry.path === input.path &&
+    entry.language === input.language &&
+    entry.text === input.text
+  );
+}
+
+function targetPreconditionConflict(
+  change: LanguageRenameChangesetFile,
+  target: RenameApplyTarget | null,
+): RenameApplyConflict | null {
+  if (target === null || target.version === null || target.fileModel === null) {
+    return {
+      code: "VERSION_MISMATCH",
+      message: `Rename target ${change.path} is not loaded in the editor.`,
+    };
+  }
+  if (isDocumentDirty(target.fileModel)) {
+    return {
+      code: "DIRTY",
+      message: `Rename target ${change.path} has unsaved changes.`,
+    };
+  }
+  if (target.version.contentHash !== change.expectedContentHash) {
+    return {
+      code: "CONTENT_HASH_MISMATCH",
+      message: `Rename target ${change.path} changed since the rename was computed.`,
+    };
+  }
+  return null;
+}
+
+function buildRenamePlan(
+  change: LanguageRenameChangesetFile,
+  target: RenameApplyTarget | null,
+): RenameApplyPlan | RenameApplyConflict {
+  if (target === null) {
+    return {
+      code: "VERSION_MISMATCH",
+      message: `Rename target ${change.path} is not loaded in the editor.`,
+    };
+  }
+  const conflict = targetPreconditionConflict(change, target);
+  if (conflict !== null) return conflict;
+  return { target, nextContent: applyTextEditsToText(target.content, renameEditsToEditor(change)) };
 }
 
 function editorAriaLabel(root: string, file: string): string {
@@ -407,7 +814,18 @@ function providerForLanguage(
 
 function providerOperationEnabled(
   provider: LanguageProviderDescriptor | null,
-  operation: "diagnostics" | "completion" | "hover" | "symbols" | "formatting",
+  operation:
+    | "diagnostics"
+    | "completion"
+    | "hover"
+    | "symbols"
+    | "formatting"
+    | "definition"
+    | "references"
+    | "renamePrepare"
+    | "renameApply"
+    | "codeActions"
+    | "signatureHelp",
 ): boolean {
   return (
     provider !== null &&
@@ -476,6 +894,7 @@ function EditorRuntimeWidget({
   onMoveTab,
   onCloseOpenFile,
   onDirtyChange,
+  openEditorFile,
   externalSaveRequest,
   onExternalSaveComplete,
   tabInsertTarget,
@@ -485,6 +904,8 @@ function EditorRuntimeWidget({
   linkedFilePath,
   linkedCapsuleIds,
   linkedCapsuleSetIds,
+  onOutlineStateChange,
+  outlineRevealRequest,
 }: EditorRuntimeWidgetProps): ReactNode {
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
@@ -612,6 +1033,14 @@ function EditorRuntimeWidget({
   );
   const [languageCapabilities, setLanguageCapabilities] =
     useState<LanguageServiceCapabilities | null>(BOOTSTRAP_LANGUAGE_CAPABILITIES);
+  const [outlineSymbols, setOutlineSymbols] = useState<readonly EditorDocumentSymbol[]>([]);
+  const [outlineLoading, setOutlineLoading] = useState(false);
+  const symbolCacheRef = useRef<SymbolCacheEntry | null>(null);
+  const symbolSeqRef = useRef(0);
+  const symbolRevealSeqRef = useRef(0);
+  const [symbolRevealRequest, setSymbolRevealRequest] = useState<
+    EditorOutlineRevealRequest | undefined
+  >(undefined);
   const [recoverySnapshot, setRecoverySnapshot] = useState<EditorHotExitSnapshotV1 | null>(null);
   // The on-disk content captured at the moment recovery was offered, so the compare view diffs the
   // recovered buffer against the disk file even if the live buffer is edited before Compare is opened.
@@ -632,6 +1061,17 @@ function EditorRuntimeWidget({
     readonly original: string;
     readonly modified: string;
   } | null>(null);
+  const [renameReview, setRenameReview] = useState<{
+    readonly changeset: LanguageRenameChangeset;
+    readonly model: PatchPreviewModel;
+    // Snapshots of every non-active changeset file, captured at review time so Accept never depends
+    // on the bounded LRU session cache surviving (a wide rename can touch far more files than the
+    // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
+    readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
+  } | null>(null);
+  const [activeHostEditRequest, setActiveHostEditRequest] = useState<
+    EditorHostEditRequest | undefined
+  >(undefined);
   // A11Y-2: focus the Accept button whenever a patch review appears.
   const patchAcceptButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -677,11 +1117,16 @@ function EditorRuntimeWidget({
     setCurrentSelection(null);
     setCursor(null);
     setDiagnosticsSummary(null);
+    setOutlineSymbols([]);
+    setOutlineLoading(false);
+    setSymbolRevealRequest(undefined);
+    symbolCacheRef.current = null;
     // Switching the active file leaves any per-file recovery-compare view or pending reload
     // confirmation; both are scoped to the file that opened them.
     setRecoveryCompare(false);
     setReloadConfirm(false);
     setRecoveryDiskBaseline(null);
+    setRenameReview(null);
   }, [file, root]);
 
   useEffect(() => {
@@ -1074,15 +1519,20 @@ function EditorRuntimeWidget({
   );
 
   const onContentChange = useCallback(
-    (next: EditorContentDelta, _origin: EditorChangeOrigin): void => {
+    (next: EditorContentDelta, origin: EditorChangeOrigin): void => {
+      setActiveHostEditRequest(undefined);
       setContent(next.text);
       setFileModel((model: EditorFileModel | null) =>
-        model === null ? model : editorFileModelReducer(model, { type: "edited", origin: "human" }),
+        model === null ? model : editorFileModelReducer(model, { type: "edited", origin }),
       );
       setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
     },
     [],
   );
+
+  useEffect(() => {
+    setActiveHostEditRequest(undefined);
+  }, [file, root]);
 
   const onSaveRequested = useCallback(
     (request: EditorSaveRequest): void => {
@@ -1410,18 +1860,38 @@ function EditorRuntimeWidget({
     [file, hasTarget, root],
   );
 
-  const provideSymbols = useCallback<EditorSymbolsResolver>(
-    async (query: EditorSymbolsQuery, signal: AbortSignal) => {
+  const resolveEditorSymbols = useCallback(
+    async (query: EditorSymbolsQuery, signal: AbortSignal): Promise<EditorSymbolsResponse> => {
+      const request = query.request.request;
       if (!hasTarget || root === undefined || file === undefined) {
-        return { request: query.request.request, symbols: [] };
+        return { request, symbols: [] };
+      }
+      const language = query.request.document.language;
+      const cacheInput = { root, path: file, language, text: query.documentText };
+      if (symbolCacheMatches(symbolCacheRef.current, cacheInput)) {
+        return { request, symbols: symbolCacheRef.current.symbols };
       }
       const wire = await requestEditorSymbols(
-        { root, path: file, languageId: query.request.document.language, text: query.documentText },
+        { root, path: file, languageId: language, text: query.documentText },
         signal,
       );
-      return mapWireToEditorSymbolsResponse(query.request.request, wire);
+      const response = mapWireToEditorSymbolsResponse(request, wire);
+      symbolCacheRef.current = { ...cacheInput, symbols: response.symbols };
+      return response;
     },
     [file, hasTarget, root],
+  );
+
+  const provideSymbols = useCallback<EditorSymbolsResolver>(
+    async (query: EditorSymbolsQuery, signal: AbortSignal) => {
+      const response = await resolveEditorSymbols(query, signal);
+      if (query.documentText === contentRef.current && !signal.aborted) {
+        setOutlineSymbols(response.symbols);
+        setOutlineLoading(false);
+      }
+      return response;
+    },
+    [resolveEditorSymbols],
   );
 
   const provideFormatting = useCallback<EditorFormattingResolver>(
@@ -1447,11 +1917,172 @@ function EditorRuntimeWidget({
     [file, hasTarget, root],
   );
 
+  const provideDefinition = useCallback<EditorDefinitionResolver>(
+    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, locations: [] };
+      }
+      const wire = await requestEditorDefinition(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      const response = mapWireToEditorDefinitionResponse(query.request.request, wire);
+      const crossFile = response.locations.find((location) => location.path !== file);
+      if (crossFile !== undefined) {
+        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
+      }
+      return response;
+    },
+    [file, hasTarget, openEditorFile, root],
+  );
+
+  const provideReferences = useCallback<EditorReferencesResolver>(
+    async (query: EditorReferencesQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, locations: [], includesDeclaration: false };
+      }
+      const wire = await requestEditorReferences(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      const response = mapWireToEditorReferencesResponse(query.request.request, wire);
+      const crossFile = response.locations.find((location) => location.path !== file);
+      if (
+        crossFile !== undefined &&
+        !locationIsOpen({ path: crossFile.path, file, openFiles, layoutPanes })
+      ) {
+        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
+      }
+      return response;
+    },
+    [file, hasTarget, layoutPanes, openEditorFile, openFiles, root],
+  );
+
+  const provideCodeActions = useCallback<EditorCodeActionsResolver>(
+    async (query: EditorCodeActionsQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, actions: [] };
+      }
+      const wire = await requestEditorCodeActions(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          range: editorRangeToWire(query.request.range),
+          diagnostics: query.request.diagnostics.map(editorDiagnosticToWire),
+        },
+        signal,
+      );
+      return mapWireToEditorCodeActionsResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const provideSignatureHelp = useCallback<EditorSignatureHelpResolver>(
+    async (query: EditorSignatureHelpQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return {
+          request: query.request.request,
+          signatures: [],
+          activeSignature: null,
+          activeParameter: null,
+        };
+      }
+      const wire = await requestEditorSignatureHelp(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      return mapWireToEditorSignatureHelpResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
   const largeFileMode = useMemo(
     () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
     [content, contentSizeBytes],
   );
   const largeFileDegraded = largeFileMode === "degraded";
+  const applyWorkspaceReplaceBuffer = useCallback(
+    (request: WorkspaceReplaceApplyFile): WorkspaceReplaceOpenBufferResult => {
+      if (file === undefined || request.path !== file || !fileModelMatchesTarget) {
+        return { status: "not-open" as const };
+      }
+      if (largeFileDegraded) {
+        return {
+          status: "conflict" as const,
+          conflict: {
+            path: request.path,
+            reason: "invalid-patch" as const,
+            detail: "The open editor buffer is read-only for large-file protection.",
+          },
+        };
+      }
+      const current = contentRef.current;
+      for (const edit of request.edits) {
+        if (textForRange(current, edit.range) !== edit.originalText) {
+          return {
+            status: "conflict" as const,
+            conflict: {
+              path: request.path,
+              reason: "write-conflict" as const,
+              detail: "The open editor buffer no longer matches the reviewed replacement preview.",
+            },
+          };
+        }
+      }
+      try {
+        const next = applyTextEditsToText(current, request.edits.map(replaceEditToEditorEdit));
+        contentRef.current = next;
+        setContent(next);
+        setFileModel((model) =>
+          model === null
+            ? model
+            : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+        );
+        setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+        return { status: "applied" as const, path: request.path };
+      } catch {
+        return {
+          status: "conflict" as const,
+          conflict: {
+            path: request.path,
+            reason: "invalid-patch" as const,
+            detail: "The reviewed replacement preview could not be applied to the open buffer.",
+          },
+        };
+      }
+    },
+    [file, fileModelMatchesTarget, largeFileDegraded],
+  );
+  useRegisterWorkspaceReplaceBuffer(root, file, applyWorkspaceReplaceBuffer);
 
   const completionLanguage = fileModel?.identity.language;
   const languageProvider = providerForLanguage(languageCapabilities, completionLanguage);
@@ -1462,6 +2093,18 @@ function EditorRuntimeWidget({
   const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
   const symbolsEnabled =
     providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
+  const definitionEnabled =
+    providerOperationEnabled(languageProvider, "definition") && !largeFileDegraded;
+  const referencesEnabled =
+    providerOperationEnabled(languageProvider, "references") && !largeFileDegraded;
+  const renameEnabled =
+    providerOperationEnabled(languageProvider, "renamePrepare") &&
+    providerOperationEnabled(languageProvider, "renameApply") &&
+    !largeFileDegraded;
+  const codeActionsEnabled =
+    providerOperationEnabled(languageProvider, "codeActions") && !largeFileDegraded;
+  const signatureHelpEnabled =
+    providerOperationEnabled(languageProvider, "signatureHelp") && !largeFileDegraded;
   // Formatting availability is browser-reachability truth from the editor-tier registry. The release
   // artifact deliberately ships no rich Monaco language workers (ADR-0042 D3.6), so only
   // `keiko-language-service` languages (ts/js) can format, and only when the server provider is up.
@@ -1486,6 +2129,86 @@ function EditorRuntimeWidget({
   const canSave = hasTarget && dirty && saveStatus !== "saving" && loadState.status === "ready";
   const saveUnavailable = !canSave;
   const canFormat = hasTarget && loadState.status === "ready" && formattingEnabled;
+  const canRename = hasTarget && loadState.status === "ready" && renameEnabled;
+  const outlineTree = useMemo(() => buildEditorOutlineTree(outlineSymbols), [outlineSymbols]);
+  const breadcrumbPath = useMemo(
+    () => findContainingOutlinePath(outlineTree, cursor),
+    [cursor, outlineTree],
+  );
+  const revealSymbol = useCallback(
+    (symbol: EditorDocumentSymbol): void => {
+      if (file === undefined) return;
+      symbolRevealSeqRef.current += 1;
+      setSymbolRevealRequest({
+        id: `symbol:${file}:${String(symbolRevealSeqRef.current)}`,
+        file,
+        range: symbol.range,
+      });
+    },
+    [file],
+  );
+
+  useEffect(() => {
+    if (!hasTarget || root === undefined || fileModel === null || !symbolsEnabled) {
+      setOutlineSymbols([]);
+      setOutlineLoading(false);
+      return;
+    }
+    if (loadState.status !== "ready" || activeContentHash === null) {
+      setOutlineLoading(loadState.status === "ready");
+      return;
+    }
+    const controller = new AbortController();
+    const request: EditorRequestIdentity = {
+      requestId: createEditorRequestId(),
+      streamId: "editor-outline",
+      sequence: (symbolSeqRef.current += 1),
+    };
+    setOutlineLoading(true);
+    void resolveEditorSymbols(
+      {
+        request: { request, document: fileModel.identity },
+        documentText: contentRef.current,
+      },
+      controller.signal,
+    )
+      .then((response) => {
+        if (controller.signal.aborted) return;
+        setOutlineSymbols(response.symbols);
+        setOutlineLoading(false);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setOutlineSymbols([]);
+        setOutlineLoading(false);
+      });
+    return () => {
+      controller.abort();
+    };
+  }, [
+    activeContentHash,
+    fileModel,
+    hasTarget,
+    loadState.status,
+    resolveEditorSymbols,
+    root,
+    symbolsEnabled,
+  ]);
+
+  const outlineSnapshot = useMemo<EditorOutlineSnapshot>(
+    () => ({
+      ...(file === undefined ? {} : { filePath: file }),
+      symbols: outlineSymbols,
+      cursor,
+      enabled: symbolsEnabled,
+      loading: outlineLoading,
+    }),
+    [cursor, file, outlineLoading, outlineSymbols, symbolsEnabled],
+  );
+  useEffect(() => {
+    if (paneId === undefined || onOutlineStateChange === undefined) return;
+    onOutlineStateChange(paneId, outlineSnapshot);
+  }, [onOutlineStateChange, outlineSnapshot, paneId]);
 
   // Issue #1202: the "Generate Tests" action is offered for governed TS/JS files; the server is the
   // authority and returns `disabled` while the wave-2 feature is switched off. The status line reflects
@@ -1525,6 +2248,134 @@ function EditorRuntimeWidget({
           },
     [content, contentSizeBytes, file, fileModel, fileModelMatchesTarget, largeFileDegraded],
   );
+
+  const loadRenameSources = useCallback(
+    async (changeset: LanguageRenameChangeset): Promise<RenameSourcesResult> => {
+      const sources: Record<string, PatchPreviewSource> = {};
+      const snapshots: Record<string, EditorFileSessionSnapshot> = {};
+      for (const fileChange of changeset.files) {
+        if (fileChange.path === file) {
+          // The active buffer is always read from live editor state, never the session cache.
+          sources[fileChange.path] = patchPreviewSourceFromText(
+            fileChange.path,
+            contentRef.current,
+          );
+          continue;
+        }
+        if (root === undefined) continue;
+        const cached = sessionCacheRef.current.get(documentSessionKey(root, fileChange.path));
+        if (cached !== undefined) {
+          snapshots[fileChange.path] = cached;
+          sources[fileChange.path] = patchPreviewSourceFromText(fileChange.path, cached.content);
+          continue;
+        }
+        const response = await fetchFilesContent(root, fileChange.path);
+        if (response.session.version.contentHash !== fileChange.expectedContentHash) {
+          return {
+            status: "conflict",
+            conflict: {
+              code: "CONTENT_HASH_MISMATCH",
+              message: `Rename target ${fileChange.path} changed since the rename was computed.`,
+            },
+          };
+        }
+        const snapshot = cleanEditorSessionSnapshot({
+          root,
+          path: fileChange.path,
+          modelScope: editorModelScope,
+          response,
+        });
+        sessionCacheRef.current.set(documentSessionKey(root, fileChange.path), snapshot);
+        snapshots[fileChange.path] = snapshot;
+        sources[fileChange.path] = patchPreviewSourceFromText(fileChange.path, snapshot.content);
+      }
+      return { status: "ready", sources, snapshots };
+    },
+    [editorModelScope, file, root],
+  );
+  const renameTargetForPath = useCallback(
+    (
+      path: string,
+      snapshots?: Readonly<Record<string, EditorFileSessionSnapshot>>,
+    ): RenameApplyTarget | null => {
+      if (root === undefined) return null;
+      if (path === file) {
+        return {
+          path,
+          content: contentRef.current,
+          fileModel,
+          version,
+          active: true,
+        };
+      }
+      // Prefer the live session cache, but fall back to the review-time snapshot so a rename whose
+      // sources were evicted from the bounded cache before Accept still applies (Issue #2105).
+      const cached =
+        sessionCacheRef.current.get(documentSessionKey(root, path)) ?? snapshots?.[path];
+      if (cached === undefined) return null;
+      return {
+        path,
+        content: cached.content,
+        fileModel: cached.fileModel,
+        version: cached.version,
+        active: false,
+        cached,
+      };
+    },
+    [file, fileModel, root, version],
+  );
+  const runRename = useCallback((): void => {
+    if (!canRename || root === undefined || file === undefined || fileModel === null) {
+      announceToolbarNotice("Rename is unavailable for this file.");
+      return;
+    }
+    if (cursor === null) {
+      announceToolbarNotice("Place the cursor on a symbol to rename.");
+      return;
+    }
+    void (async (): Promise<void> => {
+      try {
+        const position = { line: cursor.line, character: cursor.column };
+        const prepare = await requestEditorRenamePrepare({
+          root,
+          path: file,
+          languageId: fileModel.identity.language,
+          text: contentRef.current,
+          position,
+        });
+        if (prepare.range === null) {
+          announceToolbarNotice(prepare.reason);
+          return;
+        }
+        const newName = promptRenameSymbol(prepare.placeholder);
+        if (newName === null || newName === prepare.placeholder) return;
+        const changeset = await requestEditorRenameApply({
+          root,
+          path: file,
+          languageId: fileModel.identity.language,
+          text: contentRef.current,
+          position,
+          newName,
+        });
+        const sources = await loadRenameSources(changeset);
+        if (sources.status === "conflict") {
+          setAgentConflict(sources.conflict);
+          return;
+        }
+        setRenameReview({
+          changeset,
+          model: buildRenamePreview({
+            changeset,
+            sources: sources.sources,
+            patchId: `rename-symbol:${newName}`,
+          }),
+          snapshots: sources.snapshots,
+        });
+      } catch (error) {
+        announceToolbarNotice(error instanceof Error ? error.message : "Rename failed.");
+      }
+    })();
+  }, [announceToolbarNotice, canRename, cursor, file, fileModel, loadRenameSources, root]);
   const testGenerationPreview: TestGenerationPreview | null =
     isTestGenerationPreviewing(testGenState) && buffer !== null
       ? buildTestGenerationPreview({
@@ -1592,6 +2443,15 @@ function EditorRuntimeWidget({
     if (file !== undefined && dirty) set.add(file);
     return set;
   }, [dirty, dirtyFiles, file]);
+  const uriForPath = useCallback<NonNullable<EditorSurfaceProps["uriForPath"]>>(
+    (path, currentModelUri) => {
+      if (root === undefined) {
+        return currentModelUri;
+      }
+      return monacoDocumentUri(root, path, editorModelScope);
+    },
+    [editorModelScope, root],
+  );
   const handleSelectTab = useCallback(
     (path: string): void => {
       const paneAlreadyActive =
@@ -1889,6 +2749,56 @@ function EditorRuntimeWidget({
     setAgentPatchPending(null);
   }, [agentPatchPending]);
 
+  const handleRenameAccept = useCallback((): void => {
+    if (renameReview === null || root === undefined) return;
+    const plans: RenameApplyPlan[] = [];
+    for (const change of renameReview.changeset.files) {
+      const plan = buildRenamePlan(
+        change,
+        renameTargetForPath(change.path, renameReview.snapshots),
+      );
+      if ("code" in plan) {
+        setAgentConflict({ code: plan.code, message: plan.message });
+        return;
+      }
+      plans.push(plan);
+    }
+    for (const plan of plans) {
+      if (plan.target.active) {
+        setFileModel((model) =>
+          model === null
+            ? model
+            : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+        );
+        setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+        setActiveHostEditRequest({
+          id: createEditorRequestId(),
+          text: plan.nextContent,
+          origin: "applied-patch",
+        });
+      } else if (plan.target.cached !== undefined) {
+        sessionCacheRef.current.set(documentSessionKey(root, plan.target.path), {
+          ...plan.target.cached,
+          content: plan.nextContent,
+          fileModel:
+            plan.target.cached.fileModel === null
+              ? null
+              : editorFileModelReducer(plan.target.cached.fileModel, {
+                  type: "edited",
+                  origin: "applied-patch",
+                }),
+          saveStatus: saveStatusReducer(plan.target.cached.saveStatus, { type: "edited" }),
+        });
+        onDirtyChange?.(plan.target.path, true);
+      }
+    }
+    setRenameReview(null);
+  }, [onDirtyChange, renameReview, renameTargetForPath, root]);
+
+  const handleRenameReject = useCallback((): void => {
+    setRenameReview(null);
+  }, []);
+
   // Issue #1393 (ADR-0061 D3): merge an agent setSelection request into the editor surface
   // revealRequest, mapping the contract LanguageRange (0-based, `character`) onto the editor's
   // EditorRange (0-based, `column`). Agent selection takes precedence over the line-based reveal; it
@@ -1911,10 +2821,11 @@ function EditorRuntimeWidget({
             },
           },
         };
+  const outlineSelectionRequest =
+    outlineRevealRequest?.file === file ? outlineRevealRequest : symbolRevealRequest;
   const surfaceRevealRequest =
-    agentSelectionRequest === null
-      ? lineRevealRequest
-      : {
+    agentSelectionRequest !== null
+      ? {
           id: `agentAction:${agentSelectionRequest.actionId}`,
           range: {
             start: {
@@ -1926,7 +2837,8 @@ function EditorRuntimeWidget({
               column: agentSelectionRequest.selection.end.character,
             },
           },
-        };
+        }
+      : (outlineSelectionRequest ?? lineRevealRequest);
   useEffect(() => {
     if (agentSelectionRequest !== null) consumeSelectionRequest();
   }, [agentSelectionRequest, consumeSelectionRequest]);
@@ -2016,6 +2928,17 @@ function EditorRuntimeWidget({
         </div>
       </>
     );
+  } else if (renameReview !== null) {
+    panel = (
+      <EditorDiffSurface
+        model={renameReview.model}
+        loadState={{ status: "ready" }}
+        themeVariant={themeVariant}
+        actions={{ canApply: true, canReject: true, canRunVerification: false }}
+        onApply={handleRenameAccept}
+        onReject={handleRenameReject}
+      />
+    );
   } else if (testGenerationPreview !== null) {
     panel = (
       <EditorDiffSurface
@@ -2063,12 +2986,19 @@ function EditorRuntimeWidget({
         provideHover={hoverEnabled ? provideHover : undefined}
         provideSymbols={symbolsEnabled ? provideSymbols : undefined}
         provideFormatting={formattingEnabled ? provideFormatting : undefined}
+        provideDefinition={definitionEnabled ? provideDefinition : undefined}
+        uriForPath={definitionEnabled || referencesEnabled ? uriForPath : undefined}
+        provideReferences={referencesEnabled ? provideReferences : undefined}
+        provideCodeActions={codeActionsEnabled ? provideCodeActions : undefined}
+        provideSignatureHelp={signatureHelpEnabled ? provideSignatureHelp : undefined}
         formatRequestNonce={formatRequestNonce}
         onSelectionChange={setCurrentSelection}
         onCursorChange={setCursor}
         revealRequest={surfaceRevealRequest}
+        hostEditRequest={activeHostEditRequest}
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
+        onRenameSymbol={canRename ? runRename : undefined}
         showStatusFooter={false}
       />
     );
@@ -2393,6 +3323,9 @@ function EditorRuntimeWidget({
         />
       ) : null}
       <EditorAgentActionsPanel agentSessionId={agentSessionId} refreshNonce={auditRefreshNonce} />
+      {hasTarget ? (
+        <EditorBreadcrumbBar filePath={file} path={breadcrumbPath} onReveal={revealSymbol} />
+      ) : null}
       <div className="ed-host" id={tabpanelId} role="tabpanel" aria-labelledby={tabId}>
         {panel}
       </div>

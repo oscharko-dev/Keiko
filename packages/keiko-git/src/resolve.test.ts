@@ -36,6 +36,20 @@ afterEach(() => {
 });
 
 describe("resolveGitMembership", () => {
+  it("fails closed when git exits 0 with an empty toplevel line", async () => {
+    // A hostile or broken `git rev-parse` that prints nothing must never resolve to membership.
+    const blankRunner: typeof defaultGitProcessRunner = () =>
+      Promise.resolve({
+        exitCode: 0,
+        signal: null,
+        stdout: "\n\n",
+        stderr: "",
+        truncated: false,
+      });
+    const resolution = await resolveGitMembership(repo, blankRunner, TIMEOUT);
+    expect(resolution.ok).toBe(false);
+  });
+
   it("resolves the repository root with an empty prefix", async () => {
     const resolution = await resolveGitMembership(repo, defaultGitProcessRunner, TIMEOUT);
     expect(resolution.ok).toBe(true);

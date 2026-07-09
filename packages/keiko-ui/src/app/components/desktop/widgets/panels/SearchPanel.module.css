@@ -1,0 +1,178 @@
+.panel {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+}
+
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+
+.controlRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.modeGroup {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card-2);
+}
+
+.modeButton {
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 7px 10px;
+}
+
+.modeButton:last-child {
+  border-right: 0;
+}
+
+.modeButton[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--bg);
+}
+
+.modeButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.checkLabel,
+.fieldLabel {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.checkLabel {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.globGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.fieldLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.globInput {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card-2);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  padding: 7px 8px;
+}
+
+.status {
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  padding: 10px;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.results {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  padding: 0 10px 10px;
+}
+
+.fileGroup {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.fileHeader {
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.match {
+  display: grid;
+  width: 100%;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.match:last-child {
+  border-bottom: 0;
+}
+
+.match:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.match[aria-selected="true"] {
+  background: var(--card-2);
+}
+
+.lineBadge {
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.snippet {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ed-fg, var(--fg));
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.replaceReview {
+  display: flex;
+  min-height: 320px;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding: 10px;
+}

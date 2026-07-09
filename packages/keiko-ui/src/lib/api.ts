@@ -23,7 +23,6 @@ import type {
   EvidenceManifest,
   GroundedAnswer,
   GroundedAskRequest,
-  FilesDirectoryListing,
   FilesContentResponse,
   FilesMutationResponse,
   FilesPreviewResponse,
@@ -57,10 +56,18 @@ import type {
   EditorPatchApplyWireResponse,
   LanguageDiagnosticsResult,
   LanguageServiceCapabilities,
+  LanguageDefinitionResult,
   LanguageHoverResult,
+  LanguageReferencesResult,
+  LanguageRenameApplyResult,
+  LanguageRenamePrepareResult,
   LanguageSymbolResult,
   LanguageFormattingResult,
   LanguageFormattingOptions,
+  LanguageCodeActionsResult,
+  LanguageDiagnostic,
+  LanguageRange,
+  LanguageSignatureHelpResult,
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
@@ -74,6 +81,9 @@ import type {
   MessageResponse,
   MessagesResponse,
   ModelCapability,
+  NativeFileDialogCapability,
+  NativeFileDialogRequest,
+  NativeFileDialogResponse,
   PatchChatMessageBody,
   PatchMessageResponse,
   PromptEnhancementWireRequest,
@@ -109,6 +119,14 @@ import type {
   PdfCitationPreviewStatusResponse,
   VoicePersona,
   GitRepositoryValidation,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResponse,
+  WorkspaceReplaceApplyRequest,
+  WorkspaceReplaceApplyResponse,
+  WorkspaceReplacePreviewRequest,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceSymbolSearchRequest,
+  WorkspaceSymbolSearchResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
   validateGitHistoryResponse,
@@ -1303,18 +1321,27 @@ export async function sendDesktopChatStream(
 // ./terminal-api.ts. The PTY routes (/api/terminal/shells, /sessions, WS upgrade) are removed.
 
 // ---------------------------------------------------------------------------
-// Desktop files — selected-root browser, preview, and editor control plane
+// Native OS file/folder dialog (Epic #1941, ADR-0118). The BFF opens the platform picker and
+// returns ONLY validated selections; cancellation is a typed success, never an error. Selected
+// paths are never logged here and persist only into the same state the manual inputs already own.
 // ---------------------------------------------------------------------------
 
-export async function fetchFilesDirectories(
-  root: string,
-  path?: string,
-): Promise<FilesDirectoryListing> {
-  const params = new URLSearchParams();
-  params.set("root", root);
-  if (path !== undefined && path.length > 0) params.set("path", path);
-  return fetchJson(`/api/files/directories?${params.toString()}`);
+export async function fetchNativeFileDialogCapability(): Promise<NativeFileDialogCapability> {
+  return fetchJson("/api/native-file-dialog/capability");
 }
+
+export async function openNativeFileDialog(
+  input: NativeFileDialogRequest,
+): Promise<NativeFileDialogResponse> {
+  return fetchJson("/api/native-file-dialog/open", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Desktop files — selected-root browser, preview, and editor control plane
+// ---------------------------------------------------------------------------
 
 export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {
   const params = new URLSearchParams();
@@ -1334,6 +1361,48 @@ export async function fetchFilesSearch(
   params.set("q", query);
   if (limit !== undefined) params.set("limit", String(limit));
   return fetchJson(`/api/files/search?${params.toString()}`, init);
+}
+
+export async function fetchWorkspaceSearch(
+  request: WorkspaceSearchRequest,
+  init?: Pick<RequestInit, "signal">,
+): Promise<WorkspaceSearchResponse> {
+  return fetchJson("/api/editor/workspace-search", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...init,
+  });
+}
+
+export async function fetchWorkspaceSymbols(
+  request: WorkspaceSymbolSearchRequest,
+  init?: Pick<RequestInit, "signal">,
+): Promise<WorkspaceSymbolSearchResponse> {
+  return fetchJson("/api/editor/workspace-symbols", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...init,
+  });
+}
+
+export async function fetchWorkspaceReplacePreview(
+  request: WorkspaceReplacePreviewRequest,
+  init?: Pick<RequestInit, "signal">,
+): Promise<WorkspaceReplacePreviewResponse> {
+  return fetchJson("/api/editor/workspace-search/replace-preview", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...init,
+  });
+}
+
+export async function applyWorkspaceReplace(
+  request: WorkspaceReplaceApplyRequest,
+): Promise<WorkspaceReplaceApplyResponse> {
+  return fetchJson("/api/editor/workspace-search/replace-apply", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {
@@ -1806,6 +1875,142 @@ export async function requestEditorFormatting(
         root: input.root,
         document: languageDocument(input),
         ...(input.options === undefined ? {} : { options: input.options }),
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorDefinition(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageDefinitionResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "definition",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorReferences(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageReferencesResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageReferencesResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "references",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorCodeActions(
+  input: EditorLanguageRequestInput & {
+    readonly range: LanguageRange;
+    readonly diagnostics: readonly LanguageDiagnostic[];
+  },
+  signal?: AbortSignal,
+): Promise<LanguageCodeActionsResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageCodeActionsResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "codeActions",
+        root: input.root,
+        document: languageDocument(input),
+        range: input.range,
+        diagnostics: input.diagnostics,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorSignatureHelp(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageSignatureHelpResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageSignatureHelpResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "signatureHelp",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorRenamePrepare(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageRenamePrepareResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageRenamePrepareResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "renamePrepare",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorRenameApply(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+    readonly newName: string;
+  },
+  signal?: AbortSignal,
+): Promise<LanguageRenameApplyResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageRenameApplyResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "renameApply",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+        newName: input.newName,
       }),
       ...(signal === undefined ? {} : { signal }),
     },

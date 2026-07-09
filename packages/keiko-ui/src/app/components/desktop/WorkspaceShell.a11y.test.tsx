@@ -104,7 +104,6 @@ describe("Workspace shell accessibility", () => {
     const { container } = render(
       <div className="app">
         <Header
-          openPalette={vi.fn()}
           openCommandPalette={vi.fn()}
           onTileAll={vi.fn()}
           onSplitFront={vi.fn()}
@@ -166,7 +165,6 @@ describe("Workspace shell accessibility", () => {
       const { container } = render(
         <div className="app" data-theme="light">
           <Header
-            openPalette={vi.fn()}
             openCommandPalette={vi.fn()}
             onTileAll={vi.fn()}
             onSplitFront={vi.fn()}
@@ -243,13 +241,13 @@ describe("Workspace shell accessibility", () => {
     const onTool = vi.fn();
     const onToggleTheme = vi.fn();
     const openPalette = vi.fn();
+    const openCommandPalette = vi.fn();
     const wsApi = api();
 
     render(
       <div className="app">
         <Header
-          openPalette={openPalette}
-          openCommandPalette={vi.fn()}
+          openCommandPalette={openCommandPalette}
           onTileAll={onTileAll}
           onSplitFront={onSplitFront}
           onCascade={onCascade}
@@ -278,6 +276,10 @@ describe("Workspace shell accessibility", () => {
       expect(element).toHaveFocus();
     };
 
+    await tabTo(screen.getByRole("button", { name: "Open quick access" }));
+    await user.keyboard("{Enter}");
+    expect(openCommandPalette).toHaveBeenCalledTimes(1);
+
     await tabTo(screen.getByRole("button", { name: "Tile all windows" }));
     await user.keyboard("{Enter}");
     expect(onTileAll).toHaveBeenCalledTimes(1);
@@ -299,6 +301,7 @@ describe("Workspace shell accessibility", () => {
     await tabTo(screen.getByRole("button", { name: "Quality Intelligence" }));
     await tabTo(screen.getByRole("button", { name: "Prompt Enhancer" }));
     await tabTo(screen.getByRole("button", { name: "Git" }));
+    await tabTo(screen.getByRole("button", { name: "Editor" }));
     await tabTo(screen.getByRole("button", { name: "Local Knowledge" }));
     await tabTo(screen.getByRole("button", { name: "Figma Snapshot" }));
 

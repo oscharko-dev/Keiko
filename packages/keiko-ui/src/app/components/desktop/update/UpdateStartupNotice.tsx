@@ -2,10 +2,15 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchStartupUpdatePreflight } from "@/lib/api";
-import { useTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { Icons } from "../Icons";
-import { hasStartupUpdateSignal } from "./update-copy";
+import {
+  hasStartupUpdateSignal,
+  isPortableBootstrapSetupRequired,
+  isPortableExternallyManaged,
+  isPortableReleaseMetadataUnavailable,
+} from "./update-copy";
 
 interface UpdateStartupNoticeProps {
   readonly ready: boolean;
@@ -28,6 +33,7 @@ function dismissalFingerprint(report: UpdatePreflightReport): string {
     report.severity,
     report.manualUpdateRequired ? "manual" : "automatic",
     report.userActionRequired ? "action" : "no-action",
+    report.portableAsset?.status ?? "no-portable-asset",
     report.blockers
       .map((blocker) => blocker.code)
       .slice()
@@ -54,6 +60,36 @@ function persistDismissal(report: UpdatePreflightReport): void {
   } catch {
     // Dismissal persistence is a convenience only; keep the update path usable if storage is blocked.
   }
+}
+
+function noticeBody(
+  report: UpdatePreflightReport,
+  targetVersion: string,
+  t: I18nTranslate,
+): string {
+  if (isPortableReleaseMetadataUnavailable(report)) {
+    return t("updates.notice.releaseUnavailableBody");
+  }
+  if (isPortableExternallyManaged(report)) {
+    return t("updates.notice.portableExternallyManagedBody");
+  }
+  if (isPortableBootstrapSetupRequired(report)) {
+    return t("updates.notice.portableSetupBody");
+  }
+  if (
+    report.installabilitySource === "github-release-asset" &&
+    report.portableAsset?.status === "eligible"
+  ) {
+    return t("updates.notice.portableBody", { version: targetVersion });
+  }
+  return t("updates.notice.body", { version: targetVersion });
+}
+
+function noticeTitle(report: UpdatePreflightReport, critical: boolean, t: I18nTranslate): string {
+  if (critical) return t("updates.notice.criticalTitle");
+  if (isPortableReleaseMetadataUnavailable(report))
+    return t("updates.notice.releaseUnavailableTitle");
+  return t("updates.notice.title");
 }
 
 export function UpdateStartupNotice({
@@ -99,8 +135,8 @@ export function UpdateStartupNotice({
         {critical ? <Icons.info size={17} /> : <Icons.activity size={17} />}
       </span>
       <div className="update-notice-body">
-        <strong>{critical ? t("updates.notice.criticalTitle") : t("updates.notice.title")}</strong>
-        <span>{t("updates.notice.body", { version: targetVersion })}</span>
+        <strong>{noticeTitle(state.report, critical, t)}</strong>
+        <span>{noticeBody(state.report, targetVersion, t)}</span>
       </div>
       <div className="update-notice-actions">
         <button

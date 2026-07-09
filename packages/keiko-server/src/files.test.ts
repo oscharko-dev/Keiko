@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from
 import { rmSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -14,7 +14,6 @@ import {
   copyFilesEntry,
   deleteFilesEntry,
   handleFilesContent,
-  listFilesDirectories,
   readFilesContent,
   readFilesPreview,
   readFilesTree,
@@ -22,6 +21,7 @@ import {
   searchFiles,
   writeFilesContent,
 } from "./index.js";
+import { resolveRoot } from "./files.js";
 import type { RouteContext, UiHandlerDeps } from "./index.js";
 import type { UiStore } from "./store/index.js";
 
@@ -78,44 +78,18 @@ describe("desktop files browser", () => {
     }
   });
 
-  it("lists directories for the local folder picker", async () => {
-    const listing = await listFilesDirectories(store, root);
+  it("resolves a registered project root and keeps deny-listed roots out", async () => {
+    await mkdir(join(root, ".git"), { recursive: true });
 
-    expect(listing.path).toBe(root);
-    expect(listing.entries.map((entry) => entry.name)).toEqual(["assets", "src"]);
-    expect(listing.roots).toEqual([{ label: "Project root", path: root }]);
-  });
-
-  it("keeps the local folder picker inside the registered project and deny list", async () => {
-    await mkdir(join(root, ".git"));
-    await mkdir(join(root, "node_modules"));
-    await mkdir(join(root, "src", "nested"));
-
-    const listing = await listFilesDirectories(store, root, root);
-    expect(listing.entries.map((entry) => entry.name)).toEqual(["assets", "src"]);
-
-    const nested = await listFilesDirectories(store, root, join(root, "src"));
-    expect(nested.parent).toBe(root);
-    expect(nested.entries.map((entry) => entry.name)).toEqual(["nested"]);
-
-    await expect(listFilesDirectories(store, root, join(root, ".git"))).rejects.toMatchObject({
-      status: 403,
-      code: "DENIED",
+    await expect(resolveRoot(store, root, buildRedactor({}))).resolves.toMatchObject({
+      root,
+      realRoot: root,
     });
+
     store.createProject(join(root, ".git"), "git-dir");
-    await expect(listFilesDirectories(store, join(root, ".git"))).rejects.toMatchObject({
+    await expect(resolveRoot(store, join(root, ".git"), buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
-    });
-    await expect(listFilesDirectories(store, root, dirname(root))).rejects.toMatchObject({
-      status: 403,
-      code: "PATH_ESCAPE",
-    });
-    await expect(
-      listFilesDirectories(store, root, join(dirname(root), "missing-outside-project")),
-    ).rejects.toMatchObject({
-      status: 403,
-      code: "PATH_ESCAPE",
     });
   });
 
@@ -125,10 +99,10 @@ describe("desktop files browser", () => {
     await mkdir(join(arbitrary, "reports"));
     await writeFile(join(arbitrary, "notes.txt"), "hello world", "utf8");
 
-    const listing = await listFilesDirectories(store, arbitrary);
-    expect(listing.path).toBe(arbitrary);
-    expect(listing.entries.map((entry) => entry.name)).toEqual(["reports"]);
-    expect(listing.roots).toEqual([{ label: "Project root", path: arbitrary }]);
+    await expect(resolveRoot(store, arbitrary, buildRedactor({}))).resolves.toMatchObject({
+      root: arbitrary,
+      realRoot: arbitrary,
+    });
 
     const tree = await readFilesTree(store, arbitrary, "");
     expect(tree.entries.map((entry) => entry.name)).toContain("notes.txt");
@@ -141,7 +115,7 @@ describe("desktop files browser", () => {
   });
 
   it("rejects a relative (non-absolute) arbitrary root", async () => {
-    await expect(listFilesDirectories(store, "relative/dir")).rejects.toMatchObject({
+    await expect(resolveRoot(store, "relative/dir", buildRedactor({}))).rejects.toMatchObject({
       status: 400,
       code: "BAD_ROOT",
     });
@@ -156,11 +130,13 @@ describe("desktop files browser", () => {
     await mkdir(join(base, ".aws"));
     await mkdir(join(base, ".aws", "sub"));
 
-    await expect(listFilesDirectories(store, join(base, ".aws"))).rejects.toMatchObject({
+    await expect(resolveRoot(store, join(base, ".aws"), buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
-    await expect(listFilesDirectories(store, join(base, ".aws", "sub"))).rejects.toMatchObject({
+    await expect(
+      resolveRoot(store, join(base, ".aws", "sub"), buildRedactor({})),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -175,12 +151,12 @@ describe("desktop files browser", () => {
     await writeFile(join(root, "safe-dir", `${tokenSegment}.txt`), "hidden\n", "utf8");
     await writeFile(join(root, "safe-dir", "visible.txt"), "hello\n", "utf8");
 
-    await expect(listFilesDirectories(store, sensitiveRoot)).rejects.toMatchObject({
+    await expect(resolveRoot(store, sensitiveRoot, buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
-    const directories = await listFilesDirectories(store, root, root);
-    expect(directories.entries.map((entry) => entry.name)).not.toContain(tokenSegment);
+    const treeRoot = await readFilesTree(store, root, "");
+    expect(treeRoot.entries.map((entry) => entry.name)).not.toContain(tokenSegment);
 
     const tree = await readFilesTree(store, root, "safe-dir");
     expect(tree.entries.map((entry) => entry.name)).toEqual(["visible.txt"]);
@@ -216,7 +192,7 @@ describe("desktop files browser", () => {
     await mkdir(sensitiveProject, { recursive: true });
     store.createProject(sensitiveProject, "sensitive-project");
 
-    await expect(listFilesDirectories(store, sensitiveProject)).rejects.toMatchObject({
+    await expect(resolveRoot(store, sensitiveProject, buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -231,7 +207,7 @@ describe("desktop files browser", () => {
     await mkdir(nestedProject, { recursive: true });
     store.createProject(nestedProject, "nested-project");
 
-    await expect(listFilesDirectories(store, nestedProject)).rejects.toMatchObject({
+    await expect(resolveRoot(store, nestedProject, buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });

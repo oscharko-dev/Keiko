@@ -12,20 +12,31 @@
 import type {
   EditorBuffer,
   EditorChangeOrigin,
+  EditorCodeActionsResolver,
   EditorCompletionResolver,
+  EditorDefinitionResolver,
   EditorDiagnosticsResolver,
   EditorFileModel,
   EditorFormattingResolver,
+  EditorHostEditRequest,
   EditorHoverResolver,
   EditorInlineCompletionResolver,
   EditorPosition,
   EditorRange,
+  EditorReferencesResolver,
   EditorSaveRequest,
+  EditorSignatureHelpResolver,
   EditorSymbolsResolver,
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
 import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
+
+export interface EditorUriLike {
+  toString(): string;
+}
+
+export type EditorUriForPath = (path: string, currentModelUri: EditorUriLike) => EditorUriLike;
 
 /**
  * The save lifecycle the host drives and the component renders.
@@ -91,6 +102,7 @@ export interface KeikoCodeEditorProps {
   readonly onSelectionChange?: ((selection: EditorRange | null) => void) | undefined;
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
   readonly revealRequest?: EditorRevealRequest | undefined;
+  readonly hostEditRequest?: EditorHostEditRequest | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
   /**
    * Host-injected completion resolver (Issue #1199). When present, the editor registers a Monaco
@@ -144,6 +156,28 @@ export interface KeikoCodeEditorProps {
    */
   readonly provideFormatting?: EditorFormattingResolver | undefined;
   /**
+   * Host-injected definition resolver (Epic #2089). When present, the editor registers Monaco's
+   * native go-to-definition provider; the host owns the governed BFF call.
+   */
+  readonly provideDefinition?: EditorDefinitionResolver | undefined;
+  /** Resolve a workspace-relative location path to the host-owned Monaco model URI. */
+  readonly uriForPath?: EditorUriForPath | undefined;
+  /**
+   * Host-injected references resolver (Epic #2089). When present, the editor registers Monaco's
+   * native find-references provider; the host owns the governed BFF call.
+   */
+  readonly provideReferences?: EditorReferencesResolver | undefined;
+  /**
+   * Host-injected code-action resolver (Epic #2089). When present, the editor registers Monaco's
+   * lightbulb provider and enables the lightbulb UI. Edits are limited to the active model.
+   */
+  readonly provideCodeActions?: EditorCodeActionsResolver | undefined;
+  /**
+   * Host-injected signature-help resolver (Epic #2089). When present, the editor registers Monaco's
+   * parameter-hints provider and enables parameter hints.
+   */
+  readonly provideSignatureHelp?: EditorSignatureHelpResolver | undefined;
+  /**
    * Monotonic host request token for Monaco's built-in "Format Document" action. Incrementing this
    * value asks the mounted editor to invoke the registered formatter for the active buffer.
    */
@@ -161,4 +195,6 @@ export interface KeikoCodeEditorProps {
    * when the host offers no test generation (e.g. a non-source buffer), so the action never registers.
    */
   readonly onGenerateTests?: (() => void) | undefined;
+  /** Host handler for the F2 Rename Symbol command (Epic #2089, Issue #2105). */
+  readonly onRenameSymbol?: (() => void) | undefined;
 }

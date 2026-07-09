@@ -251,7 +251,7 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     expect(sandbox.respondWithCalls).toHaveLength(0);
   });
 
-  it("DOES call event.respondWith for /manifest.webmanifest (static asset)", () => {
+  it("does not call event.respondWith for /manifest.webmanifest", () => {
     const { context, sandbox } = makeSandbox();
     vm.runInContext(SW_SOURCE, context);
 
@@ -259,7 +259,7 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     const event = makeEvent("fetch", "http://localhost:3000/manifest.webmanifest", sandbox);
     fetchHandler?.(event);
 
-    expect(sandbox.respondWithCalls).toHaveLength(1);
+    expect(sandbox.respondWithCalls).toHaveLength(0);
   });
 
   it("DOES call event.respondWith for /_next/static/*.js (static asset)", () => {

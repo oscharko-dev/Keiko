@@ -17,6 +17,7 @@
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -435,6 +436,7 @@ function useDiffController(
   const controllerRef = useRef<DiffMountController | null>(null);
   const onMount = useCallback<DiffOnMount>(
     (editor, monaco): void => {
+      controllerRef.current?.dispose();
       // The live `monaco` namespace surfaces as error-typed to the typed-lint program; narrow it at
       // this single seam to the minimal structural view the mount wiring consumes (cf. KeikoCodeEditor).
       const mountMonaco = monaco as unknown as MountDiffMonaco;
@@ -446,6 +448,13 @@ function useDiffController(
       });
     },
     [themeVariant, onThemeError],
+  );
+  useEffect(
+    () => (): void => {
+      controllerRef.current?.dispose();
+      controllerRef.current = null;
+    },
+    [],
   );
   const goToPrev = useCallback((): void => controllerRef.current?.goToPreviousDiff(), []);
   const goToNext = useCallback((): void => controllerRef.current?.goToNextDiff(), []);

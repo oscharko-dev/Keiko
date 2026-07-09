@@ -28,7 +28,6 @@ import type {
   CapsuleDetail,
   ConnectCapsuleSourceScope,
 } from "@/lib/local-knowledge-api";
-import type { FilesTreeEntry } from "@/lib/types";
 import { formatBytes, formatDurationCompact as formatDuration } from "@/lib/format";
 import {
   LOCAL_KNOWLEDGE_MAX_FILE_BYTES,
@@ -36,7 +35,8 @@ import {
   LOCAL_KNOWLEDGE_PARSER_TIMEOUT_MS,
 } from "@/lib/local-knowledge-limits";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
-import { LocalFileBrowserDialog } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
+import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
+import { nativePathsToRootAndFiles, pickWithNativeDialog } from "@/lib/native-file-dialog";
 import KeikoSelect from "@/app/components/desktop/KeikoSelect";
 import { formatError } from "../format-error";
 
@@ -125,10 +125,6 @@ function localKnowledgeLimitSummary(): string {
   return `Maximum single file size: ${formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES)}. Parser budget: ${LOCAL_KNOWLEDGE_MAX_OBJECTS_PER_DOCUMENT.toLocaleString("en-US")} objects, ${formatLimitDuration(LOCAL_KNOWLEDGE_PARSER_TIMEOUT_MS)} per document.`;
 }
 
-function isOversizedPickerFile(entry: FilesTreeEntry): boolean {
-  return entry.kind === "file" && entry.sizeBytes > LOCAL_KNOWLEDGE_MAX_FILE_BYTES;
-}
-
 // ---------------------------------------------------------------------------
 // ConnectSourceForm — Issue #189 / #682 source connect affordance
 // ---------------------------------------------------------------------------
@@ -180,28 +176,6 @@ function buildScope(
   return { kind: "files", rootPath: trimmedRoot, files };
 }
 
-function pickerModeForScope(kind: ConnectCapsuleSourceScope["kind"]): "files" | "folder-or-files" {
-  return kind === "files" ? "files" : "folder-or-files";
-}
-
-function pickerFileDisabledReason(entry: FilesTreeEntry): string | undefined {
-  if (isOversizedPickerFile(entry)) {
-    return `File is ${formatBytes(entry.sizeBytes)}; maximum is ${formatBytes(LOCAL_KNOWLEDGE_MAX_FILE_BYTES)}.`;
-  }
-  if (!entry.readable) return "File is not readable.";
-  return undefined;
-}
-
-function pickerFileMeta(entry: FilesTreeEntry): ReactNode {
-  const oversized = isOversizedPickerFile(entry);
-  return (
-    <>
-      {formatBytes(entry.sizeBytes)}
-      {oversized ? " · too large" : ""}
-    </>
-  );
-}
-
 const SOURCE_KIND_OPTIONS = [
   {
     value: "folder",
@@ -230,9 +204,43 @@ function ConnectSourceForm({
   const [filesInput, setFilesInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
   const sourceKindLabelId = useId();
+  const nativeNoteId = useId();
+  const nativeDialogSupported = useNativeFileDialogCapability();
   const scope = buildScope(scopeKind, rootPath, filesInput);
+
+  // Epic #1941 (ADR-0118) — the chosen scope decides what the native dialog picks: file scopes
+  // multi-select files (folded into shared root + relative paths), folder/repository scopes pick
+  // one folder. Manual entry in the inputs below stays the fallback everywhere.
+  function openNativeSourcePicker(): void {
+    const wantsFiles = scopeKind === "files";
+    void pickWithNativeDialog({
+      mode: wantsFiles ? "open-files" : "open-directory",
+      title: wantsFiles ? "Choose files for this pod" : "Choose a folder for this pod",
+      ...(rootPath.trim().length > 0 ? { defaultPath: rootPath.trim() } : {}),
+    }).then((outcome) => {
+      if (outcome.kind === "picked") {
+        if (wantsFiles) {
+          const mapped = nativePathsToRootAndFiles(outcome.paths);
+          setRootPath(mapped.rootPath);
+          setFilesInput(mapped.files.join("\n"));
+        } else {
+          const picked = outcome.paths[0];
+          if (picked !== undefined) setRootPath(picked);
+        }
+        setConnectError(null);
+        return;
+      }
+      if (outcome.kind === "busy")
+        setConnectError("A native dialog is already open. Close it first.");
+      if (outcome.kind === "unsupported") {
+        setConnectError(
+          "Native dialogs are unavailable on this platform. Enter the path manually.",
+        );
+      }
+      if (outcome.kind === "error") setConnectError(outcome.message);
+    });
+  }
 
   async function handleConnect(): Promise<void> {
     if (scope === null || busy) return;
@@ -292,12 +300,18 @@ function ConnectSourceForm({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            disabled={busy}
-            onClick={() => setPickerOpen(true)}
+            disabled={busy || !nativeDialogSupported}
+            aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
+            onClick={openNativeSourcePicker}
           >
             Browse
           </button>
         </div>
+        {!nativeDialogSupported ? (
+          <span id={nativeNoteId} className="dlg-note">
+            Native dialogs are unavailable on this platform. Enter the path manually.
+          </span>
+        ) : null}
       </div>
       {scopeKind === "files" ? (
         <div className="lkd-connect-row">
@@ -330,32 +344,6 @@ function ConnectSourceForm({
         <div role="alert" aria-live="assertive" className="lk-alert">
           {connectError}
         </div>
-      ) : null}
-      {pickerOpen ? (
-        <LocalFileBrowserDialog
-          mode={pickerModeForScope(scopeKind)}
-          title="Choose local source"
-          description={`Select a local ${scopeKind === "files" ? "file or files" : "folder"} for this pod.`}
-          note={localKnowledgeLimitSummary()}
-          initialRootPath={rootPath}
-          initialFiles={parseFilesInput(filesInput)}
-          isFileDisabled={isOversizedPickerFile}
-          fileDisabledReason={pickerFileDisabledReason}
-          fileMeta={pickerFileMeta}
-          onApply={(selection) => {
-            if (selection.files.length > 0) {
-              setScopeKind("files");
-              setRootPath(selection.rootPath);
-              setFilesInput(selection.files.join("\n"));
-            } else {
-              setRootPath(selection.folderPath);
-              if (scopeKind !== "files") setFilesInput("");
-            }
-            setConnectError(null);
-            setPickerOpen(false);
-          }}
-          onCancel={() => setPickerOpen(false)}
-        />
       ) : null}
     </div>
   );

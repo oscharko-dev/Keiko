@@ -1,4 +1,11 @@
 import type { ReleaseImpactRemediation, ReleaseImpactStateImpact } from "./release-impact.js";
+import type {
+  UpdatePortableActivationSummary,
+  UpdatePortableSidecarFailureCode,
+  UpdatePortableSidecarVerificationStatus,
+  UpdatePortableStagingSummary,
+  UpdatePortableTarget,
+} from "./update-session.js";
 
 export const UPDATE_LOCAL_STATE_SCHEMA_VERSION = 1 as const;
 
@@ -39,6 +46,11 @@ export const UPDATE_RUNTIME_EVENT_TYPES = [
   "preflight-result",
   "snapshot-created",
   "package-update-result",
+  "portable-download-result",
+  "portable-sidecar-verification-result",
+  "portable-staging-result",
+  "portable-activation-result",
+  "portable-relaunch-result",
   "remediation-completed",
   "remediation-failed",
   "remediation-deferred",
@@ -124,6 +136,8 @@ export interface UpdateRuntimeState {
   readonly updatedAt: string;
   readonly targetVersion?: string | undefined;
   readonly snapshotId?: string | undefined;
+  readonly portableStage?: UpdatePortableStagingSummary | undefined;
+  readonly portableActivation?: UpdatePortableActivationSummary | undefined;
   readonly remediations: readonly UpdateRemediationActionState[];
   readonly warnings: readonly UpdateRuntimeWarningCode[];
 }
@@ -135,6 +149,20 @@ export interface UpdateRuntimeAuditEvent {
   readonly occurredAt: string;
   readonly targetVersion?: string | undefined;
   readonly snapshotId?: string | undefined;
+  readonly portableStageId?: string | undefined;
+  readonly portableActivationId?: string | undefined;
+  readonly portableTarget?: UpdatePortableTarget | undefined;
+  readonly portableAssetName?: string | undefined;
+  readonly portableAssetSha256?: string | undefined;
+  readonly portableAssetSizeBytes?: number | undefined;
+  readonly portableSidecarName?: string | undefined;
+  readonly portableSidecarKind?: string | undefined;
+  readonly portableSidecarVersion?: string | undefined;
+  readonly portableSidecarTarget?: UpdatePortableTarget | undefined;
+  readonly portableSidecarPayloadSha256?: string | undefined;
+  readonly portableSidecarPayloadSha256Prefix?: string | undefined;
+  readonly portableSidecarStatus?: UpdatePortableSidecarVerificationStatus | undefined;
+  readonly portableSidecarFailureCode?: UpdatePortableSidecarFailureCode | undefined;
   readonly store?: UpdateStateStore | undefined;
   readonly remediation?: ReleaseImpactRemediation | undefined;
   readonly status?: UpdateRemediationStatus | "succeeded" | "failed" | "blocked" | undefined;

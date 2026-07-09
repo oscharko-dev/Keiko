@@ -9,7 +9,6 @@ import { Header } from "./Header";
 
 function renderHeader(overrides: Partial<Parameters<typeof Header>[0]> = {}) {
   const props = {
-    openPalette: vi.fn(),
     openCommandPalette: vi.fn(),
     onTileAll: vi.fn(),
     onSplitFront: vi.fn(),
@@ -42,12 +41,10 @@ describe("Header window controls (C023)", () => {
 });
 
 describe("Header release controls", () => {
-  it("does not expose New or command-palette buttons in the header", () => {
+  it("exposes quick access without restoring the old New button", () => {
     renderHeader();
     expect(screen.queryByRole("button", { name: "New window" })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Open the command palette (Ctrl/⌘K)" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open quick access" })).toBeInTheDocument();
   });
 });
 
@@ -98,7 +95,6 @@ describe("Header split action wording (F039 C401)", () => {
     render(
       <I18nProvider>
         <Header
-          openPalette={vi.fn()}
           openCommandPalette={vi.fn()}
           onTileAll={vi.fn()}
           onSplitFront={vi.fn()}
@@ -130,7 +126,6 @@ describe("Header brand (C399)", () => {
   it("keeps the logo decorative next to the visible wordmark (no 'Keiko Keiko')", () => {
     const { container } = render(
       <Header
-        openPalette={vi.fn()}
         openCommandPalette={vi.fn()}
         onTileAll={vi.fn()}
         onSplitFront={vi.fn()}

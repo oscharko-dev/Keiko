@@ -27,7 +27,7 @@ const stubDeps: UiHandlerDeps = {
 
 describe("API route contract", () => {
   it("declares the additive route contract while keeping workflow launches outside chat routes", () => {
-    expect(API_ROUTES.length).toBeGreaterThanOrEqual(97);
+    expect(API_ROUTES.length).toBeGreaterThanOrEqual(99);
     expect(
       API_ROUTES.find(
         (route) =>
@@ -61,6 +61,17 @@ describe("API route contract", () => {
       "/api/editor/hot-exit/write",
       "/api/editor/hot-exit/read",
       "/api/editor/hot-exit/delete",
+    ]) {
+      expect(matchRoute("POST", pattern)).toMatchObject({ definition: { pattern } });
+    }
+  });
+
+  it("includes the user-facing workspace search route pair (#2108)", () => {
+    for (const pattern of [
+      "/api/editor/workspace-search",
+      "/api/editor/workspace-symbols",
+      "/api/editor/workspace-search/replace-preview",
+      "/api/editor/workspace-search/replace-apply",
     ]) {
       expect(matchRoute("POST", pattern)).toMatchObject({ definition: { pattern } });
     }
@@ -236,9 +247,9 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
-  it("includes the 20 memory routes (12 from #211, 2 #209 governance routes, 2 from #212, 3 consolidation-job routes from #208, 1 maintenance route from #204)", () => {
+  it("includes the 21 memory routes (12 from #211, 2 #209 governance routes, 2 from #212, 3 consolidation-job routes from #208, 1 maintenance route from #204, 1 health-scan route from #2129)", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(20);
+    expect(memoryRoutes).toHaveLength(21);
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/forget"),
     ).toBeDefined();
@@ -247,6 +258,9 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/maintenance"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/memory/health-scan"),
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/context"),
@@ -415,9 +429,6 @@ describe("API route contract", () => {
 
   it("includes the desktop files read-only routes", () => {
     expect(
-      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/directories"),
-    ).toBeDefined();
-    expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/tree"),
     ).toBeDefined();
     expect(
@@ -425,6 +436,17 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/preview"),
+    ).toBeDefined();
+  });
+
+  it("includes the native file dialog routes", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/native-file-dialog/open"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "GET" && r.pattern === "/api/native-file-dialog/capability",
+      ),
     ).toBeDefined();
   });
 

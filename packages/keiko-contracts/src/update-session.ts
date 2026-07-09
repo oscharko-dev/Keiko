@@ -8,12 +8,180 @@ export type UpdateInstallPackageManager = "npm" | "yarn";
 export const UPDATE_INSTALL_PACKAGE_MANAGERS: readonly UpdateInstallPackageManager[] =
   Object.freeze(["npm", "yarn"] as const satisfies readonly UpdateInstallPackageManager[]);
 
+export type UpdatePortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
+
+export const UPDATE_PORTABLE_TARGETS: readonly UpdatePortableTarget[] = Object.freeze([
+  "windows-x64",
+  "macos-arm64",
+  "macos-x64",
+] as const satisfies readonly UpdatePortableTarget[]);
+
+export const UPDATE_PORTABLE_TARGET_ASSET_NAMES: Readonly<Record<UpdatePortableTarget, string>> =
+  Object.freeze({
+    "windows-x64": "keiko-windows-x64.zip",
+    "macos-arm64": "keiko-macos-arm64.zip",
+    "macos-x64": "keiko-macos-x64.zip",
+  } as const satisfies Readonly<Record<UpdatePortableTarget, string>>);
+
+export type UpdateInstallModeKind =
+  | "package-manager"
+  | "portable-managed"
+  | "portable-bootstrap"
+  | "portable-setup-failed"
+  | "portable-it-managed";
+
+export const UPDATE_INSTALL_MODE_KINDS: readonly UpdateInstallModeKind[] = Object.freeze([
+  "package-manager",
+  "portable-managed",
+  "portable-bootstrap",
+  "portable-setup-failed",
+  "portable-it-managed",
+] as const satisfies readonly UpdateInstallModeKind[]);
+
 export type UpdateInstallModeStatus = "supported" | "unsupported";
 
 export const UPDATE_INSTALL_MODE_STATUSES: readonly UpdateInstallModeStatus[] = Object.freeze([
   "supported",
   "unsupported",
 ] as const satisfies readonly UpdateInstallModeStatus[]);
+
+export type UpdateRecommendedAction =
+  | "package-manager-maintenance"
+  | "portable-managed-update"
+  | "portable-bootstrap-setup"
+  | "manual-download";
+
+export const UPDATE_RECOMMENDED_ACTIONS: readonly UpdateRecommendedAction[] = Object.freeze([
+  "package-manager-maintenance",
+  "portable-managed-update",
+  "portable-bootstrap-setup",
+  "manual-download",
+] as const satisfies readonly UpdateRecommendedAction[]);
+
+export type UpdatePortableInstallStatus = "managed" | "bootstrap" | "setup-failed" | "it-managed";
+
+export const UPDATE_PORTABLE_INSTALL_STATUSES: readonly UpdatePortableInstallStatus[] =
+  Object.freeze([
+    "managed",
+    "bootstrap",
+    "setup-failed",
+    "it-managed",
+  ] as const satisfies readonly UpdatePortableInstallStatus[]);
+
+export type UpdatePortableManagedRootKind =
+  "default" | "home-relative" | "absolute-local" | "unknown";
+
+export interface UpdatePortableInstallSummary {
+  readonly status: UpdatePortableInstallStatus;
+  readonly target: UpdatePortableTarget;
+  readonly updateEligible: boolean;
+  readonly packageVersion?: string | undefined;
+  readonly stable?: boolean | undefined;
+  readonly managedRootKind?: UpdatePortableManagedRootKind | undefined;
+  readonly setupManifestSha256?: string | undefined;
+  readonly installRootIdentitySha256?: string | undefined;
+  readonly launcherIdentitySha256?: string | undefined;
+  readonly failureReason?: string | undefined;
+}
+
+export type UpdatePortableAssetVerificationStatus = "pending" | "verified" | "failed";
+
+export const UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES: readonly UpdatePortableAssetVerificationStatus[] =
+  Object.freeze([
+    "pending",
+    "verified",
+    "failed",
+  ] as const satisfies readonly UpdatePortableAssetVerificationStatus[]);
+
+export interface UpdatePortableAssetSummary {
+  readonly target: UpdatePortableTarget;
+  readonly fileName: string;
+  readonly packageVersion: string;
+  readonly sha256?: string | undefined;
+  readonly sizeBytes?: number | undefined;
+  readonly verificationStatus?: UpdatePortableAssetVerificationStatus | undefined;
+}
+
+export const UPDATE_PORTABLE_SIDECAR_VERIFICATION_STATUSES = ["verified", "failed"] as const;
+
+export type UpdatePortableSidecarVerificationStatus =
+  (typeof UPDATE_PORTABLE_SIDECAR_VERIFICATION_STATUSES)[number];
+
+export const UPDATE_PORTABLE_SIDECAR_FAILURE_CODES = [
+  "sidecar-metadata-malformed",
+  "sidecar-missing-required",
+  "sidecar-platform-mismatch",
+  "sidecar-payload-outside-root",
+  "sidecar-payload-missing",
+  "sidecar-digest-mismatch",
+  "sidecar-license-evidence-incomplete",
+  "sidecar-sbom-evidence-incomplete",
+  "sidecar-signing-unverified",
+  "sidecar-release-impact-binding-mismatch",
+] as const;
+
+export type UpdatePortableSidecarFailureCode =
+  (typeof UPDATE_PORTABLE_SIDECAR_FAILURE_CODES)[number];
+
+export interface UpdatePortableSidecarSummary {
+  readonly name: string;
+  readonly kind: string;
+  readonly upstreamName: string;
+  readonly upstreamVersion: string;
+  readonly adapterName: string;
+  readonly adapterVersion: string;
+  readonly protocolVersion: string;
+  readonly platformTarget: UpdatePortableTarget;
+  readonly payloadSha256: string;
+  readonly payloadSha256Prefix: string;
+  readonly sizeBytes: number;
+  readonly status: UpdatePortableSidecarVerificationStatus;
+  readonly failureCode?: UpdatePortableSidecarFailureCode | undefined;
+}
+
+export type UpdatePortableStagingStatus = "pending" | "staged" | "failed";
+
+export const UPDATE_PORTABLE_STAGING_STATUSES: readonly UpdatePortableStagingStatus[] =
+  Object.freeze([
+    "pending",
+    "staged",
+    "failed",
+  ] as const satisfies readonly UpdatePortableStagingStatus[]);
+
+export interface UpdatePortableStagingSummary {
+  readonly stageId: string;
+  readonly status: UpdatePortableStagingStatus;
+  readonly target: UpdatePortableTarget;
+  readonly packageVersion: string;
+  readonly assetName: string;
+  readonly assetId: number;
+  readonly releaseId: number;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly manifestSha256: string;
+  readonly sidecarRuntimes?: readonly UpdatePortableSidecarSummary[] | undefined;
+}
+
+export type UpdatePortableActivationStatus = "pending" | "activated" | "failed";
+
+export const UPDATE_PORTABLE_ACTIVATION_STATUSES: readonly UpdatePortableActivationStatus[] =
+  Object.freeze([
+    "pending",
+    "activated",
+    "failed",
+  ] as const satisfies readonly UpdatePortableActivationStatus[]);
+
+export interface UpdatePortableActivationSummary {
+  readonly activationId: string;
+  readonly status: UpdatePortableActivationStatus;
+  readonly stageId: string;
+  readonly target: UpdatePortableTarget;
+  readonly packageVersion: string;
+  readonly registrationRefreshed: boolean;
+  readonly shortcutRefreshed: boolean;
+  readonly relaunchRequested: boolean;
+  readonly versionVerified: boolean;
+}
 
 export type UpdateUnsupportedReason =
   | "unknown-path"
@@ -24,7 +192,12 @@ export type UpdateUnsupportedReason =
   | "launcher-drift"
   | "package-manager-ambiguous"
   | "package-manager-unsupported"
-  | "manifest-unavailable";
+  | "manifest-unavailable"
+  | "portable-bootstrap"
+  | "portable-setup-failed"
+  | "portable-it-managed"
+  | "portable-registration-invalid"
+  | "portable-non-stable";
 
 export const UPDATE_UNSUPPORTED_REASONS: readonly UpdateUnsupportedReason[] = Object.freeze([
   "unknown-path",
@@ -36,6 +209,11 @@ export const UPDATE_UNSUPPORTED_REASONS: readonly UpdateUnsupportedReason[] = Ob
   "package-manager-ambiguous",
   "package-manager-unsupported",
   "manifest-unavailable",
+  "portable-bootstrap",
+  "portable-setup-failed",
+  "portable-it-managed",
+  "portable-registration-invalid",
+  "portable-non-stable",
 ] as const satisfies readonly UpdateUnsupportedReason[]);
 
 export type UpdatePolicySource = "default" | "environment";
@@ -62,8 +240,12 @@ export interface UpdateInstallMode {
   readonly schemaVersion: typeof UPDATE_SESSION_SCHEMA_VERSION;
   readonly status: UpdateInstallModeStatus;
   readonly packageName: string;
+  readonly installKind?: UpdateInstallModeKind | undefined;
   readonly packageManager?: UpdateInstallPackageManager | undefined;
   readonly installRoot?: string | undefined;
+  readonly portable?: UpdatePortableInstallSummary | undefined;
+  readonly asset?: UpdatePortableAssetSummary | undefined;
+  readonly recommendedAction?: UpdateRecommendedAction | undefined;
   readonly reason?: UpdateUnsupportedReason | undefined;
   readonly manualInstructions?: string | undefined;
   readonly commandPreview?: UpdateCommandPreview | undefined;
@@ -90,6 +272,14 @@ export type UpdateSessionFailureReason =
   | "non-zero-exit"
   | "timed-out"
   | "cancelled"
+  | "portable-preflight-ineligible"
+  | "portable-download-failed"
+  | "portable-verification-failed"
+  | "portable-sidecar-verification-failed"
+  | "portable-staging-failed"
+  | "portable-activation-failed"
+  | "portable-relaunch-failed"
+  | "portable-version-verification-failed"
   | "restart-version-mismatch";
 
 export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason[] = Object.freeze([
@@ -101,6 +291,14 @@ export const UPDATE_SESSION_FAILURE_REASONS: readonly UpdateSessionFailureReason
   "non-zero-exit",
   "timed-out",
   "cancelled",
+  "portable-preflight-ineligible",
+  "portable-download-failed",
+  "portable-verification-failed",
+  "portable-sidecar-verification-failed",
+  "portable-staging-failed",
+  "portable-activation-failed",
+  "portable-relaunch-failed",
+  "portable-version-verification-failed",
   "restart-version-mismatch",
 ] as const satisfies readonly UpdateSessionFailureReason[]);
 
@@ -124,6 +322,8 @@ export interface UpdateSession {
   readonly installRoot?: string | undefined;
   readonly commandPreview?: UpdateCommandPreview | undefined;
   readonly restartCommandPreview?: UpdateRestartCommandPreview | undefined;
+  readonly portableStage?: UpdatePortableStagingSummary | undefined;
+  readonly portableActivation?: UpdatePortableActivationSummary | undefined;
   readonly startedAt: string;
   readonly updatedAt: string;
   readonly cancelable: boolean;

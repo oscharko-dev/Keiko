@@ -31,6 +31,7 @@ import {
   type EditorSplitDirection,
   type EditorSplitDropZone,
 } from "@oscharko-dev/keiko-contracts";
+import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
 import { Icons } from "../../Icons";
 import { acquireGrabbingBodyStyle } from "../../interactionGuards";
@@ -39,13 +40,20 @@ import { deleteEditorHotExitSnapshot } from "./editorHotExitStore";
 import type { EditorExternalSaveRequest, EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
-import { EditorCommandPalette, type EditorPaletteMode } from "./EditorCommandPalette";
+import { EditorOutlinePanel } from "./EditorOutlinePanel";
+import { EditorEmptyState } from "./EditorEmptyState";
+import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
+import { useEditorQuickAccessTrigger } from "../../EditorQuickAccessTriggerContext";
+import {
+  sameEditorOutlineSnapshot,
+  type EditorOutlineRevealRequest,
+  type EditorOutlineSnapshot,
+} from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
 import { FileIcon } from "../shared/projectTree";
 import {
   allDirtyFiles,
   clampNumber,
-  createDistributedPresetLayout,
   createInitialLayout,
   dirtyFilesForPane,
   draggedTabFromEvent,
@@ -58,7 +66,6 @@ import {
   normalizeEditorOpenFiles,
   openFilesPatchValue,
   paneIdFromPoint,
-  remapDirtyFilesToPresetPanes,
   sameStringList,
   tabInsertionTargetFromPoint,
   type DraggedTab,
@@ -240,6 +247,7 @@ export function EditorWidget({
   openFiles: configuredOpenFiles,
   layoutJson,
   onWorkspaceChange,
+  windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
   const initialRoot = root?.trim() ?? "";
@@ -257,6 +265,13 @@ export function EditorWidget({
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
   const [layout, setLayout] = useState<EditorLayoutStateV2>(initialLayout);
+  const [outlineByPane, setOutlineByPane] = useState<
+    Readonly<Record<string, EditorOutlineSnapshot>>
+  >({});
+  const [outlineRevealByPane, setOutlineRevealByPane] = useState<
+    Readonly<Record<string, EditorOutlineRevealRequest>>
+  >({});
+  const outlineRevealSeqRef = useRef(0);
   // The live layout, read by the pane callbacks so their identity stays stable across layout
   // mutations (Wave 2 perf, the #1580 pattern). Without this every callback closes over `layout` and
   // gets a new identity on each `setLayout`, which churns the per-pane props and defeats the
@@ -286,10 +301,7 @@ export function EditorWidget({
   const pointerTabDragRef = useRef<PointerTabDrag | null>(null);
   const tabInsertTargetRef = useRef<TabInsertTarget | null>(null);
   const suppressNextTabClickRef = useRef<DraggedTab | null>(null);
-  // Quick-Open / command-palette overlay (null = closed). Closed-tab MRU backs the reopen command.
-  const [paletteState, setPaletteState] = useState<{ readonly mode: EditorPaletteMode } | null>(
-    null,
-  );
+  // Closed-tab MRU backs the reopen command.
   const closedTabsRef = useRef<{ readonly paneId: string; readonly file: string }[]>([]);
 
   const setTabInsertTarget = useCallback((target: TabInsertTarget | null): void => {
@@ -343,7 +355,11 @@ export function EditorWidget({
     lastPropRootRef.current = nextRoot;
     setWorkspaceRoot(nextRoot);
     setLayout(nextLayout);
-    if (rootChanged) setDirtyByPane({});
+    if (rootChanged) {
+      setDirtyByPane({});
+      setOutlineByPane({});
+      setOutlineRevealByPane({});
+    }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
     const openFilesChanged = !sameStringList(configuredOpenFiles, nextAllOpenFiles);
@@ -607,24 +623,21 @@ export function EditorWidget({
     [commitLayout, markDirty, pushClosedTab, requestDirtyClose],
   );
 
-  const applyPanePreset = useCallback(
-    (paneId: string, direction: EditorSplitDirection): void => {
-      const pane = layout.panes[paneId];
-      if (pane === undefined || pane.activeFile.length === 0) return;
-      const nextLayout = createDistributedPresetLayout(layout, workspaceRoot, direction, pane);
-      if (nextLayout === null) return;
-      if (serializeEditorLayoutStateV2(nextLayout) === serializeEditorLayoutStateV2(layout)) {
-        return;
-      }
-      setDirtyByPane((current) => remapDirtyFilesToPresetPanes(current, nextLayout));
-      commitLayout(nextLayout);
-    },
-    [commitLayout, layout, workspaceRoot],
-  );
-
   const splitPane = useCallback(
-    (paneId: string, direction: EditorSplitDirection): void => applyPanePreset(paneId, direction),
-    [applyPanePreset],
+    (paneId: string, direction: EditorSplitDirection): void => {
+      const current = layoutRef.current;
+      const pane = current.panes[paneId];
+      if (pane === undefined || pane.activeFile.length === 0) return;
+      const next = editorLayoutReducer(current, {
+        type: "split-pane",
+        paneId,
+        direction,
+        file: pane.activeFile,
+      });
+      if (next === current) return;
+      commitLayout(next);
+    },
+    [commitLayout],
   );
 
   const closePane = useCallback(
@@ -656,6 +669,39 @@ export function EditorWidget({
       }),
     );
   }, [commitLayout]);
+
+  const toggleOutlinePanel = useCallback((): void => {
+    commitLayout(
+      editorLayoutReducer(layoutRef.current, {
+        type: "set-outline-panel",
+        visible: !layoutRef.current.outlinePanelVisible,
+      }),
+    );
+  }, [commitLayout]);
+
+  const handleOutlineStateChange = useCallback(
+    (paneId: string, snapshot: EditorOutlineSnapshot): void => {
+      setOutlineByPane((current) => {
+        if (sameEditorOutlineSnapshot(current[paneId], snapshot)) return current;
+        return { ...current, [paneId]: snapshot };
+      });
+    },
+    [],
+  );
+
+  const revealOutlineSymbol = useCallback((symbol: EditorDocumentSymbol): void => {
+    const pane = activeEditorPane(layoutRef.current);
+    if (pane.activeFile.length === 0) return;
+    outlineRevealSeqRef.current += 1;
+    setOutlineRevealByPane((current) => ({
+      ...current,
+      [pane.id]: {
+        id: `outline:${pane.id}:${String(outlineRevealSeqRef.current)}`,
+        file: pane.activeFile,
+        range: symbol.range,
+      },
+    }));
+  }, []);
 
   // Live-resize gesture state. During a pointer/mouse drag the split ratio or sidebar width is written
   // straight to the CSS variable on the DOM, and the final value is committed to layout state only on
@@ -1177,9 +1223,6 @@ export function EditorWidget({
     [closePane],
   );
 
-  const openQuickOpen = useCallback((): void => setPaletteState({ mode: "files" }), []);
-  const openCommandPalette = useCallback((): void => setPaletteState({ mode: "commands" }), []);
-
   const nextTab = useCallback((): void => cycleActiveTab(1), [cycleActiveTab]);
   const prevTab = useCallback((): void => cycleActiveTab(-1), [cycleActiveTab]);
 
@@ -1193,8 +1236,6 @@ export function EditorWidget({
       activeFile: activeFile.length > 0 ? activeFile : null,
       closedTabCount: closedTabsRef.current.length,
       dirtyCount: dirtyFileList.length,
-      openQuickOpen,
-      openCommandPalette,
       splitActive: splitActivePane,
       closeActiveSplit: closeActivePane,
       closeActiveTab,
@@ -1210,8 +1251,6 @@ export function EditorWidget({
       dirtyFileList.length,
       layout,
       nextTab,
-      openCommandPalette,
-      openQuickOpen,
       prevTab,
       reopenClosedTab,
       saveAllDirty,
@@ -1221,6 +1260,10 @@ export function EditorWidget({
   );
   const commandHostRef = useRef(commandHost);
   commandHostRef.current = commandHost;
+  useRegisterEditorPaletteHost(windowId, commandHost);
+  const quickAccessTrigger = useEditorQuickAccessTrigger();
+  const quickAccessTriggerRef = useRef(quickAccessTrigger);
+  quickAccessTriggerRef.current = quickAccessTrigger;
 
   // Container-level capturing keydown for editor-chrome chords (mirrors the on-mount save backstop,
   // but scoped to the whole editor so it also fires from the sidebar/tab strip). Only browser-safe
@@ -1232,11 +1275,19 @@ export function EditorWidget({
       if (!(event.metaKey || event.ctrlKey)) return;
       const host = commandHostRef.current;
       const key = event.key.toLowerCase();
+      // Cmd/Ctrl+P must still open the unified quick-access palette while the cursor is inside
+      // the editor. This listener is a capture-phase DOM listener on the editor container, so it
+      // fires before Monaco sees the event and regardless of useKeyboardShortcuts' editable-target
+      // guard (which would otherwise swallow the shell-level chord — see
+      // EditorQuickAccessTriggerContext.tsx).
       if (key === "p" && !event.altKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.shiftKey) host.openCommandPalette();
-        else host.openQuickOpen();
+        const trigger = quickAccessTriggerRef.current;
+        if (trigger !== null) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.shiftKey) trigger.openCommands();
+          else trigger.openFiles();
+        }
         return;
       }
       if (!event.altKey) return;
@@ -1338,7 +1389,9 @@ export function EditorWidget({
   ]);
 
   if (workspaceRoot.length === 0) {
-    return <EditorRuntimeWidget {...props} />;
+    // Unbound editor (opened without a project root, e.g. toggled from the left rail): offer the
+    // native OS folder picker so the user can choose a project and start working (ADR-0118).
+    return <EditorEmptyState onOpenRoot={openRoot} />;
   }
 
   const renderPane = (pane: EditorPaneStateV2): ReactNode => {
@@ -1350,7 +1403,7 @@ export function EditorWidget({
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
       openFiles: pane.openFiles,
       dirtyFiles: dirtyFileList,
-      windowId: `${props.windowId ?? "editor"}-${pane.id}`,
+      windowId: `${windowId ?? "editor"}-${pane.id}`,
       paneId: pane.id,
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,
@@ -1368,6 +1421,8 @@ export function EditorWidget({
           ? { file: tabInsertTarget.file, edge: tabInsertTarget.edge }
           : undefined,
       renderTabHandle: binding.renderTabHandle,
+      onOutlineStateChange: handleOutlineStateChange,
+      outlineRevealRequest: outlineRevealByPane[pane.id],
       // GEN-PERF-EDITOR-003 — a per-pane scalar that changes only for the pane whose tab is
       // held, so a hold-state change re-renders just that pane (its stable renderTabHandle
       // re-reads the held flag) while other panes stay memo-bailed.
@@ -1454,6 +1509,15 @@ export function EditorWidget({
   };
 
   const singlePane = paneCount === 1;
+  const activeOutlineSnapshot =
+    outlineByPane[currentPane.id] ??
+    ({
+      ...(activeFile.length > 0 ? { filePath: activeFile } : {}),
+      symbols: [],
+      cursor: null,
+      enabled: activeFile.length > 0,
+      loading: false,
+    } satisfies EditorOutlineSnapshot);
 
   return (
     <div
@@ -1487,6 +1551,12 @@ export function EditorWidget({
                 <Icons.sidebar size={14} />
               </button>
             </div>
+            <EditorOutlinePanel
+              snapshot={activeOutlineSnapshot}
+              visible={layout.outlinePanelVisible}
+              onToggleVisible={toggleOutlinePanel}
+              onReveal={revealOutlineSymbol}
+            />
             <FilesWidget
               root={workspaceRoot}
               activeFilePath={activeFile.length > 0 ? activeFile : undefined}
@@ -1549,15 +1619,6 @@ export function EditorWidget({
           onSave={savePendingClose}
           onDiscard={discardPendingClose}
           onCancel={cancelPendingClose}
-        />
-      ) : null}
-      {paletteState !== null ? (
-        <EditorCommandPalette
-          mode={paletteState.mode}
-          root={workspaceRoot}
-          host={commandHost}
-          onOpenFile={openFile}
-          onClose={() => setPaletteState(null)}
         />
       ) : null}
     </div>

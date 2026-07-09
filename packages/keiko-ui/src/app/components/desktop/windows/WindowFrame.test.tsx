@@ -400,6 +400,29 @@ describe("WindowFrame content zoom controls", () => {
     expect(frameClip?.contains(contentZoom)).toBe(true);
     expect(frameClip?.contains(body)).toBe(true);
     expect(frameClip?.contains(southHandle)).toBe(false);
+    expect(contentZoom?.style.minWidth).toBe("0px");
+    expect(contentZoom?.style.minHeight).toBe("0px");
+    expect(contentZoom?.style.overflow).toBe("clip");
+  });
+
+  it("keeps chat scrolling inside the chat log instead of the outer window body", () => {
+    registerWindowRender("chat", () => <div data-testid="chat-body" />);
+    const { container } = render(
+      <WindowFrame
+        win={appWindow({ type: "chat", w: 720, h: 560 })}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const body = container.querySelector<HTMLElement>(".win-body");
+
+    expect(body).not.toBeNull();
+    expect(body?.style.overflow).toBe("hidden");
+    expect(screen.getByTestId("chat-body").closest(".win-body")).toBe(body);
   });
 
   it("requests connected Files context for Prompt Enhancer windows", () => {
