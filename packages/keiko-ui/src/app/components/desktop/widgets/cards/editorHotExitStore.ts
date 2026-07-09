@@ -105,6 +105,12 @@ async function locatorHash(root: string, path: string): Promise<string | null> {
   return hex(await globalThis.crypto.subtle.digest("SHA-256", bytes));
 }
 
+async function deleteLocalIndexRecord(db: IDBDatabase, hash: string): Promise<void> {
+  const tx = db.transaction(STORE_NAME, "readwrite");
+  tx.objectStore(STORE_NAME).delete(hash);
+  await txDone(tx);
+}
+
 function recordExpired(
   record: EditorHotExitIndexRecordV2,
   now: number,
@@ -204,7 +210,10 @@ export async function readEditorHotExitSnapshot(
   const tx = db.transaction(STORE_NAME, "readonly");
   const raw = await requestToPromise<unknown>(tx.objectStore(STORE_NAME).get(hash));
   await txDone(tx);
-  if (!isEditorHotExitIndexRecordV2(raw)) return null;
+  if (!isEditorHotExitIndexRecordV2(raw)) {
+    if (raw !== undefined) await deleteLocalIndexRecord(db, hash);
+    return null;
+  }
   if (recordExpired(raw, now)) {
     await deleteEditorHotExitSnapshot(workspaceRoot, relativePath);
     return null;
@@ -278,16 +287,20 @@ export async function deleteEditorHotExitSnapshot(
     const readTx = db.transaction(STORE_NAME, "readonly");
     const raw = await requestToPromise<unknown>(readTx.objectStore(STORE_NAME).get(hash));
     await txDone(readTx);
+    let remoteDeleteError: unknown;
     if (isEditorHotExitIndexRecordV2(raw)) {
-      await deleteEditorHotExitContent({
-        workspaceRoot,
-        relativePath,
-        snapshotRef: raw.snapshotRef,
-      });
+      try {
+        await deleteEditorHotExitContent({
+          workspaceRoot,
+          relativePath,
+          snapshotRef: raw.snapshotRef,
+        });
+      } catch (error) {
+        remoteDeleteError = error;
+      }
     }
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).delete(hash);
-    await txDone(tx);
+    await deleteLocalIndexRecord(db, hash);
+    if (remoteDeleteError !== undefined) throw remoteDeleteError;
   });
 }
 

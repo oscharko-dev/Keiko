@@ -42,12 +42,13 @@ import type { EditorAgentPaneSnapshot } from "../../../../../lib/types";
 import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import { EditorEmptyState } from "./EditorEmptyState";
+import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
+import { useEditorQuickAccessTrigger } from "../../EditorQuickAccessTriggerContext";
 import {
   sameEditorOutlineSnapshot,
   type EditorOutlineRevealRequest,
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
-import { EditorCommandPalette, type EditorPaletteMode } from "./EditorCommandPalette";
 import { type EditorPaletteHost } from "./editorCommands";
 import { FileIcon } from "../shared/projectTree";
 import {
@@ -246,6 +247,7 @@ export function EditorWidget({
   openFiles: configuredOpenFiles,
   layoutJson,
   onWorkspaceChange,
+  windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
   const initialRoot = root?.trim() ?? "";
@@ -299,10 +301,7 @@ export function EditorWidget({
   const pointerTabDragRef = useRef<PointerTabDrag | null>(null);
   const tabInsertTargetRef = useRef<TabInsertTarget | null>(null);
   const suppressNextTabClickRef = useRef<DraggedTab | null>(null);
-  // Quick-Open / command-palette overlay (null = closed). Closed-tab MRU backs the reopen command.
-  const [paletteState, setPaletteState] = useState<{ readonly mode: EditorPaletteMode } | null>(
-    null,
-  );
+  // Closed-tab MRU backs the reopen command.
   const closedTabsRef = useRef<{ readonly paneId: string; readonly file: string }[]>([]);
 
   const setTabInsertTarget = useCallback((target: TabInsertTarget | null): void => {
@@ -1224,9 +1223,6 @@ export function EditorWidget({
     [closePane],
   );
 
-  const openQuickOpen = useCallback((): void => setPaletteState({ mode: "files" }), []);
-  const openCommandPalette = useCallback((): void => setPaletteState({ mode: "commands" }), []);
-
   const nextTab = useCallback((): void => cycleActiveTab(1), [cycleActiveTab]);
   const prevTab = useCallback((): void => cycleActiveTab(-1), [cycleActiveTab]);
 
@@ -1240,8 +1236,6 @@ export function EditorWidget({
       activeFile: activeFile.length > 0 ? activeFile : null,
       closedTabCount: closedTabsRef.current.length,
       dirtyCount: dirtyFileList.length,
-      openQuickOpen,
-      openCommandPalette,
       splitActive: splitActivePane,
       closeActiveSplit: closeActivePane,
       closeActiveTab,
@@ -1257,8 +1251,6 @@ export function EditorWidget({
       dirtyFileList.length,
       layout,
       nextTab,
-      openCommandPalette,
-      openQuickOpen,
       prevTab,
       reopenClosedTab,
       saveAllDirty,
@@ -1268,6 +1260,10 @@ export function EditorWidget({
   );
   const commandHostRef = useRef(commandHost);
   commandHostRef.current = commandHost;
+  useRegisterEditorPaletteHost(windowId, commandHost);
+  const quickAccessTrigger = useEditorQuickAccessTrigger();
+  const quickAccessTriggerRef = useRef(quickAccessTrigger);
+  quickAccessTriggerRef.current = quickAccessTrigger;
 
   // Container-level capturing keydown for editor-chrome chords (mirrors the on-mount save backstop,
   // but scoped to the whole editor so it also fires from the sidebar/tab strip). Only browser-safe
@@ -1279,11 +1275,19 @@ export function EditorWidget({
       if (!(event.metaKey || event.ctrlKey)) return;
       const host = commandHostRef.current;
       const key = event.key.toLowerCase();
+      // Cmd/Ctrl+P must still open the unified quick-access palette while the cursor is inside
+      // the editor. This listener is a capture-phase DOM listener on the editor container, so it
+      // fires before Monaco sees the event and regardless of useKeyboardShortcuts' editable-target
+      // guard (which would otherwise swallow the shell-level chord — see
+      // EditorQuickAccessTriggerContext.tsx).
       if (key === "p" && !event.altKey) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.shiftKey) host.openCommandPalette();
-        else host.openQuickOpen();
+        const trigger = quickAccessTriggerRef.current;
+        if (trigger !== null) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.shiftKey) trigger.openCommands();
+          else trigger.openFiles();
+        }
         return;
       }
       if (!event.altKey) return;
@@ -1399,7 +1403,7 @@ export function EditorWidget({
       ...(pane.activeFile.length > 0 ? { file: pane.activeFile } : {}),
       openFiles: pane.openFiles,
       dirtyFiles: dirtyFileList,
-      windowId: `${props.windowId ?? "editor"}-${pane.id}`,
+      windowId: `${windowId ?? "editor"}-${pane.id}`,
       paneId: pane.id,
       layoutPanes: layoutPaneSnapshots,
       activePaneId: layout.activePaneId,
@@ -1615,15 +1619,6 @@ export function EditorWidget({
           onSave={savePendingClose}
           onDiscard={discardPendingClose}
           onCancel={cancelPendingClose}
-        />
-      ) : null}
-      {paletteState !== null ? (
-        <EditorCommandPalette
-          mode={paletteState.mode}
-          root={workspaceRoot}
-          host={commandHost}
-          onOpenFile={openFile}
-          onClose={() => setPaletteState(null)}
         />
       ) : null}
     </div>

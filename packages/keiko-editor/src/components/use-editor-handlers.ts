@@ -157,6 +157,7 @@ function applyRevealRequest(
   clearRevealDecoration(refs);
   editor.focus();
   editor.setSelection(safeRange);
+  editor.setPosition({ lineNumber: safeRange.startLineNumber, column: safeRange.startColumn });
   editor.revealRangeInCenterIfOutsideViewport(safeRange);
   refs.revealDecorationIdsRef.current = editor.deltaDecorations(
     [],
@@ -185,6 +186,7 @@ function revealDiagnosticMarker(refs: EditorRefs, marker: DiagnosticOverviewMark
   const range = { startLineNumber, startColumn, endLineNumber, endColumn };
   editor.focus();
   editor.setSelection(range);
+  editor.setPosition({ lineNumber: startLineNumber, column: startColumn });
   editor.revealRangeInCenterIfOutsideViewport(range);
 }
 

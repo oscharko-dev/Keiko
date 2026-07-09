@@ -1489,6 +1489,38 @@ export {
   validateConnectedContextPack,
 } from "./connected-context.js";
 
+// ─── Workspace search and replace preview (Epic #2090) ─────────────────────────
+export type {
+  WorkspaceSearchMode,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResultMatch,
+  WorkspaceSearchResponse,
+  WorkspaceSymbolSearchRequest,
+  WorkspaceSymbolSearchResult,
+  WorkspaceSymbolSearchResponse,
+  SymbolDefinitionKind,
+  WorkspaceReplacePreviewRequest,
+  WorkspaceReplacePreviewTextRange,
+  WorkspaceReplacePreviewEdit,
+  WorkspaceReplacePreviewFileEdit,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceReplaceApplyFile,
+  WorkspaceReplaceApplyRequest,
+  WorkspaceReplaceApplyConflict,
+  WorkspaceReplaceApplyResponse,
+} from "./workspace-search.js";
+export {
+  WORKSPACE_REPLACE_MAX_FILES,
+  WORKSPACE_SEARCH_MAX_RESULTS,
+  WORKSPACE_SEARCH_MODES,
+  validateWorkspaceSearchRequest,
+  validateWorkspaceSymbolSearchRequest,
+  validateWorkspaceReplaceApplyRequest,
+  validateWorkspaceReplacePreviewRequest,
+  isWorkspaceSearchResultMatch,
+  regexSafetyIssue,
+} from "./workspace-search.js";
+
 // ─── Deterministic context-engineering layer (ADR-0052, context-engineering milestone) ──
 export type {
   ContextLaneId,

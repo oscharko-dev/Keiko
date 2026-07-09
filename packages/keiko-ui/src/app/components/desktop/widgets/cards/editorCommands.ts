@@ -1,13 +1,11 @@
 /**
- * Host-level editor command registry for the Quick-Open + Command-Palette surface (Wave 2, items
- * 2.3/2.4/2.5).
+ * Host-level editor command registry feeding the unified quick-access palette
+ * (`UnifiedQuickAccessPalette`, Epic #2090) with editor-scoped commands.
  *
  * Mirrors the editor-package command catalogue pattern (`packages/keiko-editor/src/commands.ts`:
  * a static command list plus a deterministic availability gate), but at the WORKSPACE/host level: each
  * command's `run` dispatches into the existing, identity-stable `EditorWidget` host callbacks, and
- * `isAvailable` derives purely from a content-free host snapshot. The same registry feeds the palette
- * (which renders the available commands) and the container-level keybinding layer (which maps a few
- * browser-safe chords onto command ids).
+ * `isAvailable` derives purely from a content-free host snapshot.
  */
 
 /** Content-free actions the host exposes to a command. Implemented in `EditorWidget`. */
@@ -18,8 +16,6 @@ export interface EditorPaletteHost {
   readonly activeFile: string | null;
   readonly closedTabCount: number;
   readonly dirtyCount: number;
-  openQuickOpen(): void;
-  openCommandPalette(): void;
   splitActive(direction: "row" | "column"): void;
   closeActiveSplit(): void;
   closeActiveTab(): void;

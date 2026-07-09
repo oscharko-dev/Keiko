@@ -8,7 +8,6 @@ import { Icons } from "./Icons";
 export type HeaderStatusTone = "ok" | "warn" | "danger";
 
 interface HeaderProps {
-  readonly openPalette: () => void;
   // uiux-fix F039 C223 — visible entry point for the command palette; the Cmd/Ctrl+K
   // chord alone was undiscoverable (no on-screen hint anywhere in the chrome).
   readonly openCommandPalette: () => void;
@@ -19,6 +18,7 @@ interface HeaderProps {
 }
 
 function HeaderImpl({
+  openCommandPalette,
   onTileAll,
   onSplitFront,
   onCascade,
@@ -42,6 +42,15 @@ function HeaderImpl({
       <span className="spacer" />
 
       <div className="hd-tools">
+        <button
+          type="button"
+          className="hd-tool ui-tip"
+          onClick={openCommandPalette}
+          data-tip="Quick access"
+          aria-label="Open quick access"
+        >
+          <Icons.search size={16} />
+        </button>
         <button
           type="button"
           className="hd-tool ui-tip"

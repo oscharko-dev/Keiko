@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { EditorRuntimeWidgetProps } from "./EditorRuntimeWidget";
 import { EditorWidget } from "./EditorWidget";
+import { EditorQuickAccessTriggerProvider } from "../../EditorQuickAccessTriggerContext";
 
 const probeState = vi.hoisted(() => ({
   runtimeProps: null as EditorRuntimeWidgetProps | null,
@@ -1717,6 +1718,56 @@ describe("EditorWidget workspace session", () => {
 
     fireEvent.keyDown(splitResizer, { key: "ArrowDown" });
     expect(onWorkspaceChange.mock.calls.at(-1)?.[0]).toEqual(lastPatch);
+  });
+});
+
+describe("EditorWidget — Cmd/Ctrl+P quick access while editing (Epic #2090 regression)", () => {
+  // #2112 originally routed the Cmd/Ctrl+P chord for the editor-local Quick Open through the
+  // shared useKeyboardShortcuts substrate, which bails out for any editable event target
+  // (isEditableTarget) — including Monaco's own hidden textarea. That silently broke Cmd/Ctrl+P
+  // while the cursor was inside a file, regressing pre-#2112 behavior and violating the epic's
+  // own closure statement ("Cmd/Ctrl+P finds any file from anywhere"). The fix keeps this chord on
+  // the editor's own capture-phase container listener, which fires before Monaco and is
+  // unaffected by that guard.
+  it("opens the unified quick-access palette in file mode from the editor's capturing listener", () => {
+    const openFiles = vi.fn();
+    const openCommands = vi.fn();
+    const { container } = render(
+      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands }}>
+        <EditorWidget root="/repo" file="src/a.ts" />
+      </EditorQuickAccessTriggerProvider>,
+    );
+
+    const workspace = container.querySelector(".editor-workspace");
+    expect(workspace).not.toBeNull();
+    fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true });
+
+    expect(openFiles).toHaveBeenCalledTimes(1);
+    expect(openCommands).not.toHaveBeenCalled();
+  });
+
+  it("opens the unified quick-access palette in command mode on Cmd/Ctrl+Shift+P", () => {
+    const openFiles = vi.fn();
+    const openCommands = vi.fn();
+    const { container } = render(
+      <EditorQuickAccessTriggerProvider value={{ openFiles, openCommands }}>
+        <EditorWidget root="/repo" file="src/a.ts" />
+      </EditorQuickAccessTriggerProvider>,
+    );
+
+    const workspace = container.querySelector(".editor-workspace");
+    fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true, shiftKey: true });
+
+    expect(openCommands).toHaveBeenCalledTimes(1);
+    expect(openFiles).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when no quick-access trigger is registered (defensive no-op)", () => {
+    const { container } = render(<EditorWidget root="/repo" file="src/a.ts" />);
+    const workspace = container.querySelector(".editor-workspace");
+    expect(() =>
+      fireEvent.keyDown(workspace as Element, { key: "p", metaKey: true }),
+    ).not.toThrow();
   });
 });
 

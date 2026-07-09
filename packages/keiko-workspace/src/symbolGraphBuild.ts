@@ -239,12 +239,18 @@ export async function buildSymbolGraph(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
+  signal?: AbortSignal,
 ): Promise<SymbolGraph> {
   const candidateSet = gatherCandidates(scope, limits, fs);
   const cap = symbolRecordCap(limits);
   const builder = createSymbolGraphBuilder(candidateSet.truncated);
+  const startedAt = Date.now();
   let filesScanned = 0;
   for (const file of candidateSet.files.map((entry) => entry.relativePath)) {
+    if (signal?.aborted === true || Date.now() - startedAt > limits.elapsedMsMax) {
+      builder.truncated = true;
+      break;
+    }
     if (!isSymbolSource(file)) continue;
     const text = await readSymbolSource(scope, fs, file, limits);
     if (text === undefined) continue;
