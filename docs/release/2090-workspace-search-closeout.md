@@ -2,15 +2,16 @@
 
 ## Demo script
 
-1. Start Keiko with a project containing `src/search-target.ts`, `src/replace-target.ts`, and
-   `src/quick.ts`.
+1. Start Keiko with a project containing `src/search-target.ts`, `src/replace-target.ts`,
+   `src/closed-replace.ts`, and `src/quick.ts`.
 2. Press `Cmd/Ctrl+Shift+F`, search for `workspaceSearchNeedle`, select the `src/search-target.ts`
    result, and confirm the editor opens that file at the reported line.
-3. In the Search window, search for `replaceNeedle`, enter replacement text, select
-   **Preview replace**, confirm the diff preview, then select **Apply reviewed replace**.
-4. With `src/replace-target.ts` already open and dirty, repeat the replace flow and confirm the open
-   buffer changes while the on-disk file remains unchanged until the editor save action.
-5. Press `Cmd/Ctrl+P`, search for `quickAccessNeedle`, confirm `src/quick.ts` appears, then type
+3. With `src/replace-target.ts` already open and dirty, search for `replaceNeedle`, enter
+   replacement text, select **Preview replace**, and confirm the diff preview covers both the dirty
+   open buffer and the closed `src/closed-replace.ts` file before any content changes.
+4. Select **Apply reviewed replace** and confirm the open buffer changes in memory while its on-disk
+   file remains unchanged until save, and the closed file is written through the governed write seam.
+5. Press `Cmd/Ctrl+P`, search for `quick.ts`, confirm `src/quick.ts` appears by filename, then type
    `>theme` and confirm `Toggle light / dark theme` appears in the same quick-access surface.
 
 ## Automated evidence

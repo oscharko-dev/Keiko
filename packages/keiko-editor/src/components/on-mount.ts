@@ -250,6 +250,7 @@ export interface MountEditor {
   ): monaco.IDisposable;
   focus(): void;
   setSelection(range: MonacoRange): void;
+  setPosition(position: { readonly lineNumber: number; readonly column: number }): void;
   revealRangeInCenterIfOutsideViewport(range: MonacoRange): void;
   deltaDecorations(
     oldDecorations: string[],

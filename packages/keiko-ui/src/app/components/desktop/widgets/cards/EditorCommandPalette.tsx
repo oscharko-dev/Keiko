@@ -252,7 +252,7 @@ export function EditorCommandPalette({
           ) : effectiveMode === "files" ? (
             fileResults.map((result, index) => (
               <button
-                key={`${result.root} ${result.path}`}
+                key={`${result.root}\0${result.path}`}
                 type="button"
                 id={optionId(index)}
                 role="option"

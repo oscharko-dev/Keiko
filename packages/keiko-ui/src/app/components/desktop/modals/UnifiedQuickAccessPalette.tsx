@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * App-wide quick access surface. Plain input searches workspace text and symbols; a leading `>`
- * switches the same input into command mode.
+ * App-wide quick access surface. Plain input searches workspace filenames, text, and symbols; a
+ * leading `>` switches the same input into command mode.
  */
 import {
   useCallback,
@@ -14,7 +14,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import { fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
+import { fetchFilesSearch, fetchWorkspaceSearch, fetchWorkspaceSymbols } from "@/lib/api";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import { FileIcon } from "../widgets/shared/projectTree";
 import type { QuickAccessCommand } from "../quickAccessRegistry";
@@ -40,6 +40,9 @@ interface SymbolResult {
 }
 
 type SearchResult = FileResult | SymbolResult;
+type FileNameSearchResponse = Awaited<ReturnType<typeof fetchFilesSearch>>;
+type WorkspaceTextSearchResponse = Awaited<ReturnType<typeof fetchWorkspaceSearch>>;
+type WorkspaceSymbolSearchResponse = Awaited<ReturnType<typeof fetchWorkspaceSymbols>>;
 
 interface UnifiedQuickAccessPaletteProps {
   readonly initialMode: QuickAccessMode;
@@ -63,6 +66,34 @@ function dedupeFileResults(results: readonly FileResult[]): readonly FileResult[
     out.push(result);
   }
   return out;
+}
+
+function fileNameResults(response: FileNameSearchResponse): readonly FileResult[] {
+  return response.results.map((result) => ({
+    kind: "file",
+    path: result.path,
+    line: 1,
+    snippet: result.directory.length === 0 ? result.name : `${result.directory}/${result.name}`,
+  }));
+}
+
+function textFileResults(response: WorkspaceTextSearchResponse): readonly FileResult[] {
+  return response.results.map((result) => ({
+    kind: "file",
+    path: result.path,
+    line: result.lineRange.startLine,
+    snippet: result.snippet,
+  }));
+}
+
+function symbolResults(response: WorkspaceSymbolSearchResponse): readonly SymbolResult[] {
+  return response.results.map((result) => ({
+    kind: "symbol",
+    path: result.path,
+    line: result.line,
+    symbol: result.symbol,
+    detail: result.enclosingSymbol ?? result.kind,
+  }));
 }
 
 export function UnifiedQuickAccessPalette({
@@ -101,6 +132,7 @@ export function UnifiedQuickAccessPalette({
     const trimmed = query.trim();
     const handle = setTimeout(() => {
       void Promise.all([
+        fetchFilesSearch(root, trimmed, SEARCH_LIMIT, { signal: controller.signal }),
         fetchWorkspaceSearch(
           {
             root,
@@ -120,25 +152,16 @@ export function UnifiedQuickAccessPalette({
           },
         ),
       ])
-        .then(([text, symbols]) => {
-          const files = dedupeFileResults(
-            text.results.map((result) => ({
-              kind: "file" as const,
-              path: result.path,
-              line: result.lineRange.startLine,
-              snippet: result.snippet,
-            })),
-          );
-          const symbolResults = symbols.results.map((result) => ({
-            kind: "symbol" as const,
-            path: result.path,
-            line: result.line,
-            symbol: result.symbol,
-            detail: result.enclosingSymbol ?? result.kind,
-          }));
-          setSearchResults([...symbolResults, ...files].slice(0, SEARCH_LIMIT));
+        .then(([fileNames, text, symbols]) => {
+          const files = dedupeFileResults([
+            ...fileNameResults(fileNames),
+            ...textFileResults(text),
+          ]);
+          setSearchResults([...files, ...symbolResults(symbols)].slice(0, SEARCH_LIMIT));
         })
-        .catch(() => undefined);
+        .catch(() => {
+          if (!controller.signal.aborted) setSearchResults([]);
+        });
     }, SEARCH_DEBOUNCE_MS);
     return () => {
       clearTimeout(handle);

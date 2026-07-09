@@ -28,7 +28,7 @@ const tempProjects: string[] = [];
 interface WorkspaceSearchResponse {
   readonly results: readonly {
     readonly path: string;
-    readonly lineRange: { readonly startLine: number };
+    readonly lineRange: { readonly startLine: number; readonly endLine: number };
   }[];
   readonly truncated: boolean;
   readonly filesScanned: number;
@@ -66,6 +66,12 @@ function createWorkspace(name: string): string {
   writeFileSync(
     join(root, "src", "replace-target.ts"),
     `export const replaceTarget = "replaceNeedle";
+`,
+    "utf8",
+  );
+  writeFileSync(
+    join(root, "src", "closed-replace.ts"),
+    `export const closedReplaceTarget = "replaceNeedle";
 `,
     "utf8",
   );
@@ -198,9 +204,18 @@ test("workspace search route records bounded latency and result evidence @releas
   writeFileSync(EVIDENCE_PATH, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
 });
 
-test("workspace search panel opens a result at its reported line", async ({ page, request }) => {
+test("workspace search panel opens a result at its reported start line", async ({
+  page,
+  request,
+}) => {
   const root = createWorkspace("search-ui");
   await ensureProject(request, root);
+  const searchResponse = await workspaceSearch(request, root, "workspaceSearchNeedle", 5);
+  const reportedRange = searchResponse.results.find(
+    (result) => result.path === "src/search-target.ts",
+  )?.lineRange;
+  expect(reportedRange).toBeDefined();
+  if (reportedRange === undefined) return;
   const pageErrors = collectPageErrors(page);
   await seedWindows(page, []);
   await page.goto("/");
@@ -212,6 +227,13 @@ test("workspace search panel opens a result at its reported line", async ({ page
   await option.click();
   await expect(page.locator(EDITOR_SELECTORS.workspace).first()).toBeVisible();
   await expect(page.getByRole("tab", { name: /search-target\.ts/ })).toBeVisible();
+  const cursorField = firstPane(page.locator(EDITOR_SELECTORS.workspace).first()).locator(
+    `${EDITOR_SELECTORS.statusBar} [data-field="cursor"]`,
+  );
+  await expect(cursorField).toHaveAttribute("aria-label", /^Line \d+, column \d+$/u);
+  const label = await cursorField.getAttribute("aria-label");
+  const line = Number(/^Line (\d+), column \d+$/u.exec(label ?? "")?.[1] ?? "0");
+  expect(line).toBe(reportedRange.startLine);
   expect(pageErrors).toEqual([]);
 });
 
@@ -248,14 +270,16 @@ export const unsavedOnly = true;
   await searchbox.fill("replaceNeedle");
   await page.getByLabel("Replacement").fill("replaceDone");
   await page.getByRole("button", { name: "Preview replace" }).click();
-  await expect(page.getByText("1 replacements across 1 files.")).toBeVisible();
+  await expect(page.getByText("2 replacements across 2 files.")).toBeVisible();
   expect(readFileSync(join(root, "src", "replace-target.ts"), "utf8")).toContain("replaceNeedle");
+  expect(readFileSync(join(root, "src", "closed-replace.ts"), "utf8")).toContain("replaceNeedle");
   await page.getByRole("button", { name: "Apply reviewed replace" }).click();
-  await expect(page.getByText("1 files applied.")).toBeVisible();
+  await expect(page.getByText("2 files applied.")).toBeVisible();
   await expect(
     workspace.locator(".monaco-editor .view-line").filter({ hasText: "replaceDone" }),
   ).toBeVisible();
   expect(readFileSync(join(root, "src", "replace-target.ts"), "utf8")).toContain("replaceNeedle");
+  expect(readFileSync(join(root, "src", "closed-replace.ts"), "utf8")).toContain("replaceDone");
   expect(pageErrors).toEqual([]);
 });
 
@@ -269,7 +293,7 @@ test("workspace symbols and quick access route through the unified reveal-at-lin
   await seedWindows(page, []);
   await page.goto("/");
   const quickInput = await openQuickAccess(page);
-  await quickInput.fill("quickAccessNeedle");
+  await quickInput.fill("quick.ts");
   await expect(page.getByRole("option").filter({ hasText: "src/quick.ts" }).first()).toBeVisible();
   await quickInput.fill(">theme");
   await expect(
