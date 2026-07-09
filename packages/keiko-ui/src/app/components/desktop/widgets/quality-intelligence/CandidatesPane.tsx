@@ -192,7 +192,6 @@ function GovernedActionButton({
   readonly describedBy?: string | undefined;
   readonly onActivate: () => void;
 }): ReactNode {
-  const t = useTranslate();
   return (
     <button
       type="button"
