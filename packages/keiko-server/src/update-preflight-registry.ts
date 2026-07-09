@@ -36,7 +36,7 @@ export interface GitHubReleaseOutcome {
   readonly warning?: string;
 }
 
-interface ValidatedGitHubRelease {
+export interface ValidatedGitHubRelease {
   readonly tag: string;
   readonly title: string;
   readonly summary: string;
@@ -170,7 +170,7 @@ function visibleReleaseBody(body: string): string {
   return body.replace(/<details\b[\s\S]*?<\/details>/giu, "");
 }
 
-function validateGitHubRelease(
+export function validateGitHubRelease(
   raw: unknown,
   targetVersion: string,
 ): ValidatedGitHubRelease | undefined {

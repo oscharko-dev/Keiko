@@ -1,4 +1,3 @@
-import { isAbsolute, resolve } from "node:path";
 import {
   type ReleaseImpactRemediation,
   type UpdatePreflightReport,
@@ -17,7 +16,12 @@ import type {
 // GEN-PERF-CLI-001 — server/evidence graphs load at dispatch; module scope stays type-only.
 import { loadEvidence, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { renderApplyTerminal, renderUpdateStatus } from "./update-output.js";
+import {
+  isPortableManagedInstallMode,
+  renderApplyTerminal,
+  renderUpdateStatus,
+} from "./update-output.js";
+import { resolveStateDir as resolveRuntimeStateDir } from "./state-paths.js";
 
 type ServerModule = typeof import("@oscharko-dev/keiko-server");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
@@ -58,6 +62,7 @@ interface UpdateRuntime {
   readonly preflight: UpdateCliPreflight;
   readonly session: UpdateSessionManager;
   readonly remediation: UpdateRemediationManager;
+  readonly server?: ServerModule | undefined;
   readonly close: () => void;
 }
 
@@ -73,11 +78,6 @@ function processEnvFrom(env: EnvSource): NodeJS.ProcessEnv {
     if (value !== undefined) out[key] = value;
   }
   return out;
-}
-
-function resolveStateDir(cwd: string, env: EnvSource): string {
-  const requested = env.KEIKO_STATE_DIR ?? ".keiko";
-  return isAbsolute(requested) ? requested : resolve(cwd, requested);
 }
 
 function stringRedactor(env: EnvSource, server: ServerModule): (input: string) => string {
@@ -117,10 +117,28 @@ function createHandlerDeps(
   };
 }
 
+function injectedRuntime(deps: UpdateCliDeps): UpdateRuntime | undefined {
+  if (
+    deps.preflight === undefined ||
+    deps.session === undefined ||
+    deps.remediation === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    preflight: deps.preflight,
+    session: deps.session,
+    remediation: deps.remediation,
+    close: (): undefined => undefined,
+  };
+}
+
 async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<UpdateRuntime> {
+  const injected = injectedRuntime(deps);
+  if (injected !== undefined) return injected;
   const [server, evidence] = await Promise.all([loadServer(), loadEvidence()]);
   const handlerDeps = createHandlerDeps(env, deps.fetchImpl, server, evidence);
-  const stateDir = resolveStateDir(deps.cwd ?? process.cwd(), env);
+  const stateDir = resolveRuntimeStateDir(deps.cwd ?? process.cwd(), env);
   const localState = server.createUpdateLocalStateManager({ stateDir });
   const processEnv = processEnvFrom(env);
   const service = server.createUpdatePreflightService();
@@ -134,6 +152,7 @@ async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<Updat
         redactor: stringRedactor(env, server),
       }),
     remediation: deps.remediation ?? server.createUpdateRemediationManager({ localState }),
+    server,
     close: (): void => {
       handlerDeps.store.close();
     },
@@ -187,20 +206,58 @@ function noUpdateApplyGuard(report: UpdatePreflightReport): string | undefined {
   return undefined;
 }
 
-function releaseEligibilityApplyGuard(report: UpdatePreflightReport): string | undefined {
+function portableApplyFallback(): string {
+  return [
+    "Use the Keiko update window to retry, review technical details,",
+    "keep using the current version, or download the latest Keiko release asset manually.",
+  ].join(" ");
+}
+
+function releaseEligibilityApplyGuard(
+  report: UpdatePreflightReport,
+  status: UpdateSessionStatus,
+): string | undefined {
   if (report.manualUpdateRequired || !report.oneClickEligible) {
+    if (isPortableManagedInstallMode(status.installMode)) {
+      return `This portable release asset is not eligible for automatic CLI apply. ${portableApplyFallback()}`;
+    }
     return "This release is not eligible for automatic CLI apply. Review the blockers and use the manual path.";
   }
   return undefined;
 }
 
+function portableCliApplyGuard(status: UpdateSessionStatus): string | undefined {
+  if (!isPortableManagedInstallMode(status.installMode)) return undefined;
+  return [
+    "Portable-managed one-click updates run through the Keiko update window.",
+    "Open Keiko and use Review updates to apply, retry, inspect remediation,",
+    "or download the latest release asset manually.",
+  ].join(" ");
+}
+
 function policyApplyGuard(status: UpdateSessionStatus): string | undefined {
   if (status.policy.enabled) return undefined;
+  if (isPortableManagedInstallMode(status.installMode)) {
+    return `${status.policy.reason ?? "Portable self-update is disabled by policy."} ${portableApplyFallback()}`;
+  }
   return `${status.policy.reason ?? "Package mutation is disabled."} Use your package manager outside Keiko, then restart Keiko.`;
 }
 
 function installModeApplyGuard(status: UpdateSessionStatus): string | undefined {
   if (status.installMode.status === "supported") return undefined;
+  if (
+    isPortableManagedInstallMode(status.installMode) ||
+    status.installMode.installKind?.startsWith("portable-") === true
+  ) {
+    return (
+      status.installMode.manualInstructions ??
+      [
+        "Portable self-update is unavailable for this install.",
+        "Keep using the current version, choose a managed user-writable install location",
+        "when setup asks, or download the latest release asset manually.",
+      ].join(" ")
+    );
+  }
   return (
     status.installMode.manualInstructions ??
     "Automatic update is unavailable. Use your package manager outside Keiko, then restart Keiko."
@@ -226,7 +283,8 @@ function applyGuard(
     noUpdateApplyGuard(report) ??
     policyApplyGuard(status) ??
     installModeApplyGuard(status) ??
-    releaseEligibilityApplyGuard(report) ??
+    releaseEligibilityApplyGuard(report, status) ??
+    portableCliApplyGuard(status) ??
     remediationApplyGuard(remediation)
   );
 }
@@ -338,7 +396,7 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
     deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS,
     deps.maxWaitMs ?? DEFAULT_MAX_WAIT_MS,
   );
-  writeLines(io, renderApplyTerminal(terminal));
+  writeLines(io, renderApplyTerminal(terminal, status));
   return successfulApply(terminal) ? 0 : 1;
 }
 
@@ -363,15 +421,13 @@ export async function runUpdateCli(
     return 2;
   }
   let runtime: UpdateRuntime | undefined;
-  let server: ServerModule | undefined;
   try {
-    server = await loadServer();
     runtime = await createRuntime(env, deps);
     if (subcommand === "status") return await runStatus(runtime, io);
     if (subcommand === "check") return await runCheck(runtime, io);
     return await runApply(runtime, io, deps);
   } catch (error) {
-    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, server)}\n`);
+    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, runtime?.server)}\n`);
     return 1;
   } finally {
     runtime?.close();

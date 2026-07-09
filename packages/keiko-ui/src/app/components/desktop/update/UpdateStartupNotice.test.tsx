@@ -167,6 +167,157 @@ describe("UpdateStartupNotice", () => {
     expect(screen.queryByText("Update available")).toBeNull();
   });
 
+  it("uses portable update wording for eligible release assets", async () => {
+    render(
+      <UpdateStartupNotice
+        ready
+        openUpdates={vi.fn()}
+        fetchReport={vi.fn(async () =>
+          report({
+            installabilitySource: "github-release-asset",
+            portableAsset: {
+              source: "github-release-asset",
+              target: "macos-x64",
+              requiredAssetName: "keiko-macos-x64.zip",
+              status: "eligible",
+            },
+          }),
+        )}
+      />,
+    );
+
+    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Version 0.2.10 is ready. Open updates, then click Update when you are ready.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("uses setup-required wording for unmanaged portable bootstrap installs", async () => {
+    render(
+      <UpdateStartupNotice
+        ready
+        openUpdates={vi.fn()}
+        fetchReport={vi.fn(async () =>
+          report({
+            updateAvailable: false,
+            status: "degraded",
+            availabilityState: "degraded",
+            manualUpdateRequired: true,
+            oneClickEligible: false,
+            portableAsset: {
+              source: "github-release-asset",
+              target: "macos-arm64",
+              requiredAssetName: "keiko-macos-arm64.zip",
+              status: "install-mode-ineligible",
+            },
+            blockers: [
+              {
+                code: "portable-install-mode-ineligible",
+                severity: "normal",
+                message:
+                  "Run the portable setup flow from the Keiko launcher before using in-app updates.",
+                userActionRequired: true,
+              },
+            ],
+          }),
+        )}
+      />,
+    );
+
+    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(
+      screen.getByText("Portable setup is required before Keiko can use in-app updates."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Version unknown/u)).toBeNull();
+  });
+
+  it("uses externally-managed wording for organization-managed portable installs", async () => {
+    render(
+      <UpdateStartupNotice
+        ready
+        openUpdates={vi.fn()}
+        fetchReport={vi.fn(async () =>
+          report({
+            updateAvailable: false,
+            status: "degraded",
+            availabilityState: "degraded",
+            manualUpdateRequired: true,
+            oneClickEligible: false,
+            portableAsset: {
+              source: "github-release-asset",
+              target: "macos-arm64",
+              requiredAssetName: "keiko-macos-arm64.zip",
+              status: "install-mode-ineligible",
+            },
+            blockers: [
+              {
+                code: "portable-install-managed-externally",
+                severity: "normal",
+                message:
+                  "This Keiko install is managed outside the app and is not eligible for self-update.",
+                userActionRequired: true,
+              },
+            ],
+          }),
+        )}
+      />,
+    );
+
+    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(
+      screen.getByText("This Keiko install is managed outside the app. Open updates for details."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Portable setup is required before Keiko can use in-app updates."),
+    ).toBeNull();
+    expect(screen.queryByText(/Version unknown/u)).toBeNull();
+  });
+
+  it("uses release-unavailable wording for portable metadata network failures", async () => {
+    render(
+      <UpdateStartupNotice
+        ready
+        openUpdates={vi.fn()}
+        fetchReport={vi.fn(async () =>
+          report({
+            updateAvailable: false,
+            status: "degraded",
+            availabilityState: "degraded",
+            releaseMetadataStatus: "unavailable",
+            registryStatus: "not-used",
+            manualUpdateRequired: true,
+            oneClickEligible: false,
+            portableAsset: {
+              source: "github-release-asset",
+              target: "macos-arm64",
+              requiredAssetName: "keiko-macos-arm64.zip",
+              status: "unavailable",
+            },
+            blockers: [
+              {
+                code: "portable-release-unavailable",
+                severity: "normal",
+                message: "GitHub release asset metadata is unavailable for portable updates.",
+                userActionRequired: true,
+              },
+            ],
+          }),
+        )}
+      />,
+    );
+
+    expect(await screen.findByText("Update check unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Keiko could not verify update download information right now. It will not install anything.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.queryByText(/Version unknown/u)).toBeNull();
+  });
+
   it("uses alert treatment and visible critical wording for critical updates", async () => {
     render(
       <UpdateStartupNotice

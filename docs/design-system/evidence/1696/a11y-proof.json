@@ -40,6 +40,10 @@
     {
       "file": "10-responsive-manual-path.png",
       "violations": []
+    },
+    {
+      "file": "12-portable-managed-one-click.png",
+      "violations": []
     }
   ],
   "deterministicChecks": {

@@ -470,13 +470,27 @@ export const EN_MESSAGES = {
   "updates.notice.aria": "Keiko update notification",
   "updates.notice.title": "Update available",
   "updates.notice.criticalTitle": "Critical update available",
+  "updates.notice.releaseUnavailableTitle": "Update check unavailable",
   "updates.notice.body":
     "Version {version} is ready to review. Keiko will not install it automatically.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko could not verify update download information right now. It will not install anything.",
+  "updates.notice.portableBody":
+    "Version {version} is ready. Open updates, then click Update when you are ready.",
+  "updates.notice.portableSetupBody":
+    "Portable setup is required before Keiko can use in-app updates.",
+  "updates.notice.portableExternallyManagedBody":
+    "This Keiko install is managed outside the app. Open updates for details.",
   "updates.notice.review": "Review update",
   "updates.notice.notNow": "Not now",
   "updates.versionUnknown": "unknown",
   "updates.versionLine": "Current {current} -> target {target}",
   "updates.versionUnavailable": "Current {current}; latest version could not be verified.",
+  "updates.versionReleaseUnavailable":
+    "Current {current}; update download information could not be verified.",
+  "updates.versionSetupRequired":
+    "Current {current}; portable setup is required for in-app updates.",
+  "updates.versionExternallyManaged": "Current {current}; updates are managed outside this app.",
   "updates.versionInstalled": "Keiko is now running {version}.",
   "updates.loading": "Checking update status...",
   "updates.error.title": "Update status unavailable",
@@ -487,26 +501,42 @@ export const EN_MESSAGES = {
   "updates.status.critical": "Critical update available",
   "updates.status.degraded": "Update status degraded",
   "updates.status.unavailable": "Update status unavailable",
+  "updates.status.releaseUnavailable": "Update check unavailable",
   "updates.status.installing": "Installing update",
   "updates.status.restart": "Restart required",
   "updates.status.success": "Update installed",
   "updates.status.failed": "Update failed",
+  "updates.status.portableSetupRequired": "Portable setup required",
+  "updates.status.portableExternallyManaged": "Updates managed by your organization",
   "updates.primary.title": "Recommended action",
   "updates.primary.available": "Review the state impact, then install when you are ready.",
+  "updates.primary.portableAvailable":
+    "Click Update. Keiko will download, verify, apply, relaunch, and verify the new version.",
   "updates.primary.current": "No update is available. You can check again at any time.",
   "updates.primary.unavailable":
     "Update availability could not be verified. Check again when the registry is reachable.",
+  "updates.primary.releaseUnavailable":
+    "Keiko cannot verify the update download information right now. Keep using this version and check again later.",
+  "updates.primary.portableSetupRequired":
+    "Run the portable setup flow from the Keiko launcher before using in-app updates.",
+  "updates.primary.portableExternallyManaged":
+    "Keep using this version. Updates for this install must come from your approved rollout path.",
+  "updates.primary.policyDisabled":
+    "Automatic updates are disabled by local policy. Keep using this version or ask your administrator to enable updates.",
   "updates.primary.manual":
     "Automatic install is unavailable. Follow the approved manual instructions, restart Keiko, then check again.",
   "updates.primary.manualReview": "Check the local-state risk before installing.",
   "updates.primary.installed":
     "The update is installed. No further action is required unless you want to check for a newer release.",
+  "updates.primary.followUp":
+    "Run or defer the follow-up action before affected workflows are fully ready.",
   "updates.primary.cancelled": "The update was cancelled. Retry when you are ready.",
   "updates.primary.failed":
     "The update did not complete. Review the failure details before retrying.",
   "updates.primary.restart": "Restart and verification are needed to finish the update.",
   "updates.action.check": "Check again",
   "updates.action.install": "Install update",
+  "updates.action.updatePortable": "Update Keiko",
   "updates.action.retry": "Retry update",
   "updates.action.cancel": "Cancel update",
   "updates.action.verifyRestart": "Verify restart",
@@ -525,6 +555,14 @@ export const EN_MESSAGES = {
   "updates.check.current": "Checked just now. No newer update is available.",
   "updates.check.available": "Checked just now. A newer update is available.",
   "updates.check.unavailable": "Checked just now. Update status could not be verified.",
+  "updates.check.releaseUnavailable":
+    "Checked just now. Keiko still cannot verify update download information.",
+  "updates.check.portableSetupRequired":
+    "Checked just now. Portable setup is still required before in-app updates can run.",
+  "updates.check.portableExternallyManaged":
+    "Checked just now. This install is still managed outside Keiko, so in-app updates are not available.",
+  "updates.check.policyDisabled":
+    "Checked just now. Automatic updates are still disabled by local policy.",
   "updates.check.manualStillRequired":
     "Manual install is still pending. Follow the approved manual instructions, restart Keiko, then check again.",
   "updates.check.manualInstalled": "Update installed. Keiko is now running {version}.",
@@ -585,11 +623,59 @@ export const EN_MESSAGES = {
   "updates.manual.finish":
     "After the manual update is complete and Keiko has restarted, verify here.",
   "updates.manual.releaseLink": "Open release notes",
+  "updates.portableManual.title": "Portable update needs attention",
+  "updates.portableManual.body":
+    "Keiko cannot complete this portable update automatically right now. The current version remains usable.",
+  "updates.portableManual.retry":
+    "Retry after network, release metadata, or local install-location issues are resolved.",
+  "updates.portableManual.current":
+    "Keep using the current Keiko version; this update has not replaced it.",
+  "updates.portableManual.details":
+    "Open technical details below for the redacted reason Keiko blocked the update.",
+  "updates.portableManual.download":
+    "If needed, use the release page to download the matching platform artifact manually.",
+  "updates.portableManual.integrityTitle": "Update blocked for safety",
+  "updates.portableManual.integrityBody":
+    "Keiko could not prove that this update file is the official release file. Your current Keiko version was not changed.",
+  "updates.portableManual.integrityKeepUsing": "Keep using Keiko normally.",
+  "updates.portableManual.integrityRetry": "Try again later after the release is fixed.",
+  "updates.portableManual.integrityDoNotInstall": "Do not install this downloaded update manually.",
+  "updates.portableManual.integrityDetails":
+    "Open technical details below if IT or a release owner needs the verification reason.",
+  "updates.portableManual.finish": "After resolving the issue, check again from here.",
+  "updates.portableManual.releaseLink": "Open manual download",
+  "updates.portableSetup.title": "Portable setup required",
+  "updates.portableSetup.body":
+    "This Keiko folder is not managed by the launcher yet, so Keiko cannot update itself from inside the app.",
+  "updates.portableSetup.useLauncher":
+    "Start Keiko from the portable launcher so it can complete the managed setup.",
+  "updates.portableSetup.keepUsing":
+    "Keep using the current Keiko version; this update has not replaced it.",
+  "updates.portableSetup.checkAgain": "Check again after the launcher setup is complete.",
+  "updates.portableExternallyManaged.title": "Updates managed by your organization",
+  "updates.portableExternallyManaged.body":
+    "This Keiko install is managed outside the app, so Keiko will not replace it from here.",
+  "updates.portableExternallyManaged.keepUsing":
+    "Keep using the current Keiko version; this update has not replaced it.",
+  "updates.portableExternallyManaged.admin":
+    "Install a newer version only through your approved software rollout or administrator.",
+  "updates.portableExternallyManaged.checkAgain":
+    "Check again after the approved rollout is complete.",
+  "updates.portablePolicy.title": "Automatic updates disabled by policy",
+  "updates.portablePolicy.body":
+    "Keiko cannot apply this update because local policy disables in-app update changes. The current version remains usable.",
+  "updates.portablePolicy.keepUsing":
+    "Keep using the current Keiko version; this update has not replaced it.",
+  "updates.portablePolicy.admin":
+    "Ask your administrator or distribution owner to enable updates or provide the approved rollout.",
+  "updates.portablePolicy.checkAgain": "Check again after the policy changes.",
+  "updates.portablePolicy.finish": "After the policy changes, check again from here.",
   "updates.patchNotes.summary": "Patch notes",
   "updates.details.summary": "Technical details and logs",
   "updates.details.registry": "Registry",
   "updates.details.releaseMetadata": "Release metadata",
   "updates.details.installMode": "Install mode",
+  "updates.details.installModePortableManaged": "portable-managed",
   "updates.details.remediation": "Remediation",
   "updates.details.installLog": "Installer output",
   "updates.actionStatus.notNeeded": "Not needed",

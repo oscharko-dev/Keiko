@@ -35,6 +35,7 @@ const ARTIFACT_NAMES = [
   "09-settings-entrypoint.png",
   "10-responsive-manual-path.png",
   "11-progress-state.png",
+  "12-portable-managed-one-click.png",
   "update-experience-fidelity-proof.json",
   "a11y-proof.json",
   "manifest.json",
@@ -350,6 +351,80 @@ function manualSessionStatus(): JsonObject {
   });
 }
 
+function portableAsset(status = "eligible"): JsonObject {
+  return {
+    source: "github-release-asset",
+    target: "macos-arm64",
+    requiredAssetName: "keiko-macos-arm64.zip",
+    status,
+    asset:
+      status === "eligible"
+        ? {
+            target: "macos-arm64",
+            assetName: "keiko-macos-arm64.zip",
+            assetId: 120,
+            releaseId: 12,
+            sizeBytes: 48_000_000,
+            sha256: "0".repeat(64),
+            manifestAssetName: "macos-arm64-portable-manifest.json",
+            manifestSha256: "1".repeat(64),
+            checksumAssetName: "macos-arm64-SHA256SUMS.txt",
+            checksumVerified: true,
+          }
+        : undefined,
+  };
+}
+
+function portableReport(overrides: JsonObject = {}): JsonObject {
+  return updatePreflight({
+    userActionRequired: false,
+    affectedStateStores: [],
+    installabilitySource: "github-release-asset",
+    portableAsset: portableAsset(),
+    impact: undefined,
+    ...overrides,
+  });
+}
+
+function portableBlockedReport(): JsonObject {
+  return portableReport({
+    manualUpdateRequired: true,
+    oneClickEligible: false,
+    userActionRequired: true,
+    portableAsset: portableAsset("malformed"),
+    blockers: [
+      {
+        code: "portable-checksum-mismatch",
+        message: "The release verification file does not match the downloaded update archive.",
+        severity: "high",
+        userActionRequired: true,
+      },
+    ],
+  });
+}
+
+function portableSessionStatus(): JsonObject {
+  return sessionStatus({
+    installMode: {
+      schemaVersion: "1",
+      status: "supported",
+      packageName: "@oscharko-dev/keiko",
+      installKind: "portable-managed",
+      installRoot: "/Users/private/Keiko",
+      recommendedAction: "portable-managed-update",
+      portable: {
+        status: "managed",
+        target: "macos-arm64",
+        updateEligible: true,
+        packageVersion: "0.2.10",
+        stable: true,
+        managedRootKind: "home-relative",
+      },
+    },
+    policy: { enabled: true, source: "default" },
+  });
+}
+
 function postedJson(route: Route): unknown {
   const raw = route.request().postData();
   if (raw === null) return {};
@@ -659,6 +734,53 @@ async function assertManualPath(updateWindow: Locator): Promise<void> {
   await expect(updateWindow.getByRole("button", { name: "Check again" })).toBeEnabled();
 }
 
+async function assertPortableOneClickReady(updateWindow: Locator): Promise<void> {
+  await expect(updateWindow.getByRole("heading", { name: "Update available" })).toBeFocused();
+  await expect(
+    updateWindow.getByText(
+      "Click Update. Keiko will download, verify, apply, relaunch, and verify the new version.",
+    ),
+  ).toBeVisible();
+  await expect(updateWindow.getByRole("button", { name: "Update Keiko" })).toBeEnabled();
+  await expect(updateWindow.getByText("Manual update path")).toHaveCount(0);
+  await expect(updateWindow.getByText("npm", { exact: true })).toHaveCount(0);
+}
+
+async function assertPortableOneClickPath(updateWindow: Locator): Promise<void> {
+  await assertPortableOneClickReady(updateWindow);
+  await updateWindow.getByRole("button", { name: "Update Keiko" }).click();
+  await expect(updateWindow.getByLabel("Update progress")).toBeVisible();
+}
+
+async function assertPortableBlockedPath(updateWindow: Locator): Promise<void> {
+  await expect(updateWindow.getByRole("heading", { name: "Update available" })).toBeFocused();
+  await expect(updateWindow.getByText("Update blocked for safety")).toBeVisible();
+  await expect(
+    updateWindow.getByText(
+      "Keiko could not prove that this update file is the official release file. Your current Keiko version was not changed.",
+    ),
+  ).toBeVisible();
+  await expect(updateWindow.getByText("Keep using Keiko normally.")).toBeVisible();
+  await expect(updateWindow.getByText("Try again later after the release is fixed.")).toBeVisible();
+  await expect(
+    updateWindow.getByText("Do not install this downloaded update manually."),
+  ).toBeVisible();
+  await expect(updateWindow.getByText("Manual update instructions")).toHaveCount(0);
+  await expect(updateWindow.getByText("Package-manager commands")).toHaveCount(0);
+  await expect(updateWindow.getByText("npm", { exact: true })).toHaveCount(0);
+  await expect(updateWindow.getByRole("link", { name: "Open manual download" })).toHaveCount(0);
+  const technicalDetails = updateWindow
+    .locator("details")
+    .filter({ hasText: "Technical details and logs" });
+  await technicalDetails.locator("summary").click();
+  await expect(
+    technicalDetails.getByText(
+      "The release verification file does not match the downloaded update archive.",
+    ),
+  ).toBeVisible();
+  await expect(updateWindow.getByRole("button", { name: "Check again" })).toBeEnabled();
+}
+
 async function capture(locator: Locator, name: ArtifactName): Promise<ArtifactName> {
   await locator.evaluate(() => document.fonts.ready.then(() => undefined));
   await locator.screenshot({
@@ -817,6 +939,22 @@ const MANUAL_MODE: ModeCaptureCase = {
   viewport: { width: 680, height: 900 },
 };
 
+const PORTABLE_MODE: ModeCaptureCase = {
+  file: "12-portable-managed-one-click.png",
+  mode: "dark",
+  theme: "dark",
+  media: { colorScheme: "dark" },
+};
+
+function noRemediation(): JsonObject {
+  return remediationStatus({
+    overallStatus: "not-required",
+    updateCanComplete: true,
+    actions: [],
+    affectedFeatures: [],
+  });
+}
+
 function createEvidenceState(): EvidenceState {
   return { captures: [], a11yCaptures: [], ledgers: [] };
 }
@@ -965,6 +1103,29 @@ async function recordManualEvidence(browser: Browser, evidence: EvidenceState): 
   }
 }
 
+async function recordPortableEvidence(browser: Browser, evidence: EvidenceState): Promise<void> {
+  const { page, ledger } = await openModePage(browser, PORTABLE_MODE, {
+    report: portableReport(),
+    sessionStatus: portableSessionStatus(),
+    remediation: noRemediation(),
+  });
+  evidence.ledgers.push(ledger);
+  try {
+    const settings = await openSettingsGeneral(page);
+    const updateWindow = await openUpdateFromSettings(page, settings, /Update available/u);
+    await assertPortableOneClickReady(updateWindow);
+    await resetUpdateScroll(updateWindow);
+    await capture(updateWindow, PORTABLE_MODE.file);
+    evidence.captures.push(await captureContext(page, PORTABLE_MODE, "portable-managed-one-click"));
+    evidence.a11yCaptures.push({
+      file: PORTABLE_MODE.file,
+      violations: await runAxe(page, await updateContentSelector(updateWindow)),
+    });
+  } finally {
+    await closePage(page);
+  }
+}
+
 function seriousA11yFindings(a11yCaptures: readonly A11yCapture[]): JsonObject[] {
   return a11yCaptures.flatMap((entry) =>
     entry.violations
@@ -1058,6 +1219,35 @@ function writeEvidenceArtifacts(evidence: EvidenceState): void {
   writeManifest(evidence.ledgers);
 }
 
+test("covers Issue #1958 portable update window paths", async ({ browser }) => {
+  const eligible = await openModePage(browser, PORTABLE_MODE, {
+    report: portableReport(),
+    sessionStatus: portableSessionStatus(),
+    remediation: noRemediation(),
+  });
+  try {
+    const settings = await openSettingsGeneral(eligible.page);
+    const updateWindow = await openUpdateFromSettings(eligible.page, settings, /Update available/u);
+    await assertPortableOneClickPath(updateWindow);
+    expect(eligible.ledger.sessionStarts).toEqual([{ targetVersion: "0.2.11" }]);
+  } finally {
+    await closePage(eligible.page);
+  }
+
+  const blocked = await openModePage(browser, PORTABLE_MODE, {
+    report: portableBlockedReport(),
+    sessionStatus: portableSessionStatus(),
+    remediation: noRemediation(),
+  });
+  try {
+    const settings = await openSettingsGeneral(blocked.page);
+    const updateWindow = await openUpdateFromSettings(blocked.page, settings, /Update available/u);
+    await assertPortableBlockedPath(updateWindow);
+  } finally {
+    await closePage(blocked.page);
+  }
+});
+
 test("records Issue #1696 governed update UI design-system evidence", async ({ browser }) => {
   test.setTimeout(600_000);
   ensureEvidenceDir();
@@ -1067,6 +1257,7 @@ test("records Issue #1696 governed update UI design-system evidence", async ({ b
   }
   await recordStartupEvidence(browser, evidence);
   await recordManualEvidence(browser, evidence);
+  await recordPortableEvidence(browser, evidence);
   expect(seriousA11yFindings(evidence.a11yCaptures)).toEqual([]);
   expect(evidence.ledgers.some((ledger) => ledger.sessionStarts.length > 0)).toBe(true);
   writeEvidenceArtifacts(evidence);
