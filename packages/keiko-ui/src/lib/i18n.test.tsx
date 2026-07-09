@@ -63,12 +63,16 @@ describe("resolveLocale", () => {
 
 describe("translate", () => {
   it("interpolates named values from the default catalog", () => {
-    expect(translate("en", "settings.models.modelCount", { count: 3 })).toBe("3 models");
+    expect(translate("en", "workspace.selection.many", { count: 3 })).toBe(
+      "3 workspace windows selected",
+    );
   });
 
   it("loads the non-default catalog on demand", async () => {
     await expect(loadLocaleMessages("de")).resolves.toBeTruthy();
-    expect(translate("de", "settings.models.modelCount", { count: 3 })).toBe("3 Modelle");
+    expect(translate("de", "workspace.selection.many", { count: 3 })).toBe(
+      "3 Arbeitsbereichsfenster ausgewählt",
+    );
   });
 });
 

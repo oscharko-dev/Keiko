@@ -12,6 +12,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslate } from "@/lib/i18n";
 
 export type KeikoSelectOption = {
   readonly value: string;
@@ -220,7 +221,7 @@ export default function KeikoSelect({
   sections,
   onValueChange,
   disabled = false,
-  placeholder = "Select an option",
+  placeholder,
   ariaLabel,
   ariaDescribedBy,
   ariaLabelledBy,
@@ -237,6 +238,7 @@ export default function KeikoSelect({
   triggerStyle,
   autoFocus = false,
 }: KeikoSelectProps): ReactNode {
+  const t = useTranslate();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -260,9 +262,10 @@ export default function KeikoSelect({
 
   const selectedIndex = flatOptions.findIndex((option) => option.value === value);
   const selectedOption = selectedIndex === -1 ? null : flatOptions[selectedIndex]!;
-  const visibleLabel = selectedOption?.label ?? placeholder;
+  const resolvedPlaceholder = placeholder ?? t("select.placeholder");
+  const visibleLabel = selectedOption?.label ?? resolvedPlaceholder;
   const visibleDescription = selectedOption?.description ?? null;
-  const menuLabel = menuTitle ?? ariaLabel ?? placeholder;
+  const menuLabel = menuTitle ?? ariaLabel ?? resolvedPlaceholder;
 
   const closeMenu = (): void => {
     setOpen(false);

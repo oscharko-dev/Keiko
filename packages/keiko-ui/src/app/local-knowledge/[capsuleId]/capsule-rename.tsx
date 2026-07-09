@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { renameCapsule, type RenameCapsulePatch } from "@/lib/local-knowledge-api";
+import { useLocalKnowledgeTranslate as useTranslate } from "../local-knowledge-i18n";
 import { formatError } from "../format-error";
 
 // Minimal patch: only fields that actually changed. Returns null when nothing changed so
@@ -49,6 +50,7 @@ function RenameFields({
   onCancel,
   onSubmit,
 }: RenameFieldsProps): ReactNode {
+  const t = useTranslate();
   const formRef = useRef<HTMLFormElement>(null);
   // Escape cancels the inline edit (#712 pattern): a document keydown listener scoped to this
   // form's lifetime — not a JSX handler on the non-interactive <form> (jsx-a11y). Only cancels
@@ -68,13 +70,13 @@ function RenameFields({
   return (
     <form
       className="lkd-rename-form"
-      aria-label="Rename Knowledge Pod"
+      aria-label={t("localKnowledge.detail.rename.formLabel")}
       onSubmit={onSubmit}
       ref={formRef}
     >
       <div className="dlg-field">
         <label htmlFor="lkd-rename-name" className="dlg-label">
-          Display name
+          {t("localKnowledge.detail.rename.displayName")}
         </label>
         <input
           id="lkd-rename-name"
@@ -89,7 +91,7 @@ function RenameFields({
       </div>
       <div className="dlg-field">
         <label htmlFor="lkd-rename-desc" className="dlg-label">
-          Description
+          {t("localKnowledge.detail.rename.description")}
         </label>
         <input
           id="lkd-rename-desc"
@@ -108,10 +110,10 @@ function RenameFields({
       ) : null}
       <div className="lkd-rename-actions">
         <button type="button" className="lk-btn lk-btn-ghost" disabled={busy} onClick={onCancel}>
-          Cancel
+          {t("common.cancel")}
         </button>
         <button type="submit" className="lk-btn lk-btn-primary" disabled={busy} aria-busy={busy}>
-          {busy ? "Saving…" : "Save"}
+          {busy ? t("common.saving") : t("common.save")}
         </button>
       </div>
     </form>
@@ -133,6 +135,7 @@ export function CapsuleRename({
   onRenamed,
   renameImpl = renameCapsule,
 }: CapsuleRenameProps): ReactNode {
+  const t = useTranslate();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(displayName);
   const [draftDescription, setDraftDescription] = useState(description ?? "");
@@ -171,7 +174,7 @@ export function CapsuleRename({
     event.preventDefault();
     const trimmedName = name.trim();
     if (trimmedName.length === 0) {
-      setError("Display name is required.");
+      setError(t("localKnowledge.detail.rename.nameRequired"));
       return;
     }
     const patch = buildPatch(trimmedName, draftDescription, displayName, description);
@@ -186,7 +189,7 @@ export function CapsuleRename({
       setEditing(false);
       onRenamed();
     } catch (err) {
-      setError(formatError(err));
+      setError(formatError(err, t));
     } finally {
       setBusy(false);
     }
@@ -197,11 +200,11 @@ export function CapsuleRename({
       <button
         type="button"
         className="lk-btn lk-btn-ghost"
-        aria-label={`Rename Knowledge Pod ${displayName}`}
+        aria-label={t("localKnowledge.detail.rename.buttonFor", { name: displayName })}
         ref={renameButtonRef}
         onClick={open}
       >
-        Rename
+        {t("localKnowledge.detail.rename.button")}
       </button>
     );
   }

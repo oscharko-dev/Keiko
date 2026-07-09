@@ -6,6 +6,7 @@ import type {
   ParserResult,
   SectionRecord,
 } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 import yauzl from "yauzl";
 
 import {
@@ -41,6 +42,7 @@ const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
 const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
 const TABLE_ROW_PATTERN = /<w:tr\b[\s\S]*?<\/w:tr>/gi;
 const TABLE_CELL_PATTERN = /<w:tc\b[\s\S]*?<\/w:tc>/gi;
+const DOCX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS);
 
 interface ZipFileLike {
   readonly readEntry: () => void;
@@ -58,7 +60,10 @@ interface ZipFileLike {
 }
 
 function isDocx(input: ParserSelectionInput): boolean {
-  return input.extension.toLowerCase() === "docx" || input.mediaType.toLowerCase() === DOCX_MEDIA;
+  return (
+    DOCX_EXTENSIONS.has(input.extension.toLowerCase()) ||
+    input.mediaType.toLowerCase() === DOCX_MEDIA
+  );
 }
 
 function cancelled(

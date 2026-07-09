@@ -10,6 +10,10 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { createPortal } from "react-dom";
 import { CAPSULE_SET_MAX_MEMBERS, type KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
+import {
+  useLocalKnowledgeTranslate as useTranslate,
+  type I18nTranslate,
+} from "./local-knowledge-i18n";
 import { createCapsuleSet, type CapsuleListEntry } from "@/lib/local-knowledge-api";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { formatError } from "./format-error";
@@ -135,11 +139,11 @@ function MemberCheckbox({
   );
 }
 
-function validateSelection(name: string, count: number): string | null {
-  if (name.trim().length === 0) return "Knowledge Pod Set name is required.";
-  if (count === 0) return "Select at least one Knowledge Pod to combine.";
+function validateSelection(name: string, count: number, t: I18nTranslate): string | null {
+  if (name.trim().length === 0) return t("localKnowledge.set.validation.nameRequired");
+  if (count === 0) return t("localKnowledge.set.validation.selectionRequired");
   if (count > CAPSULE_SET_MAX_MEMBERS) {
-    return `A Knowledge Pod Set can hold at most ${CAPSULE_SET_MAX_MEMBERS.toString()} Knowledge Pods.`;
+    return t("localKnowledge.set.validation.tooMany", { count: CAPSULE_SET_MAX_MEMBERS });
   }
   return null;
 }
@@ -165,6 +169,7 @@ export function CapsuleSetComposeDialog({
   const [selected, setSelected] = useState<ReadonlySet<KnowledgeCapsuleId>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const t = useTranslate();
   useModalInteractionLock();
   useComposeFocusTrap(dialogRef, busy, onCancel);
 
@@ -180,7 +185,7 @@ export function CapsuleSetComposeDialog({
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const validation = validateSelection(name, selected.size);
+    const validation = validateSelection(name, selected.size, t);
     if (validation !== null) {
       setError(validation);
       return;
@@ -197,8 +202,8 @@ export function CapsuleSetComposeDialog({
     }
   }
 
-  const nameInvalid = error === "Knowledge Pod Set name is required.";
-  const selectionInvalid = error === "Select at least one Knowledge Pod to combine.";
+  const nameInvalid = error === t("localKnowledge.set.validation.nameRequired");
+  const selectionInvalid = error === t("localKnowledge.set.validation.selectionRequired");
 
   return createPortal(
     <div className="mc-dialog-backdrop" role="presentation">
@@ -211,11 +216,11 @@ export function CapsuleSetComposeDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Create Knowledge Pod Set
+          {t("localKnowledge.set.createTitle")}
         </h2>
         <form onSubmit={(event) => void handleSubmit(event)}>
           <label className="mc-dialog-field" htmlFor={nameId}>
-            <span className="mc-dialog-label">Knowledge Pod Set name</span>
+            <span className="mc-dialog-label">{t("localKnowledge.set.nameLabel")}</span>
             <input
               id={nameId}
               className="mc-dialog-input"
@@ -237,12 +242,18 @@ export function CapsuleSetComposeDialog({
             aria-describedby={selectionInvalid ? errorId : undefined}
           >
             <legend className="mc-dialog-label">
-              Knowledge Pods ({selected.size.toString()}/{CAPSULE_SET_MAX_MEMBERS.toString()})
+              {t("localKnowledge.set.membersLegend", {
+                selected: selected.size,
+                max: CAPSULE_SET_MAX_MEMBERS,
+              })}
             </legend>
             {capsules.length === 0 ? (
-              <p className="lkd-empty-note">No Knowledge Pods available to combine.</p>
+              <p className="lkd-empty-note">{t("localKnowledge.set.emptyMembers")}</p>
             ) : (
-              <ul className="lk-compose-member-list" aria-label="Selectable Knowledge Pods">
+              <ul
+                className="lk-compose-member-list"
+                aria-label={t("localKnowledge.set.selectableMembers")}
+              >
                 {capsules.map((capsule) => (
                   <MemberCheckbox
                     key={capsule.id}
@@ -267,7 +278,7 @@ export function CapsuleSetComposeDialog({
               disabled={busy}
               onClick={onCancel}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="submit"
@@ -275,7 +286,7 @@ export function CapsuleSetComposeDialog({
               disabled={busy}
               aria-busy={busy}
             >
-              {busy ? "Creating Knowledge Pod Set…" : "Create Knowledge Pod Set"}
+              {busy ? "Creating..." : t("localKnowledge.set.submit")}
             </button>
           </div>
         </form>

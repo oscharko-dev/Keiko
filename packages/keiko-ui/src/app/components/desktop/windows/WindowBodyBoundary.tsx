@@ -14,6 +14,7 @@
 // and must not grow for this.
 
 import { Component, type ReactNode } from "react";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 interface WindowBodyBoundaryProps {
   // Window TYPE (registry key), not the user-supplied title: the type is the only value
@@ -22,12 +23,16 @@ interface WindowBodyBoundaryProps {
   readonly children: ReactNode;
 }
 
+interface InnerWindowBodyBoundaryProps extends WindowBodyBoundaryProps {
+  readonly t: I18nTranslate;
+}
+
 interface WindowBodyBoundaryState {
   readonly failed: boolean;
 }
 
-export class WindowBodyBoundary extends Component<
-  WindowBodyBoundaryProps,
+class InnerWindowBodyBoundary extends Component<
+  InnerWindowBodyBoundaryProps,
   WindowBodyBoundaryState
 > {
   public override state: WindowBodyBoundaryState = { failed: false };
@@ -50,15 +55,17 @@ export class WindowBodyBoundary extends Component<
     if (!this.state.failed) return this.props.children;
     return (
       <div className="lk-empty" role="alert" data-window-body-crashed="true">
-        <p className="lk-empty-title">This window hit an error</p>
-        <p className="lk-empty-body">
-          The window content crashed while rendering. Other windows are unaffected — retry the
-          content or close this window.
-        </p>
+        <p className="lk-empty-title">{this.props.t("window.error.title")}</p>
+        <p className="lk-empty-body">{this.props.t("window.error.body")}</p>
         <button type="button" className="lk-btn lk-btn-ghost" onClick={this.retry}>
-          Retry
+          {this.props.t("common.retry")}
         </button>
       </div>
     );
   }
+}
+
+export function WindowBodyBoundary(props: WindowBodyBoundaryProps): ReactNode {
+  const t = useTranslate();
+  return <InnerWindowBodyBoundary {...props} t={t} />;
 }

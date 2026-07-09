@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorGraph } from "./connector-graph";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
@@ -29,10 +29,7 @@ import type {
   KnowledgeCapsuleId,
   CapsuleLifecycleState,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  sealedLocalPodModelUsePolicy,
-  standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 
 const pushMock = vi.fn();
 
@@ -55,6 +52,10 @@ vi.mock("next/navigation", () => ({
 
 beforeEach(() => {
   pushMock.mockReset();
+});
+
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
 // ---------------------------------------------------------------------------
@@ -166,6 +167,36 @@ describe("ConnectorGraph — empty state", () => {
     expect(promptSpy).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: /create Knowledge Pod/i })).toBeInTheDocument();
     promptSpy.mockRestore();
+  });
+
+  it("renders the create dialog in German while keeping Knowledge Pod as feature name", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <ConnectorGraph fetchCapsulesImpl={emptyFetch} />
+      </I18nProvider>,
+    );
+
+    const createButton = await screen.findByRole("button", {
+      name: "Ersten Knowledge Pod erstellen",
+    });
+    await user.click(createButton);
+
+    const dialog = await screen.findByRole("dialog", { name: "Knowledge Pod erstellen" });
+    await waitFor(() => {
+      expect(within(dialog).getByText(/Benenne diesen Knowledge Pod/i)).toBeInTheDocument();
+    });
+    expect(within(dialog).getByLabelText(/Anzeigename des Knowledge Pod/i)).toBeInTheDocument();
+    expect(within(dialog).getByText("Zugriff")).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /^Lokal$/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: /Teilbar/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(
+      within(dialog).getByRole("button", { name: "Knowledge Pod erstellen" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -710,7 +741,7 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 });
 
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
-  it("submits a trimmed display name with sealed-local policy from the create dialog", async () => {
+  it("submits a trimmed display name without a create-time model-use policy", async () => {
     const createCapsuleImpl = vi
       .fn()
       .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
@@ -733,12 +764,11 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await waitFor(() => {
       expect(createCapsuleImpl).toHaveBeenCalledWith({
         displayName: "Treasury Docs",
-        modelUsePolicy: sealedLocalPodModelUsePolicy(),
       });
     });
   });
 
-  it("submits the explicit standard policy when selected in the create dialog", async () => {
+  it("shows local access as the active create option and shareable access as disabled", async () => {
     const createCapsuleImpl = vi
       .fn()
       .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
@@ -752,8 +782,13 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
 
     await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
     const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
-    await user.type(within(dialog).getByLabelText(/pod display name/i), "Standard Docs");
-    await user.click(within(dialog).getByLabelText(/^standard$/i));
+    const local = within(dialog).getByRole("radio", { name: /^local$/i });
+    const shareable = within(dialog).getByRole("radio", { name: /shareable/i });
+
+    expect(local).toBeChecked();
+    expect(shareable).toHaveAttribute("aria-disabled", "true");
+
+    await user.type(within(dialog).getByLabelText(/pod display name/i), "Local Docs");
     await user.click(
       within(dialog).getByRole("button", {
         name: /^create Knowledge Pod$/i,
@@ -762,10 +797,51 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
 
     await waitFor(() => {
       expect(createCapsuleImpl).toHaveBeenCalledWith({
-        displayName: "Standard Docs",
-        modelUsePolicy: standardPodModelUsePolicy(),
+        displayName: "Local Docs",
       });
     });
+  });
+
+  it("explains access choices in the create dialog", async () => {
+    const user = userEvent.setup();
+
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
+    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
+    const local = within(dialog).getByRole("radio", { name: /^local$/i });
+    const shareable = within(dialog).getByRole("radio", { name: /shareable/i });
+    const helpButton = within(dialog).getByLabelText("Explain Knowledge Pod access");
+
+    expect(local.closest("label")).toHaveClass("c-radio");
+    expect(shareable).toHaveClass("c-radio");
+
+    await user.click(helpButton);
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/local keeps it private/i);
+    expect(helpButton).toHaveAccessibleDescription(/shareable will allow trusted sharing later/i);
+  });
+
+  it("explains the disabled future sharing option on hover", async () => {
+    const user = userEvent.setup();
+
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
+    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
+    const shareable = within(dialog).getByRole("radio", { name: /shareable/i });
+
+    await user.hover(shareable);
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent(/share Knowledge Pods with trusted/i);
   });
 
   it("calls startIndexing with the right capsule ID when Index is clicked", async () => {

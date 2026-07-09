@@ -14,6 +14,7 @@
 // Reuses the existing `cmp-voice*` CSS classes so globals.css is NOT modified (SHA-pinned by tests).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { useVoiceTranslate as useTranslate, type I18nTranslate } from "./voice-i18n";
 import { Icons } from "./Icons";
 import type {
   RealtimeVoiceController,
@@ -25,20 +26,17 @@ import type { ConversationMemoryActionWire } from "@/lib/types";
 // Stable id for the local-only privacy disclosure on the realtime button.
 export const REALTIME_PRIVACY_HINT_ID = "cmp-voice-rt-privacy-hint";
 
-const REALTIME_PRIVACY_MESSAGE =
-  "Your audio is streamed directly to your configured realtime provider and is not stored.";
-
-function realtimeLabel(phase: RealtimeVoicePhase): string {
+function realtimeLabel(phase: RealtimeVoicePhase, t: I18nTranslate): string {
   switch (phase) {
     case "requesting":
-      return "Starting microphone…";
+      return t("voice.realtime.starting");
     case "negotiating":
-      return "Connecting realtime voice…";
+      return t("voice.realtime.connecting");
     case "connected":
-      return "Stop realtime voice";
+      return t("voice.realtime.stop");
     default:
       // idle | error — the affordance starts (or restarts) the realtime session.
-      return "Start realtime voice";
+      return t("voice.realtime.start");
   }
 }
 
@@ -57,12 +55,13 @@ export function VoiceRealtimeButton({
   buttonRef,
   compact = false,
 }: VoiceRealtimeButtonProps): ReactNode {
+  const t = useTranslate();
   const connected = phase === "connected";
   const negotiating = phase === "negotiating";
   // Busy during transient states; these are announced but the button stays focusable (aria-disabled
   // not native disabled — preserves focus retention, matching VoiceDictationButton pattern).
   const busy = phase === "requesting" || negotiating;
-  const label = realtimeLabel(phase);
+  const label = realtimeLabel(phase, t);
 
   return (
     <button
@@ -95,26 +94,26 @@ export function VoiceRealtimeButton({
         <Icons.mic size={16} />
       )}
       <span id={REALTIME_PRIVACY_HINT_ID} className="sr-only">
-        {REALTIME_PRIVACY_MESSAGE}
+        {t("voice.realtime.privacy")}
       </span>
     </button>
   );
 }
 
-function realtimeErrorHeadline(reason: RealtimeVoiceErrorReason): string {
+function realtimeErrorHeadline(reason: RealtimeVoiceErrorReason, t: I18nTranslate): string {
   switch (reason) {
     case "permission-denied":
-      return "Microphone access was denied. Allow microphone access in your browser to use realtime voice.";
+      return t("voice.realtime.error.permission");
     case "no-microphone":
-      return "No microphone was found. Connect a microphone and try again.";
+      return t("voice.error.noMicrophone");
     case "unsupported":
-      return "This browser does not support realtime voice.";
+      return t("voice.realtime.error.unsupported");
     case "unavailable":
-      return "Realtime voice is not available right now.";
+      return t("voice.realtime.error.unavailable");
     case "negotiation-failed":
-      return "Realtime voice connection could not be established.";
+      return t("voice.realtime.error.negotiationFailed");
     case "connection-failed":
-      return "Realtime voice connection was lost.";
+      return t("voice.realtime.error.connectionFailed");
   }
 }
 
@@ -141,11 +140,17 @@ function candidateActions(
   );
 }
 
-function memoryActivityLabel(count: number | undefined, hasMemoryContext: boolean): string | null {
+function memoryActivityLabel(
+  count: number | undefined,
+  hasMemoryContext: boolean,
+  t: I18nTranslate,
+): string | null {
   if (count !== undefined && count > 0) {
-    return count === 1 ? "1 recalled memory active." : `${String(count)} recalled memories active.`;
+    return t(count === 1 ? "voice.realtime.memory.one" : "voice.realtime.memory.many", {
+      count,
+    });
   }
-  return hasMemoryContext ? "MemoriaViva context active." : null;
+  return hasMemoryContext ? t("voice.realtime.memory.contextActive") : null;
 }
 
 function VoiceMemoryCandidate({
@@ -157,6 +162,7 @@ function VoiceMemoryCandidate({
   readonly onAccept: ((proposalId: string) => Promise<void>) | undefined;
   readonly onReject: ((proposalId: string) => Promise<void>) | undefined;
 }): ReactNode {
+  const t = useTranslate();
   const [busy, setBusy] = useState<"accept" | "reject" | null>(null);
   const [error, setError] = useState<string | undefined>();
   const run = useCallback(
@@ -166,11 +172,13 @@ function VoiceMemoryCandidate({
       setError(undefined);
       void callback(action.proposalId)
         .catch((caught) => {
-          setError(caught instanceof Error ? caught.message : "Unable to update memory.");
+          setError(
+            caught instanceof Error ? caught.message : t("voice.realtime.memory.updateFailed"),
+          );
         })
         .finally(() => setBusy(null));
     },
-    [action.proposalId, busy],
+    [action.proposalId, busy, t],
   );
   return (
     <div className="cmp-voice-memory-candidate">
@@ -183,7 +191,7 @@ function VoiceMemoryCandidate({
           aria-disabled={busy !== null || onAccept === undefined}
           onClick={() => run("accept", onAccept)}
         >
-          Approve
+          {t("memoria.approve")}
         </button>
         <button
           type="button"
@@ -192,7 +200,7 @@ function VoiceMemoryCandidate({
           aria-disabled={busy !== null || onReject === undefined}
           onClick={() => run("reject", onReject)}
         >
-          Reject
+          {t("memoria.reject")}
         </button>
       </div>
       {error !== undefined ? <span className="cmp-voice-memory-error">{error}</span> : null}
@@ -213,14 +221,15 @@ function VoiceMemoryActivity({
   readonly onAcceptMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
   readonly onRejectMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
 }): ReactNode {
+  const t = useTranslate();
   const hasMemoryContext = memoryContextText !== undefined && memoryContextText.trim().length > 0;
-  const label = memoryActivityLabel(memoryContextCount, hasMemoryContext);
+  const label = memoryActivityLabel(memoryContextCount, hasMemoryContext, t);
   const candidates = candidateActions(memoryActions);
   if (label === null && candidates.length === 0) {
     return null;
   }
   return (
-    <div className="cmp-voice-memory" aria-label="MemoriaViva voice memory">
+    <div className="cmp-voice-memory" aria-label={t("voice.realtime.memory.region")}>
       {label !== null ? <span className="cmp-voice-memory-summary">{label}</span> : null}
       {candidates.map((action) => (
         <VoiceMemoryCandidate
@@ -245,6 +254,7 @@ export function VoiceRealtimeStatus({
   onAcceptMemoryCandidate,
   onRejectMemoryCandidate,
 }: VoiceRealtimeStatusProps): ReactNode {
+  const t = useTranslate();
   const retryRef = useRef<HTMLButtonElement>(null);
 
   // Focus handoff (WCAG 2.4.3): when an error appears, move focus to its retry button so the alert
@@ -259,17 +269,17 @@ export function VoiceRealtimeStatus({
     return (
       <div className="cmp-voice-preview" role="status" aria-live="polite">
         <span className="cmp-loading-dot" aria-hidden="true" />
-        Connecting realtime voice…
+        {t("voice.realtime.connecting")}
       </div>
     );
   }
 
   if (phase === "connected") {
     return (
-      <div className="cmp-voice-preview" role="group" aria-label="Realtime voice status">
+      <div className="cmp-voice-preview" role="group" aria-label={t("voice.realtime.status")}>
         <div className="cmp-voice-connected-line" role="status" aria-live="polite">
           <span className="cmp-voice-dot" aria-hidden="true" />
-          Realtime voice connected.
+          {t("voice.realtime.connected")}
         </div>
         <VoiceMemoryActivity
           memoryContextText={memoryContextText}
@@ -285,13 +295,13 @@ export function VoiceRealtimeStatus({
   if (phase === "error" && error !== undefined) {
     return (
       <div className="cmp-voice-preview cmp-voice-error" role="alert" aria-atomic="true">
-        <p className="cmp-voice-error-text">{realtimeErrorHeadline(error.reason)}</p>
+        <p className="cmp-voice-error-text">{realtimeErrorHeadline(error.reason, t)}</p>
         <div className="cmp-voice-actions">
           <button type="button" ref={retryRef} className="cmp-voice-btn" onClick={onRetry}>
-            Try again
+            {t("common.tryAgain")}
           </button>
           <button type="button" className="cmp-voice-btn" onClick={onDismiss}>
-            Dismiss
+            {t("common.dismiss")}
           </button>
         </div>
       </div>

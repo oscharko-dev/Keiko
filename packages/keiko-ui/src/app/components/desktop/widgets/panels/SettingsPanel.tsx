@@ -4,13 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
-import {
-  LOCALE_LABELS,
-  useLocale,
-  useSetLocale,
-  useTranslate,
-  type I18nTranslate,
-} from "@/lib/i18n";
+import { LOCALE_LABELS, useLocale, useSetLocale } from "@/lib/i18n";
+import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
 import type {
   ConversationIneligibilityReason,
   GatewayReadinessProbeResult,

@@ -5,12 +5,17 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
 import type { CapsuleSetComposeDialogProps } from "./capsule-set-compose";
 import type { CapsuleListEntry, CapsuleSetDetail } from "@/lib/local-knowledge-api";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
+
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});
 
 function capsule(id: string, displayName: string): CapsuleListEntry {
   return {
@@ -69,6 +74,24 @@ describe("CapsuleSetComposeDialog — rendering", () => {
     render(<CapsuleSetComposeDialog {...defaultProps()} />);
     const list = screen.getByRole("list", { name: /selectable Knowledge Pods/i });
     expect(within(list).getAllByRole("checkbox")).toHaveLength(3);
+  });
+
+  it("renders German copy while keeping Knowledge Pod Set as feature name", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <CapsuleSetComposeDialog {...defaultProps()} />
+      </I18nProvider>,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Knowledge Pod Set erstellen" });
+    expect(within(dialog).getByLabelText(/Name des Knowledge Pod Set/i)).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("list", { name: "Auswählbare Knowledge Pods" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("button", { name: "Knowledge Pod Set erstellen" }),
+    ).toBeInTheDocument();
   });
 
   it("shows a live selection counter", async () => {

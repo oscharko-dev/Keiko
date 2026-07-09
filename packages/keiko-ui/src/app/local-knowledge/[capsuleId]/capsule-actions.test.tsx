@@ -8,6 +8,7 @@ import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CapsuleActions } from "./capsule-actions";
 import type { CapsuleActionsProps } from "./capsule-actions";
+import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type {
   CapsuleActionResponse,
@@ -30,6 +31,21 @@ vi.mock("@/lib/native-file-dialog", async (importOriginal) => {
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 
 const mockPickWithNativeDialog = vi.mocked(pickWithNativeDialog);
+
+const FILE_FILTER_NAMES = {
+  documents: "PDF, Word and Excel",
+  structuredData: "Tables and structured data",
+  textDocuments: "Text and Markdown",
+  webDocuments: "Web documents",
+  scripts: "Scripts",
+  sourceCode: "Source code",
+  configuration: "Configuration files",
+} as const;
+
+const NATIVE_DOCUMENT_FILTERS = LOCAL_KNOWLEDGE_FILE_FILTERS.map((filter) => ({
+  name: FILE_FILTER_NAMES[filter.id],
+  extensions: filter.extensions,
+}));
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -132,15 +148,8 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
   };
 }
 
-async function chooseConnectSource(
-  user: ReturnType<typeof userEvent.setup>,
-  sourceLabel: "Folder" | "Repository" | "Files",
-): Promise<void> {
-  await user.click(screen.getByRole("combobox", { name: /connect source/i }));
-  const options = await screen.findAllByRole("option");
-  const option = options.find((entry) => entry.textContent?.includes(sourceLabel));
-  if (option === undefined) throw new Error(`Missing source option ${sourceLabel}`);
-  await user.click(option);
+async function openMaintenance(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByText("Maintenance and deletion"));
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +163,7 @@ describe("CapsuleActions — connect source", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl, onActionComplete })} />);
 
-    await user.type(screen.getByLabelText(/absolute folder path to connect/i), "/docs/manuals");
+    await user.type(screen.getByLabelText(/source path/i), "/docs/manuals");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     await waitFor(() => {
@@ -167,42 +176,18 @@ describe("CapsuleActions — connect source", () => {
     expect(onActionComplete).toHaveBeenCalledOnce();
   });
 
-  it("connects a repository scope", async () => {
+  it("builds a file-list source when relative document paths are provided", async () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await chooseConnectSource(user, "Repository");
-    await user.type(screen.getByLabelText(/absolute repository path to connect/i), "/repo/app");
-    await user.click(screen.getByRole("button", { name: /^connect$/i }));
-
-    await waitFor(() => {
-      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
-        kind: "repository",
-        repositoryRoot: "/repo/app",
-      });
-    });
-  });
-
-  it("requires files input for files scopes and deduplicates file entries", async () => {
-    const user = userEvent.setup();
-    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
-    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
-
-    await chooseConnectSource(user, "Files");
-    const connectButton = screen.getByRole("button", { name: /^connect$/i });
-    expect(connectButton).toBeDisabled();
-
-    await user.type(screen.getByLabelText(/absolute root path for the selected files/i), "/repo");
-    expect(connectButton).toBeDisabled();
-
+    await user.click(screen.getByText("Index only specific documents"));
+    await user.type(screen.getByLabelText(/source path/i), "/repo");
     await user.type(
-      screen.getByLabelText(/relative files to connect/i),
+      screen.getByLabelText(/relative document paths/i),
       "src/app.ts{enter}README.md{enter}src/app.ts",
     );
-    expect(connectButton).not.toBeDisabled();
-
-    await user.click(connectButton);
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     await waitFor(() => {
       expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
@@ -220,17 +205,17 @@ describe("CapsuleActions — connect source", () => {
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    const browse = screen.getByRole("button", { name: /^browse$/i });
+    const browse = screen.getByRole("button", { name: /^select folder$/i });
     await waitFor(() => expect(browse).not.toBeDisabled());
     await user.click(browse);
 
     await waitFor(() =>
       expect(mockPickWithNativeDialog).toHaveBeenCalledWith({
         mode: "open-directory",
-        title: "Choose a folder for this pod",
+        title: "Choose a folder for this Knowledge Pod",
       }),
     );
-    expect(screen.getByLabelText(/absolute folder path to connect/i)).toHaveValue("/repo/docs");
+    expect(screen.getByLabelText(/source path/i)).toHaveValue("/repo/docs");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     await waitFor(() => {
@@ -252,21 +237,19 @@ describe("CapsuleActions — connect source", () => {
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await chooseConnectSource(user, "Files");
-    const browse = screen.getByRole("button", { name: /^browse$/i });
+    const browse = screen.getByRole("button", { name: /^select documents$/i });
     await waitFor(() => expect(browse).not.toBeDisabled());
     await user.click(browse);
 
     await waitFor(() =>
       expect(mockPickWithNativeDialog).toHaveBeenCalledWith({
         mode: "open-files",
-        title: "Choose files for this pod",
+        title: "Choose documents for this Knowledge Pod",
+        filters: NATIVE_DOCUMENT_FILTERS,
       }),
     );
-    expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
-      "/repo",
-    );
-    expect(screen.getByLabelText(/relative files to connect/i)).toHaveValue(
+    expect(screen.getByLabelText(/source path/i)).toHaveValue("/repo");
+    expect(screen.getByLabelText(/relative document paths/i)).toHaveValue(
       "README.md\nCHANGELOG.md",
     );
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
@@ -290,19 +273,14 @@ describe("CapsuleActions — connect source", () => {
 
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await chooseConnectSource(user, "Files");
-    const browse = screen.getByRole("button", { name: /^browse$/i });
+    const browse = screen.getByRole("button", { name: /^select documents$/i });
     await waitFor(() => expect(browse).not.toBeDisabled());
     await user.click(browse);
 
     await waitFor(() =>
-      expect(screen.getByLabelText(/absolute root path for the selected files/i)).toHaveValue(
-        "/home/user/Desktop",
-      ),
+      expect(screen.getByLabelText(/source path/i)).toHaveValue("/home/user/Desktop"),
     );
-    expect(screen.getByLabelText(/relative files to connect/i)).toHaveValue(
-      "Inside Agentic AI.pdf",
-    );
+    expect(screen.getByLabelText(/relative document paths/i)).toHaveValue("Inside Agentic AI.pdf");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
     await waitFor(() => {
@@ -316,7 +294,7 @@ describe("CapsuleActions — connect source", () => {
 
   it("shows the local knowledge limits next to the connect form", () => {
     render(<CapsuleActions {...defaultProps()} />);
-    expect(screen.getByText(/Maximum single file size: 1.0 GB/i)).toBeInTheDocument();
+    expect(screen.getByText(/Maximum single file size: 1 GB/i)).toBeInTheDocument();
   });
 
   it("surfaces a calm message when the native dialog fails and keeps manual entry usable", async () => {
@@ -325,14 +303,14 @@ describe("CapsuleActions — connect source", () => {
 
     render(<CapsuleActions {...defaultProps()} />);
 
-    const browse = screen.getByRole("button", { name: /^browse$/i });
+    const browse = screen.getByRole("button", { name: /^select folder$/i });
     await waitFor(() => expect(browse).not.toBeDisabled());
     await user.click(browse);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "A native dialog is already open. Close it first.",
     );
-    const manualInput = screen.getByLabelText(/absolute folder path to connect/i);
+    const manualInput = screen.getByLabelText(/source path/i);
     await user.type(manualInput, "/manual/path");
     expect(manualInput).toHaveValue("/manual/path");
   });
@@ -347,6 +325,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -357,6 +336,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
     );
@@ -370,6 +350,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /repair failed files for Knowledge Pod/i }),
     );
@@ -383,6 +364,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /full rebuild Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -394,6 +376,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
@@ -405,6 +388,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
@@ -422,6 +406,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -451,6 +436,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ deleteCapsuleImpl, onActionComplete })} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -478,6 +464,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
       <CapsuleActions {...defaultProps({ deleteCapsuleImpl, onActionComplete, onDeleted })} />,
     );
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -503,6 +490,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     const onDeleted = vi.fn();
     render(<CapsuleActions {...defaultProps({ deleteCapsuleImpl, onDeleted })} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -528,6 +516,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     const deleteCapsuleImpl = vi.fn().mockRejectedValue(new Error("delete failed"));
     render(<CapsuleActions {...defaultProps({ deleteCapsuleImpl })} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -595,6 +584,7 @@ describe("CapsuleActions — refresh action", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ refreshCapsuleImpl, onActionComplete })} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
     );
@@ -626,6 +616,7 @@ describe("CapsuleActions — refresh action", () => {
       />,
     );
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
     );
@@ -652,6 +643,7 @@ describe("CapsuleActions — refresh action", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
     );
@@ -673,6 +665,7 @@ describe("CapsuleActions — repair action", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ repairCapsuleImpl, onActionComplete })} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /repair failed files for Knowledge Pod/i }),
     );
@@ -692,8 +685,10 @@ describe("CapsuleActions — repair action", () => {
 // ---------------------------------------------------------------------------
 
 describe("CapsuleActions — full re-embed action", () => {
-  it("keeps the full re-embed button visible and marks it recommended when vectors are incompatible", () => {
+  it("keeps the full re-embed button visible and marks it recommended when vectors are incompatible", async () => {
+    const user = userEvent.setup();
     const { rerender } = render(<CapsuleActions {...defaultProps()} />);
+    await openMaintenance(user);
     expect(screen.getByRole("button", { name: /current embedding model/i })).toHaveAttribute(
       "data-recommended",
       "false",
@@ -716,6 +711,7 @@ describe("CapsuleActions — full re-embed action", () => {
       />,
     );
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /current embedding model/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -739,6 +735,7 @@ describe("CapsuleActions — full rebuild action", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ rebuildCapsuleImpl, onActionComplete })} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /full rebuild Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -760,6 +757,7 @@ describe("CapsuleActions — focus trap", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
@@ -780,6 +778,7 @@ describe("CapsuleActions — focus trap", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
     );
@@ -813,6 +812,7 @@ describe("CapsuleActions — a11y", () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
@@ -824,6 +824,7 @@ describe("CapsuleActions — a11y", () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
     );
@@ -837,6 +838,7 @@ describe("CapsuleActions — a11y", () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
+    await openMaintenance(user);
     await user.click(
       screen.getByRole("button", { name: /repair failed files for Knowledge Pod/i }),
     );

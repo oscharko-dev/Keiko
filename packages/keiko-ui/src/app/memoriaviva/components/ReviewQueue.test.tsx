@@ -165,7 +165,7 @@ describe("ReviewQueue — populated state", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Akzeptieren" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ablehnen" })).toBeInTheDocument();
-    expect(screen.getByText("Sensitivitaet: Oeffentlich")).toBeInTheDocument();
+    expect(screen.getByText("Sensitivität: Öffentlich")).toBeInTheDocument();
   });
 
   it("renders conflicted memory with Reject conflict button (no Approve)", async () => {

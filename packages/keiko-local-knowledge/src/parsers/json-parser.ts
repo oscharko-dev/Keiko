@@ -18,6 +18,7 @@ import {
   shouldStop,
 } from "./_internal.js";
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -28,7 +29,7 @@ import type {
 const PARSER_ID = "json";
 const PARSER_VERSION = "1";
 
-const JSON_EXTENSIONS: ReadonlySet<string> = new Set(["json", "jsonl", "ndjson"]);
+const JSON_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS);
 
 function isJson(input: ParserSelectionInput): boolean {
   const ext = input.extension.toLowerCase();
@@ -207,7 +208,9 @@ function parseJsonValue(
 // GRD-011: JSON Lines / NDJSON is a sequence of independent JSON values, one per line — NOT a
 // single JSON document. Whole-document `JSON.parse` always throws on a multi-record file, so
 // `.jsonl`/`.ndjson` (advertised as supported) were 100% unparseable. Detect and parse per line.
-const JSONL_EXTENSIONS: ReadonlySet<string> = new Set(["jsonl", "ndjson"]);
+const JSONL_EXTENSIONS: ReadonlySet<string> = new Set(
+  LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS.filter((extension) => extension !== "json"),
+);
 function isJsonLines(input: ParserSelectionInput): boolean {
   if (JSONL_EXTENSIONS.has(input.extension.toLowerCase())) return true;
   return input.mediaType.toLowerCase() === "application/x-ndjson";
