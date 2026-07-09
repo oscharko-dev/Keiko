@@ -1,7 +1,38 @@
 import type { EditorDocumentVersion } from "./editor-session.js";
-import type { LanguageRange } from "./language-service.js";
+import type { LanguageDiagnosticSeverity, LanguageRange } from "./language-service.js";
 
 export const EDITOR_AGENT_SCHEMA_VERSION = "1" as const;
+export const EDITOR_AGENT_CHANGESET_MAX_FILES = 50;
+export const EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES = 65_536;
+export const EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS = 2_000;
+export const EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS = 128;
+export const EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS = 1_024;
+export const EDITOR_AGENT_REFERENCE_ID_MAX_CHARS = 128;
+
+const EDITOR_AGENT_TEXT_ENCODER = new TextEncoder();
+
+export interface EditorAgentGovernedAuthorityReference {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+}
+
+export interface EditorAgentOneUseApprovalReference {
+  readonly approvalId: string;
+  readonly actionId: string;
+  readonly approvalProofDigest: string;
+  readonly expiresAt: string;
+}
+
+export interface EditorAgentDiagnostic {
+  readonly severity: LanguageDiagnosticSeverity;
+  readonly range: LanguageRange;
+  readonly message: string;
+}
+
+export interface EditorAgentDiagnosticsDetail {
+  readonly items: readonly EditorAgentDiagnostic[];
+  readonly truncated: boolean;
+}
 
 export type EditorAgentSnapshotTextMode = "none" | "selection" | "activeFile";
 
@@ -33,6 +64,7 @@ export interface EditorAgentSessionSnapshot {
     readonly warnings: number;
     readonly infos: number;
   } | null;
+  readonly diagnosticsDetail?: EditorAgentDiagnosticsDetail | undefined;
   // Issue #1379 AC4 (ADR-0067 D6) — content-free language-provider availability for the active file.
   // Additive and optional: old snapshots (field absent) still validate. ids/booleans/short reason
   // strings only — never buffer text. `providerId` is null when no provider serves the language.
@@ -59,7 +91,38 @@ export type EditorAgentActionType =
   | "format"
   | "save"
   | "applyTextEdits"
-  | "applyPatch";
+  | "applyPatch"
+  | "applyChangeset";
+
+export interface EditorAgentChangesetFile {
+  readonly file: string;
+  readonly expectedDocumentVersion?: EditorDocumentVersion | undefined;
+  readonly expectedContentHash?: string | undefined;
+}
+
+export type EditorAgentPreparedChangeKind = "create" | "modify" | "delete";
+
+export interface EditorAgentPreparedTextEdit {
+  readonly range: LanguageRange;
+  readonly newText: string;
+}
+
+export interface EditorAgentPreparedChangesetFile {
+  readonly file: string;
+  readonly kind: EditorAgentPreparedChangeKind;
+  readonly textEdits: readonly EditorAgentPreparedTextEdit[];
+}
+
+export interface EditorAgentPreparedChangeset {
+  readonly files: readonly EditorAgentPreparedChangesetFile[];
+}
+
+export interface EditorAgentChangeset {
+  readonly patch: string;
+  readonly files: readonly EditorAgentChangesetFile[];
+  readonly selectedFiles?: readonly string[] | undefined;
+  readonly prepared?: EditorAgentPreparedChangeset | undefined;
+}
 
 export interface EditorAgentAction {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
@@ -67,6 +130,8 @@ export interface EditorAgentAction {
   readonly idempotencyKey: string;
   readonly sessionId: string;
   readonly type: EditorAgentActionType;
+  readonly authorityRef?: EditorAgentGovernedAuthorityReference | undefined;
+  readonly approvalRef?: EditorAgentOneUseApprovalReference | undefined;
   readonly target?:
     | {
         readonly paneId?: string | undefined;
@@ -81,6 +146,7 @@ export interface EditorAgentAction {
   readonly textEdits?:
     readonly { readonly range: LanguageRange; readonly newText: string }[] | undefined;
   readonly patch?: string | undefined;
+  readonly changeset?: EditorAgentChangeset | undefined;
 }
 
 export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "conflict";
@@ -135,19 +201,30 @@ export interface EditorAgentActionFailure {
   readonly message: string;
 }
 
+export interface EditorAgentConflictDetail {
+  readonly code: EditorAgentConflictCode;
+  readonly message: string;
+  readonly file?: string | undefined;
+}
+
+export type EditorAgentFileActionStatus = "succeeded" | "failed" | "conflict" | "not-selected";
+
+export interface EditorAgentFileActionResult {
+  readonly file: string;
+  readonly status: EditorAgentFileActionStatus;
+  readonly message?: string | undefined;
+  readonly conflict?: EditorAgentConflictDetail | undefined;
+}
+
 export interface EditorAgentActionResult {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly actionId: string;
   readonly sessionId: string;
   readonly status: EditorAgentActionStatus;
   readonly message?: string | undefined;
-  readonly conflict?:
-    | {
-        readonly code: EditorAgentConflictCode;
-        readonly message: string;
-      }
-    | undefined;
+  readonly conflict?: EditorAgentConflictDetail | undefined;
   readonly failure?: EditorAgentActionFailure | undefined;
+  readonly files?: readonly EditorAgentFileActionResult[] | undefined;
 }
 
 export type EditorAgentEvent =
@@ -231,6 +308,7 @@ const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -245,12 +323,31 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isBoundedNonEmptyString(value: unknown, maxChars: number): value is string {
+  return isNonEmptyString(value) && value.length <= maxChars;
+}
+
+function countUnicodeCodePoints(value: string): number {
+  return Array.from(value).length;
+}
+
+function isBoundedDiagnosticMessage(value: unknown): value is string {
+  return (
+    isNonEmptyString(value) &&
+    countUnicodeCodePoints(value) <= EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS
+  );
+}
+
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isSha256Hex(value: unknown): value is string {
@@ -269,7 +366,7 @@ function isDocumentVersion(value: unknown): value is EditorDocumentVersion {
   return (
     isRecord(value) &&
     isNonNegativeInteger(value.sizeBytes) &&
-    isNonNegativeInteger(value.modifiedAt) &&
+    isNonNegativeFiniteNumber(value.modifiedAt) &&
     isSha256Hex(value.contentHash)
   );
 }
@@ -284,6 +381,173 @@ function isPosition(
 
 function isRange(value: unknown): value is LanguageRange {
   return isRecord(value) && isPosition(value.start) && isPosition(value.end);
+}
+
+function isDiagnosticSeverity(value: unknown): value is LanguageDiagnosticSeverity {
+  return value === "error" || value === "warning" || value === "info" || value === "hint";
+}
+
+export function isEditorAgentDiagnostic(value: unknown): value is EditorAgentDiagnostic {
+  return (
+    isRecord(value) &&
+    isDiagnosticSeverity(value.severity) &&
+    isRange(value.range) &&
+    isBoundedDiagnosticMessage(value.message)
+  );
+}
+
+export function isEditorAgentDiagnosticsDetail(
+  value: unknown,
+): value is EditorAgentDiagnosticsDetail {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.length <= EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS &&
+    value.items.every(isEditorAgentDiagnostic) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+export function isEditorAgentGovernedAuthorityReference(
+  value: unknown,
+): value is EditorAgentGovernedAuthorityReference {
+  return (
+    isRecord(value) &&
+    isBoundedNonEmptyString(value.runId, EDITOR_AGENT_REFERENCE_ID_MAX_CHARS) &&
+    isSha256Hex(value.envelopeDigest)
+  );
+}
+
+export function isEditorAgentOneUseApprovalReference(
+  value: unknown,
+): value is EditorAgentOneUseApprovalReference {
+  return (
+    isRecord(value) &&
+    isBoundedNonEmptyString(value.approvalId, EDITOR_AGENT_REFERENCE_ID_MAX_CHARS) &&
+    isBoundedNonEmptyString(value.actionId, EDITOR_AGENT_REFERENCE_ID_MAX_CHARS) &&
+    isSha256Hex(value.approvalProofDigest) &&
+    isBoundedNonEmptyString(value.expiresAt, 64)
+  );
+}
+
+function changesetFileHasPrecondition(file: EditorAgentChangesetFile): boolean {
+  return file.expectedDocumentVersion !== undefined || file.expectedContentHash !== undefined;
+}
+
+function normalizeAgentPath(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function normalizedPathsAreUnique(paths: readonly string[]): boolean {
+  const normalized = paths.map(normalizeAgentPath);
+  return new Set(normalized).size === normalized.length;
+}
+
+export function isEditorAgentChangesetFile(value: unknown): value is EditorAgentChangesetFile {
+  if (!isRecord(value) || "idempotencyKey" in value) return false;
+  return [
+    isNonEmptyString(value.file) && isContainedAgentPath(value.file),
+    isUndefinedOr(value.expectedDocumentVersion, isDocumentVersion),
+    isUndefinedOr(value.expectedContentHash, isSha256Hex),
+    value.expectedDocumentVersion !== undefined || value.expectedContentHash !== undefined,
+  ].every(Boolean);
+}
+
+function isUniqueNonEmptyStringArray(value: unknown, maxItems: number): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= maxItems &&
+    value.every(isNonEmptyString) &&
+    new Set(value).size === value.length
+  );
+}
+
+function selectedFilesBelongToChangeset(
+  selectedFiles: unknown,
+  files: readonly EditorAgentChangesetFile[],
+): boolean {
+  if (selectedFiles === undefined) return true;
+  if (!isUniqueNonEmptyStringArray(selectedFiles, files.length)) return false;
+  if (!selectedFiles.every(isContainedAgentPath) || !normalizedPathsAreUnique(selectedFiles)) {
+    return false;
+  }
+  const available = new Set(files.map((file) => normalizeAgentPath(file.file)));
+  return selectedFiles.every((file) => available.has(normalizeAgentPath(file)));
+}
+
+function isPreparedChangeKind(value: unknown): value is EditorAgentPreparedChangeKind {
+  return value === "create" || value === "modify" || value === "delete";
+}
+
+function isPreparedTextEditArray(value: unknown): value is readonly EditorAgentPreparedTextEdit[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(isTextEdit) &&
+    validateAgentTextEdits(value) === null
+  );
+}
+
+function isEditorAgentPreparedChangesetFile(
+  value: unknown,
+): value is EditorAgentPreparedChangesetFile {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.file) &&
+    isContainedAgentPath(value.file) &&
+    isPreparedChangeKind(value.kind) &&
+    isPreparedTextEditArray(value.textEdits)
+  );
+}
+
+function preparedTextBytes(files: readonly EditorAgentPreparedChangesetFile[]): number {
+  return files.reduce(
+    (total, file) =>
+      total +
+      file.textEdits.reduce(
+        (fileTotal, edit) => fileTotal + EDITOR_AGENT_TEXT_ENCODER.encode(edit.newText).length,
+        0,
+      ),
+    0,
+  );
+}
+
+export function isEditorAgentPreparedChangeset(
+  value: unknown,
+): value is EditorAgentPreparedChangeset {
+  if (!isRecord(value) || !Array.isArray(value.files)) return false;
+  if (value.files.length === 0 || value.files.length > EDITOR_AGENT_CHANGESET_MAX_FILES)
+    return false;
+  if (!value.files.every(isEditorAgentPreparedChangesetFile)) return false;
+  const files = value.files as readonly EditorAgentPreparedChangesetFile[];
+  const editCount = files.reduce((total, file) => total + file.textEdits.length, 0);
+  return (
+    normalizedPathsAreUnique(files.map((file) => file.file)) &&
+    editCount <= EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS &&
+    preparedTextBytes(files) <= EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES
+  );
+}
+
+export function isEditorAgentChangeset(value: unknown): value is EditorAgentChangeset {
+  if (!isRecord(value)) return false;
+  if (!Array.isArray(value.files)) return false;
+  if (value.files.length === 0 || value.files.length > EDITOR_AGENT_CHANGESET_MAX_FILES)
+    return false;
+  if (!value.files.every(isEditorAgentChangesetFile)) return false;
+  const files = value.files as readonly EditorAgentChangesetFile[];
+  if (!normalizedPathsAreUnique(files.map((file) => file.file))) return false;
+  return (
+    isNonEmptyString(value.patch) &&
+    EDITOR_AGENT_TEXT_ENCODER.encode(value.patch).length <=
+      EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES &&
+    selectedFilesBelongToChangeset(value.selectedFiles, files) &&
+    isUndefinedOr(value.prepared, isEditorAgentPreparedChangeset)
+  );
 }
 
 function isDiagnosticsSummary(
@@ -342,6 +606,7 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isNullOr(value.cursor, isPosition),
     isNullOr(value.selection, isRange),
     isNullOr(value.diagnosticsSummary, isDiagnosticsSummary),
+    isUndefinedOr(value.diagnosticsDetail, isEditorAgentDiagnosticsDetail),
     isUndefinedOr(value.languageCapability, (c) => c === null || isLanguageCapability(c)),
     isUndefinedOr(value.documentVersion, isDocumentVersion),
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
@@ -399,11 +664,20 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     isNonEmptyString(value.idempotencyKey),
     isNonEmptyString(value.sessionId),
     isActionType(value.type),
+    isUndefinedOr(value.authorityRef, isEditorAgentGovernedAuthorityReference),
+    isUndefinedOr(
+      value.approvalRef,
+      (reference) =>
+        isEditorAgentOneUseApprovalReference(reference) && reference.actionId === value.actionId,
+    ),
     isActionTarget(value.target),
     isUndefinedOr(value.expectedDocumentVersion, isDocumentVersion),
     isUndefinedOr(value.expectedContentHash, isSha256Hex),
     isUndefinedOr(value.textEdits, isTextEditArray),
     isUndefinedOr(value.patch, isString),
+    value.type === "applyChangeset"
+      ? isEditorAgentChangeset(value.changeset)
+      : value.changeset === undefined,
   ].every(Boolean);
 }
 
@@ -417,6 +691,7 @@ export const EDITOR_AGENT_WRITE_ACTION_TYPES: readonly EditorAgentActionType[] =
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
 ] as const;
 
 export function isEditorAgentWriteActionType(value: unknown): value is EditorAgentActionType {
@@ -430,6 +705,9 @@ export function isEditorAgentWriteActionType(value: unknown): value is EditorAge
 // or by content hash. Either precondition is sufficient; both may be supplied. The mandatory
 // `idempotencyKey` (validated by `isEditorAgentAction`) covers safe retry; this covers safe write.
 export function editorAgentActionHasWritePrecondition(action: EditorAgentAction): boolean {
+  if (action.type === "applyChangeset") {
+    return action.changeset?.files.every(changesetFileHasPrecondition) === true;
+  }
   return action.expectedDocumentVersion !== undefined || action.expectedContentHash !== undefined;
 }
 
@@ -449,13 +727,43 @@ function isActionStatus(value: unknown): value is EditorAgentActionStatus {
   return value === "queued" || value === "succeeded" || value === "failed" || value === "conflict";
 }
 
-// A conflict detail, when present, must carry a code drawn from the taxonomy and a string message —
-// so a result that claims a conflict cannot smuggle an out-of-taxonomy code past the guard.
-function isEditorAgentConflictDetail(value: unknown): boolean {
-  if (value === undefined) return true;
+export function isEditorAgentConflictDetail(value: unknown): value is EditorAgentConflictDetail {
   return (
-    isRecord(value) && isEditorAgentConflictCode(value.code) && typeof value.message === "string"
+    isRecord(value) &&
+    isEditorAgentConflictCode(value.code) &&
+    typeof value.message === "string" &&
+    isUndefinedOr(value.file, (file) => isNonEmptyString(file) && isContainedAgentPath(file))
   );
+}
+
+function isOptionalEditorAgentConflictDetail(value: unknown): boolean {
+  return value === undefined || isEditorAgentConflictDetail(value);
+}
+
+function isEditorAgentFileActionStatus(value: unknown): value is EditorAgentFileActionStatus {
+  return (
+    value === "succeeded" || value === "failed" || value === "conflict" || value === "not-selected"
+  );
+}
+
+export function isEditorAgentFileActionResult(
+  value: unknown,
+): value is EditorAgentFileActionResult {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.file) &&
+    isContainedAgentPath(value.file) &&
+    isEditorAgentFileActionStatus(value.status) &&
+    isUndefinedOr(value.message, isString) &&
+    isOptionalEditorAgentConflictDetail(value.conflict)
+  );
+}
+
+function isEditorAgentFileActionResultArray(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > EDITOR_AGENT_CHANGESET_MAX_FILES) return false;
+  if (!value.every(isEditorAgentFileActionResult)) return false;
+  return new Set(value.map((result) => result.file)).size === value.length;
 }
 
 // Issue #1392 — a failure detail, when present, mirrors the conflict-detail guard against the
@@ -475,8 +783,9 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
     isNonEmptyString(value.sessionId) &&
     isActionStatus(value.status) &&
     (value.message === undefined || typeof value.message === "string") &&
-    isEditorAgentConflictDetail(value.conflict) &&
-    isEditorAgentFailureDetail(value.failure)
+    isOptionalEditorAgentConflictDetail(value.conflict) &&
+    isEditorAgentFailureDetail(value.failure) &&
+    isEditorAgentFileActionResultArray(value.files)
   );
 }
 

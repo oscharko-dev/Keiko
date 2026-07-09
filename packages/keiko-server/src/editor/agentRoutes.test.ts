@@ -1,19 +1,35 @@
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
+  EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SCHEMA_VERSION,
+  isEditorAgentSessionSnapshot,
   type EditorAgentAction,
+  type EditorAgentActionResult,
+  type EditorAgentActionStatus,
   type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import { STREAMING, type RouteContext } from "../routes.js";
-import { EDITOR_AGENT_ACTION_TIMEOUT_MS } from "./agentSessionRegistry.js";
+import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentStateForTests,
+  _setEditorAgentPatchWriterForTests,
   handleEditorAgentActions,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
@@ -23,6 +39,8 @@ import {
 import type { EditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 
 const HASH = "a".repeat(64);
+const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 65_536;
+type ChangesetFile = NonNullable<EditorAgentAction["changeset"]>["files"][number];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -38,6 +56,20 @@ function actionConflictCode(body: unknown): string | undefined {
     return undefined;
   }
   return typeof body.result.conflict.code === "string" ? body.result.conflict.code : undefined;
+}
+
+function actionResult(body: unknown): EditorAgentActionResult {
+  if (!isRecord(body) || !isRecord(body.result)) throw new Error("expected action result");
+  return body.result as unknown as EditorAgentActionResult;
+}
+
+function responseSnapshot(body: unknown): EditorAgentSessionSnapshot {
+  if (!isRecord(body) || !isRecord(body.snapshot)) throw new Error("expected snapshot response");
+  return body.snapshot as unknown as EditorAgentSessionSnapshot;
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 function context(body: unknown = {}, path = "/api/editor/agent/actions"): RouteContext {
@@ -168,6 +200,111 @@ async function registerSnapshot(workspaceRoot?: string, activeFile?: string): Pr
   connectBridge("session-1");
 }
 
+function writeWorkspaceFile(root: string, file: string, content: string): void {
+  const absolute = join(root, file);
+  mkdirSync(join(absolute, ".."), { recursive: true });
+  writeFileSync(absolute, content, "utf8");
+}
+
+function readWorkspaceFile(root: string, file: string): string {
+  return readFileSync(join(root, file), "utf8");
+}
+
+function oneLineModifyPatch(
+  changes: readonly { readonly file: string; readonly before: string; readonly after: string }[],
+): string {
+  return changes
+    .flatMap(({ file, before, after }) => [
+      `--- a/${file}`,
+      `+++ b/${file}`,
+      "@@ -1 +1 @@",
+      `-${before}`,
+      `+${after}`,
+    ])
+    .join("\n");
+}
+
+function changesetActionFor(
+  root: string,
+  patch: string,
+  files: readonly string[],
+  selectedFiles?: readonly string[],
+  overrides: Partial<EditorAgentAction> = {},
+): EditorAgentAction {
+  const declared: readonly ChangesetFile[] = files.map((file) => ({
+    file,
+    expectedContentHash: sha256(readWorkspaceFile(root, file)),
+  }));
+  return action({
+    type: "applyChangeset",
+    expectedContentHash: undefined,
+    expectedDocumentVersion: undefined,
+    changeset: {
+      patch,
+      files: declared,
+      ...(selectedFiles === undefined ? {} : { selectedFiles }),
+    },
+    ...overrides,
+  });
+}
+
+async function registerChangesetSnapshot(
+  root: string,
+  activeFile: string,
+  openFiles: readonly string[],
+  dirtyFiles: readonly string[] = [],
+): Promise<ReturnType<typeof connectBridge>> {
+  const content = readWorkspaceFile(root, activeFile);
+  const stats = statSync(join(root, activeFile));
+  await registerSnapshotOnly({
+    workspaceRoot: root,
+    activeFile,
+    panes: [{ paneId: "pane-1", activeFile, openFiles }],
+    dirtyFiles,
+    documentVersion: {
+      sizeBytes: stats.size,
+      modifiedAt: stats.mtimeMs,
+      contentHash: sha256(content),
+    },
+    activeFileContentHash: sha256(content),
+  });
+  return connectBridge("session-1");
+}
+
+async function postActionResult(
+  original: EditorAgentAction,
+  status: EditorAgentActionStatus,
+  sessionId = original.sessionId,
+): Promise<Awaited<ReturnType<typeof handleEditorAgentActions>>> {
+  return handleEditorAgentActions(
+    context({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: original.actionId,
+        sessionId,
+        status,
+        ...(status === "conflict"
+          ? { conflict: { code: "INVALID_EDITS", message: "Browser reported a conflict." } }
+          : {}),
+      },
+    }),
+  );
+}
+
+function lastEmittedAction(frames: string): EditorAgentAction {
+  const frame = frames
+    .split("\n\n")
+    .filter((candidate) => candidate.includes("event: editor-agent:action"))
+    .at(-1);
+  const data = frame?.split("\n").find((line) => line.startsWith("data: "));
+  if (data === undefined) throw new Error("expected emitted action frame");
+  const event = JSON.parse(data.slice("data: ".length)) as EditorAgentEvent;
+  if (event.type !== "action") throw new Error("expected action event");
+  return event.action;
+}
+
 afterEach(() => {
   _resetEditorAgentStateForTests();
   vi.useRealTimers();
@@ -232,6 +369,150 @@ describe("editor agent routes", () => {
     });
     expect(result).toBe(STREAMING);
     expect(writes.join("")).toContain("event: ready");
+  });
+});
+
+describe("editor agent routes diagnostics detail (Issue #2118)", () => {
+  const diagnostic = {
+    severity: "hint",
+    range: { start: { line: 3, character: 5 }, end: { line: 3, character: 11 } },
+    message: "Use readonly",
+  } as const;
+
+  it("round-trips valid diagnostic detail through ingestion and read projection", async () => {
+    const diagnosticsDetail = { items: [diagnostic], truncated: false } as const;
+    const posted = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: { ...snapshot(), diagnosticsDetail },
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    const read = await handleEditorAgentSnapshot(
+      context({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION }, "/api/editor/agent/snapshot"),
+    );
+
+    expect(posted.status).toBe(200);
+    expect(responseSnapshot(posted.body).diagnosticsDetail).toEqual(diagnosticsDetail);
+    expect(responseSnapshot(read.body).diagnosticsDetail).toEqual(diagnosticsDetail);
+  });
+
+  it("keeps omitted diagnostic detail absent on ingestion and read", async () => {
+    const posted = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: snapshot(),
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    const read = await handleEditorAgentSnapshot(
+      context({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION }, "/api/editor/agent/snapshot"),
+    );
+
+    expect(posted.body).not.toHaveProperty("snapshot.diagnosticsDetail");
+    expect(read.body).not.toHaveProperty("snapshot.diagnosticsDetail");
+  });
+
+  it("preserves an upstream diagnostic truncation marker", async () => {
+    editorAgentRegistry.registerSnapshot({
+      ...snapshot(),
+      diagnosticsDetail: { items: [diagnostic], truncated: true },
+    });
+
+    const result = await handleEditorAgentSnapshot(
+      context({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION }, "/api/editor/agent/snapshot"),
+    );
+
+    expect(responseSnapshot(result.body).diagnosticsDetail).toEqual({
+      items: [diagnostic],
+      truncated: true,
+    });
+  });
+
+  it.each([
+    [
+      "an oversized item list",
+      {
+        items: Array.from({ length: EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS + 1 }, () => diagnostic),
+        truncated: false,
+      },
+    ],
+    [
+      "an overlength message",
+      {
+        items: [
+          {
+            ...diagnostic,
+            message: "x".repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS + 1),
+          },
+        ],
+        truncated: false,
+      },
+    ],
+  ])("rejects %s at ingestion", async (_case, diagnosticsDetail) => {
+    const result = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: { ...snapshot(), diagnosticsDetail },
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "INVALID_REQUEST",
+          message: "snapshot must be a valid editor agent session snapshot",
+        },
+      },
+    });
+  });
+
+  it("re-caps invalid registry detail on a text-free read projection", async () => {
+    const unicodeCharacter = "\u{1f600}";
+    const diagnosticsSummary = { errors: 1, warnings: 2, infos: 3 };
+    const invalidSnapshot = {
+      ...snapshot(),
+      diagnosticsSummary,
+      diagnosticsDetail: {
+        items: Array.from({ length: EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS + 1 }, () => ({
+          ...diagnostic,
+          message: unicodeCharacter.repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS + 1),
+        })),
+        truncated: false,
+      },
+    } as unknown as EditorAgentSessionSnapshot;
+    editorAgentRegistry.registerSnapshot(invalidSnapshot);
+
+    const result = await handleEditorAgentSnapshot(
+      context(
+        { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, textMode: "none" },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    const shaped = responseSnapshot(result.body);
+    const detail = shaped.diagnosticsDetail;
+
+    expect(isEditorAgentSessionSnapshot(shaped)).toBe(true);
+    expect(shaped.diagnosticsSummary).toEqual(diagnosticsSummary);
+    expect(detail?.items).toHaveLength(EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS);
+    expect(Array.from(detail?.items[0]?.message ?? "")).toHaveLength(
+      EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
+    );
+    expect(detail?.items[0]?.message).toBe(
+      unicodeCharacter.repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS),
+    );
+    expect(detail?.truncated).toBe(true);
   });
 });
 
@@ -947,6 +1228,92 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(actionResultStatus(result.body)).toBe("queued");
     });
 
+    it("requires a verifiable pin when the asserted document version is unavailable", async () => {
+      await registerSnapshotOnly({ documentVersion: undefined });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            idempotencyKey: "ik-version-unavailable",
+            actionId: "a-version-unavailable",
+            expectedContentHash: undefined,
+            expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+          }),
+        ),
+      );
+      // Regression: this unverified assertion was previously treated as sufficient and queued.
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
+    it("requires a verifiable pin when the asserted content hash is unavailable", async () => {
+      await registerSnapshotOnly({ activeFileContentHash: undefined });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            idempotencyKey: "ik-hash-unavailable",
+            actionId: "a-hash-unavailable",
+            expectedDocumentVersion: undefined,
+          }),
+        ),
+      );
+      // Regression: an asserted pin with no snapshot counterpart must not authorize a blind write.
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
+    it("requires a verifiable pin when both snapshot counterparts are unavailable", async () => {
+      await registerSnapshotOnly({
+        documentVersion: undefined,
+        activeFileContentHash: undefined,
+      });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            idempotencyKey: "ik-both-unavailable",
+            actionId: "a-both-unavailable",
+            expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
+    it("accepts a matching hash when the other asserted snapshot pin is unavailable", async () => {
+      await registerSnapshotOnly({ documentVersion: undefined });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            idempotencyKey: "ik-hash-match-version-unavailable",
+            actionId: "a-hash-match-version-unavailable",
+            expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+          }),
+        ),
+      );
+      expect(result.status).toBe(202);
+      expect(actionResultStatus(result.body)).toBe("queued");
+    });
+
+    it("rejects a mismatching hash even when the asserted version matches", async () => {
+      await registerSnapshot();
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            idempotencyKey: "ik-version-match-hash-mismatch",
+            actionId: "a-version-match-hash-mismatch",
+            expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+            expectedContentHash: "b".repeat(64),
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("CONTENT_HASH_MISMATCH");
+    });
+
     it("does not require a precondition for a non-write action (setSelection queues 202)", async () => {
       await registerSnapshot();
       const result = await handleEditorAgentActions(
@@ -1197,6 +1564,324 @@ function applyTextEditsAction(newText: string, file?: string): EditorAgentAction
     ],
   });
 }
+
+describe("applyChangeset server transaction (Issue #2117)", () => {
+  let workspaceRoot: string;
+
+  beforeEach(() => {
+    workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-agent-changeset-"));
+  });
+
+  afterEach(() => {
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  });
+
+  function arrangeTwoFiles(): { readonly patch: string; readonly action: EditorAgentAction } {
+    writeWorkspaceFile(workspaceRoot, "src/a.txt", "A0\n");
+    writeWorkspaceFile(workspaceRoot, "src/b.txt", "B0\n");
+    const patch = oneLineModifyPatch([
+      { file: "src/a.txt", before: "A0", after: "A1" },
+      { file: "src/b.txt", before: "B0", after: "B1" },
+    ]);
+    return {
+      patch,
+      action: changesetActionFor(workspaceRoot, patch, ["src/a.txt", "src/b.txt"]),
+    };
+  }
+
+  it("queues a multi-file changeset and an inactive open file with a server-derived preview", async () => {
+    const arranged = arrangeTwoFiles();
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
+    ]);
+    const changeset = arranged.action.changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    const forged = {
+      ...arranged.action,
+      changeset: {
+        ...changeset,
+        prepared: {
+          files: [
+            {
+              file: "src/a.txt",
+              kind: "modify" as const,
+              textEdits: [
+                {
+                  range: {
+                    start: { line: 0, character: 0 },
+                    end: { line: 1, character: 0 },
+                  },
+                  newText: "FORGED_PREVIEW\n",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const queued = await handleEditorAgentActions(context(forged));
+
+    expect(queued.status).toBe(202);
+    expect(actionResultStatus(queued.body)).toBe("queued");
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+    const emitted = lastEmittedAction(bridge.frames());
+    expect(emitted.changeset?.prepared?.files).toHaveLength(2);
+    expect(JSON.stringify(emitted.changeset?.prepared)).not.toContain("FORGED_PREVIEW");
+  });
+
+  it("queues a prepared changeset exactly at the wire text limit", async () => {
+    const tail = "x".repeat(PREPARED_CHANGESET_WIRE_LIMIT_BYTES - 4);
+    writeWorkspaceFile(workspaceRoot, "src/large.txt", `A0\n${tail}\n`);
+    const patch = oneLineModifyPatch([{ file: "src/large.txt", before: "A0", after: "A1" }]);
+    const proposed = changesetActionFor(workspaceRoot, patch, ["src/large.txt"]);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/large.txt", [
+      "src/large.txt",
+    ]);
+
+    const queued = await handleEditorAgentActions(context(proposed));
+
+    expect(queued.status).toBe(202);
+    const prepared = lastEmittedAction(bridge.frames()).changeset?.prepared;
+    const preparedText = prepared?.files[0]?.textEdits[0]?.newText;
+    expect(Buffer.byteLength(preparedText ?? "", "utf8")).toBe(PREPARED_CHANGESET_WIRE_LIMIT_BYTES);
+  });
+
+  it("fails closed before emitting a prepared changeset above the wire text limit", async () => {
+    const tail = "x".repeat(PREPARED_CHANGESET_WIRE_LIMIT_BYTES - 3);
+    writeWorkspaceFile(workspaceRoot, "src/large.txt", `A0\n${tail}\n`);
+    const patch = oneLineModifyPatch([{ file: "src/large.txt", before: "A0", after: "A1" }]);
+    const proposed = changesetActionFor(workspaceRoot, patch, ["src/large.txt"]);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/large.txt", [
+      "src/large.txt",
+    ]);
+
+    const rejected = await handleEditorAgentActions(context(proposed));
+
+    expect(rejected.status).toBe(409);
+    expect(actionConflictCode(rejected.body)).toBe("INVALID_EDITS");
+    expect(bridge.frames()).not.toContain("event: editor-agent:action");
+  });
+
+  it("rejects a safe plus deny-listed full changeset with file attribution and no mutation", async () => {
+    writeWorkspaceFile(workspaceRoot, "src/a.txt", "A0\n");
+    writeWorkspaceFile(workspaceRoot, ".env", "SECRET=old\n");
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt"]);
+    const patch = oneLineModifyPatch([
+      { file: "src/a.txt", before: "A0", after: "A1" },
+      { file: ".env", before: "SECRET=old", after: "SECRET=new" },
+    ]);
+    const proposed = changesetActionFor(workspaceRoot, patch, ["src/a.txt", ".env"]);
+
+    const rejected = await handleEditorAgentActions(context(proposed));
+
+    expect(rejected.status).toBe(409);
+    expect(actionConflictCode(rejected.body)).toBe("OUT_OF_SCOPE");
+    expect(actionResult(rejected.body).files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: "src/a.txt", status: "failed" }),
+        expect.objectContaining({
+          file: ".env",
+          status: "conflict",
+        }),
+      ]),
+    );
+    const deniedFile = actionResult(rejected.body).files?.find((file) => file.file === ".env");
+    expect(deniedFile?.conflict).toMatchObject({ code: "OUT_OF_SCOPE", file: ".env" });
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, ".env")).toBe("SECRET=old\n");
+  });
+
+  it("attributes one stale member and applies zero changes", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+    writeWorkspaceFile(workspaceRoot, "src/b.txt", "B-external\n");
+
+    const committed = await postActionResult(arranged.action, "succeeded");
+
+    expect(committed.status).toBe(200);
+    expect(actionConflictCode(committed.body)).toBe("CONTENT_HASH_MISMATCH");
+    expect(actionResult(committed.body).files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: "src/a.txt", status: "failed" }),
+        expect.objectContaining({
+          file: "src/b.txt",
+          status: "conflict",
+        }),
+      ]),
+    );
+    const staleFile = actionResult(committed.body).files?.find((file) => file.file === "src/b.txt");
+    expect(staleFile?.conflict).toMatchObject({
+      code: "CONTENT_HASH_MISMATCH",
+      file: "src/b.txt",
+    });
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B-external\n");
+  });
+
+  it("applies nothing when the browser rejects the queued changeset", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+
+    const rejected = await postActionResult(arranged.action, "failed");
+
+    expect(rejected.status).toBe(200);
+    expect(actionResultStatus(rejected.body)).toBe("failed");
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+  });
+
+  it("atomically commits every selected file once after a succeeded acknowledgment", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+
+    const committed = await postActionResult(arranged.action, "succeeded");
+    const replay = await postActionResult(arranged.action, "succeeded");
+
+    expect(committed.status).toBe(200);
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(actionResult(committed.body).files).toEqual([
+      { file: "src/a.txt", status: "succeeded" },
+      { file: "src/b.txt", status: "succeeded" },
+    ]);
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
+    expect(replay.status).toBe(409);
+  });
+
+  it("projects selectedFiles after full validation and reports non-selected members", async () => {
+    const arranged = arrangeTwoFiles();
+    const changeset = arranged.action.changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    const selected: EditorAgentAction = {
+      ...arranged.action,
+      changeset: { ...changeset, selectedFiles: ["./src/b.txt"] },
+    };
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(selected))).status).toBe(202);
+
+    const committed = await postActionResult(selected, "succeeded");
+
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(actionResult(committed.body).files).toEqual([
+      { file: "src/a.txt", status: "not-selected" },
+      { file: "src/b.txt", status: "succeeded" },
+    ]);
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
+  });
+
+  it("rolls back earlier files when the injected writer fails on a later member", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+    const writer: WorkspaceWriter = {
+      writeFileUtf8: (absolutePath, content): void => {
+        if (absolutePath.endsWith("b.txt") && content === "B1\n") {
+          throw new Error("forced writer failure");
+        }
+        writeFileSync(absolutePath, content, "utf8");
+      },
+      mkdirp: (absoluteDir): void => {
+        mkdirSync(absoluteDir, { recursive: true });
+      },
+      remove: (absolutePath): void => {
+        rmSync(absolutePath, { force: true });
+      },
+      rename: (fromAbsolute, toAbsolute): void => {
+        renameSync(fromAbsolute, toAbsolute);
+      },
+    };
+    _setEditorAgentPatchWriterForTests(writer);
+
+    const failed = await postActionResult(arranged.action, "succeeded");
+
+    expect(actionResultStatus(failed.body)).toBe("failed");
+    expect(actionResult(failed.body).files).toEqual([
+      expect.objectContaining({ file: "src/a.txt", status: "failed" }),
+      expect.objectContaining({ file: "src/b.txt", status: "failed" }),
+    ]);
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+  });
+
+  it("does not commit for unsolicited or cross-session forged success results", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+
+    const unsolicited = await postActionResult(
+      { ...arranged.action, actionId: "not-pending" },
+      "succeeded",
+    );
+    const crossSession = await postActionResult(arranged.action, "succeeded", "session-2");
+
+    expect(unsolicited.status).toBe(409);
+    expect(crossSession.status).toBe(409);
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+    expect((await postActionResult(arranged.action, "failed")).status).toBe(200);
+  });
+
+  it("records bounded content-free queued and terminal accept, reject, and conflict audit", async () => {
+    writeWorkspaceFile(workspaceRoot, "src/a.txt", "AUDIT_BASE\n");
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt"]);
+    const acceptPatch = oneLineModifyPatch([
+      { file: "src/a.txt", before: "AUDIT_BASE", after: "AUDIT_SECRET_ACCEPT" },
+    ]);
+    const accepted = changesetActionFor(workspaceRoot, acceptPatch, ["src/a.txt"], undefined, {
+      actionId: "audit-accept",
+      idempotencyKey: "audit-accept-key",
+    });
+    await handleEditorAgentActions(context(accepted));
+    await postActionResult(accepted, "succeeded");
+
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt"]);
+    const rejectPatch = oneLineModifyPatch([
+      { file: "src/a.txt", before: "AUDIT_SECRET_ACCEPT", after: "AUDIT_SECRET_REJECT" },
+    ]);
+    const rejected = changesetActionFor(workspaceRoot, rejectPatch, ["src/a.txt"], undefined, {
+      actionId: "audit-reject",
+      idempotencyKey: "audit-reject-key",
+    });
+    await handleEditorAgentActions(context(rejected));
+    await postActionResult(rejected, "failed");
+
+    const conflictPatch = oneLineModifyPatch([
+      { file: "src/a.txt", before: "AUDIT_SECRET_ACCEPT", after: "AUDIT_SECRET_CONFLICT" },
+    ]);
+    const conflicted = changesetActionFor(workspaceRoot, conflictPatch, ["src/a.txt"], undefined, {
+      actionId: "audit-conflict",
+      idempotencyKey: "audit-conflict-key",
+    });
+    await handleEditorAgentActions(context(conflicted));
+    writeWorkspaceFile(workspaceRoot, "src/a.txt", "AUDIT_EXTERNAL\n");
+    await postActionResult(conflicted, "succeeded");
+
+    const records = auditRecords();
+    expect(records.map((record) => record.outcome)).toEqual([
+      "queued",
+      "succeeded",
+      "queued",
+      "failed",
+      "queued",
+      "conflict",
+    ]);
+    expect(records).toHaveLength(6);
+    expect(records.every((record) => (record.patchByteLength ?? 0) > 0)).toBe(true);
+    expect(records.every((record) => record.summary.length <= 256)).toBe(true);
+    const serialized = JSON.stringify(records);
+    expect(serialized).not.toContain("AUDIT_SECRET_ACCEPT");
+    expect(serialized).not.toContain("AUDIT_SECRET_REJECT");
+    expect(serialized).not.toContain("AUDIT_SECRET_CONFLICT");
+    expect(serialized).not.toContain("AUDIT_EXTERNAL");
+  });
+});
 
 describe("agent editor action policy (Issue #1395 AC2)", () => {
   it("denies a write to a deny-listed sensitive path with OUT_OF_SCOPE", async () => {

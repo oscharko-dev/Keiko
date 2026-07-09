@@ -47,6 +47,7 @@ function makeControllers(): EditorAgentActionControllers {
     currentText: () => "text",
     applyTextEdits: vi.fn(),
     applyPatch: vi.fn(),
+    applyChangeset: vi.fn(),
     onSplitPane: vi.fn(),
     onMoveTab: vi.fn(),
     onRequestSelectionReveal: vi.fn(),

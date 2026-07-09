@@ -21,6 +21,7 @@ import {
 import { selectScoredTextByByteBudget } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import {
+  runEditorStateProvider,
   runLocalKnowledgeProvider,
   runMemoryProvider,
   runRepoSearchProvider,
@@ -142,6 +143,8 @@ export async function assembleCodingContext(
   });
   collect(repo, candidates, omissions);
 
+  collectEditorStateContext(request, providerCtx, candidates, omissions);
+
   const allowEmbeddingProviders =
     context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose);
   await collectEmbeddingProviderContext(
@@ -163,6 +166,22 @@ export async function assembleCodingContext(
     droppedForBudget: packed.droppedForBudget,
     omissions,
   };
+}
+
+function collectEditorStateContext(
+  request: CodingContextRequest,
+  providerCtx: ProviderContext,
+  candidates: RawExcerpt[],
+  omissions: CodingContextOmission[],
+): void {
+  if (request.editorSessionId === undefined) {
+    return;
+  }
+  collect(
+    runEditorStateProvider(providerCtx, { sessionId: request.editorSessionId }),
+    candidates,
+    omissions,
+  );
 }
 
 function collect(

@@ -13,7 +13,6 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   decideCodingWorkbenchActionForMode,
-  isCodingWorkbenchActionAllowedForMode,
   isCodingWorkbenchEvidenceSafeText,
   permissionKindForSupervisedCodingAction,
   redactCodingWorkbenchEvidenceText,
@@ -34,6 +33,14 @@ import {
   type CodingWorkbenchPermissionRequest,
   type CodingWorkbenchRuntimeEvent,
 } from "./index.js";
+import {
+  CODING_WORKBENCH_APPROVAL_RISKS,
+  CODING_WORKBENCH_MODE_POLICIES,
+  CODING_WORKBENCH_POLICY_EFFECTS,
+  CODING_WORKBENCH_POLICY_RESOURCE_SCOPES,
+  codingWorkbenchPolicyEffectFor,
+  strictestCodingWorkbenchPolicyEffect,
+} from "./coding-workbench.js";
 import { hasDisallowedEvidenceContent } from "./coding-workbench-evidence.js";
 
 function baseAuthorityEnvelope(): CodingWorkbenchAuthorityEnvelope {
@@ -185,6 +192,93 @@ describe("coding-workbench constants", () => {
   });
 });
 
+describe("coding workbench autonomy policy", () => {
+  it("pins the exact display labels and descriptions", () => {
+    expect(CODING_WORKBENCH_MODE_POLICIES["governed-assist"].display).toEqual({
+      label: "Ask for approval",
+      description:
+        "Workspace-contained edits, saves, and commands proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
+    });
+    expect(CODING_WORKBENCH_MODE_POLICIES["supervised-coding"].display).toEqual({
+      label: "Approve for me",
+      description:
+        "Low- and medium-risk file and internet operations proceed; high- and critical-risk actions require approval. Delivery remains separately human-approved.",
+    });
+    expect(CODING_WORKBENCH_MODE_POLICIES["autonomous-delivery"].display).toEqual({
+      label: "Full access",
+      description:
+        "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+    });
+  });
+
+  it("pins the closed effect, risk, and resource-scope vocabularies", () => {
+    expect(CODING_WORKBENCH_POLICY_EFFECTS).toEqual(["allowed", "approval-required", "denied"]);
+    expect(CODING_WORKBENCH_APPROVAL_RISKS).toEqual(["low", "medium", "high", "critical"]);
+    expect(CODING_WORKBENCH_POLICY_RESOURCE_SCOPES).toEqual([
+      "workspace-contained",
+      "external-file",
+      "internet",
+      "delivery",
+    ]);
+  });
+
+  it("admits every action class in every mode without treating admission as pre-approval", () => {
+    for (const mode of CODING_WORKBENCH_MODES) {
+      const policy = CODING_WORKBENCH_MODE_POLICIES[mode];
+      expect(policy.allowedActionClasses).toEqual(CODING_WORKBENCH_ACTION_CLASSES);
+      expect(policy.allowsWorkspaceWrites).toBe(true);
+      expect(policy.allowsCommandExecution).toBe(true);
+      expect(policy.allowsDeliverySubstrate).toBe(true);
+    }
+  });
+
+  it("covers the full mode, resource, and risk matrix", () => {
+    const expected = {
+      "governed-assist": {
+        low: ["allowed", "approval-required", "approval-required", "approval-required"],
+        medium: ["allowed", "approval-required", "approval-required", "approval-required"],
+        high: ["allowed", "approval-required", "approval-required", "approval-required"],
+        critical: ["allowed", "approval-required", "approval-required", "approval-required"],
+      },
+      "supervised-coding": {
+        low: ["allowed", "allowed", "allowed", "approval-required"],
+        medium: ["allowed", "allowed", "allowed", "approval-required"],
+        high: ["approval-required", "approval-required", "approval-required", "approval-required"],
+        critical: [
+          "approval-required",
+          "approval-required",
+          "approval-required",
+          "approval-required",
+        ],
+      },
+      "autonomous-delivery": {
+        low: ["allowed", "allowed", "allowed", "approval-required"],
+        medium: ["allowed", "allowed", "allowed", "approval-required"],
+        high: ["allowed", "allowed", "allowed", "approval-required"],
+        critical: ["allowed", "allowed", "allowed", "approval-required"],
+      },
+    } as const;
+    for (const mode of CODING_WORKBENCH_MODES) {
+      for (const risk of CODING_WORKBENCH_APPROVAL_RISKS) {
+        const actual = CODING_WORKBENCH_POLICY_RESOURCE_SCOPES.map((scope) =>
+          codingWorkbenchPolicyEffectFor(mode, scope, risk),
+        );
+        expect(actual).toEqual(expected[mode][risk]);
+      }
+    }
+  });
+
+  it("combines independent policy gates with the stricter effect winning", () => {
+    expect(strictestCodingWorkbenchPolicyEffect("allowed", "approval-required")).toBe(
+      "approval-required",
+    );
+    expect(strictestCodingWorkbenchPolicyEffect("approval-required", "denied", "allowed")).toBe(
+      "denied",
+    );
+    expect(strictestCodingWorkbenchPolicyEffect("allowed")).toBe("allowed");
+  });
+});
+
 function codexSubscriptionProfile(): CodingWorkbenchCodexSubscriptionProfile {
   return {
     schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
@@ -324,14 +418,13 @@ describe("coding workbench Codex subscription profile", () => {
       ok: true,
       value: envelope,
     });
-    expect(
-      validateCodingWorkbenchAuthorityEnvelope({
-        ...envelope,
-        actionClasses: [...envelope.actionClasses, "command-execution"],
-      }),
-    ).toMatchObject({
-      ok: false,
-      errors: ["authorityEnvelope.actionClasses[3] exceeds the effective mode"],
+    const commandEnvelope = {
+      ...envelope,
+      actionClasses: [...envelope.actionClasses, "command-execution"],
+    };
+    expect(validateCodingWorkbenchAuthorityEnvelope(commandEnvelope)).toEqual({
+      ok: true,
+      value: commandEnvelope,
     });
   });
 });
@@ -357,45 +450,17 @@ describe("resolveEffectiveCodingWorkbenchMode", () => {
 });
 
 describe("decideCodingWorkbenchActionForMode", () => {
-  it.each([
-    ["workspace-write", "workspace-write-denied"],
-    ["command-execution", "command-execution-denied"],
-    ["network-egress", "network-denied"],
-    ["delivery-substrate", "delivery-denied"],
-  ] as const)("denies governed-assist %s escalation", (actionClass, reasonCode) => {
-    expect(decideCodingWorkbenchActionForMode("governed-assist", actionClass)).toEqual({
-      allowed: false,
-      reasonCode,
-    });
-  });
-
-  it("allows governed-assist read-only work and denies write-capable connector scopes", () => {
-    expect(isCodingWorkbenchActionAllowedForMode("governed-assist", "workspace-read")).toBe(true);
-    expect(isCodingWorkbenchActionAllowedForMode("governed-assist", "verification")).toBe(true);
-    expect(
-      decideCodingWorkbenchActionForMode("governed-assist", "connector-access", [
-        "source-control.read",
-        "issue-tracker.read",
-      ]),
-    ).toEqual({ allowed: true });
-    expect(
-      decideCodingWorkbenchActionForMode("governed-assist", "connector-access", [
-        "source-control.write",
-      ]),
-    ).toEqual({ allowed: false, reasonCode: "connector-write-denied" });
-  });
-
-  it("keeps supervised coding below delivery substrate authority", () => {
-    expect(isCodingWorkbenchActionAllowedForMode("supervised-coding", "workspace-write")).toBe(
-      true,
-    );
-    expect(isCodingWorkbenchActionAllowedForMode("supervised-coding", "command-execution")).toBe(
-      true,
-    );
-    expect(decideCodingWorkbenchActionForMode("supervised-coding", "delivery-substrate")).toEqual({
-      allowed: false,
-      reasonCode: "delivery-denied",
-    });
+  it("admits every action class for every mode before tri-state policy evaluation", () => {
+    for (const mode of CODING_WORKBENCH_MODES) {
+      for (const actionClass of CODING_WORKBENCH_ACTION_CLASSES) {
+        expect(
+          decideCodingWorkbenchActionForMode(mode, actionClass, [
+            "source-control.write",
+            "issue-tracker.write",
+          ]),
+        ).toEqual({ allowed: true });
+      }
+    }
   });
 });
 
@@ -588,13 +653,13 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
     }
   });
 
-  it("rejects governed-assist authority that widens command, network, or write-capable connector scope authority", () => {
-    const parsed = validateCodingWorkbenchAuthorityEnvelope({
+  it("accepts governed-assist class admission for approvable command, network, and connector work", () => {
+    const envelope = {
       ...baseAuthorityEnvelope(),
       requestedMode: "governed-assist",
       deploymentCeiling: "governed-assist",
       effectiveMode: "governed-assist",
-      actionClasses: ["workspace-read", "verification", "connector-access"],
+      actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
       connectorScopes: ["source-control.write"],
       commandPolicy: {
         ...baseAuthorityEnvelope().commandPolicy,
@@ -603,25 +668,15 @@ describe("validateCodingWorkbenchAuthorityEnvelope", () => {
       networkPolicy: {
         ...baseAuthorityEnvelope().networkPolicy,
         mode: "governed-egress",
+        allowLoopback: true,
         connectorScopes: ["source-control.write"],
       },
-    });
+    } as const;
 
-    expect(parsed.ok).toBe(false);
-    if (!parsed.ok) {
-      expect(parsed.errors).toContain(
-        "authorityEnvelope.commandPolicy.mode must be deny when effectiveMode is governed-assist",
-      );
-      expect(parsed.errors).toContain(
-        "authorityEnvelope.networkPolicy.mode must be deny-all when effectiveMode is governed-assist",
-      );
-      expect(parsed.errors).toContain(
-        "authorityEnvelope.connectorScopes must not include write-capable scopes when effectiveMode is governed-assist",
-      );
-      expect(parsed.errors).toContain(
-        "authorityEnvelope.networkPolicy.connectorScopes must not include write-capable scopes when effectiveMode is governed-assist",
-      );
-    }
+    expect(validateCodingWorkbenchAuthorityEnvelope(envelope)).toEqual({
+      ok: true,
+      value: envelope,
+    });
   });
 
   it("rejects write and command-capable authority without a human-approval gate", () => {

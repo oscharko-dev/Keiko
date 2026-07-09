@@ -4,14 +4,17 @@
 // provider invents retrieval logic: repo-search reuses keiko-workspace `searchText`/`readExcerpt`,
 // Local Knowledge reuses the query-only `runLocalKnowledgeRetrieval` path (no answer generation), and
 // memory reuses the `retrieveMemoryContext` pipeline already wired for /api/memory/context. Retrieved
-// text is untrusted model input (OWASP LLM08/LLM01): every candidate is tagged with its source tier
-// (by the orchestrator) and stripped of unsafe format characters before it can reach a model or the
-// harness.
+// editor state reuses the singleton editor-agent registry. Retrieved text is untrusted model input
+// (OWASP LLM08/LLM01): every candidate is tagged with its source tier (by the orchestrator) and
+// stripped of unsafe format characters before it can reach a model or the harness.
 
 import {
   stripUnsafeFormatChars,
   type CodingContextOmission,
   type CodingContextSourceKind,
+  type EditorAgentDiagnostic,
+  type EditorAgentSessionSnapshot,
+  type LanguageRange,
   type RetrievalQuery,
   type RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
@@ -36,6 +39,7 @@ import {
   conversationFusionMode,
   semanticRetrievalGateForText,
 } from "../memory-retrieval-signals.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   buildLocalKnowledgeScope,
   retrieveEditorLocalKnowledge,
@@ -71,6 +75,11 @@ const FILES_FOCUS_MAX_CHANGED_FILES = 4;
 const LOCAL_KNOWLEDGE_MAX_REFERENCES = 8;
 const MEMORY_MAX_ENTRIES = 8;
 const MAX_CITATION_REF_CHARS = 160;
+// A live-state excerpt is intentionally narrower than the 50-file changeset ceiling and the
+// 128-item snapshot diagnostics ceiling so it cannot crowd out the rest of the context pack.
+const EDITOR_STATE_MAX_DIRTY_FILES = 32;
+const EDITOR_STATE_MAX_DIAGNOSTICS = 32;
+const EDITOR_STATE_EXCERPT_ID = "editor-state-current";
 
 function basename(scopePath: string): string {
   const parts = scopePath.split("/");
@@ -209,6 +218,88 @@ async function readHitExcerpt(
 // cooperative cancellation checks stay live (and lint-clean).
 function isAborted(signal: AbortSignal): boolean {
   return signal.aborted;
+}
+
+// ─── live editor-state provider ─────────────────────────────────────────────────────
+function copyLanguageRange(range: LanguageRange): LanguageRange {
+  return {
+    start: { line: range.start.line, character: range.start.character },
+    end: { line: range.end.line, character: range.end.character },
+  };
+}
+
+function summarizeEditorDiagnostic(diagnostic: EditorAgentDiagnostic): EditorAgentDiagnostic {
+  return {
+    severity: diagnostic.severity,
+    range: copyLanguageRange(diagnostic.range),
+    message: diagnostic.message,
+  };
+}
+
+function summarizeEditorState(snapshot: EditorAgentSessionSnapshot): {
+  readonly text: string;
+  readonly truncated: boolean;
+} {
+  const dirtyFiles = snapshot.dirtyFiles.slice(0, EDITOR_STATE_MAX_DIRTY_FILES);
+  const detail = snapshot.diagnosticsDetail;
+  const diagnosticsDetail =
+    detail === undefined
+      ? null
+      : {
+          items: detail.items.slice(0, EDITOR_STATE_MAX_DIAGNOSTICS).map(summarizeEditorDiagnostic),
+          truncated: detail.truncated || detail.items.length > EDITOR_STATE_MAX_DIAGNOSTICS,
+        };
+  return {
+    text: JSON.stringify(
+      {
+        activeFile: snapshot.activeFile,
+        selection: snapshot.selection === null ? null : copyLanguageRange(snapshot.selection),
+        diagnosticsSummary:
+          snapshot.diagnosticsSummary === null
+            ? null
+            : {
+                errors: snapshot.diagnosticsSummary.errors,
+                warnings: snapshot.diagnosticsSummary.warnings,
+                infos: snapshot.diagnosticsSummary.infos,
+              },
+        dirtyFiles,
+        diagnosticsDetail,
+      },
+      null,
+      2,
+    ),
+    truncated:
+      snapshot.dirtyFiles.length > EDITOR_STATE_MAX_DIRTY_FILES ||
+      (diagnosticsDetail?.truncated ?? false),
+  };
+}
+
+export function runEditorStateProvider(
+  ctx: ProviderContext,
+  input: { readonly sessionId: string },
+): ProviderOutcome {
+  if (isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("editor-state", "unavailable") };
+  }
+  const snapshot = editorAgentRegistry.snapshotFor(input.sessionId);
+  if (snapshot === undefined || isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("editor-state", "unavailable") };
+  }
+  if (snapshot.workspaceRoot !== ctx.realRoot) {
+    return { excerpts: [], omission: omission("editor-state", "denied") };
+  }
+  const summary = summarizeEditorState(snapshot);
+  const excerpt = prepareExcerpt(ctx, {
+    sourceKind: "editor-state",
+    id: EDITOR_STATE_EXCERPT_ID,
+    score: 1,
+    citationRef: snapshot.activeFile === null ? undefined : basename(snapshot.activeFile),
+    text: summary.text,
+    truncated: summary.truncated,
+  });
+  return excerpt === undefined
+    ? { excerpts: [], omission: omission("editor-state", "out-of-budget") }
+    : { excerpts: [excerpt], omission: undefined };
 }
 
 // ─── files-focus + repo-search provider ─────────────────────────────────────────────

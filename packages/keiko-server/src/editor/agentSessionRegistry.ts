@@ -69,6 +69,9 @@ export interface EditorAgentRegistry {
   // A second admit for an actionId already in flight for that session is rejected (no silent
   // supersede), so the first action's deadline is preserved.
   queueAction(action: EditorAgentAction, emitAction: EditorAgentAction): EditorAgentQueueOutcome;
+  // Atomically removes and returns the exact original action for one pending session/action pair.
+  // Result requests use this one-use claim before any server-side commit can run.
+  takePendingAction(sessionId: string, actionId: string): EditorAgentAction | undefined;
   // Fans out a result event. A result whose (sessionId, actionId) matches a queued action also clears
   // its timeout and frees that session's slot; any other result (preflight conflicts, late or
   // cross-session acks) is fanned out as-is without touching the queue.
@@ -78,6 +81,7 @@ export interface EditorAgentRegistry {
 }
 
 interface PendingAction {
+  readonly action: EditorAgentAction;
   readonly timer: unknown;
 }
 
@@ -174,6 +178,17 @@ function clearPending(state: RegistryState, sessionId: string, actionId: string)
   return true;
 }
 
+function takePendingActionImpl(
+  state: RegistryState,
+  sessionId: string,
+  actionId: string,
+): EditorAgentAction | undefined {
+  const action = state.pending.get(sessionId)?.get(actionId)?.action;
+  if (action === undefined) return undefined;
+  clearPending(state, sessionId, actionId);
+  return action;
+}
+
 function onTimeout(state: RegistryState, action: EditorAgentAction): void {
   const inner = state.pending.get(action.sessionId);
   if (inner?.get(action.actionId) === undefined) return;
@@ -250,7 +265,7 @@ function queueActionImpl(
   const timer = state.setTimer(() => {
     onTimeout(state, action);
   }, state.actionTimeoutMs);
-  slots.set(action.actionId, { timer });
+  slots.set(action.actionId, { action, timer });
   emit(state, { type: "action", action: emitAction });
   return {
     kind: "queued",
@@ -327,6 +342,8 @@ export function createEditorAgentRegistry(
     connect: (sessionId, send): (() => void) => connectImpl(state, sessionId, send),
     queueAction: (action, emitAction): EditorAgentQueueOutcome =>
       queueActionImpl(state, action, emitAction),
+    takePendingAction: (sessionId, actionId): EditorAgentAction | undefined =>
+      takePendingActionImpl(state, sessionId, actionId),
     reportResult: (result): void => {
       reportResultImpl(state, result);
     },

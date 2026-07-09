@@ -4,6 +4,11 @@
 
 Accepted
 
+> **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
+> The nine-action set is extended additively by `applyChangeset`; unverifiable per-file
+> preconditions fail closed, and optional authority, approval, diagnostics, and file-result fields
+> remain schema-version-`1` compatible.
+
 ## Context
 
 Issue #1391 (Epic #1491) owns the public, schema-first API contract that agents and the browser

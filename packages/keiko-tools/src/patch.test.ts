@@ -1,7 +1,7 @@
 import { linkSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
+import { applyPatch, projectValidatedPatch, renderDryRun, validatePatch } from "./patch.js";
 import {
   CommandCancelledError,
   PatchApplyDisabledError,
@@ -277,6 +277,38 @@ describe("renderDryRun", () => {
     );
     expect(preview).toContain("PATCH REJECTED");
     expect(preview).toContain("path-denied");
+  });
+});
+
+describe("projectValidatedPatch", () => {
+  it("renders only the selected files from a fully validated patch", () => {
+    write("src/a.txt", "A0\n");
+    write("src/b.txt", "B0\n");
+    const diffA = "--- a/src/a.txt\n+++ b/src/a.txt\n@@ -1 +1 @@\n-A0\n+A1\n";
+    const diffB = "--- a/src/b.txt\n+++ b/src/b.txt\n@@ -1 +1 @@\n-B0\n+B1\n";
+    const validation = validatePatch(info, diffA + diffB);
+
+    const projected = projectValidatedPatch(validation, ["./src/b.txt"]);
+
+    expect(projected).not.toContain("src/a.txt");
+    expect(projected).toContain("src/b.txt");
+    expect(validatePatch(info, projected).ok).toBe(true);
+  });
+
+  it("fails closed for invalid source validation and invalid selections", () => {
+    write("src/a.txt", "A0\n");
+    const diff = "--- a/src/a.txt\n+++ b/src/a.txt\n@@ -1 +1 @@\n-A0\n+A1\n";
+    const validation = validatePatch(info, diff);
+    const invalid = validatePatch(info, "not a patch");
+
+    expect(() => projectValidatedPatch(invalid, ["src/a.txt"])).toThrow(PatchValidationError);
+    expect(() => projectValidatedPatch(validation, [])).toThrow(PatchValidationError);
+    expect(() => projectValidatedPatch(validation, ["src/missing.txt"])).toThrow(
+      PatchValidationError,
+    );
+    expect(() => projectValidatedPatch(validation, ["src/a.txt", "./src/a.txt"])).toThrow(
+      PatchValidationError,
+    );
   });
 });
 

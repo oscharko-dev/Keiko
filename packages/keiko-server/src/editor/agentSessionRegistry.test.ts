@@ -138,6 +138,25 @@ describe("editor agent session registry", () => {
     expect(events.at(-1)?.type).toBe("result");
   });
 
+  it("takes the exact original pending action once and only within its session", () => {
+    const scheduler = fakeScheduler();
+    const registry = createEditorAgentRegistry(scheduler);
+    const original = action({
+      sessionId: "session-A",
+      actionId: "shared-id",
+      idempotencyKey: "original-key",
+    });
+    const emitted = { ...original, idempotencyKey: "derived-envelope" };
+    registry.queueAction(original, emitted);
+
+    expect(registry.takePendingAction("session-B", "shared-id")).toBeUndefined();
+    expect(registry.pendingCount("session-A")).toBe(1);
+    expect(registry.takePendingAction("session-A", "shared-id")).toEqual(original);
+    expect(registry.takePendingAction("session-A", "shared-id")).toBeUndefined();
+    expect(registry.pendingCount("session-A")).toBe(0);
+    expect(scheduler.pending()).toBe(0);
+  });
+
   it("times out an unacknowledged action and cleans up the queue (AC2)", () => {
     const scheduler = fakeScheduler();
     const registry = createEditorAgentRegistry(scheduler);

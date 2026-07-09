@@ -40,6 +40,7 @@ import {
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   applyTextEditsToText,
+  buildPatchPreview,
   buildTestGenerationPreview,
   buildRenamePreview,
   createEditorRequestId,
@@ -116,6 +117,7 @@ import {
   ApiError,
   fetchEditorLanguageCapabilities,
   postEditorAgentSessionSnapshot,
+  postEditorAgentActionResult,
   fetchFilesContent,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
@@ -148,6 +150,8 @@ import {
 } from "../../../../../lib/editor-language";
 import type {
   EditorAgentAction,
+  EditorAgentActionResult,
+  EditorAgentActionResultRequest,
   EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
@@ -174,6 +178,7 @@ import {
   useEditorAgentBridge,
   type EditorAgentActionControllers,
 } from "./editorAgentBridge";
+import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
@@ -877,6 +882,125 @@ function buildAgentPatchDiffModel(
   };
 }
 
+type AgentPreparedChangeset = NonNullable<NonNullable<EditorAgentAction["changeset"]>["prepared"]>;
+type AgentPreparedChangesetFile = AgentPreparedChangeset["files"][number];
+
+interface AgentChangesetReviewState {
+  readonly action: EditorAgentAction;
+  readonly model: PatchPreviewModel;
+  readonly applying: boolean;
+}
+
+interface BoundedActionMemory {
+  readonly order: string[];
+  readonly values: Set<string>;
+}
+
+type ChangesetSourceResult =
+  | { readonly status: "ready"; readonly sources: Readonly<Record<string, PatchPreviewSource>> }
+  | {
+      readonly status: "failed" | "conflict";
+      readonly message: string;
+      readonly conflictCode?: AgentConflictCode | undefined;
+    };
+
+const AGENT_CHANGESET_ACTION_MEMORY_LIMIT = 128;
+
+function normalizeAgentChangesetPath(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function rememberAgentChangesetAction(memory: BoundedActionMemory, key: string): boolean {
+  if (memory.values.has(key)) return false;
+  memory.values.add(key);
+  memory.order.push(key);
+  while (memory.order.length > AGENT_CHANGESET_ACTION_MEMORY_LIMIT) {
+    const evicted = memory.order.shift();
+    if (evicted !== undefined) memory.values.delete(evicted);
+  }
+  return true;
+}
+
+function changesetActionKey(action: EditorAgentAction): string {
+  return `${action.sessionId}\u0000${action.actionId}`;
+}
+
+function preparedChangesetForReview(action: EditorAgentAction): AgentPreparedChangeset | null {
+  const changeset = action.changeset;
+  const prepared = changeset?.prepared;
+  if (changeset === undefined || prepared === undefined) return null;
+  const declared = new Set(changeset.files.map((entry) => normalizeAgentChangesetPath(entry.file)));
+  const preparedPaths = prepared.files.map((entry) => normalizeAgentChangesetPath(entry.file));
+  if (declared.size !== preparedPaths.length) return null;
+  if (preparedPaths.some((path) => !declared.has(path))) return null;
+  const selected = changeset.selectedFiles?.map(normalizeAgentChangesetPath);
+  if (selected === undefined) return prepared;
+  const selectedPaths = new Set(selected);
+  const files = prepared.files.filter((entry) =>
+    selectedPaths.has(normalizeAgentChangesetPath(entry.file)),
+  );
+  return files.length === selectedPaths.size && files.length > 0 ? { files } : null;
+}
+
+function changesetDecisionRequest(
+  action: EditorAgentAction,
+  status: "succeeded" | "failed",
+  message?: string,
+): EditorAgentActionResultRequest {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    kind: "result",
+    result: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: action.actionId,
+      sessionId: action.sessionId,
+      status,
+      ...(message === undefined ? {} : { message }),
+    },
+  };
+}
+
+function succeededPreparedChangesetFiles(
+  action: EditorAgentAction,
+  result: EditorAgentActionResult,
+): readonly AgentPreparedChangesetFile[] | null {
+  const prepared = action.changeset?.prepared;
+  if (result.status !== "succeeded" || prepared === undefined || result.files === undefined) {
+    return null;
+  }
+  const statuses = new Map(
+    result.files.map((entry) => [normalizeAgentChangesetPath(entry.file), entry]),
+  );
+  if (statuses.size !== prepared.files.length) return null;
+  for (const file of prepared.files) {
+    const status = statuses.get(normalizeAgentChangesetPath(file.file))?.status;
+    if (status !== "succeeded" && status !== "not-selected") return null;
+  }
+  return prepared.files.filter(
+    (file) => statuses.get(normalizeAgentChangesetPath(file.file))?.status === "succeeded",
+  );
+}
+
+function completeChangesetPreview(model: PatchPreviewModel, expectedFiles: number): boolean {
+  return (
+    model.fileCount === expectedFiles &&
+    model.totalFileCount === expectedFiles &&
+    model.omittedFileCount === 0 &&
+    model.unsupportedCount === 0 &&
+    model.binaryCount === 0 &&
+    !model.truncated &&
+    model.files.every((entry) => entry.diffable && !entry.truncated)
+  );
+}
+
+function changesetSourceExceedsLimit(content: string, maxBytes: number | null): boolean {
+  return maxBytes !== null && UTF8_ENCODER.encode(content).length > maxBytes;
+}
+
 function EditorRuntimeWidget({
   windowId,
   paneId,
@@ -1061,6 +1185,11 @@ function EditorRuntimeWidget({
     readonly original: string;
     readonly modified: string;
   } | null>(null);
+  const [agentChangesetPending, setAgentChangesetPending] =
+    useState<AgentChangesetReviewState | null>(null);
+  const agentChangesetActiveActionRef = useRef<string | null>(null);
+  const agentChangesetSeenRef = useRef<BoundedActionMemory>({ order: [], values: new Set() });
+  const agentChangesetDecisionRef = useRef<BoundedActionMemory>({ order: [], values: new Set() });
   const [renameReview, setRenameReview] = useState<{
     readonly changeset: LanguageRenameChangeset;
     readonly model: PatchPreviewModel;
@@ -2384,6 +2513,73 @@ function EditorRuntimeWidget({
           sources: { [buffer.content.relativePath]: { content: buffer.content } },
         })
       : null;
+  const agentReviewActive =
+    recoveryCompare ||
+    agentPatchPending !== null ||
+    agentChangesetPending !== null ||
+    renameReview !== null ||
+    testGenerationPreview !== null;
+  const agentReviewActiveRef = useRef(agentReviewActive);
+  agentReviewActiveRef.current = agentReviewActive;
+
+  const loadAgentChangesetSources = useCallback(
+    async (prepared: AgentPreparedChangeset): Promise<ChangesetSourceResult> => {
+      if (root === undefined) return { status: "failed", message: "Workspace is unavailable." };
+      const sources: Record<string, PatchPreviewSource> = {};
+      for (const entry of prepared.files) {
+        if (entry.kind === "create") {
+          sources[entry.file] = patchPreviewSourceFromText(entry.file, "");
+          continue;
+        }
+        if (entry.file === file) {
+          if (dirtyRef.current) {
+            return {
+              status: "conflict",
+              conflictCode: "DIRTY",
+              message: `Changeset target ${entry.file} has unsaved changes.`,
+            };
+          }
+          sources[entry.file] = patchPreviewSourceFromText(entry.file, contentRef.current);
+          continue;
+        }
+        const cached = sessionCacheRef.current.get(documentSessionKey(root, entry.file));
+        if (cached?.fileModel !== null && cached?.fileModel !== undefined) {
+          if (isDocumentDirty(cached.fileModel)) {
+            return {
+              status: "conflict",
+              conflictCode: "DIRTY",
+              message: `Changeset target ${entry.file} has unsaved changes.`,
+            };
+          }
+          if (changesetSourceExceedsLimit(cached.content, cached.maxBytes)) {
+            return {
+              status: "failed",
+              message: `Changeset target ${entry.file} is read-only in the editor.`,
+            };
+          }
+          if (cached.loadState.status === "ready") {
+            sources[entry.file] = patchPreviewSourceFromText(entry.file, cached.content);
+            continue;
+          }
+        }
+        const response = await fetchFilesContent(root, entry.file);
+        if (
+          normalizeAgentChangesetPath(response.path) !== normalizeAgentChangesetPath(entry.file)
+        ) {
+          return { status: "failed", message: "Changeset source did not match its target." };
+        }
+        if (changesetSourceExceedsLimit(response.content, response.maxBytes)) {
+          return {
+            status: "failed",
+            message: `Changeset target ${entry.file} is read-only in the editor.`,
+          };
+        }
+        sources[entry.file] = patchPreviewSourceFromText(entry.file, response.content);
+      }
+      return { status: "ready", sources };
+    },
+    [file, root],
+  );
 
   // Issue #1205: derive the unified status-bar view model from host state. Diagnostics are surfaced
   // only for governed source files (where the deterministic language service runs); the
@@ -2580,6 +2776,77 @@ function EditorRuntimeWidget({
     windowId,
   ]);
 
+  const prepareAgentChangesetReview = useCallback(
+    async (action: EditorAgentAction, prepared: AgentPreparedChangeset): Promise<void> => {
+      const actionKey = changesetActionKey(action);
+      let staged = false;
+      try {
+        const sourceResult = await loadAgentChangesetSources(prepared);
+        if (sourceResult.status !== "ready") {
+          postEditorAgentResult(
+            action,
+            sourceResult.status,
+            sourceResult.message,
+            sourceResult.conflictCode,
+          );
+          return;
+        }
+        const patch = buildEditorAgentChangesetPatch({
+          actionId: action.actionId,
+          prepared,
+        });
+        const model = buildPatchPreview({
+          patch,
+          sources: sourceResult.sources,
+        });
+        if (!completeChangesetPreview(model, prepared.files.length)) {
+          postEditorAgentResult(action, "failed", "Changeset preview is incomplete or truncated.");
+          return;
+        }
+        if (agentReviewActiveRef.current) {
+          postEditorAgentResult(action, "failed", "Another editor review is already active.");
+          return;
+        }
+        setAgentChangesetPending({ action, model, applying: false });
+        staged = true;
+      } catch (error) {
+        postEditorAgentResult(
+          action,
+          "failed",
+          error instanceof Error ? error.message : "Changeset review could not be prepared.",
+        );
+      } finally {
+        if (!staged && agentChangesetActiveActionRef.current === actionKey) {
+          agentChangesetActiveActionRef.current = null;
+        }
+      }
+    },
+    [loadAgentChangesetSources],
+  );
+
+  const applyAgentChangesetAction = useCallback(
+    (action: EditorAgentAction): void => {
+      const actionKey = changesetActionKey(action);
+      if (!rememberAgentChangesetAction(agentChangesetSeenRef.current, actionKey)) return;
+      const prepared = preparedChangesetForReview(action);
+      if (prepared === null) {
+        postEditorAgentResult(action, "failed", "Missing or malformed prepared changeset.");
+        return;
+      }
+      if (largeFileDegraded) {
+        postEditorAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        return;
+      }
+      if (agentReviewActiveRef.current || agentChangesetActiveActionRef.current !== null) {
+        postEditorAgentResult(action, "failed", "Another editor review is already active.");
+        return;
+      }
+      agentChangesetActiveActionRef.current = actionKey;
+      void prepareAgentChangesetReview(action, prepared);
+    },
+    [largeFileDegraded, prepareAgentChangesetReview],
+  );
+
   // Issue #1394 (ADR-0058 D3): apply text edits, guarded for read-only/large-file buffers (AC4 risk #5).
   const applyAgentTextEditsAction = useCallback(
     (action: EditorAgentAction): void => {
@@ -2687,12 +2954,14 @@ function EditorRuntimeWidget({
       currentText: () => contentRef.current,
       applyTextEdits: applyAgentTextEditsAction,
       applyPatch: applyAgentPatchAction,
+      applyChangeset: applyAgentChangesetAction,
       onSplitPane,
       onMoveTab,
       onRequestSelectionReveal: undefined,
     }),
     [
       applyAgentPatchAction,
+      applyAgentChangesetAction,
       applyAgentTextEditsAction,
       formattingEnabled,
       onMoveTab,
@@ -2713,6 +2982,201 @@ function EditorRuntimeWidget({
     onConflict: setAgentConflict,
     onAgentActivity: () => setAuditRefreshNonce((nonce) => nonce + 1),
   });
+
+  const adoptActiveChangesetResponse = useCallback(
+    (path: string, response: FilesContentResponse): void => {
+      if (root === undefined || path !== file) return;
+      const snapshot = cleanEditorSessionSnapshot({
+        root,
+        path,
+        modelScope: editorModelScope,
+        response,
+      });
+      contentRef.current = response.content;
+      setContent(response.content);
+      setFileModel(snapshot.fileModel);
+      setModifiedAt(response.modifiedAt);
+      setVersion(response.session.version);
+      setMaxBytes(response.maxBytes);
+      setLoadState({ status: "ready" });
+      setSaveStatus("idle");
+      setSaveError(undefined);
+      setRecoverySnapshot(null);
+      setRecoveryCompare(false);
+      setRecoveryDiskBaseline(null);
+      setActiveHostEditRequest(undefined);
+    },
+    [editorModelScope, file, root],
+  );
+
+  const reconcileAgentChangesetDeletion = useCallback(
+    async (path: string): Promise<string | null> => {
+      if (root === undefined) return "Workspace is unavailable after changeset commit.";
+      sessionCacheRef.current.delete(documentSessionKey(root, path));
+      onDirtyChange?.(path, false);
+      await deleteHotExitSnapshotBestEffort(root, path);
+      const openInAnotherPane =
+        layoutPanes?.some(
+          (layoutPane) => layoutPane.paneId !== paneId && layoutPane.openFiles.includes(path),
+        ) === true;
+      if (documentTabs.includes(path)) {
+        if (onCloseOpenFile === undefined) {
+          return `Committed deletion ${path} could not be closed in this editor.`;
+        }
+        try {
+          const closed = await onCloseOpenFile(path);
+          if (closed === false) return `Committed deletion ${path} could not be closed.`;
+        } catch {
+          return `Committed deletion ${path} could not be closed.`;
+        }
+      }
+      if (openInAnotherPane) {
+        return `Committed deletion ${path} remains open in another editor pane.`;
+      }
+      return null;
+    },
+    [documentTabs, layoutPanes, onCloseOpenFile, onDirtyChange, paneId, root],
+  );
+
+  const reconcileAgentChangesetFile = useCallback(
+    async (entry: AgentPreparedChangesetFile): Promise<string | null> => {
+      if (entry.kind === "delete") return reconcileAgentChangesetDeletion(entry.file);
+      if (root === undefined) return "Workspace is unavailable after changeset commit.";
+      const sessionKey = documentSessionKey(root, entry.file);
+      const cached = sessionCacheRef.current.get(sessionKey);
+      const cachedDirty =
+        cached?.fileModel !== null && cached?.fileModel !== undefined
+          ? isDocumentDirty(cached.fileModel)
+          : false;
+      if ((entry.file === file && dirtyRef.current) || cachedDirty) {
+        return `Committed file ${entry.file} has newer unsaved editor changes.`;
+      }
+      try {
+        const response = await fetchFilesContent(root, entry.file);
+        if (
+          normalizeAgentChangesetPath(response.path) !== normalizeAgentChangesetPath(entry.file)
+        ) {
+          return `Committed file ${entry.file} returned mismatched metadata.`;
+        }
+        const snapshot = cleanEditorSessionSnapshot({
+          root,
+          path: entry.file,
+          modelScope: editorModelScope,
+          response,
+        });
+        sessionCacheRef.current.set(sessionKey, snapshot);
+        adoptActiveChangesetResponse(entry.file, response);
+        onDirtyChange?.(entry.file, false);
+        await deleteHotExitSnapshotBestEffort(root, entry.file);
+        return null;
+      } catch {
+        return `Committed file ${entry.file} could not be refreshed from disk.`;
+      }
+    },
+    [
+      adoptActiveChangesetResponse,
+      editorModelScope,
+      file,
+      onDirtyChange,
+      reconcileAgentChangesetDeletion,
+      root,
+    ],
+  );
+
+  const reconcileAgentChangeset = useCallback(
+    async (entries: readonly AgentPreparedChangesetFile[]): Promise<readonly string[]> => {
+      const failures: string[] = [];
+      for (const entry of entries) {
+        const failure = await reconcileAgentChangesetFile(entry);
+        if (failure !== null) failures.push(failure);
+      }
+      return failures;
+    },
+    [reconcileAgentChangesetFile],
+  );
+
+  const clearAgentChangesetReview = useCallback((action: EditorAgentAction): void => {
+    const actionKey = changesetActionKey(action);
+    setAgentChangesetPending((current) =>
+      current?.action.actionId === action.actionId ? null : current,
+    );
+    if (agentChangesetActiveActionRef.current === actionKey) {
+      agentChangesetActiveActionRef.current = null;
+    }
+  }, []);
+
+  const surfaceAgentChangesetResult = useCallback(
+    (result: EditorAgentActionResult): void => {
+      if (result.conflict !== undefined) {
+        setAgentConflict({ code: result.conflict.code, message: result.conflict.message });
+        return;
+      }
+      announceToolbarNotice(result.message ?? "The changeset was not committed.");
+    },
+    [announceToolbarNotice],
+  );
+
+  const handleAgentChangesetAccept = useCallback((): void => {
+    if (agentChangesetPending === null) return;
+    const { action } = agentChangesetPending;
+    const actionKey = changesetActionKey(action);
+    if (!rememberAgentChangesetAction(agentChangesetDecisionRef.current, actionKey)) return;
+    setAgentChangesetPending((current) =>
+      current === null ? null : { ...current, applying: true },
+    );
+    void (async (): Promise<void> => {
+      try {
+        const response = await postEditorAgentActionResult(
+          changesetDecisionRequest(action, "succeeded"),
+        );
+        if (response.result.status !== "succeeded") {
+          surfaceAgentChangesetResult(response.result);
+          return;
+        }
+        const succeeded = succeededPreparedChangesetFiles(action, response.result);
+        if (succeeded === null || succeeded.length === 0) {
+          setAgentConflict({
+            code: "INVALID_EDITS",
+            message: "The changeset acknowledgement did not identify committed files.",
+          });
+          return;
+        }
+        const failures = await reconcileAgentChangeset(succeeded);
+        if (failures[0] !== undefined) {
+          setAgentConflict({ code: "VERSION_MISMATCH", message: failures[0] });
+        }
+      } catch {
+        announceToolbarNotice("The changeset decision could not be confirmed by the server.");
+      } finally {
+        clearAgentChangesetReview(action);
+      }
+    })();
+  }, [
+    agentChangesetPending,
+    announceToolbarNotice,
+    clearAgentChangesetReview,
+    reconcileAgentChangeset,
+    surfaceAgentChangesetResult,
+  ]);
+
+  const handleAgentChangesetReject = useCallback((): void => {
+    if (agentChangesetPending === null) return;
+    const { action } = agentChangesetPending;
+    const actionKey = changesetActionKey(action);
+    if (!rememberAgentChangesetAction(agentChangesetDecisionRef.current, actionKey)) return;
+    setAgentChangesetPending((current) =>
+      current === null ? null : { ...current, applying: true },
+    );
+    void postEditorAgentActionResult(
+      changesetDecisionRequest(action, "failed", "Changeset rejected by user."),
+    )
+      .catch(() => {
+        announceToolbarNotice("The changeset rejection could not be confirmed by the server.");
+      })
+      .finally(() => {
+        clearAgentChangesetReview(action);
+      });
+  }, [agentChangesetPending, announceToolbarNotice, clearAgentChangesetReview]);
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&
@@ -2884,6 +3348,33 @@ function EditorRuntimeWidget({
           </button>
         </div>
       </>
+    );
+  } else if (agentChangesetPending !== null) {
+    panel = (
+      <div
+        role="group"
+        aria-label="Agent changeset review"
+        aria-busy={agentChangesetPending.applying}
+      >
+        <span className="sr-only">
+          Review every changed file before applying this agent changeset to disk.
+        </span>
+        <span className="sr-only" role="status" aria-live="polite">
+          {agentChangesetPending.applying ? "Applying changeset." : "Changeset ready for review."}
+        </span>
+        <EditorDiffSurface
+          model={agentChangesetPending.model}
+          loadState={{ status: "ready" }}
+          themeVariant={themeVariant}
+          actions={{
+            canApply: !agentChangesetPending.applying,
+            canReject: !agentChangesetPending.applying,
+            canRunVerification: false,
+          }}
+          onApply={handleAgentChangesetAccept}
+          onReject={handleAgentChangesetReject}
+        />
+      </div>
     );
   } else if (agentPatchPending !== null) {
     const patchDiffModel = buildAgentPatchDiffModel(

@@ -2,9 +2,18 @@ import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { toCodingContextWirePack, type CodingContextRequest } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_CONTEXT_BUDGETS,
+  CODING_CONTEXT_PURPOSES,
+  EDITOR_AGENT_SCHEMA_VERSION,
+  toCodingContextWirePack,
+  type CodingContextPack,
+  type CodingContextRequest,
+  type EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { assembleCodingContext, type AssembleCodingContextDeps } from "./codingContext.js";
 
 let root: string;
@@ -27,8 +36,40 @@ function request(overrides: Partial<CodingContextRequest> = {}): CodingContextRe
   };
 }
 
-function ctx(signal: AbortSignal): AssembleCodingContextDeps {
-  return { deps: deps(), realRoot: root, signal, nowMs: 1_700_000_000_000 };
+function ctx(
+  signal: AbortSignal,
+  overrides: Partial<AssembleCodingContextDeps> = {},
+): AssembleCodingContextDeps {
+  return { deps: deps(), realRoot: root, signal, nowMs: 1_700_000_000_000, ...overrides };
+}
+
+function editorSnapshot(
+  overrides: Partial<EditorAgentSessionSnapshot> = {},
+): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId: "editor-session-1",
+    windowId: "window-1",
+    workspaceRoot: root,
+    activePaneId: "pane-1",
+    panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+    dirtyFiles: ["src/a.ts"],
+    activeFile: "src/a.ts",
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+async function packsForEveryPurpose(): Promise<readonly CodingContextPack[]> {
+  return Promise.all(
+    CODING_CONTEXT_PURPOSES.map((purpose) =>
+      assembleCodingContext(request({ purpose }), ctx(new AbortController().signal)),
+    ),
+  );
 }
 
 beforeEach(async () => {
@@ -42,6 +83,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  editorAgentRegistry.reset();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -89,6 +131,60 @@ describe("assembleCodingContext", () => {
     expect(reasonsByKind.get("connected-context")).toBe("unavailable");
     expect(reasonsByKind.get("quality-intelligence")).toBe("unavailable");
     expect(reasonsByKind.get("workflow-context")).toBe("unavailable");
+  });
+
+  it("keeps every purpose byte-identical without an editor-session opt-in", async () => {
+    const baseline = await packsForEveryPurpose();
+    editorAgentRegistry.registerSnapshot(
+      editorSnapshot({ diagnosticsSummary: { errors: 11, warnings: 12, infos: 13 } }),
+    );
+    const withUnlinkedLiveState = await packsForEveryPurpose();
+
+    expect(JSON.stringify(withUnlinkedLiveState)).toBe(JSON.stringify(baseline));
+    for (const pack of withUnlinkedLiveState) {
+      expect(pack.excerpts.some((entry) => entry.citation.sourceKind === "editor-state")).toBe(
+        false,
+      );
+      expect(pack.omissions.some((entry) => entry.sourceKind === "editor-state")).toBe(false);
+    }
+  });
+
+  it("packs opted-in editor state with first-party provenance inside both budgets", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const pack = await assembleCodingContext(
+      request({ editorSessionId: "editor-session-1" }),
+      ctx(new AbortController().signal),
+    );
+    const editorState = pack.excerpts.find((entry) => entry.citation.sourceKind === "editor-state");
+
+    expect(editorState?.citation.sourceTier).toBe("first-party-workspace");
+    expect(editorState?.citation.citationRef).toBe("a.ts");
+    expect(editorState?.citation.id).not.toContain("editor-session-1");
+    expect(editorState?.citation.byteCount).toBeLessThanOrEqual(
+      CODING_CONTEXT_BUDGETS.completion.maxBytesPerSource,
+    );
+    expect(pack.usedBytes).toBeLessThanOrEqual(pack.budgetBytes);
+  });
+
+  it("records unavailable and cross-root denied omissions for opted-in editor state", async () => {
+    const missing = await assembleCodingContext(
+      request({ purpose: "inline", editorSessionId: "editor-session-1" }),
+      ctx(new AbortController().signal),
+    );
+    expect(missing.omissions).toContainEqual({
+      sourceKind: "editor-state",
+      reason: "unavailable",
+    });
+
+    editorAgentRegistry.registerSnapshot(editorSnapshot({ workspaceRoot: `${root}-other` }));
+    const crossRoot = await assembleCodingContext(
+      request({ purpose: "inline", editorSessionId: "editor-session-1" }),
+      ctx(new AbortController().signal),
+    );
+    expect(crossRoot.omissions).toContainEqual({ sourceKind: "editor-state", reason: "denied" });
+    expect(crossRoot.excerpts.some((entry) => entry.citation.sourceKind === "editor-state")).toBe(
+      false,
+    );
   });
 
   it("treats an injected retrieval excerpt as inert content-free data (LLM08)", async () => {

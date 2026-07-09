@@ -367,6 +367,8 @@ export type {
   EditorAgentActionsPostBody,
   EditorAgentBridgeSnapshotRequest,
   EditorAgentConflictCode,
+  EditorAgentDiagnostic,
+  EditorAgentDiagnosticsDetail,
   EditorAgentEvent,
   EditorAgentFailureCode,
   EditorAgentPaneSnapshot,
@@ -382,6 +384,8 @@ export type {
 export {
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
   EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
+  EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_FAILURE_CODES,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_WRITE_ACTION_TYPES,

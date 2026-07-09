@@ -4,6 +4,11 @@
 
 Accepted
 
+> **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
+> Contained content mutation is not blanket `review-required`. The central mode/resource/risk policy
+> effect is enforced and then mapped to the existing editor disposition; audit remains bounded and
+> redacted.
+
 ## Context
 
 Issues #1394 ([ADR-0058](ADR-0058-safe-apply-edits-and-patch-workflow.md)), #1391

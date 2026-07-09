@@ -9,9 +9,9 @@
  *
  * The pure dispatcher maps a validated {@link EditorAgentAction} to a controller call and returns a
  * synchronous {@link EditorAgentActionDescriptor} — or a Promise of one (`save`) — without touching
- * React or the DOM, so the full nine-action protocol is unit-testable in isolation. The two write
- * actions (`applyTextEdits`/`applyPatch`) need React setters, so they return a `"deferred"` marker
- * and self-report from inside their component callbacks via the shared result-posting helper.
+ * React or the DOM, so the full action protocol is unit-testable in isolation. The write actions
+ * (`applyTextEdits`/`applyPatch`/`applyChangeset`) need React setters, so they return a `"deferred"`
+ * marker and self-report from inside their component callbacks via the shared result-posting helper.
  *
  * The three layout-controller actions (`moveTab`, `splitPane`, `setSelection`) are completed here:
  * `moveTab`/`splitPane` delegate to the layout controllers injected by `EditorWidget`; `setSelection`
@@ -71,6 +71,8 @@ export interface EditorAgentActionControllers {
   readonly applyTextEdits: (action: EditorAgentAction) => void;
   /** Stage an agent patch for explicit review; self-reports via the shared helper. */
   readonly applyPatch: (action: EditorAgentAction) => void;
+  /** Stage a prepared multi-file changeset for review; self-reports via the shared helper. */
+  readonly applyChangeset?: ((action: EditorAgentAction) => void) | undefined;
   /** Split the given pane; injected by EditorWidget. Undefined when rendered standalone. */
   readonly onSplitPane: ((paneId: string, direction: "row" | "column") => void) | undefined;
   /** Move a file tab across panes; injected by EditorWidget. Undefined when rendered standalone. */
@@ -174,7 +176,7 @@ function dispatchSetSelection(
 
 /**
  * Pure, React-free dispatcher: map a validated agent action to a controller call and return a
- * descriptor. `applyTextEdits`/`applyPatch` return `"deferred"` (they self-report inside the
+ * descriptor. Write-review actions return `"deferred"` (they self-report inside the
  * component); `save` returns `"async"` with a Promise of the final descriptor.
  */
 export function dispatchEditorAgentAction(
@@ -194,6 +196,12 @@ export function dispatchEditorAgentAction(
       return DEFERRED;
     case "applyPatch":
       controllers.applyPatch(action);
+      return DEFERRED;
+    case "applyChangeset":
+      if (controllers.applyChangeset === undefined) {
+        return { status: "failed", message: "Provider unavailable." };
+      }
+      controllers.applyChangeset(action);
       return DEFERRED;
     case "splitPane":
       return dispatchSplitPane(action, controllers);

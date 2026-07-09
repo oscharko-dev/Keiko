@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
+  EDITOR_AGENT_CHANGESET_MAX_FILES,
+  EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
   EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
+  EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_FAILURE_CODES,
+  EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_WRITE_ACTION_TYPES,
   editorAgentActionHasWritePrecondition,
@@ -10,9 +15,16 @@ import {
   isContainedAgentPath,
   isEditorAgentAction,
   isEditorAgentActionResult,
+  isEditorAgentChangeset,
   isEditorAgentConflictCode,
+  isEditorAgentDiagnostic,
+  isEditorAgentDiagnosticsDetail,
   isEditorAgentEvent,
   isEditorAgentFailureCode,
+  isEditorAgentFileActionResult,
+  isEditorAgentGovernedAuthorityReference,
+  isEditorAgentOneUseApprovalReference,
+  isEditorAgentPreparedChangeset,
   isEditorAgentSessionSnapshot,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
@@ -373,6 +385,7 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
 ];
 
 const NON_WRITE_ACTION_TYPES = [
@@ -392,6 +405,21 @@ function baseAction(overrides: Partial<EditorAgentAction> = {}): EditorAgentActi
     type: "openFile",
     ...overrides,
   };
+}
+
+function changesetAction(): EditorAgentAction {
+  return baseAction({
+    type: "applyChangeset",
+    authorityRef: { runId: "run-2114", envelopeDigest: HASH },
+    changeset: {
+      patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+b\n",
+      files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+    },
+  });
+}
+
+function validActionForType(type: EditorAgentActionType): EditorAgentAction {
+  return type === "applyChangeset" ? changesetAction() : baseAction({ type });
 }
 
 describe("schema version compatibility (Issue #1391)", () => {
@@ -436,7 +464,7 @@ describe("snapshot text mode defaults to none (Issue #1391 AC1)", () => {
 describe("action validator covers every action type (Issue #1391)", () => {
   it("accepts a minimal valid action for each action type", () => {
     for (const type of ALL_ACTION_TYPES) {
-      expect(isEditorAgentAction(baseAction({ type }))).toBe(true);
+      expect(isEditorAgentAction(validActionForType(type))).toBe(true);
     }
   });
 
@@ -573,9 +601,9 @@ describe("event validator covers every event kind (Issue #1391)", () => {
 });
 
 describe("write-action precondition rule (Issue #1391 AC2)", () => {
-  it("lists exactly the four mutating action types", () => {
+  it("lists exactly the five mutating action types", () => {
     expect([...EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
-      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+      ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),
     );
   });
 
@@ -607,6 +635,8 @@ describe("write-action precondition rule (Issue #1391 AC2)", () => {
     expect(editorAgentWritePreconditionError(byHash)).toBeNull();
     expect(editorAgentActionHasWritePrecondition(byVersion)).toBe(true);
     expect(editorAgentWritePreconditionError(byVersion)).toBeNull();
+    expect(editorAgentActionHasWritePrecondition(changesetAction())).toBe(true);
+    expect(editorAgentWritePreconditionError(changesetAction())).toBeNull();
   });
 
   it("never requires a precondition for a non-write action", () => {
@@ -623,6 +653,249 @@ describe("write-action precondition rule (Issue #1391 AC2)", () => {
       isEditorAgentAction(baseAction({ type: "save", expectedContentHash: "a".repeat(63) })),
     ).toBe(false);
     expect(isEditorAgentAction(baseAction({ type: "save", expectedContentHash: HASH }))).toBe(true);
+  });
+});
+
+describe("governed applyChangeset contract (Issue #2114)", () => {
+  it("accepts bounded authority and one-use approval references bound to the action", () => {
+    const authorityRef = { runId: "run-2114", envelopeDigest: HASH };
+    const approvalRef = {
+      approvalId: "approval-1",
+      actionId: "action-1",
+      approvalProofDigest: HASH,
+      expiresAt: "2026-07-09T12:00:00Z",
+    };
+    expect(isEditorAgentGovernedAuthorityReference(authorityRef)).toBe(true);
+    expect(isEditorAgentOneUseApprovalReference(approvalRef)).toBe(true);
+    expect(isEditorAgentAction({ ...changesetAction(), approvalRef })).toBe(true);
+    expect(
+      isEditorAgentAction({
+        ...changesetAction(),
+        approvalRef: { ...approvalRef, actionId: "other" },
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentGovernedAuthorityReference({ ...authorityRef, envelopeDigest: "raw" }),
+    ).toBe(false);
+  });
+
+  it("accepts one bounded patch, per-file preconditions, and selected-file acceptance", () => {
+    const action = changesetAction();
+    const changeset = {
+      ...action.changeset,
+      files: [
+        { file: "src/a.ts", expectedContentHash: HASH },
+        {
+          file: "src/b.ts",
+          expectedDocumentVersion: { sizeBytes: 4, modifiedAt: 2, contentHash: HASH },
+        },
+      ],
+      selectedFiles: ["src/b.ts"],
+    };
+    expect(isEditorAgentChangeset(changeset)).toBe(true);
+    expect(isEditorAgentAction({ ...action, changeset })).toBe(true);
+  });
+
+  it("compares declared and selected file identity after path normalization", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        files: [
+          { file: "src/a.ts", expectedContentHash: HASH },
+          { file: "./src/a.ts", expectedContentHash: HASH },
+        ],
+      }),
+    ).toBe(false);
+    expect(isEditorAgentChangeset({ ...changeset, selectedFiles: ["./src/a.ts"] })).toBe(true);
+  });
+
+  it("accepts fractional filesystem modification times in document preconditions", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        files: [
+          {
+            file: "src/a.ts",
+            expectedDocumentVersion: {
+              sizeBytes: 4,
+              modifiedAt: 1_700_000_000_000.125,
+              contentHash: HASH,
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts a bounded browser-safe prepared changeset preview", () => {
+    const prepared = {
+      files: [
+        {
+          file: "src/a.ts",
+          kind: "modify",
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } },
+              newText: "b\n",
+            },
+          ],
+        },
+      ],
+    } as const;
+    const action = changesetAction();
+    expect(isEditorAgentPreparedChangeset(prepared)).toBe(true);
+    expect(
+      isEditorAgentAction({
+        ...action,
+        changeset: { ...action.changeset, prepared },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects malformed or unbounded prepared changeset previews", () => {
+    const edit = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+      newText: "x",
+    } as const;
+    const preparedFile = { file: "src/a.ts", kind: "modify", textEdits: [edit] } as const;
+    expect(isEditorAgentPreparedChangeset({ files: [preparedFile] })).toBe(true);
+    expect(isEditorAgentPreparedChangeset({ files: [{ ...preparedFile, kind: "rename" }] })).toBe(
+      false,
+    );
+    expect(
+      isEditorAgentPreparedChangeset({
+        files: [
+          {
+            ...preparedFile,
+            textEdits: Array.from(
+              { length: EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS + 1 },
+              () => edit,
+            ),
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentPreparedChangeset({
+        files: [
+          {
+            ...preparedFile,
+            textEdits: [
+              { ...edit, newText: "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1) },
+            ],
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("fails closed for missing preconditions, nested idempotency, and invalid selections", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    expect(isEditorAgentChangeset({ ...changeset, files: [{ file: "src/a.ts" }] })).toBe(false);
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        files: [{ ...changeset.files[0], idempotencyKey: "second-key" }],
+      }),
+    ).toBe(false);
+    expect(isEditorAgentChangeset({ ...changeset, selectedFiles: ["src/missing.ts"] })).toBe(false);
+    expect(isEditorAgentChangeset({ ...changeset, selectedFiles: [] })).toBe(false);
+  });
+
+  it("enforces named changeset file and patch caps", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    const files = Array.from({ length: EDITOR_AGENT_CHANGESET_MAX_FILES + 1 }, (_, index) => ({
+      file: `src/${String(index)}.ts`,
+      expectedContentHash: HASH,
+    }));
+    expect(isEditorAgentChangeset({ ...changeset, files })).toBe(false);
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        patch: "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps existing schema-version-1 actions valid without additive fields", () => {
+    const legacy = baseAction({ type: "save", expectedContentHash: HASH });
+    expect(legacy.schemaVersion).toBe("1");
+    expect("authorityRef" in legacy).toBe(false);
+    expect("approvalRef" in legacy).toBe(false);
+    expect("changeset" in legacy).toBe(false);
+    expect(isEditorAgentAction(legacy)).toBe(true);
+  });
+});
+
+describe("bounded diagnostics detail and file-attributed results (Issue #2114)", () => {
+  const diagnostic = {
+    severity: "error",
+    range: { start: { line: 1, character: 2 }, end: { line: 1, character: 4 } },
+    message: "Type mismatch",
+  } as const;
+
+  it("accepts bounded diagnostics and an explicit truncation marker", () => {
+    const detail = { items: [diagnostic], truncated: true };
+    expect(isEditorAgentDiagnostic(diagnostic)).toBe(true);
+    expect(isEditorAgentDiagnosticsDetail(detail)).toBe(true);
+    expect(isEditorAgentSessionSnapshot({ ...snapshot(), diagnosticsDetail: detail })).toBe(true);
+  });
+
+  it("rejects oversized diagnostic lists and messages", () => {
+    expect(
+      isEditorAgentDiagnosticsDetail({
+        items: Array.from({ length: EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS + 1 }, () => diagnostic),
+        truncated: true,
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentDiagnostic({
+        ...diagnostic,
+        message: "x".repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds diagnostic messages by Unicode code points", () => {
+    const emoji = "\u{1f600}";
+    expect(
+      isEditorAgentDiagnostic({
+        ...diagnostic,
+        message: emoji.repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS),
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentDiagnostic({
+        ...diagnostic,
+        message: emoji.repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS + 1),
+      }),
+    ).toBe(false);
+    expect(isEditorAgentDiagnostic({ ...diagnostic, message: "" })).toBe(false);
+  });
+
+  it("validates file-attributed conflicts and selected-file outcomes", () => {
+    const fileResult = {
+      file: "src/a.ts",
+      status: "conflict",
+      conflict: { code: "VERSION_MISMATCH", message: "stale", file: "src/a.ts" },
+    } as const;
+    expect(isEditorAgentFileActionResult(fileResult)).toBe(true);
+    expect(
+      isEditorAgentActionResult({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "conflict",
+        files: [fileResult, { file: "src/b.ts", status: "not-selected" }],
+      }),
+    ).toBe(true);
+    expect(isEditorAgentFileActionResult({ ...fileResult, file: "../outside.ts" })).toBe(false);
   });
 });
 

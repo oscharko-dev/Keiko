@@ -625,6 +625,8 @@ describe("keiko-contracts package surface", () => {
     const mod = await import("./index.js");
     // Compatibility pin for the schema version constant: the public agent-editor contract is v1.
     expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+    expect(mod.EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS).toBe(128);
+    expect(mod.EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS).toBe(1_024);
     // AC1: the content-free default snapshot text mode is exported and is `none`.
     expect(mod.DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE).toBe("none");
     // AC3: the structured conflict-code taxonomy is exported in full, including PRECONDITION_REQUIRED
@@ -636,7 +638,7 @@ describe("keiko-contracts package surface", () => {
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual(["QUEUE_FULL", "TIMED_OUT"]);
     // AC2: the write-action classification is exported as a single source of truth.
     expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
-      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+      ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),
     );
     expect(typeof mod.isEditorAgentEvent).toBe("function");
     expect(typeof mod.isEditorAgentWriteActionType).toBe("function");
@@ -654,12 +656,16 @@ describe("keiko-contracts package surface", () => {
     type _Action = import("./index.js").EditorAgentAction;
     type _Result = import("./index.js").EditorAgentActionResult;
     type _Event = import("./index.js").EditorAgentEvent;
+    type _Diagnostic = import("./index.js").EditorAgentDiagnostic;
+    type _DiagnosticsDetail = import("./index.js").EditorAgentDiagnosticsDetail;
     type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
     type _Request = import("./index.js").EditorAgentSnapshotRequest;
     pin<_Code>();
     pin<_Action>();
     pin<_Result>();
     pin<_Event>();
+    pin<_Diagnostic>();
+    pin<_DiagnosticsDetail>();
     pin<_Snapshot>();
     pin<_Request>();
     expect(true).toBe(true);

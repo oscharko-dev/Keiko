@@ -43,6 +43,7 @@ function makeControllers(
     currentText: () => "text",
     applyTextEdits: vi.fn(),
     applyPatch: vi.fn(),
+    applyChangeset: vi.fn(),
     onSplitPane: vi.fn(),
     onMoveTab: vi.fn(),
     onRequestSelectionReveal: vi.fn(),
@@ -168,6 +169,24 @@ describe("dispatchEditorAgentAction — applyPatch", () => {
     const result = dispatchEditorAgentAction(action, controllers);
     expect(result).toEqual({ status: "deferred" });
     expect(controllers.applyPatch).toHaveBeenCalledWith(action);
+  });
+});
+
+// ─── applyChangeset ───────────────────────────────────────────────────────────
+
+describe("dispatchEditorAgentAction — applyChangeset", () => {
+  it("returns deferred and delegates to the applyChangeset controller", () => {
+    const controllers = makeControllers();
+    const action = makeAction("applyChangeset");
+    const result = dispatchEditorAgentAction(action, controllers);
+    expect(result).toEqual({ status: "deferred" });
+    expect(controllers.applyChangeset).toHaveBeenCalledWith(action);
+  });
+
+  it("fails closed when the changeset controller is unavailable", () => {
+    const controllers = makeControllers({ applyChangeset: undefined });
+    const result = dispatchEditorAgentAction(makeAction("applyChangeset"), controllers);
+    expect(result).toEqual({ status: "failed", message: "Provider unavailable." });
   });
 });
 

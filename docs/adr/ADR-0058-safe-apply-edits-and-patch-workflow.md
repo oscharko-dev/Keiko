@@ -4,6 +4,11 @@
 
 Proposed
 
+> **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
+> Per-patch browser review and rejection of multi-file agent patches are no longer universal.
+> Mode policy may allow normal contained edits/saves, and governed multi-file closed-file changes use
+> the existing atomic server patch transaction with Monaco reconciliation.
+
 ## Context
 
 Issue #1394 closes the five open safety gaps in the agent-native editor action path built by Issue

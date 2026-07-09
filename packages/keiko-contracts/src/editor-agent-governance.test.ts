@@ -6,8 +6,10 @@ import {
   EDITOR_AGENT_ACTION_REVIEW_REASONS,
   EDITOR_AGENT_AUDIT_SCHEMA_VERSION,
   EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS,
+  EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT,
   buildEditorAgentActionAuditRecord,
   classifyEditorAgentAction,
+  editorAgentDispositionForPolicyEffect,
   isEditorAgentActionAuditRecord,
   isEditorAgentActionDisposition,
   isEditorAgentActionEffectClass,
@@ -27,6 +29,7 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
 ];
 
 const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
@@ -34,6 +37,7 @@ const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
 ];
 
 const NON_MUTATING: readonly EditorAgentActionType[] = [
@@ -55,7 +59,7 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     }
   });
 
-  it("classifies the four write actions as content-mutation", () => {
+  it("classifies all write actions as content-mutation", () => {
     for (const type of CONTENT_MUTATIONS) {
       expect(EDITOR_AGENT_ACTION_EFFECT_CLASS[type]).toBe("content-mutation");
     }
@@ -141,14 +145,26 @@ describe("disposition and reason enums", () => {
   });
 
   it("freezes the deny and review reason taxonomies", () => {
-    expect([...EDITOR_AGENT_ACTION_DENY_REASONS]).toEqual([
-      "workspace-boundary-escape",
-      "denied-sensitive-path",
-    ]);
-    expect([...EDITOR_AGENT_ACTION_REVIEW_REASONS]).toEqual([
-      "content-mutation-requires-review",
-      "external-effect-requires-review",
-    ]);
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("authority-missing");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("authority-invalid");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("authority-expired");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("unsupported-action");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("secret-exfiltration");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("platform-restricted");
+    expect(EDITOR_AGENT_ACTION_REVIEW_REASONS).toContain("mode-approval-required");
+    expect(EDITOR_AGENT_ACTION_REVIEW_REASONS).toContain("deterministic-risk-approval-required");
+    expect(EDITOR_AGENT_ACTION_REVIEW_REASONS).toContain("delivery-human-approval-required");
+  });
+
+  it("maps the central policy effects onto the existing editor disposition vocabulary", () => {
+    expect(EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT).toEqual({
+      allowed: "allowed",
+      "approval-required": "review-required",
+      denied: "denied",
+    });
+    expect(editorAgentDispositionForPolicyEffect("allowed")).toBe("allowed");
+    expect(editorAgentDispositionForPolicyEffect("approval-required")).toBe("review-required");
+    expect(editorAgentDispositionForPolicyEffect("denied")).toBe("denied");
   });
 });
 

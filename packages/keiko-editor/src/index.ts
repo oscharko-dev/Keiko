@@ -153,6 +153,7 @@ export type {
   EditorContextPurpose,
   EditorContextRequest,
   EditorContextSourceKind,
+  EditorContextSourceTier,
   EditorContextEntry,
   EditorContextOmissionReason,
   EditorContextOmission,

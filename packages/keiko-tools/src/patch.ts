@@ -318,6 +318,55 @@ function renderParsedPatch(files: readonly PatchFileChange[]): string {
   return lines.join("\n");
 }
 
+function normalizeProjectionPath(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function projectionPathIsContained(path: string): boolean {
+  if (path.length === 0 || path.startsWith("/") || /^[A-Za-z]:/u.test(path)) return false;
+  return !path.split(/[/\\]/u).includes("..");
+}
+
+function projectionFailure(message: string): never {
+  throw new PatchValidationError(
+    "patch projection failed",
+    [{ code: "malformed", message }],
+    [],
+  );
+}
+
+export function projectValidatedPatch(
+  validation: PatchValidation,
+  selectedPaths: readonly string[],
+): string {
+  if (!validation.ok) {
+    throw new PatchValidationError(
+      "source patch must pass full validation before projection",
+      validation.reasons,
+      validation.conflicts,
+    );
+  }
+  if (selectedPaths.length === 0 || !selectedPaths.every(projectionPathIsContained)) {
+    return projectionFailure("selected paths must be a non-empty contained path list");
+  }
+  const available = validation.files.map((file) => normalizeProjectionPath(file.path));
+  const selected = selectedPaths.map(normalizeProjectionPath);
+  if (new Set(available).size !== available.length || new Set(selected).size !== selected.length) {
+    return projectionFailure("patch projection paths must be unique after normalization");
+  }
+  const selectedSet = new Set(selected);
+  if (selected.some((path) => !available.includes(path))) {
+    return projectionFailure("selected paths must belong to the validated patch");
+  }
+  return renderParsedPatch(
+    validation.files.filter((file) => selectedSet.has(normalizeProjectionPath(file.path))),
+  );
+}
+
 export interface ValidateDeps {
   readonly fs?: WorkspaceFs | undefined;
   readonly limits?: PatchLimits | undefined;

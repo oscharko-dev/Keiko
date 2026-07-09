@@ -4,6 +4,11 @@
 
 Accepted
 
+> **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
+> The browser is no longer the exclusive mutation owner for multi-file closed-file changes. Later
+> runtime work reuses this registry/queue while governed server transactions apply atomically and
+> the browser reconciles open Monaco buffers.
+
 ## Context
 
 Issue #1392 (Epic #1491) owns the BFF runtime that lets agents discover live editor sessions and queue

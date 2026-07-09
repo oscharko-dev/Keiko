@@ -23,6 +23,7 @@ import {
   type EditorAgentConflictCode,
   type EditorAgentFailureCode,
 } from "./editor-agent.js";
+import type { CodingWorkbenchPolicyEffect } from "./coding-workbench.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -54,6 +55,7 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   save: "content-mutation",
   applyTextEdits: "content-mutation",
   applyPatch: "content-mutation",
+  applyChangeset: "content-mutation",
 };
 
 // The mutating action set — the classes that change buffer/file content or have an external effect.
@@ -75,20 +77,61 @@ export const EDITOR_AGENT_ACTION_DISPOSITIONS: readonly EditorAgentActionDisposi
 
 // Content-free reason codes. A denied action carries exactly one deny reason; a review-required
 // action carries exactly one review reason; an allowed action carries neither.
-export type EditorAgentActionDenyReason = "workspace-boundary-escape" | "denied-sensitive-path";
+export type EditorAgentActionDenyReason =
+  | "workspace-boundary-escape"
+  | "denied-sensitive-path"
+  | "authority-missing"
+  | "authority-invalid"
+  | "authority-expired"
+  | "approval-reference-invalid"
+  | "approval-reference-expired"
+  | "approval-reference-consumed"
+  | "unsupported-action"
+  | "secret-exfiltration"
+  | "platform-restricted";
 
 export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyReason[] = [
   "workspace-boundary-escape",
   "denied-sensitive-path",
+  "authority-missing",
+  "authority-invalid",
+  "authority-expired",
+  "approval-reference-invalid",
+  "approval-reference-expired",
+  "approval-reference-consumed",
+  "unsupported-action",
+  "secret-exfiltration",
+  "platform-restricted",
 ] as const;
 
 export type EditorAgentActionReviewReason =
-  "content-mutation-requires-review" | "external-effect-requires-review";
+  | "content-mutation-requires-review"
+  | "external-effect-requires-review"
+  | "mode-approval-required"
+  | "deterministic-risk-approval-required"
+  | "delivery-human-approval-required";
 
 export const EDITOR_AGENT_ACTION_REVIEW_REASONS: readonly EditorAgentActionReviewReason[] = [
   "content-mutation-requires-review",
   "external-effect-requires-review",
+  "mode-approval-required",
+  "deterministic-risk-approval-required",
+  "delivery-human-approval-required",
 ] as const;
+
+export const EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT: Readonly<
+  Record<CodingWorkbenchPolicyEffect, EditorAgentActionDisposition>
+> = {
+  allowed: "allowed",
+  "approval-required": "review-required",
+  denied: "denied",
+} as const;
+
+export function editorAgentDispositionForPolicyEffect(
+  effect: CodingWorkbenchPolicyEffect,
+): EditorAgentActionDisposition {
+  return EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT[effect];
+}
 
 export interface EditorAgentActionPolicyDecision {
   readonly disposition: EditorAgentActionDisposition;
