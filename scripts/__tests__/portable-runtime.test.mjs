@@ -1152,7 +1152,40 @@ describe("verify-portable-runtime-signing", () => {
   });
 });
 
-describe("stage-portable-runtime", () => {
+// Portable v1 staging is stable-only by contract: stage-portable-runtime.mjs fails closed when
+// the root package version carries a prerelease suffix, so these end-to-end staging tests can
+// only run while the repository is on a stable version (dev). During release-branch beta
+// stabilization the suite is skipped and the always-on prerelease-guard test below pins the
+// fail-closed behavior instead.
+const REPO_VERSION_IS_PRERELEASE = ROOT_PACKAGE_VERSION.includes("-");
+
+describe("stage-portable-runtime prerelease guard", () => {
+  it("fails closed when the release tag does not match a stable root package version", () => {
+    const result = runStage([
+      "--target",
+      "macos-arm64",
+      "--node-version",
+      "22.23.1",
+      "--node-archive-url",
+      "https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-arm64.tar.gz",
+      "--node-sha256",
+      "0".repeat(64),
+      "--release-tag",
+      "v9.9.9-beta.1",
+      "--release-id",
+      "0",
+      "--commit-sha",
+      "a".repeat(40),
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "--release-tag must match the stable package version",
+    );
+  });
+});
+
+describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
   it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64");

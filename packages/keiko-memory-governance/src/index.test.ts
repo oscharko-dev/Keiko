@@ -49,7 +49,7 @@ function pin<T>(_value?: T): T | undefined {
 
 describe("public barrel", () => {
   it("exports the version constant", () => {
-    expect(KEIKO_MEMORY_GOVERNANCE_VERSION).toBe("0.2.14");
+    expect(KEIKO_MEMORY_GOVERNANCE_VERSION).toBe("0.2.15-beta.0");
   });
 
   it("exports every envelope builder as a function", () => {
