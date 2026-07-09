@@ -19,6 +19,7 @@ import type {
   QualityIntelligenceImageSource,
   WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import { Icons, type IconName } from "../Icons";
 import { useOptionalActiveWorkspace } from "../context/ActiveWorkspaceContext";
 import {
@@ -38,6 +39,8 @@ import { CHAT_MINI_W, WIN_TYPES, type WindowCfgByType, type WindowType } from ".
 import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
+import selectionStyles from "../WorkspaceSelection.module.css";
+import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 
 const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 type Handle = (typeof HANDLES)[number];
@@ -63,6 +66,8 @@ interface WindowFrameProps {
   readonly connState: ConnState;
   readonly api: WorkspaceApi;
   readonly wsRef: RefObject<HTMLElement | null>;
+  readonly selected?: boolean;
+  readonly selectedWindowCount?: number;
   /**
    * Bumped by the parent whenever the cross-window link context changes (a
    * connection added/removed or any window's cfg/type mutated) but NOT on pure
@@ -302,6 +307,20 @@ interface DragSession {
   readonly W: number;
 }
 
+function requestDragFrame(flush: () => void): number {
+  return typeof window.requestAnimationFrame === "function"
+    ? window.requestAnimationFrame(flush)
+    : window.setTimeout(flush, 0);
+}
+
+function cancelDragFrame(frame: number): void {
+  if (typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(frame);
+  } else {
+    window.clearTimeout(frame);
+  }
+}
+
 function attachDragListeners(
   api: WorkspaceApi,
   geo: DragGeometry,
@@ -340,18 +359,11 @@ function attachDragListeners(
   };
   const schedule = (): void => {
     if (frame !== null) return;
-    frame =
-      typeof window.requestAnimationFrame === "function"
-        ? window.requestAnimationFrame(flush)
-        : window.setTimeout(flush, 0);
+    frame = requestDragFrame(flush);
   };
   const cancelFrame = (): void => {
     if (frame === null) return;
-    if (typeof window.cancelAnimationFrame === "function") {
-      window.cancelAnimationFrame(frame);
-    } else {
-      window.clearTimeout(frame);
-    }
+    cancelDragFrame(frame);
     frame = null;
   };
   const move = (ev: PointerEvent): void => {
@@ -359,8 +371,12 @@ function attachDragListeners(
     const py = geo.toWY(ev.clientY);
     let nx = px - session.offX;
     let ny = py - session.offY;
-    nx = Math.max(geo.vpx0 - (session.W - 120), Math.min(geo.vpx0 + geo.vpw - 120, nx));
-    ny = Math.max(geo.vpy0, Math.min(geo.vpy0 + geo.vph - 38, ny));
+    const clamped = clampWorkspaceWindowOrigin(
+      { x: nx, y: ny, w: session.W },
+      { x: geo.vpx0, y: geo.vpy0, w: geo.vpw, h: geo.vph },
+    );
+    nx = clamped.x;
+    ny = clamped.y;
     pendingX = nx;
     pendingY = ny;
     pendingZone = detectSnapZone(px, py, geo, threshold);
@@ -385,6 +401,61 @@ function attachDragListeners(
   // fast drag leaves the header and the cursor flickered to default/text over
   // other surfaces. Pin the grabbing cursor globally for the gesture via the shared ref-counted
   // helper so a concurrent pan/drag does not clobber the restore order (up() releases).
+  const releaseBodyStyle = acquireGrabbingBodyStyle();
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+}
+
+function attachGroupDragListeners(
+  api: WorkspaceApi,
+  geo: DragGeometry,
+  startClientX: number,
+  startClientY: number,
+  onDragEnd?: (() => void) | undefined,
+): void {
+  let lastX = geo.toWX(startClientX);
+  let lastY = geo.toWY(startClientY);
+  let pendingX = lastX;
+  let pendingY = lastY;
+  let hasPending = false;
+  let frame: number | null = null;
+  const flush = (): void => {
+    frame = null;
+    if (!hasPending) return;
+    hasPending = false;
+    const dx = pendingX - lastX;
+    const dy = pendingY - lastY;
+    if (dx !== 0 || dy !== 0) {
+      const applied = api.moveSelectedWindowsBy(dx, dy);
+      lastX += applied.dx;
+      lastY += applied.dy;
+    }
+  };
+  const schedule = (): void => {
+    if (frame !== null) return;
+    frame = requestDragFrame(flush);
+  };
+  const cancelFrame = (): void => {
+    if (frame === null) return;
+    cancelDragFrame(frame);
+    frame = null;
+  };
+  const move = (ev: PointerEvent): void => {
+    pendingX = geo.toWX(ev.clientX);
+    pendingY = geo.toWY(ev.clientY);
+    hasPending = true;
+    schedule();
+  };
+  const up = (): void => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    cancelFrame();
+    flush();
+    releaseBodyStyle();
+    onDragEnd?.();
+  };
   const releaseBodyStyle = acquireGrabbingBodyStyle();
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
@@ -538,8 +609,11 @@ function WindowFrameImpl({
   connState,
   api,
   wsRef,
+  selected = false,
+  selectedWindowCount = 0,
   linkRevision,
 }: WindowFrameProps): ReactNode {
+  const t = useTranslate();
   const def = WIN_TYPES[win.type];
   const canStartConnection = hasConnectablePeer(win.type);
   const Icon = Icons[def.icon];
@@ -731,7 +805,7 @@ function WindowFrameImpl({
       // user's cursor mid-click.
       if (connState === "valid") return;
       e.preventDefault();
-      focusWindowForTarget(e.target);
+      e.stopPropagation();
       const el = wsRef.current;
       if (el === null) return;
       const rect = el.getBoundingClientRect();
@@ -739,6 +813,15 @@ function WindowFrameImpl({
       // accessor instead of a per-frame `view` prop; the value is byte-identical
       // to what the prop held at this instant.
       const geo = makeDragGeometry(rect, api.currentView());
+      if (selected && selectedWindowCount > 1 && !win.max) {
+        setDraggingWindow(true);
+        attachGroupDragListeners(api, geo, e.clientX, e.clientY, () => setDraggingWindow(false));
+        return;
+      }
+      focusWindowForTarget(e.target);
+      if (!selected) {
+        api.replaceSelection([win.id]);
+      }
       const wasMax = win.max;
       const restoredW = wasMax ? (win.prev?.w ?? 480) : win.w;
       const restoredH = wasMax ? (win.prev?.h ?? 360) : win.h;
@@ -761,6 +844,8 @@ function WindowFrameImpl({
       win.prev,
       wsRef,
       connState,
+      selected,
+      selectedWindowCount,
       focusWindowForTarget,
     ],
   );
@@ -955,6 +1040,12 @@ function WindowFrameImpl({
   const onSectionKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLElement>): void => {
       if (e.target !== e.currentTarget) return;
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        e.stopPropagation();
+        api.toggleWindowSelection(win.id);
+        return;
+      }
       if (connState !== "valid") return;
       if (e.key !== "Enter") return;
       api.confirmConnect(win.id, {
@@ -966,6 +1057,10 @@ function WindowFrameImpl({
   );
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
+  const windowLabel = sub !== null ? `${def.title} — ${sub}` : def.title;
+  const accessibleWindowLabel = selected
+    ? t("workspace.window.selectedLabel", { label: windowLabel })
+    : windowLabel;
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
   // Issue #1580 — bound per-window layout/style recalc (item 8: `contain`) so a
   // scene-zoom relayout or an intra-window reflow does not cascade across all N
@@ -1012,27 +1107,31 @@ function WindowFrameImpl({
     }),
     [ew, eh, zoom],
   );
+  const windowClassName = selected
+    ? `window ${selectionStyles.workspaceWindow} ${selectionStyles.selectedWindow}`
+    : `window ${selectionStyles.workspaceWindow}`;
 
   return (
-    // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this focusable (tabIndex=-1) named window
-    // region carries pointer AND keyboard connect-confirm handlers so a keyboard
-    // user has full parity with the pointer confirm path; the connection ports own
-    // Enter/Space when a port itself is focused.
+    // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this named window region is keyboard
+    // reachable for selection toggling and connect-confirm parity. The connection
+    // ports keep owning Enter/Space when a port itself is focused.
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.1 keyboard parity on the focusable window region
     <section
-      className="window"
+      className={windowClassName}
       // Audit C408 — a name turns the section into a named region, so AT users
       // can perceive window boundaries and jump between windows; C297 — the sub
       // (path/URL/title) disambiguates multiple windows of the same type.
-      aria-label={sub !== null ? `${def.title} — ${sub}` : def.title}
+      aria-label={accessibleWindowLabel}
       aria-roledescription="window"
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
+      data-selected={selected ? "true" : undefined}
       data-dragging={draggingWindow ? "true" : undefined}
       data-window-id={win.id}
       style={sectionStyle}
-      tabIndex={-1}
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- window regions are keyboard-reachable so Space can toggle multi-selection without a drag gesture
+      tabIndex={0}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
         focusWindowForTarget(e.target);

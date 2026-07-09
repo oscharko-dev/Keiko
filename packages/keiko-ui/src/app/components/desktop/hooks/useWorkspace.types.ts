@@ -6,6 +6,7 @@ import type { ChatConnectedScope } from "@/lib/types";
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  WorkspaceUiSelectionState,
 } from "@oscharko-dev/keiko-contracts";
 
 export interface ViewportWorld {
@@ -37,6 +38,16 @@ export interface WorkspaceApi {
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly toggleTool: (type: WindowType) => void;
   readonly focus: (id: string) => void;
+  readonly currentSelection: () => WorkspaceUiSelectionState;
+  readonly replaceSelection: (windowIds: readonly string[]) => void;
+  readonly toggleWindowSelection: (windowId: string) => void;
+  readonly clearSelection: () => void;
+  readonly moveSelectedWindowsBy: (
+    dx: number,
+    dy: number,
+  ) => { readonly dx: number; readonly dy: number };
+  readonly copySelectedWindows: () => boolean;
+  readonly pasteCopiedWindows: () => boolean;
   readonly close: (id: string) => void;
   readonly minimize: (id: string) => void;
   readonly restore: (id: string) => void;
@@ -89,6 +100,7 @@ export interface UseWorkspaceResult {
   readonly setPalOpen: (open: boolean) => void;
   readonly conns: Connection[];
   readonly connecting: ConnectingState | null;
+  readonly selection: WorkspaceUiSelectionState;
   readonly view: View;
   readonly api: WorkspaceApi;
 }

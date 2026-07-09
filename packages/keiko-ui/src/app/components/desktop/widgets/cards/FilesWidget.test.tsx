@@ -20,7 +20,7 @@ import type { Chat } from "../../../../../lib/types";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
-import { FilesWidget } from "./FilesWidget";
+import { FilesWidget, filesWidgetTestInternals } from "./FilesWidget";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -438,13 +438,16 @@ describe("FilesWidget", () => {
   });
 
   it("progressively reveals large folders instead of rendering every row at once", async () => {
-    const entries = Array.from({ length: 250 }, (_, index) => ({
-      ...treeEntryBase,
-      name: `file-${String(index).padStart(3, "0")}.ts`,
-      path: `file-${String(index).padStart(3, "0")}.ts`,
-      kind: "file" as const,
-      extension: "ts",
-    }));
+    const entries = Array.from(
+      { length: filesWidgetTestInternals.DIRECTORY_RENDER_BATCH_SIZE + 1 },
+      (_, index) => ({
+        ...treeEntryBase,
+        name: `file-${String(index).padStart(3, "0")}.ts`,
+        path: `file-${String(index).padStart(3, "0")}.ts`,
+        kind: "file" as const,
+        extension: "ts",
+      }),
+    );
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
       root: "/repo",
       path: "",
@@ -452,16 +455,18 @@ describe("FilesWidget", () => {
       entries,
     });
 
-    render(<FilesWidget root="/repo" />);
+    const { container } = render(<FilesWidget root="/repo" />);
 
     expect(await screen.findByRole("treeitem", { name: /file-000\.ts/i })).toBeInTheDocument();
-    expect(screen.getAllByRole("treeitem")).toHaveLength(200);
-    expect(screen.queryByRole("treeitem", { name: /file-249\.ts/i })).toBeNull();
+    expect(container.querySelectorAll("button.tr-row")).toHaveLength(
+      filesWidgetTestInternals.DIRECTORY_RENDER_BATCH_SIZE,
+    );
+    expect(container.querySelector('[data-path="file-200.ts"]')).toBeNull();
 
-    await userEvent.click(screen.getByRole("button", { name: "Show 50 more entries" }));
+    await userEvent.click(screen.getByRole("button", { name: "Show 1 more entries" }));
 
-    expect(screen.getAllByRole("treeitem")).toHaveLength(250);
-    expect(screen.getByRole("treeitem", { name: /file-249\.ts/i })).toBeInTheDocument();
+    expect(container.querySelectorAll("button.tr-row")).toHaveLength(entries.length);
+    expect(screen.getByRole("treeitem", { name: /file-200\.ts/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /show more entries/i })).toBeNull();
   });
 
@@ -1743,95 +1748,44 @@ describe("FilesWidget file operations", () => {
     }
   });
 
-  // GEN-PERF-MEMORY-005 — the directories cache is bounded. After expanding far more than the
-  // cap, re-expanding the oldest (evicted) directory re-fetches, while a recent one does not.
+  // GEN-PERF-MEMORY-005 — the directories cache is bounded. Exercise the owner helper directly
+  // so the coverage runner does not spend minutes on dozens of expand/collapse DOM cycles.
   it("evicts least-recently-loaded directories beyond the cache cap", async () => {
-    // Root holds enough sibling directories to cross the production cache cap; each returns one
-    // file when opened. Keeping siblings collapsed after loading proves cache eviction without
-    // leaving the full expanded DOM resident under the coverage runner.
-    const DIR_COUNT = 51;
-    const rootEntries = Array.from({ length: DIR_COUNT }, (_, i) => ({
-      ...treeEntryBase,
-      name: `dir-${String(i).padStart(3, "0")}`,
-      path: `dir-${String(i).padStart(3, "0")}`,
-      kind: "directory" as const,
-    }));
-    // Each directory's inner file is uniquely named so tree rows are unambiguous by name.
-    const innerName = (i: number): string => `inner-${String(i).padStart(3, "0")}.ts`;
-    vi.mocked(fetchFilesTree).mockImplementation((_root: string, path = "") => {
-      if (path === "") {
-        return Promise.resolve({ root: "/repo", path: "", truncated: false, entries: rootEntries });
-      }
-      const i = Number.parseInt(path.slice("dir-".length), 10);
-      return Promise.resolve({
-        root: "/repo",
-        path,
-        truncated: false,
-        entries: [
-          {
-            ...treeEntryBase,
-            name: innerName(i),
-            path: `${path}/${innerName(i)}`,
-            kind: "file" as const,
-          },
-        ],
-      });
-    });
-
-    render(<FilesWidget root="/repo" />);
-    await screen.findByRole("treeitem", { name: /dir-000/ });
-
-    // Toggle a directory via its caret button, whose aria-label deterministically names the
-    // folder ("Expand folder: dir-NNN" / "Collapse folder: dir-NNN").
     const dirName = (i: number): string => `dir-${String(i).padStart(3, "0")}`;
-    // fireEvent.click (not userEvent) keeps DIR_COUNT iterations well under the timeout.
-    const expandDir = (i: number): void => {
-      fireEvent.click(screen.getByRole("button", { name: `Expand folder: ${dirName(i)}` }));
+    const directoryState = {
+      entries: [],
+      truncated: false,
+      loading: false,
+      error: null,
+      notice: null,
     };
-    const collapseDir = (i: number): void => {
-      fireEvent.click(screen.getByRole("button", { name: `Collapse folder: ${dirName(i)}` }));
-    };
-    const innerVisible = (i: number): boolean =>
-      screen.queryByRole("treeitem", { name: new RegExp(innerName(i)) }) !== null;
+    const directoryPaths = Array.from(
+      { length: filesWidgetTestInternals.DIRECTORY_CACHE_MAX + 2 },
+      (_, index) => dirName(index),
+    );
+    const directories = Object.fromEntries([
+      ["", directoryState],
+      ...directoryPaths.map((path): [string, typeof directoryState] => [path, directoryState]),
+    ]);
+    const accessOrder = ["", ...directoryPaths];
 
-    // Expand then immediately collapse dir-000: it is now cached but NOT pinned (not in the
-    // expanded set). Eviction only runs when a later directory loads.
-    expandDir(0);
-    await screen.findByRole("treeitem", { name: new RegExp(innerName(0)) });
-    collapseDir(0);
-    expect(innerVisible(0)).toBe(false);
+    const pruned = filesWidgetTestInternals.pruneDirectoryCache(
+      directories,
+      accessOrder,
+      new Set([""]),
+    );
+    expect(Object.keys(pruned)).toHaveLength(filesWidgetTestInternals.DIRECTORY_CACHE_MAX);
+    expect(pruned[""]).toBeDefined();
+    expect(pruned["dir-000"]).toBeUndefined();
+    expect(pruned["dir-001"]).toBeUndefined();
+    expect(pruned[dirName(directoryPaths.length - 1)]).toBeDefined();
 
-    // Expand dir-001 … dir-(N-1) and collapse each after it loads. Each load runs pruning; once
-    // the cache passes the cap, the least-recently-loaded unpinned entry (dir-000) is evicted,
-    // while the most recent directory stays cached.
-    for (let i = 1; i < DIR_COUNT; i += 1) {
-      expandDir(i);
-      await screen.findByRole("treeitem", { name: new RegExp(innerName(i)) });
-      collapseDir(i);
-      expect(innerVisible(i)).toBe(false);
-    }
-
-    const dir000FetchesBefore = vi
-      .mocked(fetchFilesTree)
-      .mock.calls.filter((call) => call[1] === "dir-000").length;
-    const recentDirFetchesBefore = vi
-      .mocked(fetchFilesTree)
-      .mock.calls.filter((call) => call[1] === dirName(DIR_COUNT - 1)).length;
-
-    // Re-expand dir-000: its cache entry was evicted, so it re-fetches.
-    expandDir(0);
-    await screen.findByRole("treeitem", { name: new RegExp(innerName(0)) });
-    const dir000FetchesAfter = vi
-      .mocked(fetchFilesTree)
-      .mock.calls.filter((call) => call[1] === "dir-000").length;
-    expect(dir000FetchesAfter).toBeGreaterThan(dir000FetchesBefore);
-
-    // Re-expand the most recent directory: it stayed cached, so no new fetch is needed.
-    expandDir(DIR_COUNT - 1);
-    await screen.findByRole("treeitem", { name: new RegExp(innerName(DIR_COUNT - 1)) });
-    const recentDirFetchesAfter = vi
-      .mocked(fetchFilesTree)
-      .mock.calls.filter((call) => call[1] === dirName(DIR_COUNT - 1)).length;
-    expect(recentDirFetchesAfter).toBe(recentDirFetchesBefore);
-  }, 120_000);
+    const pinned = filesWidgetTestInternals.pruneDirectoryCache(
+      directories,
+      accessOrder,
+      new Set(["", "dir-000"]),
+    );
+    expect(pinned["dir-000"]).toBeDefined();
+    expect(pinned["dir-001"]).toBeUndefined();
+  });
 });

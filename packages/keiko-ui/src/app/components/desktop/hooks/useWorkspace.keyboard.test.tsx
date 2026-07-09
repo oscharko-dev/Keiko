@@ -102,9 +102,19 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <button type="button" onClick={() => workspace.api.connect("files-1", "chat-1")}>
         connect
       </button>
+      <button type="button" onClick={() => workspace.api.replaceSelection(["files-1"])}>
+        select files
+      </button>
+      <button type="button" onClick={() => workspace.api.copySelectedWindows()}>
+        copy selected windows
+      </button>
+      <button type="button" onClick={() => workspace.api.pasteCopiedWindows()}>
+        paste copied windows
+      </button>
       <output data-testid="wins">{JSON.stringify(workspace.wins ?? [])}</output>
       <output data-testid="conns">{JSON.stringify(workspace.conns)}</output>
       <output data-testid="connecting">{JSON.stringify(workspace.connecting)}</output>
+      <output data-testid="selection">{JSON.stringify(workspace.selection)}</output>
       <output data-testid="image-sources">
         {JSON.stringify(workspace.api.linkedImageSources?.("quality") ?? null)}
       </output>
@@ -133,6 +143,13 @@ function readWins(): AppWindow[] {
 
 function readConns(): Connection[] {
   return JSON.parse(screen.getByTestId("conns").textContent ?? "[]") as Connection[];
+}
+
+function readSelection(): { focusedWindowId: string | null; selectedWindowIds: readonly string[] } {
+  return JSON.parse(screen.getByTestId("selection").textContent ?? "{}") as {
+    focusedWindowId: string | null;
+    selectedWindowIds: readonly string[];
+  };
 }
 
 describe("useWorkspace keyboard and connection workflow hardening", () => {
@@ -250,6 +267,34 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       w: 500,
       h: 360,
     });
+  });
+
+  it("copies and pastes selected windows through the workspace API", async () => {
+    persistWorkspace([
+      filesWindow({ z: 1, x: 40, y: 40, cfg: { resolvedRoot: "/repo" } }),
+      appWindow({ id: "chat-1", type: "chat", z: 10, x: 100, y: 120 }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    await waitFor(() => expect(readSelection().selectedWindowIds).toEqual(["files-1"]));
+
+    fireEvent.click(screen.getByRole("button", { name: "copy selected windows" }));
+    fireEvent.click(screen.getByRole("button", { name: "paste copied windows" }));
+
+    await waitFor(() => expect(readWins()).toHaveLength(3));
+    const pasted = readWins()[2];
+    expect(pasted).toMatchObject({
+      type: "files",
+      x: 72,
+      y: 72,
+      cfg: {},
+      max: false,
+    });
+    expect(pasted?.id).not.toBe("files-1");
+    expect(readSelection().selectedWindowIds).toEqual([pasted?.id]);
   });
 
   it("snaps the focused window left/right/maximize with Cmd+Alt+Arrow (GEN-UI-KEYBOARD-009)", async () => {

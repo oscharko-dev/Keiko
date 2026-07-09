@@ -10,6 +10,7 @@ import {
   changedFilesFromGit,
   changedFilesFromInput,
   checkUiI18nGuard,
+  hasUserFacingTextLine,
   isUiProductionSource,
 } from "../check-ui-i18n-guard.mjs";
 
@@ -61,6 +62,34 @@ test("passes when changed files are outside UI production source", async () => {
     assert.equal(result.ok, true);
     assert.deepEqual(result.problems, []);
   });
+});
+
+test("passes changed UI helper files without user-facing text", async () => {
+  await withFixture(
+    {
+      ...matchingCatalogs,
+      [UI_FILE]:
+        "export function clampValue(value, min, max) {\n  return Math.max(min, Math.min(max, value));\n}\n",
+    },
+    (repoRoot) => {
+      const result = checkUiI18nGuard({
+        repoRoot,
+        changedFiles: [UI_FILE],
+      });
+
+      assert.equal(result.ok, true);
+      assert.deepEqual(result.problems, []);
+      assert.deepEqual(result.i18nRelevantFiles, []);
+    },
+  );
+});
+
+test("recognizes user-facing JSX, a11y attributes, and return strings", () => {
+  assert.equal(hasUserFacingTextLine("<p>Hard-coded text</p>"), true);
+  assert.equal(hasUserFacingTextLine('<button aria-label="Open">'), true);
+  assert.equal(hasUserFacingTextLine('return "Enter a name.";'), true);
+  assert.equal(hasUserFacingTextLine('<g transform="translate(10 10)">'), false);
+  assert.equal(hasUserFacingTextLine("// Called when the user opens a file."), false);
 });
 
 test("detects changed files from the push event before SHA", () => {

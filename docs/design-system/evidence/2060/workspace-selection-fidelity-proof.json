@@ -1,0 +1,236 @@
+{
+  "issue": 2060,
+  "epic": 2055,
+  "verdict": "PASS",
+  "harness": "tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts",
+  "route": "/",
+  "appPath": "packaged-cli-ui",
+  "globalsCssSha256": "0cf1be9d6a7419236ad719386d6d590c2c8875fb4ea96c69ba1eb5446cc5a2b5",
+  "workspaceSelectionCssSha256": "5259151cf6e51573ef183f815e4435466b740f3be92e680668b5ec5a011ad2d8",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "mode": "dark",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ],
+      "styleProof": {
+        "dataSelected": "true",
+        "selectedBoxShadow": "rgb(78, 186, 135) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, rgba(0, 0, 0, 0.7) 0px 16px 50px -16px, lab(18.8543 -1.28049 0.509191) 0px 0px 0px 1px",
+        "selectedAfterBorderColor": "lab(68.2884 -41.5409 16.2592 / 0.4)",
+        "selectedAfterOpacity": "0.7",
+        "tokens": {
+          "focusRing": "#4eba87",
+          "accent": "#4eba87",
+          "accentLine": "lab(68.2884% -41.5409 16.2592/.4)",
+          "selectionSurface": "lab(68.2884% -41.5409 16.2592/.26)",
+          "cardShadowRaised": "0 16px 50px -16px #000000b3, 0 0 0 1px lab(18.8543% -1.28049 .509191)"
+        }
+      }
+    },
+    {
+      "file": "02-light.png",
+      "mode": "light",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "light",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ],
+      "styleProof": {
+        "dataSelected": "true",
+        "selectedBoxShadow": "lab(41.3781 -44.0935 17.2352) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, rgba(20, 30, 25, 0.26) 0px 18px 50px -18px, lab(86.1616 -1.91858 0.763166) 0px 0px 0px 1px",
+        "selectedAfterBorderColor": "lab(68.2884 -41.5409 16.2592 / 0.4)",
+        "selectedAfterOpacity": "0.7",
+        "tokens": {
+          "focusRing": "lab(41.3781% -44.0935 17.2352)",
+          "accent": "#4eba87",
+          "accentLine": "lab(68.2884% -41.5409 16.2592/.4)",
+          "selectionSurface": "lab(68.2884% -41.5409 16.2592/.26)",
+          "cardShadowRaised": "0 18px 50px -18px #141e1942, 0 0 0 1px lab(86.1616% -1.91858 .763166)"
+        }
+      }
+    },
+    {
+      "file": "03-dark-hc.png",
+      "mode": "dark-high-contrast",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ],
+      "styleProof": {
+        "dataSelected": "true",
+        "selectedBoxShadow": "lab(85.8762 -53.07 20.88) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, lab(69.9216 -1.91903 0.763297) 0px 0px 0px 1px, rgba(0, 0, 0, 0.85) 0px 18px 50px -18px",
+        "selectedAfterBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)",
+        "selectedAfterOpacity": "0.7",
+        "tokens": {
+          "focusRing": "lab(85.8762% -53.07 20.88)",
+          "accent": "#4eba87",
+          "accentLine": "color-mix(in oklch, #4eba87 72%, transparent)",
+          "selectionSurface": "color-mix(in oklch, #4eba87 42%, transparent)",
+          "cardShadowRaised": "0 0 0 1px lab(69.9216% -1.91903 .763297), 0 18px 50px -18px #000000d9"
+        }
+      }
+    },
+    {
+      "file": "04-light-hc.png",
+      "mode": "light-high-contrast",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "light",
+      "dataHc": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ],
+      "styleProof": {
+        "dataSelected": "true",
+        "selectedBoxShadow": "lab(34.5325 -48.4093 18.8159) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, rgba(20, 30, 25, 0.32) 0px 18px 50px -18px, lab(24.7355 -3.20987 1.27535) 0px 0px 0px 1px",
+        "selectedAfterBorderColor": "oklch(0.419997 0.139995 159.997 / 0.78)",
+        "selectedAfterOpacity": "0.7",
+        "tokens": {
+          "focusRing": "lab(34.5325% -48.4093 18.8159)",
+          "accent": "#4eba87",
+          "accentLine": "color-mix(in oklch, lab(34.5325% -48.4093 18.8159) 78%, transparent)",
+          "selectionSurface": "color-mix(in oklch, lab(34.5325% -48.4093 18.8159) 32%, transparent)",
+          "cardShadowRaised": "0 18px 50px -18px #141e1952, 0 0 0 1px lab(24.7355% -3.20987 1.27535)"
+        }
+      }
+    },
+    {
+      "file": "05-prefers-contrast.png",
+      "mode": "prefers-contrast",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ],
+      "styleProof": {
+        "dataSelected": "true",
+        "selectedBoxShadow": "lab(85.8762 -53.07 20.88) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, lab(69.9216 -1.91903 0.763297) 0px 0px 0px 1px, rgba(0, 0, 0, 0.85) 0px 18px 50px -18px",
+        "selectedAfterBorderColor": "oklch(0.712291 0.125417 160.091 / 0.72)",
+        "selectedAfterOpacity": "0.7",
+        "tokens": {
+          "focusRing": "lab(85.8762% -53.07 20.88)",
+          "accent": "#4eba87",
+          "accentLine": "color-mix(in oklch, #4eba87 72%, transparent)",
+          "selectionSurface": "color-mix(in oklch, #4eba87 42%, transparent)",
+          "cardShadowRaised": "0 0 0 1px lab(69.9216% -1.91903 .763297), 0 18px 50px -18px #000000d9"
+        }
+      }
+    },
+    {
+      "file": "06-forced-colors.png",
+      "mode": "forced-colors",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "active",
+      "reducedMotion": "no-preference",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ],
+      "styleProof": {
+        "dataSelected": "true",
+        "selectedBoxShadow": "none",
+        "selectedAfterBorderColor": "rgb(255, 255, 255)",
+        "selectedAfterOpacity": "0.7",
+        "tokens": {
+          "focusRing": "#4eba87",
+          "accent": "#4eba87",
+          "accentLine": "lab(68.2884% -41.5409 16.2592/.4)",
+          "selectionSurface": "lab(68.2884% -41.5409 16.2592/.26)",
+          "cardShadowRaised": "0 16px 50px -16px #000000b3, 0 0 0 1px lab(18.8543% -1.28049 .509191)"
+        }
+      }
+    },
+    {
+      "file": "07-reduced-motion.png",
+      "mode": "reduced-motion",
+      "viewport": {
+        "width": 1280,
+        "height": 860
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "reduce",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ],
+      "styleProof": {
+        "dataSelected": "true",
+        "selectedBoxShadow": "rgb(78, 186, 135) 0px 0px 0px 2px, oklch(0.712291 0.125417 160.091 / 0.14) 0px 0px 0px 7px, rgba(0, 0, 0, 0.7) 0px 16px 50px -16px, lab(18.8543 -1.28049 0.509191) 0px 0px 0px 1px",
+        "selectedAfterBorderColor": "lab(68.2884 -41.5409 16.2592 / 0.4)",
+        "selectedAfterOpacity": "0.7",
+        "tokens": {
+          "focusRing": "#4eba87",
+          "accent": "#4eba87",
+          "accentLine": "lab(68.2884% -41.5409 16.2592/.4)",
+          "selectionSurface": "lab(68.2884% -41.5409 16.2592/.26)",
+          "cardShadowRaised": "0 16px 50px -16px #000000b3, 0 0 0 1px lab(18.8543% -1.28049 .509191)"
+        }
+      }
+    }
+  ],
+  "assertions": {
+    "selectedWindowCount": 3,
+    "sevenModeThemeCoverage": 7,
+    "contentFreeSeedWindows": true,
+    "selectedStateUsesComponentScopedCss": true,
+    "globalCssChanged": false
+  }
+}

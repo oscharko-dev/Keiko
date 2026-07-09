@@ -1,0 +1,79 @@
+{
+  "issue": 2060,
+  "epic": 2055,
+  "verdict": "PASS",
+  "proofType": "browser-capture-plus-jest-axe",
+  "globalsCssSha256": "0cf1be9d6a7419236ad719386d6d590c2c8875fb4ea96c69ba1eb5446cc5a2b5",
+  "workspaceSelectionCssSha256": "5259151cf6e51573ef183f815e4435466b740f3be92e680668b5ec5a011ad2d8",
+  "gate": "selected window regions expose selected state through accessible names and live count",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "02-light.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "03-dark-hc.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "04-light-hc.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "05-prefers-contrast.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "06-forced-colors.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    },
+    {
+      "file": "07-reduced-motion.png",
+      "selectedWindowCountText": "3 workspace windows selected",
+      "selectedWindowNames": [
+        "Project — selected",
+        "Plugins — selected",
+        "Automations — selected"
+      ]
+    }
+  ],
+  "structuralTests": [
+    "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.a11y.test.tsx",
+    "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.test.tsx",
+    "packages/keiko-ui/src/app/components/desktop/Workspace.test.tsx"
+  ]
+}

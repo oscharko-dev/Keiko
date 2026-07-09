@@ -50,6 +50,13 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
     focus: vi.fn(),
+    currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
+    replaceSelection: vi.fn(),
+    toggleWindowSelection: vi.fn(),
+    clearSelection: vi.fn(),
+    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
+    copySelectedWindows: vi.fn(() => false),
+    pasteCopiedWindows: vi.fn(() => false),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),
@@ -93,6 +100,7 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
     setPalOpen: vi.fn(),
     conns: [],
     connecting: null,
+    selection: { focusedWindowId: null, selectedWindowIds: [] },
     view: { x: 0, y: 0, zoom: 1 },
     api: api(),
     ...partial,
@@ -959,12 +967,13 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface.tabIndex).toBe(0);
   });
 
-  it("pans the free workspace surface on primary-button drag", () => {
+  it("uses primary-button empty-canvas drag for marquee selection, not panning", () => {
     const panBy = vi.fn();
+    const replaceSelection = vi.fn();
     const workspaceApi = api({ panBy });
     render(
       <Workspace
-        ws={workspace({ api: workspaceApi })}
+        ws={workspace({ api: { ...workspaceApi, replaceSelection } })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={() => undefined}
       />,
@@ -972,18 +981,20 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
     fireEvent.pointerDown(surface, { button: 0, clientX: 100, clientY: 100 });
-    expect(surface).toHaveAttribute("data-panning", "true");
     fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
+    expect(surface).toHaveAttribute("data-marquee", "true");
     fireEvent.pointerUp(window);
 
-    expect(panBy).toHaveBeenCalledWith(30, 15);
-    expect(surface).not.toHaveAttribute("data-panning");
+    expect(panBy).not.toHaveBeenCalled();
+    expect(replaceSelection).toHaveBeenCalledWith([]);
+    expect(surface).not.toHaveAttribute("data-marquee");
   });
 
   it("keeps middle-button workspace panning available for mouse users", () => {
+    const panBy = vi.fn();
     render(
       <Workspace
-        ws={workspace({})}
+        ws={workspace({ api: api({ panBy }) })}
         wsRef={createRef<HTMLDivElement>()}
         openPalette={() => undefined}
       />,
@@ -991,10 +1002,11 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const surface = screen.getByRole("main", { name: "Workspace surface" });
 
     fireEvent.pointerDown(surface, { button: 1, clientX: 100, clientY: 100 });
-
     expect(surface).toHaveAttribute("data-panning", "true");
+    fireEvent.pointerMove(window, { clientX: 130, clientY: 115 });
 
     fireEvent.pointerUp(window);
+    expect(panBy).toHaveBeenCalledWith(30, 15);
     expect(surface).not.toHaveAttribute("data-panning");
   });
 
@@ -1052,6 +1064,345 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(panBy).toHaveBeenCalledWith(30, 15);
     expect(surface).not.toHaveAttribute("data-panning");
     expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("selects intersecting windows with a primary-button marquee on empty canvas", () => {
+    const replaceSelection = vi.fn();
+    const panBy = vi.fn();
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", x: 40, y: 40, w: 120, h: 90 }),
+      appWindow({ id: "files-1", type: "files", x: 360, y: 80, w: 140, h: 120 }),
+      appWindow({ id: "chat-1", type: "chat", x: 180, y: 260, w: 180, h: 120 }),
+    ];
+    render(
+      <Workspace
+        ws={workspace({ wins, api: api({ panBy, replaceSelection }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(window, { clientX: 210, clientY: 170 });
+
+    expect(screen.getByTestId("workspace-marquee")).toBeInTheDocument();
+    expect(surface).toHaveAttribute("data-marquee", "true");
+    expect(panBy).not.toHaveBeenCalled();
+
+    fireEvent.pointerUp(window);
+
+    expect(replaceSelection).toHaveBeenCalledWith(["agents-1"]);
+    expect(surface).not.toHaveAttribute("data-marquee");
+  });
+
+  it("projects marquee hit-testing through the current pan and zoom", () => {
+    const replaceSelection = vi.fn();
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", x: 40, y: 40, w: 120, h: 90 }),
+      appWindow({ id: "files-1", type: "files", x: 220, y: 40, w: 120, h: 90 }),
+    ];
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          view: { x: 100, y: 50, zoom: 2 },
+          api: api({ replaceSelection }),
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 10,
+      top: 20,
+      right: 810,
+      bottom: 620,
+      width: 800,
+      height: 600,
+      x: 10,
+      y: 20,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 180, clientY: 140 });
+    fireEvent.pointerMove(window, { clientX: 450, clientY: 340 });
+    fireEvent.pointerUp(window);
+
+    expect(replaceSelection).toHaveBeenCalledWith(["agents-1"]);
+  });
+
+  it("adds and toggles marquee hits with keyboard modifiers", () => {
+    const replaceSelection = vi.fn();
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", x: 40, y: 40, w: 120, h: 90 }),
+      appWindow({ id: "files-1", type: "files", x: 220, y: 40, w: 120, h: 90 }),
+    ];
+    const { rerender } = render(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: { focusedWindowId: "files-1", selectedWindowIds: ["files-1"] },
+          api: api({ replaceSelection }),
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.pointerDown(surface, { button: 0, shiftKey: true, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(window, { clientX: 180, clientY: 150 });
+    fireEvent.pointerUp(window);
+    expect(replaceSelection).toHaveBeenLastCalledWith(["files-1", "agents-1"]);
+
+    rerender(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: {
+            focusedWindowId: "agents-1",
+            selectedWindowIds: ["files-1", "agents-1"],
+          },
+          api: api({ replaceSelection }),
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    fireEvent.pointerDown(surface, { button: 0, metaKey: true, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(window, { clientX: 180, clientY: 150 });
+    fireEvent.pointerUp(window);
+
+    expect(replaceSelection).toHaveBeenLastCalledWith(["files-1"]);
+  });
+
+  it("cancels a marquee without changing selection", () => {
+    const replaceSelection = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents", x: 40, y: 40, w: 120, h: 90 })];
+    render(
+      <Workspace
+        ws={workspace({ wins, api: api({ replaceSelection }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(window, { clientX: 180, clientY: 150 });
+    expect(screen.getByTestId("workspace-marquee")).toBeInTheDocument();
+
+    fireEvent.pointerCancel(window);
+
+    expect(replaceSelection).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("workspace-marquee")).toBeNull();
+  });
+
+  it("clears selection when a replacement marquee hits no windows", () => {
+    const replaceSelection = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents", x: 40, y: 40, w: 120, h: 90 })];
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
+          api: api({ replaceSelection }),
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      right: 800,
+      bottom: 600,
+      width: 800,
+      height: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.pointerDown(surface, { button: 0, clientX: 300, clientY: 300 });
+    fireEvent.pointerMove(window, { clientX: 440, clientY: 420 });
+    fireEvent.pointerUp(window);
+
+    expect(replaceSelection).toHaveBeenCalledWith([]);
+  });
+
+  it("routes workspace-owned copy and paste keyboard commands", () => {
+    const copySelectedWindows = vi.fn(() => true);
+    const pasteCopiedWindows = vi.fn(() => true);
+    render(
+      <Workspace
+        ws={workspace({ api: api({ copySelectedWindows, pasteCopiedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const copy = createEvent.keyDown(surface, { key: "c", ctrlKey: true });
+    const paste = createEvent.keyDown(surface, { key: "v", metaKey: true });
+
+    fireEvent(surface, copy);
+    fireEvent(surface, paste);
+
+    expect(copySelectedWindows).toHaveBeenCalledTimes(1);
+    expect(pasteCopiedWindows).toHaveBeenCalledTimes(1);
+    expect(copy.defaultPrevented).toBe(true);
+    expect(paste.defaultPrevented).toBe(true);
+  });
+
+  it("clears workspace selection with Escape from the focused surface", () => {
+    const clearSelection = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
+          api: api({ clearSelection }),
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const escape = createEvent.keyDown(surface, { key: "Escape" });
+
+    fireEvent(surface, escape);
+
+    expect(clearSelection).toHaveBeenCalledTimes(1);
+    expect(escape.defaultPrevented).toBe(true);
+  });
+
+  it("announces the current selected-window count through a live region", () => {
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents" }),
+      appWindow({ id: "files-1", type: "files", x: 420 }),
+    ];
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: {
+            focusedWindowId: "files-1",
+            selectedWindowIds: ["agents-1", "files-1"],
+          },
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const status = screen.getByTestId("workspace-selection-status");
+    expect(status).toHaveAttribute("role", "status");
+    expect(status).toHaveAttribute("aria-live", "polite");
+    expect(status).toHaveTextContent("2 workspace windows selected");
+  });
+
+  it("does not intercept copy and paste commands from embedded window surfaces", () => {
+    const copySelectedWindows = vi.fn(() => true);
+    const pasteCopiedWindows = vi.fn(() => true);
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: api({ copySelectedWindows, pasteCopiedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+
+    fireEvent.keyDown(windowEl as HTMLElement, { key: "c", ctrlKey: true });
+    fireEvent.keyDown(windowEl as HTMLElement, { key: "v", ctrlKey: true });
+
+    expect(copySelectedWindows).not.toHaveBeenCalled();
+    expect(pasteCopiedWindows).not.toHaveBeenCalled();
+  });
+
+  it("does not arm the Space hand tool when toggling a focused window selection", () => {
+    const toggleWindowSelection = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: api({ toggleWindowSelection }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const surface = screen.getByRole("main", { name: "Workspace surface" });
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+    const space = createEvent.keyDown(windowEl as HTMLElement, { key: " ", code: "Space" });
+
+    fireEvent(windowEl as HTMLElement, space);
+
+    expect(toggleWindowSelection).toHaveBeenCalledWith("agents-1");
+    expect(space.defaultPrevented).toBe(true);
+    expect(surface).not.toHaveAttribute("data-hand-tool");
+  });
+
+  it("does not start marquee selection from embedded window surfaces", () => {
+    const replaceSelection = vi.fn();
+    const panBy = vi.fn();
+    const focus = vi.fn();
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: api({ focus, panBy, replaceSelection }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+
+    fireEvent.pointerDown(windowEl as HTMLElement, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(window, { clientX: 180, clientY: 150 });
+    fireEvent.pointerUp(window);
+
+    expect(replaceSelection).not.toHaveBeenCalled();
+    expect(panBy).not.toHaveBeenCalled();
+    expect(focus).toHaveBeenCalledWith("agents-1");
   });
 
   it("does not pan the board from right click or macOS control click", () => {

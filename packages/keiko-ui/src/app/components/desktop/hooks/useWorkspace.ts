@@ -16,6 +16,7 @@ import {
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
+import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type { UseWorkspaceResult, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
 import {
   parsePersistedConnections,
@@ -24,16 +25,27 @@ import {
   sanitizePersistedWindows,
 } from "./workspace-persistence";
 import {
+  WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX,
+  buildWorkspaceClipboardPayload,
+  duplicateWorkspaceClipboardWindows,
+} from "./workspaceClipboard";
+import {
   boundConnectorScopeOf,
   connectorChatBind,
   boundScopeOf,
   filesChatBindScope,
+  isWorkspaceWindowSelectable,
   makeConnectActions,
   makeLayoutActions,
   makeMutations,
   makeSnapActions,
+  moveSelectedWorkspaceWindows,
+  normalizeWorkspaceSelection,
+  replaceWorkspaceSelection,
+  toggleWorkspaceSelection,
 } from "./workspaceActions";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
@@ -220,8 +232,12 @@ function applyArrowMove(
   else if (state.key === "ArrowLeft") x -= step;
   else if (state.key === "ArrowDown") y += step;
   else if (state.key === "ArrowUp") y -= step;
-  x = Math.max(-(win.w - 120), Math.min(rect.width - 120, x));
-  y = Math.max(0, Math.min(rect.height - 38, y));
+  const clamped = clampWorkspaceWindowOrigin(
+    { x, y, w: win.w },
+    { x: 0, y: 0, w: rect.width, h: rect.height },
+  );
+  x = clamped.x;
+  y = clamped.y;
   return { x, y, w: win.w, h: win.h };
 }
 
@@ -1373,8 +1389,7 @@ interface UseFitMaximizedArgs {
 // window entirely off-screen with no visible recovery path (audit C132).
 export function fitWindowToViewport(w: AppWindow, vp: ViewportWorld): AppWindow {
   if (w.max) return { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h };
-  const x = Math.max(vp.x - (w.w - 120), Math.min(vp.x + vp.w - 120, w.x));
-  const y = Math.max(vp.y, Math.min(vp.y + vp.h - 38, w.y));
+  const { x, y } = clampWorkspaceWindowOrigin(w, vp);
   return x === w.x && y === w.y ? w : { ...w, x, y };
 }
 
@@ -1451,6 +1466,10 @@ export function useWorkspace(
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
   const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
+    focusedWindowId: null,
+    selectedWindowIds: [],
+  });
   const [snapPrev, setSnapPrev] = useState<SnapPrev | null>(null);
   const [palOpen, setPalOpen] = useState(false);
   const [conns, setConns] = useState<Connection[]>([]);
@@ -1515,6 +1534,12 @@ export function useWorkspace(
 
   const winsRef = useRef<AppWindow[]>([]);
   winsRef.current = wins ?? [];
+  const winsReadyRef = useRef(false);
+  winsReadyRef.current = wins !== null;
+  const selectionRef = useRef<WorkspaceUiSelectionState>(selection);
+  selectionRef.current = selection;
+  const workspaceClipboardRef = useRef<string | null>(null);
+  const workspaceClipboardPasteCountRef = useRef(1);
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
   const winsById = useMemo<ReadonlyMap<string, AppWindow>>(
@@ -1585,6 +1610,18 @@ export function useWorkspace(
 
   useConnectionPrune(wins, setConns);
 
+  useEffect(() => {
+    if (wins === null) {
+      setSelection((current) =>
+        current.focusedWindowId === null && current.selectedWindowIds.length === 0
+          ? current
+          : { focusedWindowId: null, selectedWindowIds: [] },
+      );
+      return;
+    }
+    setSelection((current) => normalizeWorkspaceSelection(wins, current));
+  }, [wins]);
+
   // Debounced localStorage persistence (issue #1580): a drag/resize mutates wins
   // every frame; without this each frame ran a synchronous sanitize + JSON.stringify
   // + setItem. Sanitize windows once and reuse the result for connection pruning/persistence.
@@ -1626,6 +1663,21 @@ export function useWorkspace(
     () => makeMutations({ setWins, zc, worldVP, winsRef }),
     [setWins, zc, worldVP, winsRef],
   );
+  const focusWindow = useCallback<WorkspaceApi["focus"]>(
+    (id) => {
+      const target = winsByIdRef.current.get(id);
+      if (target !== undefined && isWorkspaceWindowSelectable(target)) {
+        setSelection((current) =>
+          normalizeWorkspaceSelection(winsRef.current, {
+            ...current,
+            focusedWindowId: id,
+          }),
+        );
+      }
+      mutations.focus(id);
+    },
+    [mutations, winsByIdRef, winsRef],
+  );
   const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
   const snap = useMemo(
     () => makeSnapActions({ setSnapPrev, snapZone, worldVP, update: mutations.update }),
@@ -1647,7 +1699,7 @@ export function useWorkspace(
         connsByEndpointRef,
         connectingRef,
         connectCleanupRef,
-        focus: mutations.focus,
+        focus: focusWindow,
         setConns,
         setConnecting,
         onScopeBind: stableScopeBind,
@@ -1665,7 +1717,7 @@ export function useWorkspace(
       connsByEndpointRef,
       connectingRef,
       connectCleanupRef,
-      mutations,
+      focusWindow,
       setConns,
       setConnecting,
       stableScopeBind,
@@ -1736,6 +1788,84 @@ export function useWorkspace(
   // Issue #1580 — stable accessor for the live view (mirrors rect()); lets window
   // children read pan/zoom at gesture-start without a per-frame `view` prop.
   const currentView = useCallback((): View => viewRef.current, [viewRef]);
+  const currentSelection = useCallback<WorkspaceApi["currentSelection"]>(
+    () => selectionRef.current,
+    [selectionRef],
+  );
+  const replaceSelection = useCallback<WorkspaceApi["replaceSelection"]>(
+    (windowIds) => {
+      setSelection((current) => {
+        const next = replaceWorkspaceSelection(winsRef.current, windowIds);
+        return next.focusedWindowId === current.focusedWindowId &&
+          next.selectedWindowIds.length === current.selectedWindowIds.length &&
+          next.selectedWindowIds.every((id, index) => id === current.selectedWindowIds[index])
+          ? current
+          : next;
+      });
+    },
+    [winsRef],
+  );
+  const toggleWindowSelection = useCallback<WorkspaceApi["toggleWindowSelection"]>(
+    (windowId) => {
+      setSelection((current) => toggleWorkspaceSelection(winsRef.current, current, windowId));
+    },
+    [winsRef],
+  );
+  const clearSelection = useCallback<WorkspaceApi["clearSelection"]>(() => {
+    setSelection((current) =>
+      current.focusedWindowId === null && current.selectedWindowIds.length === 0
+        ? current
+        : { focusedWindowId: null, selectedWindowIds: [] },
+    );
+  }, []);
+  const moveSelectedWindowsBy = useCallback<WorkspaceApi["moveSelectedWindowsBy"]>(
+    (dx, dy) => {
+      const vp = worldVP();
+      if (vp === null) return { dx: 0, dy: 0 };
+      const result = moveSelectedWorkspaceWindows(
+        winsRef.current,
+        selectionRef.current.selectedWindowIds,
+        { dx, dy },
+        vp,
+      );
+      if (result.wins !== winsRef.current) {
+        winsRef.current = result.wins as AppWindow[];
+        setWins(result.wins as AppWindow[]);
+      }
+      return result.appliedDelta;
+    },
+    [selectionRef, setWins, winsRef, worldVP],
+  );
+  const copySelectedWindows = useCallback<WorkspaceApi["copySelectedWindows"]>(() => {
+    if (!winsReadyRef.current) return false;
+    const payload = buildWorkspaceClipboardPayload(
+      winsRef.current,
+      selectionRef.current.selectedWindowIds,
+    );
+    if (payload === null) return false;
+    workspaceClipboardRef.current = payload;
+    workspaceClipboardPasteCountRef.current = 1;
+    return true;
+  }, [selectionRef, winsReadyRef, winsRef]);
+  const pasteCopiedWindows = useCallback<WorkspaceApi["pasteCopiedWindows"]>(() => {
+    if (!winsReadyRef.current || workspaceClipboardRef.current === null) return false;
+    const vp = worldVP();
+    if (vp === null) return false;
+    const result = duplicateWorkspaceClipboardWindows({
+      wins: winsRef.current,
+      payload: workspaceClipboardRef.current,
+      viewport: vp,
+      zStart: zc.current,
+      nowMs: Date.now(),
+      pasteOffsetPx: WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX * workspaceClipboardPasteCountRef.current,
+    });
+    if (result === null) return false;
+    zc.current = result.nextZ;
+    workspaceClipboardPasteCountRef.current += 1;
+    setWins(result.wins as AppWindow[]);
+    setSelection(replaceWorkspaceSelection(result.wins, result.pastedWindowIds));
+    return true;
+  }, [setWins, winsReadyRef, winsRef, worldVP, zc]);
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -1758,7 +1888,14 @@ export function useWorkspace(
       add: mutations.add,
       openEditorFile: mutations.openEditorFile,
       toggleTool: mutations.toggleTool,
-      focus: mutations.focus,
+      focus: focusWindow,
+      currentSelection,
+      replaceSelection,
+      toggleWindowSelection,
+      clearSelection,
+      moveSelectedWindowsBy,
+      copySelectedWindows,
+      pasteCopiedWindows,
       close: closeWithTeardown,
       minimize: mutations.minimize,
       restore: mutations.restore,
@@ -1797,6 +1934,14 @@ export function useWorkspace(
       layout,
       connectActions,
       closeWithTeardown,
+      focusWindow,
+      currentSelection,
+      replaceSelection,
+      toggleWindowSelection,
+      clearSelection,
+      moveSelectedWindowsBy,
+      copySelectedWindows,
+      pasteCopiedWindows,
       updateConnBoundScope,
       currentView,
       zoomTo,
@@ -1807,5 +1952,16 @@ export function useWorkspace(
     ],
   );
 
-  return { wins, winsById, snapPrev, palOpen, setPalOpen, conns, connecting, view, api };
+  return {
+    wins,
+    winsById,
+    snapPrev,
+    palOpen,
+    setPalOpen,
+    conns,
+    connecting,
+    selection,
+    view,
+    api,
+  };
 }

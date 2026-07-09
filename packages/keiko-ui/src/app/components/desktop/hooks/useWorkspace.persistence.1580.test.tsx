@@ -63,6 +63,33 @@ function setHidden(hidden: boolean): void {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
 }
 
+function trackLocalStorageWrites(): {
+  readonly keys: readonly string[];
+  readonly restore: () => void;
+} {
+  const originalStorage = window.localStorage;
+  const keys: string[] = [];
+  const trackedStorage = new Proxy(originalStorage, {
+    get(target, prop, receiver) {
+      if (prop === "setItem") {
+        return (key: string, value: string): void => {
+          keys.push(key);
+          target.setItem(key, value);
+        };
+      }
+      const value = Reflect.get(target, prop, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  Object.defineProperty(window, "localStorage", { configurable: true, value: trackedStorage });
+  return {
+    keys,
+    restore: () => {
+      Object.defineProperty(window, "localStorage", { configurable: true, value: originalStorage });
+    },
+  };
+}
+
 describe("Issue #1580 — debounced workspace persistence", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -76,12 +103,12 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     vi.useRealTimers();
   });
 
-  it("debounces the windows write and flushes it on pagehide", () => {
+  it("debounces the windows write and flushes it on pagehide", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     const { getByTestId } = render(<Harness />);
     // Let hydrate's initial debounced write settle, then start from a known value.
-    act(() => {
-      vi.advanceTimersByTime(POLL_MS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
     });
     const baseline = window.localStorage.getItem(WS_LS);
     expect(baseline).not.toBeNull();
@@ -101,28 +128,35 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     expect(flushed).toContain('"minimized":true');
   });
 
-  it("coalesces a burst of mutations into a single debounced write", () => {
+  it("coalesces a burst of mutations into a single debounced write", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     const { getByTestId } = render(<Harness />);
-    act(() => {
-      vi.advanceTimersByTime(POLL_MS);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_MS);
     });
-    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const baseline = window.localStorage.getItem(WS_LS);
+    expect(baseline).toBe(JSON.stringify([seedWindow()]));
+    const storageWrites = trackLocalStorageWrites();
 
-    act(() => {
-      getByTestId("minimize").click();
-      getByTestId("minimize").click();
-      getByTestId("minimize").click();
-    });
-    const synchronousWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
-    expect(synchronousWsWrites).toBe(0);
+    try {
+      act(() => {
+        getByTestId("minimize").click();
+        getByTestId("minimize").click();
+        getByTestId("minimize").click();
+      });
+      expect(window.localStorage.getItem(WS_LS)).toBe(baseline);
+      expect(storageWrites.keys.filter((key) => key === WS_LS)).toHaveLength(0);
 
-    act(() => {
-      vi.advanceTimersByTime(400);
-    });
-    const debouncedWsWrites = setItemSpy.mock.calls.filter(([key]) => key === WS_LS).length;
-    expect(debouncedWsWrites).toBe(1);
-    setItemSpy.mockRestore();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      const flushed = window.localStorage.getItem(WS_LS);
+      expect(flushed).not.toBe(baseline);
+      expect(flushed).toContain('"minimized":true');
+      expect(storageWrites.keys.filter((key) => key === WS_LS)).toHaveLength(1);
+    } finally {
+      storageWrites.restore();
+    }
   });
 
   it("debounces the view write and flushes it on pagehide", () => {

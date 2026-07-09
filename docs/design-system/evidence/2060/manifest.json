@@ -1,0 +1,26 @@
+{
+  "issue": "#2060",
+  "epic": "#2055",
+  "generatedAt": "2026-07-09T12:54:50.559Z",
+  "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:workspace-selection-2060",
+  "receiptCommand": ".keiko-scripts/ui-verify-receipt.sh 2060 -- npx playwright test --config tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts --project=chromium",
+  "playwrightCommand": "npx playwright test --config tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts --project=chromium",
+  "artifacts": [
+    "01-dark.png",
+    "02-light.png",
+    "03-dark-hc.png",
+    "04-light-hc.png",
+    "05-prefers-contrast.png",
+    "06-forced-colors.png",
+    "07-reduced-motion.png",
+    "workspace-selection-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ],
+  "notes": [
+    "Packaged CLI UI renders the real workspace shell and WindowFrame selected state.",
+    "Seeded windows are content-free Project, Plugins, and Automations windows.",
+    "The behavior proof for Files-window marquee/group-drag/clipboard lives in workspace-multi-selection-2055.spec.ts."
+  ],
+  "captureCount": 7
+}

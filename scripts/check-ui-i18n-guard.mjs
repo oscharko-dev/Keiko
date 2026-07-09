@@ -9,6 +9,11 @@ export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
+const USER_FACING_JSX_TEXT_PATTERN = />\s*[^<>{}]*[A-Za-z][^<>{}]*</;
+const USER_FACING_ATTRIBUTE_PATTERN =
+  /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
+const USER_FACING_STRING_RETURN_PATTERN =
+  /\breturn\s+(?:"[^"]*\s[A-Za-z][^"]*"|'[^']*\s[A-Za-z][^']*'|`[^`]*\s[A-Za-z][^`]*`)/u;
 
 function normalizePath(file) {
   return file.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -52,6 +57,54 @@ function hasI18nUsage(repoRoot, file) {
 
 function nonCompliantUiFiles(repoRoot, uiFiles) {
   return uiFiles.filter((file) => !hasI18nUsage(repoRoot, file));
+}
+
+function isCommentLine(line) {
+  const trimmed = line.trim();
+  return trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*");
+}
+
+export function hasUserFacingTextLine(line) {
+  if (isCommentLine(line)) return false;
+  return (
+    USER_FACING_JSX_TEXT_PATTERN.test(line) ||
+    USER_FACING_ATTRIBUTE_PATTERN.test(line) ||
+    USER_FACING_STRING_RETURN_PATTERN.test(line)
+  );
+}
+
+function addedLinesFromPatch(patch) {
+  return patch
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+    .map((line) => line.slice(1));
+}
+
+function gitAddedLinesForFile(repoRoot, file, env = process.env) {
+  for (const range of diffRangesFromEnv(env)) {
+    const result = spawnSync(
+      "git",
+      ["diff", "--unified=0", "--diff-filter=ACMRT", range, "--", file],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    if (result.status === 0) return addedLinesFromPatch(result.stdout);
+  }
+  return null;
+}
+
+function sourceHasUserFacingText(source) {
+  return source.split(/\r?\n/).some(hasUserFacingTextLine);
+}
+
+function hasI18nRelevantChange(repoRoot, file) {
+  if (hasI18nUsage(repoRoot, file)) return true;
+  const addedLines = gitAddedLinesForFile(repoRoot, file);
+  if (addedLines !== null) return addedLines.some(hasUserFacingTextLine);
+  return sourceHasUserFacingText(readText(repoRoot, file));
 }
 
 function isSafeGitSha(value) {
@@ -190,13 +243,15 @@ export function checkUiI18nGuard({
     .filter(Boolean);
   const changedFileSet = new Set(normalizedChangedFiles);
   const uiFiles = normalizedChangedFiles.filter(isUiProductionSource);
+  const i18nRelevantFiles = uiFiles.filter((file) => hasI18nRelevantChange(repoRoot, file));
   const problems = [];
 
-  if (uiFiles.length === 0) {
+  if (uiFiles.length === 0 || i18nRelevantFiles.length === 0) {
     return {
       ok: true,
       problems,
       uiFiles,
+      i18nRelevantFiles,
       changedFiles: normalizedChangedFiles,
     };
   }
@@ -209,7 +264,7 @@ export function checkUiI18nGuard({
     }
   }
 
-  const nonCompliantFiles = nonCompliantUiFiles(repoRoot, uiFiles);
+  const nonCompliantFiles = nonCompliantUiFiles(repoRoot, i18nRelevantFiles);
 
   if (nonCompliantFiles.length > 0) {
     problems.push(
@@ -231,6 +286,7 @@ export function checkUiI18nGuard({
     ok: problems.length === 0,
     problems,
     uiFiles,
+    i18nRelevantFiles,
     changedFiles: normalizedChangedFiles,
   };
 }

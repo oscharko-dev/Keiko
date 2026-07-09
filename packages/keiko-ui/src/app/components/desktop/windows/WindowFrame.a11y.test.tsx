@@ -33,6 +33,13 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
     focus: vi.fn(),
+    currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
+    replaceSelection: vi.fn(),
+    toggleWindowSelection: vi.fn(),
+    clearSelection: vi.fn(),
+    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
+    copySelectedWindows: vi.fn(() => false),
+    pasteCopiedWindows: vi.fn(() => false),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),
@@ -72,6 +79,24 @@ describe("WindowFrame accessibility (GEN-UI-TEST-GAP-002)", () => {
       <WindowFrame
         win={appWindow()}
         top
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("has no axe violations in the selected window state", async () => {
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        selected
+        selectedWindowCount={1}
         connState={null}
         linkRevision={0}
         api={api()}

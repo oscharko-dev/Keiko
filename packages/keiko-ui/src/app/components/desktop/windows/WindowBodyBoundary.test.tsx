@@ -33,9 +33,16 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
 function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
   return {
     add: vi.fn(() => null),
+    currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
     focus: vi.fn(),
+    replaceSelection: vi.fn(),
+    toggleWindowSelection: vi.fn(),
+    clearSelection: vi.fn(),
+    moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
+    copySelectedWindows: vi.fn(() => false),
+    pasteCopiedWindows: vi.fn(() => false),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),

@@ -19,18 +19,23 @@ import {
   effectiveScopes,
   filesChatBindRoot,
   filesVisibleScope,
+  isWorkspaceWindowSelectable,
+  moveSelectedWorkspaceWindows,
   makeConnectActions,
   makeLayoutActions,
   makeMutations,
   makeSnapActions,
+  normalizeWorkspaceSelection,
   removeConnectorScope,
   removeConnectedScope,
   removeScope,
+  replaceWorkspaceSelection,
   resolvedFilesRoot,
   boundScopeOf,
   appendConnectedScope,
   isRootConnected,
   isScopeConnected,
+  toggleWorkspaceSelection,
   totalSourceCap,
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
@@ -471,6 +476,109 @@ function applyState<T>(store: { value: T }, update: SetStateAction<T>): void {
 }
 
 const layoutViewport = { x: 10, y: 20, w: 900, h: 600 };
+
+describe("workspace window selection helpers (Issue #2057)", () => {
+  it("treats visible floating windows as selectable only", () => {
+    expect(isWorkspaceWindowSelectable(win("chat", {}, "chat-1"))).toBe(true);
+    expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), minimized: true })).toBe(
+      false,
+    );
+    expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), max: true })).toBe(false);
+  });
+
+  it("normalizes selection by pruning stale, duplicate, minimized, and maximized ids", () => {
+    const wins = [
+      win("files", {}, "files-1"),
+      { ...win("chat", {}, "chat-1"), minimized: true },
+      { ...win("quality", {}, "quality-1"), max: true },
+      win("terminal", {}, "terminal-1"),
+    ];
+
+    expect(
+      normalizeWorkspaceSelection(wins, {
+        focusedWindowId: "quality-1",
+        selectedWindowIds: ["files-1", "missing", "files-1", "chat-1", "quality-1", "terminal-1"],
+      }),
+    ).toEqual({
+      focusedWindowId: null,
+      selectedWindowIds: ["files-1", "terminal-1"],
+    });
+  });
+
+  it("replaces and toggles selection against the current eligible window list", () => {
+    const wins = [
+      win("files", {}, "files-1"),
+      win("chat", {}, "chat-1"),
+      { ...win("quality", {}, "quality-1"), max: true },
+    ];
+
+    const replaced = replaceWorkspaceSelection(wins, ["files-1", "quality-1", "chat-1"]);
+    expect(replaced).toEqual({
+      focusedWindowId: "chat-1",
+      selectedWindowIds: ["files-1", "chat-1"],
+    });
+
+    const toggledOff = toggleWorkspaceSelection(wins, replaced, "files-1");
+    expect(toggledOff).toEqual({ focusedWindowId: "files-1", selectedWindowIds: ["chat-1"] });
+
+    expect(toggleWorkspaceSelection(wins, toggledOff, "quality-1")).toEqual(toggledOff);
+  });
+
+  it("moves only eligible selected windows while preserving offsets and content config", () => {
+    const filesCfg = { resolvedRoot: "/repo" };
+    const wins = [
+      { ...win("files", filesCfg, "files-1"), x: 40, y: 50, w: 200, h: 120 },
+      { ...win("chat", {}, "chat-1"), x: 280, y: 90, w: 240, h: 160 },
+      { ...win("terminal", {}, "terminal-1"), x: 640, y: 100, w: 260, h: 180 },
+    ];
+
+    const moved = moveSelectedWorkspaceWindows(
+      wins,
+      ["files-1", "chat-1"],
+      { dx: 25, dy: 30 },
+      layoutViewport,
+    );
+
+    expect(moved.wins).not.toBe(wins);
+    expect(moved.appliedDelta).toEqual({ dx: 25, dy: 30 });
+    expect(moved.wins[0]).toMatchObject({ id: "files-1", x: 65, y: 80 });
+    expect(moved.wins[1]).toMatchObject({ id: "chat-1", x: 305, y: 120 });
+    expect(moved.wins[2]).toBe(wins[2]);
+    expect(moved.wins[0]?.cfg).toBe(filesCfg);
+  });
+
+  it("clamps grouped moves to the shared title-bar recovery bounds", () => {
+    const wins = [
+      { ...win("files", {}, "files-1"), x: 40, y: 50, w: 300, h: 120 },
+      { ...win("chat", {}, "chat-1"), x: 260, y: 80, w: 260, h: 160 },
+    ];
+
+    const moved = moveSelectedWorkspaceWindows(
+      wins,
+      ["files-1", "chat-1"],
+      { dx: -1_000, dy: -1_000 },
+      layoutViewport,
+    );
+
+    expect(moved.appliedDelta).toEqual({ dx: -390, dy: -30 });
+    expect(moved.wins[0]).toMatchObject({ x: -350, y: 20 });
+    expect(moved.wins[1]).toMatchObject({ x: -130, y: 50 });
+  });
+
+  it("returns the same window list for empty, stale, ineligible, or zero-delta moves", () => {
+    const wins = [win("files", {}, "files-1"), { ...win("chat", {}, "chat-1"), minimized: true }];
+
+    for (const result of [
+      moveSelectedWorkspaceWindows(wins, [], { dx: 1, dy: 1 }, layoutViewport),
+      moveSelectedWorkspaceWindows(wins, ["missing"], { dx: 1, dy: 1 }, layoutViewport),
+      moveSelectedWorkspaceWindows(wins, ["chat-1"], { dx: 1, dy: 1 }, layoutViewport),
+      moveSelectedWorkspaceWindows(wins, ["files-1"], { dx: 0, dy: 0 }, layoutViewport),
+    ]) {
+      expect(result.wins).toBe(wins);
+      expect(result.appliedDelta).toEqual({ dx: 0, dy: 0 });
+    }
+  });
+});
 
 describe("layout and snap actions", () => {
   it("tiles all windows into a deterministic grid and clears stale maximize geometry", () => {

@@ -10,6 +10,7 @@ import type {
   ReactNode,
   RefObject,
 } from "react";
+import { useTranslate } from "@/lib/i18n";
 import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import {
@@ -53,7 +54,9 @@ import {
   type FigmaImageDragPayload,
   type FigmaImageDropDetail,
 } from "./figma-image-drag";
+import { isWorkspaceWindowSelectable } from "./hooks/workspaceActions";
 import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
+import selectionStyles from "./WorkspaceSelection.module.css";
 
 const WorkspaceShader = dynamic(
   () => import("./WorkspaceShader").then((mod) => mod.WorkspaceShader),
@@ -278,6 +281,21 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
 // (#305 anti-blur). A gesture that returns to the settled zoom triggers no layout
 // at all. Pan-only changes (zoom unchanged) never touch it.
 const ZOOM_SETTLE_MS = 160;
+const MARQUEE_DRAG_THRESHOLD_PX = 4;
+
+interface MarqueeRect {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+interface MarqueeSession {
+  readonly startX: number;
+  readonly startY: number;
+  readonly mode: "replace" | "add" | "toggle";
+  readonly rect: MarqueeRect;
+}
 
 function useSettledZoom(zoom: number): number {
   const [settled, setSettled] = useState(zoom);
@@ -301,6 +319,83 @@ function useSettledZoom(zoom: number): number {
   return settled;
 }
 
+function marqueeMode(event: ReactPointerEvent<HTMLElement>): MarqueeSession["mode"] {
+  if (event.metaKey || event.ctrlKey) return "toggle";
+  if (event.shiftKey) return "add";
+  return "replace";
+}
+
+function marqueeRect(
+  startX: number,
+  startY: number,
+  currentX: number,
+  currentY: number,
+): MarqueeRect {
+  return {
+    left: Math.min(startX, currentX),
+    top: Math.min(startY, currentY),
+    width: Math.abs(currentX - startX),
+    height: Math.abs(currentY - startY),
+  };
+}
+
+function marqueeIsActive(rect: MarqueeRect): boolean {
+  return rect.width >= MARQUEE_DRAG_THRESHOLD_PX || rect.height >= MARQUEE_DRAG_THRESHOLD_PX;
+}
+
+function clientRectToWorldRect(
+  rect: MarqueeRect,
+  view: UseWorkspaceResult["view"],
+): {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+} {
+  const left = (rect.left - view.x) / view.zoom;
+  const top = (rect.top - view.y) / view.zoom;
+  return {
+    left,
+    top,
+    right: left + rect.width / view.zoom,
+    bottom: top + rect.height / view.zoom,
+  };
+}
+
+function windowIntersectsRect(
+  win: AppWindow,
+  rect: ReturnType<typeof clientRectToWorldRect>,
+): boolean {
+  const right = win.x + win.w;
+  const bottom = win.y + win.h;
+  return win.x <= rect.right && right >= rect.left && win.y <= rect.bottom && bottom >= rect.top;
+}
+
+function selectableMarqueeHits(
+  wins: readonly AppWindow[] | null,
+  rect: MarqueeRect,
+  view: UseWorkspaceResult["view"],
+): readonly string[] {
+  if (wins === null || !marqueeIsActive(rect)) return [];
+  const worldRect = clientRectToWorldRect(rect, view);
+  return wins
+    .filter((win) => isWorkspaceWindowSelectable(win) && windowIntersectsRect(win, worldRect))
+    .map((win) => win.id);
+}
+
+function mergeMarqueeSelection(
+  current: readonly string[],
+  hits: readonly string[],
+  mode: MarqueeSession["mode"],
+): readonly string[] {
+  if (mode === "replace") return hits;
+  if (mode === "add") return [...current, ...hits];
+  const hitSet = new Set(hits);
+  const kept = current.filter((id) => !hitSet.has(id));
+  const currentSet = new Set(current);
+  return [...kept, ...hits.filter((id) => !currentSet.has(id))];
+}
+
 export function Workspace({
   ws,
   wsRef,
@@ -308,7 +403,8 @@ export function Workspace({
   palette,
   children,
 }: WorkspaceProps): ReactNode {
-  const { wins, view, snapPrev, conns, connecting, api } = ws;
+  const t = useTranslate();
+  const { wins, view, snapPrev, conns, connecting, selection, api } = ws;
   // GEN-PERF-WORKSPACE-003 — the four drop-handler add*Node callbacks read the live
   // `view` for drop-point→world conversion. Closing over `view` forced it into their
   // dep arrays, so each pan/zoom rAF frame re-created the callbacks and tore down +
@@ -318,6 +414,7 @@ export function Workspace({
   viewRef.current = view;
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
+  const [marquee, setMarquee] = useState<MarqueeSession | null>(null);
   const handToolRef = useRef(false);
   const settledZoom = useSettledZoom(view.zoom);
   const visibleWins = useMemo(
@@ -326,6 +423,10 @@ export function Workspace({
   );
   const linkRevision = useLinkRevision(wins, conns);
   const top = topWindow(visibleWins);
+  const selectedWindowIds = useMemo(
+    () => new Set(selection.selectedWindowIds),
+    [selection.selectedWindowIds],
+  );
   const connFrom: AppWindow | null =
     connecting !== null && visibleWins !== null
       ? (visibleWins.find((w) => w.id === connecting.from) ?? null)
@@ -346,6 +447,55 @@ export function Workspace({
     return stateById;
   }, [connFrom, visibleWins]);
 
+  const startMarqueeSelection = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    surfaceRect: DOMRect,
+  ): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const target = event.currentTarget;
+    target.setPointerCapture?.(event.pointerId);
+    const startX = event.clientX - surfaceRect.left;
+    const startY = event.clientY - surfaceRect.top;
+    const mode = marqueeMode(event);
+    let latestRect = marqueeRect(startX, startY, startX, startY);
+    setMarquee({ startX, startY, mode, rect: latestRect });
+    const move = (moveEvent: PointerEvent): void => {
+      const currentX = moveEvent.clientX - surfaceRect.left;
+      const currentY = moveEvent.clientY - surfaceRect.top;
+      latestRect = marqueeRect(startX, startY, currentX, currentY);
+      setMarquee((current) =>
+        current === null
+          ? current
+          : {
+              ...current,
+              rect: latestRect,
+            },
+      );
+    };
+    const cleanup = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      if (target.hasPointerCapture?.(event.pointerId) === true) {
+        target.releasePointerCapture?.(event.pointerId);
+      }
+      setMarquee(null);
+    };
+    const up = (): void => {
+      const hits = selectableMarqueeHits(visibleWins, latestRect, viewRef.current);
+      const next = mergeMarqueeSelection(selection.selectedWindowIds, hits, mode);
+      api.replaceSelection(next);
+      cleanup();
+    };
+    const cancel = (): void => {
+      cleanup();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+  };
+
   const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;
     if (isInteractiveSurfaceTarget(event.target)) return;
@@ -356,6 +506,10 @@ export function Workspace({
       return;
     }
     if (!isCanvasPanPointer(event)) return;
+    if (isPrimaryActivationPointer(event)) {
+      startMarqueeSelection(event, event.currentTarget.getBoundingClientRect());
+      return;
+    }
     startBgPan(api.panBy, event, setPanning);
   };
 
@@ -391,6 +545,24 @@ export function Workspace({
   // focused window child are not captured here (those are handled by WindowFrame).
   const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
     if (event.target !== event.currentTarget) return;
+    const key = event.key.toLowerCase();
+    if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (selection.selectedWindowIds.length > 0) {
+        api.clearSelection();
+        event.preventDefault();
+      }
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+      if (key === "c") {
+        if (api.copySelectedWindows()) event.preventDefault();
+        return;
+      }
+      if (key === "v") {
+        if (api.pasteCopiedWindows()) event.preventDefault();
+        return;
+      }
+    }
     const base = 48;
     const step = event.shiftKey ? base * 4 : base;
     switch (event.key) {
@@ -768,6 +940,13 @@ export function Workspace({
 
   const empty = wins !== null && wins.length === 0;
   const hasMaximizedWindow = wins?.some((win) => win.max) ?? false;
+  const selectedWindowCount = selection.selectedWindowIds.length;
+  const selectionStatusText =
+    selectedWindowCount === 0
+      ? t("workspace.selection.none")
+      : selectedWindowCount === 1
+        ? t("workspace.selection.one")
+        : t("workspace.selection.many", { count: selectedWindowCount });
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
@@ -781,6 +960,7 @@ export function Workspace({
       data-connecting={connecting !== null ? "true" : undefined}
       data-panning={panning ? "true" : undefined}
       data-hand-tool={handTool ? "true" : undefined}
+      data-marquee={marquee !== null ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
       onKeyDown={onSurfaceKeyDown}
@@ -789,7 +969,29 @@ export function Workspace({
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
+      {marquee !== null && marqueeIsActive(marquee.rect) ? (
+        <div
+          className={selectionStyles.marquee}
+          style={{
+            left: marquee.rect.left,
+            top: marquee.rect.top,
+            width: marquee.rect.width,
+            height: marquee.rect.height,
+          }}
+          aria-hidden="true"
+          data-testid="workspace-marquee"
+        />
+      ) : null}
       <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
+      <p
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="workspace-selection-status"
+      >
+        {selectionStatusText}
+      </p>
       {connecting !== null ? (
         // Visible counterpart to ConnectAnnouncer for sighted users — connect
         // mode otherwise only signals via cursor/dimming, leaving the exits
@@ -825,6 +1027,8 @@ export function Workspace({
                 api={api}
                 wsRef={wsRef}
                 linkRevision={linkRevision}
+                selected={selectedWindowIds.has(w.id)}
+                selectedWindowCount={selectedWindowIds.size}
               />
             ))
           : null}
