@@ -46,8 +46,8 @@ function HeaderImpl({
           type="button"
           className="hd-tool ui-tip"
           onClick={openCommandPalette}
-          data-tip="Quick access"
-          aria-label="Open quick access"
+          data-tip={t("header.quickAccess")}
+          aria-label={t("header.openQuickAccess")}
         >
           <Icons.search size={16} />
         </button>

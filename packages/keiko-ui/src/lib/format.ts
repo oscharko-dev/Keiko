@@ -9,12 +9,19 @@ import type { CostClass, RunStatus, VerificationStatus } from "./types";
 // Bytes → human-readable
 // ---------------------------------------------------------------------------
 
-export function formatBytes(bytes: number): string {
+function formatByteMagnitude(value: number, locale: string | undefined): string {
+  if (locale === undefined) return value.toFixed(1);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(value);
+}
+
+export function formatBytes(bytes: number, locale?: string): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes.toString()} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (bytes < 1024 * 1024) return `${formatByteMagnitude(bytes / 1024, locale)} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${formatByteMagnitude(bytes / (1024 * 1024), locale)} MB`;
+  }
+  return `${formatByteMagnitude(bytes / (1024 * 1024 * 1024), locale)} GB`;
 }
 
 // A higher-precision byte presenter: two decimals below magnitude 10, one at or

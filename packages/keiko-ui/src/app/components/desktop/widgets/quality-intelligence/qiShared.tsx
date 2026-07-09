@@ -12,6 +12,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
+import { translateQi, useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 
 // Human labels for review states — shared by the candidate review badges (CandidatesPane) and the
 // run summary (QiRunCard) so the same state never renders in two spellings on one card
@@ -23,6 +24,14 @@ export const REVIEW_LABEL: Readonly<Record<QualityIntelligenceReviewState, strin
   rejected: "Rejected",
   withdrawn: "Withdrawn",
 };
+
+export function reviewLabel(state: QualityIntelligenceReviewState, t: I18nTranslate): string {
+  if (state === "open") return t("qi.review.open");
+  if (state === "approved") return t("qi.review.approved");
+  if (state === "changes-requested") return t("qi.review.changesRequested");
+  if (state === "rejected") return t("qi.review.rejected");
+  return t("qi.review.withdrawn");
+}
 
 // CSS class map for review state badges — shared by CandidatesPane (per-candidate badge) and
 // QiHubPanel (run-row badge) so the same colour tokens apply consistently in both views
@@ -44,10 +53,11 @@ export function ReviewBadge({
 }: {
   readonly state: QualityIntelligenceReviewState;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <span className={`qi-review-badge ${REVIEW_CLASS[state]}`}>
-      <span className="sr-only">Review: </span>
-      {REVIEW_LABEL[state]}
+      <span className="sr-only">{t("qi.review.prefix")} </span>
+      {reviewLabel(state, t)}
     </span>
   );
 }
@@ -63,7 +73,7 @@ export function formatCodedError(code: string, message: string): string {
 export function formatError(err: unknown): string {
   if (err instanceof ApiError) return formatCodedError(err.code, err.message);
   if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
+  return translateQi("en", "common.error.unexpected");
 }
 
 export function formatDate(iso: string): string {
@@ -75,13 +85,6 @@ export function formatDate(iso: string): string {
 }
 
 type RunStatus = QualityIntelligenceRunStatus;
-
-const STATUS_LABEL: Readonly<Record<RunStatus, string>> = {
-  running: "Running",
-  succeeded: "Succeeded",
-  failed: "Failed",
-  cancelled: "Cancelled",
-};
 
 const STATUS_CLASS: Readonly<Record<RunStatus, string>> = {
   running: "qi-badge-running",
@@ -95,8 +98,15 @@ function isRunStatus(s: string): s is RunStatus {
 }
 
 /** Human label for a run status — falls back to the raw value for unknown statuses. */
-export function runStatusLabel(status: string): string {
-  return isRunStatus(status) ? STATUS_LABEL[status] : status;
+export function runStatusLabel(
+  status: string,
+  t: I18nTranslate = (key, values) => translateQi("en", key, values),
+): string {
+  if (!isRunStatus(status)) return status;
+  if (status === "running") return t("qi.status.running");
+  if (status === "succeeded") return t("qi.status.succeeded");
+  if (status === "failed") return t("qi.status.failed");
+  return t("qi.status.cancelled");
 }
 
 // A status badge is a STATIC label, not a live region — it carries no role="status" (that role is
@@ -104,7 +114,8 @@ export function runStatusLabel(status: string): string {
 // naming is prohibited on a generic <span> (ARIA 1.2) and assistive tech ignores it — the visible
 // label is the accessible content.
 export function StatusBadge({ status }: { readonly status: string }): ReactNode {
-  const label = runStatusLabel(status);
+  const t = useTranslate();
+  const label = runStatusLabel(status, t);
   const cls = isRunStatus(status) ? STATUS_CLASS[status] : "qi-badge-default";
   return <span className={`qi-badge ${cls}`}>{label}</span>;
 }
@@ -125,10 +136,11 @@ function isFindingSeverity(s: string): s is FindingSeverity {
 // No aria-label (prohibited on a generic <span>); the "Severity:" context lives in a
 // screen-reader-only prefix so the visible chip stays compact.
 export function SeverityBadge({ severity }: { readonly severity: string }): ReactNode {
+  const t = useTranslate();
   const cls = isFindingSeverity(severity) ? SEVERITY_CLASS[severity] : "qi-sev-low";
   return (
     <span className={`qi-sev ${cls}`}>
-      <span className="sr-only">Severity: </span>
+      <span className="sr-only">{t("qi.severity.prefix")} </span>
       {severity}
     </span>
   );
@@ -146,11 +158,12 @@ function qualityTierClass(rounded: number): string {
 // aria-label is prohibited (and ignored) on a generic <span>, so the score context is carried by
 // screen-reader-only text instead: the bare em-dash / number alone would be meaningless to AT.
 export function QualityScoreBadge({ score }: { readonly score: number | null }): ReactNode {
+  const t = useTranslate();
   if (score === null) {
     return (
       <span className="qi-badge qi-badge-default" data-testid="qi-quality-badge">
         <span aria-hidden="true">—</span>
-        <span className="sr-only">Quality score not available</span>
+        <span className="sr-only">{t("qi.quality.notAvailable")}</span>
       </span>
     );
   }
@@ -158,7 +171,7 @@ export function QualityScoreBadge({ score }: { readonly score: number | null }):
   return (
     <span className={`qi-badge ${qualityTierClass(rounded)}`} data-testid="qi-quality-badge">
       {rounded.toString()}
-      <span className="sr-only"> out of 100</span>
+      <span className="sr-only"> {t("qi.quality.outOf100")}</span>
     </span>
   );
 }
@@ -171,10 +184,11 @@ export function WeakTestFlag({
 }: {
   readonly flag: QualityIntelligenceUiWeakTestFlag;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <div
       role="note"
-      aria-label={`Weak test flagged by the quality judge: ${flag.rationale}`}
+      aria-label={t("qi.weakTest.aria", { rationale: flag.rationale })}
       className="qi-weak-flag"
       data-testid="qi-weak-flag"
     >
@@ -182,7 +196,7 @@ export function WeakTestFlag({
         <span aria-hidden="true" className="qi-weak-flag-icon">
           ⚠
         </span>
-        Weak test
+        {t("qi.weakTest.label")}
       </span>
       <p className="qi-weak-flag-reason">{flag.rationale}</p>
     </div>
@@ -196,15 +210,19 @@ export interface CandidateQualityVerdict {
   readonly overallRationale: string;
 }
 
-const QUALITY_DIMENSION_LABEL: Readonly<Record<string, string>> = {
-  verifiability: "Verifiability",
-  atomicity: "Atomicity",
-  determinism: "Determinism",
-  "ac-fidelity": "AC fidelity",
-};
+function qualityDimensionLabel(name: string, t: I18nTranslate): string {
+  if (name === "verifiability") return t("qi.quality.dimension.verifiability");
+  if (name === "atomicity") return t("qi.quality.dimension.atomicity");
+  if (name === "determinism") return t("qi.quality.dimension.determinism");
+  if (name === "ac-fidelity") return t("qi.quality.dimension.acFidelity");
+  return name;
+}
 
-function qualityVerdictLabel(verdict: CandidateQualityVerdict["verdict"]): string {
-  return verdict === "strong" ? "Strong" : "Weak";
+function qualityVerdictLabel(
+  verdict: CandidateQualityVerdict["verdict"],
+  t: I18nTranslate,
+): string {
+  return verdict === "strong" ? t("qi.quality.verdict.strong") : t("qi.quality.verdict.weak");
 }
 
 export function CandidateQualityVerdictNote({
@@ -212,24 +230,29 @@ export function CandidateQualityVerdictNote({
 }: {
   readonly verdict: CandidateQualityVerdict;
 }): ReactNode {
+  const t = useTranslate();
   const rounded = Math.round(verdict.score);
-  const label = qualityVerdictLabel(verdict.verdict);
+  const label = qualityVerdictLabel(verdict.verdict, t);
   return (
     <div
       role="note"
-      aria-label={`Quality judge verdict: ${label}, ${rounded.toString()} out of 100. ${verdict.overallRationale}`}
+      aria-label={t("qi.quality.verdict.aria", {
+        label,
+        score: rounded,
+        rationale: verdict.overallRationale,
+      })}
       className="qi-cand-block"
       data-testid="qi-quality-verdict"
     >
-      <p className="qi-cand-block-label">Quality verdict</p>
+      <p className="qi-cand-block-label">{t("qi.quality.verdict.title")}</p>
       <p>
         {label} - {rounded.toString()}/100
       </p>
-      <ul className="qi-cand-list" aria-label="Quality dimensions">
+      <ul className="qi-cand-list" aria-label={t("qi.quality.dimensions")}>
         {verdict.dimensions.map((dimension) => (
           <li key={dimension.name}>
-            {QUALITY_DIMENSION_LABEL[dimension.name] ?? dimension.name}{" "}
-            {Math.round(dimension.score).toString()}: {dimension.rationale}
+            {qualityDimensionLabel(dimension.name, t)} {Math.round(dimension.score).toString()}:{" "}
+            {dimension.rationale}
           </li>
         ))}
       </ul>
@@ -271,11 +294,12 @@ export function ErrorState({
   readonly message: string;
   readonly onRetry: () => void;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <div role="alert" aria-live="assertive" className="lk-alert" data-testid="qi-error-state">
       {message}
       <button type="button" className="lk-alert-retry" onClick={onRetry}>
-        Retry
+        {t("common.retry")}
       </button>
     </div>
   );

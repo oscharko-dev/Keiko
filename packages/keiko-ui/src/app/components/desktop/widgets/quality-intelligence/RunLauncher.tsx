@@ -29,6 +29,7 @@ import type {
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
+import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import {
@@ -407,6 +408,38 @@ function preflightStatusLabel(status: QiPreflightUiStatus): string {
   return "working";
 }
 
+function sourceKindLabelForUi(source: ConnectedRunSource, t: I18nTranslate): string {
+  if (source.kind === "file") return t("qi.launcher.source.file");
+  if (source.kind === "workspace") return t("qi.launcher.source.folder");
+  if (source.kind === "capsule") return "Knowledge Pod";
+  if (source.kind === "capsule-set") return "Knowledge Pod Set";
+  if (source.kind === "figma-snapshot") {
+    return source.label.startsWith("JSON ·") ? "Figma JSON" : t("qi.launcher.source.figmaSnapshot");
+  }
+  return t("qi.launcher.source.image");
+}
+
+function manualSourceKindLabel(kind: ManualSourceKind, t: I18nTranslate): string {
+  if (kind === "requirements") return t("qi.launcher.source.requirements");
+  if (kind === "workspace") return t("qi.launcher.source.folder");
+  if (kind === "file") return t("qi.launcher.source.file");
+  if (kind === "capsule") return "Knowledge Pod";
+  return "Knowledge Pod Set";
+}
+
+function sourceKindSentenceLabelForUi(source: ConnectedRunSource, t: I18nTranslate): string {
+  if (source.kind === "file") return t("qi.launcher.source.fileLower");
+  if (source.kind === "workspace") return t("qi.launcher.source.folderLower");
+  if (source.kind === "capsule" || source.kind === "capsule-set")
+    return sourceKindLabelForUi(source, t);
+  if (source.kind === "figma-snapshot") {
+    return source.label.startsWith("JSON ·")
+      ? "Figma JSON"
+      : t("qi.launcher.source.figmaSnapshotLower");
+  }
+  return t("qi.launcher.source.imageLower");
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
@@ -425,6 +458,7 @@ export function RunLauncher({
   connectedFigmaSnapshotSources,
   connectedImageSources,
 }: RunLauncherProps): ReactNode {
+  const t = useTranslate();
   const [label, setLabel] = useState("");
   const [sourceKind, setSourceKind] = useState<ManualSourceKind>("requirements");
   const [text, setText] = useState("");
@@ -870,20 +904,20 @@ export function RunLauncher({
   function renderWorkflowBar(): ReactNode {
     const controlsDisabled = running || modelPolicyLoading || modelPolicySaving;
     return (
-      <div className="qi-workflow-bar" aria-label="Quality Intelligence workflow">
+      <div className="qi-workflow-bar" aria-label={t("qi.launcher.workflow.aria")}>
         <div className="qi-workflow-stage qi-workflow-stage-static">
-          <span className="qi-workflow-stage-label">Source</span>
-          <span className="qi-workflow-stage-badge">deterministic</span>
+          <span className="qi-workflow-stage-label">{t("qi.launcher.workflow.source")}</span>
+          <span className="qi-workflow-stage-badge">{t("qi.launcher.workflow.deterministic")}</span>
         </div>
         <div className="qi-workflow-stage qi-workflow-stage-model">
-          <span className="qi-workflow-stage-label">Generate</span>
+          <span className="qi-workflow-stage-label">{t("qi.launcher.workflow.generate")}</span>
           <KeikoSelect
             triggerClassName="qi-model-select"
             value={selectedGenerationModelId}
-            ariaLabel="Quality Intelligence generation model"
+            ariaLabel={t("qi.launcher.generationModel")}
             disabled={controlsDisabled || generationModels.length === 0}
-            placeholder="No chat model"
-            menuTitle="Generation model"
+            placeholder={t("qi.launcher.noChatModel")}
+            menuTitle={t("qi.launcher.generationModel")}
             menuClassName="qi-model-menu"
             mono
             sections={[
@@ -899,14 +933,14 @@ export function RunLauncher({
           />
         </div>
         <div className="qi-workflow-stage qi-workflow-stage-model">
-          <span className="qi-workflow-stage-label">Judge</span>
+          <span className="qi-workflow-stage-label">{t("qi.launcher.workflow.judge")}</span>
           <KeikoSelect
             triggerClassName="qi-model-select"
             value={selectedJudgeModelId}
-            ariaLabel="Quality Intelligence judge model"
+            ariaLabel={t("qi.launcher.judgeModel")}
             disabled={controlsDisabled || judgeModels.length === 0}
-            placeholder="No judge model"
-            menuTitle="Judge model"
+            placeholder={t("qi.launcher.noJudgeModel")}
+            menuTitle={t("qi.launcher.judgeModel")}
             menuClassName="qi-model-menu"
             mono
             sections={[
@@ -919,10 +953,18 @@ export function RunLauncher({
             }}
           />
         </div>
-        {(["Coverage", "Validate", "Finalize"] as const).map((stage) => (
+        {(
+          [
+            t("qi.launcher.workflow.coverage"),
+            t("qi.launcher.workflow.validate"),
+            t("qi.launcher.workflow.finalize"),
+          ] as const
+        ).map((stage) => (
           <div key={stage} className="qi-workflow-stage qi-workflow-stage-static">
             <span className="qi-workflow-stage-label">{stage}</span>
-            <span className="qi-workflow-stage-badge">deterministic</span>
+            <span className="qi-workflow-stage-badge">
+              {t("qi.launcher.workflow.deterministic")}
+            </span>
           </div>
         ))}
         {/* The visible pill is aria-hidden and the announcement is owned by the sibling sr-only
@@ -932,7 +974,7 @@ export function RunLauncher({
           {preflightStatusLabel(preflightStatus)}
         </span>
         <span className="sr-only" role="status" aria-live="polite">
-          {`Model preflight: ${preflightStatusLabel(preflightStatus)}`}
+          {t("qi.launcher.preflightStatus", { status: preflightStatusLabel(preflightStatus) })}
         </span>
       </div>
     );
@@ -942,12 +984,12 @@ export function RunLauncher({
     if (sourceKind === "requirements") {
       return (
         <label className="qi-field">
-          <span className="qi-field-label">Requirements</span>
+          <span className="qi-field-label">{t("qi.launcher.requirements")}</span>
           <textarea
             className="qi-textarea"
             value={text}
             rows={6}
-            placeholder="Paste requirements or acceptance criteria, one statement per line."
+            placeholder={t("qi.launcher.requirementsPlaceholder")}
             disabled={running}
             onChange={(e) => {
               setText(e.target.value);
@@ -961,7 +1003,7 @@ export function RunLauncher({
       return (
         <div className="qi-field">
           <span className="qi-field-label" id={sourcePathLabelId}>
-            {isFile ? "File path" : "Folder path"}
+            {isFile ? t("qi.launcher.filePath") : t("qi.launcher.folderPath")}
           </span>
           <div className="qi-path-picker">
             <input
@@ -969,7 +1011,9 @@ export function RunLauncher({
               className="qi-path-value qi-monospace"
               aria-labelledby={sourcePathLabelId}
               title={path}
-              placeholder={isFile ? "Choose a local file…" : "Choose a local folder…"}
+              placeholder={
+                isFile ? t("qi.launcher.chooseLocalFile") : t("qi.launcher.chooseLocalFolder")
+              }
               value={path}
               disabled={running}
               onChange={(e) => {
@@ -984,12 +1028,12 @@ export function RunLauncher({
               aria-describedby={nativeDialogSupported ? undefined : nativeUnsupportedNoteId}
               onClick={openNativeSourcePicker}
             >
-              Browse
+              {t("common.browse")}
             </button>
           </div>
           {!nativeDialogSupported ? (
             <span id={nativeUnsupportedNoteId} className="qi-field-note">
-              Native dialogs are unavailable on this platform. Enter the path manually.
+              {t("qi.launcher.nativeDialogUnavailable")}
             </span>
           ) : null}
         </div>
@@ -1010,10 +1054,14 @@ export function RunLauncher({
             else setCapsuleSetId(e.target.value);
           }}
         >
-          {connectorLoading ? <option value="">Loading Knowledge Pods...</option> : null}
+          {connectorLoading ? (
+            <option value="">{t("qi.launcher.loadingKnowledgePods")}</option>
+          ) : null}
           {!connectorLoading && options.length === 0 ? (
             <option value="">
-              {isCapsule ? "No ready Knowledge Pods" : "No Knowledge Pod Sets"}
+              {isCapsule
+                ? t("qi.launcher.noReadyKnowledgePods")
+                : t("qi.launcher.noKnowledgePodSets")}
             </option>
           ) : null}
           {isCapsule
@@ -1055,9 +1103,9 @@ export function RunLauncher({
     .join(" ");
 
   return (
-    <section className="qi-launcher" aria-label="Start a Quality Intelligence run">
+    <section className="qi-launcher" aria-label={t("qi.launcher.startAria")}>
       <header className="qi-col-header">
-        <h2 className="qi-col-title">New run</h2>
+        <h2 className="qi-col-title">{t("qi.launcher.newRun")}</h2>
       </header>
       <div className="qi-launcher-body">
         {renderWorkflowBar()}
@@ -1069,7 +1117,9 @@ export function RunLauncher({
         {connectedSources.length === 1 && connectedSources[0] !== undefined ? (
           <div className="qi-connected-source" data-testid="qi-connected-source">
             <span className="qi-connected-kind">
-              Connected {sourceKindSentenceLabel(connectedSources[0])}
+              {t("qi.launcher.connectedSingle", {
+                source: sourceKindSentenceLabelForUi(connectedSources[0], t),
+              })}
             </span>
             <span
               className="qi-connected-path qi-monospace"
@@ -1079,19 +1129,21 @@ export function RunLauncher({
             </span>
             <span className="qi-connected-hint">
               {manualReady
-                ? "Manual input below overrides the connected source for this run."
-                : `Generate uses the connected ${sourceKindSentenceLabel(connectedSources[0])}.`}
+                ? t("qi.launcher.manualOverridesSingle")
+                : t("qi.launcher.generateUsesConnectedSingle", {
+                    source: sourceKindSentenceLabelForUi(connectedSources[0], t),
+                  })}
             </span>
           </div>
         ) : connectedSources.length > 1 ? (
           <div className="qi-connected-source" data-testid="qi-connected-source">
             <span className="qi-connected-kind">
-              Connected sources ({connectedSources.length.toString()})
+              {t("qi.launcher.connectedSources", { count: connectedSources.length })}
             </span>
-            <ul className="qi-connected-roots" aria-label="Connected sources">
+            <ul className="qi-connected-roots" aria-label={t("qi.launcher.connectedSourcesAria")}>
               {connectedSources.map((s) => (
                 <li key={sourceItemKey(s)} className="qi-connected-root-item">
-                  <span className="qi-connected-root-name">{sourceKindLabel(s)}</span>
+                  <span className="qi-connected-root-name">{sourceKindLabelForUi(s, t)}</span>
                   <span className="qi-connected-path qi-monospace" title={sourceValue(s)}>
                     {sourceValue(s)}
                   </span>
@@ -1100,19 +1152,19 @@ export function RunLauncher({
             </ul>
             <span className="qi-connected-hint">
               {manualReady
-                ? "Manual input below overrides the connected sources for this run."
-                : "Generate uses all connected sources."}
+                ? t("qi.launcher.manualOverridesMultiple")
+                : t("qi.launcher.generateUsesAllConnected")}
             </span>
           </div>
         ) : null}
         <div className="qi-launcher-row">
           <label className="qi-field">
-            <span className="qi-field-label">Source label</span>
+            <span className="qi-field-label">{t("qi.launcher.sourceLabel")}</span>
             <input
               type="text"
               className="qi-input"
               value={label}
-              placeholder="e.g. Funds Transfer — acceptance criteria"
+              placeholder={t("qi.launcher.sourceLabelPlaceholder")}
               disabled={running}
               aria-describedby={hasConnected && !manualReady ? labelHintId : undefined}
               onChange={(e) => {
@@ -1121,13 +1173,13 @@ export function RunLauncher({
             />
             {hasConnected && !manualReady ? (
               <span className="qi-field-hint" id={labelHintId}>
-                Applies to manual input only — connected sources use their own labels.
+                {t("qi.launcher.manualLabelHint")}
               </span>
             ) : null}
           </label>
           <div className="qi-field qi-field-kind">
             <span className="qi-field-label" id={sourceTypeLabelId}>
-              Source type
+              {t("qi.launcher.sourceType")}
             </span>
             <div
               className="qi-source-kind-grid"
@@ -1141,8 +1193,8 @@ export function RunLauncher({
                   type="button"
                   className="qi-source-kind-option"
                   role="radio"
-                  aria-label={option.label}
-                  data-tip={option.label}
+                  aria-label={manualSourceKindLabel(option.id, t)}
+                  data-tip={manualSourceKindLabel(option.id, t)}
                   aria-checked={sourceKind === option.id}
                   tabIndex={sourceKind === option.id ? 0 : -1}
                   disabled={running}
@@ -1152,7 +1204,9 @@ export function RunLauncher({
                   onClick={() => chooseSourceKind(option.id)}
                   onKeyDown={onSourceKindKeyDown}
                 >
-                  <span className="qi-source-kind-label">{option.label}</span>
+                  <span className="qi-source-kind-label">
+                    {manualSourceKindLabel(option.id, t)}
+                  </span>
                   <span className="qi-source-kind-icon" aria-hidden="true">
                     <SourceKindIcon kind={option.id} />
                   </span>
@@ -1169,13 +1223,13 @@ export function RunLauncher({
         ) : null}
         <div className="qi-launcher-controls">
           <div className="qi-field qi-field-inline qi-policy-profile-field">
-            <span className="qi-field-label">Policy profile</span>
+            <span className="qi-field-label">{t("qi.launcher.policyProfile")}</span>
             <KeikoSelect
               triggerClassName="qi-select"
               value={profileId}
-              ariaLabel="Policy profile"
+              ariaLabel={t("qi.launcher.policyProfile")}
               disabled={running}
-              menuTitle="Policy"
+              menuTitle={t("qi.launcher.policy")}
               menuClassName="qi-policy-profile-menu"
               sections={[
                 {
@@ -1189,7 +1243,7 @@ export function RunLauncher({
             />
           </div>
           <label className="qi-field qi-field-inline">
-            <span className="qi-field-label">Seed (optional)</span>
+            <span className="qi-field-label">{t("qi.launcher.seedOptional")}</span>
             <span className="number-control qi-number-control">
               <input
                 type="number"
@@ -1197,7 +1251,7 @@ export function RunLauncher({
                 step={1}
                 className="qi-input number-control-input"
                 value={seed}
-                placeholder="e.g. 42"
+                placeholder={t("qi.launcher.seedPlaceholder")}
                 disabled={running}
                 aria-invalid={seedValid ? undefined : true}
                 aria-describedby={seedValid ? undefined : seedErrorId}
@@ -1208,7 +1262,7 @@ export function RunLauncher({
                 onWheel={handleSeedWheel}
               />
               <NumberControlStepper
-                label="seed"
+                label={t("qi.launcher.seed")}
                 disabled={running}
                 onStepUp={() => stepSeed(1)}
                 onStepDown={() => stepSeed(-1)}
@@ -1216,7 +1270,7 @@ export function RunLauncher({
             </span>
             {!seedValid ? (
               <span className="qi-field-error" id={seedErrorId}>
-                Seed must be a non-negative integer.
+                {t("qi.launcher.seedError")}
               </span>
             ) : null}
           </label>
@@ -1237,12 +1291,11 @@ export function RunLauncher({
               void handleStart();
             }}
           >
-            {running ? "Cancel" : "Generate test cases"}
+            {running ? t("common.cancel") : t("qi.launcher.generateTestCases")}
           </button>
           {!running && !ready ? (
             <span className="qi-generate-hint" id={generateHintId}>
-              Add requirements text, a folder path, a file path, select a Knowledge Pod, select a
-              Knowledge Pod Set, or connect a source to generate.
+              {t("qi.launcher.generateHint")}
             </span>
           ) : null}
         </div>

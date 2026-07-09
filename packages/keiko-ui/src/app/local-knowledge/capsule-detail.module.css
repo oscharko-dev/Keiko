@@ -1,0 +1,399 @@
+.detailPage {
+  gap: 14px;
+  max-width: 920px;
+  padding-block: 18px 24px;
+}
+
+.backButton {
+  align-self: flex-start;
+  flex: none;
+}
+
+.detailContent {
+  gap: 16px;
+}
+
+.explainable {
+  position: relative;
+  min-width: 0;
+  cursor: help;
+}
+
+.explainable:not(.explainableBlock) {
+  display: inline-flex;
+}
+
+.explainableBlock {
+  display: block;
+  width: 100%;
+}
+
+.explainable:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
+.helpTooltip {
+  position: absolute;
+  z-index: calc(var(--z-tooltip, 600) + 20);
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: min(340px, calc(100vw - 48px));
+  padding: 8px 10px;
+  color: var(--tooltip-text);
+  background: var(--tooltip-surface);
+  border: 1px solid var(--popover-border);
+  border-radius: 8px;
+  box-shadow: var(--popover-shadow);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  white-space: normal;
+  pointer-events: none;
+}
+
+.explainable[data-placement="top"] .helpTooltip {
+  top: auto;
+  bottom: calc(100% + 8px);
+}
+
+.explainableBlock > .helpTooltip {
+  left: 10px;
+}
+
+.explainableBlock > :global(.lkd-metric-card),
+.explainableBlock > :global(.lkd-status-bar-row),
+.explainableBlock > :global(.lkd-status-callout) {
+  height: 100%;
+}
+
+.podHeader {
+  align-items: center;
+  min-height: 34px;
+}
+
+.podTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceSetup {
+  width: 100%;
+  padding: 16px;
+  align-items: stretch;
+  gap: 14px;
+  background: var(--surface-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.sourceSetupHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sourceSetupTitle {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.sourceSetupDescription {
+  max-width: 560px;
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.sourcePickerPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.sourcePickerCopy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sourcePickerTitle {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.sourcePickerDescription {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sourcePickerFormats {
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+  line-height: 1.35;
+}
+
+.sourcePickerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.sourcePickerActions :global(.lk-btn) {
+  min-inline-size: 148px;
+  justify-content: center;
+}
+
+.selectedSourceNote {
+  margin: -2px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.sourceSetup :global(.lkd-connect-form) {
+  width: 100%;
+  gap: 12px;
+}
+
+.sourceSetup :global(.lkd-connect-row) {
+  gap: 7px;
+}
+
+.sourceSetup :global(.lkd-connect-path-group) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.sourceSetup :global(.lkd-connect-path-group .lk-btn) {
+  white-space: nowrap;
+}
+
+.specificFilesDisclosure {
+  margin: -2px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.specificFilesSummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.specificFilesSummary::-webkit-details-marker {
+  display: none;
+}
+
+.specificFilesDisclosure textarea {
+  margin-top: 6px;
+}
+
+.indexPrompt {
+  padding-top: 2px;
+}
+
+.maintenanceDisclosure,
+.advancedDisclosure {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.maintenanceDisclosure {
+  margin-top: 2px;
+  padding-top: 4px;
+}
+
+.advancedDisclosure {
+  padding-top: 6px;
+}
+
+.disclosureSummary {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) 24px;
+  gap: 10px;
+  align-items: center;
+  min-height: 34px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.disclosureSummary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosureIcon {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  justify-self: end;
+  width: 22px;
+  height: 22px;
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+}
+
+.disclosureIcon::before,
+.disclosureIcon::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  content: "";
+  background: currentColor;
+  border-radius: 999px;
+  transform: translate(-50%, -50%);
+}
+
+.disclosureIcon::before {
+  width: 8px;
+  height: 1.5px;
+}
+
+.disclosureIcon::after {
+  width: 1.5px;
+  height: 8px;
+}
+
+.maintenanceDisclosure[open] .disclosureIcon::after,
+.advancedDisclosure[open] .disclosureIcon::after,
+.specificFilesDisclosure[open] .disclosureIcon::after {
+  opacity: 0;
+}
+
+.disclosureSummary > span:nth-child(2) {
+  justify-self: end;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.maintenanceDisclosure :global(.lkd-limit-note) {
+  margin: 6px 0 10px;
+}
+
+.maintenanceDisclosure :global(.lkd-actions-group) {
+  padding-bottom: 2px;
+}
+
+.advancedStack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 14px;
+}
+
+.capsulePodGlyph,
+.capsuleSetGlyph {
+  display: block;
+  box-sizing: border-box;
+  flex: none;
+  color: currentColor;
+}
+
+.capsulePodGlyph {
+  position: relative;
+  width: 15px;
+  height: 15px;
+}
+
+.capsulePodGlyph::before,
+.capsulePodGlyph::after {
+  position: absolute;
+  content: "";
+  clip-path: polygon(26% 6%, 74% 6%, 100% 50%, 74% 94%, 26% 94%, 0 50%);
+}
+
+.capsulePodGlyph::before {
+  inset: 0;
+  background: currentColor;
+}
+
+.capsulePodGlyph::after {
+  inset: 2px;
+  background: var(--surface-inset);
+}
+
+.capsuleSetGlyph {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 2px var(--surface-inset);
+}
+
+.capsuleRowInfo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.capsuleRowInfo :global(.lk-capsule-name) {
+  min-width: 0;
+}
+
+.capsuleRowInfo :global(.lk-badge) {
+  flex: none;
+}
+
+@media (max-width: 760px) {
+  .detailPage {
+    padding-inline: 18px;
+  }
+
+  .sourceSetup {
+    padding: 14px;
+  }
+
+  .sourcePickerPanel,
+  .sourceSetup :global(.lkd-connect-path-group) {
+    grid-template-columns: 1fr;
+  }
+
+  .sourcePickerActions {
+    justify-content: flex-start;
+  }
+
+  .helpTooltip {
+    max-width: min(280px, calc(100vw - 36px));
+  }
+
+  .disclosureSummary {
+    grid-template-columns: minmax(0, 1fr) 24px;
+  }
+
+  .disclosureSummary > span:nth-child(2) {
+    display: none;
+  }
+}

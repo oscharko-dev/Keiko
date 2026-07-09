@@ -16,6 +16,7 @@
 // (AC5). Insertion places reviewed text into the composer; it never sends or plays audio.
 
 import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useVoiceTranslate as useTranslate, type I18nTranslate } from "./voice-i18n";
 import { Icons } from "./Icons";
 import type {
   DictationController,
@@ -31,22 +32,19 @@ export const VOICE_PRIVACY_HINT_ID = "cmp-voice-privacy-hint";
 // sr-only hint (both can be in the DOM during the preview phase).
 const VOICE_PRIVACY_NOTE_ID = "cmp-voice-privacy-note";
 
-const PRIVACY_MESSAGE =
-  "Audio is sent only to your configured speech-to-text endpoint and is not stored.";
-
-function micLabel(phase: DictationPhase): string {
+function micLabel(phase: DictationPhase, t: I18nTranslate): string {
   switch (phase) {
     case "requesting":
-      return "Starting microphone…";
+      return t("voice.dictation.starting");
     case "recording":
-      return "Stop dictation";
+      return t("voice.dictation.stop");
     case "finalizing":
-      return "Finishing dictation…";
+      return t("voice.dictation.finishing");
     case "transcribing":
-      return "Transcribing your dictation…";
+      return t("voice.dictation.transcribing");
     default:
       // idle | preview | error — the affordance starts (or restarts) dictation.
-      return "Dictate a message";
+      return t("voice.dictation.start");
   }
 }
 
@@ -67,12 +65,13 @@ export function VoiceDictationButton({
   buttonRef,
   compact = false,
 }: VoiceDictationButtonProps): ReactNode {
+  const t = useTranslate();
   const recording = phase === "recording";
   const live = recording || phase === "finalizing";
   // Interactive only when there is a clear action: start from idle/preview/error, stop while
   // recording. The transient requesting / transcribing states are announced but not clickable.
   const busy = phase === "requesting" || phase === "finalizing" || phase === "transcribing";
-  const label = micLabel(phase);
+  const label = micLabel(phase, t);
   return (
     <button
       type="button"
@@ -108,7 +107,7 @@ export function VoiceDictationButton({
         <Icons.mic size={16} />
       )}
       <span id={VOICE_PRIVACY_HINT_ID} className="sr-only">
-        {PRIVACY_MESSAGE}
+        {t("voice.dictation.privacy")}
       </span>
     </button>
   );
@@ -136,19 +135,19 @@ function VoiceLevelMeter({
   );
 }
 
-function errorHeadline(reason: DictationErrorReason): string {
+function errorHeadline(reason: DictationErrorReason, t: I18nTranslate): string {
   switch (reason) {
     case "permission-denied":
-      return "Microphone access was denied. Allow microphone access in your browser to dictate.";
+      return t("voice.dictation.error.permission");
     case "no-microphone":
-      return "No microphone was found. Connect a microphone and try again.";
+      return t("voice.error.noMicrophone");
     case "unsupported":
-      return "This browser does not support microphone dictation.";
+      return t("voice.dictation.error.unsupported");
     case "unavailable":
-      return "Speech-to-text dictation is not available right now.";
+      return t("voice.dictation.error.unavailable");
     case "transcribe-failed":
     case "capture-failed":
-      return "Dictation could not be completed.";
+      return t("voice.dictation.error.failed");
   }
 }
 
@@ -181,6 +180,7 @@ export function VoiceDictationPreview({
   onDiscard,
   onRetry,
 }: VoiceDictationPreviewProps): ReactNode {
+  const t = useTranslate();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
 
@@ -199,10 +199,10 @@ export function VoiceDictationPreview({
     // "Preparing mic" until capture is verified live, so the user is only invited to speak once audio is
     // actually flowing; then "Listening" / "Capturing speech" as the level crosses the speech gate.
     const recordingLabel = !micReady
-      ? "Preparing mic…"
+      ? t("voice.dictation.preparingMic")
       : heardSpeech
-        ? "Capturing speech…"
-        : "Listening…";
+        ? t("voice.dictation.capturing")
+        : t("voice.dictation.listening");
     return (
       <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
         <VoiceLevelMeter level={micReady ? audioLevel : 0} />
@@ -218,7 +218,7 @@ export function VoiceDictationPreview({
     return (
       <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
         <VoiceLevelMeter level={0} />
-        <span>Finishing dictation…</span>
+        <span>{t("voice.dictation.finishing")}</span>
         {liveTranscript.trim().length > 0 ? (
           <span className="cmp-voice-label">{liveTranscript}</span>
         ) : null}
@@ -230,7 +230,7 @@ export function VoiceDictationPreview({
     return (
       <div className="cmp-voice-preview" role="status" aria-live="polite">
         <span className="cmp-loading-dot" aria-hidden="true" />
-        Transcribing your dictation…
+        {t("voice.dictation.transcribing")}
       </div>
     );
   }
@@ -238,13 +238,13 @@ export function VoiceDictationPreview({
   if (phase === "error" && error !== undefined) {
     return (
       <div className="cmp-voice-preview cmp-voice-error" role="alert" aria-atomic="true">
-        <p className="cmp-voice-error-text">{errorHeadline(error.reason)}</p>
+        <p className="cmp-voice-error-text">{errorHeadline(error.reason, t)}</p>
         <div className="cmp-voice-actions">
           <button type="button" ref={retryRef} className="cmp-voice-btn" onClick={onRetry}>
-            Try again
+            {t("common.tryAgain")}
           </button>
           <button type="button" className="cmp-voice-btn" onClick={onDiscard}>
-            Dismiss
+            {t("common.dismiss")}
           </button>
         </div>
       </div>
@@ -256,12 +256,12 @@ export function VoiceDictationPreview({
   }
 
   return (
-    <div className="cmp-voice-preview" role="group" aria-label="Dictation transcript preview">
+    <div className="cmp-voice-preview" role="group" aria-label={t("voice.dictation.preview")}>
       <span role="status" aria-live="polite" className="sr-only">
-        Transcript ready for review.
+        {t("voice.dictation.ready")}
       </span>
       <label className="cmp-voice-label" htmlFor="cmp-voice-transcript">
-        Review your dictation
+        {t("voice.dictation.review")}
       </label>
       <textarea
         id="cmp-voice-transcript"
@@ -273,7 +273,7 @@ export function VoiceDictationPreview({
         onChange={(event) => onTranscriptChange(event.target.value)}
       />
       <p id={VOICE_PRIVACY_NOTE_ID} className="cmp-voice-privacy">
-        {PRIVACY_MESSAGE}
+        {t("voice.dictation.privacy")}
       </p>
       {finalizationNote !== undefined ? (
         <p className="cmp-voice-privacy">{finalizationNote}</p>
@@ -282,27 +282,27 @@ export function VoiceDictationPreview({
         <button
           type="button"
           className="cmp-voice-btn cmp-voice-btn-primary"
-          aria-label="Insert transcript into the message"
+          aria-label={t("voice.dictation.insertAria")}
           disabled={transcript.trim().length === 0}
           onClick={onInsert}
         >
-          Insert
+          {t("voice.dictation.insert")}
         </button>
         <button
           type="button"
           className="cmp-voice-btn"
-          aria-label="Re-record the dictation"
+          aria-label={t("voice.dictation.rerecordAria")}
           onClick={onRetry}
         >
-          Re-record
+          {t("voice.dictation.rerecord")}
         </button>
         <button
           type="button"
           className="cmp-voice-btn"
-          aria-label="Discard the dictation"
+          aria-label={t("voice.dictation.discardAria")}
           onClick={onDiscard}
         >
-          Discard
+          {t("voice.dictation.discard")}
         </button>
       </div>
     </div>

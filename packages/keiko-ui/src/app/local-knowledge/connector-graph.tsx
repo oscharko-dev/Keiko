@@ -20,6 +20,7 @@ import {
   type FormEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
   type ReactNode,
 } from "react";
 import type {
@@ -27,17 +28,18 @@ import type {
   CapsuleSetId,
   CapsuleLifecycleState,
   KnowledgePodSetReadinessReasonCode,
-  KnowledgePodModelUsePolicy,
   ManualRefreshChangeSummary,
   ManualRefreshReasonCode,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  MANUAL_REFRESH_REASON_GUIDANCE,
-  sealedLocalPodModelUsePolicy,
-  standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+import { MANUAL_REFRESH_REASON_GUIDANCE } from "@oscharko-dev/keiko-contracts";
+import { Icons } from "@/app/components/desktop/Icons";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
+import {
+  useLocalKnowledgeTranslate as useTranslate,
+  type I18nTranslate,
+  type LocalKnowledgeMessageKey,
+} from "./local-knowledge-i18n";
 import type {
   CapsuleListEntry,
   CapsuleSetListEntry,
@@ -56,7 +58,9 @@ import {
   serializeLocalKnowledgeConnectorDrag,
 } from "./connector-drag";
 import manualRefreshStyles from "./manual-refresh-panel.module.css";
+import createDialogStyles from "./create-capsule-dialog.module.css";
 import setCountsStyles from "./set-counts.module.css";
+import detailStyles from "./capsule-detail.module.css";
 
 // ---------------------------------------------------------------------------
 // AlertBanner
@@ -71,6 +75,7 @@ function AlertBanner({
   onRetry?: () => void;
   onDismiss?: () => void;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <div role="alert" aria-live="assertive" className="lk-alert">
       {message}
@@ -78,10 +83,10 @@ function AlertBanner({
         <button
           type="button"
           onClick={onRetry}
-          aria-label="Retry loading Knowledge Pods"
+          aria-label={t("localKnowledge.overview.retryLoadingPods")}
           className="lk-alert-retry"
         >
-          Retry
+          {t("common.retry")}
         </button>
       ) : null}
       {/* Banners without a retry action used to be sticky until the next
@@ -90,10 +95,10 @@ function AlertBanner({
         <button
           type="button"
           onClick={onDismiss}
-          aria-label="Dismiss error message"
+          aria-label={t("common.dismissError")}
           className="lk-alert-retry"
         >
-          Dismiss
+          {t("common.dismissError")}
         </button>
       ) : null}
     </div>
@@ -108,10 +113,307 @@ function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
   );
 }
 
-type CreateCapsulePolicyMode = "sealed-local" | "standard";
+type CreateCapsuleAccessMode = "local" | "shareable";
 
-function policyForCreateMode(mode: CreateCapsulePolicyMode): KnowledgePodModelUsePolicy {
-  return mode === "sealed-local" ? sealedLocalPodModelUsePolicy() : standardPodModelUsePolicy();
+interface CreateCapsuleAccessOption {
+  readonly mode: CreateCapsuleAccessMode;
+  readonly labelKey: LocalKnowledgeMessageKey;
+  readonly descriptionKey: LocalKnowledgeMessageKey;
+  readonly disabled?: true;
+  readonly disabledTooltipKey?: LocalKnowledgeMessageKey;
+}
+
+const CREATE_CAPSULE_ACCESS_OPTIONS: readonly CreateCapsuleAccessOption[] = [
+  {
+    mode: "local",
+    labelKey: "localKnowledge.create.access.local",
+    descriptionKey: "localKnowledge.create.access.localDescription",
+  },
+  {
+    mode: "shareable",
+    labelKey: "localKnowledge.create.access.shareable",
+    descriptionKey: "localKnowledge.create.access.shareableDescription",
+    disabled: true,
+    disabledTooltipKey: "localKnowledge.create.access.shareableTooltip",
+  },
+];
+
+function useTooltipPosition(
+  open: boolean,
+  anchorRef: RefObject<HTMLElement | null>,
+): {
+  readonly left: number;
+  readonly top: number;
+} | null {
+  const [tooltipPosition, setTooltipPosition] = useState<{
+    readonly left: number;
+    readonly top: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setTooltipPosition(null);
+      return undefined;
+    }
+    const updatePosition = (): void => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (rect === undefined) return;
+      const width = 300;
+      const gap = 8;
+      const margin = 16;
+      const rightSideLeft = rect.right + gap;
+      const left =
+        rightSideLeft + width <= window.innerWidth - margin
+          ? rightSideLeft
+          : Math.max(margin, rect.left - width - gap);
+      setTooltipPosition({ left, top: rect.top + rect.height / 2 });
+    };
+    updatePosition();
+    window.addEventListener("resize", updatePosition);
+    return () => window.removeEventListener("resize", updatePosition);
+  }, [anchorRef, open]);
+
+  return tooltipPosition;
+}
+
+function CreateAccessTooltip({
+  id,
+  open,
+  position,
+  children,
+}: {
+  readonly id: string;
+  readonly open: boolean;
+  readonly position: { readonly left: number; readonly top: number } | null;
+  readonly children: ReactNode;
+}): ReactNode {
+  if (!open) return null;
+  const tooltip = (
+    <span
+      id={id}
+      role="tooltip"
+      className={createDialogStyles.accessTooltip}
+      data-open="true"
+      style={position === null ? undefined : { left: position.left, top: position.top }}
+    >
+      {children}
+    </span>
+  );
+  return typeof document === "undefined" ? tooltip : createPortal(tooltip, document.body);
+}
+
+function CreateAccessHelp({ tooltipId }: { readonly tooltipId: string }): ReactNode {
+  const t = useTranslate();
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const [pinnedOpen, setPinnedOpen] = useState(false);
+  const open = hoverOpen || pinnedOpen;
+  const tooltipPosition = useTooltipPosition(open, buttonRef);
+
+  return (
+    <span className={createDialogStyles.accessHelp}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={createDialogStyles.accessHelpButton}
+        aria-label={t("localKnowledge.create.access.helpLabel")}
+        aria-describedby={open ? tooltipId : undefined}
+        aria-expanded={open}
+        onMouseEnter={() => setHoverOpen(true)}
+        onMouseLeave={() => setHoverOpen(false)}
+        onFocus={() => setHoverOpen(true)}
+        onBlur={() => setHoverOpen(false)}
+        onClick={() => setPinnedOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.stopPropagation();
+          setHoverOpen(false);
+          setPinnedOpen(false);
+        }}
+      >
+        <Icons.info size={14} />
+      </button>
+      <CreateAccessTooltip id={tooltipId} open={open} position={tooltipPosition}>
+        {t("localKnowledge.create.access.help")}
+      </CreateAccessTooltip>
+    </span>
+  );
+}
+
+function CreateAccessOptionCopy({
+  labelId,
+  descriptionId,
+  option,
+  showComingSoon,
+}: {
+  readonly labelId: string;
+  readonly descriptionId: string;
+  readonly option: CreateCapsuleAccessOption;
+  readonly showComingSoon: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <span className={createDialogStyles.accessOptionCopy}>
+      <span id={labelId} className={createDialogStyles.accessOptionTitle}>
+        {t(option.labelKey)}
+        {showComingSoon ? (
+          <span className={createDialogStyles.accessOptionBadge}>
+            {t("localKnowledge.create.access.comingSoon")}
+          </span>
+        ) : null}
+      </span>
+      <span id={descriptionId} className={createDialogStyles.accessOptionDescription}>
+        {t(option.descriptionKey)}
+      </span>
+    </span>
+  );
+}
+
+function CreateDisabledAccessOption({
+  busy,
+  option,
+  name,
+}: {
+  readonly busy: boolean;
+  readonly option: CreateCapsuleAccessOption;
+  readonly name: string;
+}): ReactNode {
+  const t = useTranslate();
+  const rowRef = useRef<HTMLDivElement>(null);
+  const labelId = useId();
+  const descriptionId = useId();
+  const tooltipId = useId();
+  const [hoverOpen, setHoverOpen] = useState(false);
+  const [focusOpen, setFocusOpen] = useState(false);
+  const open = hoverOpen || focusOpen;
+  const tooltipPosition = useTooltipPosition(open, rowRef);
+  const describedBy = open ? `${descriptionId} ${tooltipId}` : descriptionId;
+  return (
+    <>
+      <div
+        ref={rowRef}
+        role="radio"
+        aria-checked="false"
+        aria-disabled="true"
+        aria-labelledby={labelId}
+        aria-describedby={describedBy}
+        data-name={name}
+        tabIndex={busy ? -1 : 0}
+        className={`c-radio ${createDialogStyles.accessOption} ${createDialogStyles.accessOptionDisabled}`}
+        onMouseEnter={() => {
+          if (!busy) setHoverOpen(true);
+        }}
+        onMouseLeave={() => setHoverOpen(false)}
+        onFocus={() => {
+          if (!busy) setFocusOpen(true);
+        }}
+        onBlur={() => setFocusOpen(false)}
+        onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.stopPropagation();
+          setHoverOpen(false);
+          setFocusOpen(false);
+        }}
+      >
+        <span className="rb" aria-hidden="true" />
+        <CreateAccessOptionCopy
+          labelId={labelId}
+          descriptionId={descriptionId}
+          option={option}
+          showComingSoon={true}
+        />
+      </div>
+      <CreateAccessTooltip id={tooltipId} open={open} position={tooltipPosition}>
+        {t(option.disabledTooltipKey ?? "localKnowledge.create.access.shareableTooltip")}
+      </CreateAccessTooltip>
+    </>
+  );
+}
+
+function CreateAccessOption({
+  busy,
+  checked,
+  name,
+  option,
+  onChange,
+}: {
+  readonly busy: boolean;
+  readonly checked: boolean;
+  readonly name: string;
+  readonly option: CreateCapsuleAccessOption;
+  readonly onChange: (mode: CreateCapsuleAccessMode) => void;
+}): ReactNode {
+  const inputId = useId();
+  const labelId = useId();
+  const descriptionId = useId();
+  if (option.disabled === true) {
+    return <CreateDisabledAccessOption busy={busy} option={option} name={name} />;
+  }
+  return (
+    <label className={`c-radio ${createDialogStyles.accessOption}`} htmlFor={inputId}>
+      <input
+        id={inputId}
+        type="radio"
+        name={name}
+        value={option.mode}
+        checked={checked}
+        disabled={busy}
+        aria-labelledby={labelId}
+        aria-describedby={descriptionId}
+        onChange={() => onChange(option.mode)}
+      />
+      <span className="rb" aria-hidden="true" />
+      <CreateAccessOptionCopy
+        labelId={labelId}
+        descriptionId={descriptionId}
+        option={option}
+        showComingSoon={false}
+      />
+    </label>
+  );
+}
+
+function CreateAccessChooser({
+  busy,
+  accessMode,
+  onAccessModeChange,
+}: {
+  readonly busy: boolean;
+  readonly accessMode: CreateCapsuleAccessMode;
+  readonly onAccessModeChange: (mode: CreateCapsuleAccessMode) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const tooltipId = useId();
+  const legendId = useId();
+  return (
+    <fieldset className={`mc-dialog-field ${createDialogStyles.accessField}`} disabled={busy}>
+      <legend id={legendId} className="mc-dialog-label">
+        {t("localKnowledge.create.access.legend")}
+      </legend>
+      <div className={createDialogStyles.accessHeading}>
+        <span className={createDialogStyles.accessHint}>
+          {t("localKnowledge.create.access.hint")}
+        </span>
+        <CreateAccessHelp tooltipId={tooltipId} />
+      </div>
+      <div
+        role="radiogroup"
+        aria-labelledby={legendId}
+        className={createDialogStyles.accessOptions}
+      >
+        {CREATE_CAPSULE_ACCESS_OPTIONS.map((option) => (
+          <CreateAccessOption
+            key={option.mode}
+            busy={busy}
+            checked={accessMode === option.mode}
+            name="knowledge-pod-access"
+            option={option}
+            onChange={onAccessModeChange}
+          />
+        ))}
+      </div>
+    </fieldset>
+  );
 }
 
 function CreateCapsuleDialog({
@@ -123,7 +425,7 @@ function CreateCapsuleDialog({
   readonly busy: boolean;
   readonly error: string | null;
   readonly onCancel: () => void;
-  readonly onSubmit: (name: string, modelUsePolicy: KnowledgePodModelUsePolicy) => Promise<void>;
+  readonly onSubmit: (name: string) => Promise<void>;
 }): ReactNode {
   const titleId = useId();
   const descriptionId = useId();
@@ -133,8 +435,9 @@ function CreateCapsuleDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
   const [name, setName] = useState("");
-  const [policyMode, setPolicyMode] = useState<CreateCapsulePolicyMode>("sealed-local");
+  const [accessMode, setAccessMode] = useState<CreateCapsuleAccessMode>("local");
   const [validationError, setValidationError] = useState<string | null>(null);
+  const t = useTranslate();
   useModalInteractionLock();
 
   useEffect(() => {
@@ -197,11 +500,11 @@ function CreateCapsuleDialog({
     event.preventDefault();
     const trimmed = name.trim();
     if (trimmed.length === 0) {
-      setValidationError("Pod display name is required.");
+      setValidationError(t("localKnowledge.create.validation.nameRequired"));
       return;
     }
     setValidationError(null);
-    await onSubmit(trimmed, policyForCreateMode(policyMode));
+    await onSubmit(trimmed);
   }
 
   const dialogError = validationError ?? error;
@@ -217,18 +520,17 @@ function CreateCapsuleDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Create Knowledge Pod
+          {t("localKnowledge.create.title")}
         </h2>
         {/* Copy used to promise "creates and indexes it" — POST /capsules only
             creates a Draft; indexing is a separate step on the capsule page
             (uiux-fix F032, C232). */}
         <p id={descriptionId} className="mc-dialog-body">
-          Name this Knowledge Pod. After creating it, connect a source and start indexing from the
-          pod page.
+          {t("localKnowledge.create.description")}
         </p>
         <form onSubmit={(event) => void handleSubmit(event)}>
           <label className="mc-dialog-field" htmlFor={inputId}>
-            <span className="mc-dialog-label">Knowledge Pod display name</span>
+            <span className="mc-dialog-label">{t("localKnowledge.create.nameLabel")}</span>
             <input
               id={inputId}
               ref={inputRef}
@@ -244,29 +546,11 @@ function CreateCapsuleDialog({
               }}
             />
           </label>
-          <fieldset className="mc-dialog-field" disabled={busy}>
-            <legend className="mc-dialog-label">Model-use policy</legend>
-            <label>
-              <input
-                type="radio"
-                name="model-use-policy"
-                value="sealed-local"
-                checked={policyMode === "sealed-local"}
-                onChange={() => setPolicyMode("sealed-local")}
-              />{" "}
-              Sealed local
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="model-use-policy"
-                value="standard"
-                checked={policyMode === "standard"}
-                onChange={() => setPolicyMode("standard")}
-              />{" "}
-              Standard
-            </label>
-          </fieldset>
+          <CreateAccessChooser
+            busy={busy}
+            accessMode={accessMode}
+            onAccessModeChange={setAccessMode}
+          />
           {/* role=alert + field link, matching the Compose dialog (uiux-fix F032, C103). */}
           {dialogError !== null ? (
             <div id={errorId} role="alert" aria-live="assertive" className="mc-dialog-error">
@@ -280,10 +564,10 @@ function CreateCapsuleDialog({
               disabled={busy}
               onClick={onCancel}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-              {busy ? "Creating…" : "Create Knowledge Pod"}
+              {busy ? t("localKnowledge.create.creating") : t("localKnowledge.create.submit")}
             </button>
           </div>
         </form>
@@ -308,6 +592,7 @@ function DisconnectConfirmDialog({
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
+  const t = useTranslate();
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -362,18 +647,17 @@ function DisconnectConfirmDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Disconnect Knowledge Pod
+          {t("localKnowledge.disconnect.title")}
         </h2>
         <p id={descriptionId} className="mc-dialog-body">
-          Disconnect &quot;{capsuleName}&quot;? The pod keeps its index, but the source link is
-          removed.
+          {t("localKnowledge.disconnect.description", { name: capsuleName })}
         </p>
         <div className="mc-dialog-actions">
           <button type="button" className="lk-btn lk-btn-ghost" onClick={onCancel}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <button type="button" className="lk-btn lk-btn-danger" onClick={onConfirm}>
-            Disconnect
+            {t("localKnowledge.disconnect.confirm")}
           </button>
         </div>
       </div>
@@ -398,6 +682,7 @@ function DeleteCapsuleSetConfirmDialog({
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
 }): ReactNode {
+  const t = useTranslate();
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -451,18 +736,17 @@ function DeleteCapsuleSetConfirmDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Delete Knowledge Pod Set
+          {t("localKnowledge.set.deleteTitle")}
         </h2>
         <p id={descriptionId} className="mc-dialog-body">
-          Delete &quot;{capsuleSetName}&quot;? The set&apos;s member Knowledge Pods keep their own
-          indexes and are not affected; only this set is removed.
+          {t("localKnowledge.set.deleteDescription", { name: capsuleSetName })}
         </p>
         <div className="mc-dialog-actions">
           <button type="button" className="lk-btn lk-btn-ghost" onClick={onCancel}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <button type="button" className="lk-btn lk-btn-danger" onClick={onConfirm}>
-            Delete
+            {t("localKnowledge.set.deleteConfirm")}
           </button>
         </div>
       </div>
@@ -749,6 +1033,7 @@ function IndexOrCancelBtn({
   onStart,
   onCancel,
 }: Pick<RowActionProps, "capsule" | "busy" | "busyKind" | "onStart" | "onCancel">): ReactNode {
+  const t = useTranslate();
   const { id, displayName, lifecycleState, sourceCount } = capsule;
   const noSourceHintId = useId();
   if (lifecycleState === "indexing") {
@@ -763,7 +1048,7 @@ function IndexOrCancelBtn({
         }}
         className="lk-btn lk-btn-ghost"
       >
-        {busyKind === "cancel" ? "Cancelling…" : "Cancel"}
+        {busyKind === "cancel" ? "Cancelling…" : t("common.cancel")}
       </button>
     );
   }
@@ -805,6 +1090,7 @@ function CapsuleRowActions({
   onHealth,
   onAddToWorkspace,
 }: RowActionProps): ReactNode {
+  const t = useTranslate();
   const { id, displayName } = capsule;
   return (
     <div
@@ -828,7 +1114,7 @@ function CapsuleRowActions({
         }}
         className="lk-btn lk-btn-ghost"
       >
-        Add to workspace
+        {t("localKnowledge.row.addToWorkspace")}
       </button>
       <button
         type="button"
@@ -851,7 +1137,7 @@ function CapsuleRowActions({
         }}
         className="lk-btn lk-btn-danger"
       >
-        {busyKind === "disconnect" ? "Disconnecting…" : "Disconnect"}
+        {busyKind === "disconnect" ? "Disconnecting…" : t("localKnowledge.disconnect.confirm")}
       </button>
     </div>
   );
@@ -912,6 +1198,7 @@ function CapsuleRow({
   onHealth,
   onAddToWorkspace,
 }: RowActionProps): ReactNode {
+  const t = useTranslate();
   const guidance = capsule.knowledgePod?.guidance;
   const guidanceDescriptionId = useId();
   const guidanceDescribedBy = guidance === undefined ? undefined : guidanceDescriptionId;
@@ -1050,7 +1337,7 @@ function CapsuleRow({
   return (
     <>
       <article
-        aria-label={`Knowledge Pod: ${capsule.displayName}`}
+        aria-label={t("localKnowledge.row.article", { name: capsule.displayName })}
         aria-describedby={guidanceDescribedBy}
         className="lk-capsule-row"
       >
@@ -1062,9 +1349,9 @@ function CapsuleRow({
           // is removed from the Tab order (tabIndex={-1}) to avoid a redundant,
           // keyboard-inert stop (GEN-UI-KEYBOARD-004 / GEN-UI-INTERACTION-004).
           tabIndex={-1}
-          aria-label={`Drag Knowledge Pod ${capsule.displayName} to the workspace`}
+          aria-label={t("localKnowledge.row.dragPod", { name: capsule.displayName })}
           aria-describedby={guidanceDescribedBy}
-          title="Drag to the workspace to create a Knowledge Pod card"
+          title={t("localKnowledge.row.dragPodTitle")}
           onPointerDown={onPointerDown}
           onMouseDown={onMouseDown}
           onDragStart={onDragStart}
@@ -1072,9 +1359,9 @@ function CapsuleRow({
           draggable
         >
           <span aria-hidden="true" className="lk-capsule-icon">
-            ⬡
+            <span className={detailStyles.capsulePodGlyph} />
           </span>
-          <span className="lk-capsule-info">
+          <span className={`lk-capsule-info ${detailStyles.capsuleRowInfo}`}>
             <span className="lk-capsule-name" title={capsule.displayName}>
               {capsule.displayName}
             </span>
@@ -1102,7 +1389,9 @@ function CapsuleRow({
               style={{ left: dragGhost.x + 14, top: dragGhost.y + 14 }}
               aria-hidden="true"
             >
-              <span className="lk-connector-drag-ghost-icon">▣</span>
+              <span className="lk-connector-drag-ghost-icon">
+                <span className={detailStyles.capsulePodGlyph} />
+              </span>
               <span className="lk-connector-drag-ghost-copy">
                 <span>{dragGhost.label}</span>
                 <small>{STATUS_LABELS[dragGhost.state]}</small>
@@ -1126,16 +1415,15 @@ function EmptyState({
   creating: boolean;
   onCreateCapsule: () => void;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <div data-testid="empty-state" className="lk-empty">
       <span aria-hidden="true" className="lk-empty-icon">
-        ⬡
+        <span className={detailStyles.capsulePodGlyph} />
       </span>
       <div>
-        <p className="lk-empty-title">No Knowledge Pods yet</p>
-        <p className="lk-empty-body">
-          Create a Knowledge Pod to start indexing governed local knowledge sources.
-        </p>
+        <p className="lk-empty-title">{t("localKnowledge.overview.emptyTitle")}</p>
+        <p className="lk-empty-body">{t("localKnowledge.overview.emptyBody")}</p>
       </div>
       <button
         type="button"
@@ -1143,7 +1431,7 @@ function EmptyState({
         onClick={onCreateCapsule}
         className="lk-btn lk-btn-primary lk-btn-xl"
       >
-        {creating ? "Creating…" : "Create your first Knowledge Pod"}
+        {creating ? t("localKnowledge.create.creating") : t("localKnowledge.overview.createFirst")}
       </button>
       {/* The permanently-disabled "Connect to existing Knowledge Pod" button (with a
           dev-jargon title tooltip nobody could reach by keyboard) is removed
@@ -1181,10 +1469,11 @@ function CapsuleSection({
   onDisconnect,
   onOpenHealth,
 }: CapsuleSectionProps): ReactNode {
+  const t = useTranslate();
   if (isLoading) {
     return (
       <p role="status" aria-live="polite" className="lk-loading">
-        Loading Knowledge Pods…
+        {t("localKnowledge.overview.loadingPods")}
       </p>
     );
   }
@@ -1193,7 +1482,7 @@ function CapsuleSection({
   }
   return (
     <ul
-      aria-label="Knowledge Pod list"
+      aria-label={t("localKnowledge.overview.podList")}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -1244,6 +1533,7 @@ function CapsuleSetRow({
   readonly onDelete: () => void;
   readonly deleteBusy: boolean;
 }): ReactNode {
+  const t = useTranslate();
   const guidance = capsuleSet.knowledgePod?.guidance;
   const guidanceDescriptionId = useId();
   const countsId = useId();
@@ -1280,15 +1570,15 @@ function CapsuleSetRow({
         type="button"
         className="lk-capsule-drag-handle"
         tabIndex={-1}
-        aria-label={`Drag Knowledge Pod Set ${capsuleSet.displayName} to the workspace`}
+        aria-label={t("localKnowledge.set.dragSet", { name: capsuleSet.displayName })}
         aria-describedby={describedBy}
-        title="Drag to the workspace to create a Knowledge Pod Set card"
+        title={t("localKnowledge.set.dragSetTitle")}
         draggable
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
       >
         <span aria-hidden="true" className="lk-capsule-icon">
-          ▣
+          <span className={detailStyles.capsuleSetGlyph} />
         </span>
         <span className="lk-capsule-info">
           <span className="lk-capsule-name" title={capsuleSet.displayName}>
@@ -1317,20 +1607,20 @@ function CapsuleSetRow({
           type="button"
           className="lk-btn lk-btn-ghost"
           onClick={onAddToWorkspace}
-          aria-label={`Add Knowledge Pod Set ${capsuleSet.displayName} to workspace`}
+          aria-label={t("localKnowledge.set.addToWorkspace", { name: capsuleSet.displayName })}
           aria-describedby={describedBy}
         >
-          Add to workspace
+          {t("localKnowledge.row.addToWorkspace")}
         </button>
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
           onClick={onDelete}
           disabled={deleteBusy}
-          aria-label={`Delete Knowledge Pod Set ${capsuleSet.displayName}`}
+          aria-label={t("localKnowledge.set.deleteAria", { name: capsuleSet.displayName })}
           aria-describedby={describedBy}
         >
-          {deleteBusy ? "Deleting…" : "Delete"}
+          {deleteBusy ? t("localKnowledge.set.deleting") : t("localKnowledge.set.deleteConfirm")}
         </button>
       </div>
     </article>
@@ -1346,12 +1636,13 @@ function CapsuleSetSection({
   readonly onDelete: (capsuleSet: CapsuleSetListEntry) => void;
   readonly deleteBusyId: CapsuleSetId | null;
 }): ReactNode {
+  const t = useTranslate();
   if (capsuleSets.length === 0) return null;
   return (
     <>
-      <h2 className="lk-section-head">Knowledge Pod Sets</h2>
+      <h2 className="lk-section-head">{t("localKnowledge.set.sectionTitle")}</h2>
       <ul
-        aria-label="Knowledge Pod Set list"
+        aria-label={t("localKnowledge.set.list")}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -1425,15 +1716,17 @@ function GraphPageHeader({
   onDismissCreateError,
   onDismissActionError,
 }: GraphPageHeaderProps): ReactNode {
+  const t = useTranslate();
   const combineHintId = useId();
+  const combineDisabledHint = t("localKnowledge.overview.combineDisabledHint");
   return (
     <>
       <header className="lk-header">
-        <h1 className="lk-title">Knowledge Pods</h1>
+        <h1 className="lk-title">{t("localKnowledge.overview.sectionLabel")}</h1>
         <div className="lk-header-actions">
           {showBackToWorkspace ? (
             <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
-              Back to Workspace
+              {t("localKnowledge.overview.backToWorkspace")}
             </Link>
           ) : null}
           {/* aria-disabled instead of native disabled: the button stays
@@ -1445,21 +1738,17 @@ function GraphPageHeader({
             aria-describedby={combineDisabled ? combineHintId : undefined}
             aria-haspopup="dialog"
             aria-expanded={combineDialogOpen}
-            title={
-              combineDisabled
-                ? "Create Knowledge Pods first, then combine them into a set."
-                : undefined
-            }
+            title={combineDisabled ? combineDisabledHint : undefined}
             onClick={() => {
               if (!combineDisabled) onCombineCapsules();
             }}
             className="lk-btn lk-btn-ghost lk-btn-lg"
           >
-            Create Knowledge Pod Set
+            {t("localKnowledge.set.submit")}
           </button>
           {combineDisabled ? (
             <span id={combineHintId} className="visually-hidden">
-              Create Knowledge Pods first, then combine them into a set.
+              {combineDisabledHint}
             </span>
           ) : null}
           <button
@@ -1470,7 +1759,7 @@ function GraphPageHeader({
             onClick={onCreateCapsule}
             className="lk-btn lk-btn-primary lk-btn-lg"
           >
-            {creating ? "Creating…" : "Create Knowledge Pod"}
+            {creating ? t("localKnowledge.create.creating") : t("localKnowledge.create.submit")}
           </button>
         </div>
       </header>
@@ -1511,6 +1800,7 @@ function catalogAnnouncement(
 
 export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   const { onOpenCapsule: externalOpenCapsule, showBackToWorkspace = true } = props;
+  const t = useTranslate();
   const [activeCapsuleId, setActiveCapsuleId] = useState<KnowledgeCapsuleId | null>(null);
   const handleOpenCapsule = useCallback(
     (id: KnowledgeCapsuleId): void => {
@@ -1555,12 +1845,9 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   // as disconnect (AUDIT-E1821-003).
   const [deleteSetTarget, setDeleteSetTarget] = useState<CapsuleSetListEntry | null>(null);
 
-  async function submitCreateCapsule(
-    name: string,
-    modelUsePolicy: KnowledgePodModelUsePolicy,
-  ): Promise<void> {
+  async function submitCreateCapsule(name: string): Promise<void> {
     try {
-      await handleCreateCapsule(name, modelUsePolicy);
+      await handleCreateCapsule(name);
       setCreateDialogOpen(false);
     } catch {
       // The state hook surfaces the error message; keep the dialog open for correction/retry.
@@ -1574,16 +1861,16 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
 
   if (activeCapsuleId !== null && externalOpenCapsule === undefined) {
     return (
-      <div className="lk-page">
+      <div className={`lk-page ${detailStyles.detailPage}`}>
         <button
           type="button"
-          className="lk-btn lk-btn-ghost lk-btn-lg lk-back-inline"
+          className={`c-back ${detailStyles.backButton}`}
           onClick={() => {
             setActiveCapsuleId(null);
             reload();
           }}
         >
-          Back to Knowledge Pods
+          {t("localKnowledge.overview.backToPods")}
         </button>
         <CapsuleDetail
           capsuleId={activeCapsuleId}
@@ -1624,11 +1911,11 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         <AlertBanner message={capsuleSetActionError} onDismiss={clearCapsuleSetActionError} />
       ) : null}
       <section
-        aria-label="Knowledge Pods"
+        aria-label={t("localKnowledge.overview.sectionLabel")}
         aria-busy={isLoading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
-        <h2 className="lk-section-head">Knowledge Pods</h2>
+        <h2 className="lk-section-head">{t("localKnowledge.overview.sectionLabel")}</h2>
         <CapsuleSection
           capsules={capsules}
           isLoading={isLoading}

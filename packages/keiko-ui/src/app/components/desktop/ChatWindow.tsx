@@ -407,27 +407,28 @@ function MessageRegenerateButton({
   readonly onRegenerate: (assistantMessageId: string) => Promise<void>;
   readonly onCancel: () => void;
 }): ReactNode {
+  const t = useTranslate();
   const [status, setStatus] = useState("");
   const handleClick = useCallback(() => {
     if (regenerating) {
       onCancel();
-      setStatus("Regeneration cancelled");
+      setStatus(t("chat.regenerate.cancelled"));
       return;
     }
-    setStatus("Regenerating response");
+    setStatus(t("chat.regenerate.running"));
     void onRegenerate(messageId);
-  }, [messageId, onCancel, onRegenerate, regenerating]);
+  }, [messageId, onCancel, onRegenerate, regenerating, t]);
   return (
     <>
       <div className="ai-controls" data-live={regenerating ? "true" : "false"}>
         <button
           type="button"
           className="ai-stop"
-          aria-label={regenerating ? "Cancel regeneration" : "Regenerate response"}
+          aria-label={regenerating ? t("chat.regenerate.cancel") : t("chat.regenerate.action")}
           aria-busy={regenerating ? "true" : undefined}
           onClick={handleClick}
         >
-          {regenerating ? "Cancel" : "Regenerate"}
+          {regenerating ? t("chat.regenerate.cancelShort") : t("chat.regenerate.short")}
         </button>
       </div>
       <span role="status" className="sr-only">
@@ -1161,7 +1162,7 @@ function mergeRepositoryFileScope(
 ): { readonly scopes: readonly ChatConnectedScope[]; readonly changed: boolean } {
   const filePath = normalizedRepositoryPath(path);
   if (filePath.length === 0) {
-    throw new Error("Select a repository file first.");
+    throw new Error("EMPTY_REPOSITORY_FILE_SELECTION");
   }
   const currentScopes = effectiveConnectedScopes(chat);
   const nextScopes: ChatConnectedScope[] = [];
@@ -1177,9 +1178,7 @@ function mergeRepositoryFileScope(
         continue;
       }
       if (scope.relativePaths.length >= MAX_REPOSITORY_FOCUS_PATHS) {
-        throw new Error(
-          `This Files source already references ${String(MAX_REPOSITORY_FOCUS_PATHS)} files.`,
-        );
+        throw new Error("REPOSITORY_FILE_SCOPE_LIMIT");
       }
       nextScopes.push({
         ...scope,
@@ -1206,27 +1205,27 @@ function mergeRepositoryFileScope(
   return { scopes: nextScopes, changed };
 }
 
-function resultDirectoryLabel(result: FilesSearchResult): string {
-  return result.directory.length === 0 ? "Repository root" : result.directory;
+function resultDirectoryLabel(result: FilesSearchResult, t: I18nTranslate): string {
+  return result.directory.length === 0 ? t("chat.repository.root") : result.directory;
 }
 
-function fileRoleLabel(role: FilesSearchResult["fileRole"] | undefined): string {
+function fileRoleLabel(role: FilesSearchResult["fileRole"] | undefined, t: I18nTranslate): string {
   switch (role) {
     case "source":
-      return "Source";
+      return t("chat.repository.role.source");
     case "test":
-      return "Test";
+      return t("chat.repository.role.test");
     case "config":
-      return "Config";
+      return t("chat.repository.role.config");
     case "docs":
-      return "Docs";
+      return t("chat.repository.role.docs");
     case "generated":
-      return "Generated";
+      return t("chat.repository.role.generated");
     case "asset":
-      return "Asset";
+      return t("chat.repository.role.asset");
     case "other":
     case undefined:
-      return "File";
+      return t("chat.repository.role.file");
   }
 }
 
@@ -1239,22 +1238,31 @@ function fileSearchResultClassName(result: FilesSearchResult): string {
   return `repo-focus-result${secondary ? " repo-focus-result-secondary" : ""}`;
 }
 
-function matchQualityLabel(quality: FilesSearchResult["matchQuality"] | undefined): string {
+function matchQualityLabel(
+  quality: FilesSearchResult["matchQuality"] | undefined,
+  t: I18nTranslate,
+): string {
   switch (quality) {
     case "exact":
-      return "Exact match";
+      return t("chat.repository.match.exact");
     case "strong":
-      return "Strong match";
+      return t("chat.repository.match.strong");
     case "path":
-      return "Path match";
+      return t("chat.repository.match.path");
     case "weak":
     case undefined:
-      return "Weak match";
+      return t("chat.repository.match.weak");
   }
 }
 
-function formatRepositoryFocusError(error: unknown): string {
-  return formatUserError(error, "Unable to reference repository file.");
+function formatRepositoryFocusError(error: unknown, t: I18nTranslate): string {
+  if (error instanceof Error && error.message === "EMPTY_REPOSITORY_FILE_SELECTION") {
+    return t("chat.repository.selectFirst");
+  }
+  if (error instanceof Error && error.message === "REPOSITORY_FILE_SCOPE_LIMIT") {
+    return t("chat.repository.limit", { count: MAX_REPOSITORY_FOCUS_PATHS });
+  }
+  return formatUserError(error, t("chat.repository.error.reference"));
 }
 
 function isAbortError(error: unknown): boolean {
@@ -1277,15 +1285,18 @@ function useRepositoryFileSearch(
   selectedRoot: string,
   query: string,
 ): RepositoryFileSearchState {
+  const t = useTranslate();
+  const idleMessage = t("chat.repository.searchIdle");
   const [results, setResults] = useState<readonly FilesSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [message, setMessage] = useState("Type after @ to search connected repository files.");
+  const [message, setMessage] = useState(idleMessage);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
       setSearching(false);
       setResults([]);
+      setMessage(idleMessage);
       setError(null);
       return undefined;
     }
@@ -1293,7 +1304,7 @@ function useRepositoryFileSearch(
     if (selectedRoot.length === 0 || trimmed.length === 0) {
       setSearching(false);
       setResults([]);
-      setMessage("Type after @ to search connected repository files.");
+      setMessage(idleMessage);
       setError(null);
       return undefined;
     }
@@ -1302,7 +1313,7 @@ function useRepositoryFileSearch(
     let cancelled = false;
     setSearching(true);
     setError(null);
-    setMessage("Searching repository files...");
+    setMessage(t("chat.repository.searching"));
     const searchTimer = window.setTimeout(() => {
       void fetchFilesSearch(selectedRoot, trimmed, REPOSITORY_FILE_SEARCH_LIMIT, {
         signal: controller.signal,
@@ -1311,19 +1322,21 @@ function useRepositoryFileSearch(
           if (cancelled) return;
           setResults(response.results);
           if (response.results.length === 0) {
-            setMessage("No matching repository files.");
+            setMessage(t("chat.repository.noMatches"));
           } else {
             const count = response.results.length;
             setMessage(
-              `${String(count)} ${count === 1 ? "file" : "files"} found${response.truncated ? "; refine query; search scanned limit reached." : "."}`,
+              response.truncated
+                ? t("chat.repository.foundTruncated", { count })
+                : t("chat.repository.found", { count }),
             );
           }
         })
         .catch((caught: unknown) => {
           if (cancelled || isAbortError(caught)) return;
           setResults([]);
-          setError(formatRepositoryFocusError(caught));
-          setMessage("Repository search failed.");
+          setError(formatRepositoryFocusError(caught, t));
+          setMessage(t("chat.repository.searchFailed"));
         })
         .finally(() => {
           if (!cancelled) setSearching(false);
@@ -1334,7 +1347,7 @@ function useRepositoryFileSearch(
       window.clearTimeout(searchTimer);
       controller.abort();
     };
-  }, [open, query, selectedRoot]);
+  }, [idleMessage, open, query, selectedRoot, t]);
 
   return { results, searching, message, error };
 }
@@ -1362,6 +1375,7 @@ function RepositoryFilePickerPanel({
   onPick,
   onClose,
 }: RepositoryFilePickerPanelProps): ReactNode {
+  const t = useTranslate();
   const activeRoot = roots.find((root) => root.root === selectedRoot) ?? roots[0];
   const displayedError = pickError ?? search.error;
   const resultsRef = useRef<HTMLDivElement | null>(null);
@@ -1396,13 +1410,15 @@ function RepositoryFilePickerPanel({
     >
       <div className="repo-focus-head">
         <div>
-          <span className="repo-focus-title">Repository file</span>
-          <span className="repo-focus-subtitle">{activeRoot?.label ?? "Connected source"}</span>
+          <span className="repo-focus-title">{t("chat.repository.title")}</span>
+          <span className="repo-focus-subtitle">
+            {activeRoot?.label ?? t("chat.repository.connectedSource")}
+          </span>
         </div>
         <button
           type="button"
           className="repo-focus-close"
-          aria-label="Close repository file picker"
+          aria-label={t("chat.repository.closePicker")}
           onClick={onClose}
         >
           <Icons.close size={13} />
@@ -1412,8 +1428,8 @@ function RepositoryFilePickerPanel({
         <KeikoSelect
           triggerClassName="repo-focus-source-select"
           value={selectedRoot}
-          ariaLabel="Repository source"
-          menuTitle="Connected repositories"
+          ariaLabel={t("chat.repository.source")}
+          menuTitle={t("chat.repository.connectedRepositories")}
           menuClassName="repo-focus-source-menu"
           menuMinWidth={240}
           sections={[
@@ -1428,14 +1444,14 @@ function RepositoryFilePickerPanel({
         />
       ) : null}
       <div className="repo-focus-message" role={displayedError === null ? "status" : "alert"}>
-        {displayedError ?? (search.searching ? "Searching repository files..." : search.message)}
+        {displayedError ?? (search.searching ? t("chat.repository.searching") : search.message)}
       </div>
       {search.results.length > 0 ? (
         <div
           className="repo-focus-results"
           id={REPO_FILE_PICKER_LISTBOX_ID}
           role="listbox"
-          aria-label="Repository file results"
+          aria-label={t("chat.repository.results")}
           ref={resultsRef}
         >
           {search.results.map((result, index) => (
@@ -1447,7 +1463,7 @@ function RepositoryFilePickerPanel({
               role="option"
               aria-selected={index === highlightedIndex ? "true" : "false"}
               data-highlighted={index === highlightedIndex ? "true" : "false"}
-              aria-label={`Reference ${result.path}`}
+              aria-label={t("chat.repository.reference", { path: result.path })}
               disabled={pickingPath !== null}
               onPointerDown={(event) => pickFromPointer(event, result)}
               onClick={(event) => {
@@ -1459,16 +1475,18 @@ function RepositoryFilePickerPanel({
                 <span className="repo-focus-result-name">{result.name}</span>
                 <span className="repo-focus-result-badges" aria-hidden="true">
                   <span className={fileRoleClassName(result.fileRole)}>
-                    {fileRoleLabel(result.fileRole)}
+                    {fileRoleLabel(result.fileRole, t)}
                   </span>
                   {result.rootKind === "nested-git-root" ? (
-                    <span className="repo-focus-badge repo-focus-badge-root">Nested repo</span>
+                    <span className="repo-focus-badge repo-focus-badge-root">
+                      {t("chat.repository.nestedRepo")}
+                    </span>
                   ) : null}
                 </span>
               </span>
-              <span className="repo-focus-result-path">{resultDirectoryLabel(result)}</span>
+              <span className="repo-focus-result-path">{resultDirectoryLabel(result, t)}</span>
               <span className="sr-only">
-                {`${fileRoleLabel(result.fileRole)}; ${matchQualityLabel(result.matchQuality)}${result.rootKind === "nested-git-root" ? "; nested repository root" : ""}.`}
+                {`${fileRoleLabel(result.fileRole, t)}; ${matchQualityLabel(result.matchQuality, t)}${result.rootKind === "nested-git-root" ? `; ${t("chat.repository.nestedRoot")}` : ""}.`}
               </span>
             </button>
           ))}
@@ -1487,9 +1505,10 @@ function RepositoryReferenceStrip({
   references,
   onRemove,
 }: RepositoryReferenceStripProps): ReactNode {
+  const t = useTranslate();
   if (references.length === 0) return null;
   return (
-    <div className="repo-token-strip" role="list" aria-label="Referenced repository files">
+    <div className="repo-token-strip" role="list" aria-label={t("chat.repository.references")}>
       {references.map((reference) => (
         <div
           key={reference.id}
@@ -1497,8 +1516,8 @@ function RepositoryReferenceStrip({
           role="listitem"
           title={
             reference.verified
-              ? `${reference.path} — ${reference.root}`
-              : `Reference not verified yet — ${reference.path} — ${reference.root}`
+              ? `${reference.path} - ${reference.root}`
+              : `${t("chat.repository.notVerified")} - ${reference.path} - ${reference.root}`
           }
         >
           <span className="repo-token-icon" aria-hidden="true">
@@ -1513,14 +1532,14 @@ function RepositoryReferenceStrip({
             </span>
           </span>
           {reference.verified ? null : (
-            <span className="repo-token-status" aria-label="Reference not verified yet">
-              Unverified
+            <span className="repo-token-status" aria-label={t("chat.repository.notVerified")}>
+              {t("chat.repository.unverified")}
             </span>
           )}
           <button
             type="button"
             className="repo-token-remove"
-            aria-label={`Remove repository reference ${reference.path}`}
+            aria-label={t("chat.repository.removeReference", { path: reference.path })}
             onClick={() => onRemove(reference.id)}
           >
             <Icons.close size={12} />
@@ -1704,6 +1723,7 @@ function VoiceDialogComposerControls({
   voiceDialogButtonRef,
   compact = false,
 }: VoiceDialogComposerControlsProps): ReactNode {
+  const t = useTranslate();
   // Stable id for the interrupt sr-only hint so the button can stay in the tab
   // order via aria-disabled (instead of the native disabled attribute, which
   // removes it from the tab sequence and hides the reason from assistive tech).
@@ -1733,8 +1753,8 @@ function VoiceDialogComposerControls({
           <button
             type="button"
             className={`cmp-voice-btn${compact ? " cmp-mode-compact" : ""}`}
-            aria-label="Interrupt the assistant"
-            data-tip="Interrupt the assistant"
+            aria-label={t("chat.voice.interrupt")}
+            data-tip={t("chat.voice.interrupt")}
             aria-disabled={!canInterrupt}
             aria-describedby={interruptHintId}
             onClick={() => {
@@ -1742,9 +1762,9 @@ function VoiceDialogComposerControls({
               onInterrupt?.();
             }}
           >
-            Interrupt
+            {t("chat.voice.interruptShort")}
             <span id={interruptHintId} className="sr-only">
-              Available while Keiko is speaking.
+              {t("chat.voice.interruptAvailable")}
             </span>
           </button>
         ) : null}
@@ -2323,12 +2343,12 @@ function ComposerCoreImpl({
           taRef.current?.setSelectionRange(next.cursor, next.cursor);
         });
       } catch (caught) {
-        setRepositoryPickError(formatRepositoryFocusError(caught));
+        setRepositoryPickError(formatRepositoryFocusError(caught, t));
       } finally {
         setRepositoryPickingPath(null);
       }
     },
-    [activeChat, draft, replaceChat, repositoryMention, setDraft],
+    [activeChat, draft, replaceChat, repositoryMention, setDraft, t],
   );
 
   const removeRepositoryReference = useCallback(
@@ -3786,7 +3806,7 @@ export function ChatWindow({
         className="chatw-scroll"
         ref={scrollRef}
         role="log"
-        aria-label="Conversation"
+        aria-label={t("chat.conversation")}
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
         tabIndex={0}
         onScroll={(event) => {
