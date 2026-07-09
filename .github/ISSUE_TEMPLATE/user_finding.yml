@@ -1,8 +1,6 @@
 name: User Finding
 description: Report a bug or defect found while using Keiko.
-title: "[User Finding]: "
 labels: ["User Findings", "bug", "status: new"]
-assignees: []
 body:
   - type: markdown
     attributes:
@@ -18,7 +16,6 @@ body:
     attributes:
       label: Keiko version
       description: Enter the installed Keiko version.
-      placeholder: "0.1.7"
     validations:
       required: true
 
@@ -31,7 +28,6 @@ body:
         - macOS
         - Windows
         - Linux
-        - Other
     validations:
       required: true
 
@@ -40,16 +36,13 @@ body:
     attributes:
       label: Browser
       description: Enter the browser and version if the UI is involved.
-      placeholder: "Firefox 139, Edge 148, Chrome 137"
-    validations:
-      required: false
+      placeholder: e.g. Chrome 125
 
   - type: textarea
     id: summary
     attributes:
       label: Summary
       description: Describe the problem in one or two sentences.
-      placeholder: "What went wrong?"
     validations:
       required: true
 
@@ -58,11 +51,6 @@ body:
     attributes:
       label: Steps to reproduce
       description: Provide the exact steps needed to reproduce the issue.
-      placeholder: |
-        1. Install Keiko with ...
-        2. Open ...
-        3. Enter ...
-        4. Observe ...
     validations:
       required: true
 
@@ -87,44 +75,43 @@ body:
     attributes:
       label: Evidence
       description: Add redacted screenshots, console output, or logs if available.
-      placeholder: "Redacted evidence only. Do not include secrets or customer data."
-    validations:
-      required: false
+      placeholder: Redacted evidence only. Do not include secrets or customer data.
 
   - type: dropdown
-    id: impact
+    id: user_impact
     attributes:
       label: User impact
       description: Select the highest observed impact.
       options:
-        - Blocks installation or startup
-        - Blocks model or credential setup
-        - Blocks core workflow
         - Degrades core workflow
-        - Visual or usability issue
-        - Unknown
+        - Degrades secondary workflow
+        - Cosmetic or minor
+        - Data loss or security concern
     validations:
       required: true
 
+  # ── OPTION B: Maintainer release impact triage ──────────────────────────────
+  # Single textarea with `value:` → structure stays visible while typing.
+
   - type: textarea
-    id: maintainer_release_impact
+    id: maintainer_triage
     attributes:
       label: Maintainer release impact triage
-      description: Maintainers and agents only. Reporters may leave this blank.
-      placeholder: |
-        Release-note category:
-        Priority:
-        User-visible change:
-        Release-note bullet:
-        Supported-from versions:
-        Affected state stores:
-        User action required and remediation:
-        Internal-only rationale:
-    validations:
-      required: false
+      description: "Maintainers and agents only. Reporters may leave this blank."
+      value: |
+        Release-note category: 
+        Priority: 
+        User-visible change: 
+        Release-note bullet: 
+        Supported-from versions: 
+        Affected state stores: 
+        User action required and remediation: 
+        Internal-only rationale: 
+
+  # ── end of triage section ────────────────────────────────────────────────────
 
   - type: checkboxes
-    id: safety
+    id: submission_safety
     attributes:
       label: Submission safety
       options:
