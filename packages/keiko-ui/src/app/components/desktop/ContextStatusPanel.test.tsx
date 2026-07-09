@@ -102,14 +102,14 @@ describe("ContextStatusPanel", () => {
     expect(text).toContain("Budget pressure");
     expect(text).toContain("Moderate");
     expect(text).toContain("Compaction");
-    expect(text).toContain("Active");
+    expect(text).toContain("Compaction active");
   });
 
   it("shows Inactive when compaction did not fire", () => {
     const { container } = render(
       <ContextStatusPanel contextSummary={summary({ compactionActive: false })} />,
     );
-    expect(container.textContent).toContain("Inactive");
+    expect(container.textContent).toContain("Compaction inactive");
   });
 
   it("renders only lanes with a count > 0, humanized, with the integer count", () => {

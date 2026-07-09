@@ -270,12 +270,12 @@ describe("MemoryDetail — success state with full record", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Praeferenz-Erinnerung");
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Präferenz-Erinnerung");
     });
-    expect(screen.getByRole("button", { name: "Zurueck" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Zurück" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Herkunft" })).toBeInTheDocument();
     expect(screen.getByText("Inhalt")).toBeInTheDocument();
-    expect(screen.getByText("Keine Schlagwoerter")).toBeInTheDocument();
+    expect(screen.getByText("Keine Schlagwörter")).toBeInTheDocument();
   });
 
   it("renders confidence as a rounded percentage", async () => {

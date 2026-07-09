@@ -202,6 +202,21 @@ function coverageStatusLabel(
   return t("qi.coverage.uncovered");
 }
 
+function coverageSummaryText(
+  coveredCount: number,
+  total: number,
+  gapCount: number,
+  t: I18nTranslate,
+): string {
+  return gapCount === 1
+    ? t("qi.coverage.summary.oneGap", { covered: coveredCount, total })
+    : t("qi.coverage.summary.manyGaps", {
+        covered: coveredCount,
+        total,
+        gaps: gapCount,
+      });
+}
+
 const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "uncovered", string>> =
   {
     covered: "qi-cov-covered",
@@ -262,7 +277,7 @@ function CoveragePanel({
         </span>
       </h3>
       <p className="qi-coverage-summary" data-testid="qi-coverage-summary">
-        {t("qi.coverage.summary", { covered: coveredCount, total, gaps: gaps.length })}
+        {coverageSummaryText(coveredCount, total, gaps.length, t)}
       </p>
       {gaps.length > 0 ? (
         <section className="qi-coverage-gaps" aria-label={t("qi.coverage.gapRadar")}>

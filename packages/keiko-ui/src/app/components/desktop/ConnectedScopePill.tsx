@@ -263,6 +263,12 @@ function pressureLabel(pressure: GroundedBudgetPressure, t: I18nTranslate): stri
   return t("scope.budget.pressure.exceeded");
 }
 
+function scopeUpdatedAnnouncement(count: number, t: I18nTranslate): string {
+  return count === 1
+    ? t("scope.announcement.updated.one")
+    : t("scope.announcement.updated.many", { count });
+}
+
 export function ConnectedScopePill({
   chat,
   onDisconnect,
@@ -285,7 +291,7 @@ export function ConnectedScopePill({
       setAnnouncement(
         scopes.length === 0
           ? t("scope.announcement.removed")
-          : t("scope.announcement.updated", { count: scopes.length }),
+          : scopeUpdatedAnnouncement(scopes.length, t),
       );
     }
   }, [signature, scopes.length, t]);

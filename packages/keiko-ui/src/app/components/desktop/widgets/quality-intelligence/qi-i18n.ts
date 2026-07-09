@@ -86,7 +86,8 @@ const QI_EN_MESSAGES = {
   "qi.coverage.uncovered": "Uncovered",
   "qi.coverage.percentAria":
     "Coverage: {percent} percent, {covered} of {total} requirements covered",
-  "qi.coverage.summary": "{covered} of {total} requirements covered · {gaps} gaps",
+  "qi.coverage.summary.oneGap": "{covered} of {total} requirements covered · 1 gap",
+  "qi.coverage.summary.manyGaps": "{covered} of {total} requirements covered · {gaps} gaps",
   "qi.coverage.gapRadar": "Gap radar",
   "qi.coverage.gapRadarCount": "Gap radar ({count})",
   "qi.coverage.gapList": "Uncovered and weakly covered atoms",
@@ -143,7 +144,7 @@ const QI_EN_MESSAGES = {
     "External target - preview only. Configure a connector to enable live export.",
   "qi.export.previewAria": "Export preview",
   "qi.hub.openRunAria":
-    "Open run {runId} - {status}, {requestedAt}, {count} test cases, review {review}",
+    "Open run {runId} — {status}, {requestedAt}, {count} test cases, review {review}",
   "qi.hub.openRunTitle": "Open run {runId}",
   "qi.hub.testCaseCount": "{count} test cases",
   "qi.hub.deleteRunAria": "Delete run {requestedAt}",
@@ -307,7 +308,8 @@ const QI_DE_MESSAGES: QiMessageCatalog = {
   "qi.coverage.uncovered": "Nicht abgedeckt",
   "qi.coverage.percentAria":
     "Coverage: {percent} Prozent, {covered} von {total} Anforderungen abgedeckt",
-  "qi.coverage.summary": "{covered} von {total} Anforderungen abgedeckt · {gaps} Lücken",
+  "qi.coverage.summary.oneGap": "{covered} von {total} Anforderungen abgedeckt · 1 Lücke",
+  "qi.coverage.summary.manyGaps": "{covered} von {total} Anforderungen abgedeckt · {gaps} Lücken",
   "qi.coverage.gapRadar": "Lückenradar",
   "qi.coverage.gapRadarCount": "Lückenradar ({count})",
   "qi.coverage.gapList": "Nicht oder nur schwach abgedeckte Atome",
