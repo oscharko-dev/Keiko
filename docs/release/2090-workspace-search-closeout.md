@@ -27,6 +27,8 @@
   - `packages/keiko-ui/src/app/components/desktop/quickAccessRegistry.test.ts`
   - `packages/keiko-ui/src/app/components/desktop/widgets/cards/editorCommands.test.ts`
   - `packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorWidget.test.tsx`
+  - `packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorDiffSurface.test.ts`
+  - `packages/keiko-workspace/src/symbolGraph.test.ts`
 
 ## Command inventory evidence
 
@@ -122,3 +124,86 @@ Third hardening pass (this PR — an independent post-merge audit of the above):
   UI caller sets it yet. Recorded here so a future audit does not mistake it for dead code: it is
   reachable, tested, governed capability awaiting a UI consumer (e.g. scoping symbol search to the
   active file/folder), not a duplicate or abandoned subsystem.
+
+Fourth hardening pass (independent post-merge audit of rounds 1–3, seven parallel reviews — one per
+child issue plus one epic-level integration review — each with a two-skeptic adversarial
+verification pass; 8/8 reported defects confirmed, 0 refuted):
+
+- **F17 — Replace-preview route crashed on a validator-approved regex containing an unescaped
+  quantifier-like character (fixed).** `buildMatchRegex` in `workspaceSearchRoutes.ts` constructed
+  its `RegExp` with a `"u"` (unicode) flag that neither `regexSafetyIssue`'s validity check nor the
+  sibling search route's `buildRegexMatcher` uses. A query such as `items{` passes validation and
+  matches fine on the plain search route, but `new RegExp("items{", "giu")` throws
+  `SyntaxError: Incomplete quantifier`, escaping as an uncaught exception into an opaque `500` on
+  the replace-preview route only. Fixed: `buildMatchRegex` now uses the same `"g"`/`"gi"` flags as
+  the validator and the shared matcher. Regression test: a fixture file containing literal
+  `items{`, replaced in regex mode.
+- **F18 — Replace could silently skip the exact line that matched, when that line followed a
+  brace-delimited block in the same file (fixed).** The replace-preview/apply path decided which
+  lines were eligible for rewriting from `searchText`'s RAG-oriented "best representative lines"
+  sampling (`collectBestLines`/`insertBestLine`/`braceRange` in
+  `packages/keiko-workspace/src/repoSearchLineSelection.ts`), which is tuned for LLM
+  context-evidence diversity, not replace completeness. `braceRange`'s backward brace scan could
+  compute an enclosing range that ended before the very line that matched, and the two match groups
+  would then merge into one, dropping the match. An already-merged test encoded this broken
+  behavior as expected. Fixed: the replace route no longer gates on the search engine's per-line
+  sample at all — `buildReplacePreviewFiles`/`buildReplaceFileEdit` now exhaustively re-scan the
+  full (already byte-bounded) content of every file the search identified as having a match, using
+  the same validated pattern, rather than trusting a "best lines" subset. Regression test: a fixture
+  where a match immediately follows a brace-delimited block, asserting both matches are found.
+- **F19 — Replace silently dropped matches in a file with more than three non-overlapping match
+  locations (fixed, same root cause as F18).** `collectBestLines`'s `MAX_MATCHES_PER_FILE = 3`
+  per-file cap (an Epic #177 retrieval-diversity heuristic) silently discarded the 4th+ match group
+  with no truncation signal, once again because replace reused a RAG-sampling primitive not
+  designed for write completeness. Fixed by the same F18 change: replace no longer depends on this
+  cap at all. Regression test: a 5-function fixture file, each with one non-overlapping match,
+  asserts all 5 are replaced.
+- **F20 — `buildSymbolGraph`'s deadline/abort bound (F9, round 3) had zero regression test
+  coverage (fixed).** The cancellation guard added in round 3 was real and correctly wired, but no
+  test anywhere exercised it — a future refactor could silently drop it undetected. Fixed:
+  `symbolGraph.test.ts` now asserts an already-aborted `AbortSignal` stops the scan before any file
+  is read (`truncated: true`, zero records, zero files scanned). The deadline half of the guard
+  (`Date.now() - startedAt > limits.elapsedMsMax`) is intentionally not separately tested with real
+  wall-clock timing, since `buildSymbolGraph` has no injectable clock (unlike `searchText`'s
+  `nowMs`) and a timing-based test would be racy; the abort-signal half exercises the identical
+  guard clause deterministically.
+- **F21 — No Playwright coverage exercised an editor-scoped command through the unified
+  quick-access palette's command mode (fixed).** The only e2e test touching the unified palette
+  seeded zero windows, so no editor-scoped command (`view.splitRight`, `files.saveAll`, etc.) was
+  ever reachable in that test, despite issue #2112's Deliverables explicitly requiring this
+  coverage. Fixed: a new e2e spec seeds an editor window with two open tabs, opens the unified
+  palette from outside the editor, confirms both an app-level and an editor-level command appear in
+  the same `>` result list, executes "Split Editor Right", and asserts the pane count actually
+  becomes 2. (Two open tabs are required deliberately — see Engineering Notes below.)
+- **F22 — The replace-preview diff-rendering logic had zero direct test coverage (fixed).**
+  `EditorDiffSurface.buildWorkspaceReplacePatchModel`/`replaceEditToEditorEdit` (added in round 2,
+  commit `daaf3a25`) convert 1-indexed server edit ranges into 0-indexed editor ranges; both unit
+  tests that reference the module stub it out entirely (`vi.mock`), and the e2e replace test only
+  asserted a summary status string, never the diff view's content. Fixed: a new
+  `EditorDiffSurface.test.ts` calls the real function directly with known multi-line/column edits
+  (mid-file, start-of-file, end-of-file cases) and asserts the resulting before/after text is
+  exactly correct; the e2e replace spec now also asserts `keiko-diff-editor`/`keiko-diff-file`
+  render with the correct file count and that the diff panes show the expected original/modified
+  text before Apply is clicked.
+- **F23 — `dedupeCommands`/`dedupeFileResults` were never exercised with actual colliding input
+  (fixed).** Both de-duplication functions existed and were called in production, but every test
+  fixture used non-overlapping ids/paths, so the actual collision-collapsing branch was untested —
+  a regression that kept the wrong duplicate, or stopped deduping altogether, would not have been
+  caught. Fixed: added a colliding-id test to `quickAccessRegistry.test.ts` (asserting the app
+  command wins over an editor command sharing its id) and a colliding-path test to
+  `UnifiedQuickAccessPalette.test.tsx` (asserting only one row renders when both the filename-search
+  and text-search mocks return the same path).
+- **F24 — This closure evidence existed but was never linked from Epic #2090's Definition of Done
+  (fixed).** The demo script and findings ledger in this document were real and reproducible, but
+  issue #2090's body still read the generic, unchecked closure line with no reference to this file.
+  Fixed: linked from the epic (see the epic's Definition of Done / a closure comment referencing
+  this document).
+
+**Engineering note on F21's two-open-tab requirement:** `splitPane` (`packages/keiko-contracts/src/editor-layout.ts`)
+implements a split by moving the active file into a brand-new pane; if the source pane has only one
+open file, moving it away would leave nothing behind, so the reducer intentionally no-ops
+(`withoutFile(source.openFiles, activeFile).length === 0 → return layout`). This is correct,
+pre-existing, load-bearing behavior — not a defect — but it means any test (or interactive demo)
+of "Split Editor Right"/"Split Editor Down" must open at least two tabs in the target pane first,
+regardless of which surface (toolbar button, keyboard chord, or unified quick-access command)
+triggers the split.

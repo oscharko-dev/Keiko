@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "issue": 2090,
-  "commit": "daaf3a2549ee1422e22d195b1b5b27aa4c6ece3e",
-  "measuredAtIso": "2026-07-09T08:19:39.542Z",
+  "commit": "5370792c76d7774732521af1e00eb01865b0f215",
+  "measuredAtIso": "2026-07-09T19:06:25.925Z",
   "workspaceSearch": {
     "runs": 3,
     "budgetP50Ms": 200,
     "budgetP95Ms": 500,
-    "p50Ms": 14,
-    "p95Ms": 40,
+    "p50Ms": 13,
+    "p95Ms": 35,
     "maxResultsRequested": 12,
     "maxObservedResultCount": 12,
     "resultBoundHeld": true

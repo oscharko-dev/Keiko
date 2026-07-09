@@ -49,6 +49,15 @@ describe("quick access registry", () => {
     expect(commandIdsForEvidence(appCommands, EDITOR_PALETTE_COMMANDS)).toContain("tab.close");
   });
 
+  it("collapses an app command that collides with an editor command id, keeping the app definition", () => {
+    const commands = buildUnifiedQuickAccessCommands([appCommand("tab.close")], host());
+    const matches = commands.filter((command) => command.id === "tab.close");
+    const [surviving] = matches;
+
+    expect(matches).toHaveLength(1);
+    expect(surviving).toEqual(expect.objectContaining({ group: "App", label: "App tab.close" }));
+  });
+
   it("keeps the launcher grid sourced from the shared quick-access window order", () => {
     expect(paletteWindowOrder()).toEqual([
       "chat",
