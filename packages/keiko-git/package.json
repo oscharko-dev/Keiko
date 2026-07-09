@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.2.14",
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   },
   "private": true
 }
