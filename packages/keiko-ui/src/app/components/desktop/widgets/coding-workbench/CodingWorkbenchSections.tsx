@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { useTranslate } from "@/lib/i18n";
 import type { CodingWorkbenchRequestState } from "./CodingWorkbenchWindow";
 import type {
   CodingWorkbenchModeOption,
@@ -27,10 +28,11 @@ export function WorkbenchHeader({
 }: {
   readonly projection: CodingWorkbenchProjection;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <header className={styles.header}>
       <div>
-        <p className={styles.eyebrow}>Coding Workbench</p>
+        <p className={styles.eyebrow}>{t("rail.coding")}</p>
         <h2 className={styles.title}>{projection.title}</h2>
         <p className={styles.summary}>{projection.currentStep}</p>
       </div>

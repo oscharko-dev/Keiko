@@ -25,6 +25,13 @@ export const EN_MESSAGES = {
   "common.status": "Status",
   "common.duration": "Duration",
   "common.confidence": "Confidence",
+  "codingWorkbench.status.checking": "Checking",
+  "codingWorkbench.status.available": "Available",
+  "codingWorkbench.status.unavailable": "Unavailable",
+  "codingWorkbench.runtime.gatewayManagedDetail": "Managed provider through Keiko Gateway",
+  "codingWorkbench.runtime.gatewayApiKeyDetail": "API key routed through Keiko Gateway",
+  "codingWorkbench.runtime.codexDetail":
+    "Subscription profile executes through the Codex runtime adapter",
   "newWindow.chat.title": "New Chat window",
   "newWindow.chat.description": "Talk to Keiko",
   "newWindow.chat.fieldTitle": "Title",

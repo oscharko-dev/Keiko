@@ -1,5 +1,6 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { useTranslate } from "@/lib/i18n";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { useChatSessionContext } from "../context/ChatSessionContext";
@@ -13,7 +14,12 @@ import {
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import type { ChatMessage } from "@/lib/types";
 
-const windowChunkFallback = (): ReactNode => <div className="lk-loading">Loading...</div>;
+function WindowChunkFallback(): ReactNode {
+  const t = useTranslate();
+  return <div className="lk-loading">{t("common.loading")}</div>;
+}
+
+const windowChunkFallback = WindowChunkFallback;
 const ChatWindow = dynamic(() => import("../ChatWindow").then((mod) => mod.ChatWindow), {
   ssr: false,
   loading: windowChunkFallback,

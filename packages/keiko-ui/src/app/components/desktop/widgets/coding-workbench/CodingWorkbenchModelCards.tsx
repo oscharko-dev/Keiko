@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { CodingWorkbenchModelSource } from "@oscharko-dev/keiko-contracts";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { CodingWorkbenchProfileState } from "./CodingWorkbenchWindow";
 import type { CodingWorkbenchProjection } from "./codingWorkbenchProjection";
 import {
@@ -27,7 +28,8 @@ interface ModelCard {
 }
 
 export function ModelRuntimeStatus({ projection, profiles }: ModelRuntimeStatusProps): ReactNode {
-  const cards = modelCards(projection.authority.modelProfile.source, profiles);
+  const t = useTranslate();
+  const cards = modelCards(projection.authority.modelProfile.source, profiles, t);
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-runtime-title">
       <div className={styles.cardHeader}>
@@ -56,11 +58,12 @@ export function ModelRuntimeStatus({ projection, profiles }: ModelRuntimeStatusP
 function modelCards(
   active: CodingWorkbenchModelSource,
   profiles: CodingWorkbenchProfileState,
+  t: I18nTranslate,
 ): readonly ModelCard[] {
   return [
-    gatewayCard("keiko-model-gateway", active, profiles),
-    gatewayCard("openai-api-key-through-gateway", active, profiles),
-    codexCard(active, profiles),
+    gatewayCard("keiko-model-gateway", active, profiles, t),
+    gatewayCard("openai-api-key-through-gateway", active, profiles, t),
+    codexCard(active, profiles, t),
   ];
 }
 
@@ -68,13 +71,19 @@ function gatewayCard(
   source: "keiko-model-gateway" | "openai-api-key-through-gateway",
   active: CodingWorkbenchModelSource,
   profiles: CodingWorkbenchProfileState,
+  t: I18nTranslate,
 ): ModelCard {
   const available = profiles.status === "ready" && profiles.sidecarGateway.status === "available";
   return {
     source,
     label: modelSourceLabel(source),
-    detail: gatewayDetail(source),
-    status: profiles.status === "loading" ? "Checking" : available ? "Available" : "Unavailable",
+    detail: gatewayDetail(source, t),
+    status:
+      profiles.status === "loading"
+        ? t("codingWorkbench.status.checking")
+        : available
+          ? t("codingWorkbench.status.available")
+          : t("codingWorkbench.status.unavailable"),
     tone: profiles.status === "loading" ? "neutral" : available ? "success" : "warning",
     active: active === source,
   };
@@ -83,20 +92,24 @@ function gatewayCard(
 function codexCard(
   active: CodingWorkbenchModelSource,
   profiles: CodingWorkbenchProfileState,
+  t: I18nTranslate,
 ): ModelCard {
   const status = profiles.status === "ready" ? profiles.codexProfile.status : profiles.status;
   return {
     source: "chatgpt-codex-subscription-profile",
     label: modelSourceLabel("chatgpt-codex-subscription-profile"),
-    detail: "Subscription profile executes through the Codex runtime adapter",
+    detail: t("codingWorkbench.runtime.codexDetail"),
     status: codexStatusLabel(status),
     tone: status === "connected" ? "success" : status === "loading" ? "neutral" : "warning",
     active: active === "chatgpt-codex-subscription-profile",
   };
 }
 
-function gatewayDetail(source: "keiko-model-gateway" | "openai-api-key-through-gateway"): string {
+function gatewayDetail(
+  source: "keiko-model-gateway" | "openai-api-key-through-gateway",
+  t: I18nTranslate,
+): string {
   return source === "keiko-model-gateway"
-    ? "Managed provider through Keiko Gateway"
-    : "API key routed through Keiko Gateway";
+    ? t("codingWorkbench.runtime.gatewayManagedDetail")
+    : t("codingWorkbench.runtime.gatewayApiKeyDetail");
 }

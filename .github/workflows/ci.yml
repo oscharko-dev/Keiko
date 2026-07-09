@@ -96,6 +96,8 @@ jobs:
         run: |
           if [ -n "${KEIKO_I18N_GUARD_BASE_REF:-}" ]; then
             git fetch --no-tags --depth=100 origin "${KEIKO_I18N_GUARD_BASE_REF}:refs/remotes/origin/${KEIKO_I18N_GUARD_BASE_REF}"
+          elif [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "${GITHUB_REF_NAME:-}" != "dev" ]; then
+            git fetch --no-tags --depth=100 origin "dev:refs/remotes/origin/dev"
           fi
           npm run check:ui-i18n
       - run: npm run check:adr-index

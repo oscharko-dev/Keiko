@@ -5,6 +5,7 @@ import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
 } from "@/lib/api";
+import { useTranslate } from "@/lib/i18n";
 import type {
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchMode,
@@ -71,6 +72,7 @@ export function CodingWorkbenchWindow({
   );
   const [profiles, setProfiles] = useState<CodingWorkbenchProfileState>({ status: "loading" });
   const [requestState, setRequestState] = useState<CodingWorkbenchRequestState>("idle");
+  const t = useTranslate();
 
   useEffect(() => setSelectedMode(projection.authority.requestedMode), [projection]);
   useEffect(() => setRequestState("idle"), [projection.authority.runId, projection.runState]);
@@ -90,7 +92,7 @@ export function CodingWorkbenchWindow({
   return (
     <section
       className={styles.shell}
-      aria-label="Coding Workbench"
+      aria-label={t("rail.coding")}
       aria-busy={isActiveRunState(projection.runState)}
       data-state={projection.runState}
     >
