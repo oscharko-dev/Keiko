@@ -95,6 +95,7 @@ import {
   handleCodingCodexSubscriptionSetup,
 } from "./coding-codex-subscription.js";
 import { AUTONOMOUS_DELIVERY_ROUTE_GROUP } from "./coding-runtime/autonomousDeliveryRoutes.js";
+import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -1109,6 +1110,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #1993 autonomous delivery: confirmed Authority Envelope gate over the existing typed repository
   // operation facade. This route never shells out directly and returns content-free execution evidence.
   ...AUTONOMOUS_DELIVERY_ROUTE_GROUP,
+  // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
+  // authorization, the server deployment ceiling, and connector-scope grants. Context stays
+  // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.
+  ...CODING_CONTEXT_ROUTE_GROUP,
 ];
 
 interface PreparedRoute {

@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "description": "Approved runtime inputs for portable release staging. Changing a version or digest here is the release approval act and must go through pull-request review.",
+  "node": {
+    "version": "22.23.1",
+    "archives": {
+      "windows-x64": {
+        "url": "https://nodejs.org/dist/v22.23.1/node-v22.23.1-win-x64.zip",
+        "sha256": "7df0bc9375723f4a86b3aa1b7cc73342423d9677a8df4538aca31a049e309c29"
+      },
+      "macos-arm64": {
+        "url": "https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-arm64.tar.gz",
+        "sha256": "ef28d8fab2c0e4314522d4bb1b7173270aa3937e93b92cb7de79c112ac1fa953"
+      },
+      "macos-x64": {
+        "url": "https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-x64.tar.gz",
+        "sha256": "b8da981b8a0b1241b70249204916da76c63573ddf5814dbd2d1e41069105cb81"
+      }
+    }
+  },
+  "sidecarRuntimes": [
+    {
+      "name": "opencode-compatible",
+      "kind": "coding-runtime",
+      "upstream": {
+        "name": "opencode",
+        "version": "1.17.17"
+      },
+      "adapterCompatibility": {
+        "adapterName": "keiko-coding-sidecar",
+        "adapterVersion": "1",
+        "protocolVersion": "coding-sidecar-v1"
+      },
+      "license": {
+        "spdxId": "MIT",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/v1.17.17/LICENSE",
+        "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
+      },
+      "archives": {
+        "windows-x64": {
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-windows-x64.zip",
+          "sha256": "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85",
+          "sizeBytes": 69576819,
+          "executableName": "opencode.exe"
+        },
+        "macos-arm64": {
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-darwin-arm64.zip",
+          "sha256": "cec03cf8b1119053d583e9afa14a987ca4ffa9dcd76cb79a7cd66774de6411f7",
+          "sizeBytes": 55159915,
+          "executableName": "opencode"
+        },
+        "macos-x64": {
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-darwin-x64.zip",
+          "sha256": "e621f1ac6c78aae10caf69d7a1cc15d8adf32b9d68ad124506e9f4e4fe04d7ba",
+          "sizeBytes": 57321241,
+          "executableName": "opencode"
+        }
+      }
+    }
+  ]
+}

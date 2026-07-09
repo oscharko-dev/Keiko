@@ -79,6 +79,8 @@ jobs:
           NODE
       - name: Validate required-check workflow names
         run: npm run check:release-required-workflows
+      - name: Validate approved portable runtime inputs
+        run: npm run check:portable-approvals
       - name: Verify required checks for tagged SHA
         env:
           GITHUB_TOKEN: ${{ github.token }}
