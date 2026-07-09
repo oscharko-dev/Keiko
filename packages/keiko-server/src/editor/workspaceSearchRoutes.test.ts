@@ -1,0 +1,413 @@
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { buildRedactor, createInMemoryUiStore } from "../index.js";
+import type { RouteContext, UiHandlerDeps } from "../index.js";
+import type { UiStore } from "../store/index.js";
+import {
+  handleEditorWorkspaceReplaceApply,
+  handleEditorWorkspaceReplacePreview,
+  handleEditorWorkspaceSearch,
+  handleEditorWorkspaceSymbols,
+} from "./workspaceSearchRoutes.js";
+
+function rawPostContext(raw: string, path: string): RouteContext {
+  const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
+  (req as { method?: string }).method = "POST";
+  return {
+    req,
+    res: {} as unknown as ServerResponse,
+    params: {},
+    url: new URL(`http://localhost${path}`),
+  };
+}
+
+function postContext(body: unknown, path = "/api/editor/workspace-search"): RouteContext {
+  return rawPostContext(JSON.stringify(body), path);
+}
+
+let root: string;
+let store: UiStore;
+
+function deps(): UiHandlerDeps {
+  return {
+    store,
+    redactor: buildRedactor({}),
+    evidenceStore: createInMemoryEvidenceStore(),
+  } as unknown as UiHandlerDeps;
+}
+
+function searchBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    root,
+    query: "parseConfig",
+    mode: "literal",
+    caseSensitive: false,
+    includeGlobs: [],
+    excludeGlobs: [],
+    maxResults: 20,
+    ...overrides,
+  };
+}
+
+function replaceBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    root,
+    query: "parseConfig",
+    mode: "literal",
+    caseSensitive: false,
+    includeGlobs: [],
+    excludeGlobs: [],
+    replacement: "readConfig",
+    maxFiles: 20,
+    ...overrides,
+  };
+}
+
+function symbolBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    root,
+    query: "parse",
+    maxResults: 20,
+    ...overrides,
+  };
+}
+
+beforeEach(async () => {
+  root = await realpath(await mkdtemp(join(tmpdir(), "keiko-workspace-search-route-")));
+  await mkdir(join(root, "src"), { recursive: true });
+  await writeFile(
+    join(root, "src", "a.ts"),
+    [
+      "export function parseConfig(value: string): string {",
+      "  return value.trim();",
+      "}",
+      'export const marker = parseConfig("a");',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(
+    join(root, "src", "b.ts"),
+    [
+      "export function parseConfigBeta(value: string): string {",
+      "  return parseConfigBeta(value);",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  await writeFile(join(root, "src", "case.ts"), "Alpha\nalpha\n", "utf8");
+  store = createInMemoryUiStore();
+  store.createProject(root, "fixture");
+});
+
+afterEach(async () => {
+  store.close();
+  await rm(root, { recursive: true, force: true });
+});
+
+describe("POST /api/editor/workspace-search", () => {
+  it("returns literal search results with bounded snippets", async () => {
+    const result = await handleEditorWorkspaceSearch(postContext(searchBody()), deps());
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      results: { path: string; lineRange: { startLine: number }; snippet: string }[];
+      filesScanned: number;
+    };
+    expect(body.results.length).toBeGreaterThan(0);
+    expect(body.results[0]?.path).toMatch(/^src\/[ab]\.ts$/);
+    expect(body.results[0]?.lineRange.startLine).toBeGreaterThan(0);
+    expect(body.results[0]?.snippet).toContain("parseConfig");
+    expect(body.filesScanned).toBeGreaterThan(0);
+  });
+
+  it("supports safe regex mode and rejects unsafe regex requests", async () => {
+    const safe = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "parseConfig\\w*", mode: "regex" })),
+      deps(),
+    );
+    expect(safe.status).toBe(200);
+
+    const unsafe = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "(a+)+", mode: "regex" })),
+      deps(),
+    );
+    expect(unsafe.status).toBe(400);
+    expect(unsafe.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("honors case sensitivity", async () => {
+    const sensitive = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "Alpha", caseSensitive: true })),
+      deps(),
+    );
+    const insensitive = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "Alpha", caseSensitive: false })),
+      deps(),
+    );
+
+    expect(sensitive.status).toBe(200);
+    expect(insensitive.status).toBe(200);
+    const sensitiveBody = sensitive.body as { results: unknown[] };
+    const insensitiveBody = insensitive.body as { results: unknown[] };
+    expect(insensitiveBody.results.length).toBeGreaterThan(sensitiveBody.results.length);
+  });
+
+  it("applies include and exclude glob filters through the governed file-search facade", async () => {
+    const included = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ includeGlobs: ["src/a.ts"] })),
+      deps(),
+    );
+    const excluded = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ excludeGlobs: ["src/a.ts"] })),
+      deps(),
+    );
+
+    expect(included.status).toBe(200);
+    expect(excluded.status).toBe(200);
+    const includedBody = included.body as { results: { path: string }[] };
+    const excludedBody = excluded.body as { results: { path: string }[] };
+    expect(new Set(includedBody.results.map((entry) => entry.path))).toEqual(new Set(["src/a.ts"]));
+    expect(excludedBody.results.every((entry) => entry.path !== "src/a.ts")).toBe(true);
+  });
+
+  it("reports truncation when the requested cap is smaller than the true match set", async () => {
+    const result = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "parseConfig", maxResults: 1 })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: unknown[]; truncated: boolean };
+    expect(body.results).toHaveLength(1);
+    expect(body.truncated).toBe(true);
+  });
+
+  it("rejects denied glob scopes and oversized request bodies", async () => {
+    const denied = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ includeGlobs: [".git/config"] })),
+      deps(),
+    );
+    expect(denied.status).toBe(403);
+    expect(denied.body).toMatchObject({ error: { code: "DENIED" } });
+
+    const oversized = await handleEditorWorkspaceSearch(
+      rawPostContext(
+        JSON.stringify({ ...searchBody(), padding: "x".repeat(70 * 1024) }),
+        "/api/editor/workspace-search",
+      ),
+      deps(),
+    );
+    expect(oversized.status).toBe(413);
+  });
+});
+
+describe("POST /api/editor/workspace-symbols", () => {
+  it("rejects an empty symbol query", async () => {
+    const result = await handleEditorWorkspaceSymbols(
+      postContext(symbolBody({ query: " " }), "/api/editor/workspace-symbols"),
+      deps(),
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("returns bounded definition symbols with jump locations", async () => {
+    const result = await handleEditorWorkspaceSymbols(
+      postContext(symbolBody({ query: "parseConfig" }), "/api/editor/workspace-symbols"),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      results: { symbol: string; kind: string; path: string; line: number }[];
+      filesScanned: number;
+    };
+    expect(body.results[0]).toMatchObject({
+      symbol: "parseConfig",
+      kind: "function",
+      path: "src/a.ts",
+      line: 1,
+    });
+    expect(body.filesScanned).toBeGreaterThan(0);
+  });
+
+  it("returns an empty result set when no symbols match", async () => {
+    const result = await handleEditorWorkspaceSymbols(
+      postContext(symbolBody({ query: "NoSuchSymbol" }), "/api/editor/workspace-symbols"),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ results: [], truncated: false });
+  });
+
+  it("reports truncation when the result cap is smaller than matching symbols", async () => {
+    const result = await handleEditorWorkspaceSymbols(
+      postContext(symbolBody({ query: "parse", maxResults: 1 }), "/api/editor/workspace-symbols"),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: unknown[]; truncated: boolean };
+    expect(body.results).toHaveLength(1);
+    expect(body.truncated).toBe(true);
+  });
+});
+
+describe("POST /api/editor/workspace-search/replace-preview", () => {
+  it("returns proposed edits without mutating files", async () => {
+    const before = await readFile(join(root, "src", "a.ts"), "utf8");
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const after = await readFile(join(root, "src", "a.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      fileCount: number;
+      editCount: number;
+      files: {
+        path: string;
+        baseContentHash: string;
+        edits: { originalText: string; newText: string }[];
+      }[];
+    };
+    expect(body.fileCount).toBe(1);
+    expect(body.editCount).toBeGreaterThan(0);
+    expect(body.files[0]?.path).toBe("src/a.ts");
+    expect(body.files[0]?.baseContentHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(body.files[0]?.edits[0]).toMatchObject({
+      originalText: "parseConfig",
+      newText: "readConfig",
+    });
+    expect(after).toBe(before);
+  });
+
+  it("recomputes matches from current on-disk content at preview time", async () => {
+    await handleEditorWorkspaceSearch(
+      postContext(searchBody({ includeGlobs: ["src/a.ts"] })),
+      deps(),
+    );
+    await writeFile(
+      join(root, "src", "a.ts"),
+      'export const current = parseConfigCurrent("x");\n',
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ query: "parseConfig\\w*", mode: "regex", includeGlobs: ["src/a.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { files: { edits: { originalText: string }[] }[] };
+    expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual(["parseConfigCurrent"]);
+  });
+
+  it("enforces file caps with an honest omitted-file count", async () => {
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(replaceBody({ maxFiles: 1 }), "/api/editor/workspace-search/replace-preview"),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      files: unknown[];
+      fileCount: number;
+      omittedFileCount: number;
+      truncated: boolean;
+    };
+    expect(body.files).toHaveLength(1);
+    expect(body.fileCount).toBe(1);
+    expect(body.omittedFileCount).toBeGreaterThan(0);
+    expect(body.truncated).toBe(true);
+  });
+});
+
+describe("POST /api/editor/workspace-search/replace-apply", () => {
+  async function previewForApply(): Promise<{
+    readonly path: string;
+    readonly baseContentHash: string;
+    readonly edits: readonly unknown[];
+  }> {
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const body = preview.body as {
+      files: {
+        path: string;
+        baseContentHash: string;
+        edits: readonly unknown[];
+      }[];
+    };
+    const file = body.files[0];
+    if (file === undefined) throw new Error("missing preview file");
+    return file;
+  }
+
+  it("applies closed-file edits through the governed replace apply route", async () => {
+    const file = await previewForApply();
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "a.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(content).toContain("readConfig");
+    expect(content).toContain('export const marker = parseConfig("a");');
+  });
+
+  it("reports a structured conflict when the file changed after preview", async () => {
+    const file = await previewForApply();
+    await writeFile(join(root, "src", "a.ts"), "export const changed = true;\n", "utf8");
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "a.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      appliedCount: 0,
+      conflictCount: 1,
+      conflicts: [{ path: "src/a.ts", reason: "write-conflict" }],
+    });
+    expect(content).toBe("export const changed = true;\n");
+  });
+
+  it("rejects a path escape before the contained writer can write", async () => {
+    const file = await previewForApply();
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext(
+        { root, files: [{ ...file, path: "../escape.ts" }] },
+        "/api/editor/workspace-search/replace-apply",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+});

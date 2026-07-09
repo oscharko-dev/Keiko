@@ -119,6 +119,14 @@ import type {
   PdfCitationPreviewStatusResponse,
   VoicePersona,
   GitRepositoryValidation,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResponse,
+  WorkspaceReplaceApplyRequest,
+  WorkspaceReplaceApplyResponse,
+  WorkspaceReplacePreviewRequest,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceSymbolSearchRequest,
+  WorkspaceSymbolSearchResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
   validateGitHistoryResponse,
@@ -1353,6 +1361,48 @@ export async function fetchFilesSearch(
   params.set("q", query);
   if (limit !== undefined) params.set("limit", String(limit));
   return fetchJson(`/api/files/search?${params.toString()}`, init);
+}
+
+export async function fetchWorkspaceSearch(
+  request: WorkspaceSearchRequest,
+  init?: Pick<RequestInit, "signal">,
+): Promise<WorkspaceSearchResponse> {
+  return fetchJson("/api/editor/workspace-search", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...init,
+  });
+}
+
+export async function fetchWorkspaceSymbols(
+  request: WorkspaceSymbolSearchRequest,
+  init?: Pick<RequestInit, "signal">,
+): Promise<WorkspaceSymbolSearchResponse> {
+  return fetchJson("/api/editor/workspace-symbols", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...init,
+  });
+}
+
+export async function fetchWorkspaceReplacePreview(
+  request: WorkspaceReplacePreviewRequest,
+  init?: Pick<RequestInit, "signal">,
+): Promise<WorkspaceReplacePreviewResponse> {
+  return fetchJson("/api/editor/workspace-search/replace-preview", {
+    method: "POST",
+    body: JSON.stringify(request),
+    ...init,
+  });
+}
+
+export async function applyWorkspaceReplace(
+  request: WorkspaceReplaceApplyRequest,
+): Promise<WorkspaceReplaceApplyResponse> {
+  return fetchJson("/api/editor/workspace-search/replace-apply", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
 }
 
 export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {

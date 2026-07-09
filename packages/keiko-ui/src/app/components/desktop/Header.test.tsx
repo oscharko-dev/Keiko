@@ -42,12 +42,10 @@ describe("Header window controls (C023)", () => {
 });
 
 describe("Header release controls", () => {
-  it("does not expose New or command-palette buttons in the header", () => {
+  it("exposes quick access without restoring the old New button", () => {
     renderHeader();
     expect(screen.queryByRole("button", { name: "New window" })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Open the command palette (Ctrl/⌘K)" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open quick access" })).toBeInTheDocument();
   });
 });
 

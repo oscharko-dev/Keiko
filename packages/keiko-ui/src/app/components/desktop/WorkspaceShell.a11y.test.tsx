@@ -235,13 +235,14 @@ describe("Workspace shell accessibility", () => {
     const onTool = vi.fn();
     const onToggleTheme = vi.fn();
     const openPalette = vi.fn();
+    const openCommandPalette = vi.fn();
     const wsApi = api();
 
     render(
       <div className="app">
         <Header
           openPalette={openPalette}
-          openCommandPalette={vi.fn()}
+          openCommandPalette={openCommandPalette}
           onTileAll={onTileAll}
           onSplitFront={onSplitFront}
           onCascade={onCascade}
@@ -269,6 +270,10 @@ describe("Workspace shell accessibility", () => {
       await user.tab();
       expect(element).toHaveFocus();
     };
+
+    await tabTo(screen.getByRole("button", { name: "Open quick access" }));
+    await user.keyboard("{Enter}");
+    expect(openCommandPalette).toHaveBeenCalledTimes(1);
 
     await tabTo(screen.getByRole("button", { name: "Tile all windows" }));
     await user.keyboard("{Enter}");
