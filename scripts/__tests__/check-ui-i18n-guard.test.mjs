@@ -83,6 +83,30 @@ test("detects changed files from the push event before SHA", () => {
   assert.equal(calls[0], "abc1234..HEAD");
 });
 
+test("fails closed when the push event before SHA is unreachable", () => {
+  const calls = [];
+
+  assert.throws(
+    () =>
+      changedFilesFromGit(
+        "repo",
+        (_repoRoot, range) => {
+          calls.push(range);
+          return range === "origin/dev...HEAD"
+            ? { ok: true, error: "", files: [] }
+            : { ok: false, error: "missing range", files: [] };
+        },
+        {
+          GITHUB_EVENT_NAME: "push",
+          KEIKO_I18N_GUARD_BASE_SHA: "deadbee",
+        },
+      ),
+    /could not determine changed files/,
+  );
+
+  assert.deepEqual(calls, ["deadbee..HEAD", "deadbee...HEAD"]);
+});
+
 test("detects changed files from workflow_dispatch base ref safely", () => {
   const calls = [];
   const files = changedFilesFromGit(
@@ -101,6 +125,25 @@ test("detects changed files from workflow_dispatch base ref safely", () => {
 
   assert.deepEqual(files, [UI_FILE]);
   assert.equal(calls[0], "origin/release-1209...HEAD");
+});
+
+test("uses only the parent commit fallback for event runs without a base", () => {
+  const calls = [];
+  const files = changedFilesFromGit(
+    "repo",
+    (_repoRoot, range) => {
+      calls.push(range);
+      return range === "HEAD^1..HEAD"
+        ? { ok: true, error: "", files: [UI_FILE] }
+        : { ok: false, error: "missing range", files: [] };
+    },
+    {
+      GITHUB_EVENT_NAME: "workflow_dispatch",
+    },
+  );
+
+  assert.deepEqual(files, [UI_FILE]);
+  assert.deepEqual(calls, ["HEAD^1..HEAD"]);
 });
 
 test("prefers pull request base ref over synchronize before SHA", () => {

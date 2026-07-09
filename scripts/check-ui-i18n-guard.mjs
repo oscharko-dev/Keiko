@@ -65,7 +65,7 @@ function isSafeGitRef(value) {
 }
 
 function diffNameOnly(repoRoot, range) {
-  const result = spawnSync("git", ["diff", "--name-only", "--diff-filter=ACMRT", range], {
+  const result = spawnSync("git", ["diff", "--name-only", "--diff-filter=ACMRT", range, "--"], {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -123,6 +123,7 @@ function pushBaseRefRanges(ranges, baseRef) {
 function diffRangesFromEnv(env) {
   const baseRef = env.KEIKO_I18N_GUARD_BASE_REF ?? env.GITHUB_BASE_REF;
   const baseSha = env.KEIKO_I18N_GUARD_BASE_SHA ?? env.GITHUB_EVENT_BEFORE;
+  const eventName = env.GITHUB_EVENT_NAME ?? "";
   const ranges = [];
 
   validateBaseSha(baseSha);
@@ -130,11 +131,19 @@ function diffRangesFromEnv(env) {
   pushBaseRefRanges(ranges, baseRef);
   pushBaseShaRanges(ranges, baseSha);
 
+  if (ranges.length === 0 && eventName) {
+    ranges.push("HEAD^1..HEAD");
+  }
+
+  if (ranges.length === 0) {
+    ranges.push("origin/dev...HEAD", "HEAD^1..HEAD");
+  }
+
   return ranges;
 }
 
 export function changedFilesFromGit(repoRoot, diffNameOnlyFn = diffNameOnly, env = process.env) {
-  const ranges = [...diffRangesFromEnv(env), "origin/dev...HEAD", "origin/dev", "HEAD^1..HEAD"];
+  const ranges = diffRangesFromEnv(env);
   const errors = [];
 
   for (const range of ranges) {
