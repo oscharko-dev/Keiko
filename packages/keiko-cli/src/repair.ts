@@ -31,6 +31,12 @@ import {
   type LauncherState,
   type LauncherStateEntry,
 } from "./launcher-state.js";
+import { attestedPortableInstallRecord } from "./portable-install.js";
+import {
+  inspectPortableManagedInstall,
+  portableRegistrationHealth,
+  repairUserLocalRegistration,
+} from "./portable-maintenance.js";
 import {
   RUNTIME_STATE_DIR_MODE,
   RUNTIME_STATE_FILE_MODE,
@@ -62,6 +68,7 @@ Runs an offline diagnostic-and-repair pass over the local Keiko install:
   - tightens known Keiko-owned runtime artifacts (DBs, Evidence/QI, credential
     vaults, sidecars) to owner-only 0o700/0o600 without touching customer files
   - prunes launcher records whose shortcut files were deleted
+  - repairs attested portable-managed user-local registration when safe
   - verifies the built CLI/UI assets and the launch path
   - validates a configured model-gateway config file
   - flags lingering plaintext credentials in the config
@@ -447,6 +454,127 @@ function checkCredentialStorage(
   return ok("Credential storage", "no plaintext credentials in config");
 }
 
+function checkPortableManagedInstall(
+  stateDir: string,
+  env: EnvSource,
+  homedir: string,
+): CheckResult {
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  if (recordResult.kind === "error") {
+    return action("Portable managed install", recordResult.message);
+  }
+  const record = recordResult.record;
+  if (record === undefined)
+    return ok("Portable managed install", "no portable-managed install recorded");
+  if (record.registration.status === "setup-failed") {
+    const reason = record.registration.failureReason ?? "setup-failed";
+    return action("Portable managed install", `previous portable setup failed (${reason})`);
+  }
+  if (
+    record.managedRoot === undefined ||
+    record.layout === undefined ||
+    record.manifest === undefined
+  ) {
+    return action(
+      "Portable managed install",
+      "recorded portable-managed install could not be attested from user-local registration or default roots",
+    );
+  }
+  const scan = inspectPortableManagedInstall(record.layout);
+  if (scan.issues.length > 0) {
+    return action(
+      "Portable managed install",
+      scan.issues[0] ?? "portable managed install is not safe to inspect",
+    );
+  }
+  return ok("Portable managed install", "attested portable-managed install verified");
+}
+
+function checkPortableRegistration(
+  stateDir: string,
+  env: EnvSource,
+  homedir: string,
+  dryRun: boolean,
+): CheckResult {
+  const recordResult = readPortableRecordForRepair(stateDir, env, homedir);
+  if (recordResult.kind === "error") {
+    return action("Portable registration", recordResult.message);
+  }
+  const record = recordResult.record;
+  if (record === undefined || record.registration.status === "setup-failed") {
+    return ok("Portable registration", "no portable-managed registration recorded");
+  }
+  if (record.layout === undefined || record.managedRoot === undefined) {
+    return action(
+      "Portable registration",
+      "portable-managed install could not be attested before registration repair",
+    );
+  }
+  const health = portableRegistrationHealth(
+    record.layout,
+    record.target,
+    record.managedRoot,
+    env,
+    homedir,
+  );
+  const status = portableRegistrationStatus(health, dryRun);
+  if (status !== "repair") return status;
+  const repaired = repairUserLocalRegistration(
+    record.layout,
+    record.target,
+    record.managedRoot,
+    env,
+    homedir,
+  );
+  return fixed(
+    "Portable registration",
+    `repaired ${String(repaired)} user-local registration artifact(s)`,
+  );
+}
+
+function portableRegistrationStatus(
+  health: ReturnType<typeof portableRegistrationHealth>,
+  dryRun: boolean,
+): CheckResult | "repair" {
+  if (health.actionRequired > 0) {
+    return action(
+      "Portable registration",
+      `${String(health.actionRequired)} user-local registration artifact(s) modified — remove the portable registration artifact and re-run setup`,
+    );
+  }
+  if (health.missing === 0) {
+    return ok(
+      "Portable registration",
+      `${String(health.ok)} user-local registration artifact(s) verified`,
+    );
+  }
+  if (dryRun) {
+    return fixable(
+      "Portable registration",
+      `${String(health.missing)} missing user-local registration artifact(s)`,
+    );
+  }
+  return "repair";
+}
+
+function readPortableRecordForRepair(
+  stateDir: string,
+  env: EnvSource,
+  homedir: string,
+):
+  | { readonly kind: "ok"; readonly record: ReturnType<typeof attestedPortableInstallRecord> }
+  | { readonly kind: "error"; readonly message: string } {
+  try {
+    return { kind: "ok", record: attestedPortableInstallRecord(stateDir, env, homedir) };
+  } catch (error) {
+    return {
+      kind: "error",
+      message:
+        error instanceof Error ? error.message : "portable-managed install record is unreadable",
+    };
+  }
+}
+
 // Counts provider/reranker `apiKeySecretRef` values in the config that have no matching entry in the
 // encrypted credential vault — the signature of an interrupted migration or a deleted/corrupt vault
 // store.
@@ -539,6 +667,8 @@ export function runRepairCli(
           checkStateDirPerms(stateDir, parsed.dryRun),
           ...checkRuntimeStateArtifacts(stateDir, parsed.dryRun),
           checkLauncherRecords(stateDir, resolved.homedir(), io, parsed.dryRun),
+          checkPortableManagedInstall(stateDir, env, resolved.homedir()),
+          checkPortableRegistration(stateDir, env, resolved.homedir(), parsed.dryRun),
         ]
       : [stateRootAction];
   const results: CheckResult[] = [

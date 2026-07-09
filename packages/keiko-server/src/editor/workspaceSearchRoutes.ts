@@ -35,7 +35,11 @@ import {
   type SearchScope,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { createContainedNodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
+import { applyPatch, validatePatch, type PatchLimits } from "@oscharko-dev/keiko-tools";
+import {
+  createContainedNodeWorkspaceWriter,
+  type WorkspaceWriter,
+} from "@oscharko-dev/keiko-tools/internal/writer";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
@@ -47,6 +51,25 @@ const MAX_WORKSPACE_SEARCH_BODY_BYTES = 64 * 1024;
 const MAX_WORKSPACE_REPLACE_APPLY_BODY_BYTES = 2 * 1024 * 1024;
 const WORKSPACE_SEARCH_SCOPE_ID = "editor-workspace-search";
 const WORKSPACE_SEARCH_SNIPPET_BYTES = 8 * 1024;
+// `renderFullFileModifyDiff` renders the entire file as one modify hunk (every original line as
+// `-`, every new line as `+`), so the preflight diff is roughly 2x the size of a file up to
+// `DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned`. `keiko-tools`' DEFAULT_PATCH_LIMITS is sized for
+// small assistant-generated patches (64KB / 2,000 changed lines) and would reject a real,
+// moderately-sized source file even for a single-word replacement. This override keeps the same
+// governed, bounded preflight (still fails closed, still routes through validatePatch/applyPatch)
+// but sizes the bound to the feature this route actually serves: replacing text in any file the
+// search/replace engine itself is willing to scan.
+const REPLACE_APPLY_PREFLIGHT_LIMITS: PatchLimits = {
+  maxPatchBytes: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned * 2 + 4_096,
+  maxChangedLines: 100_000,
+  maxFilesChanged: 1,
+};
+const PREFLIGHT_WRITER: WorkspaceWriter = {
+  writeFileUtf8: () => undefined,
+  mkdirp: () => undefined,
+  remove: () => undefined,
+  rename: () => undefined,
+};
 
 function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
@@ -73,11 +96,11 @@ function clientAbortSignal(ctx: RouteContext): AbortSignal {
   return controller.signal;
 }
 
-function buildSearchScope(realRoot: string): SearchScope {
+function buildSearchScope(realRoot: string, relativePaths: readonly string[] = []): SearchScope {
   return {
     workspace: detectWorkspaceAt(realRoot, nodeWorkspaceFs),
     scopeId: WORKSPACE_SEARCH_SCOPE_ID,
-    relativePaths: [],
+    relativePaths,
   };
 }
 
@@ -99,6 +122,12 @@ function assertAllowedApplyFiles(request: WorkspaceReplaceApplyRequest): void {
   }
 }
 
+function assertAllowedSymbolScope(request: WorkspaceSymbolSearchRequest): void {
+  if (request.scopePath !== undefined && pathIsDenied(request.scopePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+}
+
 function escapeLiteralForRegex(value: string): string {
   let escaped = "";
   for (const ch of value) {
@@ -107,6 +136,12 @@ function escapeLiteralForRegex(value: string): string {
   return escaped;
 }
 
+// "literal" mode maps onto the "regex" RetrievalQuery kind with the query character-escaped,
+// rather than onto the whitespace-free "exact-symbol" kind: `buildExactSymbolMatcher`
+// (repoSearchMatchers.ts) rejects any query containing whitespace, which would make literal
+// mode unusable for the common case of searching a multi-word string. A literal query with
+// embedded spaces (e.g. "parse Config") therefore matches the exact multi-word substring
+// unchanged, not just its first token.
 function patternForRequest(
   request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest,
 ): string {
@@ -399,6 +434,7 @@ function parseWorkspaceSymbolSearchRequest(
     root: rootFieldOf(body) ?? "",
     query: body.query as string,
     maxResults: body.maxResults as number,
+    ...(typeof body.scopePath === "string" ? { scopePath: body.scopePath } : {}),
   };
 }
 
@@ -428,9 +464,10 @@ function symbolResult(
 async function buildSymbolSearchResponse(
   scope: SearchScope,
   request: WorkspaceSymbolSearchRequest,
+  signal: AbortSignal,
 ): Promise<WorkspaceSymbolSearchResponse> {
   const startedAt = Date.now();
-  const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, nodeWorkspaceFs);
+  const graph = await buildSymbolGraph(scope, DEFAULT_SEARCH_LIMITS, nodeWorkspaceFs, signal);
   const normalizedQuery = request.query.trim().toLowerCase();
   const allResults = graph.records
     .map((record) => symbolResult(record, normalizedQuery))
@@ -524,9 +561,85 @@ function conflictFor(
   return { path: file.path, reason: "write-conflict", detail };
 }
 
+function diffLines(content: string): readonly string[] {
+  if (content.length === 0) return [];
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+function renderFullFileModifyDiff(path: string, original: string, next: string): string {
+  const oldLines = diffLines(original);
+  const newLines = diffLines(next);
+  return [
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    `@@ -1,${String(oldLines.length)} +1,${String(newLines.length)} @@`,
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+    "",
+  ].join("\n");
+}
+
+function validationReason(
+  validation: ReturnType<typeof validatePatch>,
+): WorkspaceReplaceApplyConflict["reason"] {
+  if (validation.conflicts.length > 0) return "write-conflict";
+  if (validation.files.length === 0 && validation.reasons.length === 0) return "empty-patch";
+  const code = validation.reasons[0]?.code;
+  if (code === "path-denied" || code === "path-unsafe") return "out-of-scope";
+  return "invalid-patch";
+}
+
+function validationDetail(validation: ReturnType<typeof validatePatch>): string {
+  const conflict = validation.conflicts[0];
+  if (conflict !== undefined) return conflict.reason;
+  return validation.reasons[0]?.message ?? "replace patch validation failed";
+}
+
+function validateReplacePatchPreflight(
+  scope: SearchScope,
+  file: WorkspaceReplaceApplyFile,
+  original: string,
+  next: string,
+  signal: AbortSignal,
+): WorkspaceReplaceApplyConflict | null {
+  // Preflight through keiko-tools for scope/conflict semantics, then write the exact range-applied
+  // text below so no-final-newline files are not normalized by the hunk applier. The limits
+  // override is required — see REPLACE_APPLY_PREFLIGHT_LIMITS.
+  const diff = renderFullFileModifyDiff(file.path, original, next);
+  const validation = validatePatch(scope.workspace, diff, {
+    fs: nodeWorkspaceFs,
+    limits: REPLACE_APPLY_PREFLIGHT_LIMITS,
+  });
+  if (!validation.ok) {
+    return {
+      path: file.path,
+      reason: validationReason(validation),
+      detail: validationDetail(validation),
+    };
+  }
+  try {
+    applyPatch(scope.workspace, diff, {
+      applyEnabled: true,
+      signal,
+      limits: REPLACE_APPLY_PREFLIGHT_LIMITS,
+      fs: nodeWorkspaceFs,
+      writer: PREFLIGHT_WRITER,
+    });
+    return null;
+  } catch (error) {
+    return conflictFor(
+      file,
+      error instanceof Error ? error.message : "replace patch preflight failed",
+    );
+  }
+}
+
 function applyReplaceFile(
   scope: SearchScope,
   file: WorkspaceReplaceApplyFile,
+  signal: AbortSignal,
 ): WorkspaceReplaceApplyConflict | null {
   const content = readWorkspaceFile(
     scope.workspace,
@@ -539,6 +652,8 @@ function applyReplaceFile(
   }
   const next = applyReplaceEditsToText(content.text, file.edits);
   if (next === null) return conflictFor(file, "preview edits no longer match current content");
+  const patchConflict = validateReplacePatchPreflight(scope, file, content.text, next, signal);
+  if (patchConflict !== null) return patchConflict;
   const writer = createContainedNodeWorkspaceWriter(scope.workspace.root);
   writer.writeFileUtf8(join(scope.workspace.root, file.path), next);
   return null;
@@ -547,12 +662,13 @@ function applyReplaceFile(
 function buildReplaceApplyResponse(
   scope: SearchScope,
   request: WorkspaceReplaceApplyRequest,
+  signal: AbortSignal,
 ): WorkspaceReplaceApplyResponse {
   let appliedCount = 0;
   const conflicts: WorkspaceReplaceApplyConflict[] = [];
   for (const file of request.files) {
     try {
-      const conflict = applyReplaceFile(scope, file);
+      const conflict = applyReplaceFile(scope, file, signal);
       if (conflict === null) appliedCount += 1;
       else conflicts.push(conflict);
     } catch (error) {
@@ -601,8 +717,12 @@ export async function handleEditorWorkspaceSymbols(
   if (!validation.ok) return invalidRequest(validation.reasons.join("; "));
   return runFilesHandler(async () => {
     const root = await resolveRoot(deps.store, request.root, deps.redactor);
-    const scope = buildSearchScope(root.realRoot);
-    const response = await buildSymbolSearchResponse(scope, request);
+    assertAllowedSymbolScope(request);
+    const scope = buildSearchScope(
+      root.realRoot,
+      request.scopePath === undefined ? [] : [request.scopePath],
+    );
+    const response = await buildSymbolSearchResponse(scope, request, clientAbortSignal(ctx));
     return { status: 200, body: deps.redactor(response) };
   });
 }
@@ -645,7 +765,7 @@ export async function handleEditorWorkspaceReplaceApply(
     try {
       assertAllowedApplyFiles(request);
       const scope = buildSearchScope(root.realRoot);
-      const response = buildReplaceApplyResponse(scope, request);
+      const response = buildReplaceApplyResponse(scope, request, clientAbortSignal(ctx));
       return { status: 200, body: deps.redactor(response) };
     } catch (error) {
       const routeError = searchRouteErrorResult(error);

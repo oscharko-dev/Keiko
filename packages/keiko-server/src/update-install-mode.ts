@@ -9,6 +9,11 @@ import {
   type UpdateInstallPackageManager,
   type UpdateMutationPolicy,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  detectPortableUpdateInstallMode,
+  portableStateDirFromEnv,
+  type PortableManagementMode,
+} from "./update-portable-install-mode.js";
 
 export const PACKAGE_NAME = "@oscharko-dev/keiko";
 const DISABLED_ENV = "KEIKO_UPDATE_MUTATION_DISABLED";
@@ -58,6 +63,8 @@ export interface UpdateRuntimeFacts {
   readonly linkedPackage?: boolean | undefined;
   readonly transientRunner?: boolean | undefined;
   readonly launcherDrift?: boolean | undefined;
+  readonly portableStateDir?: string | undefined;
+  readonly portableManagement?: PortableManagementMode | undefined;
 }
 
 interface DetectorFs {
@@ -245,6 +252,8 @@ function unsupportedMode(reason: UpdateInstallMode["reason"], message: string): 
     schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
     status: "unsupported",
     packageName: PACKAGE_NAME,
+    installKind: "package-manager",
+    recommendedAction: "manual-download",
     reason,
     manualInstructions: manual(message),
   };
@@ -277,8 +286,10 @@ function supportedMode(
     schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
     status: "supported",
     packageName: PACKAGE_NAME,
+    installKind: "package-manager",
     packageManager,
     installRoot,
+    recommendedAction: "package-manager-maintenance",
     commandPreview: commandPreview(packageManager),
   };
 }
@@ -348,6 +359,16 @@ export function detectUpdateInstallMode(
   env: NodeJS.ProcessEnv = {},
   fs: DetectorFs = nodeDetectorFs,
 ): UpdateInstallMode {
+  const portableMode = detectPortableUpdateInstallMode(
+    {
+      packageRoot: facts.packageRoot,
+      stateDir: facts.portableStateDir,
+      management: facts.portableManagement,
+    },
+    fs,
+    PACKAGE_NAME,
+  );
+  if (portableMode !== undefined) return portableMode;
   const blocker = installModeBlocker(facts, env, fs);
   if (blocker !== undefined) return unsupportedMode(blocker.reason, blocker.message);
   return (
@@ -367,5 +388,6 @@ export function productionUpdateFacts(
     packageRoot,
     packageName: PACKAGE_NAME,
     packageManagerHint: packageManagerHintFromRoot(packageRoot),
+    portableStateDir: portableStateDirFromEnv(env),
   };
 }

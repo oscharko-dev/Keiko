@@ -13,6 +13,36 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("../cards/EditorDiffSurface", () => ({
+  buildWorkspaceReplacePatchModel: (response: {
+    readonly files: readonly { readonly path: string }[];
+    readonly fileCount: number;
+    readonly omittedFileCount: number;
+    readonly truncated: boolean;
+  }) => ({
+    patchId: "workspace-replace-preview",
+    status: "previewed",
+    provenance: { origin: "applied-patch" },
+    files: response.files.map((file) => ({
+      uri: file.path,
+      displayPath: file.path,
+      status: "modified",
+      diffable: true,
+      original: "before",
+      modified: "after",
+      language: "typescript",
+      hasChanges: true,
+      truncated: false,
+    })),
+    fileCount: response.files.length,
+    totalFileCount: response.fileCount + response.omittedFileCount,
+    omittedFileCount: response.omittedFileCount,
+    createdCount: 0,
+    modifiedCount: response.files.length,
+    deletedCount: 0,
+    binaryCount: 0,
+    unsupportedCount: 0,
+    truncated: response.truncated,
+  }),
   default: () => <div data-testid="replace-diff" />,
 }));
 

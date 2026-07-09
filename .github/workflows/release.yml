@@ -20,6 +20,21 @@ on:
           - beta
           - next
           - latest
+      portable_assets_manifest:
+        description: "Path to reviewed portable assets manifest, or relative path inside the downloaded portable asset artifact"
+        type: string
+        required: false
+        default: ""
+      portable_assets_run_id:
+        description: "Workflow run id that produced the reviewed portable asset bundle"
+        type: string
+        required: false
+        default: ""
+      portable_assets_artifact_name:
+        description: "Artifact name containing the reviewed portable asset bundle"
+        type: string
+        required: false
+        default: ""
 
 permissions: {}
 
@@ -76,6 +91,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       checks: read
       contents: write
       id-token: write
@@ -118,9 +134,32 @@ jobs:
             throw new Error("Prerelease versions must not be published with the latest dist-tag.");
           }
           NODE
+      - name: Download reviewed portable asset bundle
+        if: inputs.portable_assets_run_id != '' || inputs.portable_assets_artifact_name != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
+          PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
+        run: |
+          if [ -z "$PORTABLE_ASSETS_RUN_ID" ] || [ -z "$PORTABLE_ASSETS_ARTIFACT_NAME" ]; then
+            echo "portable_assets_run_id and portable_assets_artifact_name must be provided together" >&2
+            exit 1
+          fi
+          gh run download "$PORTABLE_ASSETS_RUN_ID" \
+            --name "$PORTABLE_ASSETS_ARTIFACT_NAME" \
+            --dir .portable-release-assets
+      - name: Resolve portable assets manifest
+        id: portable_assets
+        env:
+          PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
+          PORTABLE_ASSETS_MANIFEST: ${{ inputs.portable_assets_manifest }}
+          PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
+          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: node scripts/resolve-release-portable-assets.mjs
       - name: Publish package
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_PORTABLE_ASSETS_MANIFEST: ${{ steps.portable_assets.outputs.manifest }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}

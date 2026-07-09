@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   validateWorkspaceReplacePreviewRequest,
   validateWorkspaceSearchRequest,
+  validateWorkspaceSymbolSearchRequest,
   type ValidationResult,
   type WorkspaceReplacePreviewRequest,
   type WorkspaceSearchRequest,
+  type WorkspaceSymbolSearchRequest,
 } from "./index.js";
 
 function expectInvalidWithReason(result: ValidationResult, fragment: string): void {
@@ -39,6 +41,17 @@ function replaceRequest(
     excludeGlobs: [],
     replacement: "readConfig",
     maxFiles: 20,
+    ...overrides,
+  };
+}
+
+function symbolRequest(
+  overrides: Partial<WorkspaceSymbolSearchRequest> = {},
+): WorkspaceSymbolSearchRequest {
+  return {
+    root: "/workspace",
+    query: "parseConfig",
+    maxResults: 50,
     ...overrides,
   };
 }
@@ -98,6 +111,31 @@ describe("workspace search wire validators", () => {
     expectInvalidWithReason(
       validateWorkspaceSearchRequest(searchRequest({ excludeGlobs: ["../secret"] })),
       "excludeGlobs",
+    );
+  });
+});
+
+describe("workspace symbol search wire validators", () => {
+  it("accepts a valid workspace symbol request with an optional scope", () => {
+    expect(
+      validateWorkspaceSymbolSearchRequest(symbolRequest({ scopePath: "src/features" })),
+    ).toEqual({
+      ok: true,
+    });
+  });
+
+  it("rejects invalid symbol request fields", () => {
+    expectInvalidWithReason(
+      validateWorkspaceSymbolSearchRequest(symbolRequest({ query: " " })),
+      "query",
+    );
+    expectInvalidWithReason(
+      validateWorkspaceSymbolSearchRequest(symbolRequest({ maxResults: 201 })),
+      "maxResults",
+    );
+    expectInvalidWithReason(
+      validateWorkspaceSymbolSearchRequest(symbolRequest({ scopePath: "../secret" })),
+      "scopePath",
     );
   });
 });

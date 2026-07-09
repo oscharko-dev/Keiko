@@ -168,10 +168,6 @@ vi.mock("./Workspace", () => ({
   },
 }));
 
-vi.mock("./modals/CommandPalette", () => ({
-  CommandPalette: () => <div data-testid="command-palette" />,
-}));
-
 vi.mock("./modals/UnifiedQuickAccessPalette", () => ({
   UnifiedQuickAccessPalette: () => <div data-testid="quick-access-palette" />,
 }));

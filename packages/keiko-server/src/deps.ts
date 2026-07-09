@@ -49,12 +49,18 @@ import {
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
-import { createUpdateSessionManager, type UpdateSessionManager } from "./update-session.js";
+import {
+  createUpdateSessionManager,
+  type UpdateCompletionGate,
+  type UpdateSessionManager,
+} from "./update-session.js";
 import { createStateDirUpdateSessionLock } from "./update-session-lock.js";
 import {
   createUpdateLocalStateManager,
   type UpdateLocalStateManager,
 } from "./update-local-state.js";
+import { createPortableUpdateStager } from "./update-portable-staging.js";
+import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   createUpdateRemediationManager,
   type UpdateRemediationManager,
@@ -926,16 +932,38 @@ function buildUpdateSession(options: {
   readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
+  readonly updateLocalState: UpdateLocalStateManager;
+  readonly updateRemediation: UpdateRemediationManager;
+  readonly runtimeConfig: RuntimeGatewayConfig;
 }): UpdateSessionManager {
   if (options.injected !== undefined) return options.injected;
   return createUpdateSessionManager({
     processEnv: options.env,
     lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
+    portableStager: createPortableUpdateStager({
+      env: options.env,
+      localState: options.updateLocalState,
+      egress: () =>
+        options.runtimeConfig.current()?.egress ??
+        resolveOutboundHttpEgressConfig(undefined, options.env),
+    }),
+    portableActivator: createPortableUpdateActivator({
+      env: options.env,
+      localState: options.updateLocalState,
+    }),
+    portableCompletionGate: portableCompletionGate(options.updateRemediation),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
     },
   });
+}
+
+function portableCompletionGate(updateRemediation: UpdateRemediationManager): UpdateCompletionGate {
+  return (session): boolean => {
+    updateRemediation.completeRestart(session.targetVersion);
+    return updateRemediation.updateCanComplete(session.targetVersion);
+  };
 }
 
 function resolveUpdateStateDir(env: EnvSource): string {
@@ -1358,6 +1386,13 @@ interface BuildPeripheralsArgs {
 // eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
+  const updateRemediation = buildUpdateRemediation({
+    injected: args.options.updateRemediation,
+    updateLocalState,
+    runtimeStateDir: args.runtimeStateDir,
+    runtimeConfig: args.runtimeConfig,
+    localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+  });
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   return {
     terminal: buildTerminalManager({
@@ -1376,16 +1411,13 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       injected: args.options.updateSession,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
+      updateLocalState,
+      updateRemediation,
+      runtimeConfig: args.runtimeConfig,
     }),
     updatePreflight: args.options.updatePreflight,
     updateLocalState,
-    updateRemediation: buildUpdateRemediation({
-      injected: args.options.updateRemediation,
-      updateLocalState,
-      runtimeStateDir: args.runtimeStateDir,
-      runtimeConfig: args.runtimeConfig,
-      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
-    }),
+    updateRemediation,
     containerRunner: buildContainerRunner({
       store: args.uiStore,
       evidenceStore: args.evidenceStore,

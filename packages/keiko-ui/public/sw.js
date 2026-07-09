@@ -1,17 +1,15 @@
-// Keiko service worker — minimal install-enabling shim.
+// Keiko service worker — static shell cache and update recovery.
 //
 // This file is plain JavaScript on purpose: browsers load service workers raw at /sw.js with
 // no bundler or TypeScript transform in the request path. Keeping the source plain JS keeps
 // what runs in the browser byte-identical to what ships in the package surface, which the
 // security audit (ADR-0024 D6 / D9 #126) depends on.
 //
-// Why this exists: Chrome only fires `beforeinstallprompt` (the gate for the #124 install
-// banner) when a service worker with a `fetch` handler is registered. Without this file the
-// install banner has no real install path. Therefore the SW is the smallest possible thing
-// that satisfies that condition without weakening the existing security posture.
+// The portable-first product path does not use browser-managed PWA installation. This worker is
+// retained only for static shell cache/update recovery and keeps the same no-API-cache boundary.
 //
 // Cache policy — REQUIRED INVARIANTS (ADR-0024 D6, D7, D9 #126):
-//   * Only static shell assets are cached (HTML, JS bundles, CSS, icons, manifest, favicons).
+//   * Only static shell assets are cached (HTML, JS bundles, CSS, icons, favicons, fonts).
 //   * `/api/*` is NEVER intercepted — the fetch handler returns early before any
 //     `event.respondWith(...)` so the browser performs the request normally and the page
 //     receives any network failure directly.
@@ -24,7 +22,7 @@
 //     recovery path on redeploy.
 //   * The HTML app shell (a top-level navigation, or the `/` document) is served
 //     NETWORK-FIRST with a cache fallback; content-hashed static assets (`/_next/static/...`,
-//     icons, manifest) stay CACHE-FIRST. Rationale: the `/` document has a STABLE url but its
+//     icons and fonts) stay CACHE-FIRST. Rationale: the `/` document has a STABLE url but its
 //     body changes every deploy (it references a fresh content-hashed chunk graph). Cache-first
 //     on `/` pins an old shell that points at chunk filenames the rebuilt server no longer
 //     serves → `ChunkLoadError` / a blank "client-side exception" until a hard refresh. A
@@ -38,11 +36,9 @@
 
 /* global self, caches, fetch */
 
-// Bumped v1 -> v2 with the network-first shell policy below; v2 -> v3 adds the self-hosted
-// JetBrains Mono webfont to the pre-cache so the brand mono renders offline. When this SW
-// activates it deletes the stale older cache (which may hold an old `/` document) in the
-// `activate` handler.
-const CACHE_NAME = "keiko-shell-v3";
+// Bumped v3 -> v4 when portable-first delivery stopped advertising browser PWA installation and
+// removed `/manifest.webmanifest` from the shell cache. Activation deletes stale older caches.
+const CACHE_NAME = "keiko-shell-v4";
 const ACTIVATE_WAITING_MESSAGE_TYPE = "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER";
 
 // Static shell pre-cache. These are pathnames that must be available offline for the app
@@ -51,7 +47,6 @@ const ACTIVATE_WAITING_MESSAGE_TYPE = "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER";
 // graph would couple this file to the Next build output, which is fragile.
 const PRECACHE_URLS = [
   "/",
-  "/manifest.webmanifest",
   "/favicon.svg",
   "/favicon.ico",
   "/icon-192.png",
@@ -65,14 +60,7 @@ const PRECACHE_URLS = [
 // Pathname prefixes that may be served from / written to the runtime cache. Anything that
 // does not match one of these prefixes falls through to the network without ever touching
 // CacheStorage. This list intentionally does NOT include `/api/` — see `isApiRequest`.
-const CACHEABLE_PREFIXES = [
-  "/_next/static/",
-  "/icon-",
-  "/apple-touch-icon",
-  "/favicon",
-  "/manifest.webmanifest",
-  "/fonts/",
-];
+const CACHEABLE_PREFIXES = ["/_next/static/", "/icon-", "/apple-touch-icon", "/favicon", "/fonts/"];
 
 function isApiRequest(url) {
   // url.pathname is provided by the URL parser, so it is already normalised (no `..`,

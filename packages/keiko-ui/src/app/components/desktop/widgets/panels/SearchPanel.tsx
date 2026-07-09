@@ -4,18 +4,16 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import {
   WORKSPACE_REPLACE_MAX_FILES,
   WORKSPACE_SEARCH_MAX_RESULTS,
+  type WorkspaceReplaceApplyConflict,
+  type WorkspaceReplaceApplyFile,
   type WorkspaceSearchMode,
   type WorkspaceSearchRequest,
   type WorkspaceSearchResponse,
   type WorkspaceSearchResultMatch,
-  type WorkspaceReplacePreviewEdit,
   type WorkspaceReplacePreviewFileEdit,
   type WorkspaceReplacePreviewResponse,
-  type WorkspaceReplaceApplyConflict,
-  type WorkspaceReplaceApplyFile,
   type WorkspaceSymbolSearchResponse,
 } from "@oscharko-dev/keiko-contracts";
-import { computeLineStarts, positionToOffset } from "@oscharko-dev/keiko-contracts/line-offsets";
 import type { PatchPreviewModel, PatchPreviewSource } from "@oscharko-dev/keiko-editor";
 import {
   applyWorkspaceReplace,
@@ -31,10 +29,9 @@ import { useWorkspaceReplaceBuffers } from "../../WorkspaceReplaceBufferContext"
 import { SearchResultList, groupSearchResults, type SearchResultGroup } from "./SearchResultList";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./searchPanelEvents";
 import styles from "./SearchPanel.module.css";
-import EditorDiffSurface from "../cards/EditorDiffSurface";
+import EditorDiffSurface, { buildWorkspaceReplacePatchModel } from "../cards/EditorDiffSurface";
 
 const SEARCH_DEBOUNCE_MS = 250;
-const PREVIEW_MAX_BYTES_PER_FILE = 262_144;
 
 interface SearchPanelProps {
   readonly root?: string | undefined;
@@ -43,20 +40,6 @@ interface SearchPanelProps {
 
 type SearchStatus = "idle" | "loading" | "ready" | "error";
 type SearchDomain = "text" | "symbols";
-type PatchPreviewFile = PatchPreviewModel["files"][number];
-type PatchPreviewLanguage = PatchPreviewFile["language"];
-
-interface PreviewResolvedEdit {
-  readonly start: number;
-  readonly end: number;
-  readonly newText: string;
-}
-
-interface PreviewText {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
 function globArray(value: string): readonly string[] {
   const trimmed = value.trim();
   return trimmed.length === 0 ? [] : [trimmed];
@@ -153,155 +136,25 @@ async function sourcesForPreview(
   return Object.fromEntries(entries);
 }
 
-function previewLanguageFor(path: string): PatchPreviewLanguage {
-  const ext = path.toLowerCase().split(".").pop() ?? "";
-  if (ext === "ts" || ext === "tsx") return "typescript";
-  if (ext === "js" || ext === "jsx" || ext === "mjs" || ext === "cjs") return "javascript";
-  if (ext === "json") return "json";
-  if (ext === "css") return "css";
-  if (ext === "scss") return "scss";
-  if (ext === "less") return "less";
-  if (ext === "html" || ext === "htm") return "html";
-  if (ext === "md" || ext === "markdown") return "markdown";
-  if (ext === "yaml" || ext === "yml") return "yaml";
-  if (ext === "py") return "python";
-  if (ext === "java") return "java";
-  if (ext === "go") return "go";
-  if (ext === "rs") return "rust";
-  if (ext === "sql") return "sql";
-  if (ext === "sh" || ext === "bash" || ext === "zsh") return "shell";
-  return "plaintext";
-}
-
-function byteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
-}
-
-function clampPreviewText(text: string): PreviewText {
-  if (byteLength(text) <= PREVIEW_MAX_BYTES_PER_FILE) return { text, truncated: false };
-  let bytes = 0;
-  let end = 0;
-  for (let index = 0; index < text.length;) {
-    const codePoint = text.codePointAt(index) ?? 0;
-    const codeUnits = codePoint > 0xffff ? 2 : 1;
-    const nextBytes = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
-    if (bytes + nextBytes > PREVIEW_MAX_BYTES_PER_FILE) break;
-    bytes += nextBytes;
-    end = index + codeUnits;
-    index += codeUnits;
-  }
-  return { text: text.slice(0, end), truncated: true };
-}
-
-function resolvePreviewEdit(text: string, edit: WorkspaceReplacePreviewEdit): PreviewResolvedEdit {
-  const lineStarts = computeLineStarts(text);
-  const start = positionToOffset(text, lineStarts, {
-    line: edit.range.startLine - 1,
-    character: edit.range.startColumn - 1,
-  });
-  const end = positionToOffset(text, lineStarts, {
-    line: edit.range.endLine - 1,
-    character: edit.range.endColumn - 1,
-  });
-  return { start, end: Math.max(start, end), newText: edit.newText };
-}
-
-function applyPreviewEdits(text: string, edits: readonly WorkspaceReplacePreviewEdit[]): string {
-  const resolved = edits
-    .map((edit) => resolvePreviewEdit(text, edit))
-    .sort((a, b) => (a.start !== b.start ? a.start - b.start : a.end - b.end));
-  const out: string[] = [];
-  let cursor = 0;
-  for (const edit of resolved) {
-    if (edit.start < cursor) throw new Error("workspace replace preview has overlapping edits");
-    out.push(text.slice(cursor, edit.start), edit.newText);
-    cursor = edit.end;
-  }
-  out.push(text.slice(cursor));
-  return out.join("");
-}
-
-function unsupportedPreviewFile(path: string, note: string): PatchPreviewFile {
-  return {
-    uri: path,
-    displayPath: path,
-    status: "unsupported",
-    diffable: false,
-    original: "",
-    modified: "",
-    language: previewLanguageFor(path),
-    hasChanges: false,
-    truncated: false,
-    note,
-  };
-}
-
-function previewFile(
-  file: WorkspaceReplacePreviewFileEdit,
-  source: PatchPreviewSource | undefined,
-): PatchPreviewFile {
-  if (source === undefined || source.content.truncated) {
-    return unsupportedPreviewFile(file.path, "Original content unavailable.");
-  }
-  try {
-    const original = clampPreviewText(source.content.text);
-    const modified = clampPreviewText(applyPreviewEdits(source.content.text, file.edits));
-    return {
-      uri: file.path,
-      displayPath: source.content.relativePath,
-      status: "modified",
-      diffable: true,
-      original: original.text,
-      modified: modified.text,
-      language: previewLanguageFor(source.content.relativePath),
-      hasChanges: original.text !== modified.text,
-      truncated: original.truncated || modified.truncated,
-      note:
-        original.truncated || modified.truncated
-          ? "Content truncated to the display limit."
-          : undefined,
-    };
-  } catch {
-    return unsupportedPreviewFile(file.path, "Patch edits could not be previewed.");
-  }
-}
-
-function previewStatusCount(
-  files: readonly PatchPreviewFile[],
-  status: PatchPreviewFile["status"],
-): number {
-  return files.filter((file) => file.status === status).length;
-}
-
-function buildReplacePatchModel(
-  response: WorkspaceReplacePreviewResponse,
-  sources: Readonly<Record<string, PatchPreviewSource>>,
-): PatchPreviewModel {
-  const files = response.files.map((file) =>
-    previewFile(file, Object.hasOwn(sources, file.path) ? sources[file.path] : undefined),
-  );
-  return {
-    patchId: "workspace-replace-preview",
-    status: "previewed",
-    provenance: { origin: "applied-patch" },
-    files,
-    fileCount: files.length,
-    totalFileCount: response.fileCount + response.omittedFileCount,
-    omittedFileCount: response.omittedFileCount,
-    createdCount: previewStatusCount(files, "created"),
-    modifiedCount: previewStatusCount(files, "modified"),
-    deletedCount: previewStatusCount(files, "deleted"),
-    binaryCount: previewStatusCount(files, "binary"),
-    unsupportedCount: previewStatusCount(files, "unsupported"),
-    truncated: response.omittedFileCount > 0 || files.some((file) => file.truncated),
-  };
-}
-
 function replaceSummary(response: WorkspaceReplacePreviewResponse | null): string {
   if (response === null) return "No replace preview has been computed.";
   const omitted =
     response.omittedFileCount > 0 ? ` ${String(response.omittedFileCount)} files omitted.` : "";
   return `${String(response.editCount)} replacements across ${String(response.fileCount)} files.${omitted}`;
+}
+
+function replaceErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function conflictSummary(conflicts: readonly WorkspaceReplaceApplyConflict[]): string {
+  if (conflicts.length === 0) return "";
+  const listed = conflicts
+    .slice(0, 3)
+    .map((conflict) => `${conflict.path} (${conflict.reason})`)
+    .join(", ");
+  const remaining = conflicts.length > 3 ? `, ${String(conflicts.length - 3)} more` : "";
+  return ` Conflicts: ${listed}${remaining}.`;
 }
 
 async function applyReviewedReplace(args: {
@@ -369,6 +222,7 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
     response,
     error: inlineError ?? routeError,
   });
+  const showReplaceStatus = replaceStatus !== "Preview replace before applying changes.";
 
   useEffect(() => {
     const focusSearch = (): void => queryInputRef.current?.focus();
@@ -448,20 +302,26 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
   const previewReplace = useCallback(async (): Promise<void> => {
     if (selectedRoot === undefined || query.trim().length === 0 || inlineError !== null) return;
     setReplaceStatus("Computing replace preview...");
-    const preview = await fetchWorkspaceReplacePreview({
-      root: selectedRoot,
-      query: query.trim(),
-      mode,
-      caseSensitive,
-      includeGlobs: globArray(includeText),
-      excludeGlobs: globArray(excludeText),
-      replacement,
-      maxFiles: WORKSPACE_REPLACE_MAX_FILES,
-    });
-    const sources = await sourcesForPreview(selectedRoot, preview.files);
-    setReplaceResponse(preview);
-    setPatchModel(buildReplacePatchModel(preview, sources));
-    setReplaceStatus(replaceSummary(preview));
+    try {
+      const preview = await fetchWorkspaceReplacePreview({
+        root: selectedRoot,
+        query: query.trim(),
+        mode,
+        caseSensitive,
+        includeGlobs: globArray(includeText),
+        excludeGlobs: globArray(excludeText),
+        replacement,
+        maxFiles: WORKSPACE_REPLACE_MAX_FILES,
+      });
+      const sources = await sourcesForPreview(selectedRoot, preview.files);
+      setReplaceResponse(preview);
+      setPatchModel(buildWorkspaceReplacePatchModel(preview, sources));
+      setReplaceStatus(replaceSummary(preview));
+    } catch (error) {
+      setReplaceResponse(null);
+      setPatchModel(null);
+      setReplaceStatus(replaceErrorMessage(error, "Replace preview failed."));
+    }
   }, [
     caseSensitive,
     excludeText,
@@ -484,9 +344,13 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
       });
       const suffix =
         result.conflictCount > 0
-          ? ` ${String(result.conflictCount)} files reported conflicts.`
+          ? ` ${String(result.conflictCount)} files reported conflicts.${conflictSummary(
+              result.conflicts,
+            )}`
           : "";
       setReplaceStatus(`${String(result.appliedCount)} files applied.${suffix}`);
+    } catch (error) {
+      setReplaceStatus(replaceErrorMessage(error, "Workspace replace apply failed."));
     } finally {
       setApplyingReplace(false);
     }
@@ -608,6 +472,11 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
       >
         {message}
       </div>
+      {showReplaceStatus ? (
+        <div className={styles.status} role="status">
+          {replaceStatus}
+        </div>
+      ) : null}
       {groups.length > 0 ? (
         <SearchResultList
           groups={groups}
@@ -618,9 +487,6 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
       ) : null}
       {patchModel === null ? null : (
         <div className={styles.replaceReview}>
-          <div className={styles.status} role="status">
-            {replaceStatus}
-          </div>
           <EditorDiffSurface
             model={patchModel}
             loadState={{ status: "ready" }}

@@ -34,6 +34,7 @@ export interface WorkspaceSymbolSearchRequest {
   readonly root: string;
   readonly query: string;
   readonly maxResults: number;
+  readonly scopePath?: string | undefined;
 }
 
 export interface WorkspaceSymbolSearchResult {
@@ -148,7 +149,13 @@ function utf8ByteLength(value: string): number {
   return TEXT_ENCODER.encode(value).length;
 }
 
-function regexSafetyIssue(source: string): string | undefined {
+/**
+ * Canonical ReDoS gate for every regex constructed from user-supplied search/replace input.
+ * `keiko-workspace`'s `repoSearchRegexSafety.ts` re-exports this function rather than keeping
+ * a second copy, so the two search surfaces (agent-context `repoSearch` and this user-facing
+ * workspace search) cannot drift apart on catastrophic-backtracking detection.
+ */
+export function regexSafetyIssue(source: string): string | undefined {
   if (source.length > MAX_QUERY_LENGTH) return "query regex too long";
   if (DANGEROUS_GROUP_OR_CLASS_REPETITION.test(source)) return "query regex unsafe";
   if (ADJACENT_QUANTIFIED_ATOMS.test(source)) return "query regex unsafe";
@@ -288,6 +295,12 @@ export function validateWorkspaceSymbolSearchRequest(value: unknown): Validation
   validateQuery(value.query, "literal", reasons);
   if (!isPositiveIntegerWithin(value.maxResults, WORKSPACE_SEARCH_MAX_RESULTS)) {
     reasons.push("maxResults invalid");
+  }
+  if (
+    value.scopePath !== undefined &&
+    (typeof value.scopePath !== "string" || !isRelativeWorkspacePathShape(value.scopePath))
+  ) {
+    reasons.push("scopePath invalid");
   }
   return buildResult(reasons);
 }

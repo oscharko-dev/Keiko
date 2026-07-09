@@ -20,7 +20,6 @@ import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
 } from "./workspace-appearance";
-import { type Command } from "./modals/CommandPalette";
 import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
 import { Palette } from "./modals/Palette";
@@ -60,6 +59,7 @@ import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bindings";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";
 import { EditorPaletteHostRegistryProvider } from "./EditorPaletteHostRegistryContext";
+import { EditorQuickAccessTriggerProvider } from "./EditorQuickAccessTriggerContext";
 import { WorkspaceReplaceBufferProvider } from "./WorkspaceReplaceBufferContext";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
 import {
@@ -67,11 +67,11 @@ import {
   QUICK_ACCESS_TOOL_TYPES,
   buildUnifiedQuickAccessCommands,
   paletteWindowOrder,
+  type Command,
 } from "./quickAccessRegistry";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
-import { InstallBanner } from "./install/InstallBanner";
 import { registerSw } from "./install/registerSw";
 import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
@@ -680,6 +680,13 @@ function AppShellInner(): ReactNode {
   const openQuickAccessFiles = useCallback((): void => setQuickAccessMode("files"), []);
   const openQuickAccessCommands = useCallback((): void => setQuickAccessMode("commands"), []);
   const closeQuickAccess = useCallback((): void => setQuickAccessMode(null), []);
+  // Lets the editor's own capturing keydown listener (EditorWidget.tsx) open the unified
+  // quick-access palette directly, so Cmd/Ctrl+P still works while the cursor is inside a file —
+  // see EditorQuickAccessTriggerContext.tsx for why this must bypass useKeyboardShortcuts.
+  const editorQuickAccessTrigger = useMemo(
+    () => ({ openFiles: openQuickAccessFiles, openCommands: openQuickAccessCommands }),
+    [openQuickAccessFiles, openQuickAccessCommands],
+  );
   const registerEditorHost = useCallback(
     (windowId: string, host: EditorPaletteHost): (() => void) => {
       setEditorHosts((current) => {
@@ -875,7 +882,7 @@ function AppShellInner(): ReactNode {
   ) : null;
 
   // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the background window layer out of
-  // the accessibility tree and the tab order. These dialogs (NewWindowDialog / CommandPalette /
+  // the accessibility tree and the tab order. These dialogs (NewWindowDialog / UnifiedQuickAccessPalette /
   // GatewaySetupDialog) are each aria-modal and render as later siblings OUTSIDE `.stage`, so inerting
   // `.stage` leaves them fully operable while nothing behind them can be tabbed to or read by AT. The
   // non-modal `Palette` (palOpen) deliberately does NOT count here: it renders INSIDE `.stage` and is
@@ -899,116 +906,118 @@ function AppShellInner(): ReactNode {
     <ActiveWorkspaceProvider value={activeWorkspace}>
       <ChatSessionProvider value={session}>
         <EditorPaletteHostRegistryProvider register={registerEditorHost}>
-          <WorkspaceReplaceBufferProvider>
-            <WsContext.Provider value={wsContextValue}>
-              {/* GEN-UI-A11Y-004 — one always-mounted app-level live-region pair. The AnnouncerProvider
+          <EditorQuickAccessTriggerProvider value={editorQuickAccessTrigger}>
+            <WorkspaceReplaceBufferProvider>
+              <WsContext.Provider value={wsContextValue}>
+                {/* GEN-UI-A11Y-004 — one always-mounted app-level live-region pair. The AnnouncerProvider
             renders its role="status"/role="alert" regions as siblings of `.app`, OUTSIDE the window
             layer, so they never unmount and any surface can post an outcome via useAnnouncer(). */}
-              <AnnouncerProvider>
-                <div className="app">
-                  {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
+                <AnnouncerProvider>
+                  <div className="app">
+                    {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
-                  <a className="skip-link" href="#main">
-                    {t("app.skipToContent")}
-                  </a>
-                  {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
-                  <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
-                  <Header
-                    openPalette={openPalette}
-                    openCommandPalette={openQuickAccessFiles}
-                    onTileAll={ws.api.tileAll}
-                    onSplitFront={ws.api.splitFront}
-                    onCascade={ws.api.cascade}
-                    contextControl={contextControl}
-                  />
-                  <div className="mid">
-                    {needsGatewaySetup ? null : (
-                      <LeftRail
-                        openTools={openTools}
-                        onTool={onTool}
-                        onNewChat={onNewChat}
-                        theme={theme}
-                        onToggleTheme={toggleTheme}
-                      />
-                    )}
-                    <div
-                      ref={stageRef}
-                      className="stage"
-                      id="main"
-                      tabIndex={-1}
-                      // GEN-UI-A11Y-003 — `inert` is toggled imperatively via stageRef (see effect above);
-                      // aria-hidden pairs with it for older AT while a modal dialog is open.
-                      aria-hidden={modalOpen ? true : undefined}
-                    >
-                      <Workspace
-                        ws={ws}
-                        wsRef={wsRef}
-                        openPalette={openPalette}
-                        palette={paletteNode}
-                      >
-                        <UpdateStartupNotice
-                          ready={updateStartupReady}
-                          openUpdates={openUpdatesFromStartup}
+                    <a className="skip-link" href="#main">
+                      {t("app.skipToContent")}
+                    </a>
+                    {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
+                    <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
+                    <Header
+                      openCommandPalette={openQuickAccessFiles}
+                      onTileAll={ws.api.tileAll}
+                      onSplitFront={ws.api.splitFront}
+                      onCascade={ws.api.cascade}
+                      contextControl={contextControl}
+                    />
+                    <div className="mid">
+                      {needsGatewaySetup ? null : (
+                        <LeftRail
+                          openTools={openTools}
+                          onTool={onTool}
+                          onNewChat={onNewChat}
+                          theme={theme}
+                          onToggleTheme={toggleTheme}
                         />
-                      </Workspace>
-                      {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
+                      )}
+                      <div
+                        ref={stageRef}
+                        className="stage"
+                        id="main"
+                        tabIndex={-1}
+                        // GEN-UI-A11Y-003 — `inert` is toggled imperatively via stageRef (see effect above);
+                        // aria-hidden pairs with it for older AT while a modal dialog is open.
+                        aria-hidden={modalOpen ? true : undefined}
+                      >
+                        <Workspace
+                          ws={ws}
+                          wsRef={wsRef}
+                          openPalette={openPalette}
+                          palette={paletteNode}
+                        >
+                          <UpdateStartupNotice
+                            ready={updateStartupReady}
+                            openUpdates={openUpdatesFromStartup}
+                          />
+                        </Workspace>
+                        {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-                      {sourceConnectionNotice !== null && (
-                        <div className="source-limit-alert" role="alert">
-                          <span>{sourceConnectionNotice}</span>
-                          <button
-                            type="button"
-                            className="source-limit-alert-dismiss"
-                            aria-label="Dismiss source connection notice"
-                            onClick={() => setSourceConnectionNotice(null)}
-                          >
-                            ×
-                          </button>
-                        </div>
+                        {sourceConnectionNotice !== null && (
+                          <div className="source-limit-alert" role="alert">
+                            <span>{sourceConnectionNotice}</span>
+                            <button
+                              type="button"
+                              className="source-limit-alert-dismiss"
+                              aria-label="Dismiss source connection notice"
+                              onClick={() => setSourceConnectionNotice(null)}
+                            >
+                              ×
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {needsGatewaySetup ? null : (
+                        <RightRail openTools={openTools} onTool={onTool} />
                       )}
                     </div>
-                    {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
-                  </div>
-                  <Footer
-                    winCount={winCount}
-                    windows={footerWindows}
-                    windowPaletteOpen={windowPaletteOpen}
-                    onToggleWindowPalette={toggleWindowPalette}
-                    onSelectWindow={selectFooterWindow}
-                    onCloseWindowPalette={closeWindowPalette}
-                    mode={twin.mode}
-                    selectedModel={session.selectedModel}
-                    projectName={projectName}
-                    branchLabel={branchLabel}
-                    shellStatusLabel={footerShellStatusLabel}
-                    evidenceStatusLabel={footerEvidenceStatusLabel}
-                    statusRef={setStatusRef}
-                  />
+                    <Footer
+                      winCount={winCount}
+                      windows={footerWindows}
+                      windowPaletteOpen={windowPaletteOpen}
+                      onToggleWindowPalette={toggleWindowPalette}
+                      onSelectWindow={selectFooterWindow}
+                      onCloseWindowPalette={closeWindowPalette}
+                      mode={twin.mode}
+                      selectedModel={session.selectedModel}
+                      projectName={projectName}
+                      branchLabel={branchLabel}
+                      shellStatusLabel={footerShellStatusLabel}
+                      evidenceStatusLabel={footerEvidenceStatusLabel}
+                      statusRef={setStatusRef}
+                    />
 
-                  {pending !== null && (
-                    <NewWindowDialog
-                      type={pending}
-                      types={WIN_TYPES}
-                      filesContext={ws.api.currentFilesContext()}
-                      onConfirm={confirmNew}
-                      onClose={closeDialog}
-                    />
-                  )}
-                  {quickAccessMode !== null ? (
-                    <UnifiedQuickAccessPalette
-                      initialMode={quickAccessMode}
-                      root={quickAccessRoot}
-                      commands={quickAccessCommands}
-                      openEditorFile={ws.api.openEditorFile}
-                      onClose={closeQuickAccess}
-                    />
-                  ) : null}
-                  {needsGatewaySetup ? <GatewaySetupDialog /> : null}
-                  <InstallBanner />
-                </div>
-              </AnnouncerProvider>
-            </WsContext.Provider>
-          </WorkspaceReplaceBufferProvider>
+                    {pending !== null && (
+                      <NewWindowDialog
+                        type={pending}
+                        types={WIN_TYPES}
+                        filesContext={ws.api.currentFilesContext()}
+                        onConfirm={confirmNew}
+                        onClose={closeDialog}
+                      />
+                    )}
+                    {quickAccessMode !== null ? (
+                      <UnifiedQuickAccessPalette
+                        initialMode={quickAccessMode}
+                        root={quickAccessRoot}
+                        commands={quickAccessCommands}
+                        openEditorFile={ws.api.openEditorFile}
+                        onClose={closeQuickAccess}
+                      />
+                    ) : null}
+                    {needsGatewaySetup ? <GatewaySetupDialog /> : null}
+                  </div>
+                </AnnouncerProvider>
+              </WsContext.Provider>
+            </WorkspaceReplaceBufferProvider>
+          </EditorQuickAccessTriggerProvider>
         </EditorPaletteHostRegistryProvider>
       </ChatSessionProvider>
     </ActiveWorkspaceProvider>
@@ -1027,10 +1036,9 @@ export function AppShell(): ReactNode {
     clearAppBootRecoveryReloadMarker();
     setMounted(true);
   }, []);
-  // Register the PWA service worker exactly once per client mount (issue #126, ADR-0024 D6).
-  // Sitting in the outer mount component means we register on first client render and never
-  // again across the inner shell's remount cycle. `registerSw` is a silent no-op on SSR /
-  // unsupported browsers / failure, so this effect cannot break the app.
+  // Register the static-shell service worker exactly once per client mount. The portable-first
+  // app shell no longer advertises a browser install manifest, so this is cache/update plumbing,
+  // not a browser-managed product installation path.
   useEffect(() => {
     registerSw();
   }, []);

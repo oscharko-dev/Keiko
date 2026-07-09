@@ -1,8 +1,10 @@
 import type {
   UpdatePreflightBlocker,
+  UpdatePreflightBlockerCode,
   UpdatePreflightImpactSummary,
   UpdatePreflightPatchNoteSection,
   UpdatePreflightPatchNotes,
+  UpdatePreflightPortableInstallability,
   UpdatePreflightReleaseSummary,
   UpdatePreflightReport,
   UpdatePreflightSeverity,
@@ -18,6 +20,8 @@ interface ReportFields {
   readonly status: UpdatePreflightReport["status"];
   readonly registryStatus: UpdatePreflightReport["registryStatus"];
   readonly releaseMetadataStatus: UpdatePreflightReport["releaseMetadataStatus"];
+  readonly installabilitySource?: UpdatePreflightReport["installabilitySource"];
+  readonly portableAsset?: UpdatePreflightPortableInstallability;
   readonly severity: UpdatePreflightSeverity;
   readonly targetVersion?: string;
   readonly release?: UpdatePreflightReleaseSummary;
@@ -111,14 +115,43 @@ function patchDetails(impact: UpdatePreflightImpactSummary | undefined): readonl
   return impact?.entries.map((entry) => `${entry.packageVersion}: ${entry.summary}`) ?? [];
 }
 
+const MANUAL_BLOCKER_CODES = new Set<UpdatePreflightBlocker["code"]>([
+  "release-impact-missing",
+  "manual-review-required",
+  "breaking-exception-manual",
+  "one-click-ineligible",
+  "portable-install-mode-ineligible",
+  "portable-install-managed-externally",
+  "portable-release-unavailable",
+  "portable-release-malformed",
+  "portable-asset-missing",
+  "portable-asset-malformed",
+  "portable-manifest-missing",
+  "portable-manifest-malformed",
+  "portable-checksum-missing",
+  "portable-checksum-mismatch",
+  "portable-signing-unverified",
+  "portable-sidecar-verification-failed",
+]);
+
 function manualRequired(blockers: readonly UpdatePreflightBlocker[]): boolean {
-  return blockers.some(
-    (item) =>
-      item.code === "release-impact-missing" ||
-      item.code === "manual-review-required" ||
-      item.code === "breaking-exception-manual" ||
-      item.code === "one-click-ineligible",
-  );
+  return blockers.some((item) => item.userActionRequired && MANUAL_BLOCKER_CODES.has(item.code));
+}
+
+function optionalReportFields(
+  fields: ReportFields,
+  patchNotes: UpdatePreflightPatchNotes | undefined,
+): Partial<UpdatePreflightReport> {
+  return {
+    ...(fields.targetVersion !== undefined ? { targetVersion: fields.targetVersion } : {}),
+    ...(fields.installabilitySource !== undefined
+      ? { installabilitySource: fields.installabilitySource }
+      : {}),
+    ...(fields.portableAsset !== undefined ? { portableAsset: fields.portableAsset } : {}),
+    ...(patchNotes !== undefined ? { patchNotes } : {}),
+    ...(fields.release !== undefined ? { release: fields.release } : {}),
+    ...(fields.impact !== undefined ? { impact: fields.impact } : {}),
+  };
 }
 
 function buildReport(base: ReportBase, fields: ReportFields): UpdatePreflightReport {
@@ -128,7 +161,6 @@ function buildReport(base: ReportBase, fields: ReportFields): UpdatePreflightRep
   const patchNotes = patchNotesFrom(fields.release, fields.impact, fields.targetVersion);
   return {
     ...base,
-    ...(fields.targetVersion !== undefined ? { targetVersion: fields.targetVersion } : {}),
     updateAvailable: fields.updateAvailable,
     status: fields.status,
     availabilityState: fields.status,
@@ -140,10 +172,8 @@ function buildReport(base: ReportBase, fields: ReportFields): UpdatePreflightRep
     blockers,
     manualUpdateRequired: manualRequired(blockers),
     oneClickEligible: reportOneClickEligible(fields, blockers),
-    ...(patchNotes !== undefined ? { patchNotes } : {}),
-    ...(fields.release !== undefined ? { release: fields.release } : {}),
-    ...(fields.impact !== undefined ? { impact: fields.impact } : {}),
     warnings: fields.warnings ?? [],
+    ...optionalReportFields(fields, patchNotes),
   };
 }
 
@@ -158,6 +188,14 @@ function reportOneClickEligible(
   fields: ReportFields,
   blockers: readonly UpdatePreflightBlocker[],
 ): boolean {
+  if (fields.installabilitySource === "github-release-asset") {
+    return (
+      fields.updateAvailable &&
+      fields.impact !== undefined &&
+      fields.portableAsset?.status === "eligible" &&
+      blockers.length === 0
+    );
+  }
   return fields.updateAvailable && fields.impact !== undefined && blockers.length === 0;
 }
 
@@ -195,6 +233,25 @@ export function currentVersionReport(
     severity: "none",
     ...(github?.release !== undefined ? { release: github.release } : {}),
     warnings: warningsOf(registry.warning, currentReleaseMetadataWarning(github)),
+  });
+}
+
+export function portableInstallModeBlockedReport(
+  base: ReportBase,
+  portableAsset: UpdatePreflightPortableInstallability,
+  message: string,
+  code: UpdatePreflightBlockerCode = "portable-install-mode-ineligible",
+): UpdatePreflightReport {
+  return buildReport(base, {
+    updateAvailable: false,
+    status: "degraded",
+    registryStatus: "not-used",
+    releaseMetadataStatus: "not-needed",
+    installabilitySource: "github-release-asset",
+    portableAsset,
+    severity: "normal",
+    blockers: [blocker(code, message, "normal", true)],
+    warnings: [],
   });
 }
 
@@ -269,4 +326,70 @@ export function updateAvailableReportFromOutcomes(
     github,
     impactResolution,
   );
+}
+
+export function portableReleaseUnavailableReport(
+  base: ReportBase,
+  portableAsset: UpdatePreflightPortableInstallability,
+  releaseMetadataStatus: "unavailable" | "malformed",
+  blockers: readonly UpdatePreflightBlocker[],
+  warnings: readonly string[],
+): UpdatePreflightReport {
+  return buildReport(base, {
+    updateAvailable: false,
+    status: "degraded",
+    registryStatus: "not-used",
+    releaseMetadataStatus,
+    installabilitySource: "github-release-asset",
+    portableAsset,
+    severity: "normal",
+    blockers,
+    warnings,
+  });
+}
+
+export function portableCurrentVersionReport(
+  base: ReportBase,
+  targetVersion: string,
+  release: UpdatePreflightReleaseSummary,
+  portableAsset: UpdatePreflightPortableInstallability,
+  warnings: readonly string[],
+): UpdatePreflightReport {
+  return buildReport(base, {
+    targetVersion,
+    updateAvailable: false,
+    status: "current",
+    registryStatus: "not-used",
+    releaseMetadataStatus: "live",
+    installabilitySource: "github-release-asset",
+    portableAsset,
+    severity: "none",
+    release,
+    warnings,
+  });
+}
+
+export function portableUpdateAvailableReport(
+  base: ReportBase,
+  targetVersion: string,
+  release: UpdatePreflightReleaseSummary,
+  portableAsset: UpdatePreflightPortableInstallability,
+  impactResolution: CatalogImpactResolution,
+  portableBlockers: readonly UpdatePreflightBlocker[],
+  warnings: readonly string[],
+): UpdatePreflightReport {
+  return buildReport(base, {
+    targetVersion,
+    updateAvailable: true,
+    status: "update-available",
+    registryStatus: "not-used",
+    releaseMetadataStatus: "live",
+    installabilitySource: "github-release-asset",
+    portableAsset,
+    severity: impactResolution.severity,
+    release,
+    ...(impactResolution.impact !== undefined ? { impact: impactResolution.impact } : {}),
+    blockers: [...impactResolution.blockers, ...portableBlockers],
+    warnings,
+  });
 }

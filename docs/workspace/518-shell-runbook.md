@@ -10,7 +10,9 @@ The production workspace is `/` (Next.js App Router root). It re-exports the des
 
 - `packages/keiko-ui/src/app/page.tsx` re-exports `KeikoDesktop`.
 - `packages/keiko-ui/src/app/components/desktop/KeikoDesktop.tsx` returns `<AppShell />`.
-- `packages/keiko-ui/src/app/layout.tsx` provides the root `<html><body>` plus PWA manifest, icons, theme color, color-scheme metadata.
+- `packages/keiko-ui/src/app/layout.tsx` provides the root `<html><body>` plus browser icons,
+  theme color, and color-scheme metadata. It intentionally does not advertise browser-managed
+  PWA installation in the portable-first product path.
 
 No new route is added by #526. The existing `/launch` (returning-user landing) and `/local-knowledge`, `/memoriaviva`, `/quality-intelligence` routes are unchanged.
 
@@ -57,7 +59,7 @@ The UI blueprint mandates 11 production states. The reachability map below names
 | State                  | Existing reach                                                                               |
 | ---------------------- | -------------------------------------------------------------------------------------------- |
 | Empty                  | `ComposerEmptyState` for chat; LeftRail without a selected tool; Workspace with no windows   |
-| Loading                | `Streaming` test pattern; `useChatSession` loading flag; PWA `InstallBanner` waiting state   |
+| Loading                | `Streaming` test pattern; `useChatSession` loading flag; boot recovery placeholder           |
 | Streaming              | `GroundedAnswer` SSE stream; `ChatWindow` `sending` state with `aria-live="polite"`          |
 | Success                | Footer review/evidence indicator reports `Evidence ready`; Notifications panel quiet success |
 | Review-needed          | `AgentGateCard` inside `ReviewWidget`                                                        |
@@ -91,7 +93,8 @@ When implementation lands additional behavior on the shell, the following transi
 4. **Window count 0 → 1.** Footer plural switches between `windows` and `window`.
 5. **Modal open → close.** Focus restores to the trigger element; the underlying shell does not re-render.
 6. **RightRail collapsed → expanded.** Layout reflows without horizontal scrollbar; inspector state preserved.
-7. **PWA install banner appears → dismissed.** Banner is dismissable; dismissal persists across reloads.
+7. **Browser install prompt absent.** The portable-first shell does not render a PWA install
+   banner; users install through the ZIP/native launcher path.
 
 ## Verification
 
