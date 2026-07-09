@@ -1,0 +1,88 @@
+{
+  "issue": 1990,
+  "epic": 1982,
+  "verdict": "PASS",
+  "cssSha256": "e22665b21d5231fd423649e0700d82ac7d47c4d7c89435a60f2ee8439be9bc95",
+  "harness": "tests/e2e/config/playwright.issue-1990-coding-workbench.config.ts",
+  "route": "/",
+  "appPath": "packaged-cli-ui",
+  "generatedAt": "2026-07-08T12:14:15Z",
+  "captures": [
+    {
+      "file": "01-empty-desktop.png",
+      "mode": "dark",
+      "entrypoint": "left-rail",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "empty"
+    },
+    {
+      "file": "02-approval-required.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "approval-required"
+    },
+    {
+      "file": "03-running-narrow.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 390,
+        "height": 860
+      },
+      "state": "running"
+    },
+    {
+      "file": "04-empty-light.png",
+      "mode": "light",
+      "entrypoint": "left-rail",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "empty"
+    },
+    {
+      "file": "05-empty-high-contrast.png",
+      "mode": "high-contrast",
+      "entrypoint": "left-rail",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "empty"
+    }
+  ],
+  "assertions": {
+    "railEntryPointVisible": true,
+    "preRunAuthorityVisible": true,
+    "governedAssistEnabled": true,
+    "autonomousDeliveryDisabled": true,
+    "sidecarGatewayProfileVisible": true,
+    "codexSubscriptionProfileVisible": true,
+    "activeRunCanRequestStop": true,
+    "activeRunCanBeTakenOver": true,
+    "approvalPromptUsesRedactedSummary": true,
+    "blockedFailedCompletedStatesAreDistinct": true,
+    "narrowViewportHasNoHorizontalOverflow": true,
+    "seriousOrCriticalAxeViolations": 0,
+    "lightModeAuthorityVisible": true,
+    "highContrastAuthorityVisible": true
+  },
+  "artifacts": [
+    "01-empty-desktop.png",
+    "02-approval-required.png",
+    "03-running-narrow.png",
+    "04-empty-light.png",
+    "05-empty-high-contrast.png",
+    "coding-workbench-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "issue": 1990,
+  "epic": 1982,
+  "verdict": "PASS",
+  "tool": "axe-core via tests/e2e/support/axe.js",
+  "cssSha256": "e22665b21d5231fd423649e0700d82ac7d47c4d7c89435a60f2ee8439be9bc95",
+  "generatedAt": "2026-07-07T18:28:41Z",
+  "gate": "zero serious/critical axe violations for the Coding Workbench narrow running state",
+  "captures": [
+    {
+      "file": "03-running-narrow.png",
+      "violations": []
+    }
+  ],
+  "deterministicChecks": {
+    "railButtonHasAccessibleName": true,
+    "autonomyModeUsesRadiogroup": true,
+    "activeRunControlsRemainKeyboardReachable": true,
+    "statusUpdatesUseLiveStatus": true,
+    "approvalPromptIsRedacted": true,
+    "narrowViewportHasNoHorizontalOverflow": true
+  }
+}

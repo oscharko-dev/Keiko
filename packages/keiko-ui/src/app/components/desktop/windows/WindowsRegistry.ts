@@ -19,6 +19,9 @@ export type WindowType =
   | "terminal"
   | "commands"
   | "runtime"
+  // Epic #1982, Issue #1990 — first-class Coding Workbench singleton. Browser code renders only
+  // contract/server projections; sidecar, shell, git, provider, and connector authority stay server-side.
+  | "coding"
   // Issue #1388 (ADR-0070) — Container engine status surface. A read-mostly status card: probes the
   // host container engine on demand and, when available, exposes the server-frozen diagnostic task
   // catalog + a governed run control. With no engine it shows the structured unavailable state and
@@ -130,6 +133,11 @@ export type WindowCfgByType = {
   readonly figmaImage: FigmaSourceWindowCfg;
   readonly terminal: ProjectRootWindowCfg & { readonly cwd?: string };
   readonly runtime: ProjectRootWindowCfg;
+  readonly coding: ProjectRootWindowCfg & {
+    readonly runId?: string;
+    readonly state?: string;
+    readonly taskRef?: string;
+  };
   readonly governedGit: ProjectRootWindowCfg;
   readonly governedPullRequest: ProjectRootWindowCfg & { readonly headBranchName?: string };
   readonly governedMerge: ProjectRootWindowCfg & { readonly headBranchName?: string };
@@ -412,6 +420,46 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       // Issue #1389 — this hub only carries the active project path and opens the specialized
       // governed surfaces. It does not execute commands or Git operations itself.
       { key: "projectPath", label: "Project path", type: "text", def: "", optional: true },
+    ],
+  },
+  coding: {
+    title: "Coding Workbench",
+    icon: "code",
+    accent: true,
+    desc: "Govern coding agents",
+    w: 860,
+    h: 680,
+    min: { w: 520, h: 420 },
+    tiny: { w: 320, h: 260 },
+    tool: true,
+    singleton: true,
+    config: [
+      {
+        key: "state",
+        label: "Preview state",
+        type: "select",
+        options: [
+          "empty",
+          "running",
+          "approval-required",
+          "blocked",
+          "governed-assist",
+          "governed-assist-blocked",
+          "supervised-approval-required",
+          "supervised-approved",
+          "supervised-denied",
+          "supervised-stopped",
+          "supervised-failed",
+          "autonomous-confirmed",
+          "autonomous-policy-blocked",
+          "autonomous-verification-failed",
+          "autonomous-completed",
+          "failed",
+          "completed",
+        ],
+        def: "empty",
+        optional: true,
+      },
     ],
   },
   containerStatus: {

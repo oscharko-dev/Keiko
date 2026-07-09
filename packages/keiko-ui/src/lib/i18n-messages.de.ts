@@ -12,6 +12,7 @@ export const DE_MESSAGES = {
   "rail.memoria": "MemoriaViva",
   "rail.quality": "Quality Intelligence",
   "rail.promptEnhancer": "Prompt Enhancer",
+  "rail.coding": "Coding Workbench",
   "rail.localKnowledge": "Lokales Wissen",
   "rail.editor": "Editor",
   "rail.figma": "Figma-Snapshot",

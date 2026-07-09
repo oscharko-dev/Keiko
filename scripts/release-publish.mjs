@@ -79,16 +79,16 @@ function readJson(relativePath) {
   return JSON.parse(readFileSync(join(repoRoot, relativePath), "utf8"));
 }
 
+function readJsonFile(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
 function readReleaseImpactCatalog() {
   const override = process.env.KEIKO_RELEASE_IMPACT_CATALOG_PATH;
   if (override === undefined || override.length === 0 || process.env.NODE_ENV !== "test") {
     return readJson("release-impact.catalog.json");
   }
   return JSON.parse(readFileSync(resolve(repoRoot, override), "utf8"));
-}
-
-function readJsonFile(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function defaultOptions() {

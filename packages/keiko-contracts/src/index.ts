@@ -585,6 +585,119 @@ export {
   validateRuntimeCapabilitiesResponse,
 } from "./runtime-capabilities.js";
 
+// ─── Coding workbench contracts (Issue #1986, Epic #1982, ADR-0123) ─────────────────
+// Shared leaf vocabulary for coding autonomy modes, authority envelopes, runtime events,
+// permission requests, deployment ceilings, model-source routing, and content-free evidence.
+// This module is browser-safe and dependency-free apart from leaf-local text-redaction helpers.
+export type {
+  CodingWorkbenchActionPolicyDecision,
+  CodingWorkbenchActionClass,
+  CodingWorkbenchApprovalRisk,
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchBudget,
+  CodingWorkbenchBranchConstraints,
+  CodingWorkbenchCommandPolicy,
+  CodingWorkbenchCommandPolicyMode,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchGate,
+  CodingWorkbenchMode,
+  CodingWorkbenchModePolicy,
+  CodingWorkbenchModelProfile,
+  CodingWorkbenchModelSource,
+  CodingWorkbenchNetworkMode,
+  CodingWorkbenchNetworkPolicy,
+  CodingWorkbenchObservationChannel,
+  CodingWorkbenchPermissionRequest,
+  CodingWorkbenchPermissionRequestKind,
+  CodingWorkbenchPolicyDenialReason,
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeEventKind,
+  CodingWorkbenchRuntimeHealth,
+  CodingWorkbenchRuntimeSource,
+  CodingWorkbenchSidecarGatewayProjection,
+  CodingWorkbenchSidecarGatewayResult,
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  CodingWorkbenchSidecarGatewayStatus,
+  CodingWorkbenchSidecarGatewayUnavailable,
+  CodingWorkbenchSidecarGatewayUnavailableReason,
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchSupervisedPolicyReason,
+  CodingWorkbenchValidationFail,
+  CodingWorkbenchValidationOk,
+  CodingWorkbenchValidationResult,
+  CodingWorkbenchWorkspaceIdentity,
+} from "./coding-workbench.js";
+export {
+  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_APPROVAL_RISKS,
+  CODING_WORKBENCH_COMMAND_POLICY_MODES,
+  CODING_WORKBENCH_CONNECTOR_SCOPES,
+  CODING_WORKBENCH_GATES,
+  CODING_WORKBENCH_MODEL_SOURCES,
+  CODING_WORKBENCH_MODES,
+  CODING_WORKBENCH_MODE_POLICIES,
+  CODING_WORKBENCH_NETWORK_MODES,
+  CODING_WORKBENCH_OBSERVATION_CHANNELS,
+  CODING_WORKBENCH_PERMISSION_REQUEST_KINDS,
+  CODING_WORKBENCH_RUNTIME_EVENT_KINDS,
+  CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
+  CODING_WORKBENCH_RUNTIME_SOURCES,
+  CODING_WORKBENCH_SCHEMA_VERSION,
+  CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
+  CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
+  decideCodingWorkbenchActionForMode,
+  isCodingWorkbenchActionAllowedForMode,
+  isCodingWorkbenchModelSource,
+  isCodingWorkbenchMode,
+  isCodingWorkbenchRuntimeSource,
+  permissionKindForSupervisedCodingAction,
+  resolveEffectiveCodingWorkbenchMode,
+  supervisedCodingActionRequiresApproval,
+} from "./coding-workbench.js";
+export type {
+  CodingWorkbenchEvidenceKind,
+  CodingWorkbenchEvidenceRecord,
+} from "./coding-workbench-evidence.js";
+export {
+  CODING_WORKBENCH_EVIDENCE_KINDS,
+  isCodingWorkbenchEvidenceSafeText,
+  redactCodingWorkbenchEvidenceText,
+  validateCodingWorkbenchEvidenceRecord,
+} from "./coding-workbench-evidence.js";
+export {
+  validateCodingWorkbenchAuthorityEnvelope,
+  validateCodingWorkbenchPermissionRequest,
+  validateCodingWorkbenchRuntimeEvent,
+} from "./coding-workbench-validation.js";
+export type {
+  CodingWorkbenchCodexAuthCommandLabel,
+  CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexAuthSetupRequest,
+  CodingWorkbenchCodexAuthStateRoot,
+  CodingWorkbenchCodexAuthStateScope,
+  CodingWorkbenchCodexAuthStatus,
+  CodingWorkbenchCodexCredentialStore,
+  CodingWorkbenchCodexCredentialTransport,
+  CodingWorkbenchCodexRuntimeBinarySource,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchRuntimeAdapterKind,
+  CodingWorkbenchRuntimeProfileSelection,
+} from "./coding-workbench-codex-auth.js";
+export {
+  CODING_WORKBENCH_CODEX_AUTH_COMMAND_LABELS,
+  CODING_WORKBENCH_CODEX_AUTH_METHODS,
+  CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
+  CODING_WORKBENCH_CODEX_AUTH_STATE_SCOPES,
+  CODING_WORKBENCH_CODEX_AUTH_STATUSES,
+  CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
+  CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  selectCodingWorkbenchRuntimeProfile,
+  validateCodingWorkbenchCodexAuthSetupPlan,
+  validateCodingWorkbenchCodexAuthSetupRequest,
+  validateCodingWorkbenchCodexSubscriptionProfile,
+} from "./coding-workbench-codex-auth.js";
+
 // ─── Git repository status/diff BFF (Issue #1386, Epic #1491) ─────────────────────
 // Read-only status/diff contract for the local BFF. The browser receives bounded, redacted
 // repository metadata and unified diff text; all Git process execution stays server-side.

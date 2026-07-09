@@ -1,0 +1,63 @@
+{
+  "issue": 1991,
+  "epic": 1982,
+  "verdict": "PASS",
+  "cssSha256": "e22665b21d5231fd423649e0700d82ac7d47c4d7c89435a60f2ee8439be9bc95",
+  "harness": "tests/e2e/config/playwright.issue-1991-governed-assist.config.ts",
+  "route": "/",
+  "appPath": "packaged-cli-ui",
+  "generatedAt": "2026-07-07T20:20:00Z",
+  "captures": [
+    {
+      "file": "01-proposed-diff.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "governed-assist"
+    },
+    {
+      "file": "02-blocked-action.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "state": "governed-assist-blocked"
+    },
+    {
+      "file": "03-blocked-narrow.png",
+      "mode": "dark",
+      "entrypoint": "persisted-window",
+      "viewport": {
+        "width": 390,
+        "height": 860
+      },
+      "state": "governed-assist-blocked"
+    }
+  ],
+  "assertions": {
+    "governedAssistSelected": true,
+    "proposedDiffVisible": true,
+    "proposedDiffNotApplied": true,
+    "approvalPromptAbsent": true,
+    "workspaceWriteDenied": true,
+    "commandExecutionDenied": true,
+    "connectorWriteDenied": true,
+    "rawDiffsHidden": true,
+    "tokensHidden": true,
+    "narrowViewportHasNoHorizontalOverflow": true,
+    "seriousOrCriticalAxeViolations": 0
+  },
+  "artifacts": [
+    "01-proposed-diff.png",
+    "02-blocked-action.png",
+    "03-blocked-narrow.png",
+    "coding-workbench-governed-assist-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ]
+}

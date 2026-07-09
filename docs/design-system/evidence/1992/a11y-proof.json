@@ -1,0 +1,22 @@
+{
+  "issue": 1992,
+  "epic": 1982,
+  "verdict": "PASS",
+  "tool": "axe-core via tests/e2e/support/axe.ts",
+  "cssSha256": "3fb769ffc1447e71bf68a5b2be70b8090556a4015267272efdb1c0fc7643d92e",
+  "generatedAt": "2026-07-08T00:30:00Z",
+  "gate": "zero serious/critical axe violations for the Supervised Coding approval-required narrow state",
+  "captures": [
+    {
+      "file": "06-approval-required-narrow.png",
+      "violations": []
+    }
+  ],
+  "deterministicChecks": {
+    "supervisedApprovalUsesRedactedPrompt": true,
+    "pushMetadataVisibleWithoutRawBodies": true,
+    "stopSidecarRemainsEnabledDuringApproval": true,
+    "approvedDeniedStoppedFailedStatesRemainDistinct": true,
+    "narrowViewportHasNoHorizontalOverflow": true
+  }
+}

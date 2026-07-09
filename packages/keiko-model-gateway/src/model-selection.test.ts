@@ -4,6 +4,7 @@ import { COST_RANK, isConversationEligibleModel } from "./capabilities.js";
 import {
   assertConfiguredModel,
   findConfiguredCapability,
+  resolveCodingSafeSidecarGatewayProfile,
   selectConfiguredModel,
 } from "./model-selection.js";
 import type { GatewayConfig, ModelCapability, ModelProviderConfig } from "./types.js";
@@ -27,6 +28,41 @@ function config(
     providers: modelIds.map(provider),
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
     ...(capabilities.length === 0 ? {} : { capabilities }),
+  };
+}
+
+function codingSidecarCapability(
+  modelId: string,
+  overrides: Partial<ModelCapability> = {},
+): ModelCapability {
+  return {
+    id: modelId,
+    kind: "chat",
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "coding-sidecar",
+    preferredUseCases: ["Coding"],
+    knownLimitations: [],
+    ...overrides,
+  };
+}
+
+function sidecarConfig(
+  providers: readonly ModelProviderConfig[],
+  capabilities: readonly ModelCapability[],
+): GatewayConfig {
+  return {
+    providers,
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities,
   };
 }
 
@@ -373,5 +409,165 @@ describe("COST_RANK single source of truth (GEN-DUP-EXACT-002)", () => {
     // capabilities.ts. Pinning the ordering guards the cheapest-first selection contract.
     expect(COST_RANK.low).toBeLessThan(COST_RANK.medium);
     expect(COST_RANK.medium).toBeLessThan(COST_RANK.high);
+  });
+});
+
+describe("resolveCodingSafeSidecarGatewayProfile", () => {
+  it("selects a configured coding-capable model and omits provider endpoint and credential details", () => {
+    const configValue = sidecarConfig(
+      [
+        {
+          modelId: "azure-coding-model",
+          baseUrl: "https://azure.example/openai",
+          apiKey: "azure-secret",
+          apiKeyHeaderName: "api-key",
+          endpointStyle: "azure-openai-deployment",
+          apiVersion: "2024-06-01",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      [codingSidecarCapability("azure-coding-model")],
+    );
+
+    const result = resolveCodingSafeSidecarGatewayProfile(configValue);
+
+    expect(result).toMatchObject({
+      status: "available",
+      profileId: "coding-safe-openai-compatible",
+      modelAlias: "azure-coding-model",
+      localEndpointPath: "/api/coding-sidecar/gateway",
+      supportsStreaming: false,
+      supportsToolCalling: true,
+    });
+    expect(JSON.stringify(result)).not.toContain("baseUrl");
+    expect(JSON.stringify(result)).not.toContain("apiKey");
+    expect(JSON.stringify(result)).not.toContain("api-key");
+  });
+
+  it("fails closed when a chat tool-calling workflow-eligible model is not coding-capable", () => {
+    const configValue = sidecarConfig(
+      [
+        {
+          modelId: "chat-only-sidecar",
+          baseUrl: "https://provider.example/openai",
+          apiKey: "chat-only-secret",
+          timeoutMs: 30_000,
+          maxRetries: 3,
+          retryBaseDelayMs: 500,
+        },
+      ],
+      [
+        codingSidecarCapability("chat-only-sidecar", {
+          preferredUseCases: ["Chat"],
+        }),
+      ],
+    );
+
+    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toEqual({
+      status: "unavailable",
+      reason: "non-coding-capable",
+    });
+  });
+
+  it.each([
+    {
+      label: "deployment policy disabled",
+      result: resolveCodingSafeSidecarGatewayProfile(sidecarConfig([], []), {
+        deploymentPolicyDisabled: true,
+      }),
+      reason: "deployment-policy-disabled" as const,
+    },
+    {
+      label: "subscription source",
+      result: resolveCodingSafeSidecarGatewayProfile(sidecarConfig([], []), {
+        modelSource: "chatgpt-codex-subscription-profile",
+      }),
+      reason: "subscription-source" as const,
+    },
+  ])("fails closed for $label", ({ result, reason }) => {
+    expect(result).toEqual({ status: "unavailable", reason });
+  });
+
+  it.each([
+    {
+      label: "non-chat capability",
+      config: sidecarConfig(
+        [
+          {
+            modelId: "text-model",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "secret",
+            timeoutMs: 30_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        [
+          {
+            ...codingSidecarCapability("text-model"),
+            kind: "embedding",
+          },
+        ],
+      ),
+      reason: "non-chat" as const,
+    },
+    {
+      label: "tool-calling disabled",
+      config: sidecarConfig(
+        [
+          {
+            modelId: "no-tools",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "secret",
+            timeoutMs: 30_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        [codingSidecarCapability("no-tools", { toolCalling: false })],
+      ),
+      reason: "no-tool-calling" as const,
+    },
+    {
+      label: "workflow disabled",
+      config: sidecarConfig(
+        [
+          {
+            modelId: "no-workflow",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "secret",
+            timeoutMs: 30_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        [codingSidecarCapability("no-workflow", { workflowEligible: false })],
+      ),
+      reason: "non-workflow-eligible" as const,
+    },
+    {
+      label: "missing credentials",
+      config: sidecarConfig(
+        [
+          {
+            modelId: "missing-credentials",
+            baseUrl: " ",
+            apiKey: "",
+            timeoutMs: 30_000,
+            maxRetries: 3,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        [codingSidecarCapability("missing-credentials")],
+      ),
+      reason: "missing-credentials" as const,
+    },
+  ])("fails closed for $label", ({ config: configValue, reason }) => {
+    expect(resolveCodingSafeSidecarGatewayProfile(configValue)).toEqual({
+      status: "unavailable",
+      reason,
+    });
   });
 });
