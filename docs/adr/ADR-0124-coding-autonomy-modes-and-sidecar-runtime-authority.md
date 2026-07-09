@@ -1,4 +1,4 @@
-# ADR-0123: Coding autonomy modes and sidecar runtime authority
+# ADR-0124: Coding autonomy modes and sidecar runtime authority
 
 ## Status
 

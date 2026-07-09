@@ -585,7 +585,7 @@ export {
   validateRuntimeCapabilitiesResponse,
 } from "./runtime-capabilities.js";
 
-// ─── Coding workbench contracts (Issue #1986, Epic #1982, ADR-0123) ─────────────────
+// ─── Coding workbench contracts (Issue #1986, Epic #1982, ADR-0124) ─────────────────
 // Shared leaf vocabulary for coding autonomy modes, authority envelopes, runtime events,
 // permission requests, deployment ceilings, model-source routing, and content-free evidence.
 // This module is browser-safe and dependency-free apart from leaf-local text-redaction helpers.
