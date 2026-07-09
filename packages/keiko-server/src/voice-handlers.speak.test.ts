@@ -272,6 +272,7 @@ describe("POST /api/voice/speak — successful synthesis (AC1/AC2)", () => {
     expect(seen[0]?.modelId).toBe("keiko-tts");
     expect(seen[0]?.input).toBe(answer);
     expect(seen[0]?.instructions).toContain("thoughtful colleague");
+    expect(seen[0]?.instructions).toContain("careful articulation and moderate vocal effort");
     // The interactive speak path requests opus (audio/ogg): faster to first audio and ~4x smaller
     // than the previous mp3 default (measured against the live endpoint).
     expect(seen[0]?.responseFormat).toBe("opus");

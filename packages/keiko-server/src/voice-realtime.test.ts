@@ -555,6 +555,7 @@ describe("realtime voice memory context", () => {
       expect(instructions).toContain("brief verbal acknowledgements sparingly");
       expect(instructions).toContain("remain silent until they explicitly invite a response");
       expect(instructions).toContain("Treat hesitation and short pauses as thinking time");
+      expect(instructions).toContain("articulate key words and slow slightly");
       expect(instructions).toContain("Do not read URLs");
       expect(instructions).toContain("ask a short clarifying question");
     } finally {

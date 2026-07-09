@@ -607,7 +607,9 @@ const INTERACTIVE_MAX_SPEECH_AUDIO_BYTES = 1_500_000;
 const KEIKO_SPEECH_INSTRUCTIONS =
   "Speak in the same language as the input. Sound like a thoughtful colleague: warm, calm, " +
   "engaged, and emotionally aware without overacting. Use natural pacing, subtle emphasis, varied " +
-  "intonation, and clear pronunciation. Do not add words, sound effects, or commentary.";
+  "intonation, and clear pronunciation. Favor careful articulation and moderate vocal effort over " +
+  "simply getting louder. For a repetition, slow slightly and emphasize only the key words. Do not " +
+  "add words, sound effects, or commentary.";
 
 function buildTtsRequest(
   provider: ModelProviderConfig,
