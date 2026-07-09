@@ -36,6 +36,14 @@ import {
   featureStateLabel,
   impactInput,
   isManualUpdatePath,
+  isPortableBootstrapSetupRequired,
+  isPortableExternallyManaged,
+  isPortableIntegrityBlocked,
+  isPortableManagedInstall,
+  isPortableManagedManualPath,
+  isPortableManagedOneClickPath,
+  isPortableManagedPolicyDisabled,
+  isPortableReleaseMetadataUnavailable,
   isSessionInProgress,
   isUpdateCheckUnavailable,
   remediationLabel,
@@ -162,9 +170,26 @@ function versionText(
   report: UpdatePreflightReport,
   t: I18nTranslate,
   manualInstallVerified = false,
+  session?: UpdateSessionStatus | undefined,
+  visibleSession?: UpdateSession | undefined,
 ): string {
   if (manualInstallVerified)
     return t("updates.versionInstalled", { version: report.currentVersion });
+  if (isPortableExternallyManaged(report, session)) {
+    return t("updates.versionExternallyManaged", { current: report.currentVersion });
+  }
+  if (isPortableBootstrapSetupRequired(report, session)) {
+    return t("updates.versionSetupRequired", { current: report.currentVersion });
+  }
+  if (isPortableReleaseMetadataUnavailable(report)) {
+    return t("updates.versionReleaseUnavailable", { current: report.currentVersion });
+  }
+  if (visibleSession?.phase === "succeeded") {
+    return t("updates.versionLine", {
+      current: visibleSession.targetVersion,
+      target: visibleSession.targetVersion,
+    });
+  }
   if (isUpdateCheckUnavailable(report)) {
     return t("updates.versionUnavailable", { current: report.currentVersion });
   }
@@ -325,6 +350,12 @@ function restartCommands(session: UpdateSession, t: I18nTranslate): readonly Res
   return [{ id: "restart", label: t("updates.restart.commandLabel"), text: preview.label }];
 }
 
+function installModeDetailText(session: UpdateSessionStatus, t: I18nTranslate): string {
+  const kind = session.installMode.installKind;
+  if (kind === "portable-managed") return t("updates.details.installModePortableManaged");
+  return kind ?? session.installMode.status;
+}
+
 function primaryActionText(
   report: UpdatePreflightReport,
   session: UpdateSessionStatus,
@@ -334,15 +365,31 @@ function primaryActionText(
 ): string {
   const visibleSession = sessionForDisplay(session, report);
   if (manualInstallVerified) return t("updates.primary.installed");
+  if (visibleSession?.phase === "succeeded" && !remediation.updateCanComplete) {
+    return t("updates.primary.followUp");
+  }
   if (visibleSession?.phase === "succeeded") return t("updates.primary.installed");
   if (visibleSession?.phase === "cancelled") return t("updates.primary.cancelled");
   if (visibleSession?.phase === "failed") return t("updates.primary.failed");
   if (visibleSession?.phase === "restart-required") return t("updates.primary.restart");
+  if (isPortableExternallyManaged(report, session)) {
+    return t("updates.primary.portableExternallyManaged");
+  }
+  if (isPortableBootstrapSetupRequired(report, session)) {
+    return t("updates.primary.portableSetupRequired");
+  }
+  if (isPortableReleaseMetadataUnavailable(report)) {
+    return t("updates.primary.releaseUnavailable");
+  }
+  if (report.updateAvailable && isPortableManagedPolicyDisabled(session)) {
+    return t("updates.primary.policyDisabled");
+  }
   if (isUpdateCheckUnavailable(report)) return t("updates.primary.unavailable");
   if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
   if (remediation.overallStatus === "manual-review-required") {
     return t("updates.primary.manualReview");
   }
+  if (isPortableManagedOneClickPath(report, session)) return t("updates.primary.portableAvailable");
   if (report.updateAvailable) return t("updates.primary.available");
   return t("updates.primary.current");
 }
@@ -392,9 +439,15 @@ function SummaryCard({
         <h2 id="updates-window-title" ref={titleRef} tabIndex={-1} className="upd-title">
           {manualInstallVerified
             ? t("updates.status.success")
-            : statusTitle(report, visibleSession, t)}
+            : isPortableExternallyManaged(report, session)
+              ? t("updates.status.portableExternallyManaged")
+              : isPortableBootstrapSetupRequired(report, session)
+                ? t("updates.status.portableSetupRequired")
+                : statusTitle(report, visibleSession, t)}
         </h2>
-        <p className="upd-body">{versionText(report, t, manualInstallVerified)}</p>
+        <p className="upd-body">
+          {versionText(report, t, manualInstallVerified, session, visibleSession)}
+        </p>
       </div>
     </div>
   );
@@ -427,6 +480,7 @@ function PrimaryActions({
   const visibleSession = sessionForDisplay(session, report);
   const disabled = busy !== undefined;
   const manual = isManualUpdatePath(report, session);
+  const portableManaged = isPortableManagedOneClickPath(report, session);
   if (visibleSession?.phase === "restart-required") {
     return (
       <>
@@ -481,7 +535,7 @@ function PrimaryActions({
       disabled={disabled || report.targetVersion === undefined}
       onClick={onStart}
     >
-      {t("updates.action.install")}
+      {portableManaged ? t("updates.action.updatePortable") : t("updates.action.install")}
     </button>
   );
 }
@@ -852,7 +906,19 @@ function ManualPath({
   readonly onCheck: () => void;
 }): ReactNode {
   const t = useTranslate();
+  if (isPortableExternallyManaged(report, session)) {
+    return <PortableExternallyManagedPath />;
+  }
+  if (isPortableBootstrapSetupRequired(report, session)) {
+    return <PortableSetupRequiredPath />;
+  }
   if (!isManualUpdatePath(report, session)) return null;
+  if (report.updateAvailable && isPortableManagedPolicyDisabled(session)) {
+    return <PortablePolicyDisabledPath busy={busy} onCheck={onCheck} />;
+  }
+  if (isPortableManagedManualPath(report, session)) {
+    return <PortableManualPath report={report} busy={busy} onCheck={onCheck} />;
+  }
   const instructions = session.installMode.manualInstructions ?? t("updates.manual.default");
   const commands = manualPackageManagerCommands(session, report.targetVersion);
   const releaseUrl = report.release?.url;
@@ -910,6 +976,143 @@ function ManualPath({
       {releaseUrl !== undefined ? (
         <a className="upd-link" href={releaseUrl} target="_blank" rel="noopener noreferrer">
           {t("updates.manual.releaseLink")}
+          <Icons.external size={13} aria-hidden="true" />
+        </a>
+      ) : null}
+    </section>
+  );
+}
+
+function PortableSetupRequiredPath(): ReactNode {
+  const t = useTranslate();
+  return (
+    <section className="upd-panel upd-manual" aria-labelledby="updates-portable-setup-title">
+      <div className="upd-panel-head">
+        <strong id="updates-portable-setup-title">{t("updates.portableSetup.title")}</strong>
+        <span>{t("updates.portableSetup.body")}</span>
+      </div>
+      <ul className="upd-manual-steps">
+        <li>{t("updates.portableSetup.useLauncher")}</li>
+        <li>{t("updates.portableSetup.keepUsing")}</li>
+        <li>{t("updates.portableSetup.checkAgain")}</li>
+      </ul>
+    </section>
+  );
+}
+
+function PortableExternallyManagedPath(): ReactNode {
+  const t = useTranslate();
+  return (
+    <section
+      className="upd-panel upd-manual"
+      aria-labelledby="updates-portable-externally-managed-title"
+    >
+      <div className="upd-panel-head">
+        <strong id="updates-portable-externally-managed-title">
+          {t("updates.portableExternallyManaged.title")}
+        </strong>
+        <span>{t("updates.portableExternallyManaged.body")}</span>
+      </div>
+      <ul className="upd-manual-steps">
+        <li>{t("updates.portableExternallyManaged.keepUsing")}</li>
+        <li>{t("updates.portableExternallyManaged.admin")}</li>
+        <li>{t("updates.portableExternallyManaged.checkAgain")}</li>
+      </ul>
+    </section>
+  );
+}
+
+function PortablePolicyDisabledPath({
+  busy,
+  onCheck,
+}: {
+  readonly busy: BusyAction;
+  readonly onCheck: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <section className="upd-panel upd-manual" aria-labelledby="updates-portable-policy-title">
+      <div className="upd-panel-head">
+        <strong id="updates-portable-policy-title">{t("updates.portablePolicy.title")}</strong>
+        <span>{t("updates.portablePolicy.body")}</span>
+      </div>
+      <ul className="upd-manual-steps">
+        <li>{t("updates.portablePolicy.keepUsing")}</li>
+        <li>{t("updates.portablePolicy.admin")}</li>
+        <li>{t("updates.portablePolicy.checkAgain")}</li>
+      </ul>
+      <div className="upd-manual-finish">
+        <span>{t("updates.portablePolicy.finish")}</span>
+        <button
+          type="button"
+          className="upd-secondary-btn"
+          disabled={busy !== undefined}
+          onClick={onCheck}
+        >
+          {t("updates.action.check")}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function PortableManualPath({
+  report,
+  busy,
+  onCheck,
+}: {
+  readonly report: UpdatePreflightReport;
+  readonly busy: BusyAction;
+  readonly onCheck: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const integrityBlocked = isPortableIntegrityBlocked(report);
+  const releaseUrl = integrityBlocked ? undefined : report.release?.url;
+  return (
+    <section className="upd-panel upd-manual" aria-labelledby="updates-portable-manual-title">
+      <div className="upd-panel-head">
+        <strong id="updates-portable-manual-title">
+          {integrityBlocked
+            ? t("updates.portableManual.integrityTitle")
+            : t("updates.portableManual.title")}
+        </strong>
+        <span>
+          {integrityBlocked
+            ? t("updates.portableManual.integrityBody")
+            : t("updates.portableManual.body")}
+        </span>
+      </div>
+      <ul className="upd-manual-steps">
+        {integrityBlocked ? (
+          <>
+            <li>{t("updates.portableManual.integrityKeepUsing")}</li>
+            <li>{t("updates.portableManual.integrityRetry")}</li>
+            <li>{t("updates.portableManual.integrityDoNotInstall")}</li>
+            <li>{t("updates.portableManual.integrityDetails")}</li>
+          </>
+        ) : (
+          <>
+            <li>{t("updates.portableManual.retry")}</li>
+            <li>{t("updates.portableManual.current")}</li>
+            <li>{t("updates.portableManual.details")}</li>
+            <li>{t("updates.portableManual.download")}</li>
+          </>
+        )}
+      </ul>
+      <div className="upd-manual-finish">
+        <span>{t("updates.portableManual.finish")}</span>
+        <button
+          type="button"
+          className="upd-secondary-btn"
+          disabled={busy !== undefined}
+          onClick={onCheck}
+        >
+          {t("updates.action.check")}
+        </button>
+      </div>
+      {releaseUrl !== undefined ? (
+        <a className="upd-link" href={releaseUrl} target="_blank" rel="noopener noreferrer">
+          {t("updates.portableManual.releaseLink")}
           <Icons.external size={13} aria-hidden="true" />
         </a>
       ) : null}
@@ -1016,7 +1219,7 @@ function TechnicalDetails({
           </div>
           <div>
             <dt>{t("updates.details.installMode")}</dt>
-            <dd>{session.installMode.status}</dd>
+            <dd>{installModeDetailText(session, t)}</dd>
           </div>
           <div>
             <dt>{t("updates.details.remediation")}</dt>
@@ -1079,16 +1282,26 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         }
         if (manual) {
           const manualStillRequired = report.updateAvailable && isManualUpdatePath(report, session);
+          const setupRequired = isPortableBootstrapSetupRequired(report, session);
+          const policyDisabled = report.updateAvailable && isPortableManagedPolicyDisabled(session);
           setCheckFeedback(
             manualInstallVerified
               ? t("updates.check.manualInstalled", { version: report.currentVersion })
-              : isUpdateCheckUnavailable(report)
-                ? t("updates.check.unavailable")
-                : report.updateAvailable
-                  ? manualStillRequired
-                    ? t("updates.check.manualStillRequired")
-                    : t("updates.check.available")
-                  : t("updates.check.current"),
+              : isPortableExternallyManaged(report, session)
+                ? t("updates.check.portableExternallyManaged")
+                : setupRequired
+                  ? t("updates.check.portableSetupRequired")
+                  : isPortableReleaseMetadataUnavailable(report)
+                    ? t("updates.check.releaseUnavailable")
+                    : isUpdateCheckUnavailable(report)
+                      ? t("updates.check.unavailable")
+                      : report.updateAvailable
+                        ? policyDisabled
+                          ? t("updates.check.policyDisabled")
+                          : manualStillRequired
+                            ? t("updates.check.manualStillRequired")
+                            : t("updates.check.available")
+                        : t("updates.check.current"),
           );
         }
       } catch (error) {

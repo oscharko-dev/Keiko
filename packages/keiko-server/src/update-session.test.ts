@@ -3,12 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CommandCancelledError, type CommandResult } from "@oscharko-dev/keiko-tools";
-import type { UpdateInstallMode } from "@oscharko-dev/keiko-contracts";
+import type {
+  UpdateInstallMode,
+  UpdatePortableActivationSummary,
+  UpdatePortableStagingSummary,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createUpdateSessionManager,
   UpdateSessionError,
   type UpdateSessionManagerOptions,
 } from "./update-session.js";
+import type { PortableUpdateStager } from "./update-portable-staging.js";
+import type { PortableUpdateActivator } from "./update-portable-activation.js";
 import { detectUpdateInstallMode, type UpdateRuntimeFacts } from "./update-install-mode.js";
 import {
   createFileUpdateSessionLock,
@@ -34,6 +40,52 @@ function supportedMode(packageManager: "npm" | "yarn" = "npm"): UpdateInstallMod
   return detectUpdateInstallMode(facts({ packageManagerHint: packageManager }));
 }
 
+function portableMode(): UpdateInstallMode {
+  return {
+    schemaVersion: "1",
+    status: "supported",
+    packageName: "@oscharko-dev/keiko",
+    installKind: "portable-managed",
+    portable: {
+      status: "managed",
+      target: "windows-x64",
+      updateEligible: true,
+      packageVersion: "0.2.11",
+      stable: true,
+    },
+    recommendedAction: "portable-managed-update",
+  };
+}
+
+function portableStageSummary(): UpdatePortableStagingSummary {
+  return {
+    stageId: "stage-1",
+    status: "staged",
+    target: "windows-x64",
+    packageVersion: "0.2.12",
+    assetName: "keiko-windows-x64.zip",
+    assetId: 123,
+    releaseId: 456,
+    sizeBytes: 789,
+    sha256: "a".repeat(64),
+    manifestSha256: "b".repeat(64),
+  };
+}
+
+function portableActivationSummary(): UpdatePortableActivationSummary {
+  return {
+    activationId: "activation-1",
+    status: "activated",
+    stageId: "stage-1",
+    target: "windows-x64",
+    packageVersion: "0.2.12",
+    registrationRefreshed: true,
+    shortcutRefreshed: true,
+    relaunchRequested: true,
+    versionVerified: true,
+  };
+}
+
 function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
   return {
     command: "npm",
@@ -47,6 +99,28 @@ function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
     truncated: false,
     ...overrides,
   };
+}
+
+function expectPortableStageInput(
+  stage: ReturnType<typeof vi.fn<PortableUpdateStager["stage"]>>,
+): void {
+  const stageInput = stage.mock.calls[0]?.[0];
+  expect(stageInput?.sessionId).toBe("session-1");
+  expect(stageInput?.targetVersion).toBe("0.2.12");
+  expect(stageInput?.installMode.installKind).toBe("portable-managed");
+  expect(stageInput?.runtimeFacts?.packageRoot).toBe("/Users/alice/Applications/Keiko/app");
+}
+
+function expectPortableActivationInput(input: {
+  readonly activate: ReturnType<typeof vi.fn<PortableUpdateActivator["activate"]>>;
+  readonly stageSummary: UpdatePortableStagingSummary;
+}): void {
+  const activationInput = input.activate.mock.calls[0]?.[0];
+  expect(activationInput?.sessionId).toBe("session-1");
+  expect(activationInput?.targetVersion).toBe("0.2.12");
+  expect(activationInput?.stage).toEqual(input.stageSummary);
+  expect(activationInput?.runtimeFacts?.packageRoot).toBe("/Users/alice/Applications/Keiko/app");
+  expect(activationInput?.signal).toBeInstanceOf(AbortSignal);
 }
 
 function lockRecord(sessionId: string): UpdateSessionLockRecord {
@@ -195,6 +269,99 @@ describe("UpdateSessionManager", () => {
     ]);
   });
 
+  it("stages portable-managed updates without invoking package-manager commands", async () => {
+    const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+    const stageSummary = portableStageSummary();
+    const activationSummary = portableActivationSummary();
+    const stage = vi.fn<PortableUpdateStager["stage"]>().mockResolvedValue({
+      ...stageSummary,
+    });
+    const activate = vi.fn<PortableUpdateActivator["activate"]>().mockResolvedValue({
+      ...activationSummary,
+    });
+    const portableStager: PortableUpdateStager = {
+      stage,
+    };
+    const portableActivator: PortableUpdateActivator = {
+      activate,
+    };
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      idFactory: () => "session-1",
+      portableStager,
+      portableActivator,
+      runCommandImpl,
+    });
+
+    const started = manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "succeeded");
+
+    expect(started.session.commandPreview).toBeUndefined();
+    expect(runCommandImpl).not.toHaveBeenCalled();
+    expectPortableStageInput(stage);
+    expectPortableActivationInput({ activate, stageSummary });
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "succeeded",
+      message: "Portable update 0.2.12 is active and verified.",
+      restartRequired: false,
+      portableStage: { stageId: "stage-1", status: "staged" },
+      portableActivation: { activationId: "activation-1", status: "activated" },
+    });
+  });
+
+  it("finishes verified portable activation while remediation remains pending", async () => {
+    const completedTargets: string[] = [];
+    let phaseDuringCompletionGate: string | undefined;
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      idFactory: () => "session-1",
+      portableStager: { stage: vi.fn().mockResolvedValue(portableStageSummary()) },
+      portableActivator: { activate: vi.fn().mockResolvedValue(portableActivationSummary()) },
+      portableCompletionGate: (session) => {
+        completedTargets.push(session.targetVersion);
+        phaseDuringCompletionGate = manager.getStatus().activeSession?.phase;
+        return false;
+      },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "succeeded");
+
+    expect(completedTargets).toEqual(["0.2.12"]);
+    expect(phaseDuringCompletionGate).toBe("running");
+    expect(manager.getStatus().activeSession).toBeUndefined();
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "succeeded",
+      restartRequired: false,
+      portableActivation: { activationId: "activation-1", status: "activated" },
+      message:
+        "Keiko is now running 0.2.12. Complete remaining follow-up action before affected workflows are fully ready.",
+    });
+  });
+
+  it("rejects stale restart verification after a completed portable activation", async () => {
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      currentVersion: () => "0.2.12",
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      idFactory: () => "session-1",
+      portableStager: { stage: vi.fn().mockResolvedValue(portableStageSummary()) },
+      portableActivator: { activate: vi.fn().mockResolvedValue(portableActivationSummary()) },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "succeeded");
+
+    expect(() => manager.verifyRestart("0.2.12")).toThrow(UpdateSessionError);
+    expect(manager.getStatus().lastSession).toMatchObject({
+      targetVersion: "0.2.12",
+      phase: "succeeded",
+      restartRequired: false,
+    });
+  });
+
   it("attaches duplicate starts and rejects conflicting concurrent starts", () => {
     const gate = deferred();
     const manager = createUpdateSessionManager({
@@ -257,6 +424,9 @@ describe("UpdateSessionManager", () => {
 
     expect(requested.phase).toBe("running");
     expect(requested.cancelable).toBe(false);
+    expect(requested.message).toBe(
+      "Cancellation requested. Waiting for the update operation to stop.",
+    );
     await aborted.promise;
     await waitForPhase(manager, "cancelled");
     expect(manager.getStatus().lastSession).toMatchObject({

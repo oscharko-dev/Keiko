@@ -28,12 +28,84 @@ must be reviewed by a release owner before it is used for a stable package relea
 notes are generated from that same structured catalog, so the updater can keep consuming metadata
 without parsing prose.
 
+Portable archive layout, launcher, and manifest rules are documented in
+[Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
+The user/operator launch and first-run setup journey is documented in
+[Portable Launch And Setup Guide](portable-launch-setup-guide.md).
+Portable artifact signing verification is owned by `scripts/verify-portable-runtime-signing.mjs`
+and the `npm run portable:verify-signing` wrapper. It updates only redacted sidecar
+manifest/evidence fields and fails closed for `--policy production`; `--policy development` and
+`--policy pull-request` may record unsigned non-production artifacts but must not present them as
+portable-complete release assets.
+
+Portable GitHub Release Assets are published by the same `scripts/release-publish.mjs` path, not by
+a second release process. Stable `latest` publishes must provide `--portable-assets-manifest` or
+`KEIKO_PORTABLE_ASSETS_MANIFEST`; beta, next, plan-only, and dry-run executions do not require real
+portable files unless a manifest is supplied. When supplied, the manifest is validated before npm
+publish starts. For stable `latest`, the publisher then creates or updates the GitHub Release,
+uploads and verifies the three portable ZIPs, binds the uploaded manifest copies to the actual
+GitHub release id and archive asset ids, uploads the evidence assets, verifies unauthenticated
+download URLs, and only then proceeds to npm publication. A broken portable asset set therefore
+cannot produce a stable package release without matching GitHub Release Assets.
+
+The portable assets manifest is a content-free operator input:
+
+```json
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "platformTarget": "windows-x64",
+      "archivePath": "artifacts/windows-x64/keiko-windows-x64.zip",
+      "manifestPath": "artifacts/windows-x64/manifest/portable-manifest.json"
+    },
+    {
+      "platformTarget": "macos-arm64",
+      "archivePath": "artifacts/macos-arm64/keiko-macos-arm64.zip",
+      "manifestPath": "artifacts/macos-arm64/manifest/portable-manifest.json"
+    },
+    {
+      "platformTarget": "macos-x64",
+      "archivePath": "artifacts/macos-x64/keiko-macos-x64.zip",
+      "manifestPath": "artifacts/macos-x64/manifest/portable-manifest.json"
+    }
+  ]
+}
+```
+
+The publisher requires exactly those three platform targets. For each target it validates the
+production portable manifest, archive name, archive size, SHA-256 digest, manifest/evidence file
+containment, checksums binding, signing/notarization verification state, and optional
+`sidecarRuntimes[]` through the portable manifest contract. Archive, manifest, and evidence paths
+must resolve to regular non-symlink files under the target's portable stage root. After the GitHub
+Release exists, it uploads the three archives plus target-prefixed manifest/checksum/SBOM/license/
+provenance/signing evidence assets with `gh release upload --clobber`, verifies GitHub reports
+non-zero asset ids and HTTPS `browser_download_url` values, and performs unauthenticated ranged
+download smoke checks for every uploaded portable asset. Generated archives and evidence remain
+release artifacts; they are not committed to Git.
+
+Optional coding sidecar runtime payloads are release inputs, not customer-installed tools.
+`scripts/stage-portable-runtime.mjs` may receive controlled local sidecar specs through
+`--sidecar-runtime-spec`; those specs can name a local `sourceRoot`, but only contained relative
+payload paths, digests, size, license/SBOM evidence, adapter compatibility, platform target, and
+signing/notarization status are written to portable manifests/evidence. A sidecar refresh requires a
+Keiko release decision and regenerated Windows x64, macOS arm64, and macOS x64 artifacts. It must
+not be implemented as a customer-side download during install, first run, app launch, or update.
+Sidecar execution authority remains deferred to later Coding Workbench runtime-adapter work.
+
 ## Triggering
 
 - Tag pushes matching `v*` run the full release verification job.
 - Manual `workflow_dispatch` with `publish: false` runs the same verification job.
 - Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
+- Stable `latest` publishes require a reviewed portable asset bundle. In GitHub Actions, provide
+  `portable_assets_run_id` and `portable_assets_artifact_name`; the workflow downloads that bundle
+  with `gh run download` before resolving `portable_assets_manifest`. If
+  `portable_assets_manifest` is empty in that mode, it defaults to
+  `.portable-release-assets/portable-assets.json`. The manifest input is interpreted only as a
+  relative path inside the downloaded artifact bundle; absolute paths, parent traversal, symlinked
+  manifests, and non-file manifests are rejected before publish starts.
 
 ## Release-branch workflow
 
@@ -77,6 +149,10 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - select a tag ref that starts with `v`,
 - set `publish` to `true`,
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.2.0-beta.0`,
+- provide `portable_assets_run_id` and `portable_assets_artifact_name` for the reviewed portable
+  asset bundle when publishing the stable `latest` release,
+- optionally set `portable_assets_manifest` to the manifest path inside that bundle; otherwise it
+  defaults to `portable-assets.json`,
 - provide `NPM_TOKEN` in repository secrets.
 
 The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after confirming
@@ -86,6 +162,22 @@ The script:
 - checks version and publish-manifest consistency,
 - checks workspace SBOM/license policy through the `check:workspace-supply-chain` gate in `prepack`,
 - checks release-impact metadata for the current package version,
+- requires portable production artifacts to carry verified signing/notarization sidecar status
+  before they may be treated as portable-complete release assets,
+- requires stable `latest` publishes to attach exactly three first-class portable GitHub Release
+  Assets: `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, and `keiko-macos-x64.zip`,
+- rejects portable artifacts with sidecar payload metadata that is unverified, wrong-platform,
+  checksum-mismatched, missing executable/license/SBOM evidence, or not contained under
+  `runtime/sidecars/<runtime-name>`,
+- uploads target-prefixed portable manifests, checksums, SBOM/license evidence, provenance, and
+  signing verification summaries as GitHub Release Assets,
+- verifies non-zero asset ids, HTTPS `browser_download_url` values, and unauthenticated ranged
+  downloads after upload,
+- publishes stable `latest` portable ZIPs and evidence before npm publication, so the primary
+  user journey is download once, click the bundled launcher, and keep npm as a developer and
+  compatibility path,
+- keeps `npm run smoke:portable-launch-setup` green for deterministic launch/setup evidence and
+  validates staged target directories when `--stage-root` is supplied,
 - generates GitHub Release notes from reviewed release-impact metadata,
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,

@@ -16,12 +16,13 @@
     "09-settings-entrypoint.png",
     "10-responsive-manual-path.png",
     "11-progress-state.png",
+    "12-portable-managed-one-click.png",
     "update-experience-fidelity-proof.json",
     "a11y-proof.json",
     "manifest.json"
   ],
   "routeLedger": {
-    "updatePreflightGets": 15,
+    "updatePreflightGets": 17,
     "updatePreflightChecks": 0,
     "sessionStarts": 1,
     "remediationActions": 0

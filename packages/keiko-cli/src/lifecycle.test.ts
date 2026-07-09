@@ -339,6 +339,37 @@ describe("runLifecycleCli", () => {
     expect(c.out()).toContain("already running");
   });
 
+  it("reopens the browser for an already-running UI when --open is requested", async () => {
+    const root = makeRoot();
+    mkdirSync(join(root, ".keiko"), { recursive: true });
+    writeFileSync(join(root, ".keiko", "ui.pid"), "12345\n", "utf8");
+    const c = makeIo();
+    const spawnFn = vi.fn();
+    const openExternal = vi.fn();
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--open"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn,
+        fetchImpl: () =>
+          Promise.resolve(Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        killProcess: vi.fn(),
+        openExternal,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:1983");
+    expect(c.out()).toContain("already running");
+  });
+
   it("restarts an already-running UI when the health version is stale", async () => {
     const root = makeRoot();
     mkdirSync(join(root, ".keiko"), { recursive: true });
