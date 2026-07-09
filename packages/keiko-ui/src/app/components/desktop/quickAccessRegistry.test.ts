@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Command } from "./modals/CommandPalette";
 import {
   buildUnifiedQuickAccessCommands,
   commandIdsForEvidence,
   paletteWindowOrder,
+  type Command,
 } from "./quickAccessRegistry";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { EDITOR_PALETTE_COMMANDS } from "./widgets/cards/editorCommands";
@@ -26,8 +26,6 @@ function host(): EditorPaletteHost {
     activeFile: "src/app.ts",
     closedTabCount: 1,
     dirtyCount: 1,
-    openQuickOpen: vi.fn(),
-    openCommandPalette: vi.fn(),
     splitActive: vi.fn(),
     closeActiveSplit: vi.fn(),
     closeActiveTab: vi.fn(),

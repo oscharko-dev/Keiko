@@ -1,12 +1,22 @@
 "use client";
 
-import type { Command } from "./modals/CommandPalette";
+import type { IconName } from "./Icons";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import {
   availablePaletteCommands,
   type EditorPaletteCommand,
   type EditorPaletteHost,
 } from "./widgets/cards/editorCommands";
+
+export interface Command {
+  readonly id: string;
+  readonly label: string;
+  readonly group?: string;
+  readonly icon: IconName;
+  // Optional keyboard chord rendered as a .kbd chip in the row (shortcut discoverability).
+  readonly shortcut?: string;
+  readonly run: () => void;
+}
 
 export const QUICK_ACCESS_CARD_TYPES: readonly WindowType[] = [
   "chat",

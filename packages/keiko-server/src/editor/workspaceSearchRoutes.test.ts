@@ -390,6 +390,43 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
     expect(body.omittedFileCount).toBeGreaterThan(0);
     expect(body.truncated).toBe(true);
   });
+
+  it("rejects an unsafe regex before constructing a RegExp, and mutates no file", async () => {
+    const before = await readFile(join(root, "src", "a.ts"), "utf8");
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ query: "(a+)+", mode: "regex" }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    const after = await readFile(join(root, "src", "a.ts"), "utf8");
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+    expect(after).toBe(before);
+  });
+
+  it("treats a literal query with embedded whitespace as an exact multi-word match", async () => {
+    await writeFile(join(root, "src", "d.ts"), 'export const label = "parse Config";\n', "utf8");
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "parse Config",
+          replacement: "parseConfig",
+          includeGlobs: ["src/d.ts"],
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { files: { edits: { originalText: string }[] }[] };
+    expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual(["parse Config"]);
+  });
 });
 
 describe("POST /api/editor/workspace-search/replace-apply", () => {
@@ -496,5 +533,42 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
 
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("applies a single-word replacement in a real-world-sized file without a spurious patch-limit conflict", async () => {
+    // A file this size produces a full-file preflight diff (renderFullFileModifyDiff renders
+    // every original line as `-` and every new line as `+`) with well over 2,000 changed lines —
+    // keiko-tools' DEFAULT_PATCH_LIMITS (sized for small assistant-generated patches) would reject
+    // this even for a one-word replacement. REPLACE_APPLY_PREFLIGHT_LIMITS must be sized to the
+    // search/replace engine's own file-size bound instead.
+    const lines: string[] = [];
+    for (let i = 0; i < 3000; i += 1) {
+      lines.push(`export const item${String(i)} = ${String(i)};`);
+    }
+    lines.push('export const marker = parseConfig("large-file");');
+    await writeFile(join(root, "src", "large.ts"), `${lines.join("\n")}\n`, "utf8");
+
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/large.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const previewBody = preview.body as {
+      files: { path: string; baseContentHash: string; edits: readonly unknown[] }[];
+    };
+    const file = previewBody.files[0];
+    if (file === undefined) throw new Error("missing preview file");
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps(),
+    );
+    const content = await readFile(join(root, "src", "large.ts"), "utf8");
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
+    expect(content).toContain('export const marker = readConfig("large-file");');
   });
 });

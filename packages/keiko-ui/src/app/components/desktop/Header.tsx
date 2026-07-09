@@ -8,7 +8,6 @@ import { Icons } from "./Icons";
 export type HeaderStatusTone = "ok" | "warn" | "danger";
 
 interface HeaderProps {
-  readonly openPalette: () => void;
   // uiux-fix F039 C223 — visible entry point for the command palette; the Cmd/Ctrl+K
   // chord alone was undiscoverable (no on-screen hint anywhere in the chrome).
   readonly openCommandPalette: () => void;

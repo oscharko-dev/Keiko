@@ -292,6 +292,7 @@ export function UnifiedQuickAccessPalette({
                 aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
+                tabIndex={-1}
                 onPointerEnter={() => setSelected(index)}
                 onClick={() => activate(index)}
               >
@@ -313,6 +314,7 @@ export function UnifiedQuickAccessPalette({
                 aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
+                tabIndex={-1}
                 onPointerEnter={() => setSelected(index)}
                 onClick={() => activate(index)}
               >
