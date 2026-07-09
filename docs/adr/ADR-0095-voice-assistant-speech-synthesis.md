@@ -6,7 +6,7 @@ Proposed (Issue #1558, Epic #1556, 2026-06-26)
 
 ## Version
 
-0.1.0
+0.2.0
 
 ## Context
 
@@ -43,8 +43,8 @@ call. No new dependency and no new egress path are introduced.
 ### D1 — Provider-neutral text-to-speech adapter on the existing egress seam
 
 `packages/keiko-model-gateway/src/text-to-speech-adapter.ts` adds `requestTextToSpeech`, mirroring
-`speech-to-text-adapter.ts`. It POSTs a JSON body (`model`, `input`, `voice`, `response_format`, and an
-optional `speed`) once to `${endpoint}/audio/speech` — the OpenAI-compatible contract the gateway
+`speech-to-text-adapter.ts`. It POSTs a JSON body (`model`, `input`, `voice`, `response_format`, and
+optional `speed` / `instructions`) once to `${endpoint}/audio/speech` — the OpenAI-compatible contract the gateway
 already speaks for chat, embeddings, and transcription — and reads the **binary** audio response. There
 is no SDK dependency and no retry (a spoken response is interactive; the caller decides). Every failure
 is a coded, content-free `TextToSpeechErrorKind` (`wrong-header`, `rate-limited`, `unsupported-model`,
@@ -88,12 +88,24 @@ resolved `voiceId` is sensitive (it lives on the credential-tier `voiceProfiles`
 the provider but **never** appears in any response. This keeps `keiko-tts` deployments that map personas
 and bare speech-output deployments without persona mappings both functional.
 
-### D5 — Synthesis input bound; over-long answers degrade rather than truncate
+### D5 — Bounded, speech-safe rendering; over-long answers degrade rather than truncate
 
 The route bounds the answer at `MAX_SPEECH_INPUT_CHARS = 4096` (the OpenAI-compatible `/audio/speech`
 input ceiling). An over-long answer is **rejected** (`413 PAYLOAD_TOO_LARGE`) and the spoken layer
 degrades to text — it is never truncated, because a truncated clip would make the spoken output diverge
 from the visible text and break AC2. The visible answer is always present in the transcript regardless.
+
+After validating that raw bound, the BFF derives a speech-only rendering with `toSpeakableText`. Link
+labels and prose remain, while URL destinations, Markdown syntax, numeric citation markers, source /
+reference appendices, images, HTML, and fenced code are omitted. Inline code keeps its short textual
+content. The visible message remains unchanged and reviewable with clickable sources; only presentation
+syntax that is unusable or unsafe when spoken is removed. If no speakable content remains, synthesis is
+rejected rather than producing silence.
+
+Realtime grounded-tool HTTP results retain both the full answer and its speech projection for the local
+chat. The browser sends only the speech projection, delivery instruction, status, and no-evidence flag in
+the provider function-call output; URLs, citations, source labels, and persistence ids do not cross into
+the provider's spoken-response context.
 
 ### D6 — Success body is base64 audio, not redacted, with a canonicalized MIME type
 
@@ -104,7 +116,7 @@ benefit. The `mimeType` is canonicalized against a closed server allowlist (`aud
 provider-controlled string crosses the boundary. The audio buffer goes out of scope after the response
 and is never written to the evidence store, a side file, a log, or any on-disk location.
 
-### D7 — Audio playback engine bound to the visible assistant message (spoken equals visible)
+### D7 — Audio playback engine bound to the visible assistant message (semantic answer stays aligned)
 
 `packages/keiko-ui/.../hooks/useAssistantSpeech.ts` is the audio integration #501 deferred. It wraps the
 `useVoicePlayback` reducer and, when speech output is advertised and a **complete** assistant message is
@@ -114,6 +126,10 @@ returned audio through one `HTMLAudioElement`, and drives the reducer `prepare �
 always speaks the text the reader sees (AC2). A streaming or pending turn is excluded until it settles.
 The hook holds no credential and never persists the audio: the object URL lives only for one spoken
 turn.
+
+The browser always submits the complete visible message; the server owns the deterministic speech-safe
+projection in D5. This keeps answer meaning aligned while allowing links and citations to remain clickable
+in chat instead of being read as punctuation and URL tokens.
 
 ### D8 — Deterministic resource release on stop, mute, switch, and unmount
 
@@ -132,6 +148,16 @@ envelopes: `VOICE_RATE_LIMITED` → `rate-limited`, `VOICE_TIMEOUT` → `timeout
 `VoicePlayback` status strip renders the "shown as text" fallback and the written answer is never
 touched (AC4). The hook never reads or mutates the transcript text beyond passing the visible content to
 synthesis.
+
+### D10 — Capability-gated delivery instructions and streaming backpressure
+
+`supportsSpeechSynthesisInstructions` is an optional voice capability that requires
+`supportsSpeechOutput`. When advertised, the BFF sends provider delivery guidance for the user's language,
+warm colleague-like tone, natural pacing, subtle emotion, varied intonation, and clear pronunciation. It
+is omitted for older compatible endpoints that reject the field. The PCM streaming route treats
+`ServerResponse.write() === false` as ordinary backpressure and waits for `drain`; only a real client close
+aborts synthesis. A committed stream failure emits a redacted, correlation-keyed operator diagnostic and
+still ends the partial response deterministically.
 
 ## Consequences
 

@@ -540,6 +540,29 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
 });
 
 describe("realtime voice memory context", () => {
+  it("keeps the realtime persona conversational, multilingual, and safe for spoken links", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    try {
+      const instructions = await _realtimeInstructionsForTests(
+        harness.deps,
+        { chatId: harness.chatId },
+        true,
+        false,
+      );
+
+      expect(instructions).toContain("same language as the user");
+      expect(instructions).toContain("thoughtful colleague");
+      expect(instructions).toContain("brief verbal acknowledgements sparingly");
+      expect(instructions).toContain("remain silent until they explicitly invite a response");
+      expect(instructions).toContain("Treat hesitation and short pauses as thinking time");
+      expect(instructions).toContain("articulate key words and slow slightly");
+      expect(instructions).toContain("Do not read URLs");
+      expect(instructions).toContain("ask a short clarifying question");
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
   it("uses the shared semantic retrieval signals and records access plus audit", async () => {
     const harness = makeVoiceMemoryHarness(true);
     try {
@@ -620,6 +643,32 @@ describe("realtime voice memory context", () => {
       expect(harness.calls).toEqual([]);
     } finally {
       cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("emits a redacted operator diagnostic when session memory priming fails", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    const diagnostics: { operation: string; message: string }[] = [];
+    try {
+      harness.vault.close();
+      const context = await _realtimeMemoryContextForTests(
+        {
+          ...harness.deps,
+          diagnostics: {
+            record: (record): void => {
+              diagnostics.push({ operation: record.operation, message: record.message });
+            },
+          },
+        },
+        { chatId: harness.chatId, memory: { enabled: true, budgetTokens: 900 } },
+      );
+
+      expect(context).toBe("");
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]?.operation).toBe("voice.realtime.memory-prime");
+    } finally {
+      harness.store.close();
+      rmSync(harness.tmp, { recursive: true, force: true });
     }
   });
 

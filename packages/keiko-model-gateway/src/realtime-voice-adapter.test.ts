@@ -42,19 +42,19 @@ function bodyToText(init: RequestInit): string {
 }
 
 describe("requestRealtimeNegotiation", () => {
-  it("POSTs the opaque offer SDP as application/sdp to /realtime/calls with the model and auth header", async () => {
+  it("uses the GA unified multipart call so server-owned session context is applied atomically", async () => {
     let seenUrl = "";
     let seenMethod = "";
     let seenContentType = "";
     let seenAuth = "";
-    let seenBody = "";
+    let seenBody: BodyInit | null | undefined;
     const fetchImpl = mockFetch((url, init) => {
       seenUrl = url;
       seenMethod = init.method ?? "";
       const headers = init.headers as Record<string, string>;
       seenContentType = headers["content-type"] ?? "";
       seenAuth = headers.authorization ?? "";
-      seenBody = bodyToText(init);
+      seenBody = init.body;
       return sdp(ANSWER_SDP);
     });
 
@@ -62,16 +62,23 @@ describe("requestRealtimeNegotiation", () => {
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-realtime",
+      instructions: "You are Keiko with the current chat and memory context.",
       offerSdp: OFFER_SDP,
       fetchImpl,
     });
 
     expect(outcome).toEqual({ ok: true, value: { answerSdp: ANSWER_SDP } });
-    expect(seenUrl).toBe("https://realtime.example.invalid/v1/realtime/calls?model=keiko-realtime");
+    expect(seenUrl).toBe("https://realtime.example.invalid/v1/realtime/calls");
     expect(seenMethod).toBe("POST");
-    expect(seenContentType).toBe("application/sdp");
+    expect(seenContentType).toMatch(/^multipart\/form-data; boundary=keiko-realtime-/u);
     expect(seenAuth).toBe(`Bearer ${SECRET_API_KEY}`);
-    expect(seenBody).toBe(OFFER_SDP);
+    expect(seenBody).toBeInstanceOf(Blob);
+    const multipart = await (seenBody as Blob).text();
+    expect(multipart).toContain('name="sdp"');
+    expect(multipart).toContain(OFFER_SDP);
+    expect(multipart).toContain('name="session"');
+    expect(multipart).toContain('"model":"keiko-realtime"');
+    expect(multipart).toContain("current chat and memory context");
   });
 
   it("supports a custom apiKeyHeaderName (Azure api-key) and url-encodes the model id", async () => {
@@ -92,9 +99,7 @@ describe("requestRealtimeNegotiation", () => {
     });
     expect(outcome.ok).toBe(true);
     expect(header).toBe(SECRET_API_KEY);
-    expect(seenUrl).toBe(
-      "https://realtime.example.invalid/v1/realtime/calls?model=gpt%20realtime%2Fpreview",
-    );
+    expect(seenUrl).toBe("https://realtime.example.invalid/v1/realtime/calls");
   });
 
   it("supports Azure-style ephemeral realtime sessions before the SDP call", async () => {
@@ -136,7 +141,7 @@ describe("requestRealtimeNegotiation", () => {
     expect(outcome).toEqual({ ok: true, value: { answerSdp: ANSWER_SDP } });
     expect(seen.map((entry) => entry.url)).toEqual([
       "https://realtime.example.invalid/v1/realtime/client_secrets",
-      "https://realtime.example.invalid/v1/realtime/calls?model=keiko-realtime",
+      "https://realtime.example.invalid/v1/realtime/calls",
     ]);
     expect(seen[0]).toMatchObject({
       apiKey: SECRET_API_KEY,
@@ -449,7 +454,7 @@ describe("requestRealtimeNegotiation", () => {
       offerSdp: OFFER_SDP,
       fetchImpl,
     });
-    expect(seenUrl).toBe("https://realtime.example.invalid/v1/realtime/calls?model=keiko-realtime");
+    expect(seenUrl).toBe("https://realtime.example.invalid/v1/realtime/calls");
   });
 
   it("rejects an answer that is not a well-formed SDP (no v= line) as invalid-response", async () => {

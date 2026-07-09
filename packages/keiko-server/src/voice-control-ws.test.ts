@@ -527,6 +527,52 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     socket.close();
   });
 
+  it("applies capability-declared semantic VAD and realtime transcription", async () => {
+    let seenRequest: RealtimeNegotiationRequest | undefined;
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(
+        true,
+        { realtimeAuthMode: "ephemeral-session" },
+        {
+          supportsSemanticTurnDetection: true,
+          realtimeTranscriptionModel: "domain-realtime-transcribe",
+        },
+      ),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: (request) => {
+        seenRequest = request;
+        return Promise.resolve({ ok: true, value: { answerSdp: ANSWER_SDP } });
+      },
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(await connect(port));
+    socket.send(sessionCreate(chat.id));
+    await next();
+    await next();
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next();
+    await next();
+
+    expect(seenRequest).toMatchObject({
+      transcriptionModel: "domain-realtime-transcribe",
+      turnDetection: {
+        type: "semantic_vad",
+        eagerness: "auto",
+        interrupt_response: true,
+      },
+    });
+    socket.close();
+  });
+
   it("forces the realtime grounding tool when grounding sources are active", async () => {
     let seenRequest: RealtimeNegotiationRequest | undefined;
     const { deps, chat } = depsWithChat({
