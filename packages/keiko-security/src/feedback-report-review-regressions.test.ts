@@ -160,6 +160,40 @@ describe("feedback report dual-review regressions", () => {
     expectRawRejected({ steps: input });
   });
 
+  it.each(['password="one"; token="two"', 'password={"value":"one"}; token={"value":"two"}'])(
+    "redacts both closed same-line assignments with verifier parity in %s",
+    (input) => {
+      const prepared = expectPreparedParity({ description: input });
+      if (prepared === undefined) return;
+
+      expect(prepared.report.summary.description.match(/\[REDACTED\]/gu)).toHaveLength(2);
+      expect(prepared.report.redactionProvenance.rules).toContainEqual({
+        code: "credential-assignment",
+        count: 2,
+      });
+      expect(
+        prepared.dispositionSidecar.records.filter(({ action }) => action === "redacted"),
+      ).toHaveLength(2);
+      expectRawDescriptionRejected(input);
+    },
+  );
+
+  it("fails closed on value-whitespace overflow with verifier parity", () => {
+    const input = `password=${" ".repeat(4_097)}opaque; token=two\ncontinuation-secret`;
+    const prepared = expectPreparedParity({ reproductionSteps: input });
+    if (prepared === undefined) return;
+
+    expect(prepared.canonicalJson).not.toContain("opaque");
+    expect(prepared.canonicalJson).not.toContain("continuation-secret");
+    expect(prepared.dispositionSidecar.records).toContainEqual({
+      action: "quarantined",
+      reason: "ambiguous-credential-structure",
+      unitKind: "line-remainder",
+      target: { kind: "draft-field", field: "reproductionSteps" },
+    });
+    expectRawRejected({ steps: input });
+  });
+
   it.each(['"', "'"] as const)(
     "quarantines the complete known multiline %s-quoted assignment segment",
     (quote) => {
