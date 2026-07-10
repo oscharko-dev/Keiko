@@ -5,6 +5,7 @@
 
 import type {
   ResourceLimitDecision,
+  VerificationFailureLocation,
   VerificationResult,
   VerificationStatus,
 } from "./verification.js";
@@ -20,6 +21,10 @@ export interface VerificationResultSummary {
   readonly outputSummary: string;
   readonly appliedLimits: readonly ResourceLimitDecision[];
   readonly detail: string | undefined;
+  // Additive (Issue #2210, ADR-0126 D3): the UI/evidence-facing projection DOES carry structured
+  // failure locations (the problems panel reads them). Deliberately NOT propagated to
+  // AuditResultEntry below, which stays free of command-derived content.
+  readonly locations?: readonly VerificationFailureLocation[] | undefined;
 }
 
 export interface VerificationSummary {

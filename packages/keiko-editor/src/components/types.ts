@@ -15,6 +15,7 @@ import type {
   EditorCodeActionsResolver,
   EditorCompletionResolver,
   EditorDefinitionResolver,
+  EditorDiagnostic,
   EditorDiagnosticsResolver,
   EditorFileModel,
   EditorFormattingResolver,
@@ -199,6 +200,12 @@ export interface KeikoCodeEditorProps {
    * diagnostic text or ranges. Absent when the host wires no diagnostics.
    */
   readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+  /**
+   * Issue #2213 (ADR-0126) — the full per-diagnostic list for the active buffer on every non-stale
+   * resolve (string severity, no Monaco-numbered leak). Consumed by the workspace Problems panel to
+   * aggregate diagnostics across open panes. Absent when the host wires no diagnostics.
+   */
+  readonly onDiagnostics?: ((diagnostics: readonly EditorDiagnostic[]) => void) | undefined;
   /**
    * Host handler for the "Generate Tests" command (Issue #1205). When present, the editor registers a
    * Keiko action into Monaco's native command palette (F1), the context menu, and the `Cmd/Ctrl+Alt+T`

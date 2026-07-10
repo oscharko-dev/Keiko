@@ -167,6 +167,8 @@ export interface WireEditorDiagnostics {
   /** Content-free diagnostic-count observer for the status bar (Issue #1205). */
   readonly onSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
   readonly onOverviewMarkers?: RegisterKeikoDiagnosticsArgs["onOverviewMarkers"] | undefined;
+  /** Issue #2213 (ADR-0126) — full per-diagnostic list for the workspace Problems panel. */
+  readonly onDiagnostics?: RegisterKeikoDiagnosticsArgs["onDiagnostics"] | undefined;
 }
 
 /**
@@ -676,6 +678,9 @@ function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | nul
     ...(diagnostics.onOverviewMarkers === undefined
       ? {}
       : { onOverviewMarkers: diagnostics.onOverviewMarkers }),
+    ...(diagnostics.onDiagnostics === undefined
+      ? {}
+      : { onDiagnostics: diagnostics.onDiagnostics }),
   });
 }
 

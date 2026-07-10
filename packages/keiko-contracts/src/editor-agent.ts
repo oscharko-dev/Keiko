@@ -1,6 +1,10 @@
 import type { EditorDocumentVersion } from "./editor-session.js";
 import type { LanguageDiagnosticSeverity, LanguageRange } from "./language-service.js";
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
+import {
+  parseEditorVerificationRunRequest,
+  type EditorVerificationRunRequest,
+} from "./editor-verification.js";
 
 export { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath };
 
@@ -116,7 +120,21 @@ export type EditorAgentActionType =
   | "save"
   | "applyTextEdits"
   | "applyPatch"
-  | "applyChangeset";
+  | "applyChangeset"
+  // Issue #2210 (ADR-0126 D5): a governed, non-mutating request to run a verification through Issue
+  // #2211's route. Added for policy classification; NOT dispatched to the browser bridge.
+  | "requestVerification";
+
+// Issue #2210 (ADR-0126 D5): an agent-originated verification request uses the same wire shape as the
+// human editor route request (kinds/targetPath/requestId). Aliased to avoid duplicating the shape;
+// the guard delegates to the canonical parser so validation stays in one place.
+export type EditorAgentVerificationRequest = EditorVerificationRunRequest;
+
+export function isEditorAgentVerificationRequest(
+  value: unknown,
+): value is EditorAgentVerificationRequest {
+  return parseEditorVerificationRunRequest(value).ok;
+}
 
 export interface EditorAgentChangesetFile {
   readonly file: string;
@@ -357,6 +375,7 @@ const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "applyTextEdits",
   "applyPatch",
   "applyChangeset",
+  "requestVerification",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -137,6 +137,21 @@ const CHANGESET_PARAMETERS = objectSchema(
   ["sessionId", "idempotencyKey", "patch", "files"],
 );
 
+// Issue #2214 — the closed VerificationKind set (test | targeted-test | typecheck | lint | build).
+// `targetPath` is the workspace-relative file for the `targeted-test` kind; the server re-checks
+// containment and the deny-list. No free-form argv or open-ended kind is ever accepted.
+const REQUEST_VERIFICATION_PARAMETERS = objectSchema(
+  {
+    sessionId: { type: "string", minLength: 1 },
+    kind: {
+      type: "string",
+      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+    },
+    targetPath: { type: "string", minLength: 1 },
+  },
+  ["sessionId", "kind"],
+);
+
 export const EDITOR_AGENT_TOOL_DEFINITIONS: readonly ToolDefinition[] = deepFreeze([
   {
     name: "editor_list_sessions",
@@ -165,5 +180,11 @@ export const EDITOR_AGENT_TOOL_DEFINITIONS: readonly ToolDefinition[] = deepFree
     description:
       "Propose one governed applyChangeset action. The server validates the complete multi-file transaction.",
     parameters: CHANGESET_PARAMETERS,
+  },
+  {
+    name: "editor_request_verification",
+    description:
+      "Request one governed verification run (test | targeted-test | typecheck | lint | build) for a session's workspace. The server classifies and gates it through the Authority Envelope before any sandboxed run starts, then returns a redacted report.",
+    parameters: REQUEST_VERIFICATION_PARAMETERS,
   },
 ]);

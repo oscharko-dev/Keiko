@@ -1,15 +1,20 @@
 import {
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
   EDITOR_AGENT_SCHEMA_VERSION,
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
   isEditorAgentAction,
+  isVerificationKind,
   type EditorAgentAction,
   type EditorAgentActionQueuedResponse,
   type EditorAgentSessionsResponse,
   type EditorAgentSnapshotResponse,
   type EditorAgentSnapshotTextMode,
+  type EditorAgentVerificationResult,
+  type EditorAgentVerificationRunRequest,
   type ToolCallRequest,
   type ToolCallResult,
   type ToolPort,
+  type VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import { type EditorAgentClientError, EditorAgentHttpClient } from "./editor-agent-client.js";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "./editor-agent-schemas.js";
@@ -27,6 +32,11 @@ export type EditorAgentToolOutput =
   | ({ readonly ok: true; readonly kind: "sessions" } & EditorAgentSessionsResponse)
   | ({ readonly ok: true; readonly kind: "snapshot" } & EditorAgentSnapshotResponse)
   | ({ readonly ok: true; readonly kind: "action-result" } & EditorAgentActionQueuedResponse)
+  | {
+      readonly ok: true;
+      readonly kind: "verification";
+      readonly result: EditorAgentVerificationResult;
+    }
   | {
       readonly ok: false;
       readonly error:
@@ -75,6 +85,14 @@ function optionalString(args: Record<string, unknown>, key: string): string | un
   if (value === undefined) return undefined;
   if (typeof value !== "string" || value.length === 0) {
     throw new InvalidArgumentsError(`Argument '${key}' must be a non-empty string.`);
+  }
+  return value;
+}
+
+function requireVerificationKind(args: Record<string, unknown>, key: string): VerificationKind {
+  const value = args[key];
+  if (!isVerificationKind(value)) {
+    throw new InvalidArgumentsError(`Argument '${key}' must be a supported verification kind.`);
   }
   return value;
 }
@@ -269,9 +287,30 @@ export class EditorAgentToolHost implements ToolPort {
         return this.proposeEdit(request);
       case "editor_propose_changeset":
         return this.proposeChangeset(request);
+      case "editor_request_verification":
+        return this.requestVerification(request);
       default:
         throw new InvalidArgumentsError("Unknown editor agent tool.");
     }
+  }
+
+  // Issue #2214 — request a governed verification run. The tool host only validates and narrows the
+  // arguments and attaches its constructor-validated authorityRef; the SERVER owns the classify →
+  // compose → reserve → audit governance and the sandboxed execution, and returns a redacted result.
+  private async requestVerification(request: ToolCallRequest): Promise<EditorAgentToolOutput> {
+    const args = request.arguments;
+    expectOnly(args, ["sessionId", "kind", "targetPath"]);
+    const targetPath = optionalString(args, "targetPath");
+    const body: EditorAgentVerificationRunRequest = {
+      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+      sessionId: requireString(args, "sessionId"),
+      kind: requireVerificationKind(args, "kind"),
+      ...(targetPath === undefined ? {} : { targetPath }),
+      authorityRef: this.authorityRef,
+    };
+    const result = await this.client.requestVerification(body, request.signal);
+    if (!result.ok) return { ok: false, error: result.error };
+    return { ok: true, kind: "verification", result: result.value };
   }
 
   private async listSessions(request: ToolCallRequest): Promise<EditorAgentToolOutput> {

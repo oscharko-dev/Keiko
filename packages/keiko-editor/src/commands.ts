@@ -52,6 +52,24 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     title: "Run Verification",
     requiredCapabilities: ["runVerification"],
   },
+  // Issue #2212 (ADR-0126) — general run affordances, gated by `runWorkspaceVerification`.
+  {
+    id: "editor.runFileTests",
+    title: "Run Tests for File",
+    requiredCapabilities: ["runWorkspaceVerification"],
+  },
+  {
+    id: "editor.runTypecheck",
+    title: "Run Typecheck",
+    requiredCapabilities: ["runWorkspaceVerification"],
+  },
+  { id: "editor.runLint", title: "Run Lint", requiredCapabilities: ["runWorkspaceVerification"] },
+  { id: "editor.runBuild", title: "Run Build", requiredCapabilities: ["runWorkspaceVerification"] },
+  {
+    id: "editor.cancelVerification",
+    title: "Cancel Verification",
+    requiredCapabilities: ["runWorkspaceVerification"],
+  },
   { id: "editor.previewPatch", title: "Preview Patch", requiredCapabilities: ["previewPatch"] },
   { id: "editor.openDiff", title: "Open Diff", requiredCapabilities: ["previewPatch"] },
   { id: "editor.applyPatch", title: "Apply Patch", requiredCapabilities: ["applyPatchReview"] },
@@ -79,6 +97,13 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   "editor.applyPatch": (ctx) => !ctx.readOnly && ctx.pendingPatchId !== null,
   "editor.rejectPatch": (ctx) => ctx.pendingPatchId !== null,
   "editor.runVerification": (ctx) => ctx.pendingPatchId !== null,
+  // Issue #2212 — the four run commands are available only while no run is active; file-targeted tests
+  // additionally require a resolvable target. Cancel is the inverse: available only while a run is active.
+  "editor.runFileTests": (ctx) => !ctx.verificationRunning && ctx.activeFileVerifiable,
+  "editor.runTypecheck": (ctx) => !ctx.verificationRunning,
+  "editor.runLint": (ctx) => !ctx.verificationRunning,
+  "editor.runBuild": (ctx) => !ctx.verificationRunning,
+  "editor.cancelVerification": (ctx) => ctx.verificationRunning,
   "editor.generateTests": () => true,
   "editor.askKeikoAboutSelection": (ctx) => ctx.hasSelection,
   "editor.renameSymbol": (ctx) => !ctx.readOnly,

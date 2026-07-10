@@ -146,7 +146,7 @@ describe("keiko-tools public surface", () => {
     // Schemas + registry:
     expect(tools.TOOL_DEFINITIONS).toBeDefined();
     expect(typeof tools.WorkspaceToolHost).toBe("function");
-    expect(tools.EDITOR_AGENT_TOOL_DEFINITIONS).toHaveLength(5);
+    expect(tools.EDITOR_AGENT_TOOL_DEFINITIONS).toHaveLength(6);
     expect(typeof tools.EditorAgentHttpClient).toBe("function");
     expect(typeof tools.createFetchEditorAgentHttpTransport).toBe("function");
     expect(typeof tools.EditorAgentToolHost).toBe("function");

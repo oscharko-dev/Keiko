@@ -330,6 +330,14 @@ export function dispatchEditorAgentAction(
       return dispatchMoveTab(action, controllers);
     case "setSelection":
       return dispatchSetSelection(action, controllers);
+    case "requestVerification":
+      // Issue #2210/#2214 (ADR-0126 D5): a verification run is a server-side sandboxed spawn dispatched
+      // through Issue #2211's route, never the browser bridge (it has no editor buffer to apply to).
+      // The bridge rejects it if one ever arrives here.
+      return {
+        status: "failed",
+        message: "Verification runs are not dispatched through the editor bridge.",
+      };
   }
 }
 

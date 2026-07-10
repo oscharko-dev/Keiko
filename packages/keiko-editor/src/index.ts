@@ -55,7 +55,7 @@ export {
 export type { EditorHotExitSnapshotV1 } from "./hot-exit.js";
 
 // ─── Types: host port ────────────────────────────────────────────────────────────
-export type { EditorBuffer, EditorHostPort } from "./host-port.js";
+export type { EditorBuffer, EditorHostPort, EditorVerificationRunIntent } from "./host-port.js";
 
 // ─── Types: geometry, document model, provenance, completion, diagnostics ─────────
 export type {

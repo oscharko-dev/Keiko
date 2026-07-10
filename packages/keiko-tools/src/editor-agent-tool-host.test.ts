@@ -8,6 +8,7 @@ import {
   type EditorAgentConflictCode,
   type EditorAgentFailureCode,
   type EditorAgentSessionSnapshot,
+  type EditorAgentVerificationResult,
   type ToolCallResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -53,8 +54,27 @@ interface RecordingRoute {
   readonly transport: EditorAgentHttpTransport;
 }
 
+const COMPLETED_VERIFICATION: EditorAgentVerificationResult = {
+  outcome: "completed",
+  report: {
+    overallStatus: "passed",
+    durationMs: 5,
+    counts: {
+      passed: 1,
+      failed: 0,
+      skipped: 0,
+      denied: 0,
+      "timed-out": 0,
+      cancelled: 0,
+      "resource-exceeded": 0,
+    },
+    steps: [{ kind: "typecheck", status: "passed", durationMs: 5 }],
+  },
+};
+
 function recordingRoute(
   actionResult: (action: EditorAgentAction) => EditorAgentActionResult = queued,
+  verificationResult: EditorAgentVerificationResult = COMPLETED_VERIFICATION,
 ): RecordingRoute {
   const requests: EditorAgentHttpTransportRequest[] = [];
   return {
@@ -68,7 +88,9 @@ function recordingRoute(
           ? { sessions: [snapshot()] }
           : route.endsWith("/snapshot")
             ? { snapshot: snapshot() }
-            : { result: actionResult(body as EditorAgentAction) };
+            : route.endsWith("/agent-runs")
+              ? { result: verificationResult }
+              : { result: actionResult(body as EditorAgentAction) };
         return Promise.resolve({
           status: route.endsWith("/actions") ? 202 : 200,
           body: encoder.encode(JSON.stringify(response)),
@@ -487,4 +509,87 @@ describe("EditorAgentToolHost route outcomes", () => {
       });
     },
   );
+});
+
+describe("EditorAgentToolHost editor_request_verification", () => {
+  it("dispatches one verification call with the injected authorityRef and maps the report", async () => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_request_verification", {
+      sessionId: "session-1",
+      kind: "typecheck",
+    });
+    const agentRuns = route.requests.filter((request) => request.url.endsWith("/agent-runs"));
+    expect(agentRuns).toHaveLength(1);
+    const body = JSON.parse(agentRuns[0]?.body ?? "{}") as Record<string, unknown>;
+    // The model never supplies authorityRef; the host attaches its constructor-validated reference.
+    expect(body).toMatchObject({
+      schemaVersion: "1",
+      sessionId: "session-1",
+      kind: "typecheck",
+      authorityRef: { runId: "run-1", envelopeDigest: HASH },
+    });
+    expect(parseOutput(result)).toMatchObject({
+      ok: true,
+      kind: "verification",
+      result: { outcome: "completed", report: { overallStatus: "passed" } },
+    });
+  });
+
+  it("forwards the optional targetPath for a targeted-test request", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_request_verification", {
+      sessionId: "session-1",
+      kind: "targeted-test",
+      targetPath: "src/a.test.ts",
+    });
+    const body = JSON.parse(
+      route.requests.find((request) => request.url.endsWith("/agent-runs"))?.body ?? "{}",
+    ) as Record<string, unknown>;
+    expect(body.targetPath).toBe("src/a.test.ts");
+  });
+
+  it("surfaces a governance not-run disposition as a typed, non-throwing output", async () => {
+    const route = recordingRoute(queued, {
+      outcome: "not-run",
+      disposition: "review-required",
+      reason: "mode-approval-required",
+    });
+    const result = await execute(host(route), "editor_request_verification", {
+      sessionId: "session-1",
+      kind: "build",
+    });
+    expect(parseOutput(result)).toMatchObject({
+      ok: true,
+      kind: "verification",
+      result: {
+        outcome: "not-run",
+        disposition: "review-required",
+        reason: "mode-approval-required",
+      },
+    });
+  });
+
+  it("rejects an unsupported verification kind before any route call", async () => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_request_verification", {
+      sessionId: "session-1",
+      kind: "deploy",
+    });
+    expect(route.requests).toHaveLength(0);
+    expect(parseOutput(result)).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_ARGUMENTS" },
+    });
+  });
+
+  it("rejects unsupported argument properties", async () => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_request_verification", {
+      sessionId: "session-1",
+      kind: "lint",
+      authorityRef: { runId: "attacker", envelopeDigest: HASH },
+    });
+    expect(route.requests).toHaveLength(0);
+    expect(parseOutput(result)).toMatchObject({ ok: false, error: { code: "INVALID_ARGUMENTS" } });
+  });
 });

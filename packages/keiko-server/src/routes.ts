@@ -124,6 +124,13 @@ import {
   handleDeleteCommandRun,
 } from "./command-runner-routes.js";
 import {
+  handleCreateVerificationRun,
+  handleDeleteVerificationRun,
+  handleVerificationCatalog,
+  handleVerificationEvents,
+} from "./editor/verificationRoutes.js";
+import { handleEditorAgentVerificationRun } from "./editor/agentVerificationRoute.js";
+import {
   handleActivateTaskWorkspace,
   handleCleanupOrphanTaskWorkspaces,
   handleCleanupTaskWorkspace,
@@ -791,6 +798,39 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/editor/local-knowledge/retrieve",
     handler: handleEditorLocalKnowledgeRetrieve,
+  },
+  // Issue #2211 (Epic #2092, ADR-0126) — editor verification runner. Plans and runs
+  // test | targeted-test | typecheck | lint | build through keiko-verification composed with the
+  // shared enforce-or-fail-closed primitive, streaming content-free lifecycle events over SSE. Literal
+  // catalog/events paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/editor/verification/catalog",
+    handler: handleVerificationCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/verification/events",
+    handler: handleVerificationEvents,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/verification/runs",
+    handler: handleCreateVerificationRun,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/editor/verification/runs/:runId",
+    handler: handleDeleteVerificationRun,
+  },
+  // Issue #2214 (Epic #2092, ADR-0126) — the agent-authorized verification entry point. Classifies and
+  // gates an agent-triggered run through the Authority Envelope (the "execution" effect class), then
+  // reuses the SAME keiko-verification execution path as the human run affordance; returns a redacted
+  // report. A distinct literal path — never captured by the `runs/:runId` matcher above.
+  {
+    method: "POST",
+    pattern: "/api/editor/verification/agent-runs",
+    handler: handleEditorAgentVerificationRun,
   },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   {
