@@ -11,6 +11,7 @@ export interface WorkspaceSearchRequest {
   readonly query: string;
   readonly mode: WorkspaceSearchMode;
   readonly caseSensitive: boolean;
+  readonly wholeWord?: boolean | undefined;
   readonly includeGlobs: readonly string[];
   readonly excludeGlobs: readonly string[];
   readonly maxResults: number;
@@ -279,8 +280,13 @@ function isRelativeWorkspacePathShape(path: string): boolean {
 export function validateWorkspaceSearchRequest(value: unknown): ValidationResult {
   const reasons: string[] = [];
   validateSharedRequest(value, reasons);
-  if (isRecord(value) && !isPositiveIntegerWithin(value.maxResults, WORKSPACE_SEARCH_MAX_RESULTS)) {
-    reasons.push("maxResults invalid");
+  if (isRecord(value)) {
+    if (!isPositiveIntegerWithin(value.maxResults, WORKSPACE_SEARCH_MAX_RESULTS)) {
+      reasons.push("maxResults invalid");
+    }
+    if (value.wholeWord !== undefined && typeof value.wholeWord !== "boolean") {
+      reasons.push("wholeWord invalid");
+    }
   }
   return buildResult(reasons);
 }
