@@ -42,6 +42,9 @@ export {
   verifyCanonicalFeedbackReportBodyV1,
 } from "./feedback-report.js";
 
+export type { FeedbackSecurityRoutingDecisionV1 } from "./feedback-security-routing.js";
+export { feedbackSecurityRoutingDecisionV1 } from "./feedback-security-routing.js";
+
 export { assertValidRunId } from "./runid.js";
 
 export type { EnvSource } from "./secrets.js";

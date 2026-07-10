@@ -1,0 +1,30 @@
+{
+  "issue": "#2073",
+  "epic": "#2070",
+  "generatedAt": "2026-07-10T17:34:51.698Z",
+  "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:feedback-2073 -- --grep \"fidelity evidence\"",
+  "receiptCommand": ".keiko-scripts/ui-verify-receipt.sh 2073 -- npm run test:e2e:feedback-2073 -- --grep \"fidelity evidence\"",
+  "playwrightCommand": "npm run test:e2e:feedback-2073 -- --grep \"fidelity evidence\"",
+  "artifacts": [
+    "01-dark.png",
+    "02-light.png",
+    "03-dark-hc.png",
+    "04-light-hc.png",
+    "05-prefers-contrast.png",
+    "06-forced-colors.png",
+    "07-reduced-motion.png",
+    "08-responsive-500.png",
+    "feedback-fidelity-proof.json",
+    "a11y-security-proof.json",
+    "manifest.json",
+    "README.md"
+  ],
+  "notes": [
+    "Every screenshot comes from the packaged CLI UI and real loopback feedback preview route.",
+    "The prepared state shows content-free quarantine and omission notices plus exact digest.",
+    "The transient raw browser-description control is masked in screenshots and absent from JSON evidence.",
+    "Popup coverage proves one accessible about:blank reservation before delayed live revalidation and same-popup public navigation; security rejection closes it without external navigation.",
+    "08-responsive-500.png records a real 500px window resize with zero body/preview overflow and all enabled preview controls keyboard reachable."
+  ],
+  "captureCount": 8
+}

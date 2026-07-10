@@ -168,6 +168,7 @@ import {
   createAutonomousDeliveryApprovalStore,
   type AutonomousDeliveryApprovalStore,
 } from "./coding-runtime/autonomousDeliveryApprovalStore.js";
+import type { FeedbackSubmissionPort } from "./feedback-submission.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -268,6 +269,10 @@ export interface UiHandlerDeps {
     { readonly isStopped: (runId: string) => boolean } | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
+  // Issue #2073 — optional local feedback submission capability. The browser can submit only a
+  // #2072-verified canonical body through this narrow port. Production leaves it absent until the
+  // hosted intake adapter is supplied by #2074, so the UI reports an explicit unavailable outcome.
+  readonly feedbackSubmission?: FeedbackSubmissionPort | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
   // in-memory store via createInMemoryUiStore; production wiring resolves a node:sqlite file path.
   readonly store: UiStore;

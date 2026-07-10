@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
 
 type UpdateCfg = (patch: AppWindow["cfg"]) => void;
+type FocusWindow = (id: string) => void;
 
 vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
@@ -100,14 +101,28 @@ vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>Resources
 vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
 vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
 vi.mock("./panels/SettingsPanel", () => ({
-  SettingsPanel: ({ openUpdatesWindow }: { readonly openUpdatesWindow?: () => void }) => (
-    <button type="button" data-testid="settings-panel" onClick={openUpdatesWindow}>
-      SettingsPanel
-    </button>
+  SettingsPanel: ({
+    openUpdatesWindow,
+    openFeedbackWindow,
+  }: {
+    readonly openUpdatesWindow?: () => void;
+    readonly openFeedbackWindow?: () => void;
+  }) => (
+    <div data-testid="settings-panel">
+      <button type="button" data-testid="settings-updates" onClick={openUpdatesWindow}>
+        SettingsPanel
+      </button>
+      <button type="button" data-testid="settings-feedback" onClick={openFeedbackWindow}>
+        Open feedback
+      </button>
+    </div>
   ),
 }));
 vi.mock("../update/UpdateWindow", () => ({
   UpdateWindow: () => <div data-testid="update-window">UpdateWindow</div>,
+}));
+vi.mock("../feedback/FeedbackWindow", () => ({
+  FeedbackWindow: () => <div data-testid="feedback-window">FeedbackWindow</div>,
 }));
 
 vi.mock("./cards/FilesWidget", () => ({
@@ -421,7 +436,7 @@ vi.mock("../../../local-knowledge/connector-graph", () => ({
   ),
 }));
 
-import "./index";
+import { WindowChunkFallback } from "./index";
 import {
   assertWindowRenderRegistryComplete,
   missingWindowRenderTypes,
@@ -431,6 +446,7 @@ import {
 function makeCtx(): WindowRenderContext & {
   readonly updateCfg: ReturnType<typeof vi.fn<UpdateCfg>>;
   readonly openWindow: ReturnType<typeof vi.fn>;
+  readonly focusWindow: ReturnType<typeof vi.fn<FocusWindow>>;
 } {
   return {
     windowId: "ctx-window",
@@ -456,18 +472,68 @@ function makeCtx(): WindowRenderContext & {
     activeBinding: null,
     updateCfg: vi.fn<UpdateCfg>(),
     openWindow: vi.fn(() => "win-1"),
-    focusWindow: vi.fn(),
+    focusWindow: vi.fn<FocusWindow>(),
     updateWindow: vi.fn(),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
   };
 }
 
 describe("workspace widget renderer registry", () => {
+  it("announces lazy window loading as an atomic status", () => {
+    render(<WindowChunkFallback />);
+
+    expect(screen.getByRole("status", { name: "Loading..." })).toHaveAttribute(
+      "aria-atomic",
+      "true",
+    );
+  });
+
   it("registers a renderer for every declared window type", () => {
     expect(missingWindowRenderTypes()).toEqual([]);
     expect(() => {
       assertWindowRenderRegistryComplete();
     }).not.toThrow();
+  });
+
+  it("keeps one non-configurable Feedback singleton above deferred Settings focus", async () => {
+    const feedback = WIN_TYPES.feedback;
+
+    expect(feedback).toBeDefined();
+    expect(feedback.singleton).toBe(true);
+    expect(feedback.config).toBeUndefined();
+    expect(typeof feedback.render).toBe("function");
+    expect(missingWindowRenderTypes()).toEqual([]);
+
+    const ctx = makeCtx();
+    let created = 0;
+    ctx.openWindow.mockImplementation(() => {
+      if (created === 0) created += 1;
+      return "feedback-window";
+    });
+    const view = render(<>{WIN_TYPES.settings.render({}, ctx)}</>);
+    const opener = await screen.findByTestId("settings-feedback");
+    vi.useFakeTimers();
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        window.setTimeout(() => ctx.focusWindow("settings-window"), 0);
+        fireEvent.click(opener);
+        act(() => vi.runAllTimers());
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(created).toBe(1);
+    expect(ctx.openWindow.mock.calls).toEqual([["feedback"], ["feedback"]]);
+    expect(ctx.focusWindow.mock.calls).toEqual([
+      ["settings-window"],
+      ["feedback-window"],
+      ["settings-window"],
+      ["feedback-window"],
+    ]);
+
+    view.rerender(<>{feedback.render({}, ctx)}</>);
+    expect(await screen.findByTestId("feedback-window")).toHaveTextContent("FeedbackWindow");
   });
 
   it("syncs an open chat window title when the active chat is renamed", async () => {
@@ -549,7 +615,7 @@ describe("workspace widget renderer registry", () => {
     );
 
     view.rerender(<>{WIN_TYPES.settings.render({}, ctx)}</>);
-    fireEvent.click(await screen.findByTestId("settings-panel"));
+    fireEvent.click(await screen.findByTestId("settings-updates"));
     expect(ctx.openWindow).toHaveBeenCalledWith("updates", { entrypoint: "settings" });
 
     view.rerender(<>{WIN_TYPES.updates.render({}, ctx)}</>);

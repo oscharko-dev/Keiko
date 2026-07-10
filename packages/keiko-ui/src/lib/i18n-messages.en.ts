@@ -479,6 +479,10 @@ export const EN_MESSAGES = {
   "settings.updates.title": "Updates",
   "settings.updates.description": "Check for Keiko updates and install them when available.",
   "settings.updates.open": "Review updates",
+  "settings.feedback.title": "Feedback",
+  "settings.feedback.description":
+    "Preview a sanitized report before submitting it or opening GitHub.",
+  "settings.feedback.open": "Open feedback",
   "updates.notice.aria": "Keiko update notification",
   "updates.notice.title": "Update available",
   "updates.notice.criticalTitle": "Critical update available",

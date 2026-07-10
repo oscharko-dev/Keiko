@@ -62,6 +62,12 @@ describe("descriptor meta table — production assertion (epic #518 #528 / ADR-0
     expect(WIN_META.pdfCitationPreview.authority).toBe("user-confirm");
   });
 
+  it("Feedback remains transient and does not claim the evidence subsystem boundary", () => {
+    expect(WIN_META.feedback.persistence).toBe("transient");
+    expect(WIN_META.feedback.trustBoundary).toEqual(["ui", "network"]);
+    expect(WIN_META.feedback.authority).toBe("user-confirm");
+  });
+
   it("Coding Workbench config exposes supervised and autonomous preview states", () => {
     const stateField = WIN_TYPES.coding.config?.find((field) => field.key === "state");
 

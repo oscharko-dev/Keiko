@@ -35,6 +35,9 @@ export type WindowType =
   // Issue #1696 — governed package-update window. Opened only from Settings/startup notification,
   // not from the rail or command palette.
   | "updates"
+  // Epic #2070, Issue #2073 — privacy-first ordinary feedback workspace. Opened only from Settings;
+  // raw draft content remains component-local and is never carried in window configuration.
+  | "feedback"
   | "project"
   | "search"
   | "plugins"
@@ -544,6 +547,16 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 620,
     h: 640,
     min: { w: 420, h: 430 },
+    tiny: { w: 320, h: 260 },
+    singleton: true,
+  },
+  feedback: {
+    title: "Feedback",
+    icon: "newChat",
+    desc: "Review sanitized feedback",
+    w: 720,
+    h: 680,
+    min: { w: 500, h: 440 },
     tiny: { w: 320, h: 260 },
     singleton: true,
   },

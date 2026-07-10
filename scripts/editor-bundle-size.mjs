@@ -153,6 +153,14 @@ const STATIC_EXPORT_FORBIDDEN_MARKERS = [
   { label: "Monaco environment marker", marker: "MonacoEnvironment" },
   { label: "Monaco editor runtime marker", marker: "editorWorkerService" },
   { label: "Monaco worker runtime marker", marker: "EditorSimpleWorker" },
+  {
+    label: "feedback-window private-security copy",
+    marker: "Private security reporting",
+  },
+  {
+    label: "feedback-window residual-risk copy",
+    marker: "Deterministic scanning can miss proprietary",
+  },
 ];
 
 export function findForbiddenStaticExportMarkers({

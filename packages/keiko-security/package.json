@@ -23,6 +23,10 @@
       "types": "./dist/feedback-report.d.ts",
       "import": "./dist/feedback-report.js"
     },
+    "./feedback-security-routing": {
+      "types": "./dist/feedback-security-routing.d.ts",
+      "import": "./dist/feedback-security-routing.js"
+    },
     "./errors": {
       "types": "./dist/errors/index.d.ts",
       "import": "./dist/errors/index.js"

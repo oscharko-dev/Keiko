@@ -9,6 +9,7 @@ export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
+const FEATURE_I18N_USAGE_PATTERNS = [/\buseFeedbackTranslate\s*\(/];
 const USER_FACING_JSX_TEXT_PATTERN = />\s*[^<>{}]*[A-Za-z][^<>{}]*</;
 const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
@@ -52,7 +53,9 @@ function readText(repoRoot, file) {
 
 function hasI18nUsage(repoRoot, file) {
   const source = readText(repoRoot, file);
-  return I18N_USAGE_PATTERNS.some((pattern) => pattern.test(source));
+  return [...I18N_USAGE_PATTERNS, ...FEATURE_I18N_USAGE_PATTERNS].some((pattern) =>
+    pattern.test(source),
+  );
 }
 
 function nonCompliantUiFiles(repoRoot, uiFiles) {

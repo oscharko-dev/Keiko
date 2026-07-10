@@ -1,0 +1,53 @@
+{
+  "issue": 2073,
+  "epic": 2070,
+  "verdict": "PASS",
+  "proofType": "real-browser-axe-plus-live-bff-security-assertions",
+  "globalsCssSha256": "99108342dbad9c0d9c92b29583cc8164f1fd88bea20988c675fd05726d120c58",
+  "gate": "zero serious or critical axe violations in the real prepared privacy-review state",
+  "captures": [
+    {
+      "mode": "dark",
+      "violations": [],
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "light",
+      "violations": [],
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "dark-high-contrast",
+      "violations": [],
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "light-high-contrast",
+      "violations": [],
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "prefers-contrast",
+      "violations": [],
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "forced-colors",
+      "violations": [],
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "reduced-motion",
+      "violations": [],
+      "seriousOrCritical": []
+    }
+  ],
+  "assertions": {
+    "seriousOrCriticalViolationCount": 0,
+    "rawCredentialLikeDraftAbsentFromCanonicalPreview": true,
+    "dispositionMetadataContentFree": true,
+    "sendAnywayBypassAbsent": true,
+    "publicProjectionUsesSanitizedPreparedReport": true,
+    "screenshotRawDraftMasking": "Browser-description input is masked; raw draft is never evidence."
+  }
+}

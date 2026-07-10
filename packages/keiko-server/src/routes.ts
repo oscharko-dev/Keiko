@@ -288,6 +288,7 @@ import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
+import { FEEDBACK_ROUTE_GROUP } from "./feedback-routes.js";
 
 export interface ApiError {
   readonly error: {
@@ -346,6 +347,7 @@ function health(): RouteResult {
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
+  ...FEEDBACK_ROUTE_GROUP,
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
   { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
