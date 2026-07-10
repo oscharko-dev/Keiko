@@ -204,12 +204,13 @@ across all apps and cannot be restricted to Keiko alone, so this operational iso
 
 Production signing is permitted only on protected native runners for a reviewed stable tag in the
 `portable-release-signing` GitHub environment. The same native job must sign, calculate or verify the
-artifact digest, verify the reviewed publisher identity alias or certificate profile, and produce the
-platform booleans consumed by the existing signing verifier. A later job, a manually supplied Boolean,
-or the Ubuntu bundle assembler cannot assert that proof. Missing configuration, unavailable tools,
-provider failure, revoked identity, incomplete signing, failed notarization, failed stapling, failed
-assessment, or partial target completion fails closed and cannot produce or promote
-`verified-production`.
+artifact digest, verify every Windows PE against the exact reviewed subscriber identity-validation EKU
+and valid Public Trust/code-signing chain or verify macOS against the expected Developer ID identity and
+Team ID, and produce the platform booleans consumed by the existing signing verifier. A later job, a
+manually supplied Boolean, or the Ubuntu bundle assembler cannot assert that proof. Missing
+configuration, unavailable tools, provider failure, revoked identity, incomplete signing, failed
+notarization, failed stapling, failed assessment, or partial target completion fails closed and cannot
+produce or promote `verified-production`.
 
 The evidence remains the existing portable manifest and `evidence/signing-verification.json`
 projection. Provider logs, certificate bodies, notarization logs, credentials, private paths, and raw
@@ -262,8 +263,9 @@ Security review for implementation under this ADR must cover:
   owner-readable only, never passed on command lines, and removed in an always-run cleanup step
   together with the temporary keychain. Cleanup failure blocks promotion.
 - **Evidence provenance.** Native verification booleans are trusted only when produced in the same
-  protected native job as signing and bound to the artifact digest and approved identity/profile.
-  Cross-job declarations and assembly-time reconstruction are not signing proof.
+  protected native job as signing and bound to the artifact digest and approved durable platform
+  identity: the Windows subscriber EKU and Public Trust/code-signing chain, or the macOS Developer ID
+  identity and Team ID. Cross-job declarations and assembly-time reconstruction are not signing proof.
 
 ## Consequences
 
