@@ -101,17 +101,21 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      # Assemble into a NON-hidden directory: actions/upload-artifact does not descend into a
+      # dot-prefixed root path, so uploading `.portable-release-assets` finds zero files. The
+      # per-target stage uploads work because their path ends in a non-hidden leaf. The artifact
+      # NAME is unchanged, so the Release workflow (which downloads by name) is unaffected.
       - name: Download staged target artifacts
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: portable-stage-*
-          path: .portable-release-assets/artifacts
+          path: portable-release-assets/artifacts
       - name: Assemble and validate the release asset bundle
-        run: node scripts/assemble-portable-release-assets.mjs
+        run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets
       - name: Upload reviewed-candidate bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: portable-release-assets
-          path: .portable-release-assets
+          path: portable-release-assets
           if-no-files-found: error
           retention-days: 90
