@@ -1338,7 +1338,13 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(status).toHaveTextContent("2 workspace windows selected");
   });
 
-  it("does not intercept copy and paste commands from embedded window surfaces", () => {
+  it("issue #2150 — routes copy and paste commands from a focused window's chrome, not only the bare surface", () => {
+    // Completing a marquee-select (or clicking a window's header/body) leaves
+    // focus on the window's own section, never on the bare <main> surface —
+    // startMarqueeSelection calls preventDefault() on pointerdown, which
+    // suppresses the browser's default focus-on-mousedown. Copy/paste must
+    // still work from there, or it silently no-ops after the exact gesture
+    // users perform to build a selection.
     const copySelectedWindows = vi.fn(() => true);
     const pasteCopiedWindows = vi.fn(() => true);
     const wins = [appWindow({ id: "agents-1", type: "agents" })];
@@ -1352,8 +1358,35 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     const windowEl = container.querySelector<HTMLElement>(".window");
     expect(windowEl).not.toBeNull();
 
-    fireEvent.keyDown(windowEl as HTMLElement, { key: "c", ctrlKey: true });
-    fireEvent.keyDown(windowEl as HTMLElement, { key: "v", ctrlKey: true });
+    const copy = createEvent.keyDown(windowEl as HTMLElement, { key: "c", ctrlKey: true });
+    const paste = createEvent.keyDown(windowEl as HTMLElement, { key: "v", ctrlKey: true });
+    fireEvent(windowEl as HTMLElement, copy);
+    fireEvent(windowEl as HTMLElement, paste);
+
+    expect(copySelectedWindows).toHaveBeenCalledTimes(1);
+    expect(pasteCopiedWindows).toHaveBeenCalledTimes(1);
+    expect(copy.defaultPrevented).toBe(true);
+    expect(paste.defaultPrevented).toBe(true);
+  });
+
+  it("does not intercept copy and paste commands from an embedded text-entry control (ADR-0123 D6)", () => {
+    const copySelectedWindows = vi.fn(() => true);
+    const pasteCopiedWindows = vi.fn(() => true);
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, api: api({ copySelectedWindows, pasteCopiedWindows }) })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    const windowEl = container.querySelector<HTMLElement>(".window");
+    expect(windowEl).not.toBeNull();
+    const input = document.createElement("input");
+    windowEl?.appendChild(input);
+
+    fireEvent.keyDown(input, { key: "c", ctrlKey: true });
+    fireEvent.keyDown(input, { key: "v", ctrlKey: true });
 
     expect(copySelectedWindows).not.toHaveBeenCalled();
     expect(pasteCopiedWindows).not.toHaveBeenCalled();
@@ -1642,5 +1675,53 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     // Dispatch on the child; the event bubbles but target stays the child.
     fireEvent.keyDown(windowEl as HTMLElement, { key: "ArrowLeft", bubbles: true });
     expect(panBy).not.toHaveBeenCalled();
+  });
+});
+
+describe("issue #2150 — selection ring renders above every window, not per-window", () => {
+  it("renders one selection-ring overlay per selected window, z-indexed above the topmost window", () => {
+    // Two overlapping windows: "back" (lower z) is selected, "front" (higher
+    // z, unselected) overlaps it. Before the fix, a selected window's ring was
+    // painted on the window's own (lower) z-index, so an overlapping
+    // higher-z window would visually cover it — "select two windows, one
+    // highlighted, the other isn't". The ring is now a sibling overlay whose
+    // z-index is always above the topmost window's, so it can never be
+    // occluded by window stacking order.
+    const wins = [
+      appWindow({ id: "back", type: "agents", x: 40, y: 40, z: 1 }),
+      appWindow({ id: "front", type: "files", x: 60, y: 60, z: 5 }),
+    ];
+    const { container } = render(
+      <Workspace
+        ws={workspace({
+          wins,
+          selection: { focusedWindowId: "back", selectedWindowIds: ["back"] },
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const ring = screen.getByTestId("selection-ring-back");
+    expect(container.querySelector('[data-testid="selection-ring-front"]')).toBeNull();
+    const ringZIndex = Number(ring.style.zIndex);
+    const frontWindowZIndex = Number(
+      (container.querySelector<HTMLElement>('.window[data-window-id="front"]') as HTMLElement).style
+        .zIndex,
+    );
+    expect(ringZIndex).toBeGreaterThan(frontWindowZIndex);
+    expect(ringZIndex).toBeGreaterThan(1);
+  });
+
+  it("renders no selection-ring overlays when nothing is selected", () => {
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    expect(container.querySelector('[data-testid^="selection-ring-"]')).toBeNull();
   });
 });
