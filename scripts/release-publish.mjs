@@ -23,10 +23,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { URL } from "node:url";
 
 import {
+  findPortableMetadataRedactionFailures,
   PORTABLE_TARGET_NAMES,
   PORTABLE_TARGETS,
+  portableVerificationSummaryForManifest,
   readPortableManifest,
-  validatePortableManifest,
+  validatePortableCandidateManifest,
+  validatePortablePublishedManifest,
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
@@ -466,6 +469,10 @@ function sha256FileSync(path) {
   }
 }
 
+function sha256Text(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function containedPath(root, path) {
   const normalizedRoot = root.endsWith("/") ? root : `${root}/`;
   return path === root || path.startsWith(normalizedRoot);
@@ -481,6 +488,10 @@ function regularContainedFile(path, root, label, failures) {
     }
     if (!fileStat.isFile()) {
       failures.push(`${label} must point to a regular file.`);
+      return undefined;
+    }
+    if (fileStat.nlink !== 1) {
+      failures.push(`${label} must not be hard linked.`);
       return undefined;
     }
     if (fileStat.size <= 0) {
@@ -643,7 +654,7 @@ function validatePortableAssetFiles(
   if (basename(archivePath) !== target.assetName) {
     failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
   }
-  for (const failure of validatePortableManifest(manifest, { allowUnverified: false })) {
+  for (const failure of validatePortableCandidateManifest(manifest)) {
     failures.push(`${target.platformTarget}.${failure}`);
   }
   if (manifest.product?.packageVersion !== rootManifest.version) {
@@ -656,8 +667,28 @@ function validatePortableAssetFiles(
       `${target.platformTarget}.release.releaseTag must match ${releaseTag(rootManifest.version)}.`,
     );
   }
+  validateQualificationBinding(manifest, target, failures);
   validatePortableArchiveDigest(target, archivePath, archiveStat, manifest, failures);
   validatePortableEvidenceFiles(target, dirname(dirname(manifestPath)), manifest, failures);
+}
+
+function validateQualificationBinding(manifest, target, failures) {
+  const checks = [
+    ["KEIKO_PORTABLE_ASSETS_SOURCE_SHA", manifest.release?.commitSha, "source SHA"],
+    ["KEIKO_PORTABLE_ASSETS_TAG", manifest.release?.releaseTag, "release tag"],
+    ["KEIKO_PORTABLE_ASSETS_RUN_ID", manifest.provenance?.buildWorkflowRunId, "workflow run id"],
+    [
+      "KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT",
+      manifest.provenance?.buildWorkflowAttempt,
+      "workflow run attempt",
+    ],
+  ];
+  for (const [envName, actual, label] of checks) {
+    const expected = process.env[envName];
+    if (expected !== undefined && expected !== "" && String(actual) !== expected) {
+      failures.push(`${target.platformTarget}.${label} must match the downloaded workflow run.`);
+    }
+  }
 }
 
 function validatePortableArchiveDigest(target, archivePath, archiveStat, manifest, failures) {
@@ -686,9 +717,94 @@ function validatePortableEvidenceFiles(target, stageRoot, manifest, failures) {
   );
   if (checksumsPath !== undefined && existsSync(checksumsPath)) {
     const expected = `${manifest.artifact?.sha256}  ${manifest.artifact?.assetName}`;
-    if (!readFileSync(checksumsPath, "utf8").includes(expected)) {
+    if (readFileSync(checksumsPath, "utf8") !== `${expected}\n`) {
       failures.push(`${target.platformTarget}.checksumsPath must bind the archive digest.`);
     }
+  }
+  validateSigningSummary(target, stageRoot, manifest, failures);
+  validateProvenanceStatement(target, stageRoot, manifest, failures);
+  validateSbomAndLicense(target, stageRoot, manifest, failures);
+}
+
+function readEvidenceJson(path, label, failures) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    failures.push(`${label} must contain valid JSON.`);
+    return {};
+  }
+}
+
+function validateSigningSummary(target, stageRoot, manifest, failures) {
+  const path = containedLocalPath(
+    stageRoot,
+    manifest.security?.verificationSummaryPath,
+    "signing summary",
+    failures,
+  );
+  if (path === undefined || !existsSync(path)) return;
+  const actual = readEvidenceJson(path, `${target.platformTarget}.signing summary`, failures);
+  if (JSON.stringify(actual) !== JSON.stringify(portableVerificationSummaryForManifest(manifest))) {
+    failures.push(`${target.platformTarget}.signing summary must match the manifest.`);
+  }
+}
+
+function validateProvenanceStatement(target, stageRoot, manifest, failures) {
+  const path = containedLocalPath(
+    stageRoot,
+    manifest.provenance?.provenanceStatementPath,
+    "provenance statement",
+    failures,
+  );
+  if (path === undefined || !existsSync(path)) return;
+  const text = readFileSync(path, "utf8");
+  if (sha256Text(text) !== manifest.provenance?.provenanceStatementSha256) {
+    failures.push(`${target.platformTarget}.provenance statement digest must match.`);
+  }
+  const statement = readEvidenceJson(
+    path,
+    `${target.platformTarget}.provenance statement`,
+    failures,
+  );
+  const expected = portableProvenanceExpectation(target, manifest);
+  if (!Object.entries(expected).every(([key, value]) => statement[key] === value))
+    failures.push(`${target.platformTarget}.provenance statement semantics must match.`);
+}
+
+function portableProvenanceExpectation(target, manifest) {
+  return {
+    artifact: manifest.artifact?.assetName,
+    buildWorkflowAttempt: manifest.provenance?.buildWorkflowAttempt,
+    buildWorkflowRunId: manifest.provenance?.buildWorkflowRunId,
+    packageVersion: manifest.product?.packageVersion,
+    sourceCommitSha: manifest.release?.commitSha,
+    subjectDigest: manifest.artifact?.sha256,
+    target: target.platformTarget,
+  };
+}
+
+function validateSbomAndLicense(target, stageRoot, manifest, failures) {
+  const sbomPath = containedLocalPath(
+    stageRoot,
+    manifest.evidence?.sbomPath,
+    "SBOM evidence",
+    failures,
+  );
+  if (sbomPath !== undefined && existsSync(sbomPath)) {
+    const sbom = readEvidenceJson(sbomPath, `${target.platformTarget}.SBOM evidence`, failures);
+    if (sbom.bomFormat !== "CycloneDX")
+      failures.push(`${target.platformTarget}.SBOM evidence is invalid.`);
+  }
+  const licensePath = containedLocalPath(
+    stageRoot,
+    manifest.evidence?.licenseNoticePath,
+    "license evidence",
+    failures,
+  );
+  if (licensePath !== undefined && existsSync(licensePath)) {
+    const text = readFileSync(licensePath, "utf8");
+    if (findPortableMetadataRedactionFailures(text).length > 0)
+      failures.push(`${target.platformTarget}.license evidence is not redacted.`);
   }
 }
 
@@ -912,6 +1028,7 @@ function portableArchiveUploadFiles(assets) {
     addUploadPath(asset.archivePath, asset.archiveAssetName, names, paths);
     expected.push({
       assetName: asset.archiveAssetName,
+      expectedSha256: asset.manifest.artifact.sha256,
       expectedSize: asset.manifest.artifact.sizeBytes,
       firstClassArchive: true,
     });
@@ -929,6 +1046,7 @@ function portableEvidenceUploadFiles(assets, root) {
       addUploadPath(destination, evidence.assetName, names, paths);
       expected.push({
         assetName: evidence.assetName,
+        expectedSha256: sha256FileSync(destination),
         expectedSize: statSync(destination).size,
         firstClassArchive: false,
       });
@@ -983,9 +1101,10 @@ function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
     fail(`${asset.archiveAssetName} must have a remote GitHub asset id before evidence upload.`);
   }
   const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id);
-  const failures = validatePortableManifest(manifest, { allowUnverified: false }).map(
-    (failure) => `${asset.platformTarget}.${failure}`,
-  );
+  const failures = validatePortablePublishedManifest(manifest, {
+    assetId: remote.id,
+    releaseId,
+  }).map((failure) => `${asset.platformTarget}.${failure}`);
   if (failures.length > 0) {
     fail(`portable manifest binding failed:\n  - ${failures.join("\n  - ")}`);
   }
@@ -1063,28 +1182,30 @@ function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
   for (const expected of expectedAssets) {
     const url = remoteByName.get(expected.assetName)?.browser_download_url;
     if (typeof url !== "string") fail(`${expected.assetName} has no browser_download_url.`);
-    smokePortableDownloadUrl(expected.assetName, url);
+    smokePortableDownloadUrl(expected, url);
   }
 }
 
-function smokePortableDownloadUrl(assetName, url) {
-  const result = commandResult(
-    "curl",
-    [
-      "--fail",
-      "--silent",
-      "--show-error",
-      "--location",
-      "--range",
-      "0-0",
-      "--output",
-      "/dev/null",
-      url,
-    ],
-    { env: networkEnvironment() },
-  );
-  if (result.error !== undefined || result.status !== 0) {
-    fail(`unauthenticated portable asset download failed for ${assetName}.`);
+function smokePortableDownloadUrl(expected, url) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
+  const destination = join(root, expected.assetName);
+  try {
+    const result = commandResult(
+      "curl",
+      ["--fail", "--silent", "--show-error", "--location", "--output", destination, url],
+      { env: networkEnvironment() },
+    );
+    if (result.error !== undefined || result.status !== 0) {
+      fail(`unauthenticated portable asset download failed for ${expected.assetName}.`);
+    }
+    if (
+      statSync(destination).size !== expected.expectedSize ||
+      sha256FileSync(destination) !== expected.expectedSha256
+    ) {
+      fail(`downloaded portable asset bytes do not match ${expected.assetName}.`);
+    }
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 }
 

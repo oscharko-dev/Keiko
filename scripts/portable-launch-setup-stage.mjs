@@ -1,7 +1,11 @@
 import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { PORTABLE_TARGETS, validatePortableManifest } from "./portable-runtime.mjs";
+import {
+  PORTABLE_TARGETS,
+  validatePortableCandidateManifest,
+  validatePortableStagingManifest,
+} from "./portable-runtime.mjs";
 
 function fail(message) {
   throw new Error(`portable launch/setup smoke failed: ${message}`);
@@ -60,7 +64,10 @@ function validateTargetRoot(targetRoot, target, options) {
   for (const [label, path] of Object.entries(layout))
     assertFile(path, `${target.platformTarget} ${label}`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const failures = validatePortableManifest(manifest, options);
+  const failures =
+    options.context === "candidate"
+      ? validatePortableCandidateManifest(manifest)
+      : validatePortableStagingManifest(manifest);
   if (failures.length > 0)
     fail(`${target.platformTarget} manifest invalid:\n  - ${failures.join("\n  - ")}`);
   validateSetupManifest(layout.setupManifest, target);
@@ -101,6 +108,6 @@ export function validateStageTargets(stageRoot, targetNames) {
     fail("stage root is not a directory");
   if (targetNames.length === 0) fail("at least one stage target is required");
   return targetNames.map((name) => {
-    return validatePortableTargetRoot(join(stageRoot, name), name, { allowUnverified: true });
+    return validatePortableTargetRoot(join(stageRoot, name), name, { context: "staging" });
   });
 }

@@ -49,7 +49,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PORTABLE_TARGETS } from "../portable-runtime.mjs";
+import { portableVerificationSummaryForManifest, PORTABLE_TARGETS } from "../portable-runtime.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -97,7 +97,15 @@ function portableManifest(target, archivePath, assetId) {
   const archiveBytes = readFileSync(archivePath);
   const archiveSha256 = digestFor(archiveBytes);
   const archiveSize = statSync(archivePath).size;
-  const provenanceText = `${target.platformTarget} provenance\n`;
+  const provenanceText = `${JSON.stringify({
+    artifact: target.assetName,
+    buildWorkflowAttempt: 1,
+    buildWorkflowRunId: 123456789,
+    packageVersion: RELEASE_VERSION,
+    sourceCommitSha: HEAD_SHA,
+    subjectDigest: archiveSha256,
+    target: target.platformTarget,
+  })}\n`;
   const provenanceSha256 = digestFor(provenanceText);
   const notarizationRequired = target.nodePlatform === "darwin";
   const verificationChecks = targetVerificationChecks(target);
@@ -129,7 +137,7 @@ function portableManifestObject(
   return {
     schemaVersion: 1,
     product: portableProduct(),
-    release: { releaseId: 123456789, releaseTag, stable: true, commitSha: HEAD_SHA },
+    release: { releaseId: 0, releaseTag, stable: true, commitSha: HEAD_SHA },
     artifact: portableArtifact(target, assetId, archiveSize, archiveSha256),
     provenance: portableProvenance(provenanceSha256),
     runtime: portableRuntime(target),
@@ -276,7 +284,7 @@ function portableReviewedBinding(
   security,
 ) {
   return {
-    releaseId: 123456789,
+    releaseId: 0,
     releaseTag: `v${RELEASE_VERSION}`,
     assetId,
     assetName: target.assetName,
@@ -382,6 +390,7 @@ function ghStubBody() {
     "      }",
     "    }",
     "    byName.set(name, {",
+    "      content: readFileSync(path).toString('base64'),",
     "      id,",
     "      name,",
     "      size: readFileSync(path).byteLength,",
@@ -417,7 +426,18 @@ function makeStub(binDir, name, body, logFile, stateFile) {
 }
 
 function curlStubBody() {
-  return ['log("curl");', "process.exit(0);"].join("\n");
+  return [
+    'log("curl");',
+    'const outputIndex = argv.indexOf("--output");',
+    'const output = outputIndex >= 0 ? argv[outputIndex + 1] : "";',
+    'const name = argv.at(-1).split("/").at(-1);',
+    "const asset = (state().uploadedAssets || []).find((entry) => entry.name === name);",
+    "if (!asset || output.length === 0) process.exit(2);",
+    'const bytes = Buffer.from(asset.content, "base64");',
+    'if (state().tamperRemoteDownloads && name.endsWith(".zip") && bytes.length > 0) bytes[0] ^= 0xff;',
+    "writeFileSync(output, bytes);",
+    "process.exit(0);",
+  ].join("\n");
 }
 
 function writePortableAssetsFixture(root, options = {}) {
@@ -430,7 +450,7 @@ function writePortableAssetsFixture(root, options = {}) {
     mkdirSync(join(targetRoot, "evidence"), { recursive: true });
     mkdirSync(dirname(manifestPath), { recursive: true });
     writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
-    const { manifest, provenanceText } = portableManifest(target, archivePath, 1000 + index);
+    const { manifest, provenanceText } = portableManifest(target, archivePath, 0);
     writePortableEvidence(targetRoot, manifest, provenanceText);
     if (options.symlinkEvidenceOutsideRoot === true && index === 0) {
       const sbomPath = join(targetRoot, "evidence", "sbom.cdx.json");
@@ -457,7 +477,7 @@ function writePortableEvidence(targetRoot, manifest, provenanceText) {
   );
   writeFileSync(
     join(targetRoot, "evidence", "signing-verification.json"),
-    JSON.stringify({ status: "verified-production" }) + "\n",
+    JSON.stringify(portableVerificationSummaryForManifest(manifest)) + "\n",
   );
   writeFileSync(join(targetRoot, "evidence", "provenance.intoto.jsonl"), provenanceText);
 }
@@ -684,6 +704,23 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("portable upload failed");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("rejects same-size remote tampering before npm publish or dist-tag mutation", () => {
+      const viewBody = [
+        'if (argv.includes("version")) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
+        'if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { published: false, tamperRemoteDownloads: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("downloaded portable asset bytes do not match");
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 
     it("rejects symlinked portable evidence before upload or npm publish", () => {

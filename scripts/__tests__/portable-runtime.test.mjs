@@ -20,7 +20,10 @@ import {
   PORTABLE_TARGETS,
   safeArchiveEntryPath,
   sha256File,
+  validatePortableCandidateManifest,
   validatePortableManifest,
+  validatePortablePublishedManifest,
+  validatePortableStagingManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
 import {
@@ -29,6 +32,7 @@ import {
   isCrossDeviceError,
   moveStagedDirectory,
 } from "../stage-portable-runtime.mjs";
+import { validatePortableReleaseSet } from "../assemble-portable-release-assets.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -384,6 +388,10 @@ function setVerificationState(candidate, options = {}) {
 }
 
 function writeManifestFixture(candidate, dir) {
+  candidate.release.releaseId = 0;
+  candidate.artifact.assetId = 0;
+  syncReviewedBinding(candidate);
+  candidate.releaseImpact.reviewedBinding.releaseId = 0;
   const stageRoot = join(dir, "portable-runtime");
   const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
   mkdirSync(join(stageRoot, "manifest"), { recursive: true });
@@ -416,10 +424,12 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
       nodeSha256: nodeArchive.sha256,
       nodeVersion: NODE_VERSION,
       outDir,
-      releaseId: 123456789,
+      releaseId: 0,
       releaseTag: ROOT_RELEASE_TAG,
       sidecarRuntimeSpecs,
       target,
+      workflowRunAttempt: 1,
+      workflowRunId: 123456789,
     },
     {
       buildPrimaryLauncher: writePrimaryLauncherFixture,
@@ -568,7 +578,7 @@ function stageArgs(dir, platformTarget, nodeArchive, sidecarSpec) {
     "--commit-sha",
     COMMIT_SHA,
     "--release-id",
-    "123456789",
+    "0",
     "--release-tag",
     ROOT_RELEASE_TAG,
     "--node-cache-dir",
@@ -623,6 +633,54 @@ describe("verifySha256File", () => {
 });
 
 describe("validatePortableManifest", () => {
+  it("separates staging, unpublished candidate, and API-bound published identities", () => {
+    const candidate = manifest();
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+
+    expect(validatePortableCandidateManifest(candidate)).toEqual([]);
+    expect(validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 })).toEqual(
+      expect.arrayContaining([
+        "release.releaseId: must be greater than 0",
+        "artifact.assetId: must be greater than 0",
+      ]),
+    );
+
+    candidate.release.releaseId = 123;
+    candidate.artifact.assetId = 456;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 123;
+    expect(validatePortableCandidateManifest(candidate).join("\n")).toContain(
+      "artifact.assetId: must be 0 before GitHub Release upload",
+    );
+    expect(validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 })).toEqual(
+      [],
+    );
+    expect(validatePortablePublishedManifest(candidate, undefined)).toContain(
+      "validation.apiIdentity: must be a positive GitHub API snapshot",
+    );
+    expect(
+      validatePortablePublishedManifest(candidate, { assetId: 999, releaseId: 123 }),
+    ).toContain("artifact.assetId: does not match the GitHub API snapshot");
+
+    setVerificationState(candidate, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate)).toEqual([]);
+  });
+
   it("accepts a complete production manifest", () => {
     expect(validatePortableManifest(manifest())).toEqual([]);
   });
@@ -755,7 +813,11 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(candidate).join("\n")).toContain(
       "security.signatureVerified: must be true",
     );
-    expect(validatePortableManifest(candidate, { allowUnverified: true })).toEqual([]);
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate)).toEqual([]);
   });
 
   it("reserves missing release asset ids for explicit unverified staging mode", () => {
@@ -774,7 +836,10 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(candidate).join("\n")).toContain(
       "artifact.assetId: must be greater than 0",
     );
-    expect(validatePortableManifest(candidate, { allowUnverified: true })).toEqual([]);
+    candidate.release.releaseId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate)).toEqual([]);
   });
 
   it("requires explicit verification policy metadata for production manifests", () => {
@@ -812,6 +877,107 @@ describe("validatePortableManifest", () => {
     expect(failures).toContain("releaseImpact.reviewedBinding.releaseId");
     expect(failures).toContain("releaseImpact.reviewedBinding.checksumsPath");
     expect(failures).toContain("releaseImpact.reviewedBinding.signatureKind");
+  });
+});
+
+describe("validatePortableReleaseSet", () => {
+  function candidateSet() {
+    return PORTABLE_TARGETS.map((target) => {
+      const candidate = manifest();
+      setManifestTarget(candidate, target.platformTarget);
+      setVerificationState(candidate);
+      candidate.release.releaseId = 0;
+      candidate.artifact.assetId = 0;
+      syncReviewedBinding(candidate);
+      candidate.releaseImpact.reviewedBinding.releaseId = 0;
+      return candidate;
+    });
+  }
+
+  const expected = {
+    commitSha: COMMIT_SHA,
+    releaseTag: ROOT_RELEASE_TAG,
+    runAttempt: 1,
+    runId: 123456789,
+    version: ROOT_PACKAGE_VERSION,
+  };
+
+  it("accepts exactly the three canonical verified candidates", () => {
+    expect(validatePortableReleaseSet(candidateSet(), expected)).toEqual([]);
+  });
+
+  it.each([
+    ["missing", (set) => set.slice(1), "exactly three"],
+    ["extra", (set) => [...set, manifest()], "exactly three"],
+    ["duplicate", (set) => [...set.slice(0, 2), set[0]], "duplicate portable target"],
+    [
+      "case collision",
+      (set) => {
+        set[0].artifact.platformTarget = "Windows-X64";
+        return set;
+      },
+      "unsupported or relabelled",
+    ],
+    [
+      "relabelled",
+      (set) => {
+        set[0].artifact.platformTarget = "linux-x64";
+        return set;
+      },
+      "unsupported or relabelled",
+    ],
+    [
+      "architecture drift",
+      (set) => {
+        set[2].runtime.nodeArchitecture = "arm64";
+        return set;
+      },
+      "runtime.nodeArchitecture",
+    ],
+    [
+      "SHA drift",
+      (set) => {
+        set[2].release.commitSha = "f".repeat(40);
+        return set;
+      },
+      "release.commitSha",
+    ],
+    [
+      "version drift",
+      (set) => {
+        set[2].product.packageVersion = "9.9.9";
+        return set;
+      },
+      "product.packageVersion",
+    ],
+    [
+      "tag drift",
+      (set) => {
+        set[2].release.releaseTag = "v9.9.9";
+        return set;
+      },
+      "release.releaseTag",
+    ],
+    [
+      "run id drift",
+      (set) => {
+        set[2].provenance.buildWorkflowRunId = 222;
+        return set;
+      },
+      "buildWorkflowRunId",
+    ],
+    [
+      "run drift",
+      (set) => {
+        set[2].provenance.buildWorkflowAttempt = 2;
+        return set;
+      },
+      "buildWorkflowAttempt",
+    ],
+  ])("rejects %s target sets", (_name, mutate, message) => {
+    expect(validatePortableReleaseSet(mutate(candidateSet()), expected).join("\n")).toContain(
+      message,
+    );
   });
 });
 
@@ -1055,7 +1221,7 @@ describe("verify-portable-runtime-signing", () => {
       "verified-production",
       "verified-production",
     ]);
-    expect(validatePortableManifest(manifestAfter)).toEqual([]);
+    expect(validatePortableCandidateManifest(manifestAfter)).toEqual([]);
   });
 
   it("fails production verification when a sidecar remains unverifiable", () => {
@@ -1089,7 +1255,7 @@ describe("verify-portable-runtime-signing", () => {
     const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifestAfter.security.verificationStatus).toBe("verified-production");
     expect(manifestAfter.sidecarRuntimes[0].signing.verificationStatus).toBe("verification-failed");
-    expect(validatePortableManifest(manifestAfter).join("\n")).toContain(
+    expect(validatePortableCandidateManifest(manifestAfter).join("\n")).toContain(
       "sidecarRuntimes[0].signing.signatureVerified: must be true",
     );
   });
@@ -1672,7 +1838,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1703,7 +1869,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1734,7 +1900,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1766,7 +1932,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1795,7 +1961,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       `${ROOT_RELEASE_TAG}-beta.1`,
       "--node-cache-dir",

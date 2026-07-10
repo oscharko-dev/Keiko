@@ -18,7 +18,7 @@ import {
 import { join, posix, relative, resolve } from "node:path";
 import { URL } from "node:url";
 
-import { validatePortableManifest } from "./portable-runtime.mjs";
+import { validatePortableCandidateManifest } from "./portable-runtime.mjs";
 import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
 import {
   assertWindowsProductionVerificationInput,
@@ -297,7 +297,7 @@ async function finalizeCommand(options) {
     resolve(import.meta.dirname, ".."),
   );
   const finalManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const failures = validatePortableManifest(finalManifest);
+  const failures = validatePortableCandidateManifest(finalManifest);
   if (
     failures.length > 0 ||
     finalManifest.security.verificationStatus !== "verified-production" ||

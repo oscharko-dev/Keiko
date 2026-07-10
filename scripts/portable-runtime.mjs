@@ -56,6 +56,12 @@ export const PORTABLE_VERIFICATION_STATUSES = Object.freeze([
   "verified-production",
   "verification-failed",
 ]);
+export const PORTABLE_MANIFEST_VALIDATION_CONTEXTS = Object.freeze([
+  "staging",
+  "candidate",
+  "published",
+  "published-contract",
+]);
 export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
   "credential-unavailable",
   "macos-assessment-unverified",
@@ -225,9 +231,10 @@ function validateProduct(manifest, failures) {
   stringAt(product, "packageVersion", "product", failures);
 }
 
-function validateRelease(manifest, failures) {
+function validateRelease(manifest, failures, options) {
   const release = recordAt(manifest, "release", "manifest", failures);
-  numberAt(release, "releaseId", "release", failures);
+  const releaseId = numberAt(release, "releaseId", "release", failures);
+  validateReleaseIdentity(releaseId, failures, options);
   stringAt(release, "releaseTag", "release", failures);
   if (!booleanAt(release, "stable", "release", failures)) {
     push(failures, "release.stable", "must be true for portable v1");
@@ -236,15 +243,25 @@ function validateRelease(manifest, failures) {
   if (!COMMIT_PATTERN.test(commitSha)) push(failures, "release.commitSha", "must be a commit SHA");
 }
 
+function validateReleaseIdentity(releaseId, failures, options) {
+  if (options.context === "staging" || options.context === "candidate") {
+    if (releaseId !== 0)
+      push(failures, "release.releaseId", "must be 0 before GitHub Release upload");
+    return;
+  }
+  if (releaseId === 0) push(failures, "release.releaseId", "must be greater than 0");
+  if (options.apiIdentity !== undefined && releaseId !== options.apiIdentity.releaseId) {
+    push(failures, "release.releaseId", "does not match the GitHub API snapshot");
+  }
+}
+
 function validateArtifact(manifest, failures, options) {
   const artifact = recordAt(manifest, "artifact", "manifest", failures);
   const targetName = stringAt(artifact, "platformTarget", "artifact", failures);
   const target = portableTargetByName(targetName);
   if (target === undefined) push(failures, "artifact.platformTarget", "is unsupported");
   const assetId = numberAt(artifact, "assetId", "artifact", failures);
-  if (assetId === 0 && !options.allowUnverified) {
-    push(failures, "artifact.assetId", "must be greater than 0");
-  }
+  validateAssetIdentity(assetId, failures, options);
   if (numberAt(artifact, "sizeBytes", "artifact", failures) === 0) {
     push(failures, "artifact.sizeBytes", "must be greater than 0");
   }
@@ -260,6 +277,17 @@ function validateArtifact(manifest, failures, options) {
   }
 }
 
+function validateAssetIdentity(assetId, failures, options) {
+  if (options.context === "staging" || options.context === "candidate") {
+    if (assetId !== 0) push(failures, "artifact.assetId", "must be 0 before GitHub Release upload");
+    return;
+  }
+  if (assetId === 0) push(failures, "artifact.assetId", "must be greater than 0");
+  if (options.apiIdentity !== undefined && assetId !== options.apiIdentity.assetId) {
+    push(failures, "artifact.assetId", "does not match the GitHub API snapshot");
+  }
+}
+
 function validateProvenance(manifest, failures, options) {
   const provenance = recordAt(manifest, "provenance", "manifest", failures);
   const commitSha = stringAt(provenance, "sourceCommitSha", "provenance", failures);
@@ -268,8 +296,14 @@ function validateProvenance(manifest, failures, options) {
   stringAt(provenance, "rootPackageVersion", "provenance", failures);
   digestAt(provenance, "rootPackageTarballSha256", "provenance", failures, options);
   digestAt(provenance, "packagedAppTreeSha256", "provenance", failures, options);
-  numberAt(provenance, "buildWorkflowRunId", "provenance", failures);
-  numberAt(provenance, "buildWorkflowAttempt", "provenance", failures);
+  const runId = numberAt(provenance, "buildWorkflowRunId", "provenance", failures);
+  const runAttempt = numberAt(provenance, "buildWorkflowAttempt", "provenance", failures);
+  if (options.context !== "staging" && runId === 0) {
+    push(failures, "provenance.buildWorkflowRunId", "must be greater than 0");
+  }
+  if (options.context !== "staging" && runAttempt === 0) {
+    push(failures, "provenance.buildWorkflowAttempt", "must be greater than 0");
+  }
   relativePathAt(provenance, "provenanceStatementPath", "provenance", failures);
   digestAt(provenance, "provenanceStatementSha256", "provenance", failures, options);
 }
@@ -473,7 +507,7 @@ function validateSecurity(manifest, failures, options) {
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, "security.signatureKind", `must be ${target.signatureKind}`);
   }
-  if (!options.allowUnverified && !signatureVerified) {
+  if (options.context !== "staging" && !signatureVerified) {
     push(failures, "security.signatureVerified", "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures);
@@ -567,7 +601,7 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, `${signingPath}.signatureKind`, `must be ${target.signatureKind}`);
   }
-  if (!options.allowUnverified && !verified) {
+  if (options.context !== "staging" && !verified) {
     push(failures, `${signingPath}.signatureVerified`, "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures, signingPath);
@@ -653,7 +687,7 @@ function validateSidecarNotarization(target, required, verified, failures, optio
   if (required !== macosTarget) {
     push(failures, `${path}.signing.notarizationRequired`, `must be ${String(macosTarget)}`);
   }
-  if (macosTarget && !options.allowUnverified && !verified) {
+  if (macosTarget && options.context !== "staging" && !verified) {
     push(failures, `${path}.signing.notarizationVerified`, "must be true for macOS targets");
   }
   if (!macosTarget && verified) {
@@ -725,7 +759,7 @@ function validateTargetNotarization(target, required, verified, failures, option
   if (required !== macosTarget) {
     push(failures, "security.notarizationRequired", `must be ${String(macosTarget)}`);
   }
-  if (macosTarget && !options.allowUnverified && !verified) {
+  if (macosTarget && options.context !== "staging" && !verified) {
     push(failures, "security.notarizationVerified", "must be true for macOS targets");
   }
   if (!macosTarget && verified) {
@@ -880,7 +914,7 @@ function validateUpdatePredicates(manifest, update, failures, options) {
       );
     }
   }
-  if (!options.allowUnverified && !verified) {
+  if (options.context !== "staging" && !verified) {
     push(
       failures,
       "updateEligibility.requiredPredicates.platformSignatureLocallyVerified",
@@ -984,27 +1018,66 @@ function scanForbiddenString(value, path, failures) {
   }
 }
 
+function normalizedValidationOptions(options) {
+  const context = options.context ?? "published-contract";
+  return { ...options, context };
+}
+
+function validateApiIdentity(options, failures) {
+  if (options.context !== "published") return;
+  if (
+    !isRecord(options.apiIdentity) ||
+    !Number.isSafeInteger(options.apiIdentity.releaseId) ||
+    options.apiIdentity.releaseId <= 0 ||
+    !Number.isSafeInteger(options.apiIdentity.assetId) ||
+    options.apiIdentity.assetId <= 0
+  ) {
+    push(failures, "validation.apiIdentity", "must be a positive GitHub API snapshot");
+  }
+}
+
 export function validatePortableManifest(manifest, options = {}) {
+  const normalized = normalizedValidationOptions(options);
   const failures = [];
   if (!isRecord(manifest)) return ["manifest: must be an object"];
+  if (!PORTABLE_MANIFEST_VALIDATION_CONTEXTS.includes(normalized.context)) {
+    return ["validation.context: is unsupported"];
+  }
+  validateApiIdentity(normalized, failures);
   if (manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION)
     push(failures, "schemaVersion", "must be 1");
   validateProduct(manifest, failures);
-  validateRelease(manifest, failures);
-  validateArtifact(manifest, failures, options);
-  validateProvenance(manifest, failures, options);
-  validateRuntime(manifest, failures, options);
-  validateSidecarRuntimes(manifest, failures, options);
+  validateRelease(manifest, failures, normalized);
+  validateArtifact(manifest, failures, normalized);
+  validateProvenance(manifest, failures, normalized);
+  validateRuntime(manifest, failures, normalized);
+  validateSidecarRuntimes(manifest, failures, normalized);
   validatePackageSurface(manifest, failures);
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
   validateStateExclusion(manifest, failures);
-  validateSecurity(manifest, failures, options);
+  validateSecurity(manifest, failures, normalized);
   validateEvidence(manifest, failures);
   validateReleaseImpact(manifest, failures);
-  validateUpdateEligibility(manifest, failures, options);
+  validateUpdateEligibility(manifest, failures, normalized);
   scanForbidden(manifest, "manifest", failures);
   return failures;
+}
+
+export function validatePortableStagingManifest(manifest, options = {}) {
+  return validatePortableManifest(manifest, { ...options, context: "staging" });
+}
+
+export function validatePortableCandidateManifest(manifest, options = {}) {
+  return validatePortableManifest(manifest, { ...options, context: "candidate" });
+}
+
+export function validatePortablePublishedManifest(manifest, apiIdentity, options = {}) {
+  return validatePortableManifest(manifest, {
+    ...options,
+    apiIdentity,
+    context: "published",
+  });
 }
 
 export function findPortableMetadataRedactionFailures(value, path = "metadata") {

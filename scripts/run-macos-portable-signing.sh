@@ -19,7 +19,7 @@ sign_file() {
   local relative="$1" role="$2" path="$payload/$relative" entitlements
   entitlements="native/portable-launcher/macos-entitlements.plist"
   if [[ "$role" == "node-runtime" ]]; then entitlements="native/portable-launcher/macos-node-entitlements.plist"; fi
-  scripts/check-macos-macho-architecture.sh "$path" "$required_arch"
+  if [[ -f "$path" ]]; then scripts/check-macos-macho-architecture.sh "$path" "$required_arch"; fi
   codesign --force --options runtime --timestamp --keychain "$KEIKO_KEYCHAIN_PATH" \
     --entitlements "$entitlements" --sign "$APPLE_DEVELOPER_ID_IDENTITY" "$path" >/dev/null 2>&1
 }

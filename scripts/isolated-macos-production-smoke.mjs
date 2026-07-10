@@ -12,7 +12,7 @@ import {
   portableVerificationSummaryForManifest,
   readPortableManifest,
   sha256File,
-  validatePortableManifest,
+  validatePortableCandidateManifest,
 } from "./portable-runtime.mjs";
 
 const TARGETS = new Set(["macos-arm64", "macos-x64"]);
@@ -51,7 +51,7 @@ function assertVerifiedManifest(manifest, target) {
   if (!TARGETS.has(target) || descriptor === undefined) fail("target is invalid");
   if (manifest.artifact?.platformTarget !== target) fail("manifest target is invalid");
   if (manifest.artifact.assetName !== descriptor.assetName) fail("manifest asset is invalid");
-  if (validatePortableManifest(manifest).length > 0) fail("manifest is invalid");
+  if (validatePortableCandidateManifest(manifest).length > 0) fail("manifest is invalid");
   if (manifest.security?.verificationStatus !== "verified-production")
     fail("artifact is not verified production");
 }

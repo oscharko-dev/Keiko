@@ -8,7 +8,8 @@ import {
   portableTargetByName,
   portableVerificationSummaryForManifest,
   readPortableManifest,
-  validatePortableManifest,
+  validatePortableCandidateManifest,
+  validatePortableStagingManifest,
 } from "./portable-runtime.mjs";
 import {
   PortableVerificationInputError,
@@ -277,9 +278,12 @@ export function runPortableRuntimeSigningVerify(argv = process.argv.slice(2)) {
     sidecarStates,
   );
   writeOutputs(options.manifest, manifest);
-  const failures = validatePortableManifest(manifest, { allowUnverified: true });
-  if (failures.length > 0) fail(failures.join("\n  - "));
   if (options.policy === "production") assertProductionVerified(manifest);
+  const failures =
+    options.policy === "production"
+      ? validatePortableCandidateManifest(manifest)
+      : validatePortableStagingManifest(manifest);
+  if (failures.length > 0) fail(failures.join("\n  - "));
   console.log(
     `portable-signing verify: PASS ${manifest.artifact.platformTarget} ${manifest.security.verificationStatus}`,
   );
