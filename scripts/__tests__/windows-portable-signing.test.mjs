@@ -12,6 +12,7 @@ import {
   inventoryWindowsPortablePeFiles,
   rebindArchive,
 } from "../windows-portable-signing.mjs";
+import { assertWindowsProductionVerificationInput } from "../windows-portable-verification-input.mjs";
 
 const roots = [];
 
@@ -159,5 +160,35 @@ describe("Windows portable PE signing inventory", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("windows-portable-signing: payload root is missing");
     expect(result.stderr).not.toContain(privatePath);
+  });
+
+  it("blocks false, missing, or incomplete finalizer inputs before production promotion", () => {
+    const manifest = { sidecarRuntimes: [{ name: "worker" }] };
+    const verified = {
+      reasonCodes: [],
+      verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+      sidecarRuntimes: [
+        {
+          name: "worker",
+          verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+        },
+      ],
+    };
+    expect(() => assertWindowsProductionVerificationInput(verified, manifest)).not.toThrow();
+    expect(() => assertWindowsProductionVerificationInput(undefined, manifest)).toThrow(
+      /input is incomplete/u,
+    );
+    expect(() =>
+      assertWindowsProductionVerificationInput(
+        {
+          ...verified,
+          verificationChecks: { publisherChainVerified: false, timestampVerified: true },
+        },
+        manifest,
+      ),
+    ).toThrow(/did not succeed/u);
+    expect(() =>
+      assertWindowsProductionVerificationInput({ ...verified, sidecarRuntimes: [] }, manifest),
+    ).toThrow(/sidecar verification input is incomplete/u);
   });
 });

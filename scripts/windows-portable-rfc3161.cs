@@ -228,22 +228,22 @@ public static class WindowsPortableRfc3161
 
     private static bool HasExactTimestampEku(X509Certificate2 certificate)
     {
+        X509EnhancedKeyUsageExtension? found = null;
         foreach (X509Extension extension in certificate.Extensions)
         {
             if (extension.Oid?.Value != "2.5.29.37")
             {
                 continue;
             }
-            var eku = new X509EnhancedKeyUsageExtension(extension, extension.Critical);
-            foreach (Oid usage in eku.EnhancedKeyUsages)
+            if (found != null || !extension.Critical)
             {
-                if (usage.Value == "1.3.6.1.5.5.7.3.8")
-                {
-                    return true;
-                }
+                return false;
             }
+            found = new X509EnhancedKeyUsageExtension(extension, extension.Critical);
         }
-        return false;
+        return found != null &&
+            found.EnhancedKeyUsages.Count == 1 &&
+            found.EnhancedKeyUsages[0].Value == "1.3.6.1.5.5.7.3.8";
     }
 
     private static byte[] ReadAuthenticodeCms(string path)

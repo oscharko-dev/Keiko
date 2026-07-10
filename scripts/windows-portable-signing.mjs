@@ -19,6 +19,10 @@ import { basename, join, posix, relative, resolve } from "node:path";
 import { URL } from "node:url";
 
 import { hashDirectoryTree, sha256File, validatePortableManifest } from "./portable-runtime.mjs";
+import {
+  assertWindowsProductionVerificationInput,
+  WindowsVerificationInputError,
+} from "./windows-portable-verification-input.mjs";
 
 const MAX_FILES = 50_000;
 const MAX_DEPTH = 32;
@@ -36,7 +40,8 @@ function fail(message) {
 }
 
 export function redactedWindowsSigningError(error) {
-  return error instanceof BoundedWindowsSigningError
+  return error instanceof BoundedWindowsSigningError ||
+    error instanceof WindowsVerificationInputError
     ? error.message
     : "windows-portable-signing: redacted failure";
 }
@@ -325,6 +330,9 @@ async function finalizeCommand(options) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   if (manifest.artifact?.platformTarget !== WINDOWS_TARGET)
     fail("manifest target is not Windows x64");
+  const verificationInputPath = resolve(required(options, "verification-input"));
+  const verificationInput = JSON.parse(readFileSync(verificationInputPath, "utf8"));
+  assertWindowsProductionVerificationInput(verificationInput, manifest);
   await rebindArchive(stageRoot, manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(
@@ -336,7 +344,7 @@ async function finalizeCommand(options) {
       "--policy",
       "production",
       "--verification-input",
-      resolve(required(options, "verification-input")),
+      verificationInputPath,
     ],
     resolve(import.meta.dirname, ".."),
   );

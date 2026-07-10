@@ -8,6 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "windows-portable-native-policy.ps1")
 
 function Fail-Bounded([string]$Reason) {
   throw "windows-portable-signing: $Reason"
@@ -67,10 +68,8 @@ if ($inventory.schemaVersion -ne 1 -or $inventory.target -ne "windows-x64" -or $
   Fail-Bounded "PE inventory is invalid"
 }
 
-$publisherVerified = $true
-$timestampVerified = $true
-$verifiedCount = 0
 $inventoryPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$nativeEntries = @()
 foreach ($entry in $inventory.files) {
   if ($entry.relativePath -notmatch '^[^\\/:*?"<>|]+(?:/[^\\/:*?"<>|]+)*$') {
     Fail-Bounded "PE inventory contains an unsafe path"
@@ -84,30 +83,26 @@ foreach ($entry in $inventory.files) {
     Fail-Bounded "an inventoried PE file is missing"
   }
 
-  try {
-    & signtool.exe verify /pa /all /tw /v $candidate *> $null
-    $signtoolValid = $LASTEXITCODE -eq 0
-    $signature = Get-AuthenticodeSignature -LiteralPath $candidate
-    $signer = $signature.SignerCertificate
-    $publisherValid =
-      $signtoolValid -and
-      $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
-      $null -ne $signer -and
-      (Test-CertificateChain $signer) -and
-      (Test-Eku $signer "1.3.6.1.5.5.7.3.3") -and
-      (Test-Eku $signer $ExpectedIdentityEku)
-    $timestampValid = Test-Rfc3161Timestamp $candidate
-  }
-  catch {
-    $publisherValid = $false
-    $timestampValid = $false
-  }
-  $publisherVerified = $publisherVerified -and $publisherValid
-  $timestampVerified = $timestampVerified -and $timestampValid
   if (-not $inventoryPaths.Add($entry.relativePath)) { Fail-Bounded "PE inventory contains duplicates" }
-  $verifiedCount += 1
+  $nativeEntries += [pscustomobject]@{ Path = $candidate }
 }
 
+$policy = Invoke-WindowsPortableNativePolicy `
+  -Entries $nativeEntries `
+  -ExpectedIdentityEku $ExpectedIdentityEku `
+  -VerifySigntool {
+    param($Path)
+    & signtool.exe verify /pa /all /tw /v $Path *> $null
+    return $LASTEXITCODE -eq 0
+  } `
+  -ReadSignature { param($Path) Get-AuthenticodeSignature -LiteralPath $Path } `
+  -VerifyChain { param($Certificate) Test-CertificateChain $Certificate } `
+  -VerifyEku { param($Certificate, $Oid) Test-Eku $Certificate $Oid } `
+  -VerifyTimestamp { param($Path) Test-Rfc3161Timestamp $Path }
+
+$publisherVerified = $policy.PublisherChainVerified
+$timestampVerified = $policy.TimestampVerified
+$verifiedCount = $policy.ResultCount
 if ($verifiedCount -ne $inventory.files.Count) {
   Fail-Bounded "PE verification coverage is incomplete"
 }

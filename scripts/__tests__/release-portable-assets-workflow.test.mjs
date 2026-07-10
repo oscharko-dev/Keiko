@@ -24,6 +24,28 @@ import {
 const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 const windowsVerifier = readFileSync("scripts/verify-windows-portable-signing.ps1", "utf8");
+const windowsNativePolicy = readFileSync("scripts/windows-portable-native-policy.ps1", "utf8");
+
+function productionStepPolicies() {
+  const job = portableWorkflow.slice(
+    portableWorkflow.indexOf("  stage-windows-production:"),
+    portableWorkflow.indexOf("\n  assemble:"),
+  );
+  const matches = [...job.matchAll(/^ {6}- name: (.+)$/gmu)];
+  return matches.map((match, index) => {
+    const body = job.slice(match.index, matches[index + 1]?.index ?? job.length);
+    return { always: body.includes("if: ${{ always() }}"), name: match[1] };
+  });
+}
+
+function simulateProviderRejection() {
+  let failed = false;
+  return productionStepPolicies().map((step) => {
+    const ran = !failed || step.always;
+    if (ran && step.name === "Sign the exact inventoried PE set") failed = true;
+    return { ...step, ran };
+  });
+}
 
 let currentRoot;
 
@@ -197,11 +219,11 @@ describe("Windows portable production signing workflow", () => {
   it("requires native chain, subscriber identity, and timestamp verification without raw output", () => {
     expect(windowsVerifier).toContain("signtool.exe verify /pa /all /tw /v");
     expect(windowsVerifier).toContain("Get-AuthenticodeSignature");
-    expect(windowsVerifier).toContain('Test-Eku $signer "1.3.6.1.5.5.7.3.3"');
-    expect(windowsVerifier).toContain("Test-Eku $signer $ExpectedIdentityEku");
+    expect(windowsNativePolicy).toContain('"1.3.6.1.5.5.7.3.3"');
+    expect(windowsNativePolicy).toContain("$ExpectedIdentityEku");
     expect(windowsVerifier).toContain("[WindowsPortableRfc3161]::VerifyFile");
     expect(readFileSync("scripts/windows-portable-rfc3161.cs", "utf8")).toContain(
-      'usage.Value == "1.3.6.1.5.5.7.3.8"',
+      'found.EnhancedKeyUsages[0].Value == "1.3.6.1.5.5.7.3.8"',
     );
     expect(windowsVerifier).toContain("*> $null");
     expect(windowsVerifier).not.toMatch(/thumbprint|subject/iu);
@@ -226,6 +248,40 @@ describe("Windows portable production signing workflow", () => {
     expect(portableWorkflow.slice(cleanup, verification)).toContain("az logout *> $null");
     expect(portableWorkflow.slice(cleanup, verification)).toContain("az account clear *> $null");
     expect(portableWorkflow.slice(cleanup, verification)).not.toContain("continue-on-error");
+  });
+
+  it("propagates provider rejection through the actual step conditions", () => {
+    const simulation = simulateProviderRejection();
+    expect(simulation.filter((step) => step.always).map((step) => step.name)).toEqual([
+      "Clear the Azure CLI signing session",
+    ]);
+    expect(
+      simulation.find((step) => step.name === "Clear the Azure CLI signing session")?.ran,
+    ).toBe(true);
+    for (const name of [
+      "Prove signing did not change the PE scope",
+      "Verify Authenticode chain, identity, and RFC3161 timestamp",
+      "Rebuild, bind, and verify the production archive",
+      "Upload verified Windows target artifact",
+    ]) {
+      expect(simulation.find((step) => step.name === name)?.ran, name).toBe(false);
+    }
+  });
+
+  it("executes the production native reducer against the deterministic failure matrix", () => {
+    const result = spawnSync(
+      "pwsh",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "scripts/__tests__/windows-native-policy-fixtures.ps1",
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(windowsVerifier).toContain("Invoke-WindowsPortableNativePolicy");
+    expect(portableWorkflow).not.toMatch(/fixture|test-mode|VerifySigntool/iu);
   });
 });
 

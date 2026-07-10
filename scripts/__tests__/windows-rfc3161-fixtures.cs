@@ -29,14 +29,21 @@ public static class WindowsRfc3161Fixtures
         }
         if (mode == "legacy")
         {
-            var legacy = TimestampChain("1.3.6.1.5.5.7.3.8");
+            var legacy = TimestampChain(new[] { "1.3.6.1.5.5.7.3.8" }, true);
             outer.SignerInfos[0].ComputeCounterSignature(new CmsSigner(legacy.Leaf));
             return Fixture(outer, legacy.Root);
         }
 
         bool wrongEku = mode == "wrong-eku";
+        bool nonCriticalEku = mode == "non-critical-eku";
+        bool mixedEku = mode == "mixed-eku";
         var timestamp = TimestampChain(
-            wrongEku ? "1.3.6.1.5.5.7.3.3" : "1.3.6.1.5.5.7.3.8");
+            wrongEku
+                ? new[] { "1.3.6.1.5.5.7.3.3" }
+                : mixedEku
+                    ? new[] { "1.3.6.1.5.5.7.3.8", "1.3.6.1.5.5.7.3.3" }
+                    : new[] { "1.3.6.1.5.5.7.3.8" },
+            !nonCriticalEku);
         byte[] signature = outer.SignerInfos[0].GetSignature();
         string algorithm = mode == "wrong-digest" ? Sha384 : Sha256;
         byte[] imprint = mode == "wrong-imprint"
@@ -62,7 +69,7 @@ public static class WindowsRfc3161Fixtures
         }
         if (mode == "wrong-root")
         {
-            return Fixture(outer, TimestampChain("1.3.6.1.5.5.7.3.8").Root);
+            return Fixture(outer, TimestampChain(new[] { "1.3.6.1.5.5.7.3.8" }, true).Root);
         }
         return Fixture(outer, timestamp.Root);
     }
@@ -115,7 +122,7 @@ public static class WindowsRfc3161Fixtures
         return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
     }
 
-    private static TimestampPair TimestampChain(string eku)
+    private static TimestampPair TimestampChain(string[] ekus, bool critical)
     {
         using var rootKey = RSA.Create(2048);
         var rootRequest = new CertificateRequest("CN=Keiko Test Root", rootKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -126,8 +133,9 @@ public static class WindowsRfc3161Fixtures
         using var leafKey = RSA.Create(2048);
         var leafRequest = new CertificateRequest("CN=Keiko Test TSA", leafKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         leafRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
-        leafRequest.CertificateExtensions.Add(
-            new X509EnhancedKeyUsageExtension(new OidCollection { new Oid(eku) }, true));
+        var usages = new OidCollection();
+        foreach (string eku in ekus) usages.Add(new Oid(eku));
+        leafRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(usages, critical));
         byte[] serial = RandomNumberGenerator.GetBytes(16);
         using var issued = leafRequest.Create(
             root,

@@ -182,7 +182,8 @@ RFC 3161 authority comes from the embedded Authenticode CMS, not `signtool /tw` 
 timestamper certificate alone. Every Authenticode signer must have exactly one timestamp-token unsigned
 attribute (`1.2.840.113549.1.9.16.2.14`) and no legacy countersignature attribute
 (`1.2.840.113549.1.9.6`). The nested CMS signature and timestamp certificate chain are validated at the
-token generation time, the leaf must explicitly carry the timestamping EKU, and DER `TSTInfo` must use
+token generation time, the leaf must carry exactly one critical EKU extension containing only the
+timestamping EKU, and DER `TSTInfo` must use
 SHA-256 with a message imprint equal to SHA-256 of the outer signer signature bytes. Missing, legacy,
 duplicate, malformed, wrong-algorithm, wrong-imprint, invalid-signature, invalid-chain, or wrong-EKU
 tokens all reduce to the bounded `windows-timestamp-unverified` failure.

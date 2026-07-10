@@ -19,6 +19,8 @@ Assert-Result "wrong-digest" $false
 Assert-Result "wrong-imprint" $false
 Assert-Result "corrupt-token" $false
 Assert-Result "wrong-eku" $false
+Assert-Result "non-critical-eku" $false
+Assert-Result "mixed-eku" $false
 Assert-Result "wrong-root" $false
 Assert-Result "duplicate" $false
 
