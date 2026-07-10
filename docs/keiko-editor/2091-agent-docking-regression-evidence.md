@@ -42,19 +42,19 @@ finding disposition. See [the demo script](./2091-agent-docking-demo.md) for man
 
 `npm run test:coverage:quality` passed:
 
-- package run: 1,068 test files, 18,316 tests passed, 2 skipped;
-- UI run: 287 test files and 4,729 tests passed;
+- package run: 1,068 test files, 18,332 tests passed, 2 skipped;
+- UI run: 288 test files and 4,739 tests passed;
 - all 26 governed file-level floors passed;
 - UI line coverage met the strict 88% release target.
 
 | Package           |  Lines | Branches | Branch floor | Result                           |
 | ----------------- | -----: | -------: | -----------: | -------------------------------- |
-| `keiko-contracts` | 90.94% |   86.73% |       85.00% | Pass                             |
-| `keiko-server`    | 88.57% |   76.23% |       75.87% | Pass                             |
+| `keiko-contracts` | 90.98% |   86.77% |       85.00% | Pass                             |
+| `keiko-server`    | 88.56% |   76.22% |       75.87% | Pass                             |
 | `keiko-tools`     | 89.91% |   80.02% |       80.02% | Pass, ratchet raised from 79.55% |
 | `keiko-harness`   | 91.21% |   86.61% |       85.00% | Pass                             |
 | `keiko-editor`    | 95.93% |   87.72% |       85.00% | Pass                             |
-| `keiko-ui`        | 88.70% |   77.04% |       76.70% | Pass                             |
+| `keiko-ui`        | 88.69% |   77.06% |       76.70% | Pass                             |
 
 No baseline floor is lowered. The Linux/CI metric remains authoritative when it differs from macOS
 instrumentation.
@@ -78,8 +78,10 @@ idempotent replay, action-bound local authority, and commit-time changeset reval
 
 ## Editor release evidence
 
-The Linux-authoritative bundle was generated locally in `node:22-bookworm-slim` after `npm ci` and
-`npm run build:ui`, then verified with `npm run check:editor-release-evidence`:
+The Linux-authoritative bundle was generated locally in `node:22-bookworm-slim` after `npm ci`,
+`npm run build:packages`, and `npm run build:ui`, then regenerated with
+`node scripts/editor-release-evidence.mjs --json` and verified with
+`npm run check:editor-release-evidence`:
 
 - static export: 277 files;
 - measurement SHA-256: `ba49c1483866b583330343f2e5c72451928540aa958a5c493c6626e29f5a66a8`;
@@ -109,25 +111,36 @@ commit stamp is reachable from the current branch.
 
 ## Final local gates
 
-| Command                                                           | Current branch result                                        |
-| ----------------------------------------------------------------- | ------------------------------------------------------------ |
-| `npm run typecheck`                                               | Pass                                                         |
-| `NODE_OPTIONS=--max-old-space-size=8192 npm run lint`             | Pass; the first default-heap run exhausted Node's 4 GiB heap |
-| `npm run format:check`                                            | Pass                                                         |
-| `npm run arch:check`                                              | Pass, 2,831 modules / 7,897 dependencies                     |
-| `npm run arch:check:negative`                                     | Pass, 48 negative fixtures fired                             |
-| `npm run test:coverage:quality`                                   | Pass                                                         |
-| `npm run check:coverage:branches`                                 | Pass after raising only the `keiko-tools` ratchet            |
-| `npm run test:e2e:editor-agent-docking-2122`                      | Pass, 4 Chromium tests                                       |
-| `npm run check:adr-index`                                         | Pass, 98 unique indexed ADRs                                 |
-| `npm run check:editor-doc-links`                                  | Pass, 23 documents                                           |
-| Linux `npm run build:ui && npm run check:editor-release-evidence` | Pass                                                         |
+| Command                                                 | Current branch result                                        |
+| ------------------------------------------------------- | ------------------------------------------------------------ |
+| `npm run typecheck`                                     | Pass                                                         |
+| `NODE_OPTIONS=--max-old-space-size=8192 npm run lint`   | Pass; the first default-heap run exhausted Node's 4 GiB heap |
+| `npm run format:check`                                  | Pass                                                         |
+| `npm test`                                              | Pass, 1,062 files / 18,249 passed / 2 skipped                |
+| `npm run test:coverage:quality`                         | Pass, including file and branch ratchets                     |
+| `npm run arch:check`                                    | Pass, 2,833 modules / 7,900 dependencies                     |
+| `npm run arch:check:negative`                           | Pass, 48 negative fixtures fired                             |
+| `npm run build`                                         | Pass                                                         |
+| `npm run prepare:bin`                                   | Pass                                                         |
+| `npm run build:ui`                                      | Pass                                                         |
+| `npm run prune:package-build-artifacts`                 | Pass, 26 build-only artifacts removed                        |
+| `npm run check:package-surface`                         | Pass, 4,483 packaged files                                   |
+| `npm run test:e2e:smoke`                                | Pass, 52 Chromium tests                                      |
+| `npm run test:e2e:editor-agent-docking-2122`            | Pass, 4 Chromium tests                                       |
+| `npm run test:e2e:editor-perf`                          | Pass, 1 Chromium test                                        |
+| `npm run check:perf-evidence`                           | Pass, workspace and editor evidence fresh                    |
+| `npm run check:error-observability`                     | Pass                                                         |
+| `npm run check:adr-index`                               | Pass, 98 unique indexed ADRs                                 |
+| `npm run check:editor-doc-links`                        | Pass, 23 documents                                           |
+| Linux `npm run build:ui`                                | Pass                                                         |
+| Linux `node scripts/editor-release-evidence.mjs --json` | Pass, B1/B2/B3 within budget                                 |
+| Linux `npm run check:editor-release-evidence`           | Pass, committed fingerprint fresh                            |
 
-The required aggregate `npm test`, smoke, build/package-surface, and the gates above are rerun after
-rebasing onto current `origin/dev`; the PR records the final post-rebase outcomes.
+All required gates were rerun after rebasing onto current `origin/dev` at
+`5654ea12dc5e8c8feb94da0ebfe7cdb33e1f3b4e`.
 
 ## Closure assessment
 
 Implementation, focused security review, full-loop browser evidence, coverage, documentation, and
-Linux release evidence are complete on the feature branch. Formal epic closure still waits for the
-current-`dev` rebase, final local rerun, required GitHub checks, review settlement, and merge.
+Linux release evidence are complete on the feature branch. Formal epic closure now waits only for
+required GitHub checks, review settlement, and merge.
