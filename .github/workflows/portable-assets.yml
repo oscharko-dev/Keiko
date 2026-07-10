@@ -174,7 +174,6 @@ jobs:
       - name: Smoke test the unsigned staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
       - name: Validate protected Azure configuration
-        shell: pwsh
         env:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
@@ -183,29 +182,7 @@ jobs:
           AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
           AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
           AZURE_ARTIFACT_SIGNING_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
-        run: |
-          $required = @(
-            "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID",
-            "AZURE_ARTIFACT_SIGNING_ENDPOINT", "AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME",
-            "AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME", "AZURE_ARTIFACT_SIGNING_IDENTITY_EKU"
-          )
-          if ($required.Where({ [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }).Count -gt 0) {
-            throw "windows-portable-signing: protected configuration is incomplete"
-          }
-          try { $endpoint = [Uri]$env:AZURE_ARTIFACT_SIGNING_ENDPOINT }
-          catch { throw "windows-portable-signing: service endpoint is invalid" }
-          if ($endpoint.Scheme -ne "https" -or -not [string]::IsNullOrEmpty($endpoint.UserInfo)) {
-            throw "windows-portable-signing: service endpoint is invalid"
-          }
-          foreach ($name in @("AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID")) {
-            $parsed = [Guid]::Empty
-            if (-not [Guid]::TryParse([Environment]::GetEnvironmentVariable($name), [ref]$parsed)) {
-              throw "windows-portable-signing: protected identifier is invalid"
-            }
-          }
-          if ($env:AZURE_ARTIFACT_SIGNING_IDENTITY_EKU -notmatch '^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$') {
-            throw "windows-portable-signing: subscriber identity EKU is invalid"
-          }
+        run: node scripts/windows-portable-signing.mjs validate-config
       - name: Inventory the bounded PE signing set
         shell: pwsh
         run: |
@@ -241,6 +218,14 @@ jobs:
           exclude-azure-developer-cli-credential: true
           exclude-interactive-browser-credential: true
           trace: false
+      - name: Clear the Azure CLI signing session
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          az logout *> $null
+          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
+          az account clear *> $null
+          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
       - name: Prove signing did not change the PE scope
         shell: pwsh
         run: |

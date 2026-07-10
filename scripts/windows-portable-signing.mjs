@@ -16,6 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join, posix, relative, resolve } from "node:path";
+import { URL } from "node:url";
 
 import { hashDirectoryTree, sha256File, validatePortableManifest } from "./portable-runtime.mjs";
 
@@ -23,10 +24,59 @@ const MAX_FILES = 50_000;
 const MAX_DEPTH = 32;
 const MAX_PE_FILES = 4_096;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const GUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
+const ARTIFACT_SIGNING_HOST_PATTERN =
+  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.codesigning\.azure\.net$/u;
 const WINDOWS_TARGET = "windows-x64";
 
+export class BoundedWindowsSigningError extends Error {}
+
 function fail(message) {
-  throw new Error(`windows-portable-signing: ${message}`);
+  throw new BoundedWindowsSigningError(`windows-portable-signing: ${message}`);
+}
+
+export function redactedWindowsSigningError(error) {
+  return error instanceof BoundedWindowsSigningError
+    ? error.message
+    : "windows-portable-signing: redacted failure";
+}
+
+export function validateAzureArtifactSigningConfig(env) {
+  const names = [
+    "AZURE_CLIENT_ID",
+    "AZURE_TENANT_ID",
+    "AZURE_SUBSCRIPTION_ID",
+    "AZURE_ARTIFACT_SIGNING_ENDPOINT",
+    "AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME",
+    "AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME",
+    "AZURE_ARTIFACT_SIGNING_IDENTITY_EKU",
+  ];
+  if (names.some((name) => typeof env[name] !== "string" || env[name].trim().length === 0)) {
+    fail("protected configuration is incomplete");
+  }
+  for (const name of ["AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID"]) {
+    if (!GUID_PATTERN.test(env[name])) fail("protected identifier is invalid");
+  }
+  let endpoint;
+  try {
+    endpoint = new URL(env.AZURE_ARTIFACT_SIGNING_ENDPOINT);
+  } catch {
+    fail("service endpoint is invalid");
+  }
+  const canonical = `https://${endpoint.hostname}/`;
+  if (
+    env.AZURE_ARTIFACT_SIGNING_ENDPOINT !== canonical ||
+    !ARTIFACT_SIGNING_HOST_PATTERN.test(endpoint.hostname)
+  ) {
+    fail("service endpoint is invalid");
+  }
+  if (
+    !/^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$/u.test(
+      env.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU,
+    )
+  ) {
+    fail("subscriber identity EKU is invalid");
+  }
 }
 
 function sha256Bytes(bytes) {
@@ -238,7 +288,7 @@ function rebindSidecars(manifest, payloadRoot) {
   }
 }
 
-async function rebindArchive(stageRoot, manifest) {
+export async function rebindArchive(stageRoot, manifest) {
   const payloadContainer = join(stageRoot, "payload");
   const payloadRoot = join(payloadContainer, "Keiko");
   const archivePath = join(stageRoot, manifest.artifact.assetName);
@@ -304,18 +354,22 @@ async function finalizeCommand(options) {
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
-  if (command === "inventory") inventoryCommand(options);
+  if (command === "validate-config") validateAzureArtifactSigningConfig(process.env);
+  else if (command === "inventory") inventoryCommand(options);
   else if (command === "verify-inventory") verifyInventoryCommand(options);
   else if (command === "compare-paths") comparePathsCommand(options);
   else if (command === "finalize") await finalizeCommand(options);
-  else fail("command must be inventory, compare-paths, verify-inventory, or finalize");
+  else
+    fail(
+      "command must be validate-config, inventory, compare-paths, verify-inventory, or finalize",
+    );
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   try {
     await main();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : "windows-portable-signing: failed");
+    console.error(redactedWindowsSigningError(error));
     process.exit(1);
   }
 }

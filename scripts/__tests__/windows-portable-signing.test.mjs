@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,6 +10,7 @@ import {
   inventoriesMatch,
   inventoryPathsMatch,
   inventoryWindowsPortablePeFiles,
+  rebindArchive,
 } from "../windows-portable-signing.mjs";
 
 const roots = [];
@@ -100,5 +102,62 @@ describe("Windows portable PE signing inventory", () => {
     expect(inventoriesMatch(before, after)).toBe(false);
     after.files.pop();
     expect(inventoryPathsMatch(before, after)).toBe(false);
+  });
+
+  it("rebinds the signed archive, provenance, application tree, sidecar tree, and checksum", async () => {
+    const stage = root();
+    const payload = join(stage, "payload", "Keiko");
+    write(join(payload, "app", "index.js"), Buffer.from("signed app"));
+    write(join(payload, "runtime", "sidecars", "worker", "worker.exe"), portableExecutable(8));
+    mkdirSync(join(stage, "evidence"), { recursive: true });
+    writeFileSync(
+      join(stage, "evidence", "provenance.intoto.jsonl"),
+      `${JSON.stringify({ artifact: "Keiko-windows-x64.zip", subjectDigest: "0".repeat(64) })}\n`,
+    );
+    const sidecar = {
+      name: "worker",
+      payloadRootPath: "runtime/sidecars/worker",
+      payloadSha256: "0".repeat(64),
+      sizeBytes: 0,
+    };
+    const manifest = {
+      artifact: { assetName: "Keiko-windows-x64.zip", sha256: "0".repeat(64), sizeBytes: 0 },
+      provenance: {
+        packagedAppTreeSha256: "0".repeat(64),
+        provenanceStatementSha256: "0".repeat(64),
+      },
+      sidecarRuntimes: [sidecar],
+      releaseImpact: { reviewedBinding: { sidecarRuntimes: [] } },
+    };
+
+    await rebindArchive(stage, manifest);
+
+    expect(manifest.artifact.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(manifest.artifact.sha256).not.toBe("0".repeat(64));
+    expect(manifest.provenance.packagedAppTreeSha256).not.toBe("0".repeat(64));
+    expect(sidecar.payloadSha256).not.toBe("0".repeat(64));
+    expect(manifest.releaseImpact.reviewedBinding.archiveSha256).toBe(manifest.artifact.sha256);
+    expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual([sidecar]);
+  });
+
+  it("redacts unexpected filesystem failures at the executable boundary", () => {
+    const privatePath = join(root(), "private-missing-stage");
+    const result = spawnSync(
+      process.execPath,
+      [
+        "scripts/windows-portable-signing.mjs",
+        "inventory",
+        "--stage-root",
+        privatePath,
+        "--inventory",
+        join(root(), "inventory.json"),
+        "--catalog",
+        join(root(), "catalog.txt"),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("windows-portable-signing: payload root is missing");
+    expect(result.stderr).not.toContain(privatePath);
   });
 });

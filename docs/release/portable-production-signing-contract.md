@@ -162,6 +162,13 @@ The catalog is transient and is the exact input to the pinned Artifact Signing a
 uses the Azure CLI session established by environment-bound OIDC; all other `DefaultAzureCredential`
 routes are disabled for the signing action.
 
+The service endpoint is accepted only in canonical `https://<region>.codesigning.azure.net/` form,
+where `<region>` is exactly one DNS label. Explicit ports, alternate paths, user information, query or
+fragment data, multi-label regions, and suffix lookalikes fail before authentication. Immediately after
+the Artifact Signing action, an always-run bounded cleanup logs out and clears the Azure CLI session;
+cleanup failure blocks every verification, finalization, and upload step. The Azure action's post hook
+remains defense in depth rather than the only cleanup authority.
+
 After signing, the job requires the same PE path set and verifies every file with both `signtool` and
 `Get-AuthenticodeSignature`. Success requires the Windows Authenticode policy chain, code-signing EKU,
 the exact configured subscriber identity-validation EKU, a valid RFC 3161 timestamper chain, and the
@@ -170,6 +177,15 @@ the ephemeral verifier input. The job then proves the verified file hashes are u
 ZIP, recalculates byte-derived archive, provenance, application-tree, sidecar-tree, reviewed-binding,
 and checksum fields, and invokes the existing production verifier. Upload occurs only after the final
 manifest is `verified-production` and the post-sign smoke test passes.
+
+RFC 3161 authority comes from the embedded Authenticode CMS, not `signtool /tw` or the presence of a
+timestamper certificate alone. Every Authenticode signer must have exactly one timestamp-token unsigned
+attribute (`1.2.840.113549.1.9.16.2.14`) and no legacy countersignature attribute
+(`1.2.840.113549.1.9.6`). The nested CMS signature and timestamp certificate chain are validated at the
+token generation time, the leaf must explicitly carry the timestamping EKU, and DER `TSTInfo` must use
+SHA-256 with a message imprint equal to SHA-256 of the outer signer signature bytes. Missing, legacy,
+duplicate, malformed, wrong-algorithm, wrong-imprint, invalid-signature, invalid-chain, or wrong-EKU
+tokens all reduce to the bounded `windows-timestamp-unverified` failure.
 
 For normal account/profile rotation with an unchanged reviewed subscriber EKU, update only the
 protected environment references, retain certificate-profile-scoped Signer RBAC, and rerun the Windows

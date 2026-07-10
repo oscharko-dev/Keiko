@@ -37,6 +37,19 @@ function Test-CertificateChain([System.Security.Cryptography.X509Certificates.X5
   }
 }
 
+function Test-Rfc3161Timestamp([string]$Path) {
+  $result = [WindowsPortableRfc3161]::VerifyFile($Path)
+  return $result.Valid -and $result.Certificates.Count -gt 0
+}
+
+try {
+  $references = [string][AppContext]::GetData("TRUSTED_PLATFORM_ASSEMBLIES") -split [IO.Path]::PathSeparator
+  Add-Type -Path (Join-Path $PSScriptRoot "windows-portable-rfc3161.cs") -ReferencedAssemblies $references
+}
+catch {
+  Fail-Bounded "verification-tool-unavailable"
+}
+
 if ($ExpectedIdentityEku -notmatch '^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$') {
   Fail-Bounded "configured subscriber identity EKU is invalid"
 }
@@ -71,22 +84,24 @@ foreach ($entry in $inventory.files) {
     Fail-Bounded "an inventoried PE file is missing"
   }
 
-  & signtool.exe verify /pa /all /tw /v $candidate *> $null
-  $signtoolValid = $LASTEXITCODE -eq 0
-  $signature = Get-AuthenticodeSignature -LiteralPath $candidate
-  $signer = $signature.SignerCertificate
-  $publisherValid =
-    $signtoolValid -and
-    $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
-    $null -ne $signer -and
-    (Test-CertificateChain $signer) -and
-    (Test-Eku $signer "1.3.6.1.5.5.7.3.3") -and
-    (Test-Eku $signer $ExpectedIdentityEku)
-  $timestamp = $signature.TimeStamperCertificate
-  $timestampValid =
-    $null -ne $timestamp -and
-    (Test-CertificateChain $timestamp) -and
-    (Test-Eku $timestamp "1.3.6.1.5.5.7.3.8")
+  try {
+    & signtool.exe verify /pa /all /tw /v $candidate *> $null
+    $signtoolValid = $LASTEXITCODE -eq 0
+    $signature = Get-AuthenticodeSignature -LiteralPath $candidate
+    $signer = $signature.SignerCertificate
+    $publisherValid =
+      $signtoolValid -and
+      $signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and
+      $null -ne $signer -and
+      (Test-CertificateChain $signer) -and
+      (Test-Eku $signer "1.3.6.1.5.5.7.3.3") -and
+      (Test-Eku $signer $ExpectedIdentityEku)
+    $timestampValid = Test-Rfc3161Timestamp $candidate
+  }
+  catch {
+    $publisherValid = $false
+    $timestampValid = $false
+  }
   $publisherVerified = $publisherVerified -and $publisherValid
   $timestampVerified = $timestampVerified -and $timestampValid
   if (-not $inventoryPaths.Add($entry.relativePath)) { Fail-Bounded "PE inventory contains duplicates" }
