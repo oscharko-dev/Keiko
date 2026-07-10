@@ -27,7 +27,11 @@ const TYPESCRIPT_OPERATIONS = [
   "symbols",
   "formatting",
   "definition",
+  "typeDefinition",
+  "implementation",
   "references",
+  "callHierarchy",
+  "inlayHints",
   "renamePrepare",
   "renameApply",
   "codeActions",
@@ -363,6 +367,49 @@ describe("hover", () => {
     if (outcome.kind === "hover") {
       expect(outcome.result.contents).toBeNull();
     }
+  });
+});
+
+describe("TypeScript-only navigation, hierarchy, and inlay dispatch", () => {
+  it("routes all four additive operations through the advertised provider", () => {
+    const text =
+      "interface Worker { run(): string; }\n" +
+      "class ConcreteWorker implements Worker { run(): string { return 'done'; } }\n" +
+      "function invoke(worker: Worker): string { return worker.run(); }\n" +
+      "const worker = new ConcreteWorker();\n" +
+      "export const result = invoke(worker);\n";
+    const document = tsDocument("src/new-navigation.ts", text);
+    const run = (request: LanguageServiceRequest): ReturnType<typeof runLanguageOperation> =>
+      runLanguageOperation(request, options("src/new-navigation.ts"));
+    const typeDefinition = run({
+      operation: "typeDefinition",
+      root,
+      document,
+      position: { line: 4, character: 29 },
+    });
+    const implementation = run({
+      operation: "implementation",
+      root,
+      document,
+      position: { line: 0, character: 11 },
+    });
+    const hierarchy = run({
+      operation: "callHierarchy",
+      root,
+      document,
+      position: { line: 2, character: 10 },
+    });
+    const hints = run({
+      operation: "inlayHints",
+      root,
+      document,
+      range: { start: { line: 0, character: 0 }, end: { line: 4, character: 37 } },
+    });
+
+    expect(typeDefinition.kind).toBe("typeDefinition");
+    expect(implementation.kind).toBe("implementation");
+    expect(hierarchy.kind).toBe("callHierarchy");
+    expect(hints.kind).toBe("inlayHints");
   });
 });
 

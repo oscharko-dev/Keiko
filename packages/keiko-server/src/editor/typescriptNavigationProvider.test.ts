@@ -11,8 +11,11 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createDeadlineCancellation } from "./languageCancellation.js";
 import type { LanguageProviderContext } from "./languageProvider.js";
 import {
+  resolveTypescriptCallHierarchy,
   resolveTypescriptDefinition,
+  resolveTypescriptImplementation,
   resolveTypescriptReferences,
+  resolveTypescriptTypeDefinition,
 } from "./typescriptNavigationProvider.js";
 import {
   createTypescriptProjectService,
@@ -73,6 +76,67 @@ function project(
 }
 
 describe("typescript navigation provider", () => {
+  it("resolves type definitions separately from value definitions", () => {
+    const text =
+      "interface Service { run(): string; }\n" +
+      "const service: Service = { run: () => 'ok' };\n" +
+      "export const result = service.run();\n";
+    writeFileSync(join(root, "src", "types.ts"), text, "utf8");
+    const result = resolveTypescriptTypeDefinition(
+      project("src/types.ts", text),
+      positionOf(text, "service", text.indexOf("result")),
+    );
+
+    expect(result.locations).toContainEqual(
+      expect.objectContaining({
+        path: "src/types.ts",
+        range: { start: { line: 0, character: 10 }, end: { line: 0, character: 17 } },
+      }),
+    );
+  });
+
+  it("resolves an interface to its concrete implementation, not its declaration", () => {
+    const text =
+      "interface Worker { run(): string; }\n" +
+      "class ConcreteWorker implements Worker { run(): string { return 'done'; } }\n" +
+      "export const worker: Worker = new ConcreteWorker();\n";
+    writeFileSync(join(root, "src", "implementation.ts"), text, "utf8");
+    const result = resolveTypescriptImplementation(
+      project("src/implementation.ts", text),
+      positionOf(text, "Worker"),
+    );
+
+    expect(result.locations).toContainEqual(
+      expect.objectContaining({
+        path: "src/implementation.ts",
+        range: { start: { line: 1, character: 6 }, end: { line: 1, character: 20 } },
+      }),
+    );
+    expect(result.locations).not.toContainEqual(
+      expect.objectContaining({
+        range: { start: { line: 0, character: 10 }, end: { line: 0, character: 16 } },
+      }),
+    );
+  });
+
+  it("preserves every incoming call site in a multi-call-site fixture", () => {
+    const text =
+      "function target(): void {}\n" +
+      "function caller(): void { target(); target(); }\n" +
+      "target();\n";
+    writeFileSync(join(root, "src", "hierarchy.ts"), text, "utf8");
+    const result = resolveTypescriptCallHierarchy(
+      project("src/hierarchy.ts", text),
+      positionOf(text, "target"),
+    );
+    const callSites = result.roots.flatMap((rootItem) =>
+      rootItem.incomingCalls.flatMap((call) => call.fromRanges),
+    );
+
+    expect(callSites).toHaveLength(3);
+    expect(callSites.map((site) => site.start.line)).toEqual([1, 1, 2]);
+  });
+
   it("resolves a cross-file definition", () => {
     writeFileSync(join(root, "src", "decl.ts"), "export const sharedValue = 1;\n", "utf8");
     const main = "import { sharedValue } from './decl.js';\nexport const use = sharedValue;\n";

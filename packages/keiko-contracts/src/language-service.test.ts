@@ -54,7 +54,11 @@ describe("language-service schema, operations, and error codes", () => {
       "symbols",
       "formatting",
       "definition",
+      "typeDefinition",
+      "implementation",
       "references",
+      "callHierarchy",
+      "inlayHints",
       "renamePrepare",
       "renameApply",
       "codeActions",
@@ -83,6 +87,9 @@ describe("language-service schema, operations, and error codes", () => {
       maxFormattingEdits: 4_096,
       maxDefinitionLocations: 64,
       maxReferenceLocations: 512,
+      maxCallHierarchyItems: 128,
+      maxCallHierarchyCallSites: 512,
+      maxInlayHints: 512,
       maxCodeActions: 32,
       maxSignatures: 32,
       maxRenameChangesetFiles: 128,
@@ -185,6 +192,30 @@ describe("parseLanguageServiceRequest", () => {
         position: position(),
       });
     }
+  });
+
+  it("parses the additive navigation and hierarchy position operations", () => {
+    for (const operation of ["typeDefinition", "implementation", "callHierarchy"] as const) {
+      const result = parseLanguageServiceRequest({
+        operation,
+        root: "/repo",
+        document: overlay(),
+        position: position(),
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toMatchObject({ operation, position: position() });
+    }
+  });
+
+  it("parses an inlay-hints range request", () => {
+    const result = parseLanguageServiceRequest({
+      operation: "inlayHints",
+      root: "/repo",
+      document: overlay(),
+      range: range(),
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toMatchObject({ operation: "inlayHints", range: range() });
   });
 
   it("parses a hover request and a symbols request", () => {
