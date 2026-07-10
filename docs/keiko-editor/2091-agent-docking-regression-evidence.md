@@ -42,19 +42,19 @@ finding disposition. See [the demo script](./2091-agent-docking-demo.md) for man
 
 `npm run test:coverage:quality` passed:
 
-- package run: 1,068 test files, 18,332 tests passed, 2 skipped;
-- UI run: 288 test files and 4,741 tests passed;
+- package run: 1,073 test files, 18,394 tests passed, 3 skipped;
+- UI run: 289 test files and 4,747 tests passed;
 - all 26 governed file-level floors passed;
 - UI line coverage met the strict 88% release target.
 
-| Package           |  Lines | Branches | Branch floor | Result                           |
-| ----------------- | -----: | -------: | -----------: | -------------------------------- |
-| `keiko-contracts` | 90.98% |   86.77% |       85.00% | Pass                             |
-| `keiko-server`    | 88.56% |   76.22% |       75.87% | Pass                             |
-| `keiko-tools`     | 89.91% |   80.02% |       80.02% | Pass, ratchet raised from 79.55% |
-| `keiko-harness`   | 91.21% |   86.61% |       85.00% | Pass                             |
-| `keiko-editor`    | 95.93% |   87.72% |       85.00% | Pass                             |
-| `keiko-ui`        | 88.70% |   77.05% |       76.70% | Pass                             |
+| Package           |  Lines | Branches | Branch floor | Result                 |
+| ----------------- | -----: | -------: | -----------: | ---------------------- |
+| `keiko-contracts` | 90.86% |   86.35% |       85.00% | Pass                   |
+| `keiko-server`    | 88.58% |   76.22% |       75.87% | Pass                   |
+| `keiko-tools`     | 90.15% |   80.56% |       80.02% | Pass, ratchet retained |
+| `keiko-harness`   | 91.21% |   86.61% |       85.00% | Pass                   |
+| `keiko-editor`    | 94.03% |   85.18% |       85.00% | Pass                   |
+| `keiko-ui`        | 88.62% |   76.96% |       76.70% | Pass                   |
 
 No baseline floor is lowered. The Linux/CI metric remains authoritative when it differs from macOS
 instrumentation.
@@ -62,7 +62,9 @@ instrumentation.
 ## Authority Envelope disposition
 
 **Implemented and verified — editor agent actions are classified under Epic #1982's Authority
-Envelope as of commit `abb7bfd1da07c72f96c740a49a48d5a14049081e`.**
+Envelope in the reachable `dev` history. The integration landed in
+`74fe98697e9ff2d7e49daf3a2eae3e89bc9542eb` and its post-merge audit hardening landed in
+`16f255660fb5cc0ca447980f29d46ff8465eff46`.**
 
 The integration uses the existing validated envelope contracts in
 `packages/keiko-contracts/src/coding-workbench.ts`. The server stores full envelopes in a bounded
@@ -97,10 +99,11 @@ platform difference is recorded rather than treated as authoritative.
 
 ## Editor performance evidence
 
-`npm run test:e2e:editor-perf` regenerated `docs/release/1209-perf-evidence.json` from the packaged
-production UI on reachable commit `3c0cce1b355fcf41ef77bbbc29753e487f9616ad`:
+`npm run test:e2e:editor-perf` regenerated `docs/release/1209-perf-evidence.json` in Linux from the
+packaged production UI on reachable `dev` commit
+`8ae6b82b4ce5ac837662633d1568a308545d7793`:
 
-- B4 cold start: p50 853 ms / p95 854 ms against 1,500 / 2,500 ms budgets;
+- B4 cold start: p50 880 ms / p95 886 ms against 1,500 / 2,500 ms budgets;
 - B5 keystrokes: captured with zero long tasks and 0 ms maximum long-task duration;
 - B6 interaction: p75 24 ms against the 200 ms budget;
 - B11 memory: supported and measured across two cycles;
@@ -111,38 +114,40 @@ commit stamp is reachable from the current branch.
 
 ## Final local gates
 
-| Command                                                 | Current branch result                                        |
-| ------------------------------------------------------- | ------------------------------------------------------------ |
-| `npm run typecheck`                                     | Pass                                                         |
-| `NODE_OPTIONS=--max-old-space-size=8192 npm run lint`   | Pass; the first default-heap run exhausted Node's 4 GiB heap |
-| `npm run format:check`                                  | Pass                                                         |
-| `npm test`                                              | Pass, 1,062 files / 18,249 passed / 2 skipped                |
-| `npm run test:coverage:quality`                         | Pass, including file and branch ratchets                     |
-| `npm run test:coverage:ui`                              | Pass, 288 files / 4,741 tests                                |
-| `npm run check:ui-i18n`                                 | Pass, English and German catalogs complete                   |
-| `npm run arch:check`                                    | Pass, 2,833 modules / 7,900 dependencies                     |
-| `npm run arch:check:negative`                           | Pass, 48 negative fixtures fired                             |
-| `npm run build`                                         | Pass                                                         |
-| `npm run prepare:bin`                                   | Pass                                                         |
-| `npm run build:ui`                                      | Pass                                                         |
-| `npm run prune:package-build-artifacts`                 | Pass, 26 build-only artifacts removed                        |
-| `npm run check:package-surface`                         | Pass, 4,483 packaged files                                   |
-| `npm run test:e2e:smoke`                                | Pass, 52 Chromium tests                                      |
-| `npm run test:e2e:editor-agent-docking-2122`            | Pass, 4 Chromium tests                                       |
-| `npm run test:e2e:editor-perf`                          | Pass, 1 Chromium test                                        |
-| `npm run check:perf-evidence`                           | Pass, workspace and editor evidence fresh                    |
-| `npm run check:error-observability`                     | Pass                                                         |
-| `npm run check:adr-index`                               | Pass, 98 unique indexed ADRs                                 |
-| `npm run check:editor-doc-links`                        | Pass, 23 documents                                           |
-| Linux `npm run build:ui`                                | Pass                                                         |
-| Linux `node scripts/editor-release-evidence.mjs --json` | Pass, B1/B2/B3 within budget                                 |
-| Linux `npm run check:editor-release-evidence`           | Pass, committed fingerprint fresh                            |
+| Command                                                 | Current branch result                            |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `npm run typecheck`                                     | Pass                                             |
+| `NODE_OPTIONS=--max-old-space-size=8192 npm run lint`   | Pass                                             |
+| `npm run format:check`                                  | Pass                                             |
+| `npm test`                                              | Pass, 1,066 files / 18,305 passed / 3 skipped    |
+| `npm run test:coverage:quality`                         | Pass, including file and branch ratchets         |
+| `npm run test:coverage:ui`                              | Pass, 289 files / 4,747 tests                    |
+| `npm run check:ui-i18n`                                 | Pass, English and German catalogs complete       |
+| `npm run arch:check`                                    | Pass, 2,847 modules / 7,967 dependencies         |
+| `npm run arch:check:negative`                           | Pass, 48 negative fixtures fired                 |
+| `npm run build`                                         | Pass                                             |
+| `npm run prepare:bin`                                   | Pass                                             |
+| `npm run build:ui`                                      | Pass                                             |
+| `npm run prune:package-build-artifacts`                 | Pass, 37 build-only artifacts removed            |
+| `npm run prune:package-native-optionals`                | Pass, platform-specific native optionals removed |
+| `npm run check:package-surface`                         | Pass, 4,486 packaged files                       |
+| `npm run test:e2e:smoke`                                | Pass, 52 Chromium tests                          |
+| `npm run test:e2e:editor-agent-docking-2122`            | Pass, 4 Chromium tests                           |
+| `npm run test:e2e:editor-perf`                          | Pass, 1 Chromium test                            |
+| `npm run check:perf-evidence`                           | Pass, workspace and editor evidence fresh        |
+| `npm run check:error-observability`                     | Pass                                             |
+| `npm run check:adr-index`                               | Pass, 98 unique indexed ADRs                     |
+| `npm run check:editor-doc-links`                        | Pass, 23 documents                               |
+| Linux `npm run build:ui`                                | Pass                                             |
+| Linux `node scripts/editor-release-evidence.mjs --json` | Pass, B1/B2/B3 within budget                     |
+| Linux `npm run check:editor-release-evidence`           | Pass, committed fingerprint fresh                |
 
-All required gates were rerun after rebasing onto current `origin/dev` at
-`5654ea12dc5e8c8feb94da0ebfe7cdb33e1f3b4e`.
+All required gates were rerun after synchronizing with `origin/dev` at
+`8ae6b82b4ce5ac837662633d1568a308545d7793`.
 
 ## Closure assessment
 
-Implementation, focused security review, full-loop browser evidence, coverage, documentation, and
-Linux release evidence are complete on the feature branch. Formal epic closure now waits only for
-required GitHub checks, review settlement, and merge.
+The implementation and post-merge audit hardening are present on `dev`. Focused security review,
+full-loop browser evidence, coverage, documentation, and Linux release evidence are complete. Formal
+epic closure now waits only for the evidence-closeout pull request's required GitHub checks, review
+settlement, merge, and the final evidence links in Epic #2091.
