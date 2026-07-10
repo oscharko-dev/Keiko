@@ -112,6 +112,19 @@ describe("buildVerificationSummary", () => {
     );
     expect(JSON.stringify(summary)).not.toContain(SECRET);
   });
+
+  it("carries structured failure locations through to the summary projection (ADR-0126 D3)", () => {
+    const locations = [
+      { file: "src/a.test.ts", line: 12, column: 3, message: "expected 2, got 0" },
+    ];
+    const summary = buildVerificationSummary(report([result({ status: "failed", locations })]));
+    expect(summary.results[0]?.locations).toEqual(locations);
+  });
+
+  it("omits locations when the result carries none", () => {
+    const summary = buildVerificationSummary(report([result({ status: "passed" })]));
+    expect(summary.results[0]?.locations).toBeUndefined();
+  });
 });
 
 describe("summarizeForAudit", () => {
@@ -126,6 +139,18 @@ describe("summarizeForAudit", () => {
     expect(audit.results[0]?.exitCode).toBe(1);
     expect(audit.results[0]?.appliedLimits).toHaveLength(4);
     expect(audit.counts.failed).toBe(1);
+  });
+
+  it("does not carry structured failure locations into the audit projection", () => {
+    const audit = summarizeForAudit(
+      report([
+        result({
+          status: "failed",
+          locations: [{ file: "src/a.test.ts", line: 12, column: 3, message: "expected 2, got 0" }],
+        }),
+      ]),
+    );
+    expect("locations" in (audit.results[0] as unknown as Record<string, unknown>)).toBe(false);
   });
 });
 

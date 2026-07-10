@@ -122,6 +122,14 @@ describe("extractFailureLocations — bounded (cap enforcement)", () => {
     const out = extractFailureLocations("typecheck", cmd(many));
     expect(out).toHaveLength(VERIFICATION_MAX_FAILURE_LOCATIONS);
   });
+
+  it("drops a non-positive line rather than surfacing a fabricated coordinate", () => {
+    const out = extractFailureLocations(
+      "typecheck",
+      cmd("src/a.ts(0,5): error TS2322: Type 'string' is not assignable to type 'number'."),
+    );
+    expect(out).toEqual([]);
+  });
 });
 
 describe("extractFailureLocations — branch edge cases (bounded parsing)", () => {

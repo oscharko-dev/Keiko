@@ -96,3 +96,63 @@ click a problem and land on the exact line; the status bar reflects run state; a
 request the same kind of run, policy-classified and audit-visible, with no broader command surface
 than the human UI. Every trust boundary is verified by a passing test (see
 `2092-run-verify-fix-loop-security-review.md`). No gate was weakened.
+
+## Post-acceptance audit (2026-07-10)
+
+A follow-up audit against `dev` (after merge) fanned out one agent per child issue plus one
+epic-level pass, then adversarially re-verified every flagged defect. 29 defects were confirmed (2
+critical, 11 major, 16 minor). All were fixed in a follow-up change on this branch, with regression
+tests proving each fix:
+
+- **#2210** — `EditorVerificationTrustState` duplicated `CommandTaskTrustState` instead of reusing
+  it; now a type alias. Added test coverage for `isEditorVerificationCatalog` and the
+  `requestVerification` exhaustiveness fixtures.
+- **#2211** — the verification runner wrote no audit-evidence entry per run (evidence store was never
+  wired); now every finished run persists a content-free `editor-verification-run` evidence manifest,
+  mirroring `command-runner-evidence.ts`, with a fail-closed `EVIDENCE_WRITE_FAILED` path when it
+  cannot be written. Also fixed: `requestId` was parsed but never echoed on `run-started`; no test
+  proved the concurrency cap actually rejects an over-limit run; `clamp()`'s non-positive-line guard
+  didn't match its own doc comment.
+- **#2212** — the diff-review "Run Verification" button resolved its target from the pane's active
+  file instead of the reviewed change, risking silently verifying the wrong file for a multi-file
+  agent changeset or rename review; now each review surface resolves its OWN reviewed file(s). The
+  status-bar verification label never cleared, permanently masking test-generation status after the
+  first run; it now auto-dismisses after a delay, cancelled by a fresh run. Added dispatch-proof tests
+  for the two previously-untested "Run Verification" call sites and a type-only `EditorHostPort` test.
+- **#2213** — switching the active tab evicted the PREVIOUS tab's Problems-panel diagnostics even
+  though the file remained open; eviction now only fires when a file actually leaves the open-tabs
+  list (or the pane unmounts). Removed a dead, never-implemented `problems.errored` i18n key. Fixed
+  the axe test that claimed to cover a "focused" state but never moved keyboard focus. Added a
+  dedicated `onDiagnostics` callback test.
+- **#2214/#2215** — an agent-triggered run shared the same concurrency accounting as a human run but
+  emitted no lifecycle events, so it was invisible to the status bar/problems panel and effectively
+  uncancellable (a human had no way to learn its `runId`); `runToReport` now emits the identical
+  lifecycle events `execute` does, making the run visible and cancellable through the existing
+  `DELETE /runs/:runId` endpoint. The full-loop Playwright spec drove every scenario via direct
+  `page.request.post(...)` calls instead of the command-palette run affordance, and its "jump to
+  line" assertion never checked the actual landed line — both rewritten to drive through the real UI
+  (Issue #2212's command palette) and assert the post-click status-bar cursor position, mirroring
+  `editor-baseline-1377.spec.ts`'s F12 verification pattern. Added a from-scratch regression test for
+  the single governed spawn boundary (`executeVerificationEnforced`/`probeNetworkIsolation`) with no
+  injected execution port — previously every test in this area faked the execution port, so a
+  regression hardcoding `enforcedNetworkAvailable: true` would have gone undetected.
+- **Epic-level** — `buildVerificationSummary` never copied `VerificationResult.locations` despite
+  ADR-0126 D3 stating the summary projection carries it; fixed with a test. The verification-run
+  status store and the problems-aggregation store were unscoped, process-wide singletons even though
+  the desktop shell supports multiple simultaneously mounted editor windows bound to different
+  project roots — a run or diagnostic from one project could appear in another's UI, and two projects
+  sharing a relative path could silently overwrite each other's diagnostics. Both stores are now
+  scoped per project root; `EditorVerificationRun`/`EditorVerificationRunStartedEvent` gained a
+  required `projectId` field (ADR-0126 D1 updated) so an agent-triggered run — which has no
+  client-side call to correlate against — can still be attributed to its project.
+
+Not fixed, by design: `EDITOR_COMMANDS`/`isCommandAvailable` remaining unconsumed by `keiko-ui` is
+explicitly out of scope per issue #2212's own text (a documented follow-up, not a regression). Two
+process-only findings (a security-review document attributing a source fix to the wrong child issue;
+epic/issue tracking state not reflecting the merged evidence) are noted but not code defects.
+
+Residual risk: `docs/release/1209-perf-evidence.json` and the full `test:coverage:quality` /
+`check:perf-evidence` CI Studio gates were not regenerated locally for this audit pass (perf evidence
+requires the browser performance suites, which — per this repository's own convention — run only in
+CI; see the Editor performance evidence section above). This mirrors the original implementing
+session's own disclosed limitation and remains a residual risk until CI regenerates it.

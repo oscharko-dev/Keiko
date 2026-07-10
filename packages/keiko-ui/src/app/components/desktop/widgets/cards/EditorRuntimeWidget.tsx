@@ -1252,34 +1252,41 @@ function EditorRuntimeWidget({
     root: root ?? "",
     activeFile: file !== undefined && file.length > 0 ? file : null,
   });
-  const {
-    runFileTests: runVerificationFileTests,
-    runWorkspaceVerification,
-    verifiableTarget,
-  } = verification;
-  // Issue #2212 — the diff-review "Run Verification" intent: verify the reviewed file's tests when a
-  // counterpart resolves, else fall back to a workspace typecheck. Available only when idle.
-  const runDiffVerification = useCallback((): void => {
-    if (verifiableTarget !== null) {
-      runVerificationFileTests();
-    } else {
-      runWorkspaceVerification("typecheck");
-    }
-  }, [runVerificationFileTests, runWorkspaceVerification, verifiableTarget]);
+  const { runFileTests: runVerificationFileTests, runWorkspaceVerification } = verification;
+  // Issue #2212 fix-up — the diff-review "Run Verification" intent is scoped to the file(s) the
+  // active review surface is actually reviewing, never to the pane's currently active file. This
+  // matters most for `agentChangesetPending`/rename review: both can legitimately touch a file other
+  // than the one open in the pane (`runtimeAgentTargetMatches` deliberately bypasses the active-file
+  // match for `applyChangeset`), so resolving from the pane's active file would silently verify the
+  // wrong file. `applyPatch` review's target always equals the active file by construction
+  // (`runtimeAgentTargetMatches` requires it for admission), so it is scoped explicitly here too for
+  // consistency and to stay correct if that invariant ever changes. `reviewedFiles` singular resolves
+  // to that file's test counterpart; a multi-file review (or none) falls back to a workspace typecheck
+  // rather than guessing which single file represents "the reviewed change".
+  const runScopedVerification = useCallback(
+    (reviewedFiles: readonly string[]): void => {
+      if (reviewedFiles.length === 1 && reviewedFiles[0] !== undefined) {
+        runVerificationFileTests(reviewedFiles[0]);
+      } else {
+        runWorkspaceVerification("typecheck");
+      }
+    },
+    [runVerificationFileTests, runWorkspaceVerification],
+  );
   // Issue #2213 (ADR-0126) — feed this pane's diagnostics (keyed by path) into the workspace Problems
-  // panel store, and remove them when the pane closes or switches file. Language diagnostics are
-  // inherently bounded to currently-open buffers; the panel copy must not imply full-workspace coverage.
+  // panel store, and remove them only once a file is truly no longer open (closed, or the pane
+  // unmounts) — never merely because the user switched to a different already-open tab. Language
+  // diagnostics are inherently bounded to currently-open buffers; the panel copy must not imply
+  // full-workspace coverage, but it must also not silently drop a background tab's diagnostics the
+  // instant the user looks away from it (Issue #2213 fix-up).
   const onPaneDiagnostics = useCallback(
     (diagnostics: readonly EditorDiagnostic[]): void => {
-      if (file !== undefined && file.length > 0) setPaneDiagnostics(file, diagnostics);
+      if (root !== undefined && root.length > 0 && file !== undefined && file.length > 0) {
+        setPaneDiagnostics(root, file, diagnostics);
+      }
     },
-    [file],
+    [root, file],
   );
-  useEffect(() => {
-    return (): void => {
-      if (file !== undefined && file.length > 0) removePaneDiagnostics(file);
-    };
-  }, [file]);
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
   const editorModelScope = useMemo(
@@ -1300,6 +1307,24 @@ function EditorRuntimeWidget({
     }
     return deduped;
   }, [file, openFiles]);
+  // Issue #2213 fix-up — evict a path's Problems-panel diagnostics only when it leaves documentTabs
+  // (a genuine close), never on a mere active-tab switch between still-open tabs. Cleans up every
+  // remaining open path on unmount (the whole pane closing).
+  const documentTabsRef = useRef<readonly string[]>(documentTabs);
+  useEffect(() => {
+    const previousTabs = documentTabsRef.current;
+    documentTabsRef.current = documentTabs;
+    if (root === undefined || root.length === 0) return;
+    for (const previousPath of previousTabs) {
+      if (!documentTabs.includes(previousPath)) removePaneDiagnostics(root, previousPath);
+    }
+  }, [documentTabs, root]);
+  useEffect(() => {
+    return (): void => {
+      if (root === undefined || root.length === 0) return;
+      for (const openPath of documentTabsRef.current) removePaneDiagnostics(root, openPath);
+    };
+  }, [root]);
   const [tablistWidth, setTablistWidth] = useState(0);
 
   useLayoutEffect(() => {
@@ -1463,6 +1488,20 @@ function EditorRuntimeWidget({
     // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
     readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
   } | null>(null);
+  // Issue #2212 fix-up — one scoped "Run Verification" callback per review surface, each resolving its
+  // OWN reviewed file(s) rather than the pane's active file (see runScopedVerification above).
+  const runChangesetVerification = useCallback((): void => {
+    const files = agentChangesetPending?.action.changeset?.files.map((f) => f.file) ?? [];
+    runScopedVerification(files);
+  }, [agentChangesetPending, runScopedVerification]);
+  const runPatchVerification = useCallback((): void => {
+    const targetFile = agentPatchPending?.action.target?.file;
+    runScopedVerification(targetFile === undefined ? [] : [targetFile]);
+  }, [agentPatchPending, runScopedVerification]);
+  const runRenameVerification = useCallback((): void => {
+    const files = renameReview?.changeset.files.map((f) => f.path) ?? [];
+    runScopedVerification(files);
+  }, [renameReview, runScopedVerification]);
   const [activeHostEditRequest, setActiveHostEditRequest] = useState<
     EditorHostEditRequest | undefined
   >(undefined);
@@ -4302,7 +4341,7 @@ function EditorRuntimeWidget({
             }}
             onApply={handleAgentChangesetAccept}
             onReject={handleAgentChangesetReject}
-            onRunVerification={runDiffVerification}
+            onRunVerification={runChangesetVerification}
           />
         </div>
       </div>
@@ -4367,7 +4406,7 @@ function EditorRuntimeWidget({
             data-testid="agent-patch-run-verification"
             aria-label={commonT("editor.verification.runReviewedChangeLabel")}
             disabled={agentPatchPending.applying || verification.verificationRunning}
-            onClick={runDiffVerification}
+            onClick={runPatchVerification}
           >
             {commonT("editor.verification.run")}
           </button>
@@ -4387,7 +4426,7 @@ function EditorRuntimeWidget({
         }}
         onApply={handleRenameAccept}
         onReject={handleRenameReject}
-        onRunVerification={runDiffVerification}
+        onRunVerification={runRenameVerification}
       />
     );
   } else if (testGenerationPreview !== null) {

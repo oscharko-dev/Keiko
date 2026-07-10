@@ -10,6 +10,7 @@
 // content-free fields; only the terminal run-completed event carries the already-redacted
 // VerificationReport. A step event never embeds the full VerificationResult (which holds outputSummary).
 
+import { COMMAND_TASK_TRUST_STATES, type CommandTaskTrustState } from "./command-runner.js";
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
 import type { VerificationKind, VerificationReport, VerificationStatus } from "./verification.js";
 
@@ -69,16 +70,26 @@ export interface EditorVerificationRunRequest {
 // The registry-tracked run identity (Issue #2211's VerificationRunnerManager is the concrete producer).
 export interface EditorVerificationRun {
   readonly runId: string;
+  // Epic #2092 fix-up: which project root this run belongs to. Every run always has one — required,
+  // not optional — so a multi-window client can scope run state per project instead of a single
+  // process-wide singleton (the epic's Architecture Invariants require multi-window support).
+  readonly projectId: string;
   readonly kinds: readonly VerificationKind[];
   readonly targetPath?: string | undefined;
   readonly state: EditorVerificationRunState;
   readonly startedAtMs: number;
+  // Echoes EditorVerificationRunRequest.requestId when the caller supplied one (correlation only;
+  // never used as authority). Mirrors CommandTaskRunRequest's requestIdPayload() convention.
+  readonly requestId?: string | undefined;
 }
 
 // A content-free projection of the detected scripts for a project root (Issue #2211's catalog route,
 // consumed by Issue #2212's run affordances). Per kind: whether it is runnable and its server-owned
 // trust state. Script-backed kinds carry the workspace-trust decision; targeted-test is exempt.
-export type EditorVerificationTrustState = "trusted" | "approval-required";
+// This reuses (not redeclares) `CommandTaskTrustState` (command-runner.ts, Issue #1387): both model
+// the identical "server-owned trust decision for a discovered, executable script" concept, and an
+// alias keeps the two forced to stay in sync instead of able to drift independently (ADR-0126 D1).
+export type EditorVerificationTrustState = CommandTaskTrustState;
 
 export interface EditorVerificationCatalogEntry {
   readonly kind: VerificationKind;
@@ -116,9 +127,16 @@ export interface EditorVerificationRunStartedEvent {
   readonly schemaVersion: typeof EDITOR_VERIFICATION_SCHEMA_VERSION;
   readonly kind: "run-started";
   readonly runId: string;
+  // Epic #2092 fix-up: lets a multi-window client route this run's lifecycle (this event plus every
+  // later step/terminal event correlated by runId) to the correct per-project state instead of one
+  // process-wide singleton. Only run-started needs it on the wire — later events are looked up by
+  // runId against the mapping this event established.
+  readonly projectId: string;
   readonly kinds: readonly VerificationKind[];
   readonly targetPath?: string | undefined;
   readonly startedAtMs: number;
+  // Echoes EditorVerificationRunRequest.requestId when the caller supplied one.
+  readonly requestId?: string | undefined;
 }
 
 export interface EditorVerificationStepStartedEvent {
@@ -291,10 +309,12 @@ export function isEditorVerificationRun(value: unknown): value is EditorVerifica
   if (!isRecord(value)) return false;
   return [
     isNonEmptyString(value.runId),
+    isNonEmptyString(value.projectId),
     isKindArray(value.kinds),
     value.targetPath === undefined || isBoundedTargetPath(value.targetPath),
     isEditorVerificationRunState(value.state),
     isFiniteNonNegative(value.startedAtMs),
+    value.requestId === undefined || isValidRequestId(value.requestId),
   ].every(Boolean);
 }
 
@@ -303,7 +323,7 @@ function isCatalogEntry(value: unknown): value is EditorVerificationCatalogEntry
     isRecord(value) &&
     isVerificationKind(value.kind) &&
     typeof value.available === "boolean" &&
-    (value.trustState === "trusted" || value.trustState === "approval-required")
+    (COMMAND_TASK_TRUST_STATES as readonly string[]).includes(value.trustState as string)
   );
 }
 
@@ -332,9 +352,11 @@ function isVerificationReportShape(value: unknown): value is VerificationReport 
 function isRunStartedEvent(value: Record<string, unknown>): boolean {
   return (
     isNonEmptyString(value.runId) &&
+    isNonEmptyString(value.projectId) &&
     isKindArray(value.kinds) &&
     (value.targetPath === undefined || isBoundedTargetPath(value.targetPath)) &&
-    isFiniteNonNegative(value.startedAtMs)
+    isFiniteNonNegative(value.startedAtMs) &&
+    (value.requestId === undefined || isValidRequestId(value.requestId))
   );
 }
 

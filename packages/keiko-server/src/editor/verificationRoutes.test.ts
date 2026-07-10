@@ -43,6 +43,7 @@ class FakeManager implements VerificationRunnerManager {
     this.executed.push(input);
     const run: EditorVerificationRun = {
       runId: "run-1",
+      projectId: input.projectId,
       kinds: [...input.kinds],
       state: "running",
       startedAtMs: 1,

@@ -96,9 +96,9 @@ describe("verificationResultToProblems", () => {
 describe("editorProblemsStore aggregation", () => {
   it("aggregates pane diagnostics and the latest report, notifying subscribers", () => {
     const listener = vi.fn();
-    const unsubscribe = subscribeEditorProblems(listener);
-    setPaneDiagnostics("src/a.ts", [diagnostic("error", 0)]);
-    setVerificationReport({
+    const unsubscribe = subscribeEditorProblems("/ws", listener);
+    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("error", 0)]);
+    setVerificationReport("/ws", {
       workspaceRoot: "/ws",
       results: [result({ locations: [{ file: "src/b.ts", line: 9, message: "x" }] })],
       overallStatus: "failed",
@@ -114,7 +114,7 @@ describe("editorProblemsStore aggregation", () => {
         "resource-exceeded": 0,
       },
     });
-    const files = getEditorProblems().map((p) => p.file);
+    const files = getEditorProblems("/ws").map((p) => p.file);
     expect(files).toContain("src/a.ts");
     expect(files).toContain("src/b.ts");
     expect(listener).toHaveBeenCalled();
@@ -122,9 +122,28 @@ describe("editorProblemsStore aggregation", () => {
   });
 
   it("removes a pane's diagnostics when it closes (open-files-only scoping)", () => {
-    setPaneDiagnostics("src/a.ts", [diagnostic("error", 0)]);
-    expect(getEditorProblems()).toHaveLength(1);
-    setPaneDiagnostics("src/a.ts", []);
-    expect(getEditorProblems()).toHaveLength(0);
+    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("error", 0)]);
+    expect(getEditorProblems("/ws")).toHaveLength(1);
+    setPaneDiagnostics("/ws", "src/a.ts", []);
+    expect(getEditorProblems("/ws")).toHaveLength(0);
+  });
+
+  it("scopes diagnostics per project root — two projects sharing a relative path do not collide (Epic #2092 fix-up)", () => {
+    setPaneDiagnostics("/ws-a", "src/index.ts", [diagnostic("error", 0, "project A error")]);
+    setPaneDiagnostics("/ws-b", "src/index.ts", [diagnostic("warning", 0, "project B warning")]);
+    expect(getEditorProblems("/ws-a")).toHaveLength(1);
+    expect(getEditorProblems("/ws-a")[0]?.message).toBe("project A error");
+    expect(getEditorProblems("/ws-b")).toHaveLength(1);
+    expect(getEditorProblems("/ws-b")[0]?.message).toBe("project B warning");
+  });
+
+  it("does not notify a different project's subscriber (Epic #2092 fix-up)", () => {
+    const listenerA = vi.fn();
+    const listenerB = vi.fn();
+    subscribeEditorProblems("/ws-a", listenerA);
+    subscribeEditorProblems("/ws-b", listenerB);
+    setPaneDiagnostics("/ws-a", "src/a.ts", [diagnostic("error", 0)]);
+    expect(listenerA).toHaveBeenCalled();
+    expect(listenerB).not.toHaveBeenCalled();
   });
 });

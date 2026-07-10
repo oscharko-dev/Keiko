@@ -23,6 +23,7 @@ import {
   type VerificationPlan,
   type VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   buildVerificationPlan,
   detectScripts,
@@ -34,6 +35,10 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  appendEditorVerificationRunEvidence,
+  buildEditorVerificationRunEvidenceEntry,
+} from "./verification-run-evidence.js";
 import {
   executeVerificationEnforced,
   type ExecuteVerificationArgs,
@@ -100,6 +105,11 @@ export interface VerificationRunnerManagerOptions {
   // Injectable execution port; tests supply a deterministic report/probe without spawning.
   readonly execute?: VerificationExecutePort | undefined;
   readonly maxConcurrentRuns?: number | undefined;
+  // Issue #2211 fix-up (Epic #2092): the audit-evidence trail, mirroring buildCommandRunner's
+  // store/evidence/live-redactor construction pattern. Optional (like CommandRunnerManagerOptions)
+  // so unit tests may omit it; production wiring (deps.ts) always supplies both.
+  readonly evidenceStore?: EvidenceStore | undefined;
+  readonly redactor?: ((input: string) => string) | undefined;
 }
 
 // ─── Project resolution (private per-module copy, established convention — command-runner.ts:94) ──
@@ -125,6 +135,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly now: () => number;
   private readonly executePort: VerificationExecutePort;
   private readonly maxConcurrentRuns: number;
+  private readonly evidenceStore: EvidenceStore | undefined;
+  private readonly redactor: (input: string) => string;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<VerificationRunnerEventEmitter>();
 
@@ -135,6 +147,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.now = opts.now ?? Date.now;
     this.executePort = opts.execute ?? executeVerificationEnforced;
     this.maxConcurrentRuns = opts.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS;
+    this.evidenceStore = opts.evidenceStore;
+    this.redactor = opts.redactor ?? ((input: string): string => input);
   }
 
   public readonly inFlightCount = (): number => this.runs.size;
@@ -169,50 +183,37 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   public readonly execute = (input: VerificationRunInput): VerificationRunStart => {
     const workspace = this.resolveWorkspace(input.projectId);
     const plan = this.buildPlan(workspace, input);
-    if (plan.steps.length === 0) {
-      throw new VerificationRunnerError(
-        "NO_RUNNABLE_STEPS",
-        "No runnable verification step was resolved for the requested kinds.",
-      );
-    }
-    if (this.runs.size >= this.maxConcurrentRuns) {
-      throw new VerificationRunnerError(
-        "RUN_LIMIT_EXCEEDED",
-        "Too many in-flight verification runs.",
-      );
-    }
+    this.assertRunnable(plan);
     const runId = randomUUID();
     const controller = new AbortController();
     this.runs.set(runId, { controller, cancelledByUser: false });
     const run: EditorVerificationRun = {
       runId,
+      projectId: input.projectId,
       kinds: [...input.kinds],
       ...(input.targetPath === undefined ? {} : { targetPath: input.targetPath }),
       state: "running",
       startedAtMs: this.now(),
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
     };
     void this.runPlan(run, workspace, plan);
     return { runId, run };
   };
 
+  // Issue #2214/#2215 fix-up — an agent-triggered run is registered in and accounted against the SAME
+  // `this.runs` registry as a human-triggered one (shared concurrency fairness, already true before
+  // this fix), and now ALSO emits the identical lifecycle events `execute`/`runPlan` emit for every
+  // subscriber (the status bar, the problems panel, and any other human-facing SSE client). This makes
+  // an in-flight agent run observable and its `runId` cancellable via the existing
+  // `DELETE /runs/:runId` endpoint (which already operates on this same registry) — closing the
+  // "invisible, uncancellable" gap without introducing a second execution or registry pipeline.
   public readonly runToReport = async (
     input: VerificationRunInput,
     signal: AbortSignal,
   ): Promise<VerificationReport> => {
     const workspace = this.resolveWorkspace(input.projectId);
     const plan = this.buildPlan(workspace, input);
-    if (plan.steps.length === 0) {
-      throw new VerificationRunnerError(
-        "NO_RUNNABLE_STEPS",
-        "No runnable verification step was resolved for the requested kinds.",
-      );
-    }
-    if (this.runs.size >= this.maxConcurrentRuns) {
-      throw new VerificationRunnerError(
-        "RUN_LIMIT_EXCEEDED",
-        "Too many in-flight verification runs.",
-      );
-    }
+    this.assertRunnable(plan);
     const runId = randomUUID();
     const controller = new AbortController();
     const forwardAbort = (): void => {
@@ -220,15 +221,60 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     };
     if (signal.aborted) controller.abort();
     else signal.addEventListener("abort", forwardAbort, { once: true });
-    this.runs.set(runId, { controller, cancelledByUser: false });
+    const entry: InFlightRun = { controller, cancelledByUser: false };
+    this.runs.set(runId, entry);
+    const startedAtMs = this.now();
+    this.emitRunStarted(runId, input, startedAtMs);
+    this.emitStepsStarted(runId, plan);
     try {
       const { report } = await this.executePort({ plan, workspace, signal: controller.signal });
+      this.emitStepCompletions(runId, report);
+      // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
+      // surfaced both as the terminal SSE event AND a thrown error, so the caller receives a real
+      // failure instead of a redacted report the ledger has no record of.
+      this.persistAndEmitTerminalOrThrow(runId, workspace.root, report, startedAtMs, entry);
       return report;
+    } catch (error) {
+      if (!(error instanceof VerificationRunnerError && error.code === "EVIDENCE_WRITE_FAILED")) {
+        this.emitTerminal(runId, entry.cancelledByUser, undefined);
+      }
+      throw error;
     } finally {
       signal.removeEventListener("abort", forwardAbort);
       this.runs.delete(runId);
     }
   };
+
+  private assertRunnable(plan: VerificationPlan): void {
+    if (plan.steps.length === 0) {
+      throw new VerificationRunnerError(
+        "NO_RUNNABLE_STEPS",
+        "No runnable verification step was resolved for the requested kinds.",
+      );
+    }
+    if (this.runs.size >= this.maxConcurrentRuns) {
+      throw new VerificationRunnerError(
+        "RUN_LIMIT_EXCEEDED",
+        "Too many in-flight verification runs.",
+      );
+    }
+  }
+
+  private persistAndEmitTerminalOrThrow(
+    runId: string,
+    projectId: string,
+    report: VerificationReport,
+    startedAtMs: number,
+    entry: InFlightRun,
+  ): void {
+    try {
+      this.persistEvidence(runId, projectId, report, startedAtMs);
+    } catch (evidenceError) {
+      this.emitEvidenceWriteFailure(runId);
+      throw evidenceError;
+    }
+    this.emitTerminal(runId, entry.cancelledByUser, report);
+  }
 
   private buildPlan(workspace: WorkspaceInfo, input: VerificationRunInput): VerificationPlan {
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
@@ -269,23 +315,39 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   ): Promise<void> {
     const entry = this.runs.get(run.runId);
     if (entry === undefined) return;
+    this.emitRunStarted(run.runId, run, run.startedAtMs);
+    this.emitStepsStarted(run.runId, plan);
+    await this.executeAndReport(run.runId, workspace, plan, entry, run.startedAtMs);
+  }
+
+  // Shared by `execute`/`runPlan` (human path) and `runToReport` (agent path, Issue #2214/#2215
+  // fix-up) so both surface the identical run-started event to every SSE subscriber.
+  private emitRunStarted(
+    runId: string,
+    input: Pick<VerificationRunInput, "projectId" | "kinds" | "targetPath" | "requestId">,
+    startedAtMs: number,
+  ): void {
     this.emit({
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       kind: "run-started",
-      runId: run.runId,
-      kinds: run.kinds,
-      ...(run.targetPath === undefined ? {} : { targetPath: run.targetPath }),
-      startedAtMs: run.startedAtMs,
+      runId,
+      projectId: input.projectId,
+      kinds: [...input.kinds],
+      ...(input.targetPath === undefined ? {} : { targetPath: input.targetPath }),
+      startedAtMs,
+      ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
     });
+  }
+
+  private emitStepsStarted(runId: string, plan: VerificationPlan): void {
     for (const step of plan.steps) {
       this.emit({
         schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
         kind: "step-started",
-        runId: run.runId,
+        runId,
         stepKind: step.kind,
       });
     }
-    await this.executeAndReport(run.runId, workspace, plan, entry);
   }
 
   private async executeAndReport(
@@ -293,6 +355,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     workspace: WorkspaceInfo,
     plan: VerificationPlan,
     entry: InFlightRun,
+    startedAtMs: number,
   ): Promise<void> {
     try {
       const { report } = await this.executePort({
@@ -301,7 +364,15 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         signal: entry.controller.signal,
       });
       this.emitStepCompletions(runId, report);
-      this.emitTerminal(runId, entry.cancelledByUser, report);
+      // Fire-and-forget path (nothing awaits runPlan): an evidence-write failure must not become an
+      // unhandled rejection, so it is caught and surfaced as the terminal event itself rather than
+      // rethrown (mirrors TerminalExecutionManager.persistEntryOrEmitFailure's non-crashing variant).
+      try {
+        this.persistEvidence(runId, workspace.root, report, startedAtMs);
+        this.emitTerminal(runId, entry.cancelledByUser, report);
+      } catch {
+        this.emitEvidenceWriteFailure(runId);
+      }
     } catch {
       this.emitTerminal(runId, entry.cancelledByUser, undefined);
     } finally {
@@ -351,6 +422,46 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       kind: "run-completed",
       runId,
       report,
+    });
+  }
+
+  // Issue #2211 fix-up (Epic #2092): writes the content-free audit-evidence entry for a finished
+  // run, mirroring CommandRunnerManagerImpl.persist(). Fails closed — a governed execution surface
+  // must not run silently unaudited (AGENTS.md "no silent failures").
+  private persistEvidence(
+    runId: string,
+    projectId: string,
+    report: VerificationReport,
+    startedAt: number,
+  ): void {
+    if (this.evidenceStore === undefined) {
+      throw new VerificationRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Verification run evidence store is unavailable.",
+      );
+    }
+    try {
+      const entry = buildEditorVerificationRunEvidenceEntry({
+        runId,
+        projectId,
+        report,
+        startedAt,
+      });
+      appendEditorVerificationRunEvidence(this.evidenceStore, entry, this.redactor);
+    } catch {
+      throw new VerificationRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Verification run evidence could not be persisted.",
+      );
+    }
+  }
+
+  private emitEvidenceWriteFailure(runId: string): void {
+    this.emit({
+      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+      kind: "run-failed",
+      runId,
+      reason: "verification-evidence-write-failed",
     });
   }
 

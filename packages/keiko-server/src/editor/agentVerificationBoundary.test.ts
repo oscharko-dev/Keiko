@@ -19,6 +19,7 @@ import type {
   VerificationResult,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { executeVerificationEnforced } from "./verificationExecution.js";
 import type {
@@ -100,6 +101,7 @@ function spyPort(rep: VerificationReport): SpyPort {
 
 let workspaceRoot: string;
 let store: UiStore;
+let evidenceStore: EvidenceStore;
 
 beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-agent-verify-"));
@@ -108,6 +110,7 @@ beforeEach(() => {
   writeFileSync(join(workspaceRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
   store = createInMemoryUiStore();
   store.createProject(workspaceRoot, "fixture");
+  evidenceStore = createInMemoryEvidenceStore();
 });
 
 afterEach(() => {
@@ -124,6 +127,7 @@ describe("agent verification stays inside the single governed spawn boundary (Is
     const spy = spyPort(report("typecheck", "passed"));
     const manager = createVerificationRunnerManager({
       store,
+      evidenceStore,
       execute: spy.port,
       isWorkspaceTrustedForPackageScripts: () => true,
     });
@@ -153,6 +157,7 @@ describe("agent verification stays inside the single governed spawn boundary (Is
     const spy = spyPort(report("lint", "passed"));
     const manager = createVerificationRunnerManager({
       store,
+      evidenceStore,
       execute: spy.port,
       isWorkspaceTrustedForPackageScripts: () => true,
     });
@@ -167,6 +172,7 @@ describe("agent verification stays inside the single governed spawn boundary (Is
     const spy = spyPort(report("typecheck", "denied"));
     const manager = createVerificationRunnerManager({
       store,
+      evidenceStore,
       execute: spy.port,
       isWorkspaceTrustedForPackageScripts: () => true,
     });
@@ -180,7 +186,7 @@ describe("agent verification stays inside the single governed spawn boundary (Is
     // the human run affordance and post-apply phase use, which probes for an enforcing backend and runs
     // keiko-verification with networkEnforcement: "enforce-or-fail-closed". This is the boundary that
     // exec.test.ts's "fails closed, never spawns, when no enforcing backend is available" already pins.
-    const managerWithDefault = createVerificationRunnerManager({ store });
+    const managerWithDefault = createVerificationRunnerManager({ store, evidenceStore });
     expect(managerWithDefault.runToReport).toBeTypeOf("function");
     expect(executeVerificationEnforced).toBeTypeOf("function");
   });

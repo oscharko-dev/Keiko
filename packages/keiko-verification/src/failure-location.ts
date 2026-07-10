@@ -150,7 +150,9 @@ function clamp(
   const out: VerificationFailureLocation[] = [];
   for (const location of raw) {
     if (out.length >= VERIFICATION_MAX_FAILURE_LOCATIONS) break;
-    if (location.line !== undefined && !Number.isInteger(location.line)) continue;
+    if (location.line !== undefined && (!Number.isInteger(location.line) || location.line <= 0)) {
+      continue;
+    }
     const key = `${location.file}:${String(location.line)}:${String(location.column)}`;
     if (seen.has(key)) continue;
     seen.add(key);

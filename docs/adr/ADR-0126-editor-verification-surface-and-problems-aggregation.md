@@ -60,9 +60,15 @@ an editor-scoped run/event envelope under its own schema version
   workspace-relative `targetPath` for file-targeted kinds, and an optional `requestId` correlation
   token mirroring `CommandTaskRunRequest.requestId`. `parseEditorVerificationRunRequest` validates it
   at the trust boundary in the throw-free, all-errors-collected style of `parseCommandTaskRunRequest`.
-- `EditorVerificationRun` is the registry-tracked run identity: `runId`, the requested `kinds`, the
-  optional `targetPath`, a lifecycle `state: EditorVerificationRunState`
-  (`pending | running | completed | cancelled | failed`), and `startedAtMs`.
+- `EditorVerificationRun` is the registry-tracked run identity: `runId`, `projectId` (the project
+  root this run belongs to), the requested `kinds`, the optional `targetPath`, a lifecycle
+  `state: EditorVerificationRunState` (`pending | running | completed | cancelled | failed`), and
+  `startedAtMs`. `projectId` is required (Post-acceptance fix-up, audit-confirmed 2026-07-10): the
+  desktop shell supports multiple simultaneously mounted editor windows bound to different project
+  roots, and the run/event envelope must let a client scope run state per project instead of one
+  process-wide singleton — otherwise a run started in one project's window would appear in another
+  project's status bar, and an agent-triggered run (no client-side call to correlate against) would
+  have no way to be attributed to its project at all.
 - `EditorVerificationEvent` is a **discriminated union** keyed by `kind`
   (`run-started | step-started | step-completed | run-completed | run-cancelled | run-failed`), each
   variant carrying `runId` plus a strongly typed payload. This composes the command-runner SSE
@@ -74,9 +80,14 @@ an editor-scoped run/event envelope under its own schema version
 
 **Content-free lifecycle events (refinement of the drafting-time envelope, load-bearing).** Every
 non-terminal event carries only closed-shape, content-free fields: `run-started`
-(`runId`, `kinds`, optional `targetPath`, `startedAtMs`), `step-started` (`runId`, `stepKind`),
-`step-completed` (`runId`, `stepKind`, `status`, `durationMs`), `run-cancelled` (`runId`), and
-`run-failed` (`runId`, a bounded `reason` code). Only the terminal `run-completed` event carries the
+(`runId`, `projectId`, `kinds`, optional `targetPath`, `startedAtMs`), `step-started` (`runId`,
+`stepKind`), `step-completed` (`runId`, `stepKind`, `status`, `durationMs`), `run-cancelled`
+(`runId`), and `run-failed` (`runId`, a bounded `reason` code). `projectId` on `run-started` only
+(not repeated on every event) is a deliberate trade-off: a client correlates every later event for a
+`runId` back to the project `run-started` established, at the cost of being unable to route a step
+or terminal event whose `run-started` it never observed (e.g. a stream reconnect mid-run) — accepted
+as a narrow, bounded gap rather than repeating an identifier on every content-free frame. Only the
+terminal `run-completed` event carries the
 full, already-redacted `VerificationReport`. A `step-completed` event therefore does **not** embed
 the full `VerificationResult` (which contains `outputSummary`); embedding a potentially large
 redacted digest on every step event would violate the epic's "content-free lifecycle events"

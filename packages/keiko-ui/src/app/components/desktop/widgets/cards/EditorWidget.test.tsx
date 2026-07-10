@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
 import type {
   EditorAgentAction,
   EditorAgentActionResult,
@@ -47,6 +48,8 @@ import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
 import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
+import { getEditorProblems, resetEditorProblemsStoreForTests } from "./editorProblemsStore";
+import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 import {
   useWorkspaceReplaceBuffers,
   WorkspaceReplaceBufferProvider,
@@ -334,6 +337,7 @@ afterEach(() => {
   delete document.documentElement.dataset.theme;
   restoreEventSource();
   _resetEditorAgentBridgeStateForTests();
+  resetEditorProblemsStoreForTests();
   agentActionSequence = 0;
   vi.clearAllMocks();
 });
@@ -2743,6 +2747,70 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
   });
 });
 
+describe("EditorWidget — Problems panel diagnostics eviction (Issue #2213 fix-up)", () => {
+  function diagnostic(message: string): EditorDiagnostic {
+    return {
+      range: { start: { line: 0, column: 0 }, end: { line: 0, column: 1 } },
+      severity: "error",
+      message,
+    };
+  }
+
+  it("keeps a background tab's diagnostics visible after switching to another open tab", async () => {
+    const view = await renderLoaded({ file: "src/a.ts", openFiles: ["src/a.ts", "src/b.ts"] });
+    act(() => {
+      surface.props?.onDiagnostics?.([diagnostic("a has an error")]);
+    });
+    expect(getEditorProblems("/repo").map((p) => p.file)).toEqual(["src/a.ts"]);
+
+    // Switch the active tab to src/b.ts — both files remain in openFiles (still open).
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({ path: "src/b.ts", name: "b.ts" }),
+    );
+    view.rerender(
+      <EditorRuntimeWidget
+        windowId="editor-test"
+        root="/repo"
+        file="src/b.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+      />,
+    );
+    await waitFor(() => expect(surface.props?.buffer.content.relativePath).toBe("src/b.ts"));
+    act(() => {
+      surface.props?.onDiagnostics?.([diagnostic("b has an error")]);
+    });
+
+    // src/a.ts's diagnostics must still be present — switching tabs is not closing a.ts.
+    const problemFiles = getEditorProblems("/repo")
+      .map((p) => p.file)
+      .sort();
+    expect(problemFiles).toEqual(["src/a.ts", "src/b.ts"]);
+
+    // Now actually CLOSE src/a.ts (removed from openFiles) — only then must its diagnostics go away.
+    view.rerender(
+      <EditorRuntimeWidget
+        windowId="editor-test"
+        root="/repo"
+        file="src/b.ts"
+        openFiles={["src/b.ts"]}
+      />,
+    );
+    await waitFor(() =>
+      expect(getEditorProblems("/repo").map((p) => p.file)).toEqual(["src/b.ts"]),
+    );
+  });
+
+  it("clears all open tabs' diagnostics when the pane unmounts", async () => {
+    const view = await renderLoaded({ file: "src/a.ts", openFiles: ["src/a.ts", "src/b.ts"] });
+    act(() => {
+      surface.props?.onDiagnostics?.([diagnostic("a has an error")]);
+    });
+    expect(getEditorProblems("/repo")).toHaveLength(1);
+    view.unmount();
+    expect(getEditorProblems("/repo")).toHaveLength(0);
+  });
+});
+
 describe("EditorWidget — agent bridge", () => {
   function agentResults(): readonly Parameters<typeof postEditorAgentActionResult>[0]["result"][] {
     return vi.mocked(postEditorAgentActionResult).mock.calls.map(([body]) => body.result);
@@ -3344,6 +3412,51 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
     expect(screen.getByTestId("agent-patch-accept").parentElement).toHaveStyle({
       flex: "0 0 auto",
     });
+  });
+
+  it("dispatches 'Run Verification' scoped to the reviewed patch's OWN target file (Issue #2212 fix-up)", async () => {
+    // runtimeAgentTargetMatches requires an applyPatch action's target to match the active buffer to
+    // be admitted for review at all, so target === active file here is the only reachable case — this
+    // test proves DISPATCH (the button actually starts a targeted-test run for that file), which is
+    // the concrete gap the audit found: the prior test only asserted onRunVerification was a function.
+    const verificationFetchMock = vi.fn((url: string, init?: RequestInit) => {
+      const body = init?.method === "DELETE" ? { ok: true } : { runId: "verification-run-1" };
+      void url;
+      return Promise.resolve({ json: () => Promise.resolve(body) } as Response);
+    });
+    vi.stubGlobal("fetch", verificationFetchMock);
+    try {
+      const { source, sessionId } = await renderedAgentSession1394();
+      act(() => {
+        source.emitAction(
+          agentAction(sessionId, "applyPatch", {
+            target: { file: "src/app.ts", paneId: "pane-1" },
+            textEdits: [
+              {
+                range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+                newText: "const value = 42;\n",
+              },
+            ],
+          }),
+        );
+      });
+      const runButton = await screen.findByTestId("agent-patch-run-verification");
+      act(() => {
+        runButton.click();
+      });
+      await waitFor(() => expect(verificationFetchMock).toHaveBeenCalled());
+      const [runUrl, runInit] = verificationFetchMock.mock.calls[0] ?? [];
+      expect(runUrl).toBe("/api/editor/verification/runs");
+      const runBody = JSON.parse((runInit as RequestInit).body as string) as {
+        kinds: readonly string[];
+        targetPath?: string;
+      };
+      expect(runBody.kinds).toEqual(["targeted-test"]);
+      expect(runBody.targetPath).toBe("src/app.test.ts");
+    } finally {
+      vi.unstubAllGlobals();
+      resetEditorVerificationRunStateForTests();
+    }
   });
 
   it("applies an explicitly allowed patch immediately without staging review", async () => {
