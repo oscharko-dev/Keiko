@@ -5,9 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import {
+  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_SCHEMA_VERSION,
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentEvent,
+  resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchAuthorityEnvelope,
   type EditorAgentAction,
+  type EditorAgentGovernedAuthorityReference,
   type EditorAgentSessionSnapshot,
   type ToolCallResult,
   type ToolPort,
@@ -31,6 +36,10 @@ import {
   handleEditorAgentSnapshot,
 } from "../packages/keiko-server/src/editor/agentRoutes.js";
 import {
+  editorAgentAuthorityRegistry,
+  editorAgentWorkspaceRootDigest,
+} from "../packages/keiko-server/src/editor/agentAuthorityRegistry.js";
+import {
   STREAMING,
   type RouteContext,
   type RouteResult,
@@ -40,7 +49,6 @@ const EDITOR_AGENT_CHANGESET_MODULE =
   "../packages/keiko-ui/src/app/components/desktop/widgets/cards/editorAgentChangeset.js";
 const SESSION_ID = "session-2117";
 const ACTION_ID = "action-2117";
-const AUTHORITY_REF = { runId: "run-2117", envelopeDigest: "d".repeat(64) } as const;
 const FILES = [
   { path: "src/a.txt", before: "A0\n", after: "A1\n" },
   { path: "src/b.txt", before: "B0\n", after: "B1\n" },
@@ -242,13 +250,73 @@ function emittedAction(frames: string): EditorAgentAction {
   return event.action;
 }
 
-function createToolPort(client: EditorAgentHttpClient): ToolPort {
+function createToolPort(
+  client: EditorAgentHttpClient,
+  authorityRef: EditorAgentGovernedAuthorityReference,
+): ToolPort {
   return new EditorAgentToolHost({
     client,
-    authorityRef: AUTHORITY_REF,
+    authorityRef,
     nextActionId: () => ACTION_ID,
     now: () => 2_117,
   });
+}
+
+function registerAuthority(root: string): EditorAgentGovernedAuthorityReference {
+  const now = new Date();
+  const envelope: CodingWorkbenchAuthorityEnvelope = {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    runId: "run-2117",
+    localUser: "local-operator",
+    taskRefs: ["issue-2117"],
+    workspace: {
+      workspaceId: "workspace-1",
+      rootLabel: "workspace",
+      rootDigest: editorAgentWorkspaceRootDigest(root),
+    },
+    branch: {
+      baseRef: "dev",
+      headRef: "local-workspace",
+      allowDetachedHead: false,
+      allowedPrefixes: ["local-"],
+    },
+    requestedMode: "supervised-coding",
+    deploymentCeiling: "governed-assist",
+    effectiveMode: resolveEffectiveCodingWorkbenchMode("supervised-coding", "governed-assist"),
+    runtimeSource: "keiko-sidecar",
+    actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
+    connectorScopes: [],
+    modelProfile: {
+      profileId: "profile-1",
+      source: "keiko-model-gateway",
+      supportsStreaming: false,
+      supportsToolCalling: true,
+    },
+    commandPolicy: {
+      mode: "deny",
+      allow: [],
+      deny: [],
+      maxCommandTimeoutMs: 1,
+      requirePerCommandApproval: true,
+    },
+    networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    gates: ["human-approval"],
+    budget: {
+      maxRuntimeMs: 300_000,
+      maxToolCalls: 4,
+      maxPromptTokens: 1,
+      maxPatchBytes: 65_536,
+    },
+    expiresAt: new Date(now.getTime() + 300_000).toISOString(),
+    approvalProofDigest: "a".repeat(64),
+  };
+  const registered = editorAgentAuthorityRegistry.register(
+    envelope,
+    "governed-assist",
+    now.toISOString(),
+  );
+  if (!registered.ok) throw new Error("expected integration authority registration");
+  return registered.authorityRef;
 }
 
 function proposeChangeset(toolPort: ToolPort): Promise<ToolCallResult> {
@@ -279,7 +347,7 @@ function assertEmittedChangeset(action: EditorAgentAction): PreparedChangeset {
     actionId: ACTION_ID,
     sessionId: SESSION_ID,
     type: "applyChangeset",
-    authorityRef: AUTHORITY_REF,
+    requiresReview: true,
     changeset: {
       patch: PATCH,
       files: FILES.map((file) => ({
@@ -288,6 +356,7 @@ function assertEmittedChangeset(action: EditorAgentAction): PreparedChangeset {
       })),
     },
   });
+  expect(action).not.toHaveProperty("authorityRef");
   const prepared = requirePrepared(action);
   expect(prepared).toEqual({
     files: FILES.map((file) => ({
@@ -399,7 +468,9 @@ describe("editor agent changeset cross-package integration (#2117)", () => {
         value: { sessions: [{ sessionId: SESSION_ID, dirtyFiles: [] }] },
       });
 
-      const result = await proposeChangeset(createToolPort(client));
+      const result = await proposeChangeset(
+        createToolPort(client, registerAuthority(workspace.root)),
+      );
       expect(parseToolOutput(result)).toMatchObject({
         ok: true,
         kind: "action-result",

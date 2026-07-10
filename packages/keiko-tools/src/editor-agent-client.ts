@@ -278,6 +278,7 @@ export function createFetchEditorAgentHttpTransport(
         method: request.method,
         headers: {
           accept: "application/json",
+          ...(request.method === "POST" ? { "X-Keiko-CSRF": "1" } : {}),
           ...(request.body === undefined ? {} : { "content-type": "application/json" }),
         },
         ...(request.body === undefined ? {} : { body: request.body }),

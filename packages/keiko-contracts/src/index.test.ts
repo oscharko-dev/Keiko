@@ -648,7 +648,9 @@ describe("keiko-contracts package surface", () => {
     // and the Issue #1392 NO_ACTIVE_BRIDGE liveness code.
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
-    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual(["QUEUE_FULL", "TIMED_OUT"]);
     // AC2: the write-action classification is exported as a single source of truth.

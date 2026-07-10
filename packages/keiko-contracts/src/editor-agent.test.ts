@@ -184,6 +184,40 @@ describe("editor agent contracts", () => {
     ).toEqual({ ok: false, errors: ["browser action request is invalid"] });
   });
 
+  it("canonicalizes action and result envelopes before they cross the bridge boundary", () => {
+    const canary = "CAPABILITY_AUTHORITY_CANARY";
+    const action = changesetAction();
+    const parsedAction = parseEditorAgentActionsPostBody({
+      ...action,
+      bridgeDecisionCapability: canary,
+      authorityEnvelope: { canary },
+      changeset: {
+        ...action.changeset,
+        authorityEnvelope: { canary },
+        files: action.changeset?.files.map((file) => ({ ...file, capability: canary })),
+      },
+    });
+    expect(parsedAction).toMatchObject({ ok: true });
+    if (!parsedAction.ok) throw new Error("Expected the valid action to parse.");
+    expect(JSON.stringify(parsedAction.value)).not.toContain(canary);
+
+    const parsedResult = parseEditorAgentActionsPostBody({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "succeeded",
+        authorityEnvelope: { canary },
+        files: [{ file: "src/a.ts", status: "succeeded", capability: canary }],
+      },
+    });
+    expect(parsedResult).toMatchObject({ ok: true });
+    if (!parsedResult.ok) throw new Error("Expected the valid result to parse.");
+    expect(JSON.stringify(parsedResult.value)).not.toContain(canary);
+  });
+
   it("byte-bounds identifiers and target metadata at the wire boundary", () => {
     const oversizedActionId = "x".repeat(EDITOR_AGENT_ACTION_ID_MAX_BYTES + 1);
     const oversizedSessionId = "x".repeat(EDITOR_AGENT_SESSION_ID_MAX_BYTES + 1);

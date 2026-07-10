@@ -89,6 +89,12 @@ Agent producers call the existing `/api/editor/agent/*` route family and reuse t
 registry, bounded queue, idempotency handling, SSE events, and browser bridge. This decision creates
 no second transport, session model, control plane, or external-file broker.
 
+The producer transport accepts only a loopback HTTP origin, follows no redirects, bounds response
+time and bytes, and sends the BFF's `X-Keiko-CSRF: 1` mutation guard on POST requests. Shared action
+and result parsing emits a deep canonical projection of every recognized wire field before route or
+SSE handling. Unknown top-level or nested fields are not retained, so callers cannot smuggle bridge
+capabilities, Authority Envelope bodies, or parallel policy data through structurally valid actions.
+
 `EditorAgentAction` gains optional, content-free references:
 
 - `authorityRef`: run id plus SHA-256 Authority Envelope digest. The server accepts an external

@@ -5,6 +5,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -2404,42 +2405,102 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects a safe plus deny-listed full changeset with file attribution and no mutation", async () => {
-    writeWorkspaceFile(workspaceRoot, "src/a.txt", "A0\n");
-    writeWorkspaceFile(workspaceRoot, ".env", "SECRET=old\n");
-    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt"]);
-    const patch = oneLineModifyPatch([
-      { file: "src/a.txt", before: "A0", after: "A1" },
-      { file: ".env", before: "SECRET=old", after: "SECRET=new" },
+  it("strips unknown authority and capability fields before action emission and audit", async () => {
+    const canary = "CAPABILITY_AUTHORITY_CANARY";
+    const arranged = arrangeTwoFiles();
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
     ]);
-    const proposed = changesetActionFor(workspaceRoot, patch, ["src/a.txt", ".env"]);
-    const originalRead = nodeWorkspaceFs.readFileUtf8.bind(nodeWorkspaceFs);
-    const reads: string[] = [];
-    vi.spyOn(nodeWorkspaceFs, "readFileUtf8").mockImplementation((path) => {
-      reads.push(path);
-      return originalRead(path);
-    });
+    const proposed = {
+      ...arranged.action,
+      bridgeDecisionCapability: canary,
+      authorityEnvelope: { canary },
+      changeset: { ...arranged.action.changeset, authorityEnvelope: { canary } },
+    };
 
-    const rejected = await handleEditorAgentActions(context(proposed));
+    const queued = await handleEditorAgentActions(context(proposed));
+    const terminal = await postActionResult(arranged.action, "failed");
 
-    expect(rejected.status).toBe(409);
-    expect(actionConflictCode(rejected.body)).toBe("OUT_OF_SCOPE");
-    expect(actionResult(rejected.body).files).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ file: "src/a.txt", status: "failed" }),
-        expect.objectContaining({
-          file: ".env",
-          status: "conflict",
-        }),
-      ]),
-    );
-    const deniedFile = actionResult(rejected.body).files?.find((file) => file.file === ".env");
-    expect(deniedFile?.conflict).toMatchObject({ code: "OUT_OF_SCOPE", file: ".env" });
-    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
-    expect(readWorkspaceFile(workspaceRoot, ".env")).toBe("SECRET=old\n");
-    expect(reads).not.toContain(join(workspaceRoot, ".env"));
-    vi.restoreAllMocks();
+    expect(queued.status).toBe(202);
+    expect(terminal.status).toBe(200);
+    expect(bridge.frames()).not.toContain(canary);
+    expect(JSON.stringify(terminal.body)).not.toContain(canary);
+    expect(JSON.stringify(auditRecords())).not.toContain(canary);
   });
+
+  it.each([".env", ".ssh/id_rsa", ".keiko/state.json", ".aws/credentials"])(
+    "rejects a safe plus deny-listed %s changeset with file attribution and no mutation",
+    async (deniedPath) => {
+      writeWorkspaceFile(workspaceRoot, "src/a.txt", "A0\n");
+      writeWorkspaceFile(workspaceRoot, deniedPath, "SECRET=old\n");
+      await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt"]);
+      const patch = oneLineModifyPatch([
+        { file: "src/a.txt", before: "A0", after: "A1" },
+        { file: deniedPath, before: "SECRET=old", after: "SECRET=new" },
+      ]);
+      const proposed = changesetActionFor(workspaceRoot, patch, ["src/a.txt", deniedPath]);
+      const originalRead = nodeWorkspaceFs.readFileUtf8.bind(nodeWorkspaceFs);
+      const reads: string[] = [];
+      vi.spyOn(nodeWorkspaceFs, "readFileUtf8").mockImplementation((path) => {
+        reads.push(path);
+        return originalRead(path);
+      });
+
+      const rejected = await handleEditorAgentActions(context(proposed));
+
+      expect(rejected.status).toBe(409);
+      expect(actionConflictCode(rejected.body)).toBe("OUT_OF_SCOPE");
+      expect(actionResult(rejected.body).files).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ file: "src/a.txt", status: "failed" }),
+          expect.objectContaining({
+            file: deniedPath,
+            status: "conflict",
+          }),
+        ]),
+      );
+      const deniedFile = actionResult(rejected.body).files?.find(
+        (file) => file.file === deniedPath,
+      );
+      expect(deniedFile?.conflict).toMatchObject({ code: "OUT_OF_SCOPE", file: deniedPath });
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+      expect(readWorkspaceFile(workspaceRoot, deniedPath)).toBe("SECRET=old\n");
+      expect(reads).not.toContain(join(workspaceRoot, deniedPath));
+      vi.restoreAllMocks();
+    },
+  );
+
+  it.each(["../outside.txt", "/tmp/outside.txt"])(
+    "rejects an escaping changeset member %s before reading or queueing any file",
+    async (escapingPath) => {
+      const arranged = arrangeTwoFiles();
+      const changeset = arranged.action.changeset;
+      if (changeset === undefined) throw new Error("expected changeset");
+      const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt"]);
+      const proposed = {
+        ...arranged.action,
+        changeset: {
+          ...changeset,
+          files: [changeset.files[0], { file: escapingPath, expectedContentHash: HASH }],
+        },
+      };
+      const reads: string[] = [];
+      vi.spyOn(nodeWorkspaceFs, "readFileUtf8").mockImplementation((path) => {
+        reads.push(path);
+        throw new Error("an invalid changeset must not read the workspace");
+      });
+
+      const rejected = await handleEditorAgentActions(context(proposed));
+
+      expect(rejected.status).toBe(400);
+      expect(reads).toEqual([]);
+      expect(bridge.frames()).not.toContain("event: editor-agent:action");
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+      expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+      vi.restoreAllMocks();
+    },
+  );
 
   it("attributes one stale member and applies zero changes", async () => {
     const arranged = arrangeTwoFiles();
@@ -2467,6 +2528,51 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     });
     expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("C0\n");
+  });
+
+  it("revalidates changeset authority expiry before the atomic commit", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"));
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    const expiring = authorityEnvelope(workspaceRoot);
+    const registered = editorAgentAuthorityRegistry.register(
+      { ...expiring, expiresAt: "2026-07-10T00:00:01.000Z" },
+      "governed-assist",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("expected expiring authority registration");
+    agentAuthorityRef = registered.authorityRef;
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+
+    vi.setSystemTime(new Date("2026-07-10T00:00:02.000Z"));
+    const denied = await postActionResult(arranged.action, "succeeded");
+
+    expect(denied.status).toBe(200);
+    expect(actionConflictCode(denied.body)).toBe("POLICY_DENIED");
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+  });
+
+  it("revalidates every changeset member after a target becomes an outward symlink", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+    const outsideRoot = mkdtempSync(join(tmpdir(), "keiko-agent-changeset-outside-"));
+    const outsideFile = join(outsideRoot, "outside.txt");
+    writeFileSync(outsideFile, "B0\n", "utf8");
+    rmSync(join(workspaceRoot, "src/b.txt"));
+    symlinkSync(outsideFile, join(workspaceRoot, "src/b.txt"));
+
+    try {
+      const denied = await postActionResult(arranged.action, "succeeded");
+      expect(denied.status).toBe(200);
+      expect(actionConflictCode(denied.body)).toBe("OUT_OF_SCOPE");
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+      expect(readFileSync(outsideFile, "utf8")).toBe("B0\n");
+    } finally {
+      rmSync(outsideRoot, { recursive: true, force: true });
+    }
   });
 
   it("applies nothing when the browser rejects the queued changeset", async () => {

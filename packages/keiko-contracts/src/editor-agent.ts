@@ -1086,6 +1086,150 @@ export function parseEditorAgentSnapshotRequest(
     : parseReadSnapshotRequest(value);
 }
 
+function canonicalRange(range: LanguageRange): LanguageRange {
+  return {
+    start: { line: range.start.line, character: range.start.character },
+    end: { line: range.end.line, character: range.end.character },
+  };
+}
+
+function canonicalDocumentVersion(version: EditorDocumentVersion): EditorDocumentVersion {
+  return {
+    sizeBytes: version.sizeBytes,
+    modifiedAt: version.modifiedAt,
+    contentHash: version.contentHash,
+  };
+}
+
+function canonicalActionTarget(
+  target: NonNullable<EditorAgentAction["target"]>,
+): NonNullable<EditorAgentAction["target"]> {
+  return {
+    ...(target.paneId === undefined ? {} : { paneId: target.paneId }),
+    ...(target.file === undefined ? {} : { file: target.file }),
+    ...(target.toPaneId === undefined ? {} : { toPaneId: target.toPaneId }),
+    ...(target.splitDirection === undefined ? {} : { splitDirection: target.splitDirection }),
+    ...(target.selection === undefined ? {} : { selection: canonicalRange(target.selection) }),
+  };
+}
+
+function canonicalChangesetFile(file: EditorAgentChangesetFile): EditorAgentChangesetFile {
+  return {
+    file: file.file,
+    ...(file.expectedDocumentVersion === undefined
+      ? {}
+      : { expectedDocumentVersion: canonicalDocumentVersion(file.expectedDocumentVersion) }),
+    ...(file.expectedContentHash === undefined
+      ? {}
+      : { expectedContentHash: file.expectedContentHash }),
+  };
+}
+
+function canonicalPreparedTextEdit(edit: EditorAgentPreparedTextEdit): EditorAgentPreparedTextEdit {
+  return { range: canonicalRange(edit.range), newText: edit.newText };
+}
+
+function canonicalPreparedChangesetFile(
+  file: EditorAgentPreparedChangesetFile,
+): EditorAgentPreparedChangesetFile {
+  return {
+    file: file.file,
+    kind: file.kind,
+    textEdits: file.textEdits.map(canonicalPreparedTextEdit),
+  };
+}
+
+function canonicalChangeset(changeset: EditorAgentChangeset): EditorAgentChangeset {
+  return {
+    patch: changeset.patch,
+    files: changeset.files.map(canonicalChangesetFile),
+    ...(changeset.selectedFiles === undefined
+      ? {}
+      : { selectedFiles: [...changeset.selectedFiles] }),
+    ...(changeset.prepared === undefined
+      ? {}
+      : {
+          prepared: { files: changeset.prepared.files.map(canonicalPreparedChangesetFile) },
+        }),
+  };
+}
+
+function canonicalEditorAgentAction(action: EditorAgentAction): EditorAgentAction {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: action.actionId,
+    idempotencyKey: action.idempotencyKey,
+    sessionId: action.sessionId,
+    type: action.type,
+    origin: resolveEditorAgentActionOrigin(action.origin),
+    ...(action.authorityRef === undefined
+      ? {}
+      : {
+          authorityRef: {
+            runId: action.authorityRef.runId,
+            envelopeDigest: action.authorityRef.envelopeDigest,
+          },
+        }),
+    ...(action.approvalRef === undefined
+      ? {}
+      : {
+          approvalRef: {
+            approvalId: action.approvalRef.approvalId,
+            actionId: action.approvalRef.actionId,
+            approvalProofDigest: action.approvalRef.approvalProofDigest,
+            expiresAt: action.approvalRef.expiresAt,
+          },
+        }),
+    ...(action.requiresReview === undefined ? {} : { requiresReview: action.requiresReview }),
+    ...(action.target === undefined ? {} : { target: canonicalActionTarget(action.target) }),
+    ...(action.expectedDocumentVersion === undefined
+      ? {}
+      : { expectedDocumentVersion: canonicalDocumentVersion(action.expectedDocumentVersion) }),
+    ...(action.expectedContentHash === undefined
+      ? {}
+      : { expectedContentHash: action.expectedContentHash }),
+    ...(action.textEdits === undefined
+      ? {}
+      : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) }),
+    ...(action.patch === undefined ? {} : { patch: action.patch }),
+    ...(action.changeset === undefined ? {} : { changeset: canonicalChangeset(action.changeset) }),
+  };
+}
+
+function canonicalConflict(conflict: EditorAgentConflictDetail): EditorAgentConflictDetail {
+  return {
+    code: conflict.code,
+    message: conflict.message,
+    ...(conflict.file === undefined ? {} : { file: conflict.file }),
+  };
+}
+
+function canonicalFileActionResult(
+  result: EditorAgentFileActionResult,
+): EditorAgentFileActionResult {
+  return {
+    file: result.file,
+    status: result.status,
+    ...(result.message === undefined ? {} : { message: result.message }),
+    ...(result.conflict === undefined ? {} : { conflict: canonicalConflict(result.conflict) }),
+  };
+}
+
+function canonicalActionResult(result: EditorAgentActionResult): EditorAgentActionResult {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: result.actionId,
+    sessionId: result.sessionId,
+    status: result.status,
+    ...(result.message === undefined ? {} : { message: result.message }),
+    ...(result.conflict === undefined ? {} : { conflict: canonicalConflict(result.conflict) }),
+    ...(result.failure === undefined
+      ? {}
+      : { failure: { code: result.failure.code, message: result.failure.message } }),
+    ...(result.files === undefined ? {} : { files: result.files.map(canonicalFileActionResult) }),
+  };
+}
+
 const EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS = new Set([
   "schemaVersion",
   "kind",
@@ -1109,7 +1253,7 @@ function parseBridgeActionRequest(
     value: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "action",
-      action: { ...value.action, origin: resolveEditorAgentActionOrigin(value.action.origin) },
+      action: canonicalEditorAgentAction(value.action),
       bridgeDecisionCapability: value.bridgeDecisionCapability,
     },
   };
@@ -1130,7 +1274,7 @@ function parseActionResultRequest(
     value: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "result",
-      result: value.result,
+      result: canonicalActionResult(value.result),
       ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
     },
   };
@@ -1147,7 +1291,7 @@ export function parseEditorAgentActionsPostBody(
   value: unknown,
 ): EditorAgentParse<EditorAgentActionsPostBody> {
   if (isEditorAgentAction(value)) {
-    return { ok: true, value: { ...value, origin: resolveEditorAgentActionOrigin(value.origin) } };
+    return { ok: true, value: canonicalEditorAgentAction(value) };
   }
   if (!isRecord(value)) return invalidActionsPostBody();
   if (value.kind === "action") return parseBridgeActionRequest(value);

@@ -373,7 +373,8 @@ function isChatApplyRequest(request: PlaywrightRequest): boolean {
   if (request.method() !== "POST") return false;
   if (new URL(request.url()).pathname !== "/api/editor/agent/actions") return false;
   const body = tryParseJsonRecord(request.postData());
-  return body?.type === "applyPatch" && body.origin === "chat";
+  const action = isRecord(body?.action) ? body.action : body;
+  return body?.kind === "action" && action?.type === "applyPatch";
 }
 
 async function queueCodeBlock(page: Page, frame: Locator): Promise<QueuedAction> {
@@ -389,11 +390,13 @@ async function queueCodeBlock(page: Page, frame: Locator): Promise<QueuedAction>
   expect(response.status()).toBe(202);
   const responseBody = parseJsonRecord(await response.text(), "Editor action queue");
   expect(responseBody.result).toEqual(expect.objectContaining({ status: "queued" }));
-  const body = parseJsonRecord(actionRequest.postData() ?? "", "Editor action request");
+  const requestBody = parseJsonRecord(actionRequest.postData() ?? "", "Editor action request");
+  const body = requestBody.action;
+  if (!isRecord(body)) throw new Error("Editor bridge request lacks an action envelope.");
+  expect(requestBody).toMatchObject({ schemaVersion: "1", kind: "action" });
   expect(body).toMatchObject({
     schemaVersion: "1",
     type: "applyPatch",
-    origin: "chat",
     target: { file: RELATIVE_PATH },
   });
   expect(body.expectedContentHash).toEqual(expect.stringMatching(/^[a-f0-9]{64}$/u));

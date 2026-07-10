@@ -91,6 +91,14 @@ vi.mock("next/dynamic", () => {
 
 const BASE_VERSION = { sizeBytes: 12, modifiedAt: 1, contentHash: "a".repeat(64) };
 const BRIDGE_DECISION_CAPABILITY = "A".repeat(43);
+const INITIAL_CONTENT_HASH = "8de5c07db8deb3b75dedd9b5bc999669936cea181ae0033c27c4e2071a6e434d";
+const WRITE_ACTION_TYPES = new Set<EditorAgentAction["type"]>([
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+  "applyChangeset",
+]);
 
 const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
@@ -198,6 +206,7 @@ function agentAction(
     idempotencyKey: `a11y-ik-${agentActionSeq}`,
     sessionId,
     type,
+    ...(WRITE_ACTION_TYPES.has(type) ? { expectedContentHash: INITIAL_CONTENT_HASH } : {}),
     ...overrides,
   };
 }

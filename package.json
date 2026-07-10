@@ -58,6 +58,7 @@
     "test:e2e:editor-fidelity-1296": "playwright test --config tests/e2e/config/playwright.issue-1296-editor-agent.config.ts --project=chromium",
     "test:e2e:editor-agent-1394": "playwright test --config tests/e2e/config/playwright.issue-1394-editor-agent.config.ts --project=chromium",
     "test:e2e:editor-chat-2119": "playwright test tests/e2e/editor-chat-roundtrip-2119.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium",
+    "test:e2e:editor-agent-docking-2122": "playwright test --config tests/e2e/config/playwright.issue-2122-editor-agent-docking.config.ts --project=chromium",
     "test:e2e:editor-governance-1395": "playwright test --config tests/e2e/config/playwright.issue-1395-editor-agent.config.ts --project=chromium",
     "test:e2e:editor-layout-1375": "playwright test --config tests/e2e/config/playwright.issue-1375-editor-layout.config.ts --project=chromium",
     "test:e2e:editor-baseline-1377": "playwright test --config tests/e2e/config/playwright.issue-1377-editor-baseline.config.ts --project=chromium",
