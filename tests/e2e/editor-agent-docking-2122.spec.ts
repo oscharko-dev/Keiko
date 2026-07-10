@@ -304,6 +304,53 @@ async function expectAuditEvidence(
   expect(JSON.stringify(records)).not.toContain(CLOSED_AFTER);
 }
 
+async function openSplitPaneWorkspace(
+  page: Page,
+  request: APIRequestContext,
+  root: string,
+  eventSessionSets: string[][],
+): Promise<{
+  readonly workspace: Locator;
+  readonly closedPane: Locator;
+  readonly activePane: Locator;
+  readonly sessionId: string;
+}> {
+  await page.goto("/");
+  const workspace = await openEditorWorkspace(page);
+  await splitActivePane(workspace, ACTIVE_FILE, "right");
+  const panes = workspace.locator(EDITOR_SELECTORS.pane);
+  await expect(panes).toHaveCount(2);
+  const closedPane = panes.nth(0);
+  const activePane = panes.nth(1);
+  await closedPane.locator(`${EDITOR_SELECTORS.tabHit}[data-tip="${CLOSED_FILE}"]`).click();
+  await expect(
+    closedPane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "closed = 1" }),
+  ).toBeVisible();
+  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
+  const closedSession = (await liveEditorSessionIds(request, root))[0];
+  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
+  await activePane.locator(`${EDITOR_SELECTORS.tabHit}[data-tip="${ACTIVE_FILE}"]`).click();
+  await expect(
+    activePane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "active = 1" }),
+  ).toBeVisible();
+  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
+  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
+  const sessionId = await waitForEditorSession(request, root);
+  expect(sessionId).not.toBe(closedSession);
+  return { workspace, closedPane, activePane, sessionId };
+}
+
+function collectEventSessionSets(page: Page): string[][] {
+  const sessionSets: string[][] = [];
+  page.on("request", (browserRequest) => {
+    const url = new URL(browserRequest.url());
+    if (url.pathname === "/api/editor/agent/events") {
+      sessionSets.push(url.searchParams.getAll("sessionId"));
+    }
+  });
+  return sessionSets;
+}
+
 test.afterAll(() => {
   cleanupEditorWorkspaces();
 });
@@ -426,37 +473,14 @@ test("split panes keep one live session and reconcile a committed changeset in b
     windowId: "editor-agent-docking-2122-split",
     resetWorkspace: true,
   });
-  const eventSessionSets: string[][] = [];
-  page.on("request", (browserRequest) => {
-    const url = new URL(browserRequest.url());
-    if (url.pathname === "/api/editor/agent/events") {
-      eventSessionSets.push(url.searchParams.getAll("sessionId"));
-    }
-  });
+  const eventSessionSets = collectEventSessionSets(page);
   const pageErrors = collectPageErrors(page);
-  await page.goto("/");
-  const workspace = await openEditorWorkspace(page);
-  await splitActivePane(workspace, ACTIVE_FILE, "right");
-  const panes = workspace.locator(EDITOR_SELECTORS.pane);
-  await expect(panes).toHaveCount(2);
-  const closedPane = panes.nth(0);
-  const activePane = panes.nth(1);
-  await closedPane.locator(`${EDITOR_SELECTORS.tabHit}[data-tip="${CLOSED_FILE}"]`).click();
-  await expect(
-    closedPane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "closed = 1" }),
-  ).toBeVisible();
-  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
-  const secondSession = (await liveEditorSessionIds(request, root))[0];
-  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
-
-  await activePane.locator(`${EDITOR_SELECTORS.tabHit}[data-tip="${ACTIVE_FILE}"]`).click();
-  await expect(
-    activePane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "active = 1" }),
-  ).toBeVisible();
-  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
-  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
-  const sessionId = await waitForEditorSession(request, root);
-  expect(sessionId).not.toBe(secondSession);
+  const { workspace, closedPane, activePane, sessionId } = await openSplitPaneWorkspace(
+    page,
+    request,
+    root,
+    eventSessionSets,
+  );
 
   const envelope = authorityEnvelope(root, "supervised-coding", "run-2122-model");
   const authorityRef = await registerAuthority(request, envelope);

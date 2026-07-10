@@ -1168,6 +1168,25 @@ function canonicalChangeset(changeset: EditorAgentChangeset): EditorAgentChanges
   };
 }
 
+function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  if (action.type === "applyTextEdits") {
+    return action.textEdits === undefined
+      ? {}
+      : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) };
+  }
+  if (action.type === "applyPatch") {
+    return {
+      ...(action.textEdits === undefined
+        ? {}
+        : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) }),
+      ...(action.patch === undefined ? {} : { patch: action.patch }),
+    };
+  }
+  return action.type === "applyChangeset" && action.changeset !== undefined
+    ? { changeset: canonicalChangeset(action.changeset) }
+    : {};
+}
+
 function canonicalEditorAgentAction(action: EditorAgentAction): EditorAgentAction {
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
@@ -1202,14 +1221,7 @@ function canonicalEditorAgentAction(action: EditorAgentAction): EditorAgentActio
     ...(action.expectedContentHash === undefined
       ? {}
       : { expectedContentHash: action.expectedContentHash }),
-    ...((action.type !== "applyTextEdits" && action.type !== "applyPatch") ||
-    action.textEdits === undefined
-      ? {}
-      : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) }),
-    ...(action.type !== "applyPatch" || action.patch === undefined ? {} : { patch: action.patch }),
-    ...(action.type !== "applyChangeset" || action.changeset === undefined
-      ? {}
-      : { changeset: canonicalChangeset(action.changeset) }),
+    ...canonicalEditorAgentActionPayload(action),
   };
 }
 
