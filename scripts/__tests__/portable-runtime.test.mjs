@@ -90,6 +90,13 @@ describe("findPortableMetadataRedactionFailures", () => {
     [{ authorization: "Basic c2Vuc2l0aXZlOnZhbHVl" }],
     [{ client_secret: "correct-horse-battery-staple" }],
     [{ privateKey: "correct-horse-battery-staple" }],
+    [{ api_token: "opaque" }],
+    [{ authToken: "opaque" }],
+    [{ refresh_token: "opaque" }],
+    [{ "proxy-authorization": "opaque" }],
+    [{ "client-password": "opaque" }],
+    [{ properties: [{ name: "api_token", value: "opaque" }] }],
+    [{ properties: [{ key: "client-password", value: "opaque" }] }],
   ])("rejects credential-bearing metadata %#", (value) => {
     expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
     expect(findPortableMetadataRedactionFailures(JSON.stringify(value))).not.toEqual([]);
@@ -99,11 +106,29 @@ describe("findPortableMetadataRedactionFailures", () => {
     const evidence = {
       bomFormat: "CycloneDX",
       component: { name: "@oscharko-dev/keiko", version: ROOT_PACKAGE_VERSION },
+      descriptions: [
+        "Basic authentication utilities for local testing",
+        "The bearer must retain this notice.",
+      ],
       subjectDigest: DIGEST_A,
     };
 
     expect(findPortableMetadataRedactionFailures(evidence)).toEqual([]);
     expect(findPortableMetadataRedactionFailures(JSON.stringify(evidence))).toEqual([]);
+  });
+
+  it("rejects embedded credential URLs and explicit authorization syntax", () => {
+    expect(
+      findPortableMetadataRedactionFailures("mirror https://user:password@example.invalid/npm/"),
+    ).not.toEqual([]);
+    expect(findPortableMetadataRedactionFailures("Authorization: Bearer opaque-value")).not.toEqual(
+      [],
+    );
+    expect(
+      findPortableMetadataRedactionFailures(
+        "metadata auth=Bearer opaque-value proxy_authorization=Basic c2Vuc2l0aXZlOnZhbHVl",
+      ),
+    ).not.toEqual([]);
   });
 });
 

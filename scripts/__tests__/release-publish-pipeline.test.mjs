@@ -763,6 +763,16 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "evidence/sbom.cdx.json",
         '{"bomFormat":"CycloneDX","Authorization":"Bearer sensitive-value"}\n',
       ],
+      [
+        "SBOM compound token",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","api_token":"opaque"}\n',
+      ],
+      [
+        "SBOM semantic credential property",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","properties":[{"name":"api_token","value":"opaque"}]}\n',
+      ],
       ["license", "evidence/third-party-notices.txt", "https://user:pass@example.com/private\n"],
       ["signing", "evidence/signing-verification.json", '{"rawOutput":"secret"}\n'],
       ["provenance", "evidence/provenance.intoto.jsonl", '{"privatePath":"/Users/customer"}\n'],
@@ -790,6 +800,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     it.each([
       '{"password":"correct-horse-battery-staple"}\n',
       '{"Authorization":"Basic c2Vuc2l0aXZlOnZhbHVl"}\n',
+      '{"authToken":"opaque"}\n',
+      '{"refresh_token":"opaque"}\n',
+      '{"description":"mirror https://user:password@example.invalid/npm/"}\n',
     ])("rejects credential-bearing optional evidence before publication", (content) => {
       const viewBody =
         'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
@@ -810,6 +823,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stderr).toContain("is not redacted");
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 
     it.each(["license", "sbom"])(
@@ -831,7 +845,11 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       },
     );
 
-    it("rejects credential-bearing sidecar evidence before publication", () => {
+    it.each([
+      "Authorization: Bearer sensitive-value\n",
+      '{"proxy-authorization":"opaque"}\n',
+      '{"client-password":"opaque"}\n',
+    ])("rejects credential-bearing sidecar evidence before publication", (content) => {
       const viewBody =
         'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
       lastRun = runPublish({
@@ -851,7 +869,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
                   "opencode-compatible",
                   "LICENSE.txt",
                 ),
-                "Authorization: Bearer sensitive-value\\n",
+                content,
               );
             }
           },
@@ -863,6 +881,28 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("allows benign authentication prose in release evidence", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateEvidence: (root, _manifest, _target, index) => {
+            if (index === 0) {
+              writeFileSync(
+                join(root, "evidence", "third-party-notices.txt"),
+                "Basic authentication utilities for local testing.\nThe bearer must retain this notice.\n",
+              );
+            }
+          },
+        },
+      });
+
+      expect(lastRun.stderr).not.toContain("license evidence is not redacted");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(true);
     });
 
     it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {

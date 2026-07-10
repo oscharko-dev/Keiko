@@ -80,8 +80,9 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 
 const SECRET_PATTERN =
   /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
-const CREDENTIAL_VALUE_PATTERN = /(?:^|[\s"'=:-])(?:bearer|basic)\s+\S+/iu;
-const CREDENTIAL_URL_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;
+const CREDENTIAL_VALUE_PATTERN =
+  /(?:(?:^|[\r\n])\s*(?:proxy[-_ ]authorization|authorization)\s*:|(?:^|[\s"'`])(?:proxy[-_ ]authorization|authorization|auth)\s*=)\s*(?:bearer|basic)\s+\S+/iu;
+const CREDENTIAL_URL_PATTERN = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -117,6 +118,14 @@ const CREDENTIAL_METADATA_KEYS = new Set([
   "credential",
   "privatekey",
   "clientsecret",
+]);
+const CREDENTIAL_METADATA_WORDS = new Set([
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "authorization",
+  "credential",
 ]);
 const FORBIDDEN_PATH_PARTS = [
   ".env",
@@ -1039,6 +1048,7 @@ function scanForbidden(value, path, failures) {
   if (Array.isArray(value))
     value.forEach((entry, index) => scanForbidden(entry, `${path}[${String(index)}]`, failures));
   if (isRecord(value)) {
+    scanSemanticCredentialProperty(value, path, failures);
     for (const [key, entry] of Object.entries(value)) {
       if (isForbiddenManifestKey(key, path)) {
         push(failures, `${path}.${key}`, "uses a forbidden manifest key");
@@ -1053,12 +1063,43 @@ function isForbiddenManifestKey(key, path) {
   const normalizedKey = key.toLowerCase();
   return (
     CREDENTIAL_METADATA_KEYS.has(normalizeCredentialMetadataKey(key)) ||
+    isCompoundCredentialMetadataKey(key) ||
     FORBIDDEN_KEY_PARTS.some((part) => normalizedKey.includes(part.toLowerCase()))
   );
 }
 
 function normalizeCredentialMetadataKey(key) {
   return key.toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
+}
+
+function credentialMetadataWords(key) {
+  return key
+    .replaceAll(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replaceAll(/([A-Z]+)([A-Z][a-z])/gu, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((word) => word.length > 0);
+}
+
+function isCompoundCredentialMetadataKey(key) {
+  const words = credentialMetadataWords(key);
+  if (words.some((word) => CREDENTIAL_METADATA_WORDS.has(word))) return true;
+  return words.some(
+    (word, index) =>
+      word === "key" && (words[index - 1] === "api" || words[index - 1] === "private"),
+  );
+}
+
+function scanSemanticCredentialProperty(value, path, failures) {
+  for (const semanticKey of ["name", "key"]) {
+    if (
+      typeof value[semanticKey] === "string" &&
+      Object.hasOwn(value, "value") &&
+      isForbiddenManifestKey(value[semanticKey], path)
+    ) {
+      push(failures, `${path}.${semanticKey}`, "names a forbidden credential property");
+    }
+  }
 }
 
 function scanForbiddenString(value, path, failures) {
