@@ -3,6 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ApiError, setupGateway } from "@/lib/api";
+import { useTranslate } from "@/lib/i18n";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
@@ -100,6 +101,7 @@ export function GatewaySetupDialog({
   readonly storedApiKeyHeaderName?: string | undefined;
   readonly storedModels?: readonly ModelCapability[] | undefined;
 }): ReactNode {
+  const t = useTranslate();
   const dialogRef = useRef<HTMLDivElement>(null);
   const voiceProviderLocalityLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
@@ -320,30 +322,38 @@ export function GatewaySetupDialog({
       if (submittedFigmaCredential && !submittedGatewaySettings) {
         setSuccess(
           submittedVoiceCredential
-            ? "Updated audio and Digital Voice settings and verified Figma access token. Reloading Keiko…"
+            ? t("gatewaySetup.voice.success.audioAndFigma")
             : "Verified Figma access token. Reloading Keiko…",
         );
       } else if (submittedFigmaCredential && !submittedGatewayCredentials) {
         setSuccess(
           submittedVoiceCredential
-            ? "Updated model gateway, audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…"
+            ? t("gatewaySetup.voice.success.gatewayAudioAndFigma")
             : "Updated model gateway settings and verified Figma access token. Reloading Keiko…",
         );
       } else if (!submittedFigmaCredential && !submittedGatewayCredentials) {
         setSuccess(
           submittedVoiceCredential
-            ? "Updated audio and Digital Voice settings. Reloading Keiko…"
+            ? t("gatewaySetup.voice.success.audio")
             : "Updated model gateway settings. Reloading Keiko…",
         );
       } else if (submittedFigmaCredential) {
         setSuccess(
           submittedVoiceCredential
-            ? `${verifiedModelSummary}, updated audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…${skippedSummary}`
+            ? t("gatewaySetup.voice.success.verifiedAudioAndFigma", {
+                verified: verifiedModelSummary,
+                skipped: skippedSummary,
+              })
             : `${verifiedModelSummary} and Figma access token. Reloading Keiko…${skippedSummary}`,
         );
       } else {
         setSuccess(
-          `${verifiedModelSummary}${submittedVoiceCredential ? " and updated audio and Digital Voice settings" : ""}. Reloading Keiko…${skippedSummary}`,
+          submittedVoiceCredential
+            ? t("gatewaySetup.voice.success.verifiedAudio", {
+                verified: verifiedModelSummary,
+                skipped: skippedSummary,
+              })
+            : `${verifiedModelSummary}. Reloading Keiko…${skippedSummary}`,
         );
       }
       reloadTimerRef.current = window.setTimeout(
@@ -499,17 +509,18 @@ export function GatewaySetupDialog({
   const voiceFields = (
     <div className="gw-grid">
       <div className="gw-note gw-span-2">
-        Configure only what you need: Dictate requires a speech-to-text deployment. Digital Voice
-        requires a separate Realtime deployment. The same audio connection and credential are used
-        for the selected deployments below. Use the exact deployment names shown by your provider.
+        {t("gatewaySetup.voice.guidance")}
         <br />
-        Selected capabilities: Dictate {voiceModelId.trim() === "" ? "off" : "on"} · Digital Voice{" "}
-        {voiceRealtimeModelId.trim() === "" ? "off" : "on"} · Read aloud{" "}
-        {voiceSpeechOutputModelId.trim() === "" ? "off" : "on"}.
+        {t("gatewaySetup.voice.selectedCapabilities", {
+          dictate: t(voiceModelId.trim() === "" ? "common.off" : "common.on"),
+          digitalVoice: t(voiceRealtimeModelId.trim() === "" ? "common.off" : "common.on"),
+          readAloud: t(voiceSpeechOutputModelId.trim() === "" ? "common.off" : "common.on"),
+        })}
       </div>
       <label className="gw-field">
         <span>
-          Dictate · speech-to-text deployment <span className="dlg-opt">optional</span>
+          {t("gatewaySetup.voice.dictateDeployment")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <input
           className="gw-input mono"
@@ -522,7 +533,8 @@ export function GatewaySetupDialog({
       </label>
       <label className="gw-field">
         <span>
-          Digital Voice · Realtime deployment <span className="dlg-opt">optional</span>
+          {t("gatewaySetup.voice.realtimeDeployment")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <input
           className="gw-input mono"
@@ -535,7 +547,8 @@ export function GatewaySetupDialog({
       </label>
       <label className="gw-field">
         <span>
-          Read aloud · speech-output deployment <span className="dlg-opt">optional</span>
+          {t("gatewaySetup.voice.speechOutputDeployment")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <input
           className="gw-input mono"
@@ -548,7 +561,8 @@ export function GatewaySetupDialog({
       </label>
       <label className="gw-field">
         <span>
-          Output voice <span className="dlg-opt">optional; default alloy</span>
+          {t("gatewaySetup.voice.outputVoice")}{" "}
+          <span className="dlg-opt">{t("gatewaySetup.voice.outputVoiceHint")}</span>
         </span>
         <input
           className="gw-input mono"
@@ -579,7 +593,7 @@ export function GatewaySetupDialog({
       </div>
       <label className="gw-field gw-span-2">
         <span>
-          Audio endpoint URL{" "}
+          {t("gatewaySetup.voice.endpointUrl")}{" "}
           {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
         </span>
         <input
@@ -587,7 +601,7 @@ export function GatewaySetupDialog({
           value={voiceBaseUrl}
           placeholder={
             preserveExisting
-              ? "Only enter a value to replace the stored audio URL"
+              ? t("gatewaySetup.voice.endpointReplacePlaceholder")
               : "https://voice-gateway.example.com/openai/v1"
           }
           autoComplete="off"
@@ -597,7 +611,7 @@ export function GatewaySetupDialog({
       </label>
       <label className="gw-field">
         <span>
-          Audio credential{" "}
+          {t("gatewaySetup.voice.credential")}{" "}
           {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
         </span>
         <input
@@ -606,8 +620,8 @@ export function GatewaySetupDialog({
           value={voiceApiKey}
           placeholder={
             preserveExisting
-              ? "Only enter a value to replace the stored audio credential"
-              : "Paste your audio credential"
+              ? t("gatewaySetup.voice.credentialReplacePlaceholder")
+              : t("gatewaySetup.voice.credentialPlaceholder")
           }
           autoComplete="off"
           disabled={busy || success !== undefined}
@@ -616,7 +630,8 @@ export function GatewaySetupDialog({
       </label>
       <label className="gw-field">
         <span>
-          Audio auth header <span className="dlg-opt">advanced</span>
+          {t("gatewaySetup.voice.authHeader")}{" "}
+          <span className="dlg-opt">{t("common.advanced")}</span>
         </span>
         <input
           className="gw-input mono"
@@ -629,7 +644,7 @@ export function GatewaySetupDialog({
       </label>
       <label className="gw-field">
         <span>
-          Audio timeout (ms) <span className="dlg-opt">advanced</span>
+          {t("gatewaySetup.voice.timeout")} <span className="dlg-opt">{t("common.advanced")}</span>
         </span>
         <input
           className="gw-input mono"
@@ -725,15 +740,15 @@ export function GatewaySetupDialog({
           <section className="gw-section" aria-labelledby="gw-voice-section-title">
             <div className="gw-section-head">
               <div>
-                <h2 id="gw-voice-section-title">Audio &amp; Digital Voice</h2>
-                <p>Optional models for dictation, live conversation, and spoken answers.</p>
+                <h2 id="gw-voice-section-title">{t("gatewaySetup.voice.title")}</h2>
+                <p>{t("gatewaySetup.voice.description")}</p>
               </div>
             </div>
             {preserveExisting ? (
               <>
-                <div className="gw-current" aria-label="Stored audio credentials">
+                <div className="gw-current" aria-label={t("gatewaySetup.voice.storedAria")}>
                   <div className="gw-current-row">
-                    <span>Audio models</span>
+                    <span>{t("gatewaySetup.voice.audioModels")}</span>
                     <strong>{voiceModelNames.length > 0 ? "Stored" : "Not configured"}</strong>
                   </div>
                   {voiceModelNames.length > 0 ? (
@@ -750,7 +765,7 @@ export function GatewaySetupDialog({
                   ) : null}
                 </div>
                 <details className="gw-replace">
-                  <summary>Update audio and Digital Voice settings</summary>
+                  <summary>{t("gatewaySetup.voice.updateSettings")}</summary>
                   {voiceFields}
                 </details>
               </>
