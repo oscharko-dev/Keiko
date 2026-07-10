@@ -96,54 +96,88 @@ function buildAllProblems(
   return problems;
 }
 
-// ─── Module-level store ──────────────────────────────────────────────────────────────
-let diagnosticsByPath = new Map<string, readonly EditorDiagnostic[]>();
-let latestReport: VerificationReport | null = null;
-let problems: readonly EditorProblem[] = [];
-const listeners = new Set<() => void>();
-
-function rebuild(): void {
-  problems = buildAllProblems(diagnosticsByPath, latestReport);
-  for (const listener of [...listeners]) listener();
+// ─── Module-level store, scoped per project root (Epic #2092 fix-up) ─────────────────────────────
+// The desktop shell supports multiple simultaneously mounted editor windows bound to different
+// project roots (see WindowsRegistry/resolveBoundRoot). A single process-wide store would let a
+// project A diagnostic silently overwrite a same-relative-path project B diagnostic, and would make
+// one project's problems appear in another project's panel. Each root gets its own aggregation.
+interface ProjectProblemsState {
+  diagnosticsByPath: Map<string, readonly EditorDiagnostic[]>;
+  latestReport: VerificationReport | null;
+  problems: readonly EditorProblem[];
+  readonly listeners: Set<() => void>;
 }
 
-export function setPaneDiagnostics(path: string, diagnostics: readonly EditorDiagnostic[]): void {
-  const next = new Map(diagnosticsByPath);
+const projectStates = new Map<string, ProjectProblemsState>();
+
+function projectState(root: string): ProjectProblemsState {
+  let entry = projectStates.get(root);
+  if (entry === undefined) {
+    entry = {
+      diagnosticsByPath: new Map(),
+      latestReport: null,
+      problems: [],
+      listeners: new Set(),
+    };
+    projectStates.set(root, entry);
+  }
+  return entry;
+}
+
+function rebuild(entry: ProjectProblemsState): void {
+  entry.problems = buildAllProblems(entry.diagnosticsByPath, entry.latestReport);
+  for (const listener of [...entry.listeners]) listener();
+}
+
+export function setPaneDiagnostics(
+  root: string,
+  path: string,
+  diagnostics: readonly EditorDiagnostic[],
+): void {
+  const entry = projectState(root);
+  const next = new Map(entry.diagnosticsByPath);
   if (diagnostics.length === 0) next.delete(path);
   else next.set(path, diagnostics);
-  diagnosticsByPath = next;
-  rebuild();
+  entry.diagnosticsByPath = next;
+  rebuild(entry);
 }
 
-export function removePaneDiagnostics(path: string): void {
-  if (!diagnosticsByPath.has(path)) return;
-  const next = new Map(diagnosticsByPath);
+export function removePaneDiagnostics(root: string, path: string): void {
+  const entry = projectStates.get(root);
+  if (entry === undefined || !entry.diagnosticsByPath.has(path)) return;
+  const next = new Map(entry.diagnosticsByPath);
   next.delete(path);
-  diagnosticsByPath = next;
-  rebuild();
+  entry.diagnosticsByPath = next;
+  rebuild(entry);
 }
 
-export function setVerificationReport(report: VerificationReport | null): void {
-  latestReport = report;
-  rebuild();
+export function setVerificationReport(root: string, report: VerificationReport | null): void {
+  const entry = projectState(root);
+  entry.latestReport = report;
+  rebuild(entry);
 }
 
-export function subscribeEditorProblems(listener: () => void): () => void {
-  listeners.add(listener);
+export function subscribeEditorProblems(root: string, listener: () => void): () => void {
+  const entry = projectState(root);
+  entry.listeners.add(listener);
   return (): void => {
-    listeners.delete(listener);
+    entry.listeners.delete(listener);
+    if (
+      entry.listeners.size === 0 &&
+      entry.diagnosticsByPath.size === 0 &&
+      entry.latestReport === null
+    ) {
+      projectStates.delete(root);
+    }
   };
 }
 
-export function getEditorProblems(): readonly EditorProblem[] {
-  return problems;
+export function getEditorProblems(root: string): readonly EditorProblem[] {
+  return projectStates.get(root)?.problems ?? [];
 }
 
 export function resetEditorProblemsStoreForTests(): void {
-  diagnosticsByPath = new Map();
-  latestReport = null;
-  problems = [];
-  listeners.clear();
+  projectStates.clear();
 }
 
 // Re-exported for the panel + tests so the canonical bounded/sorted snapshot is built in one place.

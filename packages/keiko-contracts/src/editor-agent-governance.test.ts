@@ -39,6 +39,7 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "applyChangeset",
   "navigateSymbol",
   "searchWorkspace",
+  "requestVerification",
 ];
 
 const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
@@ -57,6 +58,7 @@ const NON_MUTATING: readonly EditorAgentActionType[] = [
   "setSelection",
   "navigateSymbol",
   "searchWorkspace",
+  "requestVerification",
 ];
 
 function ctx(over: Partial<EditorAgentActionPolicyContext> = {}): EditorAgentActionPolicyContext {
@@ -97,6 +99,7 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.searchWorkspace).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.moveTab).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.splitPane).toBe("layout");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.requestVerification).toBe("execution");
   });
 
   it("marks exactly the mutating action set as mutating (AC1)", () => {

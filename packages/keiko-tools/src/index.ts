@@ -100,6 +100,7 @@ export { WorkspaceToolHost } from "./registry.js";
 export {
   DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
   DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES,
+  DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS,
   EditorAgentHttpClient,
   createFetchEditorAgentHttpTransport,
   type EditorAgentClientError,

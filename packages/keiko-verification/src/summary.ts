@@ -41,6 +41,9 @@ export function buildVerificationSummary(report: VerificationReport): Verificati
       outputSummary: redact(r.outputSummary),
       appliedLimits: r.appliedLimits,
       detail: r.detail === undefined ? undefined : redact(r.detail),
+      // Additive (Issue #2210, ADR-0126 D3): carried through unredacted — locations are structured
+      // file/line/column coordinates, never raw command output (see VerificationFailureLocation).
+      locations: r.locations,
     })),
   };
 }

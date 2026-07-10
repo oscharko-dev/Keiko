@@ -15,7 +15,7 @@
  * (WCAG 1.4.1); styling uses inline design-token custom properties, never globals.css (#1300).
  */
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 
 import type {
   EditorProblem,
@@ -199,11 +199,15 @@ function SourceFilterSelect(props: {
 
 export function ProblemsPanel({ root, openEditorFile }: ProblemsPanelProps): ReactNode {
   const t = useProblemsTranslate();
-  const allProblems = useSyncExternalStore(
-    subscribeEditorProblems,
-    getEditorProblems,
-    getEditorProblems,
+  // Issue #2092 (epic-level fix-up) — problems are scoped per project root: a multi-window desktop
+  // can have editor panes open for different projects simultaneously, and each project's Problems
+  // panel must show only that project's diagnostics/failures.
+  const subscribe = useCallback(
+    (listener: () => void) => subscribeEditorProblems(root, listener),
+    [root],
   );
+  const getSnapshot = useCallback(() => getEditorProblems(root), [root]);
+  const allProblems = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const [severity, setSeverity] = useState<SeverityFilter>("all");
   const [source, setSource] = useState<SourceFilter>("all");
   const [focusId, setFocusId] = useState<string | null>(null);
