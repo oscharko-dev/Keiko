@@ -174,6 +174,52 @@ describe("EditorAgentToolHost route dispatch", () => {
     );
   });
 
+  it("queues symbol navigation with a bounded document overlay", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_navigate_symbol", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      file: "src/a.ts",
+      operation: "definition",
+      position: { line: 0, character: 3 },
+      languageId: "typescript",
+      text: "const value = 1;\nvalue;",
+    });
+    const action = JSON.parse(route.requests[0]?.body ?? "null") as EditorAgentAction;
+    expect(action).toMatchObject({
+      type: "navigateSymbol",
+      target: { file: "src/a.ts" },
+      navigateSymbol: {
+        operation: "definition",
+        document: { path: "src/a.ts", languageId: "typescript", text: "const value = 1;\nvalue;" },
+        position: { line: 0, character: 3 },
+      },
+    });
+  });
+
+  it("queues bounded text and symbol workspace searches", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_search_workspace", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      query: "parseConfig",
+      mode: "symbol",
+      maxResults: 3,
+      scopePath: "src",
+    });
+    const action = JSON.parse(route.requests[0]?.body ?? "null") as EditorAgentAction;
+    expect(action).toMatchObject({
+      type: "searchWorkspace",
+      target: { file: "src" },
+      searchWorkspace: {
+        mode: "symbol",
+        query: "parseConfig",
+        maxResults: 3,
+        scopePath: "src",
+      },
+    });
+  });
+
   it.each([
     [
       "applyTextEdits",

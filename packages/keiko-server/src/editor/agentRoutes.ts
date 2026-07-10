@@ -16,6 +16,8 @@
 
 import type { ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
+import { Readable } from "node:stream";
+import type { IncomingMessage } from "node:http";
 import {
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES,
   EDITOR_AGENT_ACTION_APPROVAL_RISK,
@@ -25,6 +27,7 @@ import {
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SESSION_ID_MAX_BYTES,
   EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
+  EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES,
   classifyEditorAgentAction,
   composeEditorAgentActionPolicyDecision,
   editorAgentWritePreconditionError,
@@ -63,7 +66,12 @@ import {
   type PatchValidation,
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
-import { isDenied, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  detectWorkspaceAt,
+  isDenied,
+  readWorkspaceFile,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   errorBody,
@@ -76,6 +84,11 @@ import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { handleEditorLanguage } from "./languageRoutes.js";
+import {
+  handleEditorWorkspaceSearch,
+  handleEditorWorkspaceSymbols,
+} from "./workspaceSearchRoutes.js";
 import type { AutonomousDeliveryConfirmation } from "../coding-runtime/autonomousDeliveryPolicy.js";
 import {
   editorAgentAuthorityRegistry,
@@ -93,6 +106,8 @@ type EditorAgentRouteDeps = Pick<
   "autonomousDeliveryApprovalStore" | "autonomousDeliveryDeploymentCeiling"
 >;
 
+type EditorAgentActionRouteDeps = UiHandlerDeps;
+
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
 const MAX_ACTIVE_BRIDGE_STREAMS = 256;
@@ -104,6 +119,10 @@ type PreparedFile = PreparedChangeset["files"][number];
 type PreparedTextEdit = PreparedFile["textEdits"][number];
 type ChangesetFileResult = NonNullable<EditorAgentActionResult["files"]>[number];
 type DocumentVersion = NonNullable<ChangesetFile["expectedDocumentVersion"]>;
+
+function isServerResolvedAction(action: EditorAgentAction): boolean {
+  return action.type === "navigateSymbol" || action.type === "searchWorkspace";
+}
 
 let editorAgentPatchWriterForTests: WorkspaceWriter | undefined;
 
@@ -1172,6 +1191,13 @@ export async function handleEditorAgentAuthority(
   return { status: 200, body: { authorityRef: registration.authorityRef } };
 }
 
+function resolveNonMutationTargetPath(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): readonly string[] {
+  return optionalTargetPath(action.target?.file ?? snapshot?.activeFile);
+}
+
 function resolveActionTargetPaths(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
@@ -1182,7 +1208,64 @@ function resolveActionTargetPaths(
   if (isEditorAgentActiveBufferActionType(action.type)) {
     return optionalTargetPath(snapshot?.activeFile);
   }
-  return optionalTargetPath(action.target?.file ?? snapshot?.activeFile);
+  if (action.type === "searchWorkspace") {
+    return optionalTargetPath(action.searchWorkspace?.scopePath);
+  }
+  return resolveNonMutationTargetPath(action, snapshot);
+}
+
+function serverResolvedActionPaths(action: EditorAgentAction): readonly (string | undefined)[] {
+  if (action.type === "navigateSymbol") {
+    return [action.navigateSymbol?.document.path, action.target?.file];
+  }
+  return [
+    action.searchWorkspace?.scopePath,
+    action.target?.file,
+    ...(action.searchWorkspace?.includeGlobs ?? []),
+    ...(action.searchWorkspace?.excludeGlobs ?? []),
+  ];
+}
+
+function serverResolvedPathIssue(path: string): EditorAgentActionDenyReason | null {
+  if (!isContainedAgentPath(path)) return "workspace-boundary-escape";
+  return isDenied(path) ? "denied-sensitive-path" : null;
+}
+
+function serverResolvedPathIssues(action: EditorAgentAction): EditorAgentActionDenyReason | null {
+  const paths = serverResolvedActionPaths(action);
+  for (const path of paths) {
+    if (path === undefined) continue;
+    const issue = serverResolvedPathIssue(path);
+    if (issue !== null) return issue;
+  }
+  return null;
+}
+
+function serverActionContext(body: unknown, path: string): RouteContext {
+  const req = Readable.from([
+    Buffer.from(JSON.stringify(body), "utf8"),
+  ]) as unknown as IncomingMessage;
+  (req as { method?: string }).method = "POST";
+  const res = {
+    writableEnded: false,
+    on: (): typeof res => res,
+  } as unknown as ServerResponse;
+  return { req, res, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+}
+
+function serverResolvedDocumentText(
+  snapshot: EditorAgentSessionSnapshot,
+  path: string,
+  text: string | undefined,
+): string {
+  if (text !== undefined) return text;
+  const workspace = detectWorkspaceAt(snapshot.workspaceRoot, nodeWorkspaceFs);
+  return readWorkspaceFile(
+    workspace,
+    path,
+    { maxBytes: EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES },
+    nodeWorkspaceFs,
+  ).text;
 }
 
 function optionalTargetPath(path: string | null | undefined): readonly string[] {
@@ -1720,13 +1803,218 @@ function replayEditorAction(action: EditorAgentAction, requestHash: string): Rou
   return { status: 200, body: { result: replay.result } };
 }
 
-function admitEditorAction(
+function serverResolvedFailure(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  result: EditorAgentActionResult,
+  requestHash: string,
+  status: 200 | 403 | 409,
+): RouteResult {
+  rememberIdempotency(action.idempotencyKey, requestHash, result);
+  auditAction(action, snapshot, decision, result);
+  editorAgentRegistry.reportResult(result);
+  return { status, body: { result } };
+}
+
+async function runNavigateSymbolAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
+  const request = action.navigateSymbol;
+  if (request === undefined) throw new Error("navigateSymbol payload is missing");
+  return handleEditorLanguage(
+    serverActionContext(
+      {
+        root: snapshot.workspaceRoot,
+        operation: request.operation,
+        document: {
+          path: request.document.path,
+          languageId: request.document.languageId,
+          text: serverResolvedDocumentText(snapshot, request.document.path, request.document.text),
+        },
+        position: request.position,
+        ...(request.range === undefined ? {} : { range: request.range }),
+        ...(request.diagnostics === undefined ? {} : { diagnostics: request.diagnostics }),
+      },
+      "/api/editor/language",
+    ),
+    deps,
+  );
+}
+
+async function runSearchWorkspaceAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
+  const request = action.searchWorkspace;
+  if (request === undefined) throw new Error("searchWorkspace payload is missing");
+  if (request.mode === "symbol") {
+    return handleEditorWorkspaceSymbols(
+      serverActionContext(
+        {
+          root: snapshot.workspaceRoot,
+          query: request.query,
+          maxResults: request.maxResults ?? 50,
+          ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
+        },
+        "/api/editor/workspace-symbols",
+      ),
+      deps,
+    );
+  }
+  return handleEditorWorkspaceSearch(
+    serverActionContext(
+      {
+        root: snapshot.workspaceRoot,
+        query: request.query,
+        mode: "literal",
+        caseSensitive: request.caseSensitive ?? false,
+        includeGlobs: request.includeGlobs ?? [],
+        excludeGlobs: request.excludeGlobs ?? [],
+        maxResults: request.maxResults ?? 50,
+      },
+      "/api/editor/workspace-search",
+    ),
+    deps,
+  );
+}
+
+function serverResolvedActionRoute(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
+  return action.type === "navigateSymbol"
+    ? runNavigateSymbolAction(action, snapshot, deps)
+    : runSearchWorkspaceAction(action, snapshot, deps);
+}
+
+async function executeServerResolvedAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult | EditorAgentActionResult> {
+  try {
+    return await serverResolvedActionRoute(action, snapshot, deps);
+  } catch (error) {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: action.actionId,
+        operation: `editor.agent.${action.type}`,
+        source: "editor.agent.serverResolvedAction",
+        error,
+        redact: () => "The server-resolved editor operation failed.",
+      }),
+    );
+    return failedResult(action, "The server-resolved editor operation failed.");
+  }
+}
+
+function finishServerResolvedAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  outcome: RouteResult | EditorAgentActionResult,
+): RouteResult {
+  if ("status" in outcome && typeof outcome.status === "number") {
+    if (outcome.status === 200 && isRecord(outcome.body)) {
+      return serverResolvedFailure(
+        action,
+        snapshot,
+        decision,
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          actionId: action.actionId,
+          sessionId: action.sessionId,
+          status: "succeeded",
+          data: outcome.body,
+        },
+        requestHash,
+        200,
+      );
+    }
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      decision,
+      conflict(
+        action,
+        outcome.status === 403 ? "OUT_OF_SCOPE" : "INVALID_EDITS",
+        "The editor operation was rejected.",
+      ),
+      requestHash,
+      outcome.status === 403 ? 403 : 409,
+    );
+  }
+  return serverResolvedFailure(action, snapshot, decision, outcome, requestHash, 200);
+}
+
+async function resolveServerAction(
   action: EditorAgentAction,
   requestHash: string,
-  deps: EditorAgentRouteDeps | undefined,
-): RouteResult {
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
+  const baseline = decideActionPolicy(action, snapshot, deps);
+  if (snapshot === undefined) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      baseline,
+      conflict(action, "NO_ACTIVE_SESSION", "No editor session snapshot is registered."),
+      requestHash,
+      409,
+    );
+  }
+  const pathIssue = serverResolvedPathIssues(action);
+  if (pathIssue !== null) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      denyByAuthority(baseline, pathIssue),
+      conflict(
+        action,
+        "OUT_OF_SCOPE",
+        "The requested editor operation is outside the workspace scope.",
+      ),
+      requestHash,
+      403,
+    );
+  }
+  return finishServerResolvedAction(
+    action,
+    snapshot,
+    baseline,
+    requestHash,
+    await executeServerResolvedAction(action, snapshot, deps),
+  );
+}
+
+async function admitEditorAction(
+  action: EditorAgentAction,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps | undefined,
+): Promise<RouteResult> {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   const decision = decideActionPolicy(action, snapshot, deps);
+  if (isServerResolvedAction(action)) {
+    if (deps === undefined) {
+      return serverResolvedFailure(
+        action,
+        snapshot,
+        decision,
+        failedResult(action, "The server-resolved editor operation is unavailable."),
+        requestHash,
+        200,
+      );
+    }
+    return resolveServerAction(action, requestHash, snapshot, deps);
+  }
   const admission = preflight(action, snapshot);
   if (!admission.ok) {
     return rejectActionRequest(action, snapshot, decision, admission.result, requestHash, 409);
@@ -1745,7 +2033,7 @@ function admitEditorAction(
 
 export async function handleEditorAgentActions(
   ctx: RouteContext,
-  deps?: EditorAgentRouteDeps,
+  deps?: EditorAgentActionRouteDeps,
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
   if (isRouteResult(body)) return body;

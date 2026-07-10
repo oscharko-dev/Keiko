@@ -330,6 +330,12 @@ export function dispatchEditorAgentAction(
       return dispatchMoveTab(action, controllers);
     case "setSelection":
       return dispatchSetSelection(action, controllers);
+    case "navigateSymbol":
+    case "searchWorkspace":
+      return {
+        status: "failed",
+        message: "Server-resolved editor actions cannot execute in the browser bridge.",
+      };
   }
 }
 
