@@ -788,6 +788,28 @@ describe("KeikoCodeEditor — reference reveal", () => {
     );
   });
 
+  it("keeps the cursor on an indented symbol while highlighting its whole line", async () => {
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          revealRequest: {
+            id: "nested-symbol",
+            range: { start: { line: 16, column: 2 }, end: { line: 18, column: 3 } },
+          },
+        })}
+      />,
+    );
+    await flushMount();
+
+    expect(captured.editor?.setSelection).toHaveBeenCalledWith({
+      startLineNumber: 17,
+      startColumn: 1,
+      endLineNumber: 19,
+      endColumn: 4,
+    });
+    expect(captured.editor?.setPosition).toHaveBeenCalledWith({ lineNumber: 17, column: 3 });
+  });
+
   it("replays the same range when the host sends a new reveal request id", async () => {
     const revealRequest = {
       id: "ref-1",

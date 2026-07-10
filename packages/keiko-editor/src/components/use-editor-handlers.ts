@@ -157,7 +157,12 @@ function applyRevealRequest(
   clearRevealDecoration(refs);
   editor.focus();
   editor.setSelection(safeRange);
-  editor.setPosition({ lineNumber: safeRange.startLineNumber, column: safeRange.startColumn });
+  // Keep the whole-line highlight, but place the cursor at the actual symbol/reference column so
+  // cursor-derived breadcrumbs can resolve an indented nested symbol instead of only its parent.
+  editor.setPosition({
+    lineNumber: safeRange.startLineNumber,
+    column: Math.max(1, monacoRange.startColumn),
+  });
   editor.revealRangeInCenterIfOutsideViewport(safeRange);
   refs.revealDecorationIdsRef.current = editor.deltaDecorations(
     [],
