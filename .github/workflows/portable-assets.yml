@@ -44,16 +44,21 @@ jobs:
         with:
           node-version: "22.x"
           cache: npm
-      - name: Ensure unzip is available for zip staging
+      - name: Ensure zip/unzip are available for staging
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # The stage script lists/extracts the Node .zip runtime with `unzip`, which is not on the
-          # Windows runner by default. Chocolatey is preinstalled; install unzip so staging works.
+          # The stage script extracts the Node .zip runtime with `unzip` and builds the portable
+          # archive with `zip` (Info-ZIP). Neither is on the Windows runner by default; Chocolatey
+          # is preinstalled, so install both before staging.
           if (-not (Get-Command unzip -ErrorAction SilentlyContinue)) {
             choco install unzip --no-progress -y
           }
+          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
+            choco install zip --no-progress -y
+          }
           unzip -v | Select-Object -First 1
+          zip -v | Select-Object -First 2
       - name: Configure MSVC environment for the native launcher
         if: runner.os == 'Windows'
         shell: cmd
