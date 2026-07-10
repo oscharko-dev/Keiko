@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -1440,10 +1441,32 @@ function validateGeneratedManifest(manifest) {
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
 }
 
+export function isCrossDeviceError(error) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EXDEV" || error.code === "ENOTSUP")
+  );
+}
+
+// Windows CI stages under the OS temp drive (C:) but promotes into the workspace checkout (D:),
+// so a same-filesystem rename fails with EXDEV. Fall back to a filesystem-agnostic recursive
+// copy + remove; macOS/Linux keep the atomic rename fast path. `renameImpl` is a seam for tests.
+export function moveStagedDirectory(sourceDir, destDir, renameImpl = renameSync) {
+  try {
+    renameImpl(sourceDir, destDir);
+  } catch (error) {
+    if (!isCrossDeviceError(error)) throw error;
+    cpSync(sourceDir, destDir, { recursive: true });
+    rmSync(sourceDir, { recursive: true, force: true });
+  }
+}
+
 function promoteStageRoot(options, paths) {
   if (options.dryRun) return;
   mkdirSync(resolve(options.outDir), { recursive: true });
-  renameSync(paths.stageRoot, paths.finalRoot);
+  moveStagedDirectory(paths.stageRoot, paths.finalRoot);
 }
 
 export async function runPortableStage(argv = process.argv.slice(2)) {
