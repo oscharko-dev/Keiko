@@ -260,6 +260,57 @@ function folderRerankInputs(
   );
 }
 
+// Cheap length proxy for rerankAndSelect's byte-budget check, computed from the citation's own
+// character span — no store access. Text/page-unit references carry characterStart/characterEnd on
+// every result (see scoped-vector-search), so this covers the overwhelming majority of connector
+// candidates and lets the shared budget truncate the raw pool BEFORE any excerpt is decrypted.
+// Returns undefined for a reference with no span (e.g. table/JSON-pointer citations), which falls
+// back to eager hydration in connectorRerankInput below since there is nothing cheap to estimate.
+export function estimateConnectorExcerptBytes(
+  reference: RetrievalReference,
+  maxExcerptChars: number,
+): number | undefined {
+  const { characterStart, characterEnd } = reference.citation;
+  if (characterStart === undefined || characterEnd === undefined) return undefined;
+  return Math.max(0, Math.min(characterEnd - characterStart, maxExcerptChars));
+}
+
+function connectorRerankInput(
+  reference: RetrievalReference,
+  src: RetrievedConnector,
+  store: KnowledgeStore,
+  redactor: Redactor,
+  maxExcerptChars: number,
+  lookup: ReturnType<typeof buildSelectedScopeSourceLookup>,
+  includeExcerptText: boolean,
+): RerankInput<HybridPayload> {
+  const shared = {
+    kind: "connector" as const,
+    engineScore: reference.score,
+    sourceLabel: redactString(redactor, src.label),
+    tieKey: String(reference.chunkId),
+    payload: { kind: "connector" as const, reference, lookup },
+  };
+  if (!includeExcerptText) {
+    // Policy-denied path: unchanged — no external rerank call will consume this text, so hydration
+    // stays fully deferred until the final prompt-sized selection (see selectHybridPromptCandidates).
+    return { ...shared, redactedText: "" };
+  }
+  // The external reranker needs every preliminary candidate's text, but decrypting EVERY raw
+  // candidate up front (up to maxLocalKnowledgeSources * topK, before the shared budget below has
+  // truncated anything) is the cost this estimate removes: rank/truncate on the cheap proxy first,
+  // then hydrateConnectorSelections fills in real text for the survivors only.
+  const estimatedBytes = estimateConnectorExcerptBytes(reference, maxExcerptChars);
+  return {
+    ...shared,
+    redactedText:
+      estimatedBytes === undefined
+        ? connectorRedactedText(store, reference, redactor, maxExcerptChars)
+        : "",
+    ...(estimatedBytes === undefined ? {} : { estimatedBytes }),
+  };
+}
+
 function connectorRerankInputs(
   connectors: readonly RetrievedConnector[],
   store: KnowledgeStore,
@@ -269,16 +320,17 @@ function connectorRerankInputs(
 ): RerankInput<HybridPayload>[] {
   return connectors.flatMap((src) => {
     const lookup = buildSelectedScopeSourceLookup(store, src.selected);
-    return src.references.map((reference) => ({
-      kind: "connector" as const,
-      redactedText: includeExcerptText
-        ? connectorRedactedText(store, reference, redactor, maxExcerptChars)
-        : "",
-      engineScore: reference.score,
-      sourceLabel: redactString(redactor, src.label),
-      tieKey: String(reference.chunkId),
-      payload: { kind: "connector" as const, reference, lookup },
-    }));
+    return src.references.map((reference) =>
+      connectorRerankInput(
+        reference,
+        src,
+        store,
+        redactor,
+        maxExcerptChars,
+        lookup,
+        includeExcerptText,
+      ),
+    );
   });
 }
 
@@ -325,7 +377,9 @@ function hydrateConnectorSelection(
   redactor: Redactor,
   maxExcerptChars: number,
 ): SelectedCandidate<HybridPayload> {
-  if (!isConnectorCandidate(candidate)) return candidate;
+  // Already-hydrated candidates (connectorRerankInput's eager-fallback branch) are a no-op here —
+  // only a deferred ("") excerpt needs the real read.
+  if (!isConnectorCandidate(candidate) || candidate.redactedText.length > 0) return candidate;
   const redactedText = connectorRedactedText(
     store,
     candidate.payload.reference,
@@ -532,10 +586,27 @@ function resolveConnectorScopes(
   return resolved;
 }
 
-function connectorQuery(scope: ChatLocalKnowledgeScope, content: string): RetrievalQueryShape {
+// Per-connector share of the candidate budget, mirroring splitExplorationBudget on the folder side
+// (above): without this, topK stayed fixed per connector regardless of connector count, so raw
+// candidate volume scaled as numConnectors * topK (up to maxLocalKnowledgeSources * 100) instead of
+// a shared budget. Floored so a large connector count still retrieves a useful minimum per source
+// rather than starving to near-zero.
+const MIN_CONNECTOR_RETRIEVAL_CANDIDATES = 15;
+
+export function connectorRetrievalTopK(connectorScopeCount: number): number {
+  if (connectorScopeCount <= 1) return LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES;
+  const share = Math.floor(LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES / connectorScopeCount);
+  return Math.max(MIN_CONNECTOR_RETRIEVAL_CANDIDATES, share);
+}
+
+export function connectorQuery(
+  scope: ChatLocalKnowledgeScope,
+  content: string,
+  connectorScopeCount: number,
+): RetrievalQueryShape {
   return {
     text: content,
-    topK: LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
+    topK: connectorRetrievalTopK(connectorScopeCount),
     ...(scope.kind === "capsule" ? { capsuleId: scope.capsuleId } : {}),
     ...(scope.kind === "capsule-set" ? { capsuleSetId: scope.capsuleSetId } : {}),
   };
@@ -543,7 +614,10 @@ function connectorQuery(scope: ChatLocalKnowledgeScope, content: string): Retrie
 
 type RetrievalQueryShape = Parameters<typeof runLocalKnowledgeRetrieval>[1];
 
-function defaultConnectorRetrieve(ctx: HybridGroundedAskCtx): ConnectorRetrieve {
+function defaultConnectorRetrieve(
+  ctx: HybridGroundedAskCtx,
+  connectorScopeCount: number,
+): ConnectorRetrieve {
   return async (store, scope, _selected): Promise<RetrievalResult> => {
     const embeddingAdapter = createEmbeddingAdapter(ctx.deps);
     if ("status" in embeddingAdapter) {
@@ -551,7 +625,7 @@ function defaultConnectorRetrieve(ctx: HybridGroundedAskCtx): ConnectorRetrieve 
     }
     return runLocalKnowledgeRetrieval(
       { store, embeddingAdapter, signal: ctx.signal },
-      connectorQuery(scope, ctx.content),
+      connectorQuery(scope, ctx.content, connectorScopeCount),
     );
   };
 }
@@ -624,7 +698,7 @@ async function retrieveConnectors(
   connectorScopes: readonly ChatLocalKnowledgeScope[],
   resolved: readonly SelectedLocalKnowledgeScope[],
 ): Promise<ConnectorRetrieval | RouteResult> {
-  const retrieve = ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx);
+  const retrieve = ctx.connectorRetrieve ?? defaultConnectorRetrieve(ctx, connectorScopes.length);
   const labels = connectorLabels(resolved.map((s) => s.scopeLabel));
   // Index-addressed slots keep the emitted order identical to the scope order regardless of
   // which worker finishes first — evidence and labels stay deterministic.
@@ -1608,9 +1682,17 @@ async function selectHybridPromptCandidates(
     store,
     !externalRerankingDenied,
   );
+  // The external reranker below scores every preliminary candidate's TEXT, so any candidate whose
+  // hydration connectorRerankInput deferred to a cheap byte estimate must be filled in first —
+  // hydrateConnectorSelection is a no-op for candidates that were already eagerly hydrated. The
+  // policy-denied path skips this: it never calls the external reranker, so hydration stays
+  // deferred until the final prompt-sized `selected` below (unchanged from before).
+  const rerankable = externalRerankingDenied
+    ? preliminary
+    : hydrateConnectorSelections(store, preliminary, ctx.deps.redactor, limits.maxExcerptChars);
   const { selected, diagnostics } = await rerankHybridSelection(
     ctx,
-    preliminary,
+    rerankable,
     limits,
     externalRerankingDenied,
   );
