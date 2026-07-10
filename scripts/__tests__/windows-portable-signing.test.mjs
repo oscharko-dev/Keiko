@@ -283,7 +283,7 @@ describe("Windows portable PE signing inventory", () => {
         "--verification-input",
         malformedPath,
       ]),
-    ).rejects.toThrow(/unsupported verification input key/u);
+    ).rejects.toThrow(/verification input contains unsupported keys/u);
 
     expect(paths.map((path) => readFileSync(path))).toEqual(before);
   });

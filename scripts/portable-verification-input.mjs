@@ -1,6 +1,7 @@
 import {
   createPortableVerificationChecks,
   findPortableMetadataRedactionFailures,
+  PORTABLE_VERIFICATION_REASON_CODES,
   portableTargetByName,
   readPortableManifest,
 } from "./portable-runtime.mjs";
@@ -23,6 +24,9 @@ function readReasonCodes(value) {
   ) {
     fail("verification input reasonCodes must be a string array");
   }
+  if (value.some((entry) => !PORTABLE_VERIFICATION_REASON_CODES.includes(entry))) {
+    fail("verification input reasonCodes contain unsupported values");
+  }
   return [...new Set(value)];
 }
 
@@ -35,7 +39,7 @@ function readVerificationChecks(value, target) {
       ? ["publisherChainVerified", "timestampVerified"]
       : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
   for (const key of exactInputKeys(value)) {
-    if (!allowedKeys.includes(key)) fail(`unsupported verification check key: ${key}`);
+    if (!allowedKeys.includes(key)) fail("verification checks contain unsupported keys");
   }
   const checks = {};
   for (const key of allowedKeys) {
@@ -47,7 +51,7 @@ function readVerificationChecks(value, target) {
 
 function sidecarTarget(sidecar) {
   const target = portableTargetByName(sidecar.platformTarget);
-  if (target === undefined) fail(`sidecar ${sidecar.name} platformTarget is unsupported`);
+  if (target === undefined) fail("sidecar platformTarget is unsupported");
   return target;
 }
 
@@ -77,12 +81,12 @@ function readSidecarInputEntry(entry, sidecarsByName) {
   }
   for (const key of exactInputKeys(entry)) {
     if (!["name", "reasonCodes", "verificationChecks"].includes(key)) {
-      fail(`unsupported sidecar verification input key: ${key}`);
+      fail("sidecar verification input contains unsupported keys");
     }
   }
   const name = readSidecarName(entry.name);
   const sidecar = sidecarsByName.get(name);
-  if (sidecar === undefined) fail(`unknown sidecar verification input: ${name}`);
+  if (sidecar === undefined) fail("sidecar verification input is unknown");
   return {
     name,
     reasonCodes: readReasonCodes(entry.reasonCodes),
@@ -98,7 +102,7 @@ function readSidecarInputs(value, sidecars, policy) {
   for (const entry of value) {
     const sidecarInput = readSidecarInputEntry(entry, sidecarsByName);
     if (inputsByName.has(sidecarInput.name)) {
-      fail(`duplicate sidecar verification input: ${sidecarInput.name}`);
+      fail("sidecar verification input is duplicated");
     }
     inputsByName.set(sidecarInput.name, sidecarInput);
   }
@@ -113,16 +117,17 @@ export function parsePortableVerificationInput(input, target, policy, sidecars) 
   }
   for (const key of exactInputKeys(input)) {
     if (!["reasonCodes", "sidecarRuntimes", "verificationChecks"].includes(key)) {
-      fail(`unsupported verification input key: ${key}`);
+      fail("verification input contains unsupported keys");
     }
   }
-  const redactionFailures = findPortableMetadataRedactionFailures(input, "verificationInput");
-  if (redactionFailures.length > 0) fail(redactionFailures.join("\n  - "));
-  return {
+  const parsed = {
     reasonCodes: readReasonCodes(input.reasonCodes),
     sidecarRuntimes: readSidecarInputs(input.sidecarRuntimes, sidecars, policy),
     verificationChecks: readVerificationChecks(input.verificationChecks, target),
   };
+  const redactionFailures = findPortableMetadataRedactionFailures(input, "verificationInput");
+  if (redactionFailures.length > 0) fail("verification input failed redaction policy");
+  return parsed;
 }
 
 export function readPortableVerificationInput(path, target, policy, sidecars) {
@@ -133,5 +138,11 @@ export function readPortableVerificationInput(path, target, policy, sidecars) {
       verificationChecks: createPortableVerificationChecks(target.platformTarget, false),
     };
   }
-  return parsePortableVerificationInput(readPortableManifest(path), target, policy, sidecars);
+  let input;
+  try {
+    input = readPortableManifest(path);
+  } catch {
+    fail("verification input could not be read");
+  }
+  return parsePortableVerificationInput(input, target, policy, sidecars);
 }
