@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
   existsSync,
@@ -15,10 +15,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join, posix, relative, resolve } from "node:path";
+import { join, posix, relative, resolve } from "node:path";
 import { URL } from "node:url";
 
-import { hashDirectoryTree, sha256File, validatePortableManifest } from "./portable-runtime.mjs";
+import { validatePortableManifest } from "./portable-runtime.mjs";
+import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
 import {
   assertWindowsProductionVerificationInput,
   WindowsVerificationInputError,
@@ -86,10 +87,6 @@ export function validateAzureArtifactSigningConfig(env) {
 
 function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function sha256Text(text) {
-  return sha256Bytes(Buffer.from(text, "utf8"));
 }
 
 function portablePath(root, path) {
@@ -267,60 +264,12 @@ function run(command, args, cwd) {
   if (result.error !== undefined || result.status !== 0) fail("archive finalization failed");
 }
 
-function treeSize(root) {
-  let size = 0;
-  const walk = (current) => {
-    for (const name of readdirSync(current)) {
-      const path = join(current, name);
-      const entry = lstatSync(path);
-      if (entry.isDirectory()) walk(path);
-      else if (entry.isFile()) size += entry.size;
-      else fail("signed payload contains an unsupported entry");
-    }
-  };
-  walk(root);
-  return size;
-}
-
-function rebindSidecars(manifest, payloadRoot) {
-  for (const sidecar of manifest.sidecarRuntimes ?? []) {
-    const root = resolve(payloadRoot, sidecar.payloadRootPath);
-    if (portablePath(payloadRoot, root) !== sidecar.payloadRootPath) {
-      fail("sidecar payload root is not canonical");
-    }
-    sidecar.payloadSha256 = hashDirectoryTree(root);
-    sidecar.sizeBytes = treeSize(root);
-  }
-}
-
-export async function rebindArchive(stageRoot, manifest) {
+export async function rebindPortableSignedArchive(stageRoot, manifest) {
   const payloadContainer = join(stageRoot, "payload");
-  const payloadRoot = join(payloadContainer, "Keiko");
   const archivePath = join(stageRoot, manifest.artifact.assetName);
   rmSync(archivePath, { force: true });
   run("zip", ["-qr", archivePath, "Keiko"], payloadContainer);
-  const archiveSha256 = await sha256File(archivePath);
-  const provenancePath = join(stageRoot, "evidence", "provenance.intoto.jsonl");
-  const provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
-  provenance.subjectDigest = archiveSha256;
-  const provenanceText = `${JSON.stringify(provenance)}\n`;
-  writeFileSync(provenancePath, provenanceText);
-  manifest.artifact.sha256 = archiveSha256;
-  manifest.artifact.sizeBytes = statSync(archivePath).size;
-  manifest.provenance.packagedAppTreeSha256 = hashDirectoryTree(join(payloadRoot, "app"));
-  manifest.provenance.provenanceStatementSha256 = sha256Text(provenanceText);
-  rebindSidecars(manifest, payloadRoot);
-  const binding = manifest.releaseImpact.reviewedBinding;
-  binding.archiveSha256 = archiveSha256;
-  binding.assetSizeBytes = manifest.artifact.sizeBytes;
-  binding.provenanceStatementSha256 = manifest.provenance.provenanceStatementSha256;
-  if (manifest.sidecarRuntimes !== undefined) {
-    binding.sidecarRuntimes = JSON.parse(JSON.stringify(manifest.sidecarRuntimes));
-  }
-  writeFileSync(
-    join(stageRoot, "evidence", "SHA256SUMS.txt"),
-    `${archiveSha256}  ${basename(archivePath)}\n`,
-  );
+  await rebindExistingSignedArchive(stageRoot, manifest, archivePath, WINDOWS_TARGET);
 }
 
 async function finalizeCommand(options) {
@@ -332,7 +281,7 @@ async function finalizeCommand(options) {
     fail("manifest target is not Windows x64");
   const verificationInputPath = resolve(required(options, "verification-input"));
   assertWindowsProductionVerificationInput(verificationInputPath, manifest);
-  await rebindArchive(stageRoot, manifest);
+  await rebindPortableSignedArchive(stageRoot, manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(
     process.execPath,
@@ -358,6 +307,8 @@ async function finalizeCommand(options) {
   }
   console.log("windows-portable-signing: verified production archive finalized");
 }
+
+export const rebindArchive = rebindPortableSignedArchive;
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
