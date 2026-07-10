@@ -99,7 +99,7 @@ test.afterEach(() => {
   cleanupEditorWorkspaces();
 });
 
-test("@smoke file-targeted run streams to a terminal state and surfaces the failure in the problems panel", async ({
+test("file-targeted run streams to a terminal state and surfaces the failure in the problems panel", async ({
   page,
 }) => {
   const ws = workspace();
@@ -120,9 +120,7 @@ test("@smoke file-targeted run streams to a terminal state and surfaces the fail
   await expect(page.locator(EDITOR_SELECTORS.workspace).first()).toBeVisible();
 });
 
-test("@smoke workspace-scoped run (typecheck) exercises the non-file-targeted path", async ({
-  page,
-}) => {
+test("workspace-scoped run (typecheck) exercises the non-file-targeted path", async ({ page }) => {
   const ws = workspace();
   await openEditorFor(page, ws.root);
 
