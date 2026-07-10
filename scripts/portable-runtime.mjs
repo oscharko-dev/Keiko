@@ -80,6 +80,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 
 const SECRET_PATTERN =
   /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
+const CREDENTIAL_VALUE_PATTERN = /(?:^|[\s"'=:-])(?:bearer|basic)\s+\S+/iu;
 const CREDENTIAL_URL_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
@@ -104,6 +105,19 @@ const FORBIDDEN_KEY_PARTS = [
   "secretValue",
   "tokenValue",
 ];
+const CREDENTIAL_METADATA_KEYS = new Set([
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "accesstoken",
+  "apikey",
+  "authorization",
+  "auth",
+  "credential",
+  "privatekey",
+  "clientsecret",
+]);
 const FORBIDDEN_PATH_PARTS = [
   ".env",
   ".keiko",
@@ -1037,12 +1051,20 @@ function scanForbidden(value, path, failures) {
 function isForbiddenManifestKey(key, path) {
   if (path === "manifest.stateExclusion" && key.startsWith("excludes")) return false;
   const normalizedKey = key.toLowerCase();
-  return FORBIDDEN_KEY_PARTS.some((part) => normalizedKey.includes(part.toLowerCase()));
+  return (
+    CREDENTIAL_METADATA_KEYS.has(normalizeCredentialMetadataKey(key)) ||
+    FORBIDDEN_KEY_PARTS.some((part) => normalizedKey.includes(part.toLowerCase()))
+  );
+}
+
+function normalizeCredentialMetadataKey(key) {
+  return key.toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
 }
 
 function scanForbiddenString(value, path, failures) {
   if (
     SECRET_PATTERN.test(value) ||
+    CREDENTIAL_VALUE_PATTERN.test(value) ||
     PRIVATE_PATH_PATTERN.test(value) ||
     CREDENTIAL_URL_PATTERN.test(value)
   ) {
@@ -1118,6 +1140,13 @@ export function validatePortablePublishedManifest(manifest, apiIdentity, options
 export function findPortableMetadataRedactionFailures(value, path = "metadata") {
   const failures = [];
   scanForbidden(value, path, failures);
+  if (typeof value === "string") {
+    try {
+      scanForbidden(JSON.parse(value), path, failures);
+    } catch {
+      // Non-JSON evidence is scanned as text above.
+    }
+  }
   return failures;
 }
 

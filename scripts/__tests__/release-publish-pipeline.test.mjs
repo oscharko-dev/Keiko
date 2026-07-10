@@ -748,6 +748,21 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
     it.each([
       ["SBOM", "evidence/sbom.cdx.json", '{"bomFormat":"CycloneDX","tokenValue":"secret"}\n'],
+      [
+        "SBOM password",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","password":"correct-horse-battery-staple"}\n',
+      ],
+      [
+        "SBOM token",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","token":"sensitive-but-not-prefix-shaped"}\n',
+      ],
+      [
+        "SBOM authorization",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","Authorization":"Bearer sensitive-value"}\n',
+      ],
       ["license", "evidence/third-party-notices.txt", "https://user:pass@example.com/private\n"],
       ["signing", "evidence/signing-verification.json", '{"rawOutput":"secret"}\n'],
       ["provenance", "evidence/provenance.intoto.jsonl", '{"privatePath":"/Users/customer"}\n'],
@@ -772,7 +787,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 
-    it("rejects unsafe optional evidence before publication", () => {
+    it.each([
+      '{"password":"correct-horse-battery-staple"}\n',
+      '{"Authorization":"Basic c2Vuc2l0aXZlOnZhbHVl"}\n',
+    ])("rejects credential-bearing optional evidence before publication", (content) => {
       const viewBody =
         'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
       lastRun = runPublish({
@@ -783,8 +801,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
             bundle.artifacts[0].evidencePaths = ["evidence/optional.json"];
           },
           mutateEvidence: (root, _manifest, _target, index) => {
-            if (index === 0)
-              writeFileSync(join(root, "evidence", "optional.json"), '{"rawStdout":"secret"}\n');
+            if (index === 0) writeFileSync(join(root, "evidence", "optional.json"), content);
           },
         },
       });
@@ -813,6 +830,40 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
       },
     );
+
+    it("rejects credential-bearing sidecar evidence before publication", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          sidecarEvidenceKind: "safe",
+          mutateEvidence: (root, _manifest, _target, index) => {
+            if (index === 0) {
+              writeFileSync(
+                join(
+                  root,
+                  "payload",
+                  "Keiko",
+                  "runtime",
+                  "sidecars",
+                  "opencode-compatible",
+                  "LICENSE.txt",
+                ),
+                "Authorization: Bearer sensitive-value\\n",
+              );
+            }
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("sidecar evidence is not redacted");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
 
     it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {
       // `npm view <spec> version` fails with E404 until a publish has happened; the

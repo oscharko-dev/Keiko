@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   PORTABLE_TARGETS,
+  findPortableMetadataRedactionFailures,
   hashDirectoryTree,
   portableVerificationSummaryForManifest,
   safeArchiveEntryPath,
@@ -76,6 +77,35 @@ const INVALID_LIFECYCLE_STATES = LIFECYCLE_CONTEXTS.flatMap((context) => {
 });
 const PORTABLE_RELEASE_IMPACT_ENTRY_ID = `2026-07-06-keiko-${ROOT_PACKAGE_VERSION}-portable-runtime-staging-contract`;
 let packageSurfacePreparedForTest = false;
+
+describe("findPortableMetadataRedactionFailures", () => {
+  it.each([
+    [{ password: "correct-horse-battery-staple" }],
+    [{ passwd: "correct-horse-battery-staple" }],
+    [{ secret: "correct-horse-battery-staple" }],
+    [{ token: "sensitive-but-not-prefix-shaped" }],
+    [{ "access-token": "sensitive-but-not-prefix-shaped" }],
+    [{ "api-key": "sensitive-but-not-prefix-shaped" }],
+    [{ Authorization: "Bearer sensitive-value" }],
+    [{ authorization: "Basic c2Vuc2l0aXZlOnZhbHVl" }],
+    [{ client_secret: "correct-horse-battery-staple" }],
+    [{ privateKey: "correct-horse-battery-staple" }],
+  ])("rejects credential-bearing metadata %#", (value) => {
+    expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+    expect(findPortableMetadataRedactionFailures(JSON.stringify(value))).not.toEqual([]);
+  });
+
+  it("allows benign documented evidence metadata", () => {
+    const evidence = {
+      bomFormat: "CycloneDX",
+      component: { name: "@oscharko-dev/keiko", version: ROOT_PACKAGE_VERSION },
+      subjectDigest: DIGEST_A,
+    };
+
+    expect(findPortableMetadataRedactionFailures(evidence)).toEqual([]);
+    expect(findPortableMetadataRedactionFailures(JSON.stringify(evidence))).toEqual([]);
+  });
+});
 
 const BASE_MANIFEST = {
   schemaVersion: 1,
