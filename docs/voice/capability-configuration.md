@@ -49,6 +49,25 @@ Adding the `voice` kind is a structural change, so `CONVERSATION_CAPABILITY_CONT
 
 ## 2. Registering the existing `keiko-stt` deployment (STT-only)
 
+### First-run setup for operators
+
+The credential dialog groups audio configuration by user-visible outcome and uses one shared audio
+connection:
+
+- **Dictate** needs the exact speech-to-text deployment name.
+- **Digital Voice** needs the exact Realtime deployment name. An STT deployment alone cannot enable
+  live conversation.
+- **Read aloud** optionally needs a text-to-speech deployment name.
+
+Enter the audio endpoint URL and credential once, then fill only the deployment roles the installation
+supports. Keiko stores each role as explicit capability metadata and shows the corresponding controls only
+when that capability is configured. Output-capable roles receive the neutral `alloy` persona by default so a
+valid Realtime installation exposes Digital Voice immediately; an operator can replace the provider voice id
+in the same dialog. Advanced auth-header, locality, and timeout fields normally keep their defaults.
+
+The dialog validates configuration structure before saving, but it does not upload synthetic customer audio.
+Provider availability is therefore verified on first use, and failures remain content-free and credential-free.
+
 The Azure Foundry `keiko-stt` deployment is registered as an **STT-only** voice provider through
 configuration — no global Azure dependency is hardcoded, and Azure is one valid provider locality among
 three. Declare it as a Model Gateway provider with an inline voice capability:

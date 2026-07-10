@@ -644,6 +644,10 @@ export interface GatewaySetupInput {
   readonly voiceApiKey?: string | undefined;
   readonly voiceApiKeyHeaderName?: string | undefined;
   readonly voiceModelId?: string | undefined;
+  readonly voiceSpeechToTextModelId?: string | undefined;
+  readonly voiceRealtimeModelId?: string | undefined;
+  readonly voiceSpeechOutputModelId?: string | undefined;
+  readonly voiceOutputVoiceId?: string | undefined;
   readonly voiceProviderLocality?: string | undefined;
   readonly voiceTimeoutMs?: number | undefined;
   readonly figmaAccessToken?: string | undefined;
