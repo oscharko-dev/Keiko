@@ -489,6 +489,10 @@ export const DE_MESSAGES = {
   "settings.updates.description":
     "Pruefe Keiko-Updates und installiere sie, wenn sie verfuegbar sind.",
   "settings.updates.open": "Updates pruefen",
+  "settings.feedback.title": "Feedback",
+  "settings.feedback.description":
+    "Pruefe einen bereinigten Bericht, bevor du ihn sendest oder GitHub oeffnest.",
+  "settings.feedback.open": "Feedback oeffnen",
   "updates.notice.aria": "Keiko-Update-Hinweis",
   "updates.notice.title": "Update verfuegbar",
   "updates.notice.criticalTitle": "Kritisches Update verfuegbar",

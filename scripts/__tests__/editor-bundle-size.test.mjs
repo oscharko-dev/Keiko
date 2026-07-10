@@ -212,6 +212,19 @@ describe("static export first-load helpers", () => {
       { path: "b.js", label: "Monaco environment marker", marker: "MonacoEnvironment" },
     ]);
   });
+
+  it("rejects feedback-window copy in first-load JavaScript", () => {
+    const findings = findForbiddenStaticExportMarkers({
+      files: [{ path: "first-load.js", content: "Private security reporting" }],
+    });
+    expect(findings).toEqual([
+      {
+        path: "first-load.js",
+        label: "feedback-window private-security copy",
+        marker: "Private security reporting",
+      },
+    ]);
+  });
 });
 
 describe("runEditorBundleSizeCheck (integration against the real repo state)", () => {

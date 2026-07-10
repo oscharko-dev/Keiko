@@ -1,5 +1,5 @@
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -14,9 +14,13 @@ import {
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import type { ChatMessage } from "@/lib/types";
 
-function WindowChunkFallback(): ReactNode {
+export function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
-  return <div className="lk-loading">{t("common.loading")}</div>;
+  return (
+    <div className="lk-loading" role="status" aria-atomic="true" aria-label={t("common.loading")}>
+      {t("common.loading")}
+    </div>
+  );
 }
 
 const windowChunkFallback = WindowChunkFallback;
@@ -79,6 +83,9 @@ const SettingsPanel = dynamic(
 const UpdateWindow = dynamic(
   () => import("../update/UpdateWindow").then((mod) => mod.UpdateWindow),
   { ssr: false, loading: windowChunkFallback },
+);
+const FeedbackWindow = lazy(() =>
+  import("../feedback/FeedbackWindow").then((mod) => ({ default: mod.FeedbackWindow })),
 );
 const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mod.FilesWidget), {
   ssr: false,
@@ -404,9 +411,23 @@ registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", (_cfg, ctx) => (
-  <SettingsPanel openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })} />
+  <SettingsPanel
+    openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })}
+    openFeedbackWindow={() => {
+      const feedbackWindowId = ctx.openWindow("feedback");
+      if (feedbackWindowId === null) return;
+      // The Settings frame defers its own pointer focus. Raise Feedback after that callback so the
+      // newly opened singleton is immediately interactive instead of remaining behind Settings.
+      window.setTimeout(() => ctx.focusWindow(feedbackWindowId), 0);
+    }}
+  />
 ));
 registerWindowRender("updates", () => <UpdateWindow />);
+registerWindowRender("feedback", () => (
+  <Suspense fallback={<WindowChunkFallback />}>
+    <FeedbackWindow />
+  </Suspense>
+));
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
   <PdfCitationPreviewWindow

@@ -99,6 +99,17 @@ const mobilePanelComponent = readFileSync(
   resolve(here, "components/desktop/widgets/panels/MobilePanel.tsx"),
   "utf8",
 );
+const feedbackComponentDirectory = resolve(here, "components/desktop/feedback");
+const feedbackComponentSources = [
+  "FeedbackWindow.tsx",
+  "FeedbackSecurityGate.tsx",
+  "FeedbackDraftForm.tsx",
+  "FeedbackAttachments.tsx",
+  "FeedbackPreview.tsx",
+  "FeedbackDispositionNotices.tsx",
+  "FeedbackSubmissionReview.tsx",
+  "FeedbackPublicHandoff.tsx",
+].map((fileName) => readFileSync(resolve(feedbackComponentDirectory, fileName), "utf8"));
 const lazyWidgetCss = [
   pdfViewerModuleCss,
   browserWidgetModuleCss,
@@ -4935,5 +4946,37 @@ describe("PR6 context status panel — shared evidence disclosure styling pin (A
     ]) {
       expect(block.includes(token), `.ctx-* block must use ${token}`).toBe(true);
     }
+  });
+});
+
+describe("Issue #2073 — governed feedback intake styling", () => {
+  it("keeps feedback styling in the governed global token source, without feedback CSS Modules", () => {
+    for (const fileName of [
+      "FeedbackWindow.module.css",
+      "FeedbackAttachments.module.css",
+      "FeedbackPublicHandoff.module.css",
+      "FeedbackSubmissionReview.module.css",
+    ]) {
+      expect(existsSync(resolve(feedbackComponentDirectory, fileName))).toBe(false);
+    }
+    for (const source of feedbackComponentSources) expect(source).not.toContain(".module.css");
+  });
+
+  it("pins uniquely-prefixed feedback selectors to governed component and semantic tokens", () => {
+    const block = css.slice(css.indexOf("/* Issue #2073 — governed feedback intake */"));
+    expect(block).toContain(".feedback-root {");
+    expect(block).toContain("--feedback-border-width: calc(var(--space-1) / 2)");
+    for (const token of [
+      "var(--surface-primary)",
+      "var(--card-surface)",
+      "var(--card-border)",
+      "var(--text-primary)",
+      "var(--feedback-danger)",
+      "var(--focus-ring)",
+      "var(--radius-control)",
+    ]) {
+      expect(block.includes(token), `feedback styling must consume ${token}`).toBe(true);
+    }
+    expect(block).not.toMatch(/border:\s*1px/);
   });
 });

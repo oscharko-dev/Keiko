@@ -152,6 +152,14 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "transient",
   },
+  // Epic #2070, Issue #2073 — the raw report draft exists only inside the mounted component. The
+  // BFF returns a sanitized, digest-bound preview; opening GitHub remains an explicit user action.
+  feedback: {
+    lifecycle: ["draft", "running", "needs-review", "final", "error"],
+    trustBoundary: ["ui", "network"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
   project: {
     lifecycle: ["none", "connecting", "connected", "disconnected"],
     trustBoundary: ["ui", "fs"],

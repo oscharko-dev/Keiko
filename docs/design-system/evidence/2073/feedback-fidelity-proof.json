@@ -1,0 +1,366 @@
+{
+  "issue": 2073,
+  "epic": 2070,
+  "verdict": "PASS",
+  "harness": "tests/e2e/config/playwright.issue-2073-feedback-ui.config.ts",
+  "route": "/",
+  "appPath": "packaged-cli-ui",
+  "globalsCssSha256": "99108342dbad9c0d9c92b29583cc8164f1fd88bea20988c675fd05726d120c58",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "mode": "dark",
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "windowName": "Feedback",
+      "activeElementText": "Sanitized preview",
+      "noHorizontalOverflow": true,
+      "horizontalOverflowProof": {
+        "window": {
+          "clientWidth": 718,
+          "scrollWidth": 721
+        },
+        "body": {
+          "clientWidth": 718,
+          "scrollWidth": 718
+        },
+        "preview": {
+          "clientWidth": 332,
+          "scrollWidth": 332
+        },
+        "pass": true
+      },
+      "exactDigestVisible": true,
+      "privacyActions": [
+        "quarantined:ambiguous-credential-structure",
+        "omitted:no-safe-optional-content"
+      ],
+      "style": {
+        "previewBackground": "lab(11.3143 -1.28133 0.509417)",
+        "previewBorderColor": "lab(18.8543 -1.28049 0.509191)",
+        "previewColor": "lab(96.5608 -0.958711 0.381434)",
+        "noticeBackground": "lab(3.39429 -0.712723 0.283253)",
+        "noticeBorderColor": "lab(18.8543 -1.28049 0.509191)",
+        "tokens": {
+          "--surface-primary": "lab(11.3143% -1.28133 .509417)",
+          "--surface-inset": "lab(3.39429% -.712723 .283253)",
+          "--text-primary": "lab(96.5608% -.958711 .381434)",
+          "--text-secondary": "lab(69.8944% -1.27876 .508702)",
+          "--border-subtle": "lab(14.2143% -1.28095 .509322)",
+          "--focus-ring": "#4eba87",
+          "--feedback-warning": "lab(74.4048% 16.5655 55.5067)",
+          "--feedback-warning-surface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+        }
+      }
+    },
+    {
+      "file": "02-light.png",
+      "mode": "light",
+      "dataTheme": "light",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "windowName": "Feedback",
+      "activeElementText": "Sanitized preview",
+      "noHorizontalOverflow": true,
+      "horizontalOverflowProof": {
+        "window": {
+          "clientWidth": 718,
+          "scrollWidth": 721
+        },
+        "body": {
+          "clientWidth": 718,
+          "scrollWidth": 718
+        },
+        "preview": {
+          "clientWidth": 332,
+          "scrollWidth": 332
+        },
+        "pass": true
+      },
+      "exactDigestVisible": true,
+      "privacyActions": [
+        "quarantined:ambiguous-credential-structure",
+        "omitted:no-safe-optional-content"
+      ],
+      "style": {
+        "previewBackground": "lab(100 0 0)",
+        "previewBorderColor": "lab(86.1616 -1.91858 0.763166)",
+        "previewColor": "lab(14.3222 -3.86415 1.53382)",
+        "noticeBackground": "lab(93.688 -1.59839 0.635874)",
+        "noticeBorderColor": "lab(86.1616 -1.91858 0.763166)",
+        "tokens": {
+          "--surface-primary": "lab(100% 0 0)",
+          "--surface-inset": "lab(93.688% -1.59839 .635874)",
+          "--text-primary": "lab(14.3222% -3.86415 1.53382)",
+          "--text-secondary": "lab(32.8691% -3.52936 1.40247)",
+          "--border-subtle": "lab(90.208% -1.59842 .635874)",
+          "--focus-ring": "lab(41.3781% -44.0935 17.2352)",
+          "--feedback-warning": "lab(33.5217% 22.3139 76.2583)",
+          "--feedback-warning-surface": "color-mix(in oklch, lab(33.5217% 22.3139 76.2583) 12%, transparent)"
+        }
+      }
+    },
+    {
+      "file": "03-dark-hc.png",
+      "mode": "dark-high-contrast",
+      "dataTheme": "dark",
+      "dataHc": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "windowName": "Feedback",
+      "activeElementText": "Sanitized preview",
+      "noHorizontalOverflow": true,
+      "horizontalOverflowProof": {
+        "window": {
+          "clientWidth": 718,
+          "scrollWidth": 721
+        },
+        "body": {
+          "clientWidth": 718,
+          "scrollWidth": 718
+        },
+        "preview": {
+          "clientWidth": 332,
+          "scrollWidth": 332
+        },
+        "pass": true
+      },
+      "exactDigestVisible": true,
+      "privacyActions": [
+        "quarantined:ambiguous-credential-structure",
+        "omitted:no-safe-optional-content"
+      ],
+      "style": {
+        "previewBackground": "lab(5.76283 -1.0163 0.403985)",
+        "previewBorderColor": "lab(56.0016 -1.91954 0.76344)",
+        "previewColor": "lab(100 0 0)",
+        "noticeBackground": "lab(0.668787 -0.239246 0.0949919)",
+        "noticeBorderColor": "lab(56.0016 -1.91954 0.76344)",
+        "tokens": {
+          "--surface-primary": "lab(5.76283% -1.0163 .403985)",
+          "--surface-inset": "lab(.668787% -.239246 .0949919)",
+          "--text-primary": "lab(100% 0 0)",
+          "--text-secondary": "lab(86.1344% -1.27858 .508654)",
+          "--border-subtle": "lab(42.068% -1.59967 .63622)",
+          "--focus-ring": "lab(85.8762% -53.07 20.88)",
+          "--feedback-warning": "lab(86.1646% 13.6748 60.3065)",
+          "--feedback-warning-surface": "color-mix(in oklch, lab(86.1646% 13.6748 60.3065) 12%, transparent)"
+        }
+      }
+    },
+    {
+      "file": "04-light-hc.png",
+      "mode": "light-high-contrast",
+      "dataTheme": "light",
+      "dataHc": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "windowName": "Feedback",
+      "activeElementText": "Sanitized preview",
+      "noHorizontalOverflow": true,
+      "horizontalOverflowProof": {
+        "window": {
+          "clientWidth": 718,
+          "scrollWidth": 721
+        },
+        "body": {
+          "clientWidth": 718,
+          "scrollWidth": 718
+        },
+        "preview": {
+          "clientWidth": 332,
+          "scrollWidth": 332
+        },
+        "pass": true
+      },
+      "exactDigestVisible": true,
+      "privacyActions": [
+        "quarantined:ambiguous-credential-structure",
+        "omitted:no-safe-optional-content"
+      ],
+      "style": {
+        "previewBackground": "lab(100 0 0)",
+        "previewBorderColor": "lab(36.3086 -2.56301 1.01894)",
+        "previewColor": "lab(2.03811 -1.23847 0.490952)",
+        "noticeBackground": "lab(94.2544 -1.27852 0.508642)",
+        "noticeBorderColor": "lab(36.3086 -2.56301 1.01894)",
+        "tokens": {
+          "--surface-primary": "lab(100% 0 0)",
+          "--surface-inset": "lab(94.2544% -1.27852 .508642)",
+          "--text-primary": "lab(2.03811% -1.23847 .490952)",
+          "--text-secondary": "lab(18.9623% -3.85977 1.53262)",
+          "--border-subtle": "lab(53.6816% -1.91969 .763476)",
+          "--focus-ring": "lab(34.5325% -48.4093 18.8159)",
+          "--feedback-warning": "lab(27.6547% 23.3136 66.7402)",
+          "--feedback-warning-surface": "color-mix(in oklch, lab(27.6547% 23.3136 66.7402) 12%, transparent)"
+        }
+      }
+    },
+    {
+      "file": "05-prefers-contrast.png",
+      "mode": "prefers-contrast",
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "windowName": "Feedback",
+      "activeElementText": "Sanitized preview",
+      "noHorizontalOverflow": true,
+      "horizontalOverflowProof": {
+        "window": {
+          "clientWidth": 718,
+          "scrollWidth": 721
+        },
+        "body": {
+          "clientWidth": 718,
+          "scrollWidth": 718
+        },
+        "preview": {
+          "clientWidth": 332,
+          "scrollWidth": 332
+        },
+        "pass": true
+      },
+      "exactDigestVisible": true,
+      "privacyActions": [
+        "quarantined:ambiguous-credential-structure",
+        "omitted:no-safe-optional-content"
+      ],
+      "style": {
+        "previewBackground": "lab(5.76283 -1.0163 0.403985)",
+        "previewBorderColor": "lab(56.0016 -1.91954 0.76344)",
+        "previewColor": "lab(100 0 0)",
+        "noticeBackground": "lab(0.668787 -0.239246 0.0949919)",
+        "noticeBorderColor": "lab(56.0016 -1.91954 0.76344)",
+        "tokens": {
+          "--surface-primary": "lab(5.76283% -1.0163 .403985)",
+          "--surface-inset": "lab(.668787% -.239246 .0949919)",
+          "--text-primary": "lab(100% 0 0)",
+          "--text-secondary": "lab(86.1344% -1.27858 .508654)",
+          "--border-subtle": "lab(42.068% -1.59967 .63622)",
+          "--focus-ring": "lab(85.8762% -53.07 20.88)",
+          "--feedback-warning": "lab(86.1646% 13.6748 60.3065)",
+          "--feedback-warning-surface": "color-mix(in oklch, lab(86.1646% 13.6748 60.3065) 12%, transparent)"
+        }
+      }
+    },
+    {
+      "file": "06-forced-colors.png",
+      "mode": "forced-colors",
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "active",
+      "reducedMotion": "no-preference",
+      "windowName": "Feedback",
+      "activeElementText": "Sanitized preview",
+      "noHorizontalOverflow": true,
+      "horizontalOverflowProof": {
+        "window": {
+          "clientWidth": 718,
+          "scrollWidth": 721
+        },
+        "body": {
+          "clientWidth": 718,
+          "scrollWidth": 718
+        },
+        "preview": {
+          "clientWidth": 332,
+          "scrollWidth": 332
+        },
+        "pass": true
+      },
+      "exactDigestVisible": true,
+      "privacyActions": [
+        "quarantined:ambiguous-credential-structure",
+        "omitted:no-safe-optional-content"
+      ],
+      "style": {
+        "previewBackground": "rgb(0, 0, 0)",
+        "previewBorderColor": "rgb(255, 255, 255)",
+        "previewColor": "rgb(255, 255, 255)",
+        "noticeBackground": "rgb(0, 0, 0)",
+        "noticeBorderColor": "rgb(255, 255, 255)",
+        "tokens": {
+          "--surface-primary": "lab(11.3143% -1.28133 .509417)",
+          "--surface-inset": "lab(3.39429% -.712723 .283253)",
+          "--text-primary": "lab(96.5608% -.958711 .381434)",
+          "--text-secondary": "lab(69.8944% -1.27876 .508702)",
+          "--border-subtle": "lab(14.2143% -1.28095 .509322)",
+          "--focus-ring": "#4eba87",
+          "--feedback-warning": "lab(74.4048% 16.5655 55.5067)",
+          "--feedback-warning-surface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+        }
+      }
+    },
+    {
+      "file": "07-reduced-motion.png",
+      "mode": "reduced-motion",
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "reduce",
+      "windowName": "Feedback",
+      "activeElementText": "Sanitized preview",
+      "noHorizontalOverflow": true,
+      "horizontalOverflowProof": {
+        "window": {
+          "clientWidth": 718,
+          "scrollWidth": 721
+        },
+        "body": {
+          "clientWidth": 718,
+          "scrollWidth": 718
+        },
+        "preview": {
+          "clientWidth": 332,
+          "scrollWidth": 332
+        },
+        "pass": true
+      },
+      "exactDigestVisible": true,
+      "privacyActions": [
+        "quarantined:ambiguous-credential-structure",
+        "omitted:no-safe-optional-content"
+      ],
+      "style": {
+        "previewBackground": "lab(11.3143 -1.28133 0.509417)",
+        "previewBorderColor": "lab(18.8543 -1.28049 0.509191)",
+        "previewColor": "lab(96.5608 -0.958711 0.381434)",
+        "noticeBackground": "lab(3.39429 -0.712723 0.283253)",
+        "noticeBorderColor": "lab(18.8543 -1.28049 0.509191)",
+        "tokens": {
+          "--surface-primary": "lab(11.3143% -1.28133 .509417)",
+          "--surface-inset": "lab(3.39429% -.712723 .283253)",
+          "--text-primary": "lab(96.5608% -.958711 .381434)",
+          "--text-secondary": "lab(69.8944% -1.27876 .508702)",
+          "--border-subtle": "lab(14.2143% -1.28095 .509322)",
+          "--focus-ring": "#4eba87",
+          "--feedback-warning": "lab(74.4048% 16.5655 55.5067)",
+          "--feedback-warning-surface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+        }
+      }
+    }
+  ],
+  "assertions": {
+    "sevenModeThemeCoverage": 7,
+    "exactPreparedDigestVisibleInEveryMode": true,
+    "namedFocusedPreviewInEveryMode": true,
+    "noHorizontalOverflowInEveryMode": true,
+    "outerFrameResizeAffordanceExcluded": true,
+    "rawDraftControlMaskedInScreenshots": true
+  },
+  "responsive500": {
+    "targetWidth": 500,
+    "actualWidth": 502,
+    "windowScrollWidth": 503,
+    "bodyClientWidth": 500,
+    "bodyScrollWidth": 500,
+    "visibleControlCount": 4,
+    "enabledControlCount": 3,
+    "keyboardReachableControlCount": 3,
+    "pass": true
+  }
+}

@@ -8,7 +8,7 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { I18nProvider } from "@/lib/i18n";
+import { I18nProvider, loadLocaleMessages, translate } from "@/lib/i18n";
 import type { ModelCapability } from "@/lib/types";
 import { SettingsPanel, formatGatewayReadinessReport } from "./SettingsPanel";
 import { consumePendingGatewaySetup, requestGatewaySetup } from "../shared/gatewaySetupBus";
@@ -254,6 +254,32 @@ describe("SettingsPanel Updates entry point (Issue #1696)", () => {
     expect(
       screen.getByText("Check for Keiko updates and install them when available."),
     ).toBeInTheDocument();
+  });
+});
+
+describe("SettingsPanel Feedback entry point (Issue #2073)", () => {
+  it("exposes one localized action from the General tab", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    const openFeedbackWindow = vi.fn();
+    render(<SettingsPanel openFeedbackWindow={openFeedbackWindow} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-ok")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    const actions = screen.getAllByRole("button", { name: "Open feedback" });
+    expect(actions).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Open feedback" }));
+
+    expect(openFeedbackWindow).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByText("Preview a sanitized report before submitting it or opening GitHub."),
+    ).toBeInTheDocument();
+    await loadLocaleMessages("de");
+    expect(translate("de", "settings.feedback.description")).toBe(
+      "Pruefe einen bereinigten Bericht, bevor du ihn sendest oder GitHub oeffnest.",
+    );
   });
 });
 

@@ -494,9 +494,14 @@ function ModelCapabilityRow({
 interface GeneralPrefsProps {
   readonly voicePersonas: readonly VoicePersona[];
   readonly openUpdatesWindow?: (() => void) | undefined;
+  readonly openFeedbackWindow?: (() => void) | undefined;
 }
 
-function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): ReactNode {
+function GeneralPrefs({
+  voicePersonas,
+  openUpdatesWindow,
+  openFeedbackWindow,
+}: GeneralPrefsProps): ReactNode {
   const locale = useLocale();
   const setLocale = useSetLocale();
   const t = useTranslate();
@@ -698,6 +703,24 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
         >
           <Icons.activity size={14} />
           {t("settings.updates.open")}
+        </button>
+      </div>
+      <div className="set-sec-h">
+        <div>
+          <div className="set-sec-t">{t("settings.feedback.title")}</div>
+          <div className="set-sec-d" id="settings-feedback-help">
+            {t("settings.feedback.description")}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="set-add"
+          aria-describedby="settings-feedback-help"
+          disabled={openFeedbackWindow === undefined}
+          onClick={openFeedbackWindow}
+        >
+          <Icons.newChat size={14} />
+          {t("settings.feedback.open")}
         </button>
       </div>
       <div className="set-sec-h">
@@ -924,8 +947,10 @@ function describeSettingsLoadError(error: unknown, t: I18nTranslate): string {
 
 export function SettingsPanel({
   openUpdatesWindow,
+  openFeedbackWindow,
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
+  readonly openFeedbackWindow?: (() => void) | undefined;
 } = {}): ReactNode {
   const t = useTranslate();
   const [tab, setTab] = useState<Tab>("models");
@@ -1168,7 +1193,11 @@ export function SettingsPanel({
           </>
         )}
         {tab === "general" && (
-          <GeneralPrefs voicePersonas={voicePersonas} openUpdatesWindow={openUpdatesWindow} />
+          <GeneralPrefs
+            voicePersonas={voicePersonas}
+            openUpdatesWindow={openUpdatesWindow}
+            openFeedbackWindow={openFeedbackWindow}
+          />
         )}
         {tab === "security" && (
           <div className="set-placeholder">{t("settings.security.placeholder")}</div>
