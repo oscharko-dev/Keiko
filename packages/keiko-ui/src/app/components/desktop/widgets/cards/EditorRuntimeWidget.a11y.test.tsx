@@ -16,6 +16,7 @@ import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EditorAgentAction,
+  EditorAgentActionResult,
   FilesContentResponse,
   LanguageServiceCapabilities,
 } from "../../../../../lib/types";
@@ -30,7 +31,10 @@ import {
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
-import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
+import {
+  _resetEditorAgentBridgeStateForTests,
+  EDITOR_AGENT_ACTIVITY_RECENCY_MS,
+} from "./editorAgentBridge";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -141,6 +145,24 @@ class FakeEventSource {
       }
     }
   }
+
+  emitResult(result: EditorAgentActionResult): void {
+    const event = new MessageEvent<string>("editor-agent:result", {
+      data: JSON.stringify({
+        schemaVersion: "1",
+        eventId: `evt-${result.actionId}-${result.status}`,
+        type: "result",
+        result,
+      }),
+    });
+    for (const listener of this.listeners.get("editor-agent:result") ?? []) {
+      if (typeof listener === "function") {
+        listener(event);
+      } else {
+        listener.handleEvent(event);
+      }
+    }
+  }
 }
 
 const ORIGINAL_EVENT_SOURCE = globalThis.EventSource;
@@ -220,6 +242,7 @@ afterEach(() => {
   restoreEventSource();
   agentActionSeq = 0;
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 /**
@@ -274,6 +297,77 @@ describe("EditorRuntimeWidget patch-review buttons — accessibility (jest-axe)"
     const { container } = await renderWithPatchReview();
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+});
+
+describe("EditorRuntimeWidget agent presence — accessibility (Issue #2120)", () => {
+  it("shows no attachment before the bridge observes an agent frame", async () => {
+    installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="a11y-presence-empty"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+      />,
+    );
+
+    const indicator = await screen.findByTestId("agent-presence-indicator");
+    expect(indicator).toHaveAttribute("data-presence-state", "detached");
+    expect(indicator).toHaveTextContent("Agent not attached - no recent activity");
+  });
+
+  it("is axe-clean and names an attached staged review without relying on colour", async () => {
+    const { container } = await renderWithPatchReview();
+    const indicator = screen.getByTestId("agent-presence-indicator");
+    expect(indicator).toHaveAttribute("data-presence-state", "review");
+    expect(indicator).toHaveTextContent("Agent attached - review required");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("transitions from active to idle and expires attachment with fake timers", async () => {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="a11y-presence-transition"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => expect(FakeSource.instances.length).toBeGreaterThan(0));
+    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+    const sessionId = String(snapshot?.sessionId);
+    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    const action = agentAction(sessionId, "format", {
+      target: { file: "src/app.ts", paneId: "pane-1" },
+    });
+    vi.useFakeTimers();
+
+    act(() => source.emitAction(action));
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+      "Agent attached - 1 action in progress",
+    );
+
+    act(() =>
+      source.emitResult({
+        schemaVersion: "1",
+        actionId: action.actionId,
+        sessionId,
+        status: "succeeded",
+      }),
+    );
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+      "Agent attached - idle",
+    );
+
+    act(() => vi.advanceTimersByTime(EDITOR_AGENT_ACTIVITY_RECENCY_MS));
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+      "Agent not attached - no recent activity",
+    );
   });
 });
 

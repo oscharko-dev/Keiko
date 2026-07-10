@@ -45,6 +45,18 @@ import {
  */
 export const EDITOR_SNAPSHOT_DEBOUNCE_MS = 300;
 
+/**
+ * Issue #2120 (ADR-0058 through ADR-0062) — action/result traffic is considered recent for one
+ * minute. This deliberately measures observed agent activity, not the browser's own SSE liveness.
+ */
+export const EDITOR_AGENT_ACTIVITY_RECENCY_MS = 60_000;
+
+/**
+ * Maximum content-free action identifiers retained by one mounted bridge hook. A newly observed
+ * action evicts the oldest retained identifier when this FIFO bound is full.
+ */
+export const MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS = 64;
+
 /** A content-free agent selection-reveal request the host merges into the editor surface. */
 export interface EditorAgentSelectionRequest {
   readonly actionId: string;
@@ -373,11 +385,120 @@ export interface UseEditorAgentBridgeParams {
 export interface UseEditorAgentBridgeResult {
   readonly agentSelectionRequest: EditorAgentSelectionRequest | null;
   readonly consumeSelectionRequest: () => void;
+  readonly bridgeState: EditorAgentBridgeState;
+}
+
+/** Bounded, content-free state derived only from action/result frames already observed by the hook. */
+export interface EditorAgentBridgeState {
+  /** Epoch milliseconds for the most recently observed valid action or result frame. */
+  readonly lastActivityAt: number | null;
+  /** True only during the finite recency window following the latest observed frame. */
+  readonly recentlyAttached: boolean;
+  /** Bounded action metadata retained until a matching terminal result or lifecycle reset. */
+  readonly inFlightActionIds: readonly string[];
+  readonly inFlightActionCount: number;
 }
 
 interface EditorAgentSessionHandlers {
   readonly onAction: (action: EditorAgentAction) => void;
   readonly onResult: (result: EditorAgentActionResult) => void;
+}
+
+const EMPTY_EDITOR_AGENT_BRIDGE_STATE: EditorAgentBridgeState = {
+  lastActivityAt: null,
+  recentlyAttached: false,
+  inFlightActionIds: [],
+  inFlightActionCount: 0,
+};
+
+function recentBridgeState(
+  lastActivityAt: number,
+  inFlightActionIds: readonly string[],
+): EditorAgentBridgeState {
+  return {
+    lastActivityAt,
+    recentlyAttached: true,
+    inFlightActionIds,
+    inFlightActionCount: inFlightActionIds.length,
+  };
+}
+
+function retainInFlightAction(current: readonly string[], actionId: string): readonly string[] {
+  if (current.includes(actionId)) return current;
+  const firstRetainedIndex = Math.max(0, current.length - MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS + 1);
+  return [...current.slice(firstRetainedIndex), actionId];
+}
+
+function stateAfterActionFrame(
+  current: EditorAgentBridgeState,
+  actionId: string,
+  observedAt: number,
+): EditorAgentBridgeState {
+  return recentBridgeState(observedAt, retainInFlightAction(current.inFlightActionIds, actionId));
+}
+
+function stateAfterResultFrame(
+  current: EditorAgentBridgeState,
+  result: EditorAgentActionResult,
+  observedAt: number,
+): EditorAgentBridgeState {
+  const inFlightActionIds =
+    result.status === "queued"
+      ? current.inFlightActionIds
+      : current.inFlightActionIds.filter((actionId) => actionId !== result.actionId);
+  return recentBridgeState(observedAt, inFlightActionIds);
+}
+
+function inactiveBridgeState(current: EditorAgentBridgeState): EditorAgentBridgeState {
+  return current.recentlyAttached ? { ...current, recentlyAttached: false } : current;
+}
+
+interface EditorAgentBridgeStateObserver {
+  readonly bridgeState: EditorAgentBridgeState;
+  readonly observeAction: (actionId: string) => void;
+  readonly observeResult: (result: EditorAgentActionResult) => void;
+}
+
+function useEditorAgentBridgeState(
+  agentSessionId: string,
+  enabled: boolean,
+): EditorAgentBridgeStateObserver {
+  const [bridgeState, setBridgeState] = useState(EMPTY_EDITOR_AGENT_BRIDGE_STATE);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearInactivityTimer = useCallback((): void => {
+    if (inactivityTimerRef.current === null) return;
+    clearTimeout(inactivityTimerRef.current);
+    inactivityTimerRef.current = null;
+  }, []);
+  const restartInactivityTimer = useCallback((): void => {
+    clearInactivityTimer();
+    inactivityTimerRef.current = setTimeout(() => {
+      inactivityTimerRef.current = null;
+      setBridgeState(inactiveBridgeState);
+    }, EDITOR_AGENT_ACTIVITY_RECENCY_MS);
+  }, [clearInactivityTimer]);
+  const observeAction = useCallback(
+    (actionId: string): void => {
+      const observedAt = Date.now();
+      setBridgeState((current) => stateAfterActionFrame(current, actionId, observedAt));
+      restartInactivityTimer();
+    },
+    [restartInactivityTimer],
+  );
+  const observeResult = useCallback(
+    (result: EditorAgentActionResult): void => {
+      const observedAt = Date.now();
+      setBridgeState((current) => stateAfterResultFrame(current, result, observedAt));
+      restartInactivityTimer();
+    },
+    [restartInactivityTimer],
+  );
+  useEffect(() => {
+    clearInactivityTimer();
+    setBridgeState(EMPTY_EDITOR_AGENT_BRIDGE_STATE);
+    return clearInactivityTimer;
+  }, [agentSessionId, clearInactivityTimer, enabled]);
+  return { bridgeState, observeAction, observeResult };
 }
 
 async function performBridgeSnapshotRegistration(
@@ -612,9 +733,9 @@ export function _resetEditorAgentBridgeStateForTests(): void {
 }
 
 /**
- * The single React artifact of the bridge: owns the snapshot-register effect, the SSE connection
- * (action + result listeners, both validated with `isEditorAgentEvent`), result posting, conflict
- * surfacing, and the one-shot `setSelection` reveal state.
+ * The single exported React artifact of the bridge: owns the snapshot-register effect, the SSE
+ * connection (action + result listeners, both validated with `isEditorAgentEvent`), result posting,
+ * conflict surfacing, and the one-shot `setSelection` reveal state.
  */
 export function useEditorAgentBridge(
   params: UseEditorAgentBridgeParams,
@@ -630,6 +751,10 @@ export function useEditorAgentBridge(
   } = params;
   const [agentSelectionRequest, setAgentSelectionRequest] =
     useState<EditorAgentSelectionRequest | null>(null);
+  const { bridgeState, observeAction, observeResult } = useEditorAgentBridgeState(
+    agentSessionId,
+    enabled,
+  );
 
   // Refs keep the SSE effect stable across re-renders so the live onConflictRef and
   // dispatchControllersRef are used without tearing down and re-opening the EventSource on every keystroke.
@@ -679,12 +804,14 @@ export function useEditorAgentBridge(
     if (!enabled) return;
     const handlers: EditorAgentSessionHandlers = {
       onAction: (action): void => {
+        observeAction(action.actionId);
         const descriptor = dispatchEditorAgentAction(action, dispatchControllersRef.current);
         reportDescriptor(action, descriptor);
         // Issue #1395 — an action for this session was dispatched; refresh the audit panel.
         onAgentActivityRef.current?.();
       },
       onResult: (result): void => {
+        observeResult(result);
         // Issue #1395 — any result for this session is audit-relevant; refresh the audit panel.
         onAgentActivityRef.current?.();
         if (result.status !== "queued") onTerminalResultRef.current?.(result);
@@ -697,7 +824,7 @@ export function useEditorAgentBridge(
     const unsubscribe = subscribeEditorAgentSession(agentSessionId, handlers);
     void registerBridgeSnapshot(agentSessionId, registerSnapshotRef.current);
     return unsubscribe;
-  }, [agentSessionId, enabled]);
+  }, [agentSessionId, enabled, observeAction, observeResult]);
 
-  return { agentSelectionRequest, consumeSelectionRequest };
+  return { agentSelectionRequest, consumeSelectionRequest, bridgeState };
 }

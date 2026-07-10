@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import {
   _resetEditorAgentBridgeStateForTests,
+  EDITOR_AGENT_ACTIVITY_RECENCY_MS,
   EDITOR_SNAPSHOT_DEBOUNCE_MS,
+  MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS,
   useEditorAgentBridge,
   type EditorAgentActionControllers,
   type UseEditorAgentBridgeParams,
@@ -67,6 +69,42 @@ class FakeEventSource {
     const event = new MessageEvent(type, { data: JSON.stringify(data) });
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
+}
+
+function latestEventSource(): FakeEventSource {
+  const source = createSourceSpy.mock.results.at(-1)?.value as FakeEventSource | undefined;
+  if (source === undefined) throw new Error("expected authenticated event source");
+  return source;
+}
+
+function emitAction(source: FakeEventSource, sessionId: string, actionId: string): void {
+  source.emit("editor-agent:action", {
+    schemaVersion: "1",
+    eventId: `event-${actionId}`,
+    type: "action",
+    action: {
+      schemaVersion: "1",
+      actionId,
+      idempotencyKey: `key-${actionId}`,
+      sessionId,
+      type: "format",
+      target: { file: "src/a.ts", paneId: "pane-1" },
+    },
+  });
+}
+
+function emitResult(
+  source: FakeEventSource,
+  sessionId: string,
+  actionId: string,
+  status: "queued" | "succeeded",
+): void {
+  source.emit("editor-agent:result", {
+    schemaVersion: "1",
+    eventId: `event-${actionId}-${status}`,
+    type: "result",
+    result: { schemaVersion: "1", actionId, sessionId, status },
+  });
 }
 
 function makeControllers(): EditorAgentActionControllers {
@@ -443,5 +481,154 @@ describe("useEditorAgentBridge — SSE reuse (GEN-PERF-EDITOR-008)", () => {
     await act(async () => {
       await Promise.resolve();
     });
+  });
+});
+
+describe("useEditorAgentBridge — observed activity state (Issue #2120)", () => {
+  it("becomes recently attached from a frame and deterministically expires the recency window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T08:00:00.000Z"));
+    const hook = renderHook(() =>
+      useEditorAgentBridge({
+        agentSessionId: "activity",
+        controllers: makeControllers(),
+        registerSnapshot: registeredSnapshot(capability("K")),
+        onConflict: vi.fn(),
+      }),
+    );
+    await flushBridgeMicrotasks();
+
+    expect(hook.result.current.bridgeState).toEqual({
+      lastActivityAt: null,
+      recentlyAttached: false,
+      inFlightActionIds: [],
+      inFlightActionCount: 0,
+    });
+    act(() => {
+      emitAction(latestEventSource(), "activity", "action-1");
+    });
+    expect(hook.result.current.bridgeState).toEqual({
+      lastActivityAt: Date.now(),
+      recentlyAttached: true,
+      inFlightActionIds: ["action-1"],
+      inFlightActionCount: 1,
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(EDITOR_AGENT_ACTIVITY_RECENCY_MS - 1);
+    });
+    expect(hook.result.current.bridgeState.recentlyAttached).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(hook.result.current.bridgeState).toEqual({
+      lastActivityAt: new Date("2026-07-10T08:00:00.000Z").getTime(),
+      recentlyAttached: false,
+      inFlightActionIds: ["action-1"],
+      inFlightActionCount: 1,
+    });
+    hook.unmount();
+  });
+
+  it("keeps queued actions in flight and settles them only on terminal results", async () => {
+    vi.useFakeTimers();
+    const hook = renderHook(() =>
+      useEditorAgentBridge({
+        agentSessionId: "settlement",
+        controllers: makeControllers(),
+        registerSnapshot: registeredSnapshot(capability("L")),
+        onConflict: vi.fn(),
+      }),
+    );
+    await flushBridgeMicrotasks();
+    const source = latestEventSource();
+
+    act(() => {
+      emitAction(source, "settlement", "action-1");
+      emitAction(source, "settlement", "action-2");
+      emitResult(source, "settlement", "action-1", "queued");
+    });
+    expect(hook.result.current.bridgeState.inFlightActionIds).toEqual(["action-1", "action-2"]);
+    expect(hook.result.current.bridgeState.inFlightActionCount).toBe(2);
+
+    act(() => {
+      emitResult(source, "settlement", "action-1", "succeeded");
+    });
+    expect(hook.result.current.bridgeState.inFlightActionIds).toEqual(["action-2"]);
+    expect(hook.result.current.bridgeState.inFlightActionCount).toBe(1);
+    hook.unmount();
+  });
+
+  it("bounds retained in-flight action identifiers and evicts the oldest first", async () => {
+    vi.useFakeTimers();
+    const hook = renderHook(() =>
+      useEditorAgentBridge({
+        agentSessionId: "bounded",
+        controllers: makeControllers(),
+        registerSnapshot: registeredSnapshot(capability("M")),
+        onConflict: vi.fn(),
+      }),
+    );
+    await flushBridgeMicrotasks();
+    const source = latestEventSource();
+
+    act(() => {
+      for (let index = 0; index <= MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS; index += 1) {
+        emitAction(source, "bounded", `action-${String(index)}`);
+      }
+    });
+    expect(hook.result.current.bridgeState.inFlightActionCount).toBe(
+      MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS,
+    );
+    expect(hook.result.current.bridgeState.inFlightActionIds[0]).toBe("action-1");
+    expect(hook.result.current.bridgeState.inFlightActionIds.at(-1)).toBe(
+      `action-${String(MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS)}`,
+    );
+    hook.unmount();
+  });
+
+  it("resets across session and enabled changes without an old timer expiring new activity", async () => {
+    vi.useFakeTimers();
+    const hook = renderHook(
+      ({ enabled, sessionId }: { enabled: boolean; sessionId: string }) =>
+        useEditorAgentBridge({
+          agentSessionId: sessionId,
+          controllers: makeControllers(),
+          enabled,
+          registerSnapshot: registeredSnapshot(capability("N")),
+          onConflict: vi.fn(),
+        }),
+      { initialProps: { enabled: true, sessionId: "first" } },
+    );
+    await flushBridgeMicrotasks();
+    act(() => {
+      emitAction(latestEventSource(), "first", "first-action");
+      vi.advanceTimersByTime(EDITOR_AGENT_ACTIVITY_RECENCY_MS / 2);
+    });
+
+    hook.rerender({ enabled: true, sessionId: "second" });
+    expect(hook.result.current.bridgeState).toEqual({
+      lastActivityAt: null,
+      recentlyAttached: false,
+      inFlightActionIds: [],
+      inFlightActionCount: 0,
+    });
+    await flushBridgeMicrotasks();
+    act(() => {
+      emitAction(latestEventSource(), "second", "second-action");
+      vi.advanceTimersByTime(EDITOR_AGENT_ACTIVITY_RECENCY_MS / 2);
+    });
+    expect(hook.result.current.bridgeState.recentlyAttached).toBe(true);
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+    hook.rerender({ enabled: false, sessionId: "second" });
+    expect(hook.result.current.bridgeState).toEqual({
+      lastActivityAt: null,
+      recentlyAttached: false,
+      inFlightActionIds: [],
+      inFlightActionCount: 0,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+    hook.unmount();
   });
 });

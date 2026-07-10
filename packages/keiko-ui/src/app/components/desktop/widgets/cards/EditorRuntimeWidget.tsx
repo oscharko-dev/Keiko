@@ -245,6 +245,92 @@ const EDITOR_REVIEW_ACTIONS_STYLE: CSSProperties = {
   flex: "0 0 auto",
 };
 
+const EDITOR_AGENT_PRESENCE_STYLE: CSSProperties = {
+  minHeight: 30,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "5px 12px",
+  borderTop: "1px solid color-mix(in oklch, var(--text-secondary) 18%, transparent)",
+  borderBottom: "1px solid color-mix(in oklch, var(--text-secondary) 18%, transparent)",
+  color: "var(--text-secondary)",
+  fontSize: "var(--text-body-sm)",
+};
+
+const EDITOR_AGENT_PRESENCE_MARKER_STYLE: CSSProperties = {
+  width: 3,
+  height: 14,
+  flex: "0 0 auto",
+  borderRadius: 2,
+};
+
+type EditorAgentPresenceKind = "detached" | "idle" | "active" | "review";
+
+interface EditorAgentPresenceView {
+  readonly color: string;
+  readonly kind: EditorAgentPresenceKind;
+  readonly label: string;
+}
+
+function editorAgentPresenceView(args: {
+  readonly inFlightActionCount: number;
+  readonly recentlyActive: boolean;
+  readonly reviewPendingCount: number;
+}): EditorAgentPresenceView {
+  if (args.reviewPendingCount > 0) {
+    return {
+      color: "var(--feedback-warning)",
+      kind: "review",
+      label: args.recentlyActive
+        ? "Agent attached - review required"
+        : "Agent review required - no recent activity",
+    };
+  }
+  if (!args.recentlyActive) {
+    return {
+      color: "var(--text-secondary)",
+      kind: "detached",
+      label: "Agent not attached - no recent activity",
+    };
+  }
+  if (args.inFlightActionCount > 0) {
+    const noun = args.inFlightActionCount === 1 ? "action" : "actions";
+    return {
+      color: "var(--accent)",
+      kind: "active",
+      label: `Agent attached - ${String(args.inFlightActionCount)} ${noun} in progress`,
+    };
+  }
+  return {
+    color: "var(--feedback-success)",
+    kind: "idle",
+    label: "Agent attached - idle",
+  };
+}
+
+function EditorAgentPresenceIndicator(props: {
+  readonly inFlightActionCount: number;
+  readonly recentlyActive: boolean;
+  readonly reviewPendingCount: number;
+}): ReactNode {
+  const view = editorAgentPresenceView(props);
+  return (
+    <div
+      aria-atomic="true"
+      aria-live="polite"
+      data-presence-state={view.kind}
+      data-testid="agent-presence-indicator"
+      style={EDITOR_AGENT_PRESENCE_STYLE}
+    >
+      <span
+        aria-hidden="true"
+        style={{ ...EDITOR_AGENT_PRESENCE_MARKER_STYLE, background: view.color }}
+      />
+      <span>{view.label}</span>
+    </div>
+  );
+}
+
 interface MonacoCompatibleEditorUri {
   readonly scheme: string;
   readonly authority: string;
@@ -3154,7 +3240,7 @@ function EditorRuntimeWidget({
     },
     [t],
   );
-  const { agentSelectionRequest, consumeSelectionRequest } = useEditorAgentBridge({
+  const { agentSelectionRequest, bridgeState, consumeSelectionRequest } = useEditorAgentBridge({
     agentSessionId,
     controllers: agentControllers,
     enabled: shouldSubscribeToAgentActions,
@@ -3163,6 +3249,11 @@ function EditorRuntimeWidget({
     onAgentActivity: () => setAuditRefreshNonce((nonce) => nonce + 1),
     onTerminalResult: handleBridgeTerminalResult,
   });
+  // Issue #2120 (ADR-0058 through ADR-0062): only staged, undecided reviews are labelled as
+  // requiring a human decision. Generic in-flight bridge actions remain ordinary activity.
+  const agentReviewPendingCount =
+    Number(agentPatchPending !== null && !agentPatchPending.applying) +
+    Number(agentChangesetPending !== null && !agentChangesetPending.applying);
 
   const adoptActiveChangesetResponse = useCallback(
     (path: string, response: FilesContentResponse): void => {
@@ -4222,6 +4313,11 @@ function EditorRuntimeWidget({
           }}
         />
       ) : null}
+      <EditorAgentPresenceIndicator
+        inFlightActionCount={bridgeState.inFlightActionCount}
+        recentlyActive={bridgeState.recentlyAttached}
+        reviewPendingCount={agentReviewPendingCount}
+      />
       <EditorAgentActionsPanel agentSessionId={agentSessionId} refreshNonce={auditRefreshNonce} />
       {hasTarget ? (
         <EditorBreadcrumbBar filePath={file} path={breadcrumbPath} onReveal={revealSymbol} />
