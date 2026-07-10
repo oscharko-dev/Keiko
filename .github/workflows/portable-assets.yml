@@ -7,8 +7,8 @@ name: Portable assets
 # layout that the Release workflow consumes via portable_assets_run_id.
 #
 # Publishing remains a human decision: this workflow never uploads release
-# assets or publishes to npm. Production signing stays an operator step; CI
-# artifacts carry staging (unverified) signing status by design.
+# assets or publishes to npm. Manual runs remain unsigned staging; stable-tag
+# Windows artifacts are signed and verified in the protected native job.
 
 on:
   push:
@@ -16,10 +16,51 @@ on:
       - "v*"
   workflow_dispatch: {}
 
-permissions:
-  contents: read
+permissions: {}
+
+env:
+  RELEASE_BASE_BRANCH: release/0.2
+  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
+  windows-signing-preflight:
+    name: Authorize Windows production signing
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: read
+      statuses: read
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+      - name: Validate stable tag and immutable source commit
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          node <<'NODE'
+          const { version } = require("./package.json");
+          if (version.includes("-") || process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error("Windows production signing requires the exact stable package tag.");
+          }
+          NODE
+      - name: Validate reviewed release gates
+        run: |
+          npm run check:release-required-workflows
+          npm run check:portable-approvals
+      - name: Verify required checks for tagged SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
+
   stage:
     name: Stage portable asset (${{ matrix.platform_target }})
     # Portable v1 is stable-only by contract (stage-portable-runtime.mjs rejects prerelease
@@ -29,14 +70,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - platform_target: windows-x64
-            runner: windows-latest
-          - platform_target: macos-arm64
-            runner: macos-latest
-          - platform_target: macos-x64
-            runner: macos-latest
+        include: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '[{"platform_target":"windows-x64","runner":"windows-latest"},{"platform_target":"macos-arm64","runner":"macos-latest"},{"platform_target":"macos-x64","runner":"macos-latest"}]' || '[{"platform_target":"macos-arm64","runner":"macos-latest"},{"platform_target":"macos-x64","runner":"macos-latest"}]') }}
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -88,10 +125,169 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  stage-windows-production:
+    name: Stage and sign portable asset (windows-x64)
+    needs: windows-signing-preflight
+    if: ${{ needs.windows-signing-preflight.result == 'success' }}
+    runs-on: windows-latest
+    environment: portable-release-signing
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: npm
+      - name: Ensure zip/unzip are available for staging
+        shell: pwsh
+        run: |
+          if (-not (Get-Command unzip -ErrorAction SilentlyContinue)) {
+            choco install unzip --no-progress -y
+          }
+          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
+            choco install zip --no-progress -y
+          }
+          unzip -v | Select-Object -First 1
+          zip -v | Select-Object -First 2
+      - name: Configure MSVC environment for the native launcher
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          echo PATH=%PATH%>> %GITHUB_ENV%
+          echo INCLUDE=%INCLUDE%>> %GITHUB_ENV%
+          echo LIB=%LIB%>> %GITHUB_ENV%
+          echo LIBPATH=%LIBPATH%>> %GITHUB_ENV%
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate approved runtime inputs
+        run: npm run check:portable-approvals
+      - name: Prepare approved sidecar payloads
+        run: node scripts/prepare-approved-sidecar-payloads.mjs --target windows-x64
+      - name: Stage portable runtime from approved inputs
+        run: node scripts/run-portable-assets-stage.mjs --target windows-x64
+      - name: Smoke test the unsigned staged artifact
+        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
+      - name: Validate protected Azure configuration
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          AZURE_ARTIFACT_SIGNING_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
+        run: |
+          $required = @(
+            "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID",
+            "AZURE_ARTIFACT_SIGNING_ENDPOINT", "AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME",
+            "AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME", "AZURE_ARTIFACT_SIGNING_IDENTITY_EKU"
+          )
+          if ($required.Where({ [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) }).Count -gt 0) {
+            throw "windows-portable-signing: protected configuration is incomplete"
+          }
+          try { $endpoint = [Uri]$env:AZURE_ARTIFACT_SIGNING_ENDPOINT }
+          catch { throw "windows-portable-signing: service endpoint is invalid" }
+          if ($endpoint.Scheme -ne "https" -or -not [string]::IsNullOrEmpty($endpoint.UserInfo)) {
+            throw "windows-portable-signing: service endpoint is invalid"
+          }
+          foreach ($name in @("AZURE_CLIENT_ID", "AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID")) {
+            $parsed = [Guid]::Empty
+            if (-not [Guid]::TryParse([Environment]::GetEnvironmentVariable($name), [ref]$parsed)) {
+              throw "windows-portable-signing: protected identifier is invalid"
+            }
+          }
+          if ($env:AZURE_ARTIFACT_SIGNING_IDENTITY_EKU -notmatch '^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$') {
+            throw "windows-portable-signing: subscriber identity EKU is invalid"
+          }
+      - name: Inventory the bounded PE signing set
+        shell: pwsh
+        run: |
+          node scripts/windows-portable-signing.mjs inventory `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --inventory "$env:RUNNER_TEMP\windows-pe-before.json" `
+            --catalog .portable-runtime/staging/windows-x64/windows-signing-files.txt
+      - name: Authenticate to Azure with environment-bound OIDC
+        uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          audience: api://AzureADTokenExchange
+      - name: Sign the exact inventoried PE set
+        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
+          files-catalog: .portable-runtime/staging/windows-x64/windows-signing-files.txt
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+          exclude-workload-identity-credential: true
+          exclude-managed-identity-credential: true
+          exclude-shared-token-cache-credential: true
+          exclude-visual-studio-credential: true
+          exclude-visual-studio-code-credential: true
+          exclude-azure-cli-credential: false
+          exclude-azure-powershell-credential: true
+          exclude-azure-developer-cli-credential: true
+          exclude-interactive-browser-credential: true
+          trace: false
+      - name: Prove signing did not change the PE scope
+        shell: pwsh
+        run: |
+          node scripts/windows-portable-signing.mjs inventory `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --inventory "$env:RUNNER_TEMP\windows-pe-verified.json" `
+            --catalog "$env:RUNNER_TEMP\windows-pe-verified.txt"
+          node scripts/windows-portable-signing.mjs compare-paths `
+            --expected-inventory "$env:RUNNER_TEMP\windows-pe-before.json" `
+            --actual-inventory "$env:RUNNER_TEMP\windows-pe-verified.json"
+      - name: Verify Authenticode chain, identity, and RFC3161 timestamp
+        shell: pwsh
+        env:
+          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
+        run: |
+          ./scripts/verify-windows-portable-signing.ps1 `
+            -StageRoot .portable-runtime/staging/windows-x64 `
+            -InventoryPath "$env:RUNNER_TEMP\windows-pe-verified.json" `
+            -VerificationInput "$env:RUNNER_TEMP\windows-verification-input.json" `
+            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
+      - name: Remove transient signing inventory
+        shell: pwsh
+        run: Remove-Item -LiteralPath .portable-runtime/staging/windows-x64/windows-signing-files.txt -Force
+      - name: Rebuild, bind, and verify the production archive
+        shell: pwsh
+        run: |
+          node scripts/windows-portable-signing.mjs finalize `
+            --stage-root .portable-runtime/staging/windows-x64 `
+            --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json" `
+            --verification-input "$env:RUNNER_TEMP\windows-verification-input.json"
+      - name: Smoke test the verified production artifact
+        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
+      - name: Upload verified Windows target artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-stage-windows-x64
+          path: .portable-runtime/staging/windows-x64
+          if-no-files-found: error
+          retention-days: 30
+
   assemble:
     name: Assemble reviewed portable asset bundle
-    needs: stage
+    needs: [stage, windows-signing-preflight, stage-windows-production]
+    if: ${{ always() && needs.stage.result == 'success' && (needs.stage-windows-production.result == 'success' || needs.stage-windows-production.result == 'skipped') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

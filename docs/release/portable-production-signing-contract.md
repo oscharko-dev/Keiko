@@ -145,6 +145,41 @@ runs, targets, or rebuilt archives. The Ubuntu assembler may check manifests, ev
 it must never synthesize a Boolean, convert a staging declaration into success, or promote any target
 that did not arrive as `verified-production` from its protected native job.
 
+### Windows operating procedure
+
+The portable-assets workflow performs Windows production signing only for an exact stable package tag.
+An unprotected preflight first proves the tag/commit/package binding and the reviewed release checks.
+Only then may the native `windows-latest` job reference `portable-release-signing`, request an OIDC
+token, and wait for the environment's stable-release approval. Manual dispatch remains in the separate
+secret-free staging matrix.
+
+The protected job validates that every required Azure reference is non-empty and that the endpoint and
+full subscriber identity EKU have the required shape without printing their values. It then creates a
+bounded, deterministic catalog from PE content beneath the staged payload. Every `.exe` and `.dll` must
+be PE, while PE content with another extension (including native `.node` add-ons) is included. Links,
+hard links, special files, escapes, excessive depth, and excessive file counts fail before OIDC login.
+The catalog is transient and is the exact input to the pinned Artifact Signing action. Authentication
+uses the Azure CLI session established by environment-bound OIDC; all other `DefaultAzureCredential`
+routes are disabled for the signing action.
+
+After signing, the job requires the same PE path set and verifies every file with both `signtool` and
+`Get-AuthenticodeSignature`. Success requires the Windows Authenticode policy chain, code-signing EKU,
+the exact configured subscriber identity-validation EKU, a valid RFC 3161 timestamper chain, and the
+timestamping EKU. Tool output is discarded; only the existing bounded Booleans and reason codes reach
+the ephemeral verifier input. The job then proves the verified file hashes are unchanged, rebuilds the
+ZIP, recalculates byte-derived archive, provenance, application-tree, sidecar-tree, reviewed-binding,
+and checksum fields, and invokes the existing production verifier. Upload occurs only after the final
+manifest is `verified-production` and the post-sign smoke test passes.
+
+For normal account/profile rotation with an unchanged reviewed subscriber EKU, update only the
+protected environment references, retain certificate-profile-scoped Signer RBAC, and rerun the Windows
+qualification before selecting the replacement for release. An EKU change follows the trust-boundary
+review described below. For revocation, suspected compromise, provider rejection, timestamp failure,
+or Azure/GitHub OIDC outage, disable the environment or federated credential as appropriate and allow
+the job to fail closed. Do not switch credential types, preserve a partial signed payload, upload a
+failure artifact, or substitute operator-supplied verification Booleans. Secret-free manual staging
+remains available while production signing is unavailable.
+
 The exact current verifier input is a JSON object with no keys other than:
 
 ```json
