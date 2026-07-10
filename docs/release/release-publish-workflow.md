@@ -30,6 +30,9 @@ without parsing prose.
 
 Portable archive layout, launcher, and manifest rules are documented in
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
+Production provider trust, protected-environment configuration, credential hygiene, and the native
+signing/verifier handoff are governed by the
+[Portable Production Signing Contract](portable-production-signing-contract.md).
 The user/operator launch and first-run setup journey is documented in
 [Portable Launch And Setup Guide](portable-launch-setup-guide.md).
 Portable artifact signing verification is owned by `scripts/verify-portable-runtime-signing.mjs`
@@ -118,10 +121,15 @@ SHA-256 digests. `npm run portable:approve-runtimes -- --node-version <v> --open
 regenerates the pins from the official upstream sources; reviewing and merging that diff is the
 release approval act. The staging pipeline never downloads unpinned or `latest` inputs.
 
-Publishing remains a human decision. The workflow uploads a reviewed-candidate bundle artifact
-only; `release.yml` still requires an operator dispatch (with `portable_assets_run_id` pointing at
-a green `Portable assets` run), and production signing verification stays an operator-owned step —
-CI-staged artifacts intentionally carry staging (unverified) signing status.
+Publishing remains a human decision. Secret-free `workflow_dispatch`, prerelease, development, and
+pull-request staging never selects `portable-release-signing`, requests Azure OIDC, or receives Apple
+secrets; those artifacts intentionally remain staging/non-production and cannot be promoted. Production
+signing is restricted to protected native-runner jobs triggered by a reviewed stable tag, with separate
+event, tag-shape, exact `v<package.json.version>`, digest, and signing-identity guards. Only their
+`verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler validates
+those outputs but cannot generate or upgrade signing-verification booleans. `release.yml` still requires
+an operator dispatch with `portable_assets_run_id` pointing at the resulting green `Portable assets`
+run.
 
 ## Triggering
 
