@@ -331,8 +331,7 @@ async function finalizeCommand(options) {
   if (manifest.artifact?.platformTarget !== WINDOWS_TARGET)
     fail("manifest target is not Windows x64");
   const verificationInputPath = resolve(required(options, "verification-input"));
-  const verificationInput = JSON.parse(readFileSync(verificationInputPath, "utf8"));
-  assertWindowsProductionVerificationInput(verificationInput, manifest);
+  assertWindowsProductionVerificationInput(verificationInputPath, manifest);
   await rebindArchive(stageRoot, manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(

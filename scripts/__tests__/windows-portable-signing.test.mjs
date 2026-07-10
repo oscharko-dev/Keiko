@@ -1,6 +1,14 @@
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +18,7 @@ import {
   inventoriesMatch,
   inventoryPathsMatch,
   inventoryWindowsPortablePeFiles,
+  main,
   rebindArchive,
 } from "../windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "../windows-portable-verification-input.mjs";
@@ -163,7 +172,16 @@ describe("Windows portable PE signing inventory", () => {
   });
 
   it("blocks false, missing, or incomplete finalizer inputs before production promotion", () => {
-    const manifest = { sidecarRuntimes: [{ name: "worker" }] };
+    const dir = root();
+    const manifest = {
+      artifact: { platformTarget: "windows-x64" },
+      sidecarRuntimes: [{ name: "worker", platformTarget: "windows-x64" }],
+    };
+    const writeInput = (name, input) => {
+      const path = join(dir, `${name}.json`);
+      writeFileSync(path, JSON.stringify(input));
+      return path;
+    };
     const verified = {
       reasonCodes: [],
       verificationChecks: { publisherChainVerified: true, timestampVerified: true },
@@ -174,21 +192,99 @@ describe("Windows portable PE signing inventory", () => {
         },
       ],
     };
-    expect(() => assertWindowsProductionVerificationInput(verified, manifest)).not.toThrow();
+    expect(() =>
+      assertWindowsProductionVerificationInput(writeInput("verified", verified), manifest),
+    ).not.toThrow();
     expect(() => assertWindowsProductionVerificationInput(undefined, manifest)).toThrow(
-      /input is incomplete/u,
+      /did not succeed/u,
     );
     expect(() =>
       assertWindowsProductionVerificationInput(
-        {
+        writeInput("false", {
           ...verified,
           verificationChecks: { publisherChainVerified: false, timestampVerified: true },
-        },
+        }),
         manifest,
       ),
     ).toThrow(/did not succeed/u);
     expect(() =>
-      assertWindowsProductionVerificationInput({ ...verified, sidecarRuntimes: [] }, manifest),
+      assertWindowsProductionVerificationInput(
+        writeInput("incomplete", { ...verified, sidecarRuntimes: [] }),
+        manifest,
+      ),
     ).toThrow(/sidecar verification input is incomplete/u);
+    const sidecar = verified.sidecarRuntimes[0];
+    const malformed = [
+      { ...verified, rawLog: "provider output" },
+      { ...verified, reasonCodes: { length: 0 } },
+      {
+        ...verified,
+        verificationChecks: { ...verified.verificationChecks, callerApproved: true },
+      },
+      { ...verified, verificationChecks: { publisherChainVerified: true } },
+      { ...verified, sidecarRuntimes: [{ ...sidecar, rawPath: "private" }] },
+      { ...verified, sidecarRuntimes: [sidecar, sidecar] },
+      { ...verified, sidecarRuntimes: [{ ...sidecar, name: "unknown" }] },
+      { ...verified, reasonCodes: ["token=ghp_abcdefghijklmnopqrstuvwxyz123456"] },
+    ];
+    for (const [index, input] of malformed.entries()) {
+      expect(() =>
+        assertWindowsProductionVerificationInput(
+          writeInput(`malformed-${String(index)}`, input),
+          manifest,
+        ),
+      ).toThrow();
+    }
+  });
+
+  it("leaves every finalizer-owned byte unchanged when canonical input parsing rejects", async () => {
+    const stage = root();
+    const payload = join(stage, "payload", "Keiko");
+    write(join(payload, "Keiko.exe"), portableExecutable(1));
+    write(join(payload, "runtime", "node", "node.exe"), portableExecutable(2));
+    const manifestPath = join(stage, "manifest", "portable-manifest.json");
+    const archivePath = join(stage, "Keiko-windows-x64.zip");
+    const provenancePath = join(stage, "evidence", "provenance.intoto.jsonl");
+    const checksumPath = join(stage, "evidence", "SHA256SUMS.txt");
+    const summaryPath = join(stage, "evidence", "signing-verification.json");
+    mkdirSync(join(stage, "manifest"), { recursive: true });
+    mkdirSync(join(stage, "evidence"), { recursive: true });
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        artifact: { platformTarget: "windows-x64", assetName: "Keiko-windows-x64.zip" },
+      }),
+    );
+    writeFileSync(archivePath, "archive-before");
+    writeFileSync(provenancePath, "provenance-before");
+    writeFileSync(checksumPath, "checksums-before");
+    writeFileSync(summaryPath, "summary-before");
+    const inventoryPath = join(stage, "inventory.json");
+    writeFileSync(inventoryPath, JSON.stringify(inventoryWindowsPortablePeFiles(payload)));
+    const malformedPath = join(stage, "malformed.json");
+    writeFileSync(
+      malformedPath,
+      JSON.stringify({
+        rawLog: "/private/provider/output",
+        reasonCodes: { length: 0 },
+        verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+      }),
+    );
+    const paths = [archivePath, manifestPath, provenancePath, checksumPath, summaryPath];
+    const before = paths.map((path) => readFileSync(path));
+
+    await expect(
+      main([
+        "finalize",
+        "--stage-root",
+        stage,
+        "--expected-inventory",
+        inventoryPath,
+        "--verification-input",
+        malformedPath,
+      ]),
+    ).rejects.toThrow(/unsupported verification input key/u);
+
+    expect(paths.map((path) => readFileSync(path))).toEqual(before);
   });
 });

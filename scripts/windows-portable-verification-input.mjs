@@ -1,41 +1,39 @@
+import { portableTargetByName } from "./portable-runtime.mjs";
+import {
+  PortableVerificationInputError,
+  readPortableVerificationInput,
+} from "./portable-verification-input.mjs";
+
 export class WindowsVerificationInputError extends Error {}
 
 function fail(message) {
   throw new WindowsVerificationInputError(`windows-portable-signing: ${message}`);
 }
 
-function windowsChecksVerified(checks) {
-  return checks?.publisherChainVerified === true && checks?.timestampVerified === true;
+function checksVerified(checks) {
+  return checks.publisherChainVerified === true && checks.timestampVerified === true;
 }
 
-function verifiedSidecarName(sidecar) {
-  if (typeof sidecar?.name !== "string" || !windowsChecksVerified(sidecar.verificationChecks)) {
-    fail("production sidecar verification input is incomplete");
+export function assertWindowsProductionVerificationInput(path, manifest) {
+  const target = portableTargetByName(manifest.artifact?.platformTarget);
+  if (target?.nodePlatform !== "win32") fail("manifest target is not Windows x64");
+  const sidecars = Array.isArray(manifest.sidecarRuntimes) ? manifest.sidecarRuntimes : [];
+  let input;
+  try {
+    input = readPortableVerificationInput(path, target, "production", sidecars);
+  } catch (error) {
+    if (error instanceof PortableVerificationInputError) fail(error.message);
+    throw error;
   }
-  return sidecar.name;
-}
-
-function assertSidecars(sidecarInput, manifestSidecars) {
-  const expected = (manifestSidecars ?? []).map((sidecar) => sidecar.name).sort();
-  const sidecars = sidecarInput ?? [];
-  if (!Array.isArray(sidecars) || sidecars.length !== expected.length) {
-    fail("production sidecar verification input is incomplete");
+  if (!checksVerified(input.verificationChecks) || input.reasonCodes.length > 0) {
+    fail("production native verification did not succeed");
   }
-  const actual = sidecars.map(verifiedSidecarName).sort();
   if (
-    JSON.stringify(actual) !== JSON.stringify(expected) ||
-    new Set(actual).size !== actual.length
+    input.sidecarRuntimes.some(
+      (sidecar) => !checksVerified(sidecar.verificationChecks) || sidecar.reasonCodes.length > 0,
+    )
   ) {
     fail("production sidecar verification input is incomplete");
   }
-}
-
-export function assertWindowsProductionVerificationInput(input, manifest) {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    fail("production verification input is incomplete");
-  }
-  if (!windowsChecksVerified(input.verificationChecks) || (input.reasonCodes?.length ?? 0) > 0) {
-    fail("production native verification did not succeed");
-  }
-  assertSidecars(input.sidecarRuntimes, manifest.sidecarRuntimes);
+  return input;
 }
