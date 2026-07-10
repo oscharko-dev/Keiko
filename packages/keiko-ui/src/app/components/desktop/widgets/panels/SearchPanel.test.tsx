@@ -225,6 +225,19 @@ describe("SearchPanel", () => {
     );
   });
 
+  it("sends the whole-word toggle with text-search requests", async () => {
+    renderPanel();
+    fireEvent.click(screen.getByLabelText("Match whole word"));
+
+    await searchFor("needle");
+
+    await waitFor(() => expect(fetchWorkspaceSearchMock).toHaveBeenCalledTimes(1));
+    expect(fetchWorkspaceSearchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ wholeWord: true }),
+      expect.anything(),
+    );
+  });
+
   it("clearing glob fields returns to unfiltered requests for the same query", async () => {
     renderPanel();
     const include = screen.getByLabelText("Include glob");

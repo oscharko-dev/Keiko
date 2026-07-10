@@ -60,6 +60,7 @@ function requestFromState(args: {
   readonly query: string;
   readonly mode: WorkspaceSearchMode;
   readonly caseSensitive: boolean;
+  readonly wholeWord: boolean;
   readonly includeText: string;
   readonly excludeText: string;
 }): WorkspaceSearchRequest {
@@ -68,6 +69,7 @@ function requestFromState(args: {
     query: args.query.trim(),
     mode: args.mode,
     caseSensitive: args.caseSensitive,
+    wholeWord: args.wholeWord,
     includeGlobs: globArray(args.includeText),
     excludeGlobs: globArray(args.excludeText),
     maxResults: WORKSPACE_SEARCH_MAX_RESULTS,
@@ -199,6 +201,7 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
   const [searchDomain, setSearchDomain] = useState<SearchDomain>("text");
   const [mode, setMode] = useState<WorkspaceSearchMode>("literal");
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
   const [includeText, setIncludeText] = useState("");
   const [excludeText, setExcludeText] = useState("");
   const [replacement, setReplacement] = useState("");
@@ -254,6 +257,7 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
                   query,
                   mode,
                   caseSensitive,
+                  wholeWord,
                   includeText,
                   excludeText,
                 }),
@@ -269,7 +273,17 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
         setStatus("error");
       }
     },
-    [caseSensitive, excludeText, includeText, inlineError, mode, query, searchDomain, selectedRoot],
+    [
+      caseSensitive,
+      excludeText,
+      includeText,
+      inlineError,
+      mode,
+      query,
+      searchDomain,
+      selectedRoot,
+      wholeWord,
+    ],
   );
 
   useEffect(() => {
@@ -425,6 +439,14 @@ export function SearchPanel({ root, openEditorFile }: SearchPanelProps): ReactNo
               onChange={(event) => setCaseSensitive(event.target.checked)}
             />
             Case sensitive
+          </label>
+          <label className={styles.checkLabel}>
+            <input
+              type="checkbox"
+              checked={wholeWord}
+              onChange={(event) => setWholeWord(event.target.checked)}
+            />
+            Match whole word
           </label>
         </div>
         <div className={styles.globGrid}>
