@@ -15,6 +15,14 @@
       "types": "./dist/redaction.d.ts",
       "import": "./dist/redaction.js"
     },
+    "./sensitive-text": {
+      "types": "./dist/sensitive-text.d.ts",
+      "import": "./dist/sensitive-text.js"
+    },
+    "./feedback-report": {
+      "types": "./dist/feedback-report.d.ts",
+      "import": "./dist/feedback-report.js"
+    },
     "./errors": {
       "types": "./dist/errors/index.d.ts",
       "import": "./dist/errors/index.js"

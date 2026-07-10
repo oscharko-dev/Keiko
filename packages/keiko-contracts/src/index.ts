@@ -1434,10 +1434,63 @@ export {
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
 export {
   containsAbsolutePath,
+  containsControlOtherThanTabOrLf,
   containsPseudoRoleMarker,
+  isUnicodeScalarString,
   redactAbsolutePaths,
+  redactAbsolutePathsWithCount,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
+export type { AbsolutePathRedactionResult } from "./text-safety.js";
+
+export type {
+  FeedbackCategory,
+  FeedbackDiagnosticsV1,
+  FeedbackDispositionActionV1,
+  FeedbackDispositionReasonV1,
+  FeedbackDispositionRecordV1,
+  FeedbackDispositionSidecarV1,
+  FeedbackDispositionTargetV1,
+  FeedbackDispositionUnitKindV1,
+  FeedbackDraftFieldIdV1,
+  FeedbackFeatureArea,
+  FeedbackImpact,
+  FeedbackPlatform,
+  FeedbackRedactionProvenanceV1,
+  FeedbackRedactionRuleCode,
+  FeedbackRedactionRuleCountV1,
+  FeedbackReportDraftV1,
+  FeedbackReportDraftParse,
+  FeedbackReportError,
+  FeedbackReportErrorCode,
+  FeedbackReportField,
+  FeedbackReportParse,
+  FeedbackReportPreparationError,
+  FeedbackReportRewriteError,
+  FeedbackReportSummaryV1,
+  FeedbackReportV1,
+  FeedbackSeverityCountsV1,
+  FeedbackTextAttachmentCandidateV1,
+} from "./feedback-report.js";
+export {
+  FEEDBACK_ATTACHMENT_MAGIC_TABLE_VERSION,
+  FEEDBACK_CATEGORIES,
+  FEEDBACK_DISPOSITION_ACTIONS_V1,
+  FEEDBACK_DISPOSITION_REASONS_V1,
+  FEEDBACK_DISPOSITION_UNIT_KINDS_V1,
+  FEEDBACK_DRAFT_FIELD_IDS_V1,
+  FEEDBACK_FEATURE_AREAS,
+  FEEDBACK_IMPACTS,
+  FEEDBACK_PLATFORMS,
+  FEEDBACK_PRIVACY_CONTRACT_VERSION,
+  FEEDBACK_REDACTION_ENGINE_VERSION,
+  FEEDBACK_REDACTION_RULE_CODES,
+  FEEDBACK_REPORT_LIMITS,
+  FEEDBACK_REPORT_SUMMARY_DISPLAY_SEPARATOR_V1,
+  FEEDBACK_REPORT_SCHEMA_VERSION,
+  parseFeedbackReportDraftV1,
+  parseFeedbackReportV1,
+} from "./feedback-report.js";
 
 // ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
 export type {

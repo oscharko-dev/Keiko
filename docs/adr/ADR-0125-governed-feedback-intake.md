@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Issue #2071, 2026-07-09).
+Accepted (Issue #2071, 2026-07-09); disposition clarification authorized in Issue #2072
+(2026-07-10).
 
 ## Context
 
@@ -10,7 +11,7 @@ Epic #2070 adds an in-product path for reporting a Keiko user finding without we
 product's local-first runtime or publishing unreviewed customer material. The path must support two
 different outcomes:
 
-- send an already-redacted report to a Keiko-operator intake queue for maintainer review, when an
+- send an already-sanitized report to a Keiko-operator intake queue for maintainer review, when an
   operator has configured that service; or
 - open the existing public [`user_finding.yml`](../../.github/ISSUE_TEMPLATE/user_finding.yml)
   form with a bounded prefill/copy handoff that the user still submits themselves.
@@ -25,7 +26,7 @@ literal secrets, German IBANs, and German phone numbers, but it is **not** a sem
 arbitrary customer data, proprietary code, private business facts, or every personal-data format.
 
 The hosted side has a different job. It accepts anonymous submissions, rate-limits abuse, retains
-redacted reports for review, authenticates maintainers, records review transitions, and creates a
+sanitized reports for review, authenticates maintainers, records review transitions, and creates a
 public GitHub issue only after approval. Its storage, audit, OIDC authorization, abuse controls, and
 GitHub App credentials are service-side responsibilities; moving any of them into the local BFF
 would turn the npm-delivered product into an unsupported hosted multi-user server.
@@ -49,10 +50,10 @@ The feedback flow has two separately deployed planes:
 
 | Plane | Owns | Must not own |
 | --- | --- | --- |
-| Local Keiko product | Field assembly, bounded local text extraction, deterministic redaction, canonicalization, preview, explicit user confirmation, and optional outbound submission through `gatewayFetch`. | A remote listener, hosted queue storage, maintainer identities or roles, OIDC sessions, GitHub App credentials, or multi-user review state. |
+| Local Keiko product | Field assembly, bounded local text extraction, deterministic detection/disposition, canonicalization, preview, explicit user confirmation, and optional outbound submission through `gatewayFetch`. | A remote listener, hosted queue storage, maintainer identities or roles, OIDC sessions, GitHub App credentials, or multi-user review state. |
 | Operator-hosted intake service | Anonymous submit endpoint, validation, abuse controls, redacted queue storage, content-free audit, OIDC/server-authorized maintainer API, review state, and GitHub App issue creation. | Local repository/filesystem access, local Keiko credentials, pre-redaction material, or a general-purpose proxy back into `createUiServer`. |
 
-`createUiServer` remains the local assembly/redaction/preview plane and **must not** host the remote
+`createUiServer` remains the local assembly/sanitization/preview plane and **must not** host the remote
 intake API. The operator-hosted service is a distinct deployment, process, origin, data store, and
 authorization boundary. Its existence does not make Keiko's local BFF a supported multi-user or
 internet-facing server.
@@ -114,17 +115,35 @@ the user to write a new sanitized summary; Keiko does not automatically summariz
 raw log. The original log bytes, file object, and rejected content remain local and have zero durable
 retention.
 
-The existing redactor is reused as one deterministic defense, not advertised as a semantic
-customer-data classifier. The preview must say that redaction can miss proprietary/customer data and
-that the user remains responsible for reviewing the complete outbound text. Known-risk detections
-fail closed; uncertainty is never presented as proof that a report is safe.
+Detection and disposition are separate; redact complete, high-confidence sensitive spans in place.
+Ambiguous credential-like content needs structural evidence; never partially redact it. Quarantine
+the smallest complete quoted/structured value, then a malformed line remainder, then an optional
+unit or attachment, while preserving safe remainder. Ordinary password-policy/reset prose is not
+structural evidence. V1 keeps `summary.title` and `summary.description` as distinct required strings
+and scans/verifies each independently, preventing join-boundary credential or raw-log grammar. Their
+combined 4 KiB UTF-8 budget includes the reserved two-LF display boundary; projections render title
+then description unchanged. Scan exhaustion quarantines the unit, omits exhausted optional content,
+or returns content-free `rewrite-required` only when a required field has no meaningful safe content.
 
-### D4 - Preview and submit use the exact same canonical redacted bytes
+Preparation returns canonical sanitized bytes plus a paired, local-memory-only disposition sidecar.
+The sidecar has closed action/reason/unit-kind codes and only a closed source draft-field id or
+snapshotted attachment ordinal; it has no content, offset, filename, path, or user label and never
+enters the wire body, public prefill, evidence, or logs. Redaction provenance in the canonical body
+remains engine version plus rule-code/count pairs only. Raw/quarantined input stays transient and
+local. Recovery is edit/rescan, optional removal, or safe omission—never `send anyway`; the pipeline
+stays deterministic, bounded, and linear-time.
+Binary, oversized, raw-log, structurally unprocessable, or required-empty input remains blocked.
 
-The local assembler validates and normalizes typed inputs, redacts every string, and serializes the
-semantic report once into canonical UTF-8 JSON bytes. The preview is rendered by decoding those
-immutable bytes. Confirmation sends those exact bytes; submit-time code must not rebuild, enrich,
-reorder, re-read, or re-redact the report.
+The redactor is one bounded defense, not a semantic customer-data classifier. The preview must say
+it can miss proprietary/customer data and that the user must review the complete outbound text.
+
+### D4 - Preview and every destination use one canonical sanitized projection
+
+The local assembler validates typed inputs, applies the complete detection/disposition pipeline to
+every string, and serializes the safe semantic report once into canonical UTF-8 JSON bytes. The
+preview is rendered by decoding those immutable bytes. Confirmation sends those exact bytes;
+submit-time code must not rebuild, enrich, reorder, re-read, or resanitize the report. Public-form
+prefill/copy maps only that same semantic projection and cannot restore an omitted unit.
 The envelope binds a schema version, privacy/redaction contract version, and SHA-256 digest to the
 canonical report. This exact-body SHA-256 is an integrity digest only; it is not the service's
 semantic dedupe identifier. The hosted service uses the same contract rules to verify:
@@ -132,9 +151,9 @@ semantic dedupe identifier. The hosted service uses the same contract rules to v
 - the body is already canonical and its digest matches;
 - every field and aggregate byte limit is satisfied;
 - the declared contract versions are supported; and
-- acceptance would not require additional normalization, redaction, or field removal.
+- acceptance would not require additional normalization, redaction, quarantine, or omission.
 
-Any validation, canonicalization, or redaction drift is rejected with a content-free error and no
+Any validation, canonicalization, or sanitization drift is rejected with a content-free error and no
 report persistence. The service must not silently repair or transform a submitted report, because
 that would break the promise that maintainers review exactly what the user previewed.
 
@@ -190,11 +209,11 @@ selects the rate-limit identity. Rate-limit buckets store only the rotating HMAC
 This mechanism is abuse resistance, not user identity, authentication, deduplication, or an audit
 principal.
 
-### D7 - Dedupe with a separately keyed HMAC over the redacted semantic projection
+### D7 - Dedupe with a separately keyed HMAC over the sanitized semantic projection
 
 The dedupe identifier is
 `HMAC-SHA-256(dedupe_key, "keiko-feedback-dedupe-v1" || 0x00 || canonical_semantic_bytes)` over only
-the canonical bytes of the already-redacted semantic report projection. It is not the exact-body
+the canonical bytes of the already-sanitized semantic report projection. It is not the exact-body
 SHA-256 integrity digest and never uses the daily abuse-control key. It is not computed over raw
 inputs, pre-redaction text, redaction provenance, IP-derived data, receipt capabilities, timestamps,
 request/correlation ids, review state, transport headers, reviewer identity, GitHub metadata, or
@@ -238,10 +257,11 @@ and must not be widened to create issues, hold a GitHub App key, or act for the 
 
 The local UI always identifies the public path as public and links specifically to the repository's
 current [`user_finding.yml`](../../.github/ISSUE_TEMPLATE/user_finding.yml) form. It may prefill only
-bounded values derived from the same canonical redacted report. If the browser or GitHub form does
+bounded values mapped from the same canonical sanitized projection. If the browser or GitHub form does
 not support a field, the encoded URL would exceed the conservative URL cap, or clipboard permission
-is unavailable, the UI presents the redacted report for explicit copy instead of dropping fields or
-using a different template. The user reviews and submits the public issue; Keiko does not do so on
+is unavailable, the UI presents that same sanitized field-labelled content for explicit copy instead
+of truncating fields or using a different template. It never reads the raw draft or serializes the
+local disposition sidecar. The user reviews and submits the public issue; Keiko does not do so on
 their behalf.
 
 Suspected vulnerabilities and reports requiring private coordination must never use the anonymous
@@ -259,10 +279,10 @@ requires a superseding reviewed policy decision or ADR.
 
 | Data class | Maximum durable retention |
 | --- | --- |
-| Local draft, raw file/network/log bytes, pre-redaction report, rejected request body | None (zero durable retention) |
+| Local draft, quarantined units, disposition sidecar, raw file/network/log bytes, pre-sanitization report, rejected request body | None (zero durable retention) |
 | Open redacted intake payload | 90 days |
 | Terminal-state redacted payload | 30 days |
-| Canonical redacted semantic dedupe HMAC and bounded group count | 180 days from first acceptance; duplicates do not refresh |
+| Canonical sanitized semantic dedupe HMAC and bounded group count | 180 days from first acceptance; duplicates do not refresh |
 | Semantic dedupe HMAC key material | Active key rotates every 90 days; at most two predecessor keys survive only until their last 180-day digest expires |
 | Content-free audit transitions, payload digest, and GitHub linkage | 365 days |
 | Daily abuse-rate buckets | Exactly 48 hours from their 00:00 UTC start; close after 24 hours and expire 24 hours later |
@@ -282,31 +302,14 @@ capabilities from primary storage; backup replay must not restore expired data.
 
 The epic obligations are:
 
-1. **#2072 - Local feedback report contract and redaction engine:** define shared bounded report,
-   canonicalization, redaction-version, exact-body integrity digest, deterministic accepted-text
-   predicate, known raw-log signature rejection, and negative-fixture rules; prove no raw bytes,
-   file object, log body, or metadata survive.
-2. **#2073 - In-app feedback UI with redaction preview and public GitHub link:** render the exact
-   canonical bytes, obtain explicit confirmation, expose configured/disabled submission states,
-   implement bounded public-form prefill/copy fallback, and route security reports privately.
-3. **#2074 - Intake API contract, validation, dedupe, and rate limiting:** implement the separately
-   deployed anonymous JSON endpoint, exact-origin compatibility, drift rejection, exact-midnight
-   daily abuse-key rotation, trusted-proxy parsing, independently keyed semantic-report HMAC dedupe,
-   immutable per-submission receipt records and fixed receipt read operation, and retention jobs.
-4. **#2075 - Maintainer review queue:** define and implement the one closed review state/action table
-   and complete transition rules, OIDC plus server-side authorization, redacted item review,
-   digest-bound actor-attributed transitions, private/security routing, retention controls, and
-   content-free audit. This ADR fixes the invariants but deliberately does not pre-empt that table.
-5. **#2076 - GitHub App issue creation:** implement the dedicated closed issue adapter, configured
-   repository allowlist, pre-approval reconciliation marker covered by the approved projection
-   digest, exact `Issues: read/write` plus mandatory `Metadata: read` permission gate, approved-item
-   gate, memory-only installation token, template mapping, idempotency, and safe GitHub linkage.
-6. **#2077 - End-to-end verification, docs, and release evidence:** prove preview-byte equivalence,
-   accepted-text/raw-log rejection, absent-config zero egress, no raw IP/log persistence, exact
-   abuse/dedupe key rollover and separation, no duplicate-triggered TTL refresh, one receipt per
-   accepted submission with generic-404 isolation, authz isolation, pre-approval reconciliation
-   marker binding, approved-only issue creation, public/private routing, and release evidence across
-   the integrated flow.
+| Issue | Obligation |
+| --- | --- |
+| #2072 | Define the bounded report and local-only typed disposition sidecar; deterministic accepted-text, structural detection, smallest-safe-unit quarantine/omission, false-positive controls, canonicalization, provenance, exact-body digest, and adversarial linear-time verification. |
+| #2073 | Render exact canonical safe content with redaction/quarantine/omission notices; support edit-and-rescan, optional-unit removal, and continue-with-safe-omission; provide fixed public prefill/copy and private security routing with no `send anyway`. |
+| #2074 | Implement the separate anonymous JSON endpoint, drift rejection, exact-origin compatibility, daily abuse-key rotation, trusted proxies, separately keyed dedupe, per-submission receipts, and retention jobs. |
+| #2075 | Define the closed review table; implement OIDC/server authorization, immutable redacted review, digest-bound CAS transitions, private routing, retention, and content-free audit without changing this ADR's invariants. |
+| #2076 | Implement the closed GitHub App issue adapter, configured targets, pre-approval marker/digest binding, exact permission gate, approved-item gate, memory-only token, template mapping, idempotency, and safe linkage. |
+| #2077 | Prove preview/submit/public-projection identity, dispositions and safe omissions, rejection gates, zero-config egress, abuse/dedupe rotation, receipt isolation, authorization, marker binding, approved-only creation, routing, retention, and release evidence. |
 
 No child may weaken an earlier obligation to make a later slice easier. Public-API expansion,
 retention widening, additional remote endpoints, attachment support, or a new credential scope
@@ -317,7 +320,8 @@ requires architecture review before implementation.
 ### Positive
 
 - Keiko remains a loopback-only local product while gaining one explicit optional outbound action.
-- Users preview the exact redacted bytes that maintainers receive.
+- Users preview the exact canonical sanitized bytes that maintainers receive, while content-free
+  local notices identify redaction, quarantine, and omission recovery.
 - Hosted authentication, storage, abuse control, and GitHub credentials have a dedicated security
   boundary rather than leaking into the local BFF.
 - Separately keyed dedupe and daily abuse control avoid raw/stable reporter identifiers and
@@ -332,6 +336,8 @@ requires architecture review before implementation.
 - Anonymous intake remains an abuse target even with daily pseudonymous rate limiting.
 - Pattern and literal redaction can miss semantic customer data. Explicit preview and human review
   reduce but do not eliminate that risk.
+- Structural ambiguity can remove safe-looking adjacent text. Smallest-safe-unit rules and
+  field-level edit/rescan recovery bound that false-positive cost without permitting a bypass.
 - Exact-byte equivalence deliberately turns validator/redactor version skew into a rejected
   submission; coordinated version rollout and clear remediation are required.
 - Text-only evidence is less convenient than attachments, but avoids a materially larger malware,
@@ -350,7 +356,7 @@ Rejected. Browser-direct or user-controlled destinations would bypass `gatewayFe
 egress controls, exact-destination validation, and the no-credential contract, while creating an
 SSRF/open-webhook-like product surface.
 
-### A3 - Re-redact or normalize reports after preview
+### A3 - Resanitize or normalize reports after preview
 
 Rejected. Silent service transformations make the preview untruthful. Drift is rejected instead.
 

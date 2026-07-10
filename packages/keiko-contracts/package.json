@@ -35,6 +35,10 @@
       "types": "./dist/text-safety.d.ts",
       "import": "./dist/text-safety.js"
     },
+    "./feedback-report": {
+      "types": "./dist/feedback-report.d.ts",
+      "import": "./dist/feedback-report.js"
+    },
     "./line-offsets": {
       "types": "./dist/line-offsets.d.ts",
       "import": "./dist/line-offsets.js"

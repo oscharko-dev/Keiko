@@ -778,4 +778,20 @@ describe("keiko-contracts package surface", () => {
     expect(m.isGitPullRequestReadinessSummary(readiness)).toBe(true);
     expect(readiness.objectExists).toBe(false);
   });
+
+  it("feedback report and counted text-safety contracts are reachable through the barrel", async () => {
+    const m = await import("./index.js");
+
+    expect(m.FEEDBACK_REPORT_SCHEMA_VERSION).toBe("1");
+    expect(m.FEEDBACK_PRIVACY_CONTRACT_VERSION).toBe("1");
+    expect(m.FEEDBACK_REDACTION_ENGINE_VERSION).toBe("1");
+    expect(m.FEEDBACK_ATTACHMENT_MAGIC_TABLE_VERSION).toBe("1");
+    expect(m.FEEDBACK_REPORT_SUMMARY_DISPLAY_SEPARATOR_V1).toBe("\n\n");
+    expect(m.FEEDBACK_REPORT_LIMITS.attachmentCount).toBe(3);
+    expect(typeof m.parseFeedbackReportDraftV1).toBe("function");
+    expect(typeof m.parseFeedbackReportV1).toBe("function");
+    expect(typeof m.redactAbsolutePathsWithCount).toBe("function");
+    expect(typeof m.isUnicodeScalarString).toBe("function");
+    expect(typeof m.containsControlOtherThanTabOrLf).toBe("function");
+  });
 });
