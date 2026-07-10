@@ -85,6 +85,34 @@ export const DE_MESSAGES = {
     "Zugriff auf die Zwischenablage fehlgeschlagen. Wähle die Antwort manuell aus und kopiere sie.",
   "chat.copy.copied": "Kopiert",
   "chat.copy.message": "Antwort kopieren",
+  "chat.codeApply.action": "Im Editor anwenden",
+  "chat.codeApply.preparing": "Wird vorbereitet",
+  "chat.codeApply.queued": "Zur Prüfung vorgemerkt",
+  "chat.codeApply.conflict": "Konflikt: {code}",
+  "chat.codeApply.unavailable": "Editor nicht verfügbar",
+  "chat.codeApply.retry": "Erneut versuchen",
+  "chat.codeApply.outcomeUnknown": "Ergebnis unbekannt",
+  "chat.codeApply.outcomeUnknownStatus": "Ergebnis unbekannt. Prüfe den Editor.",
+  "editor.askSelection.selectText": "Wähle Text im aktiven Editor aus, bevor du Keiko fragst.",
+  "editor.askSelection.chatUnavailable": "Der Chat ist für diesen Arbeitsbereich nicht verfügbar.",
+  "editor.askSelection.openFailed": "Der Chat für diese Auswahl konnte nicht geöffnet werden.",
+  "editor.agentReview.ready": "Editor-Änderungen können geprüft werden.",
+  "editor.agentReview.applying": "Die Editor-Prüfung wird bestätigt.",
+  "editor.agentReview.rejected": "Die Editor-Änderungen wurden abgelehnt.",
+  "editor.agentReview.timedOut":
+    "Die Editor-Prüfung ist abgelaufen. Fordere die Änderung erneut an.",
+  "editor.agentReview.conflict": "Die Editor-Prüfung steht im Konflikt mit dem aktuellen Ziel.",
+  "editor.agentReview.failed": "Die Editor-Prüfung wurde nicht abgeschlossen.",
+  "editor.agentReview.unexpectedSuccess":
+    "Die Editor-Prüfung endete ohne passende lokale Entscheidung.",
+  "editor.agentReview.stale":
+    "Der Editor wurde während der Prüfung geändert. Es wurden keine lokalen Änderungen angewendet.",
+  "editor.agentReview.reconcileFailed":
+    "Die übernommenen Änderungen konnten im Editor nicht aktualisiert werden.",
+  "editor.agentReview.unconfirmed":
+    "Die Prüfentscheidung wurde nicht akzeptiert. Es wurden keine lokalen Änderungen angewendet.",
+  "editor.agentReview.awaitingResult":
+    "Das Prüfungsergebnis ist unbekannt. Der Editor wartet auf einen verbindlichen Status.",
   "chat.regenerate.cancelled": "Regenerierung abgebrochen",
   "chat.regenerate.running": "Antwort wird neu generiert",
   "chat.regenerate.cancel": "Regenerierung abbrechen",

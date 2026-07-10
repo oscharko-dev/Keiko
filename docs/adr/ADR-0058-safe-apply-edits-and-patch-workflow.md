@@ -9,6 +9,11 @@ Proposed
 > Mode policy may allow normal contained edits/saves, and governed multi-file closed-file changes use
 > the existing atomic server patch transaction with Monaco reconciliation.
 
+> **Amended by Issue #2119 (2026-07-10).** Canonical assistant code blocks may propose
+> `applyPatch` or `applyChangeset` actions with additive `origin: "chat"`. They enter the existing
+> editor-agent preflight, queue, SSE, and EditorRuntimeWidget review path; #2119 adds no second
+> transport, apply engine, or Accept/Reject surface.
+
 ## Context
 
 Issue #1394 closes the five open safety gaps in the agent-native editor action path built by Issue
@@ -217,6 +222,51 @@ preservation. It loads the editor, posts a `applyTextEdits` agent action via the
 content change, then calls `editor.trigger('keyboard', 'undo', null)` via `page.evaluate()` and
 asserts the text reverts. This is the only proof possible for the executeEdits/pushUndoStop claim
 (unit tests cannot exercise the Monaco imperative API).
+
+### D6 — Issue #2119: bidirectional editor/chat handoff reuses the governed path
+
+The editor-to-chat direction captures only the active Monaco selection, its root-relative file and
+range, and a truncation flag. Selection text is bounded to 16 KiB of valid UTF-8 and held behind a
+bounded, expiring, one-use local handoff id until the existing chat send lifecycle can consume it.
+The id, rather than selection content, is placed in window configuration. This is a local UI
+handoff, not a new editor-agent action or BFF transport.
+
+The local registry entry also binds the exact originating workspace root. Window configuration and
+persistence still receive only the opaque id: neither selection text nor the bound root is copied
+there. The chat host may inspect only root-and-expiry metadata for routing, uses the existing project
+and chat methods to open an existing exact-root chat or create one, and consumes only after
+`handoff.workspaceRoot === activeProject.path === activeChat.projectPath`. Missing, unavailable,
+expired, or unresolved targets discard the one-use entry and announce a bounded local failure; a
+wrong-project chat never receives or persists the selection.
+
+The chat-to-editor direction is available only on settled, canonical assistant fenced code blocks.
+`ChatWindow` binds the proposal to the active chat's exact workspace root, after requiring that root
+to equal the active project path, and delegates code, diff, and patch blocks to the chat apply core.
+That core prepares `applyPatch` or `applyChangeset` and queues it through the existing
+`/api/editor/agent/*` control plane with `origin: "chat"`.
+Legacy origin-free actions remain the agent producer; the origin marker is additive metadata and
+does not grant authority or change policy disposition.
+
+The chat and SafeMarkdown layers do not construct or execute `applyTextEdits`, apply source text,
+or own a second diff/review state. Their terminal success state is "queued for review". Existing
+server preflight and queueing own admission and conflicts; the existing SSE bridge and
+`EditorRuntimeWidget` own review, Accept/Reject, application, reconciliation, and result posting.
+
+`keiko-tools.inspectPatch` owns the bounded source snapshot used for patch validation,
+preconditions, and review post-images. The server consumes that one admission inspection and does
+not reread patch sources outside the tools boundary or retain inspection content in the registry or
+browser wire. Changeset acceptance performs a fresh inspection and selected-subpatch validation;
+`applyPatch` still performs its own fresh commit-time preparation before any write.
+
+Apply is exposed only when `activeChat.projectPath` is non-empty and exactly equals
+`activeProject.path`; the action context uses that chat-owned root and never a linked-root fallback.
+The chat apply core creates one action/idempotency identity after preparation and reuses that same
+identity for every internal replay. Existing 409/429 structured-result recovery remains one replay.
+A network error, 5xx/timeout, or invalid/lost successful response receives one additional
+same-identity replay; a second uncertain result becomes terminal `outcome-unknown`. SafeMarkdown
+disables that action, retains the content-free terminal message/block state in bounded module
+memory across transcript remounts, and directs the user to inspect the editor. Deterministic
+conflicts and rejections remain retryable.
 
 ## Consequences
 

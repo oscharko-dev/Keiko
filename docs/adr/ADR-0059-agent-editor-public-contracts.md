@@ -9,6 +9,16 @@ Accepted
 > preconditions fail closed, and optional authority, approval, diagnostics, and file-result fields
 > remain schema-version-`1` compatible.
 
+> **Amended by Issue #2119 (2026-07-10).** `EditorAgentAction` has an optional, bounded producer
+> origin (`agent | chat`). Omission remains valid and resolves to `agent` before queueing.
+
+> **Amended by Epic #2091 trust-path hardening (2026-07-10).** The existing snapshot and result
+> POST envelopes carry an additive opaque browser decision capability. Identifier and target-path
+> metadata are UTF-8 byte-bounded; retained snapshots additionally bound workspace-root bytes,
+> pane/file-list counts, aggregate path bytes, snapshot text to the existing 64 KiB read budget, and
+> result-detail messages. Active-buffer actions are classified by one shared frozen set. Schema
+> version `"1"` and all normal legacy values remain compatible.
+
 ## Context
 
 Issue #1391 (Epic #1491) owns the public, schema-first API contract that agents and the browser
@@ -32,8 +42,8 @@ suites. It already provides:
 - a versioned envelope (`EDITOR_AGENT_SCHEMA_VERSION = "1"`);
 - `EditorAgentSessionSnapshot` (sessions) and `EditorAgentSnapshotRequest` (snapshot requests) with a
   bounded text-mode (`none | selection | activeFile`);
-- `EditorAgentAction` (action requests) with a mandatory `idempotencyKey` and optional
-  `expectedDocumentVersion` / `expectedContentHash` preconditions;
+- `EditorAgentAction` (action requests) with a mandatory `idempotencyKey`, an optional bounded
+  producer origin, and optional `expectedDocumentVersion` / `expectedContentHash` preconditions;
 - `EditorAgentActionResult` (action results) with a structured `conflict` object;
 - `EditorAgentEvent` (events: session, action, result, heartbeat);
 - content-free document versions (`EditorDocumentVersion`, from `editor-session.ts`) and SHA-256
@@ -138,6 +148,18 @@ adopts it for both the action and result streams — the action stream drives th
 is the more consequential boundary to guard. All new symbols are exported from the contracts barrel
 and pinned by the barrel surface test, demonstrating reuse by UI, BFF, tests, and future agents.
 
+### D6 — Issue #2119: bounded producer origin with a compatible default
+
+`EditorAgentAction` gains optional `origin: "agent" | "chat"`. `agent` denotes the existing
+harness/agent producer and is the deterministic default for legacy actions that omit the field;
+`chat` denotes actions proposed from the chat producer. The frozen `EDITOR_AGENT_ACTION_ORIGINS`
+table and `isEditorAgentActionOrigin` guard reject every other value at the action trust boundary.
+
+`parseEditorAgentActionsPostBody` canonicalizes an omitted origin to `agent` before idempotency,
+queueing, governance, or SSE emission. Explicit `chat` survives those existing paths unchanged. The
+marker carries no conversation id, prompt, path, patch, selection, or other producer content, and it
+does not add an action type, route, event, policy exception, or schema-version bump.
+
 ## Consequences
 
 ### Positive
@@ -149,6 +171,8 @@ and pinned by the barrel surface test, demonstrating reuse by UI, BFF, tests, an
 - The conflict taxonomy is a single exported vocabulary that agents, the BFF, and the UI discriminate
   on without parsing free text.
 - "What is a write action" lives once, in the contract, and is reused by the BFF.
+- Agent/harness and chat-produced actions are distinguishable by a closed, content-free marker;
+  legacy origin-free actions remain valid and deterministically resolve to `agent`.
 - `root-package-surface.contract.json` is unaffected (the contracts barrel is not re-exported from the
   root barrel).
 

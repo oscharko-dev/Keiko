@@ -31,7 +31,7 @@ vi.mock("@/lib/safe-markdown", async () => {
   };
 });
 
-import { SafeMarkdown } from "./SafeMarkdown";
+import { SafeMarkdown, type AssistantCodeBlockApply } from "./SafeMarkdown";
 import { highlightLines } from "./widgets/cards/shared/syntaxHighlight";
 import { parseSafeMarkdown } from "@/lib/safe-markdown";
 
@@ -40,28 +40,34 @@ const CODE_SOURCE = "Here is code:\n\n```ts\nconst a = 1;\nconst b = 2;\nconst c
 describe("SafeMarkdown — render stability (GEN-PERF-CHAT-010)", () => {
   it("highlights each code block exactly once across identical-prop re-renders", () => {
     const highlightSpy = vi.mocked(highlightLines);
+    const onApplyCodeBlock = vi.fn<AssistantCodeBlockApply>().mockResolvedValue({ kind: "queued" });
     highlightSpy.mockClear();
 
-    const { rerender } = render(<SafeMarkdown source={CODE_SOURCE} />);
+    const { rerender } = render(
+      <SafeMarkdown source={CODE_SOURCE} onApplyCodeBlock={onApplyCodeBlock} />,
+    );
     const afterFirst = highlightSpy.mock.calls.length;
     expect(afterFirst).toBe(1);
 
     // 10 identical-prop parent re-renders must NOT re-run the highlighter.
     for (let i = 0; i < 10; i += 1) {
-      rerender(<SafeMarkdown source={CODE_SOURCE} />);
+      rerender(<SafeMarkdown source={CODE_SOURCE} onApplyCodeBlock={onApplyCodeBlock} />);
     }
     expect(highlightSpy.mock.calls.length).toBe(afterFirst);
   });
 
   it("parses the Markdown source exactly once across identical-prop re-renders", () => {
     const parseSpy = vi.mocked(parseSafeMarkdown);
+    const onApplyCodeBlock = vi.fn<AssistantCodeBlockApply>().mockResolvedValue({ kind: "queued" });
     parseSpy.mockClear();
 
-    const { rerender } = render(<SafeMarkdown source={CODE_SOURCE} />);
+    const { rerender } = render(
+      <SafeMarkdown source={CODE_SOURCE} onApplyCodeBlock={onApplyCodeBlock} />,
+    );
     expect(parseSpy.mock.calls.length).toBe(1);
 
     for (let i = 0; i < 10; i += 1) {
-      rerender(<SafeMarkdown source={CODE_SOURCE} />);
+      rerender(<SafeMarkdown source={CODE_SOURCE} onApplyCodeBlock={onApplyCodeBlock} />);
     }
     expect(parseSpy.mock.calls.length).toBe(1);
   });

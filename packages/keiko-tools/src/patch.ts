@@ -13,15 +13,18 @@ import {
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
+  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { EditorDocumentVersion } from "@oscharko-dev/keiko-contracts";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   CommandCancelledError,
   PatchApplyDisabledError,
   PatchApplyError,
   PatchValidationError,
 } from "./errors.js";
-import { computeFileContent } from "./patch-content.js";
+import { computeFileContent, type ApplyOutcome } from "./patch-content.js";
 import { normalizeUnifiedDiffHunks } from "./patch-normalize.js";
 import { parseUnifiedDiff, PatchParseError } from "./patch-parse.js";
 import { createContainedNodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
@@ -36,6 +39,30 @@ import {
   type PatchRejection,
   type PatchValidation,
 } from "./types.js";
+
+const PATCH_SOURCE_MAX_FILE_BYTES = 1_000_000;
+const PATCH_SOURCE_MAX_TOTAL_BYTES = 4_000_000;
+
+interface SourceReadBudget {
+  totalBytes: number;
+}
+
+interface SourceSnapshot {
+  readonly absolute: string;
+  readonly content: string | undefined;
+  readonly sourceContentHash: string;
+  readonly sourceVersion?: EditorDocumentVersion | undefined;
+}
+
+class SourceReadError extends Error {
+  readonly rejection: PatchRejection;
+
+  constructor(rejection: PatchRejection) {
+    super(rejection.message);
+    this.name = "SourceReadError";
+    this.rejection = rejection;
+  }
+}
 
 function containsNul(value: string): boolean {
   return value.includes("\u0000");
@@ -105,7 +132,11 @@ function safePath(
     if (error instanceof PathDeniedError) {
       return { code: "path-denied", message: "path matches an always-on deny pattern", path };
     }
-    throw error;
+    return {
+      code: "path-denied",
+      message: "source file could not be inspected safely",
+      path,
+    };
   }
 }
 
@@ -124,12 +155,142 @@ function collectPathReasons(
   return reasons;
 }
 
-function readCurrent(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): string | undefined {
-  const absolute = resolveWithinWorkspace(workspace.root, path);
-  if (!fs.exists(absolute)) {
-    return undefined;
+function sourceReadFailure(path: string, code: PatchRejection["code"], message: string): never {
+  throw new SourceReadError({ code, message, path });
+}
+
+function normalizeSourceReadError(error: unknown, path: string): SourceReadError {
+  if (error instanceof SourceReadError) {
+    return error;
   }
-  return fs.readFileUtf8(absolute);
+  if (error instanceof PathEscapeError) {
+    return new SourceReadError({
+      code: "path-unsafe",
+      message: "path escapes the workspace",
+      path,
+    });
+  }
+  if (error instanceof PathDeniedError) {
+    return new SourceReadError({
+      code: "path-denied",
+      message: "path matches an always-on deny pattern",
+      path,
+    });
+  }
+  return new SourceReadError({
+    code: "path-denied",
+    message: "source file could not be inspected safely",
+    path,
+  });
+}
+
+function statSource(fs: WorkspaceFs, absolute: string, path: string): WorkspaceStat {
+  try {
+    return fs.stat(absolute);
+  } catch {
+    return sourceReadFailure(path, "path-denied", "source file could not be inspected safely");
+  }
+}
+
+function reserveSourceBytes(stat: WorkspaceStat, budget: SourceReadBudget, path: string): void {
+  if (!Number.isSafeInteger(stat.size) || stat.size < 0) {
+    return sourceReadFailure(path, "path-denied", "source file could not be inspected safely");
+  }
+  if (stat.size > PATCH_SOURCE_MAX_FILE_BYTES) {
+    return sourceReadFailure(path, "size-limit", "source file exceeds the per-file byte limit");
+  }
+  if (budget.totalBytes + stat.size > PATCH_SOURCE_MAX_TOTAL_BYTES) {
+    return sourceReadFailure(path, "size-limit", "source files exceed the aggregate byte limit");
+  }
+  budget.totalBytes += stat.size;
+}
+
+function readSourceContent(fs: WorkspaceFs, absolute: string, path: string): string {
+  try {
+    return fs.readFileUtf8(absolute);
+  } catch {
+    return sourceReadFailure(path, "path-denied", "source file could not be read safely");
+  }
+}
+
+function verifySourceBytes(
+  content: string,
+  stat: WorkspaceStat,
+  budget: SourceReadBudget,
+  path: string,
+): void {
+  const bytes = Buffer.byteLength(content, "utf8");
+  if (bytes > PATCH_SOURCE_MAX_FILE_BYTES) {
+    return sourceReadFailure(path, "size-limit", "source file exceeds the per-file byte limit");
+  }
+  if (budget.totalBytes - stat.size + bytes > PATCH_SOURCE_MAX_TOTAL_BYTES) {
+    return sourceReadFailure(path, "size-limit", "source files exceed the aggregate byte limit");
+  }
+  if (bytes !== stat.size) {
+    return sourceReadFailure(path, "path-denied", "source file changed during validation");
+  }
+}
+
+function inspectSource(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  path: string,
+  budget: SourceReadBudget,
+): SourceSnapshot {
+  try {
+    const absolute = enforcePath(workspace, fs, path);
+    if (!fs.exists(absolute)) {
+      return { absolute, content: undefined, sourceContentHash: sha256Hex("") };
+    }
+    const stat = statSource(fs, absolute, path);
+    if (!stat.isFile || stat.isDirectory || stat.isSymbolicLink) {
+      return sourceReadFailure(path, "path-denied", "source target is not a regular file");
+    }
+    if ((stat.hardLinkCount ?? 1) > 1) {
+      return sourceReadFailure(path, "path-denied", "path matches an always-on deny pattern");
+    }
+    reserveSourceBytes(stat, budget, path);
+    const content = readSourceContent(fs, absolute, path);
+    verifySourceBytes(content, stat, budget, path);
+    const sourceContentHash = sha256Hex(content);
+    const sourceVersion = sourceVersionFromStat(stat, sourceContentHash);
+    return {
+      absolute,
+      content,
+      sourceContentHash,
+      ...(sourceVersion === undefined ? {} : { sourceVersion }),
+    };
+  } catch (error) {
+    throw normalizeSourceReadError(error, path);
+  }
+}
+
+function sourceVersionFromStat(
+  stat: WorkspaceStat,
+  contentHash: string,
+): EditorDocumentVersion | undefined {
+  const modifiedAt = stat.mtimeMs;
+  if (modifiedAt === undefined || !Number.isFinite(modifiedAt) || modifiedAt < 0) return undefined;
+  return { sizeBytes: stat.size, modifiedAt, contentHash };
+}
+
+function prepareSources(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  files: readonly PatchFileChange[],
+  signal?: AbortSignal,
+): ReadonlyMap<string, SourceSnapshot> {
+  const budget: SourceReadBudget = { totalBytes: 0 };
+  const sources = new Map<string, SourceSnapshot>();
+  for (const file of files) {
+    if (signal?.aborted === true) {
+      throw new CommandCancelledError("apply cancelled before write planning completed");
+    }
+    if (!sources.has(file.path)) {
+      sources.set(file.path, inspectSource(workspace, fs, file.path, budget));
+    }
+  }
+  return sources;
 }
 
 function toLines(content: string): string[] {
@@ -217,11 +378,10 @@ function isCreateOnlyModify(file: PatchFileChange): boolean {
 }
 
 function alignHunksToCurrentContent(
-  workspace: WorkspaceInfo,
-  fs: WorkspaceFs,
   files: readonly PatchFileChange[],
+  sources: ReadonlyMap<string, SourceSnapshot>,
 ): readonly PatchFileChange[] {
-  return files.map((file) => alignFileHunks(file, readCurrent(workspace, fs, file.path)));
+  return files.map((file) => alignFileHunks(file, sources.get(file.path)?.content));
 }
 
 function unanchoredModifyReasons(files: readonly PatchFileChange[]): PatchRejection[] {
@@ -235,14 +395,13 @@ function unanchoredModifyReasons(files: readonly PatchFileChange[]): PatchReject
 }
 
 function collectConflicts(
-  workspace: WorkspaceInfo,
-  fs: WorkspaceFs,
   files: readonly PatchFileChange[],
+  sources: ReadonlyMap<string, SourceSnapshot>,
   allowOverwrite: boolean,
 ): PatchConflict[] {
   const conflicts: PatchConflict[] = [];
   for (const file of files) {
-    const current = readCurrent(workspace, fs, file.path);
+    const current = sources.get(file.path)?.content;
     const outcome = computeFileContent(file, current, allowOverwrite);
     for (const conflict of outcome.conflicts) {
       conflicts.push({ path: file.path, hunkIndex: conflict.hunkIndex, reason: conflict.reason });
@@ -332,11 +491,7 @@ function projectionPathIsContained(path: string): boolean {
 }
 
 function projectionFailure(message: string): never {
-  throw new PatchValidationError(
-    "patch projection failed",
-    [{ code: "malformed", message }],
-    [],
-  );
+  throw new PatchValidationError("patch projection failed", [{ code: "malformed", message }], []);
 }
 
 export function projectValidatedPatch(
@@ -373,6 +528,19 @@ export interface ValidateDeps {
   // When true (set only after explicit user confirmation), a create whose target already exists is a
   // replacement rather than a conflict (Issue #1204 AC7/AC14). Default false = no-silent-overwrite.
   readonly allowOverwrite?: boolean | undefined;
+}
+
+export interface PatchInspectionFile {
+  readonly change: PatchFileChange;
+  readonly original: string | undefined;
+  readonly outcome: ApplyOutcome;
+  readonly sourceContentHash: string;
+  readonly sourceVersion?: EditorDocumentVersion | undefined;
+}
+
+export interface PatchInspection {
+  readonly validation: PatchValidation;
+  readonly files: readonly PatchInspectionFile[] | null;
 }
 
 interface ParsedDiff {
@@ -412,48 +580,149 @@ function malformedValidation(diff: string, error: unknown): PatchValidation {
   };
 }
 
-function completeValidation(
+interface ValidationResultInput {
+  readonly diff: string;
+  readonly effectiveDiff: string;
+  readonly files: readonly PatchFileChange[];
+  readonly totalChangedLines: number;
+  readonly reasons: readonly PatchRejection[];
+  readonly conflicts: readonly PatchConflict[];
+}
+
+function validationResult(input: ValidationResultInput): PatchValidation {
+  return {
+    ok: input.reasons.length === 0 && input.conflicts.length === 0,
+    files: input.files,
+    totalChangedLines: input.totalChangedLines,
+    totalBytes: Buffer.byteLength(input.effectiveDiff, "utf8"),
+    ...(input.effectiveDiff === input.diff ? {} : { normalizedDiff: input.effectiveDiff }),
+    reasons: input.reasons,
+    conflicts: input.conflicts,
+  };
+}
+
+type SourcePreparation =
+  | { readonly ok: true; readonly sources: ReadonlyMap<string, SourceSnapshot> }
+  | { readonly ok: false; readonly rejection: PatchRejection };
+
+function prepareValidationSources(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  files: readonly PatchFileChange[],
+): SourcePreparation {
+  try {
+    return { ok: true, sources: prepareSources(workspace, fs, files) };
+  } catch (error) {
+    if (error instanceof SourceReadError) {
+      return { ok: false, rejection: error.rejection };
+    }
+    throw error;
+  }
+}
+
+function validationReasons(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  limits: PatchLimits,
+  parsed: ParsedDiff,
+  totalChangedLines: number,
+): PatchRejection[] {
+  const totalBytes = Buffer.byteLength(parsed.effectiveDiff, "utf8");
+  return [
+    ...sizeAndCountReasons(
+      parsed.effectiveDiff,
+      parsed.files,
+      totalChangedLines,
+      limits,
+      totalBytes,
+    ),
+    ...collectPathReasons(workspace, fs, parsed.files),
+  ];
+}
+
+function patchInspectionFile(
+  change: PatchFileChange,
+  sources: ReadonlyMap<string, SourceSnapshot>,
+  allowOverwrite: boolean,
+): PatchInspectionFile {
+  const source = sources.get(change.path);
+  if (source === undefined) {
+    throw new Error("patch source inspection invariant failed");
+  }
+  return {
+    change,
+    original: source.content,
+    outcome: computeFileContent(change, source.content, allowOverwrite),
+    sourceContentHash: source.sourceContentHash,
+    ...(source.sourceVersion === undefined ? {} : { sourceVersion: source.sourceVersion }),
+  };
+}
+
+function rejectedInspection(
+  diff: string,
+  parsed: ParsedDiff,
+  totalChangedLines: number,
+  reasons: readonly PatchRejection[],
+): PatchInspection {
+  return {
+    validation: validationResult({
+      diff,
+      effectiveDiff: parsed.effectiveDiff,
+      files: parsed.files,
+      totalChangedLines,
+      reasons,
+      conflicts: [],
+    }),
+    files: null,
+  };
+}
+
+function completeInspection(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
   limits: PatchLimits,
   diff: string,
   parsed: ParsedDiff,
   allowOverwrite: boolean,
-): PatchValidation {
+): PatchInspection {
   const files = parsed.files;
-  const totalBytes = Buffer.byteLength(parsed.effectiveDiff, "utf8");
   const totalChangedLines = files.reduce((sum, f) => sum + f.addedLines + f.removedLines, 0);
-  const pathAndSizeReasons = [
-    ...sizeAndCountReasons(parsed.effectiveDiff, files, totalChangedLines, limits, totalBytes),
-    ...collectPathReasons(workspace, fs, files),
-  ];
-  const alignedFiles =
-    pathAndSizeReasons.length === 0 ? alignHunksToCurrentContent(workspace, fs, files) : files;
+  const initialReasons = validationReasons(workspace, fs, limits, parsed, totalChangedLines);
+  if (initialReasons.length > 0) {
+    return rejectedInspection(diff, parsed, totalChangedLines, initialReasons);
+  }
+  const prepared = prepareValidationSources(workspace, fs, files);
+  if (!prepared.ok) {
+    return rejectedInspection(diff, parsed, totalChangedLines, [prepared.rejection]);
+  }
+  const alignedFiles = alignHunksToCurrentContent(files, prepared.sources);
   const aligned = alignedFiles.some((file, index) => file !== files[index]);
   const effectiveDiff = parsed.normalized || aligned ? renderParsedPatch(alignedFiles) : diff;
-  const reasons = [...pathAndSizeReasons, ...unanchoredModifyReasons(alignedFiles)];
+  const reasons = unanchoredModifyReasons(alignedFiles);
   const conflicts =
-    reasons.length === 0 ? collectConflicts(workspace, fs, alignedFiles, allowOverwrite) : [];
+    reasons.length === 0 ? collectConflicts(alignedFiles, prepared.sources, allowOverwrite) : [];
   return {
-    ok: reasons.length === 0 && conflicts.length === 0,
-    files: alignedFiles,
-    totalChangedLines,
-    totalBytes: Buffer.byteLength(effectiveDiff, "utf8"),
-    ...(effectiveDiff === diff ? {} : { normalizedDiff: effectiveDiff }),
-    reasons,
-    conflicts,
+    validation: validationResult({
+      diff,
+      effectiveDiff,
+      files: alignedFiles,
+      totalChangedLines,
+      reasons,
+      conflicts,
+    }),
+    files: alignedFiles.map((file) => patchInspectionFile(file, prepared.sources, allowOverwrite)),
   };
 }
 
-export function validatePatch(
+export function inspectPatch(
   workspace: WorkspaceInfo,
   diff: string,
   deps: ValidateDeps = {},
-): PatchValidation {
+): PatchInspection {
   const fs = deps.fs ?? nodeWorkspaceFs;
   const limits = deps.limits ?? DEFAULT_PATCH_LIMITS;
   try {
-    return completeValidation(
+    return completeInspection(
       workspace,
       fs,
       limits,
@@ -462,8 +731,16 @@ export function validatePatch(
       deps.allowOverwrite ?? false,
     );
   } catch (error) {
-    return malformedValidation(diff, error);
+    return { validation: malformedValidation(diff, error), files: null };
   }
+}
+
+export function validatePatch(
+  workspace: WorkspaceInfo,
+  diff: string,
+  deps: ValidateDeps = {},
+): PatchValidation {
+  return inspectPatch(workspace, diff, deps).validation;
 }
 
 function renderFileLine(file: PatchFileChange): string {
@@ -540,9 +817,16 @@ function hasCreateOverwrite(
   fs: WorkspaceFs,
   files: readonly PatchFileChange[],
 ): boolean {
-  return files.some(
-    (file) => file.kind === "create" && readCurrent(workspace, fs, file.path) !== undefined,
-  );
+  const creates = files.filter((file) => file.kind === "create");
+  const sources = prepareSources(workspace, fs, creates);
+  return creates.some((file) => sources.get(file.path)?.content !== undefined);
+}
+
+function throwPatchSourceValidation(error: unknown): never {
+  if (error instanceof SourceReadError) {
+    throw new PatchValidationError("patch failed validation", [error.rejection], []);
+  }
+  throw error;
 }
 
 // Builds a guarded restore proposal only when the diff needed for restoration is already content-safe.
@@ -569,8 +853,14 @@ export function buildRestorePatch(
       validation.conflicts,
     );
   }
-  if (allowOverwrite && hasCreateOverwrite(workspace, fs, validation.files)) {
-    return undefined;
+  if (allowOverwrite) {
+    try {
+      if (hasCreateOverwrite(workspace, fs, validation.files)) {
+        return undefined;
+      }
+    } catch (error) {
+      return throwPatchSourceValidation(error);
+    }
   }
   return invertPatch(validation.normalizedDiff ?? diff);
 }
@@ -594,6 +884,39 @@ interface PlannedWrite {
   readonly original: string | undefined;
 }
 
+function requiredSource(
+  sources: ReadonlyMap<string, SourceSnapshot>,
+  path: string,
+): SourceSnapshot {
+  const source = sources.get(path);
+  if (source === undefined) {
+    return sourceReadFailure(path, "path-denied", "source file could not be inspected safely");
+  }
+  return source;
+}
+
+function plannedWrite(
+  file: PatchFileChange,
+  source: SourceSnapshot,
+  allowOverwrite: boolean,
+): PlannedWrite {
+  const outcome = computeFileContent(file, source.content, allowOverwrite);
+  if (outcome.conflicts.length > 0) {
+    throw new PatchValidationError(
+      "patch failed commit-time validation",
+      [],
+      outcome.conflicts.map((conflict) => ({ path: file.path, ...conflict })),
+    );
+  }
+  return {
+    path: file.path,
+    absolute: source.absolute,
+    kind: file.kind,
+    newContent: outcome.content,
+    original: source.content,
+  };
+}
+
 function planWrites(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
@@ -601,23 +924,14 @@ function planWrites(
   files: readonly PatchFileChange[],
   allowOverwrite: boolean,
 ): readonly PlannedWrite[] {
-  const plans: PlannedWrite[] = [];
-  for (const file of files) {
-    if (signal.aborted) {
-      throw new CommandCancelledError("apply cancelled before write planning completed");
-    }
-    const absolute = enforcePath(workspace, fs, file.path);
-    const original = readCurrent(workspace, fs, file.path);
-    const outcome = computeFileContent(file, original, allowOverwrite);
-    plans.push({
-      path: file.path,
-      absolute,
-      kind: file.kind,
-      newContent: outcome.content,
-      original,
-    });
+  try {
+    const sources = prepareSources(workspace, fs, files, signal);
+    return files.map((file) =>
+      plannedWrite(file, requiredSource(sources, file.path), allowOverwrite),
+    );
+  } catch (error) {
+    return throwPatchSourceValidation(error);
   }
-  return plans;
 }
 
 function applyOne(writer: WorkspaceWriter, plan: PlannedWrite): void {

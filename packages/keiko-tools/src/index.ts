@@ -77,11 +77,14 @@ export {
 export {
   applyPatch,
   buildRestorePatch,
+  inspectPatch,
   invertPatch,
   projectValidatedPatch,
   renderDryRun,
   validatePatch,
   type ApplyDeps,
+  type PatchInspection,
+  type PatchInspectionFile,
   type ValidateDeps,
 } from "./patch.js";
 export { normalizeUnifiedDiffHunks } from "./patch-normalize.js";

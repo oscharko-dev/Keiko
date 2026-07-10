@@ -18,6 +18,9 @@
 
 import {
   isContainedAgentPath,
+  isEditorAgentActionOrigin,
+  resolveEditorAgentActionOrigin,
+  type EditorAgentActionOrigin,
   type EditorAgentActionStatus,
   type EditorAgentActionType,
   type EditorAgentConflictCode,
@@ -136,6 +139,7 @@ export function editorAgentDispositionForPolicyEffect(
 export interface EditorAgentActionPolicyDecision {
   readonly disposition: EditorAgentActionDisposition;
   readonly effectClass: EditorAgentActionEffectClass;
+  readonly origin?: EditorAgentActionOrigin | undefined;
   readonly denyReason?: EditorAgentActionDenyReason | undefined;
   readonly reviewReason?: EditorAgentActionReviewReason | undefined;
 }
@@ -146,6 +150,8 @@ export interface EditorAgentActionPolicyContext {
   // Server-computed: the target matches the always-on `keiko-workspace` deny-list (`.env`, `.ssh`,
   // `.keiko`, credentials, …). The leaf cannot import `keiko-workspace`, so the caller supplies it.
   readonly targetSensitive: boolean;
+  // Optional for schema-v1 compatibility. Omission is the agent/harness producer.
+  readonly origin?: EditorAgentActionOrigin | undefined;
 }
 
 const ALLOWED: EditorAgentActionPolicyDecision = {
@@ -156,29 +162,32 @@ const ALLOWED: EditorAgentActionPolicyDecision = {
 function denyDecision(
   effectClass: EditorAgentActionEffectClass,
   denyReason: EditorAgentActionDenyReason,
+  origin: EditorAgentActionOrigin,
 ): EditorAgentActionPolicyDecision {
-  return { disposition: "denied", effectClass, denyReason };
+  return { disposition: "denied", effectClass, origin, denyReason };
 }
 
 function reviewDecision(
   effectClass: EditorAgentActionEffectClass,
   reviewReason: EditorAgentActionReviewReason,
+  origin: EditorAgentActionOrigin,
 ): EditorAgentActionPolicyDecision {
-  return { disposition: "review-required", effectClass, reviewReason };
+  return { disposition: "review-required", effectClass, origin, reviewReason };
 }
 
 // A content mutation is denied when its target escapes the workspace root or matches the deny-list,
 // otherwise it requires human review (the existing #1394 browser diff-review is the review gate).
 function classifyContentMutation(
   context: EditorAgentActionPolicyContext,
+  origin: EditorAgentActionOrigin,
 ): EditorAgentActionPolicyDecision {
   if (context.targetPath !== null && !isContainedAgentPath(context.targetPath)) {
-    return denyDecision("content-mutation", "workspace-boundary-escape");
+    return denyDecision("content-mutation", "workspace-boundary-escape", origin);
   }
   if (context.targetSensitive) {
-    return denyDecision("content-mutation", "denied-sensitive-path");
+    return denyDecision("content-mutation", "denied-sensitive-path", origin);
   }
-  return reviewDecision("content-mutation", "content-mutation-requires-review");
+  return reviewDecision("content-mutation", "content-mutation-requires-review", origin);
 }
 
 // Deterministic, fail-closed policy classifier (AC2). Pure: same (type, context) always yields the
@@ -190,14 +199,15 @@ export function classifyEditorAgentAction(
   context: EditorAgentActionPolicyContext,
 ): EditorAgentActionPolicyDecision {
   const effectClass = EDITOR_AGENT_ACTION_EFFECT_CLASS[type];
+  const origin = resolveEditorAgentActionOrigin(context.origin);
   switch (effectClass) {
     case "navigation":
     case "layout":
-      return { ...ALLOWED, effectClass };
+      return { ...ALLOWED, effectClass, origin };
     case "content-mutation":
-      return classifyContentMutation(context);
+      return classifyContentMutation(context, origin);
     case "external-effect":
-      return reviewDecision("external-effect", "external-effect-requires-review");
+      return reviewDecision("external-effect", "external-effect-requires-review", origin);
   }
 }
 
@@ -211,6 +221,7 @@ export interface EditorAgentActionAuditRecord {
   readonly sessionId: string;
   readonly actionId: string;
   readonly actionType: EditorAgentActionType;
+  readonly origin?: EditorAgentActionOrigin | undefined;
   readonly effectClass: EditorAgentActionEffectClass;
   readonly mutating: boolean;
   readonly disposition: EditorAgentActionDisposition;
@@ -285,6 +296,7 @@ export function buildEditorAgentActionAuditRecord(
     sessionId: input.sessionId,
     actionId: input.actionId,
     actionType: input.actionType,
+    origin: resolveEditorAgentActionOrigin(input.decision.origin),
     effectClass: input.decision.effectClass,
     mutating: isMutatingEditorAgentAction(input.actionType),
     disposition: input.decision.disposition,
@@ -346,6 +358,7 @@ export function isEditorAgentActionAuditRecord(
     typeof value.occurredAt === "number" && Number.isFinite(value.occurredAt),
     typeof value.sessionId === "string" && value.sessionId.length > 0,
     typeof value.actionId === "string" && value.actionId.length > 0,
+    value.origin === undefined || isEditorAgentActionOrigin(value.origin),
     isEditorAgentActionEffectClass(value.effectClass),
     typeof value.mutating === "boolean",
     isEditorAgentActionDisposition(value.disposition),

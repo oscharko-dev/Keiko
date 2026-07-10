@@ -128,6 +128,11 @@ describe("policy classifier (Issue #1395 AC2)", () => {
     expect(a).toEqual(b);
   });
 
+  it("carries a chat origin and defaults an omitted origin to agent", () => {
+    expect(classifyEditorAgentAction("applyPatch", ctx()).origin).toBe("agent");
+    expect(classifyEditorAgentAction("applyPatch", ctx({ origin: "chat" })).origin).toBe("chat");
+  });
+
   it("allows a content mutation with no file target (null path) that is not sensitive", () => {
     const decision = classifyEditorAgentAction("save", ctx({ targetPath: null }));
     expect(decision.disposition).toBe("review-required");
@@ -193,9 +198,26 @@ describe("audit record builder (Issue #1395 AC1, AC3)", () => {
     expect(record.disposition).toBe("review-required");
     expect(record.reviewReason).toBe("content-mutation-requires-review");
     expect(record.outcome).toBe("queued");
+    expect(record.origin).toBe("agent");
     expect(record.targetPath).toBe("src/a.ts");
     expect(record.editCount).toBe(3);
     expect(isEditorAgentActionAuditRecord(record)).toBe(true);
+  });
+
+  it("distinguishes chat actions while retaining bounded target metadata", () => {
+    const record = buildEditorAgentActionAuditRecord(
+      auditInput({
+        decision: classifyEditorAgentAction("applyPatch", ctx({ origin: "chat" })),
+        actionType: "applyPatch",
+        targetPath: "src/private-name.ts",
+        patchByteLength: 123,
+      }),
+    );
+    const serialized = JSON.stringify(record);
+    expect(record.origin).toBe("chat");
+    expect(record.targetPath).toBe("src/private-name.ts");
+    expect(record.patchByteLength).toBe(123);
+    expect(serialized).not.toContain("newText");
   });
 
   it("records the deny reason and conflict code for a denied action", () => {
@@ -251,6 +273,7 @@ describe("audit record guard", () => {
       }),
     ).toBe(false);
     expect(isEditorAgentActionAuditRecord({ ...valid, disposition: "nope" })).toBe(false);
+    expect(isEditorAgentActionAuditRecord({ ...valid, origin: "automation" })).toBe(false);
     expect(isEditorAgentActionAuditRecord(null)).toBe(false);
   });
 });

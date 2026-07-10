@@ -23,14 +23,18 @@ import { postEditorAgentActionResult } from "../../../../../lib/api";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   EditorAgentAction,
+  EditorAgentActionQueuedResponse,
   EditorAgentEvent,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
+  EditorAgentSnapshotResponse,
   EditorAgentConflictCode,
 } from "../../../../../lib/types";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isContainedAgentPath,
+  isEditorAgentActiveBufferActionType,
+  isEditorAgentBridgeDecisionCapability,
   isEditorAgentEvent,
 } from "../../../../../lib/types";
 
@@ -57,6 +61,11 @@ export interface EditorAgentSelectionRequest {
 export interface EditorAgentActionControllers {
   /** The pane this bridge serves; used as the default pane target for layout actions. */
   readonly paneId: string | undefined;
+  /** The snapshot/browser target against which active-buffer actions are checked. */
+  readonly activePaneId: string | undefined;
+  readonly activeFile: string | undefined;
+  /** Runtime-owned repeat check immediately before a controller mutation. */
+  readonly verifyActiveTarget: (action: EditorAgentAction) => boolean;
   /** Open/focus a file tab in this pane. */
   readonly onSelectOpenFile: ((file: string) => void) | undefined;
   /** Whether the host's deterministic formatter is available for the active language. */
@@ -92,6 +101,74 @@ export type EditorAgentActionDescriptor =
   | { readonly status: "async"; readonly promise: Promise<EditorAgentActionDescriptor> };
 
 const DEFERRED: EditorAgentActionDescriptor = { status: "deferred" };
+const MAX_BROWSER_BRIDGE_CAPABILITIES = 256;
+interface BrowserBridgeCapability {
+  readonly value: string;
+  readonly generation: number;
+}
+
+const editorAgentDecisionCapabilities = new Map<string, BrowserBridgeCapability>();
+const editorAgentSnapshotRegistrations = new Map<string, Promise<boolean>>();
+const editorAgentReadySessions = new Set<string>();
+let editorAgentCapabilityGeneration = 0;
+
+function evictIdleBridgeCapability(): boolean {
+  for (const sessionId of editorAgentDecisionCapabilities.keys()) {
+    if (editorAgentSubscribersBySession.has(sessionId)) continue;
+    editorAgentDecisionCapabilities.delete(sessionId);
+    return true;
+  }
+  return false;
+}
+
+function rememberBridgeCapability(sessionId: string, capability: string): boolean {
+  const current = editorAgentDecisionCapabilities.get(sessionId);
+  if (current?.value === capability) return true;
+  if (
+    current === undefined &&
+    editorAgentDecisionCapabilities.size >= MAX_BROWSER_BRIDGE_CAPABILITIES &&
+    !evictIdleBridgeCapability()
+  ) {
+    return false;
+  }
+  editorAgentCapabilityGeneration += 1;
+  editorAgentDecisionCapabilities.set(sessionId, {
+    value: capability,
+    generation: editorAgentCapabilityGeneration,
+  });
+  return true;
+}
+
+function normalizeActiveTarget(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function activeTargetConflict(
+  action: EditorAgentAction,
+  controllers: EditorAgentActionControllers,
+): EditorAgentActionDescriptor | null {
+  if (!isEditorAgentActiveBufferActionType(action.type)) return null;
+  const claimedFile = action.target?.file;
+  const claimedPane = action.target?.paneId;
+  const fileMismatch =
+    claimedFile === undefined ||
+    controllers.activeFile === undefined ||
+    normalizeActiveTarget(claimedFile) !== normalizeActiveTarget(controllers.activeFile);
+  const paneMismatch =
+    claimedPane === undefined ||
+    controllers.activePaneId === undefined ||
+    claimedPane !== controllers.activePaneId;
+  if (!fileMismatch && !paneMismatch && controllers.verifyActiveTarget(action)) return null;
+  return {
+    status: "conflict",
+    conflictCode: "OUT_OF_SCOPE",
+    message: "Action target does not match the active editor buffer.",
+  };
+}
 
 function dispatchOpenOrFocus(
   action: EditorAgentAction,
@@ -183,6 +260,8 @@ export function dispatchEditorAgentAction(
   action: EditorAgentAction,
   controllers: EditorAgentActionControllers,
 ): EditorAgentActionDescriptor {
+  const targetConflict = activeTargetConflict(action, controllers);
+  if (targetConflict !== null) return targetConflict;
   switch (action.type) {
     case "openFile":
     case "focusTab":
@@ -237,9 +316,20 @@ export function postEditorAgentResult(
       ...(conflict === undefined ? {} : { conflict }),
     },
   };
-  void postEditorAgentActionResult(body).catch(() => {
+  void postEditorAgentResultRequest(action, body).catch(() => {
     // Best-effort action reporting; the local UI action already happened or was rejected.
   });
+}
+
+export function postEditorAgentResultRequest(
+  action: EditorAgentAction,
+  request: EditorAgentActionResultRequest,
+): Promise<EditorAgentActionQueuedResponse> {
+  const capability = editorAgentDecisionCapabilities.get(action.sessionId)?.value;
+  if (capability === undefined) {
+    return Promise.reject(new Error("The browser bridge decision capability is unavailable."));
+  }
+  return postEditorAgentActionResult({ ...request, bridgeDecisionCapability: capability });
 }
 
 function reportDescriptor(
@@ -263,7 +353,9 @@ export interface UseEditorAgentBridgeParams {
    * snapshot dependency list, so its identity changes exactly when a snapshot dimension changes and
    * the hook re-fires the register effect.
    */
-  readonly registerSnapshot: () => void;
+  readonly registerSnapshot: (
+    capability: string | undefined,
+  ) => Promise<EditorAgentSnapshotResponse | void> | EditorAgentSnapshotResponse | void;
   readonly onConflict: (conflict: {
     readonly code: EditorAgentConflictCode;
     readonly message: string;
@@ -274,6 +366,8 @@ export interface UseEditorAgentBridgeParams {
    * so the governance surface stays live without widening the frozen `EditorAgentEvent` union.
    */
   readonly onAgentActivity?: (() => void) | undefined;
+  /** Receives validated terminal SSE results for this exact session without retaining a history. */
+  readonly onTerminalResult?: ((result: EditorAgentActionResult) => void) | undefined;
 }
 
 export interface UseEditorAgentBridgeResult {
@@ -284,6 +378,54 @@ export interface UseEditorAgentBridgeResult {
 interface EditorAgentSessionHandlers {
   readonly onAction: (action: EditorAgentAction) => void;
   readonly onResult: (result: EditorAgentActionResult) => void;
+}
+
+async function performBridgeSnapshotRegistration(
+  sessionId: string,
+  registerSnapshot: UseEditorAgentBridgeParams["registerSnapshot"],
+): Promise<boolean> {
+  try {
+    const current = editorAgentDecisionCapabilities.get(sessionId)?.value;
+    const response = await registerSnapshot(current);
+    const issued = response?.bridgeDecisionCapability;
+    if (issued === undefined) return editorAgentDecisionCapabilities.has(sessionId);
+    return isEditorAgentBridgeDecisionCapability(issued)
+      ? rememberBridgeCapability(sessionId, issued)
+      : false;
+  } catch {
+    // Registration is availability-only; mutation remains server-gated without a valid lease.
+    return false;
+  }
+}
+
+function registerBridgeSnapshot(
+  sessionId: string,
+  registerSnapshot: UseEditorAgentBridgeParams["registerSnapshot"],
+): Promise<boolean> {
+  const prior = editorAgentSnapshotRegistrations.get(sessionId);
+  if (
+    prior === undefined &&
+    editorAgentSnapshotRegistrations.size >= MAX_BROWSER_BRIDGE_CAPABILITIES &&
+    !editorAgentDecisionCapabilities.has(sessionId)
+  ) {
+    return Promise.resolve(false);
+  }
+  const pending = (prior ?? Promise.resolve(true))
+    .then(() => performBridgeSnapshotRegistration(sessionId, registerSnapshot))
+    .then((ready) => {
+      if (ready && editorAgentSubscribersBySession.has(sessionId)) {
+        editorAgentReadySessions.add(sessionId);
+        scheduleEditorAgentReconcile();
+      }
+      return ready;
+    });
+  editorAgentSnapshotRegistrations.set(sessionId, pending);
+  void pending.then(() => {
+    if (editorAgentSnapshotRegistrations.get(sessionId) === pending) {
+      editorAgentSnapshotRegistrations.delete(sessionId);
+    }
+  });
+  return pending;
 }
 
 const editorAgentSubscribersBySession = new Map<string, Set<EditorAgentSessionHandlers>>();
@@ -297,17 +439,35 @@ let editorAgentResultListener: EventListener | null = null;
 let editorAgentConnectedSessionKey: string | null = null;
 let editorAgentRestartScheduled = false;
 
-function currentSessionKey(): string {
-  return [...editorAgentSubscribersBySession.keys()].sort().join(" ");
+interface ReadySubscribedSession {
+  readonly sessionId: string;
+  readonly capability: BrowserBridgeCapability;
 }
 
-function editorAgentEventUrl(): string {
-  const params = new URLSearchParams();
+function readySubscribedSessions(): readonly ReadySubscribedSession[] {
+  const ready: ReadySubscribedSession[] = [];
   for (const sessionId of [...editorAgentSubscribersBySession.keys()].sort()) {
+    const capability = editorAgentDecisionCapabilities.get(sessionId);
+    if (!editorAgentReadySessions.has(sessionId) || capability === undefined) continue;
+    ready.push({ sessionId, capability });
+  }
+  return ready;
+}
+
+function currentSessionKey(sessions: readonly ReadySubscribedSession[]): string {
+  return sessions
+    .map(({ sessionId, capability }) => `${sessionId}:${String(capability.generation)}`)
+    .join("\u0000");
+}
+
+function editorAgentEventUrl(sessions: readonly ReadySubscribedSession[]): string | null {
+  const params = new URLSearchParams();
+  for (const { sessionId, capability } of sessions) {
     params.append("sessionId", sessionId);
+    params.append("bridgeDecisionCapability", capability.value);
   }
   const query = params.toString();
-  return query.length > 0 ? `/api/editor/agent/events?${query}` : "/api/editor/agent/events";
+  return query.length > 0 ? `/api/editor/agent/events?${query}` : null;
 }
 
 function eventSessionId(event: EditorAgentEvent): string | undefined {
@@ -369,9 +529,10 @@ function closeEditorAgentEventSource(): void {
  * extra panes on an already-subscribed session no longer force a reconnect.
  */
 function reconcileEditorAgentEventSource(): void {
-  const nextKey = currentSessionKey();
-  if (editorAgentSubscribersBySession.size === 0) {
-    // Last subscriber left — tear the stream down.
+  const readySessions = readySubscribedSessions();
+  const nextKey = currentSessionKey(readySessions);
+  if (readySessions.length === 0) {
+    // No authenticated subscriber is ready — tear the stream down.
     closeEditorAgentEventSource();
     return;
   }
@@ -381,7 +542,9 @@ function reconcileEditorAgentEventSource(): void {
   }
   closeEditorAgentEventSource();
   if (typeof EventSource === "undefined") return;
-  const source = createSameOriginApiEventSource(editorAgentEventUrl());
+  const url = editorAgentEventUrl(readySessions);
+  if (url === null) return;
+  const source = createSameOriginApiEventSource(url);
   if (source === null) return;
   editorAgentActionListener = handleEditorAgentFrame;
   editorAgentResultListener = handleEditorAgentFrame;
@@ -421,7 +584,10 @@ function subscribeEditorAgentSession(
     const subscribers = editorAgentSubscribersBySession.get(sessionId);
     if (subscribers === undefined) return;
     subscribers.delete(handlers);
-    if (subscribers.size === 0) editorAgentSubscribersBySession.delete(sessionId);
+    if (subscribers.size === 0) {
+      editorAgentSubscribersBySession.delete(sessionId);
+      editorAgentReadySessions.delete(sessionId);
+    }
     if (editorAgentSubscribersBySession.size === 0) {
       // Last subscriber left — tear the stream down synchronously so unmount closes the
       // connection deterministically (no deferred socket lingering after the pane is gone).
@@ -432,6 +598,17 @@ function subscribeEditorAgentSession(
     // burst of unsubscribes collapses; a no-op set change won't restart the stream.
     scheduleEditorAgentReconcile();
   };
+}
+
+/** Test-only reset for module-scoped capability and EventSource state. */
+export function _resetEditorAgentBridgeStateForTests(): void {
+  closeEditorAgentEventSource();
+  editorAgentSubscribersBySession.clear();
+  editorAgentDecisionCapabilities.clear();
+  editorAgentSnapshotRegistrations.clear();
+  editorAgentReadySessions.clear();
+  editorAgentCapabilityGeneration = 0;
+  editorAgentRestartScheduled = false;
 }
 
 /**
@@ -449,6 +626,7 @@ export function useEditorAgentBridge(
     registerSnapshot,
     onConflict,
     onAgentActivity,
+    onTerminalResult,
   } = params;
   const [agentSelectionRequest, setAgentSelectionRequest] =
     useState<EditorAgentSelectionRequest | null>(null);
@@ -459,6 +637,8 @@ export function useEditorAgentBridge(
   onConflictRef.current = onConflict;
   const onAgentActivityRef = useRef(onAgentActivity);
   onAgentActivityRef.current = onAgentActivity;
+  const onTerminalResultRef = useRef(onTerminalResult);
+  onTerminalResultRef.current = onTerminalResult;
 
   const requestSelectionReveal = useCallback((request: EditorAgentSelectionRequest): void => {
     setAgentSelectionRequest(request);
@@ -484,19 +664,20 @@ export function useEditorAgentBridge(
   const registerSnapshotRef = useRef(registerSnapshot);
   registerSnapshotRef.current = registerSnapshot;
   useEffect(() => {
+    if (!enabled) return;
     // `registerSnapshot` is a dependency so a new snapshot dimension re-arms the timer;
     // the ref indirection means we always invoke the latest closure on the trailing edge.
     const handle = setTimeout(() => {
-      registerSnapshotRef.current();
+      void registerBridgeSnapshot(agentSessionId, registerSnapshotRef.current);
     }, EDITOR_SNAPSHOT_DEBOUNCE_MS);
     return (): void => {
       clearTimeout(handle);
     };
-  }, [registerSnapshot]);
+  }, [agentSessionId, enabled, registerSnapshot]);
 
   useEffect(() => {
     if (!enabled) return;
-    return subscribeEditorAgentSession(agentSessionId, {
+    const handlers: EditorAgentSessionHandlers = {
       onAction: (action): void => {
         const descriptor = dispatchEditorAgentAction(action, dispatchControllersRef.current);
         reportDescriptor(action, descriptor);
@@ -506,12 +687,16 @@ export function useEditorAgentBridge(
       onResult: (result): void => {
         // Issue #1395 — any result for this session is audit-relevant; refresh the audit panel.
         onAgentActivityRef.current?.();
+        if (result.status !== "queued") onTerminalResultRef.current?.(result);
         if (result.status !== "conflict") return;
         const { conflict } = result;
         if (conflict === undefined) return;
         onConflictRef.current({ code: conflict.code, message: conflict.message });
       },
-    });
+    };
+    const unsubscribe = subscribeEditorAgentSession(agentSessionId, handlers);
+    void registerBridgeSnapshot(agentSessionId, registerSnapshotRef.current);
+    return unsubscribe;
   }, [agentSessionId, enabled]);
 
   return { agentSelectionRequest, consumeSelectionRequest };

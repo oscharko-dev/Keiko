@@ -157,7 +157,7 @@ function registerSnapshot(workspace: WorkspaceFixture): Promise<RouteResult> {
   );
 }
 
-function connectBridge(): CapturedBridge {
+function connectBridge(bridgeDecisionCapability: string): CapturedBridge {
   const writes: string[] = [];
   const closeHandlers: (() => void)[] = [];
   const res = {
@@ -173,11 +173,15 @@ function connectBridge(): CapturedBridge {
     destroy: vi.fn(),
   } as unknown as ServerResponse;
   const req = { on: vi.fn() } as unknown as IncomingMessage;
+  const query = new URLSearchParams({
+    sessionId: SESSION_ID,
+    bridgeDecisionCapability,
+  }).toString();
   const outcome = handleEditorAgentEvents({
     req,
     res,
     params: {},
-    url: new URL(`${BASE_URL}/api/editor/agent/events?sessionId=${SESSION_ID}`),
+    url: new URL(`${BASE_URL}/api/editor/agent/events?${query}`),
   });
   if (outcome !== STREAMING) throw new Error("expected streaming editor agent bridge");
   return {
@@ -338,6 +342,7 @@ async function assertReviewModel(
 function postFailedBrowserResult(
   transport: EditorAgentHttpTransport,
   action: EditorAgentAction,
+  bridgeDecisionCapability: string,
 ): Promise<EditorAgentHttpTransportResponse> {
   return transport.request({
     method: "POST",
@@ -345,6 +350,7 @@ function postFailedBrowserResult(
     body: JSON.stringify({
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "result",
+      bridgeDecisionCapability,
       result: {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         actionId: action.actionId,
@@ -361,6 +367,14 @@ function decodedBody(response: EditorAgentHttpTransportResponse): unknown {
   return JSON.parse(decoder.decode(response.body)) as unknown;
 }
 
+function registeredBridgeCapability(result: RouteResult): string {
+  const body = result.body;
+  if (typeof body !== "object" || body === null) throw new Error("expected registration body");
+  const capability = (body as { bridgeDecisionCapability?: unknown }).bridgeDecisionCapability;
+  if (typeof capability !== "string") throw new Error("expected bridge decision capability");
+  return capability;
+}
+
 function assertWorkspaceUnchanged(workspace: WorkspaceFixture): void {
   for (const file of FILES) {
     expect(readFileSync(join(workspace.root, file.path), "utf8")).toBe(file.before);
@@ -373,8 +387,10 @@ describe("editor agent changeset cross-package integration (#2117)", () => {
     const workspace = createWorkspace();
     let bridge: CapturedBridge | undefined;
     try {
-      expect((await registerSnapshot(workspace)).status).toBe(200);
-      bridge = connectBridge();
+      const registration = await registerSnapshot(workspace);
+      expect(registration.status).toBe(200);
+      const bridgeDecisionCapability = registeredBridgeCapability(registration);
+      bridge = connectBridge(bridgeDecisionCapability);
       const transport = new InMemoryEditorAgentHttpTransport();
       const client = new EditorAgentHttpClient({ baseUrl: BASE_URL, transport });
       const sessions = await client.listSessions(new AbortController().signal);
@@ -394,7 +410,7 @@ describe("editor agent changeset cross-package integration (#2117)", () => {
       await assertReviewModel(prepared, workspace.sources);
       assertWorkspaceUnchanged(workspace);
 
-      const failed = await postFailedBrowserResult(transport, action);
+      const failed = await postFailedBrowserResult(transport, action, bridgeDecisionCapability);
       expect(failed.status).toBe(200);
       expect(decodedBody(failed)).toMatchObject({ result: { status: "failed" } });
       assertWorkspaceUnchanged(workspace);

@@ -8,6 +8,28 @@ export const EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS = 2_000;
 export const EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS = 128;
 export const EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS = 1_024;
 export const EDITOR_AGENT_REFERENCE_ID_MAX_CHARS = 128;
+export const EDITOR_AGENT_ACTION_ID_MAX_BYTES = 128;
+export const EDITOR_AGENT_SESSION_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES = 256;
+export const EDITOR_AGENT_WINDOW_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_PANE_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_TARGET_PATH_MAX_BYTES = 4_096;
+export const EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES = 4_096;
+export const EDITOR_AGENT_SNAPSHOT_MAX_PANES = 32;
+export const EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE = 256;
+export const EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES = 512;
+export const EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES = 262_144;
+export const EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES = 65_536;
+export const EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS = 1_024;
+export const EDITOR_AGENT_EVENT_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES = 32;
+export const EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS = 43;
+
+export const EDITOR_AGENT_ACTION_ORIGINS = ["agent", "chat"] as const;
+export type EditorAgentActionOrigin = (typeof EDITOR_AGENT_ACTION_ORIGINS)[number];
+export const DEFAULT_EDITOR_AGENT_ACTION_ORIGIN: EditorAgentActionOrigin = "agent";
+
+export type EditorAgentBridgeDecisionCapability = string;
 
 const EDITOR_AGENT_TEXT_ENCODER = new TextEncoder();
 
@@ -130,6 +152,7 @@ export interface EditorAgentAction {
   readonly idempotencyKey: string;
   readonly sessionId: string;
   readonly type: EditorAgentActionType;
+  readonly origin?: EditorAgentActionOrigin | undefined;
   readonly authorityRef?: EditorAgentGovernedAuthorityReference | undefined;
   readonly approvalRef?: EditorAgentOneUseApprovalReference | undefined;
   readonly target?:
@@ -264,12 +287,14 @@ export interface EditorAgentBridgeSnapshotRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "snapshot";
   readonly snapshot: EditorAgentSessionSnapshot;
+  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
 }
 
 export interface EditorAgentActionResultRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "result";
   readonly result: EditorAgentActionResult;
+  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
 }
 
 export type EditorAgentActionsPostBody = EditorAgentAction | EditorAgentActionResultRequest;
@@ -284,6 +309,7 @@ export interface EditorAgentActionQueuedResponse {
 
 export interface EditorAgentSnapshotResponse {
   readonly snapshot: EditorAgentSessionSnapshot | null;
+  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
 }
 
 export interface EditorAgentParseOk<T> {
@@ -327,6 +353,18 @@ function isBoundedNonEmptyString(value: unknown, maxChars: number): value is str
   return isNonEmptyString(value) && value.length <= maxChars;
 }
 
+function isBoundedUtf8String(value: unknown, maxBytes: number): value is string {
+  return isNonEmptyString(value) && isUtf8StringWithin(value, maxBytes);
+}
+
+function isUtf8StringWithin(value: unknown, maxBytes: number): value is string {
+  return typeof value === "string" && EDITOR_AGENT_TEXT_ENCODER.encode(value).length <= maxBytes;
+}
+
+function isBoundedTargetPath(value: unknown): value is string {
+  return isBoundedUtf8String(value, EDITOR_AGENT_TARGET_PATH_MAX_BYTES);
+}
+
 function countUnicodeCodePoints(value: string): number {
   return Array.from(value).length;
 }
@@ -338,8 +376,15 @@ function isBoundedDiagnosticMessage(value: unknown): value is string {
   );
 }
 
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+function isBoundedResultMessage(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    countUnicodeCodePoints(value) <= EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS
+  );
+}
+
+function isTargetPathArray(value: unknown, maxItems: number): value is readonly string[] {
+  return Array.isArray(value) && value.length <= maxItems && value.every(isBoundedTargetPath);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -578,9 +623,9 @@ function isLanguageCapability(value: unknown): boolean {
 function isPaneSnapshot(value: unknown): value is EditorAgentPaneSnapshot {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.paneId) &&
-    (value.activeFile === null || typeof value.activeFile === "string") &&
-    isStringArray(value.openFiles)
+    isBoundedUtf8String(value.paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES) &&
+    (value.activeFile === null || isBoundedTargetPath(value.activeFile)) &&
+    isTargetPathArray(value.openFiles, EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE)
   );
 }
 
@@ -589,20 +634,42 @@ function isSnapshotTextMode(value: unknown): value is EditorAgentSnapshotTextMod
 }
 
 function isPaneSnapshotArray(value: unknown): value is readonly EditorAgentPaneSnapshot[] {
-  return Array.isArray(value) && value.every(isPaneSnapshot);
+  return (
+    Array.isArray(value) &&
+    value.length <= EDITOR_AGENT_SNAPSHOT_MAX_PANES &&
+    value.every(isPaneSnapshot)
+  );
+}
+
+function snapshotPathMetadataWithinBound(value: Record<string, unknown>): boolean {
+  if (!isPaneSnapshotArray(value.panes)) return false;
+  if (!isTargetPathArray(value.dirtyFiles, EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES)) return false;
+  const activeFile = value.activeFile;
+  if (activeFile !== null && !isBoundedTargetPath(activeFile)) return false;
+  const paths = value.panes.flatMap((pane) => [
+    ...(pane.activeFile === null ? [] : [pane.activeFile]),
+    ...pane.openFiles,
+  ]);
+  if (activeFile !== null) paths.push(activeFile);
+  paths.push(...value.dirtyFiles);
+  const bytes = paths.reduce(
+    (total, path) => total + EDITOR_AGENT_TEXT_ENCODER.encode(path).length,
+    0,
+  );
+  return bytes <= EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES;
 }
 
 export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAgentSessionSnapshot {
   if (!isRecord(value)) return false;
   return [
     value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION,
-    isNonEmptyString(value.sessionId),
-    isNonEmptyString(value.windowId),
-    isNonEmptyString(value.workspaceRoot),
-    isNullOr(value.activePaneId, isString),
-    isPaneSnapshotArray(value.panes),
-    isStringArray(value.dirtyFiles),
-    isNullOr(value.activeFile, isString),
+    isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES),
+    isBoundedUtf8String(value.windowId, EDITOR_AGENT_WINDOW_ID_MAX_BYTES),
+    isBoundedUtf8String(value.workspaceRoot, EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES),
+    isNullOr(value.activePaneId, (paneId) =>
+      isBoundedUtf8String(paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES),
+    ),
+    snapshotPathMetadataWithinBound(value),
     isNullOr(value.cursor, isPosition),
     isNullOr(value.selection, isRange),
     isNullOr(value.diagnosticsSummary, isDiagnosticsSummary),
@@ -611,7 +678,9 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isUndefinedOr(value.documentVersion, isDocumentVersion),
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
     isSnapshotTextMode(value.textMode),
-    isUndefinedOr(value.text, isString),
+    isUndefinedOr(value.text, (text) =>
+      isUtf8StringWithin(text, EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES),
+    ),
     isUndefinedOr(
       value.textTruncated,
       (candidate): candidate is boolean => typeof candidate === "boolean",
@@ -626,6 +695,19 @@ function isActionType(value: unknown): value is EditorAgentActionType {
   );
 }
 
+export function isEditorAgentActionOrigin(value: unknown): value is EditorAgentActionOrigin {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_ACTION_ORIGINS.includes(value as EditorAgentActionOrigin)
+  );
+}
+
+export function resolveEditorAgentActionOrigin(
+  value: EditorAgentActionOrigin | undefined,
+): EditorAgentActionOrigin {
+  return value ?? DEFAULT_EDITOR_AGENT_ACTION_ORIGIN;
+}
+
 function isSplitDirection(
   value: unknown,
 ): value is NonNullable<NonNullable<EditorAgentAction["target"]>["splitDirection"]> {
@@ -636,9 +718,13 @@ function isActionTarget(value: unknown): value is NonNullable<EditorAgentAction[
   if (value === undefined) return true;
   if (!isRecord(value)) return false;
   return [
-    isUndefinedOr(value.paneId, isString),
-    isUndefinedOr(value.file, isString),
-    isUndefinedOr(value.toPaneId, isString),
+    isUndefinedOr(value.paneId, (paneId) =>
+      isBoundedUtf8String(paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES),
+    ),
+    isUndefinedOr(value.file, isBoundedTargetPath),
+    isUndefinedOr(value.toPaneId, (paneId) =>
+      isBoundedUtf8String(paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES),
+    ),
     isUndefinedOr(value.splitDirection, isSplitDirection),
     isUndefinedOr(value.selection, isRange),
   ].every(Boolean);
@@ -660,10 +746,11 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
   if (!isRecord(value)) return false;
   return [
     value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION,
-    isNonEmptyString(value.actionId),
-    isNonEmptyString(value.idempotencyKey),
-    isNonEmptyString(value.sessionId),
+    isBoundedUtf8String(value.actionId, EDITOR_AGENT_ACTION_ID_MAX_BYTES),
+    isBoundedUtf8String(value.idempotencyKey, EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES),
+    isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES),
     isActionType(value.type),
+    isUndefinedOr(value.origin, isEditorAgentActionOrigin),
     isUndefinedOr(value.authorityRef, isEditorAgentGovernedAuthorityReference),
     isUndefinedOr(
       value.approvalRef,
@@ -693,6 +780,23 @@ export const EDITOR_AGENT_WRITE_ACTION_TYPES: readonly EditorAgentActionType[] =
   "applyPatch",
   "applyChangeset",
 ] as const;
+
+export const EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES: readonly EditorAgentActionType[] = [
+  "setSelection",
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+] as const;
+
+export function isEditorAgentActiveBufferActionType(
+  value: unknown,
+): value is EditorAgentActionType {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES.includes(value as EditorAgentActionType)
+  );
+}
 
 export function isEditorAgentWriteActionType(value: unknown): value is EditorAgentActionType {
   return (
@@ -731,7 +835,7 @@ export function isEditorAgentConflictDetail(value: unknown): value is EditorAgen
   return (
     isRecord(value) &&
     isEditorAgentConflictCode(value.code) &&
-    typeof value.message === "string" &&
+    isBoundedResultMessage(value.message) &&
     isUndefinedOr(value.file, (file) => isNonEmptyString(file) && isContainedAgentPath(file))
   );
 }
@@ -754,7 +858,7 @@ export function isEditorAgentFileActionResult(
     isNonEmptyString(value.file) &&
     isContainedAgentPath(value.file) &&
     isEditorAgentFileActionStatus(value.status) &&
-    isUndefinedOr(value.message, isString) &&
+    isUndefinedOr(value.message, isBoundedResultMessage) &&
     isOptionalEditorAgentConflictDetail(value.conflict)
   );
 }
@@ -771,7 +875,7 @@ function isEditorAgentFileActionResultArray(value: unknown): boolean {
 function isEditorAgentFailureDetail(value: unknown): boolean {
   if (value === undefined) return true;
   return (
-    isRecord(value) && isEditorAgentFailureCode(value.code) && typeof value.message === "string"
+    isRecord(value) && isEditorAgentFailureCode(value.code) && isBoundedResultMessage(value.message)
   );
 }
 
@@ -779,10 +883,10 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
   return (
     isRecord(value) &&
     value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION &&
-    isNonEmptyString(value.actionId) &&
-    isNonEmptyString(value.sessionId) &&
+    isBoundedUtf8String(value.actionId, EDITOR_AGENT_ACTION_ID_MAX_BYTES) &&
+    isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES) &&
     isActionStatus(value.status) &&
-    (value.message === undefined || typeof value.message === "string") &&
+    isUndefinedOr(value.message, isBoundedResultMessage) &&
     isOptionalEditorAgentConflictDetail(value.conflict) &&
     isEditorAgentFailureDetail(value.failure) &&
     isEditorAgentFileActionResultArray(value.files)
@@ -811,7 +915,7 @@ export function isEditorAgentFailureCode(value: unknown): value is EditorAgentFa
 export function isEditorAgentEvent(value: unknown): value is EditorAgentEvent {
   if (!isRecord(value)) return false;
   if (value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION) return false;
-  if (!isNonEmptyString(value.eventId)) return false;
+  if (!isBoundedUtf8String(value.eventId, EDITOR_AGENT_EVENT_ID_MAX_BYTES)) return false;
   switch (value.type) {
     case "session":
       return isEditorAgentSessionSnapshot(value.snapshot);
@@ -885,7 +989,7 @@ export function validateAgentTextEdits(
 }
 
 export function isContainedAgentPath(candidate: string): boolean {
-  if (candidate.length === 0) return false;
+  if (!isBoundedTargetPath(candidate)) return false;
   if (candidate.startsWith("/")) return false;
   if (/^[A-Za-z]:/u.test(candidate)) return false;
   if (candidate.includes("\u0000")) return false;
@@ -899,12 +1003,21 @@ function parseBridgeSnapshotRequest(
   if (!isEditorAgentSessionSnapshot(value.snapshot)) {
     return { ok: false, errors: ["snapshot must be a valid editor agent session snapshot"] };
   }
+  if (
+    value.bridgeDecisionCapability !== undefined &&
+    !isEditorAgentBridgeDecisionCapability(value.bridgeDecisionCapability)
+  ) {
+    return { ok: false, errors: ["bridgeDecisionCapability must be a bounded capability"] };
+  }
   return {
     ok: true,
     value: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "snapshot",
       snapshot: value.snapshot,
+      ...(value.bridgeDecisionCapability === undefined
+        ? {}
+        : { bridgeDecisionCapability: value.bridgeDecisionCapability }),
     },
   };
 }
@@ -923,8 +1036,11 @@ function parseReadSnapshotRequest(
   if (!isSnapshotTextMode(textMode)) {
     return { ok: false, errors: ["textMode must be none, selection, or activeFile"] };
   }
-  if (value.sessionId !== undefined && typeof value.sessionId !== "string") {
-    return { ok: false, errors: ["sessionId must be a string when present"] };
+  if (
+    value.sessionId !== undefined &&
+    !isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES)
+  ) {
+    return { ok: false, errors: ["sessionId must be a bounded string when present"] };
   }
   if (value.maxBytes !== undefined && !isNonNegativeInteger(value.maxBytes)) {
     return { ok: false, errors: ["maxBytes must be a non-negative integer when present"] };
@@ -952,16 +1068,33 @@ export function parseEditorAgentSnapshotRequest(
 export function parseEditorAgentActionsPostBody(
   value: unknown,
 ): EditorAgentParse<EditorAgentActionsPostBody> {
-  if (isEditorAgentAction(value)) return { ok: true, value };
+  if (isEditorAgentAction(value)) {
+    return { ok: true, value: { ...value, origin: resolveEditorAgentActionOrigin(value.origin) } };
+  }
   if (isRecord(value) && value.kind === "result" && isEditorAgentActionResult(value.result)) {
+    const capability = value.bridgeDecisionCapability;
+    if (capability !== undefined && !isEditorAgentBridgeDecisionCapability(capability)) {
+      return { ok: false, errors: ["bridgeDecisionCapability must be a bounded capability"] };
+    }
     return {
       ok: true,
       value: {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         kind: "result",
         result: value.result,
+        ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
       },
     };
   }
   return { ok: false, errors: ["body must be an editor agent action or action result"] };
+}
+
+export function isEditorAgentBridgeDecisionCapability(
+  value: unknown,
+): value is EditorAgentBridgeDecisionCapability {
+  return (
+    typeof value === "string" &&
+    value.length === EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS &&
+    /^[A-Za-z0-9_-]+$/u.test(value)
+  );
 }

@@ -14,6 +14,7 @@ const ALL_CAPABILITIES: readonly EditorHostCapability[] = [
   "provideInlineCompletions",
   "provideDiagnostics",
   "provideContext",
+  "askKeikoAboutSelection",
   "generateTests",
   "previewPatch",
   "applyPatchReview",
@@ -29,6 +30,7 @@ const EXPECTED_IDS: readonly EditorCommandId[] = [
   "editor.acceptInlineCompletion",
   "editor.rejectInlineCompletion",
   "editor.generateTests",
+  "editor.askKeikoAboutSelection",
   "editor.runVerification",
   "editor.previewPatch",
   "editor.openDiff",
@@ -114,12 +116,25 @@ describe("isCommandAvailable state gates", () => {
     expect(isCommandAvailable(command("editor.renameSymbol"), ctx)).toBe(false);
   });
 
-  it("read-only still allows reject, preview, generateTests, and requestContext", () => {
-    const ctx = baseContext({ readOnly: true, pendingPatchId: "p" });
+  it("read-only still allows reject, preview, Generate Tests, Ask Keiko, and context", () => {
+    const ctx = baseContext({ readOnly: true, hasSelection: true, pendingPatchId: "p" });
     expect(isCommandAvailable(command("editor.rejectPatch"), ctx)).toBe(true);
     expect(isCommandAvailable(command("editor.previewPatch"), ctx)).toBe(true);
     expect(isCommandAvailable(command("editor.generateTests"), ctx)).toBe(true);
+    expect(isCommandAvailable(command("editor.askKeikoAboutSelection"), ctx)).toBe(true);
     expect(isCommandAvailable(command("editor.requestContext"), ctx)).toBe(true);
+  });
+
+  it("offers Ask Keiko only when the host capability and a non-empty selection are present", () => {
+    const askCommand = command("editor.askKeikoAboutSelection");
+    expect(isCommandAvailable(askCommand, baseContext())).toBe(false);
+    expect(isCommandAvailable(askCommand, baseContext({ hasSelection: true }))).toBe(true);
+    expect(
+      isCommandAvailable(
+        askCommand,
+        baseContext({ hasSelection: true, availableCapabilities: [] }),
+      ),
+    ).toBe(false);
   });
 
   it("gates the #1205 UX commands on capability and state", () => {
@@ -187,7 +202,12 @@ describe("isCommandAvailable state gates", () => {
 describe("availableCommands", () => {
   it("returns the filtered subset for a writable dirty patch context", () => {
     const ids = availableCommands(
-      baseContext({ dirty: true, inlineCompletionVisible: true, pendingPatchId: "p1" }),
+      baseContext({
+        dirty: true,
+        hasSelection: true,
+        inlineCompletionVisible: true,
+        pendingPatchId: "p1",
+      }),
     ).map((entry) => entry.id);
     expect([...ids].sort()).toEqual([...EXPECTED_IDS].sort());
   });

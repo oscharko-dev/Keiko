@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentSessionSnapshot,
   type EditorAgentAction,
@@ -25,6 +26,7 @@ import {
   type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { STREAMING, type RouteContext } from "../routes.js";
 import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
@@ -40,10 +42,17 @@ import type { EditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts
 
 const HASH = "a".repeat(64);
 const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 65_536;
+const PATCH_SOURCE_LIMIT_BYTES = 1_000_000;
+let bridgeDecisionCapability: string | undefined;
+const bridgeDecisionCapabilities = new Map<string, string>();
 type ChangesetFile = NonNullable<EditorAgentAction["changeset"]>["files"][number];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 function actionResultStatus(body: unknown): string | undefined {
@@ -66,6 +75,13 @@ function actionResult(body: unknown): EditorAgentActionResult {
 function responseSnapshot(body: unknown): EditorAgentSessionSnapshot {
   if (!isRecord(body) || !isRecord(body.snapshot)) throw new Error("expected snapshot response");
   return body.snapshot as unknown as EditorAgentSessionSnapshot;
+}
+
+function responseBridgeCapability(body: unknown): string | undefined {
+  if (!isRecord(body)) return undefined;
+  return typeof body.bridgeDecisionCapability === "string"
+    ? body.bridgeDecisionCapability
+    : undefined;
 }
 
 function sha256(content: string): string {
@@ -121,9 +137,15 @@ function action(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
 // Connect a session-scoped SSE bridge so the session is "live" (Issue #1392). Returns the captured
 // frames plus a close() that drops the bridge. Bridge liveness gates action queueing: without a live
 // bridge a queued action is answered NO_ACTIVE_BRIDGE (AC1).
-function connectBridge(sessionId: string | readonly string[] | undefined): {
+function connectBridge(
+  sessionId: string | readonly string[] | undefined,
+  capabilityOverride?: string | readonly string[] | null,
+): {
   readonly frames: () => string;
   readonly close: () => void;
+  readonly outcome: ReturnType<typeof handleEditorAgentEvents>;
+  readonly requestUrl: () => string | undefined;
+  readonly contextUrl: () => string;
 } {
   const writes: string[] = [];
   const closeHandlers: (() => void)[] = [];
@@ -142,18 +164,32 @@ function connectBridge(sessionId: string | readonly string[] | undefined): {
   const req = { on: vi.fn() } as unknown as IncomingMessage;
   const sessionIds: readonly string[] =
     sessionId === undefined ? [] : Array.isArray(sessionId) ? sessionId : [sessionId];
-  const query =
-    sessionIds.length === 0
-      ? ""
-      : `?${sessionIds.map((id) => `sessionId=${encodeURIComponent(id)}`).join("&")}`;
-  handleEditorAgentEvents({
+  const overrides = isStringArray(capabilityOverride) ? capabilityOverride : undefined;
+  const capabilities = sessionIds.map((id, index) => {
+    if (overrides !== undefined) return overrides[index];
+    if (typeof capabilityOverride === "string") return capabilityOverride;
+    return capabilityOverride === null ? undefined : bridgeDecisionCapabilities.get(id);
+  });
+  const queryParts = sessionIds.map((id) => `sessionId=${encodeURIComponent(id)}`);
+  for (const capability of capabilities) {
+    if (capability !== undefined) {
+      queryParts.push(`bridgeDecisionCapability=${encodeURIComponent(capability)}`);
+    }
+  }
+  const query = queryParts.length === 0 ? "" : `?${queryParts.join("&")}`;
+  (req as { url?: string }).url = `/api/editor/agent/events${query}`;
+  const url = new URL(`http://localhost/api/editor/agent/events${query}`);
+  const outcome = handleEditorAgentEvents({
     req,
     res,
     params: {},
-    url: new URL(`http://localhost/api/editor/agent/events${query}`),
+    url,
   });
   return {
     frames: (): string => writes.join(""),
+    outcome,
+    requestUrl: (): string | undefined => req.url,
+    contextUrl: (): string => url.toString(),
     close: (): void => {
       for (const cb of closeHandlers) cb();
     },
@@ -171,32 +207,31 @@ function actionFailureCode(body: unknown): string | undefined {
 async function registerSnapshotOnly(
   overrides: Partial<EditorAgentSessionSnapshot> = {},
 ): Promise<void> {
-  await handleEditorAgentSnapshot(
+  const nextSnapshot = { ...snapshot(), ...overrides };
+  const existingCapability = bridgeDecisionCapabilities.get(nextSnapshot.sessionId);
+  const registered = await handleEditorAgentSnapshot(
     context(
       {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         kind: "snapshot",
-        snapshot: { ...snapshot(), ...overrides },
+        snapshot: nextSnapshot,
+        ...(existingCapability === undefined
+          ? {}
+          : { bridgeDecisionCapability: existingCapability }),
       },
       "/api/editor/agent/snapshot",
     ),
   );
+  const issued = responseBridgeCapability(registered.body);
+  if (issued !== undefined) bridgeDecisionCapabilities.set(nextSnapshot.sessionId, issued);
+  bridgeDecisionCapability = bridgeDecisionCapabilities.get("session-1");
 }
 
 // Register a snapshot AND connect its live bridge, so a following action can be queued. The existing
 // preflight-conflict tests reach their structural conflict before the liveness gate regardless, but
 // the tests that expect a 202 queue need a live bridge present.
 async function registerSnapshot(workspaceRoot?: string, activeFile?: string): Promise<void> {
-  await handleEditorAgentSnapshot(
-    context(
-      {
-        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-        kind: "snapshot",
-        snapshot: snapshot(workspaceRoot, activeFile),
-      },
-      "/api/editor/agent/snapshot",
-    ),
-  );
+  await registerSnapshotOnly(snapshot(workspaceRoot, activeFile));
   connectBridge("session-1");
 }
 
@@ -275,11 +310,15 @@ async function postActionResult(
   original: EditorAgentAction,
   status: EditorAgentActionStatus,
   sessionId = original.sessionId,
+  capabilityOverride?: string | null,
 ): Promise<Awaited<ReturnType<typeof handleEditorAgentActions>>> {
+  const capability =
+    capabilityOverride === null ? undefined : (capabilityOverride ?? bridgeDecisionCapability);
   return handleEditorAgentActions(
     context({
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "result",
+      ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
       result: {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         actionId: original.actionId,
@@ -306,6 +345,8 @@ function lastEmittedAction(frames: string): EditorAgentAction {
 }
 
 afterEach(() => {
+  bridgeDecisionCapability = undefined;
+  bridgeDecisionCapabilities.clear();
   _resetEditorAgentStateForTests();
   vi.useRealTimers();
 });
@@ -330,6 +371,92 @@ describe("editor agent routes", () => {
     });
   });
 
+  it("issues one bridge capability and never exposes it through session discovery or global SSE", async () => {
+    const observer = connectBridge(undefined);
+    const registered = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: { ...snapshot(), textMode: "activeFile", text: "PRIVATE_SNAPSHOT_TEXT" },
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    const capability = responseBridgeCapability(registered.body);
+
+    expect(capability).toHaveLength(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS);
+    const discovery = JSON.stringify(handleEditorAgentSessions().body);
+    expect(discovery).not.toContain(capability);
+    expect(discovery).not.toContain("PRIVATE_SNAPSHOT_TEXT");
+    expect(handleEditorAgentSessions().body).toMatchObject({
+      sessions: [{ textMode: "none" }],
+    });
+    expect(observer.frames()).not.toContain("PRIVATE_SNAPSHOT_TEXT");
+    expect(observer.frames()).not.toContain(capability);
+  });
+
+  it("rotates a stale capability only while the existing session is idle", async () => {
+    const registered = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: snapshot(),
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    const capability = responseBridgeCapability(registered.body);
+    if (capability === undefined) throw new Error("expected bridge capability");
+    const takeover = { ...snapshot(), workspaceRoot: "/forged", updatedAt: 2 };
+
+    const missing = await handleEditorAgentSnapshot(
+      context(
+        { schemaVersion: EDITOR_AGENT_SCHEMA_VERSION, kind: "snapshot", snapshot: takeover },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    expect(missing.status).toBe(200);
+    const rotated = responseBridgeCapability(missing.body);
+    if (rotated === undefined) throw new Error("expected rotated bridge capability");
+    const bridge = connectBridge("session-1", rotated);
+    expect(bridge.outcome).toBe(STREAMING);
+
+    const wrongWhileLive = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: takeover,
+          bridgeDecisionCapability: "B".repeat(
+            EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
+          ),
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+    const refreshed = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: { ...snapshot(), updatedAt: 3 },
+          bridgeDecisionCapability: rotated,
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+
+    expect(wrongWhileLive.status).toBe(403);
+    expect(refreshed.status).toBe(200);
+    expect(responseBridgeCapability(refreshed.body)).toBeUndefined();
+    expect(editorAgentRegistry.snapshotFor("session-1")?.workspaceRoot).toBe("/repo");
+    expect(JSON.stringify(wrongWhileLive.body)).not.toContain(rotated);
+    expect(capability).not.toBe(rotated);
+    bridge.close();
+  });
+
   it("requires an active browser bridge before queueing write actions", async () => {
     const result = await handleEditorAgentActions(context(action()));
     expect(result.status).toBe(409);
@@ -345,6 +472,14 @@ describe("editor agent routes", () => {
     expect(first.status).toBe(202);
     expect(replay.status).toBe(200);
     expect(divergent.status).toBe(409);
+  });
+
+  it("rejects an out-of-enum action origin at the route boundary (#2119)", async () => {
+    const result = await handleEditorAgentActions(
+      context({ ...action(), origin: "chat:conversation-content" }),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
   });
 
   it("opens an SSE stream with a ready frame", () => {
@@ -369,6 +504,39 @@ describe("editor agent routes", () => {
     });
     expect(result).toBe(STREAMING);
     expect(writes.join("")).toContain("event: ready");
+  });
+
+  it("authenticates every session-scoped SSE bridge without exposing capabilities", async () => {
+    await registerSnapshotOnly();
+    await registerSnapshotOnly({ sessionId: "session-2" });
+    const first = bridgeDecisionCapabilities.get("session-1");
+    const second = bridgeDecisionCapabilities.get("session-2");
+    if (first === undefined || second === undefined) throw new Error("expected capabilities");
+
+    const missing = connectBridge("session-1", null);
+    const wrong = connectBridge("session-1", "B".repeat(43));
+    const crossSession = connectBridge("session-1", second);
+    const authenticated = connectBridge(["session-1", "session-2"]);
+
+    for (const rejected of [missing, wrong, crossSession]) {
+      expect(rejected.outcome).toMatchObject({
+        status: 403,
+        body: { error: { code: "BRIDGE_CAPABILITY_INVALID" } },
+      });
+      expect(rejected.frames()).toBe("");
+      expect(JSON.stringify(rejected.outcome)).not.toContain(first);
+      expect(JSON.stringify(rejected.outcome)).not.toContain(second);
+    }
+    expect(authenticated.outcome).toBe(STREAMING);
+    expect(authenticated.frames()).toContain("event: ready");
+    expect(authenticated.requestUrl()).not.toContain("bridgeDecisionCapability");
+    expect(authenticated.contextUrl()).not.toContain("bridgeDecisionCapability");
+    expect(authenticated.contextUrl()).toContain("sessionId=session-1");
+    expect(authenticated.contextUrl()).toContain("sessionId=session-2");
+    expect(crossSession.requestUrl()).not.toContain("bridgeDecisionCapability");
+    expect(crossSession.contextUrl()).not.toContain("bridgeDecisionCapability");
+    expect(crossSession.contextUrl()).toContain("sessionId=session-1");
+    authenticated.close();
   });
 });
 
@@ -420,10 +588,13 @@ describe("editor agent routes diagnostics detail (Issue #2118)", () => {
   });
 
   it("preserves an upstream diagnostic truncation marker", async () => {
-    editorAgentRegistry.registerSnapshot({
-      ...snapshot(),
-      diagnosticsDetail: { items: [diagnostic], truncated: true },
-    });
+    editorAgentRegistry.registerSnapshot(
+      {
+        ...snapshot(),
+        diagnosticsDetail: { items: [diagnostic], truncated: true },
+      },
+      "d".repeat(64),
+    );
 
     const result = await handleEditorAgentSnapshot(
       context({ schemaVersion: EDITOR_AGENT_SCHEMA_VERSION }, "/api/editor/agent/snapshot"),
@@ -492,7 +663,7 @@ describe("editor agent routes diagnostics detail (Issue #2118)", () => {
         truncated: false,
       },
     } as unknown as EditorAgentSessionSnapshot;
-    editorAgentRegistry.registerSnapshot(invalidSnapshot);
+    editorAgentRegistry.registerSnapshot(invalidSnapshot, "d".repeat(64));
 
     const result = await handleEditorAgentSnapshot(
       context(
@@ -915,6 +1086,58 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(actionResultStatus(result.body)).toBe("queued");
     });
 
+    it("preserves chat origin on queued applyPatch and emits content-free audit (#2119)", async () => {
+      const relativePath = "src/chat-origin.ts";
+      const srcDir = join(tmpDir, "src");
+      mkdirSync(srcDir);
+      writeFileSync(join(srcDir, "chat-origin.ts"), "CHAT_PATCH_BEFORE\n", "utf8");
+      await registerSnapshot(tmpDir, relativePath);
+      const observer = connectBridge("session-1");
+      const patch = [
+        `--- a/${relativePath}`,
+        `+++ b/${relativePath}`,
+        "@@ -1,1 +1,1 @@",
+        "-CHAT_PATCH_BEFORE",
+        "+CHAT_PATCH_AFTER",
+      ].join("\n");
+      const proposed = {
+        ...action({
+          type: "applyPatch",
+          actionId: "a-chat-patch",
+          idempotencyKey: "ik-chat-patch",
+          origin: "chat",
+          target: {
+            file: relativePath,
+            selection: {
+              start: { line: 0, character: 0 },
+              end: { line: 0, character: 1 },
+            },
+          },
+          patch,
+        }),
+        prompt: "AUDIT_CHAT_PROMPT",
+      };
+
+      const result = await handleEditorAgentActions(context(proposed));
+
+      expect(result.status).toBe(202);
+      expect(lastEmittedAction(observer.frames()).origin).toBe("chat");
+      const records = auditRecords();
+      expect(records).toHaveLength(1);
+      expect(records[0]?.origin).toBe("chat");
+      expect(records[0]?.targetPath).toBe(relativePath);
+      const serialized = JSON.stringify(records);
+      expect(serialized).not.toContain(patch);
+      for (const forbidden of [
+        "CHAT_PATCH_BEFORE",
+        "CHAT_PATCH_AFTER",
+        "AUDIT_CHAT_PROMPT",
+        "selection",
+      ]) {
+        expect(serialized).not.toContain(forbidden);
+      }
+    });
+
     it("captures emitted action textEdits via SSE subscriber for a valid patch", async () => {
       // Arrange: write the pre-image to disk.
       const srcDir = join(tmpDir, "src");
@@ -939,11 +1162,15 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
         destroy: vi.fn(),
       } as unknown as ServerResponse;
       const fakeReq = { on: vi.fn() } as unknown as IncomingMessage;
+      const capability = bridgeDecisionCapabilities.get("session-1");
+      if (capability === undefined) throw new Error("expected bridge capability");
       handleEditorAgentEvents({
         req: fakeReq,
         res: fakeRes,
         params: {},
-        url: new URL("http://localhost/api/editor/agent/events"),
+        url: new URL(
+          `http://localhost/api/editor/agent/events?sessionId=session-1&bridgeDecisionCapability=${encodeURIComponent(capability)}`,
+        ),
       });
 
       const validDiff = [
@@ -998,6 +1225,35 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       }));
       const applied = applyTextEditsToText(preImage, mappedEdits);
       expect(applied).toContain("export const X = 99;");
+    });
+
+    it("derives a single-file patch preview from its one bounded admission read", async () => {
+      const srcDir = join(tmpDir, "src");
+      mkdirSync(srcDir);
+      const filePath = join(srcDir, "diagnostic.ts");
+      writeFileSync(filePath, "export const X = 1;\n", "utf8");
+      await registerSnapshot(tmpDir, "src/diagnostic.ts");
+      const originalRead = nodeWorkspaceFs.readFileUtf8.bind(nodeWorkspaceFs);
+      const reads: string[] = [];
+      vi.spyOn(nodeWorkspaceFs, "readFileUtf8").mockImplementation((path) => {
+        reads.push(path);
+        return originalRead(path);
+      });
+      const patch = [
+        "--- a/src/diagnostic.ts",
+        "+++ b/src/diagnostic.ts",
+        "@@ -1 +1 @@",
+        "-export const X = 1;",
+        "+export const X = 2;",
+      ].join("\n");
+
+      const result = await handleEditorAgentActions(
+        context(action({ type: "applyPatch", patch, actionId: "diagnostic-action" })),
+      );
+
+      expect(result.status).toBe(202);
+      expect(reads).toEqual([filePath]);
+      vi.restoreAllMocks();
     });
   });
 
@@ -1367,6 +1623,27 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(actionConflictCode(afterClose.body)).toBe("NO_ACTIVE_BRIDGE");
   });
 
+  it("does not rotate a stale capability while an action remains pending", async () => {
+    await registerSnapshotOnly();
+    const bridge = connectBridge("session-1");
+    expect((await handleEditorAgentActions(context(navAction()))).status).toBe(202);
+    bridge.close();
+
+    const rotated = await handleEditorAgentSnapshot(
+      context(
+        {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          kind: "snapshot",
+          snapshot: { ...snapshot(), updatedAt: 2 },
+        },
+        "/api/editor/agent/snapshot",
+      ),
+    );
+
+    expect(rotated.status).toBe(403);
+    expect(editorAgentRegistry.pendingCount("session-1")).toBe(1);
+  });
+
   it("treats one multi-session SSE stream as a live bridge for each listed session", async () => {
     await registerSnapshotOnly();
     await registerSnapshotOnly({ sessionId: "session-2" });
@@ -1434,6 +1711,7 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
       context({
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         kind: "result",
+        bridgeDecisionCapability,
         result: {
           schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
           actionId: "action-1",
@@ -1447,6 +1725,37 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     vi.advanceTimersByTime(EDITOR_AGENT_ACTION_TIMEOUT_MS + 1);
     expect(bridge.frames()).toContain("succeeded");
     expect(bridge.frames()).not.toContain("TIMED_OUT");
+  });
+
+  it("rejects every forged or late terminal result and does not accept queued reports", async () => {
+    vi.useFakeTimers();
+    await registerSnapshotOnly();
+    connectBridge("session-1");
+    const statuses = ["succeeded", "failed", "conflict"] as const;
+    const pending = statuses.map((status, index) =>
+      navAction({
+        actionId: `late-${status}`,
+        idempotencyKey: `late-key-${String(index)}`,
+      }),
+    );
+    for (const proposed of pending) {
+      expect((await handleEditorAgentActions(context(proposed))).status).toBe(202);
+    }
+    vi.advanceTimersByTime(EDITOR_AGENT_ACTION_TIMEOUT_MS + 1);
+
+    for (const [index, status] of statuses.entries()) {
+      const proposed = pending[index];
+      if (proposed === undefined) throw new Error("expected pending action");
+      const late = await postActionResult(proposed, status);
+      expect(late.status).toBe(409);
+      expect(late.body).toMatchObject({ error: { code: "ACTION_RESULT_NOT_PENDING" } });
+    }
+
+    const live = navAction({ actionId: "still-pending", idempotencyKey: "still-pending-key" });
+    expect((await handleEditorAgentActions(context(live))).status).toBe(202);
+    const queuedReport = await postActionResult(live, "queued");
+    expect(queuedReport.status).toBe(400);
+    expect(editorAgentRegistry.pendingCount("session-1")).toBe(1);
   });
 
   it("bounds the per-session queue and answers QUEUE_FULL with 429 (perf)", async () => {
@@ -1487,7 +1796,24 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(actionFailureCode(second.body)).toBeUndefined();
   });
 
-  it("scopes action fan-out to the target session's bridge plus global observers (perf)", async () => {
+  it("rejects a second mutation while allowing a nonmutating action to queue", async () => {
+    await registerSnapshotOnly();
+    connectBridge("session-1");
+    const first = await handleEditorAgentActions(context(action()));
+    const second = await handleEditorAgentActions(
+      context(action({ actionId: "format-2", idempotencyKey: "format-key-2", type: "format" })),
+    );
+    const navigation = await handleEditorAgentActions(
+      context(navAction({ actionId: "nav-2", idempotencyKey: "nav-key-2" })),
+    );
+
+    expect(first.status).toBe(202);
+    expect(second.status).toBe(409);
+    expect(actionResultStatus(second.body)).toBe("failed");
+    expect(navigation.status).toBe(202);
+  });
+
+  it("delivers action bodies only to the target session bridge", async () => {
     await registerSnapshotOnly();
     const bridge1 = connectBridge("session-1");
     const bridge2 = connectBridge("session-2");
@@ -1498,7 +1824,7 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     );
 
     expect(bridge1.frames()).toContain("event: editor-agent:action");
-    expect(observer.frames()).toContain("event: editor-agent:action");
+    expect(observer.frames()).not.toContain("event: editor-agent:action");
     expect(bridge2.frames()).not.toContain("event: editor-agent:action");
   });
 
@@ -1565,6 +1891,136 @@ function applyTextEditsAction(newText: string, file?: string): EditorAgentAction
   });
 }
 
+describe("active-buffer target binding", () => {
+  it.each([
+    action({ type: "format", target: { file: "src/other.ts" } }),
+    action({ type: "save", target: { file: "src/other.ts" } }),
+    action({
+      type: "applyTextEdits",
+      target: { file: "src/other.ts" },
+      textEdits: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          newText: "x",
+        },
+      ],
+    }),
+    action({ type: "applyPatch", target: { file: "src/other.ts" }, patch: "not reached" }),
+    action({
+      type: "setSelection",
+      expectedContentHash: undefined,
+      target: {
+        file: "src/other.ts",
+        selection: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      },
+    }),
+  ])("rejects $type when its claimed file differs from the active snapshot", async (proposed) => {
+    await registerSnapshot();
+    const result = await handleEditorAgentActions(
+      context({
+        ...proposed,
+        actionId: `target-${proposed.type}`,
+        idempotencyKey: `target-key-${proposed.type}`,
+      }),
+    );
+
+    expect(result.status).toBe(409);
+    expect(actionConflictCode(result.body)).toBe("OUT_OF_SCOPE");
+    for (const record of auditRecords()) expect(record.targetPath).toBe("src/a.ts");
+  });
+
+  it("rejects a claimed pane mismatch and accepts a normalized active-file spelling", async () => {
+    await registerSnapshot();
+    const mismatch = await handleEditorAgentActions(
+      context(
+        action({
+          type: "setSelection",
+          actionId: "pane-mismatch",
+          idempotencyKey: "pane-mismatch-key",
+          expectedContentHash: undefined,
+          target: {
+            paneId: "pane-other",
+            selection: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+          },
+        }),
+      ),
+    );
+    const normalized = await handleEditorAgentActions(
+      context(
+        action({
+          type: "setSelection",
+          actionId: "normalized-target",
+          idempotencyKey: "normalized-target-key",
+          expectedContentHash: undefined,
+          target: {
+            paneId: "pane-1",
+            file: "./src/a.ts",
+            selection: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+          },
+        }),
+      ),
+    );
+
+    expect(mismatch.status).toBe(409);
+    expect(actionConflictCode(mismatch.body)).toBe("OUT_OF_SCOPE");
+    expect(normalized.status).toBe(202);
+  });
+
+  it("fails closed for every active-buffer action when the snapshot has no active pane", async () => {
+    await registerSnapshotOnly({ activePaneId: null, panes: [] });
+    connectBridge("session-1");
+    const unclaimed = await handleEditorAgentActions(
+      context(
+        action({
+          type: "format",
+          actionId: "pane-unclaimed",
+          idempotencyKey: "pane-unclaimed-key",
+        }),
+      ),
+    );
+    const claimed = await handleEditorAgentActions(
+      context(
+        action({
+          type: "format",
+          actionId: "pane-unverified",
+          idempotencyKey: "pane-unverified-key",
+          target: { paneId: "pane-unverified" },
+        }),
+      ),
+    );
+
+    expect(unclaimed.status).toBe(409);
+    expect(actionConflictCode(unclaimed.body)).toBe("OUT_OF_SCOPE");
+    expect(claimed.status).toBe(409);
+    expect(actionConflictCode(claimed.body)).toBe("OUT_OF_SCOPE");
+  });
+
+  it("fills missing targets and emits the exact active file and pane", async () => {
+    await registerSnapshotOnly();
+    const bridge = connectBridge("session-1");
+    const selection = {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 1 },
+    };
+    const result = await handleEditorAgentActions(
+      context(
+        navAction({
+          actionId: "bound-target",
+          idempotencyKey: "bound-target-key",
+          target: { selection },
+        }),
+      ),
+    );
+
+    expect(result.status).toBe(202);
+    expect(lastEmittedAction(bridge.frames()).target).toEqual({
+      file: "src/a.ts",
+      paneId: "pane-1",
+      selection,
+    });
+  });
+});
+
 describe("applyChangeset server transaction (Issue #2117)", () => {
   let workspaceRoot: string;
 
@@ -1620,6 +2076,12 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         },
       },
     };
+    const originalRead = nodeWorkspaceFs.readFileUtf8.bind(nodeWorkspaceFs);
+    const reads: string[] = [];
+    vi.spyOn(nodeWorkspaceFs, "readFileUtf8").mockImplementation((path) => {
+      reads.push(path);
+      return originalRead(path);
+    });
 
     const queued = await handleEditorAgentActions(context(forged));
 
@@ -1630,6 +2092,25 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     const emitted = lastEmittedAction(bridge.frames());
     expect(emitted.changeset?.prepared?.files).toHaveLength(2);
     expect(JSON.stringify(emitted.changeset?.prepared)).not.toContain("FORGED_PREVIEW");
+    expect(reads).toEqual([join(workspaceRoot, "src/a.txt"), join(workspaceRoot, "src/b.txt")]);
+    vi.restoreAllMocks();
+  });
+
+  it("preserves chat origin through a queued applyChangeset and its audit record (#2119)", async () => {
+    const arranged = arrangeTwoFiles();
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
+    ]);
+    const proposed = { ...arranged.action, origin: "chat" as const };
+
+    const queued = await handleEditorAgentActions(context(proposed));
+
+    expect(queued.status).toBe(202);
+    expect(lastEmittedAction(bridge.frames()).origin).toBe("chat");
+    const reported = await postActionResult(proposed, "conflict");
+    expect(reported.status).toBe(200);
+    expect(auditRecords().map((record) => record.origin)).toEqual(["chat", "chat"]);
   });
 
   it("queues a prepared changeset exactly at the wire text limit", async () => {
@@ -1665,6 +2146,30 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(bridge.frames()).not.toContain("event: editor-agent:action");
   });
 
+  it("rejects an oversized source before reading or emitting its tiny changeset", async () => {
+    const file = "src/oversized.txt";
+    const content = `A0\n${"x".repeat(PATCH_SOURCE_LIMIT_BYTES - 2)}`;
+    writeWorkspaceFile(workspaceRoot, file, content);
+    const patch = oneLineModifyPatch([{ file, before: "A0", after: "A1" }]);
+    const proposed = changesetActionFor(workspaceRoot, patch, [file]);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, file, [file]);
+    const originalRead = nodeWorkspaceFs.readFileUtf8.bind(nodeWorkspaceFs);
+    const reads: string[] = [];
+    vi.spyOn(nodeWorkspaceFs, "readFileUtf8").mockImplementation((path) => {
+      reads.push(path);
+      return originalRead(path);
+    });
+
+    const rejected = await handleEditorAgentActions(context(proposed));
+
+    expect(Buffer.byteLength(content, "utf8")).toBe(PATCH_SOURCE_LIMIT_BYTES + 1);
+    expect(rejected.status).toBe(409);
+    expect(actionConflictCode(rejected.body)).toBe("INVALID_EDITS");
+    expect(reads).toEqual([]);
+    expect(bridge.frames()).not.toContain("event: editor-agent:action");
+    vi.restoreAllMocks();
+  });
+
   it("rejects a safe plus deny-listed full changeset with file attribution and no mutation", async () => {
     writeWorkspaceFile(workspaceRoot, "src/a.txt", "A0\n");
     writeWorkspaceFile(workspaceRoot, ".env", "SECRET=old\n");
@@ -1674,6 +2179,12 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       { file: ".env", before: "SECRET=old", after: "SECRET=new" },
     ]);
     const proposed = changesetActionFor(workspaceRoot, patch, ["src/a.txt", ".env"]);
+    const originalRead = nodeWorkspaceFs.readFileUtf8.bind(nodeWorkspaceFs);
+    const reads: string[] = [];
+    vi.spyOn(nodeWorkspaceFs, "readFileUtf8").mockImplementation((path) => {
+      reads.push(path);
+      return originalRead(path);
+    });
 
     const rejected = await handleEditorAgentActions(context(proposed));
 
@@ -1692,13 +2203,15 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(deniedFile?.conflict).toMatchObject({ code: "OUT_OF_SCOPE", file: ".env" });
     expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
     expect(readWorkspaceFile(workspaceRoot, ".env")).toBe("SECRET=old\n");
+    expect(reads).not.toContain(join(workspaceRoot, ".env"));
+    vi.restoreAllMocks();
   });
 
   it("attributes one stale member and applies zero changes", async () => {
     const arranged = arrangeTwoFiles();
     await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
     expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
-    writeWorkspaceFile(workspaceRoot, "src/b.txt", "B-external\n");
+    writeWorkspaceFile(workspaceRoot, "src/b.txt", "C0\n");
 
     const committed = await postActionResult(arranged.action, "succeeded");
 
@@ -1719,7 +2232,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       file: "src/b.txt",
     });
     expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
-    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B-external\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("C0\n");
   });
 
   it("applies nothing when the browser rejects the queued changeset", async () => {
@@ -1752,6 +2265,62 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
     expect(replay.status).toBe(409);
+  });
+
+  it("does not claim or commit for missing, wrong, or replayed bridge capabilities", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+
+    const missing = await postActionResult(arranged.action, "succeeded", "session-1", null);
+    const wrong = await postActionResult(
+      arranged.action,
+      "succeeded",
+      "session-1",
+      "B".repeat(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS),
+    );
+    expect(missing.status).toBe(403);
+    expect(wrong.status).toBe(403);
+    expect(editorAgentRegistry.pendingCount("session-1")).toBe(1);
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+
+    const committed = await postActionResult(arranged.action, "succeeded");
+    const replayed = await postActionResult(arranged.action, "succeeded");
+    expect(committed.status).toBe(200);
+    expect(actionResultStatus(committed.body)).toBe("succeeded");
+    expect(replayed.status).toBe(409);
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
+  });
+
+  it("requires a live lease and verifiable active snapshot counterparts at commit time", async () => {
+    const arranged = arrangeTwoFiles();
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
+    ]);
+    expect((await handleEditorAgentActions(context(arranged.action))).status).toBe(202);
+    bridge.close();
+
+    const disconnected = await postActionResult(arranged.action, "succeeded");
+    expect(disconnected.status).toBe(409);
+    expect(editorAgentRegistry.pendingCount("session-1")).toBe(1);
+    connectBridge("session-1");
+    const currentSnapshot = editorAgentRegistry.snapshotFor("session-1");
+    if (currentSnapshot === undefined) throw new Error("expected current snapshot");
+    await registerSnapshotOnly({
+      ...currentSnapshot,
+      documentVersion: undefined,
+      activeFileContentHash: undefined,
+      updatedAt: currentSnapshot.updatedAt + 1,
+    });
+
+    const unverifiable = await postActionResult(arranged.action, "succeeded");
+    expect(unverifiable.status).toBe(200);
+    expect(actionConflictCode(unverifiable.body)).toBe("PRECONDITION_REQUIRED");
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
   });
 
   it("projects selectedFiles after full validation and reports non-selected members", async () => {
@@ -1822,7 +2391,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     const crossSession = await postActionResult(arranged.action, "succeeded", "session-2");
 
     expect(unsolicited.status).toBe(409);
-    expect(crossSession.status).toBe(409);
+    expect(crossSession.status).toBe(403);
     expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
     expect((await postActionResult(arranged.action, "failed")).status).toBe(200);
@@ -1929,10 +2498,11 @@ describe("agent editor action audit (Issue #1395 AC1, AC3, AC4)", () => {
     expect(records[0]?.outcome).toBe("queued");
     expect(records[0]?.mutating).toBe(true);
     expect(records[0]?.editCount).toBe(1);
+    expect(records[0]?.origin).toBe("agent");
   });
 
   it("records a denied action with its deny reason and conflict code (AC2, AC4)", async () => {
-    await registerSnapshot();
+    await registerSnapshot(undefined, ".env");
     await handleEditorAgentActions(context(applyTextEditsAction("x", ".env")));
     const records = auditRecords();
     expect(records).toHaveLength(1);

@@ -166,10 +166,55 @@ function redactActionResult(result: EditorAgentActionResult): EditorAgentActionR
   };
 }
 
+function redactUnknownConflict(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return {
+    code: value.code,
+    message: typeof value.message === "string" ? REDACTED_ROUTE_MESSAGE : value.message,
+    ...(value.file === undefined ? {} : { file: value.file }),
+  };
+}
+
+function redactUnknownFileResult(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return {
+    file: value.file,
+    status: value.status,
+    ...(value.message === undefined
+      ? {}
+      : {
+          message: typeof value.message === "string" ? REDACTED_ROUTE_MESSAGE : value.message,
+        }),
+    ...(value.conflict === undefined ? {} : { conflict: redactUnknownConflict(value.conflict) }),
+  };
+}
+
+function redactUnknownActionResult(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return {
+    schemaVersion: value.schemaVersion,
+    actionId: value.actionId,
+    sessionId: value.sessionId,
+    status: value.status,
+    ...(value.message === undefined
+      ? {}
+      : {
+          message: typeof value.message === "string" ? REDACTED_ROUTE_MESSAGE : value.message,
+        }),
+    ...(value.conflict === undefined ? {} : { conflict: redactUnknownConflict(value.conflict) }),
+    ...(value.failure === undefined ? {} : { failure: redactUnknownConflict(value.failure) }),
+    ...(Array.isArray(value.files)
+      ? { files: value.files.map((file) => redactUnknownFileResult(file)) }
+      : value.files === undefined
+        ? {}
+        : { files: value.files }),
+  };
+}
+
 function parseActionResult(value: unknown): EditorAgentActionQueuedResponse | null {
-  return isRecord(value) && isEditorAgentActionResult(value.result)
-    ? { result: redactActionResult(value.result) }
-    : null;
+  if (!isRecord(value)) return null;
+  const result = redactUnknownActionResult(value.result);
+  return isEditorAgentActionResult(result) ? { result: redactActionResult(result) } : null;
 }
 
 function parseRouteCode(value: unknown): string | null {

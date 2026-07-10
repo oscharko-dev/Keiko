@@ -71,6 +71,7 @@ import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
+  EditorAgentBridgeDecisionCapability,
   EditorAgentAuditResponse,
   EditorAgentSessionSnapshot,
   EditorAgentSessionsResponse,
@@ -2131,6 +2132,7 @@ export async function requestEditorAgentSnapshot(
 
 export async function postEditorAgentSessionSnapshot(
   snapshot: EditorAgentSessionSnapshot,
+  bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability,
 ): Promise<EditorAgentSnapshotResponse> {
   return fetchJson("/api/editor/agent/snapshot", {
     method: "POST",
@@ -2138,6 +2140,7 @@ export async function postEditorAgentSessionSnapshot(
       schemaVersion: snapshot.schemaVersion,
       kind: "snapshot",
       snapshot,
+      ...(bridgeDecisionCapability === undefined ? {} : { bridgeDecisionCapability }),
     }),
   });
 }

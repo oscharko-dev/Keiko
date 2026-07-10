@@ -36,6 +36,8 @@ import {
   fetchUpdateSessionStatus,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
+  postEditorAgentActionResult,
+  postEditorAgentSessionSnapshot,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   runGatewayReadiness,
@@ -72,6 +74,80 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("editor agent bridge capability serialization", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("attaches the capability only to the existing snapshot and result POST bodies", async () => {
+    const capability = "A".repeat(43);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ snapshot: null, bridgeDecisionCapability: capability }))
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const snapshot = {
+      schemaVersion: "1",
+      sessionId: "session-1",
+      windowId: "window-1",
+      workspaceRoot: "/repo",
+      activePaneId: "pane-1",
+      panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+      dirtyFiles: [],
+      activeFile: "src/a.ts",
+      cursor: null,
+      selection: null,
+      diagnosticsSummary: null,
+      activeFileContentHash: "a".repeat(64),
+      textMode: "none",
+      updatedAt: 1,
+    } as const;
+
+    await postEditorAgentSessionSnapshot(snapshot, capability);
+    await postEditorAgentActionResult({
+      schemaVersion: "1",
+      kind: "result",
+      bridgeDecisionCapability: capability,
+      result: {
+        schemaVersion: "1",
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "succeeded",
+      },
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/editor/agent/snapshot",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "snapshot",
+          snapshot,
+          bridgeDecisionCapability: capability,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/agent/actions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "result",
+          bridgeDecisionCapability: capability,
+          result: {
+            schemaVersion: "1",
+            actionId: "action-1",
+            sessionId: "session-1",
+            status: "succeeded",
+          },
+        }),
+      }),
+    );
+  });
+});
 
 describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
   afterEach(() => {

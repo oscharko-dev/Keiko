@@ -401,6 +401,7 @@ function buildCommandsWiring(
 ): WireEditorCommands | undefined {
   if (
     latestProps.current.onGenerateTests === undefined &&
+    latestProps.current.onAskKeikoAboutSelection === undefined &&
     latestProps.current.onRenameSymbol === undefined
   ) {
     return undefined;
@@ -411,6 +412,13 @@ function buildCommandsWiring(
       : {
           generateTests: (): void => {
             latestProps.current.onGenerateTests?.();
+          },
+        }),
+    ...(latestProps.current.onAskKeikoAboutSelection === undefined
+      ? {}
+      : {
+          askKeikoAboutSelection: (selection): void => {
+            latestProps.current.onAskKeikoAboutSelection?.(selection);
           },
         }),
     ...(latestProps.current.onRenameSymbol === undefined
@@ -594,6 +602,7 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.provideCodeActions,
     props.provideSignatureHelp,
     props.onGenerateTests,
+    props.onAskKeikoAboutSelection,
     props.onRenameSymbol,
   ]
     .map(availabilityBit)

@@ -1,20 +1,36 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_EDITOR_AGENT_ACTION_ORIGIN,
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
+  EDITOR_AGENT_ACTION_ID_MAX_BYTES,
+  EDITOR_AGENT_ACTION_ORIGINS,
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
   EDITOR_AGENT_CHANGESET_MAX_FILES,
   EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_FAILURE_CODES,
+  EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES,
   EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS,
+  EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_SCHEMA_VERSION,
+  EDITOR_AGENT_SESSION_ID_MAX_BYTES,
+  EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES,
+  EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE,
+  EDITOR_AGENT_SNAPSHOT_MAX_PANES,
+  EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES,
+  EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
+  EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
+  EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES,
   EDITOR_AGENT_WRITE_ACTION_TYPES,
   editorAgentActionHasWritePrecondition,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
+  isEditorAgentActionOrigin,
   isEditorAgentActionResult,
+  isEditorAgentBridgeDecisionCapability,
   isEditorAgentChangeset,
   isEditorAgentConflictCode,
   isEditorAgentDiagnostic,
@@ -29,6 +45,7 @@ import {
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
+  resolveEditorAgentActionOrigin,
   validateAgentTextEdits,
   type EditorAgentAction,
   type EditorAgentActionResult,
@@ -40,6 +57,7 @@ import {
 } from "./editor-agent.js";
 
 const HASH = "a".repeat(64);
+const BRIDGE_CAPABILITY = "A".repeat(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS);
 
 function snapshot(): EditorAgentSessionSnapshot {
   return {
@@ -106,6 +124,214 @@ describe("editor agent contracts", () => {
         },
       }),
     ).toMatchObject({ ok: true });
+  });
+
+  it("validates the additive browser bridge decision capability envelopes", () => {
+    expect(isEditorAgentBridgeDecisionCapability(BRIDGE_CAPABILITY)).toBe(true);
+    expect(
+      isEditorAgentBridgeDecisionCapability(
+        "A".repeat(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS - 1),
+      ),
+    ).toBe(false);
+    expect(isEditorAgentBridgeDecisionCapability(`${BRIDGE_CAPABILITY.slice(1)}+`)).toBe(false);
+
+    expect(
+      parseEditorAgentSnapshotRequest({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "snapshot",
+        snapshot: snapshot(),
+        bridgeDecisionCapability: BRIDGE_CAPABILITY,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { bridgeDecisionCapability: BRIDGE_CAPABILITY },
+    });
+    expect(
+      parseEditorAgentActionsPostBody({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "result",
+        bridgeDecisionCapability: BRIDGE_CAPABILITY,
+        result: {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          actionId: "action-1",
+          sessionId: "session-1",
+          status: "succeeded",
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { bridgeDecisionCapability: BRIDGE_CAPABILITY },
+    });
+  });
+
+  it("byte-bounds identifiers and target metadata at the wire boundary", () => {
+    const oversizedActionId = "x".repeat(EDITOR_AGENT_ACTION_ID_MAX_BYTES + 1);
+    const oversizedSessionId = "x".repeat(EDITOR_AGENT_SESSION_ID_MAX_BYTES + 1);
+    const oversizedIdempotencyKey = "x".repeat(EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES + 1);
+    const oversizedTarget = "x".repeat(EDITOR_AGENT_TARGET_PATH_MAX_BYTES + 1);
+    expect(isEditorAgentAction({ ...baseAction(), actionId: oversizedActionId })).toBe(false);
+    expect(isEditorAgentAction({ ...baseAction(), sessionId: oversizedSessionId })).toBe(false);
+    expect(isEditorAgentAction({ ...baseAction(), idempotencyKey: oversizedIdempotencyKey })).toBe(
+      false,
+    );
+    expect(isEditorAgentAction({ ...baseAction(), target: { file: oversizedTarget } })).toBe(false);
+    expect(isEditorAgentSessionSnapshot({ ...snapshot(), activeFile: oversizedTarget })).toBe(
+      false,
+    );
+    expect(
+      isEditorAgentActionResult({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: oversizedActionId,
+        sessionId: "session-1",
+        status: "failed",
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentAction({
+        ...baseAction(),
+        actionId: "\u{1f600}".repeat(Math.floor(EDITOR_AGENT_ACTION_ID_MAX_BYTES / 4) + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds retained snapshot roots and metadata arrays", () => {
+    const panesAtLimit = Array.from({ length: EDITOR_AGENT_SNAPSHOT_MAX_PANES }, (_, index) => ({
+      paneId: `pane-${String(index)}`,
+      activeFile: null,
+      openFiles: [],
+    }));
+    const openFilesAtLimit = Array.from(
+      { length: EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE },
+      (_, index) => `src/open-${String(index)}.ts`,
+    );
+    const dirtyFilesAtLimit = Array.from(
+      { length: EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES },
+      (_, index) => `src/dirty-${String(index)}.ts`,
+    );
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        workspaceRoot: "r".repeat(EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES),
+        panes: panesAtLimit,
+        activeFile: null,
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({ ...snapshot(), panes: [...panesAtLimit, panesAtLimit[0]] }),
+    ).toBe(false);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        panes: [{ ...snapshot().panes[0], openFiles: openFilesAtLimit }],
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        panes: [{ ...snapshot().panes[0], openFiles: [...openFilesAtLimit, "src/extra.ts"] }],
+      }),
+    ).toBe(false);
+    expect(isEditorAgentSessionSnapshot({ ...snapshot(), dirtyFiles: dirtyFilesAtLimit })).toBe(
+      true,
+    );
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        dirtyFiles: [...dirtyFilesAtLimit, "src/extra.ts"],
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        workspaceRoot: "r".repeat(EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("caps aggregate snapshot path metadata at the exact byte boundary", () => {
+    const fullPath = "x".repeat(EDITOR_AGENT_TARGET_PATH_MAX_BYTES);
+    const pathsAtLimit = Array.from(
+      { length: EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES / fullPath.length },
+      () => fullPath,
+    );
+    const bounded = {
+      ...snapshot(),
+      panes: [{ paneId: "pane-1", activeFile: null, openFiles: pathsAtLimit }],
+      activeFile: null,
+      dirtyFiles: [],
+    };
+    expect(isEditorAgentSessionSnapshot(bounded)).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...bounded,
+        panes: [{ ...bounded.panes[0], openFiles: [...pathsAtLimit, "x"] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("caps retained snapshot text at 64 KiB of UTF-8", () => {
+    const asciiAtLimit = "x".repeat(EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES);
+    const emojiAtLimit = "\u{1f600}".repeat(EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES / 4);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: asciiAtLimit,
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: `${asciiAtLimit}x`,
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: emojiAtLimit,
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: `${emojiAtLimit}x`,
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds every action-result message field by Unicode code points", () => {
+    const atLimit = "\u{1f600}".repeat(EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS);
+    const oversized = `${atLimit}\u{1f600}`;
+    const base = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: "action-1",
+      sessionId: "session-1",
+      status: "failed" as const,
+    };
+    expect(isEditorAgentActionResult({ ...base, message: atLimit })).toBe(true);
+    expect(isEditorAgentActionResult({ ...base, message: oversized })).toBe(false);
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        status: "conflict",
+        conflict: { code: "INVALID_EDITS", message: oversized },
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        failure: { code: "TIMED_OUT", message: oversized },
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        files: [{ file: "src/a.ts", status: "failed", message: oversized }],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -425,6 +651,42 @@ function validActionForType(type: EditorAgentActionType): EditorAgentAction {
 describe("schema version compatibility (Issue #1391)", () => {
   it("pins EDITOR_AGENT_SCHEMA_VERSION to the literal '1'", () => {
     expect(EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+  });
+});
+
+describe("bounded editor action origin (Issue #2119)", () => {
+  it("accepts only the canonical agent and chat wire values", () => {
+    expect(EDITOR_AGENT_ACTION_ORIGINS).toEqual(["agent", "chat"]);
+    expect(isEditorAgentActionOrigin("agent")).toBe(true);
+    expect(isEditorAgentActionOrigin("chat")).toBe(true);
+    expect(isEditorAgentActionOrigin("harness")).toBe(false);
+    expect(isEditorAgentActionOrigin("chat:conversation-1")).toBe(false);
+    expect(isEditorAgentActionOrigin("chat".repeat(1_000))).toBe(false);
+    expect(isEditorAgentActionOrigin({ producer: "chat" })).toBe(false);
+  });
+
+  it("keeps legacy origin-free actions valid and resolves them to the agent default", () => {
+    const legacy = baseAction({ type: "applyPatch", patch: "patch" });
+    expect("origin" in legacy).toBe(false);
+    expect(isEditorAgentAction(legacy)).toBe(true);
+    expect(DEFAULT_EDITOR_AGENT_ACTION_ORIGIN).toBe("agent");
+    expect(resolveEditorAgentActionOrigin(legacy.origin)).toBe("agent");
+
+    const parsed = parseEditorAgentActionsPostBody(legacy);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || "kind" in parsed.value) throw new Error("expected an action");
+    expect(parsed.value.origin).toBe("agent");
+  });
+
+  it("preserves chat and rejects any out-of-enum origin", () => {
+    const chatAction = baseAction({ type: "applyPatch", origin: "chat", patch: "patch" });
+    expect(isEditorAgentAction(chatAction)).toBe(true);
+    expect(resolveEditorAgentActionOrigin(chatAction.origin)).toBe("chat");
+    expect(parseEditorAgentActionsPostBody(chatAction)).toMatchObject({
+      ok: true,
+      value: { origin: "chat" },
+    });
+    expect(isEditorAgentAction({ ...chatAction, origin: "automation" })).toBe(false);
   });
 });
 

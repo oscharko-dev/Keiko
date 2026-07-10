@@ -225,6 +225,7 @@ export type {
   EditorAgentActionQueuedResponse,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
+  EditorAgentBridgeDecisionCapability,
   EditorAgentConflictCode,
   EditorAgentEvent,
   EditorAgentPaneSnapshot,
@@ -237,6 +238,8 @@ export type {
 export {
   EDITOR_AGENT_SCHEMA_VERSION,
   isContainedAgentPath,
+  isEditorAgentActiveBufferActionType,
+  isEditorAgentBridgeDecisionCapability,
   isEditorAgentEvent,
 } from "@oscharko-dev/keiko-contracts";
 

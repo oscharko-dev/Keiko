@@ -22,6 +22,7 @@ import type {
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
 import type { EditorSurfaceProps } from "./EditorSurface";
+import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -151,6 +152,21 @@ class FakeEventSource {
       }),
     });
     for (const listener of this.listeners.get("editor-agent:action") ?? []) {
+      if (typeof listener === "function") listener(event);
+      else listener.handleEvent(event);
+    }
+  }
+
+  emitResult(result: EditorAgentActionResult): void {
+    const event = new MessageEvent<string>("editor-agent:result", {
+      data: JSON.stringify({
+        schemaVersion: "1",
+        eventId: `result-${result.actionId}`,
+        type: "result",
+        result,
+      }),
+    });
+    for (const listener of this.listeners.get("editor-agent:result") ?? []) {
       if (typeof listener === "function") listener(event);
       else listener.handleEvent(event);
     }
@@ -313,7 +329,13 @@ beforeEach(() => {
   vi.mocked(fetchEditorAgentAudit).mockResolvedValue({ records: [] });
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
   vi.mocked(requestEditorSymbols).mockResolvedValue({ symbols: [], truncated: false });
-  vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
+  vi.mocked(postEditorAgentSessionSnapshot).mockReset();
+  vi.mocked(postEditorAgentSessionSnapshot).mockImplementation(
+    async (_snapshot, currentCapability) => ({
+      snapshot: null,
+      ...(currentCapability === undefined ? { bridgeDecisionCapability: "B".repeat(43) } : {}),
+    }),
+  );
   vi.mocked(postEditorAgentActionResult).mockResolvedValue({
     result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
   });
@@ -321,6 +343,7 @@ beforeEach(() => {
 
 afterEach(() => {
   restoreEventSource();
+  _resetEditorAgentBridgeStateForTests();
   vi.clearAllMocks();
 });
 
@@ -349,6 +372,20 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
 
     act(() => rendered.source.emitAction(action));
     const review = await screen.findByRole("group", { name: "Agent changeset review" });
+    expect(review.parentElement).toHaveStyle({
+      display: "flex",
+      flexDirection: "column",
+      width: "100%",
+      height: "100%",
+      minWidth: 0,
+      minHeight: 0,
+    });
+    expect(review).toHaveStyle({
+      flex: "1 1 auto",
+      width: "100%",
+      minWidth: 0,
+      minHeight: 0,
+    });
     expect(diffSurface.props?.model.files.map((entry) => entry.status)).toEqual([
       "created",
       "modified",
@@ -394,7 +431,7 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
     expect(isDocumentDirty(surface.props!.fileModel)).toBe(false);
   });
 
-  it("deduplicates delivery and Reject, leaving disk and buffers unchanged", async () => {
+  it("reconciles once when SSE confirms a changeset before the HTTP response", async () => {
     const disk = new Map<string, FilesContentResponse>([
       ["src/active.ts", fileResponse("src/active.ts", ORIGINAL_ACTIVE, HASH_A)],
       ["src/deleted.ts", fileResponse("src/deleted.ts", DELETED_CONTENT, HASH_B)],
@@ -405,7 +442,57 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
       return response;
     });
     const rendered = await renderAgentEditor();
-    const action = changesetAction(rendered.sessionId);
+    const action = changesetAction(rendered.sessionId, "sse-before-http");
+    let resolveDecision:
+      ((value: Awaited<ReturnType<typeof postEditorAgentActionResult>>) => void) | undefined;
+    vi.mocked(postEditorAgentActionResult).mockReturnValue(
+      new Promise((resolve) => {
+        resolveDecision = resolve;
+      }),
+    );
+
+    act(() => rendered.source.emitAction(action));
+    const review = await screen.findByRole("group", { name: "Agent changeset review" });
+    act(() => diffSurface.props?.onApply?.());
+    expect(review).toHaveAttribute("aria-busy", "true");
+    expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
+
+    disk.set("src/active.ts", fileResponse("src/active.ts", UPDATED_ACTIVE, HASH_C, 2));
+    disk.set("src/created.ts", fileResponse("src/created.ts", CREATED_CONTENT, HASH_D, 2));
+    disk.delete("src/deleted.ts");
+    act(() => rendered.source.emitResult(terminalResult(action, "succeeded")));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("group", { name: "Agent changeset review" })).toBeNull();
+      expect(surface.props?.buffer.content.text).toBe(UPDATED_ACTIVE);
+    });
+    expect(rendered.onCloseOpenFile).toHaveBeenCalledOnce();
+    const fetchCount = vi.mocked(fetchFilesContent).mock.calls.length;
+
+    act(() => {
+      resolveDecision?.({ result: terminalResult(action, "succeeded") });
+      rendered.source.emitResult(terminalResult(action, "succeeded"));
+    });
+    await act(async () => {});
+    expect(vi.mocked(fetchFilesContent)).toHaveBeenCalledTimes(fetchCount);
+    expect(rendered.onCloseOpenFile).toHaveBeenCalledOnce();
+  });
+
+  it("routes chat-origin Reject through the existing changeset review exactly once", async () => {
+    const disk = new Map<string, FilesContentResponse>([
+      ["src/active.ts", fileResponse("src/active.ts", ORIGINAL_ACTIVE, HASH_A)],
+      ["src/deleted.ts", fileResponse("src/deleted.ts", DELETED_CONTENT, HASH_B)],
+    ]);
+    vi.mocked(fetchFilesContent).mockImplementation(async (_root, path) => {
+      const response = disk.get(path);
+      if (response === undefined) throw new Error("missing fixture");
+      return response;
+    });
+    const rendered = await renderAgentEditor();
+    const action: EditorAgentAction = {
+      ...changesetAction(rendered.sessionId),
+      origin: "chat",
+    };
     vi.mocked(postEditorAgentActionResult).mockImplementation(async (body) => ({
       result: terminalResult(action, body.result.status === "failed" ? "failed" : "succeeded"),
     }));
@@ -415,6 +502,23 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
       rendered.source.emitAction(action);
     });
     await screen.findByRole("group", { name: "Agent changeset review" });
+    expect(diffSurface.props?.model).toMatchObject({
+      patchId: `agent-changeset:${action.actionId}`,
+      provenance: { origin: "applied-patch" },
+      fileCount: 3,
+    });
+    expect(diffSurface.props?.actions).toEqual({
+      canApply: true,
+      canReject: true,
+      canRunVerification: false,
+    });
+    expect(diffSurface.props?.onApply).toBeTypeOf("function");
+    expect(diffSurface.props?.onReject).toBeTypeOf("function");
+    // applyTextEdits would mutate and report immediately instead of staging EditorDiffSurface.
+    expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
+    expect(submittedResults().filter((result) => result.actionId === action.actionId)).toHaveLength(
+      0,
+    );
     const reject = diffSurface.props?.onReject;
     act(() => {
       reject?.();
@@ -422,11 +526,9 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
     });
 
     await waitFor(() => {
-      expect(
-        submittedResults().filter(
-          (result) => result.actionId === action.actionId && result.status === "failed",
-        ),
-      ).toHaveLength(1);
+      const results = submittedResults().filter((result) => result.actionId === action.actionId);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.status).toBe("failed");
       expect(screen.queryByRole("group", { name: "Agent changeset review" })).toBeNull();
     });
     expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
@@ -507,7 +609,7 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
 
     await screen.findByTestId("agent-conflict-banner");
     expect(screen.getByTestId("agent-conflict-banner")).toHaveTextContent(
-      "A target changed on disk.",
+      "The editor review conflicts with the current target.",
     );
     expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
     expect(vi.mocked(fetchFilesContent)).toHaveBeenCalledTimes(fetchCount);

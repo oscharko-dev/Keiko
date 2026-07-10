@@ -70,6 +70,17 @@ export interface EditorContentDelta {
   readonly sizeBytes: number;
 }
 
+/** The bounded Monaco selection handed to the host by the Ask Keiko command (Issue #2119). */
+export interface EditorSelectionCapture {
+  /** Fixed discriminator matching the existing agent snapshot text-mode contract. */
+  readonly textMode: "selection";
+  readonly range: EditorRange;
+  /** Text read from `getValueInRange(range)` only; never an implicit active-buffer fallback. */
+  readonly text: string;
+}
+
+export type AskKeikoAboutSelectionHandler = (selection: EditorSelectionCapture) => void;
+
 /**
  * Controlled, host-agnostic props for {@link import("./KeikoCodeEditor.js").KeikoCodeEditor}.
  *
@@ -195,6 +206,12 @@ export interface KeikoCodeEditorProps {
    * when the host offers no test generation (e.g. a non-source buffer), so the action never registers.
    */
   readonly onGenerateTests?: (() => void) | undefined;
+  /**
+   * Host handler for "Ask Keiko about this selection" (Issue #2119). The command is registered only
+   * when this callback exists and is disabled by Monaco when no non-empty selection exists. The
+   * payload contains only the live selected range and its text; the host owns chat-session routing.
+   */
+  readonly onAskKeikoAboutSelection?: AskKeikoAboutSelectionHandler | undefined;
   /** Host handler for the F2 Rename Symbol command (Epic #2089, Issue #2105). */
   readonly onRenameSymbol?: (() => void) | undefined;
 }

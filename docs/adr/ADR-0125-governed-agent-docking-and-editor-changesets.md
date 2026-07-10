@@ -14,6 +14,12 @@ decisions remain in force.
 ADR-0125 was allocated after refreshing `origin/dev` and checking all open pull requests on
 2026-07-09. `origin/dev` ended at ADR-0124 and there were no open pull requests claiming ADR-0125.
 
+Epic #2091 trust-path hardening (2026-07-10) additionally binds browser decisions to a random,
+memory-only bridge capability whose digest is held by the live session registry. A changeset commit
+requires that valid live lease, a current matching snapshot, complete active-file version/hash
+counterparts, dirty checks, and the existing disk revalidation before the atomic transaction. This
+does not add per-action approval or change the three-mode policy.
+
 ## Context
 
 Keiko has two compatible foundations that now need one docking contract: the Coding Workbench's
@@ -84,6 +90,11 @@ no second transport, session model, control plane, or external-file broker.
 Both fields stay optional so existing schema-version-`1` actions validate unchanged. Missing or
 invalid authority is a governance outcome, not a reason to reinterpret old V1 payloads.
 
+Issue #2119 additionally adds optional `origin: "agent" | "chat"` on the same action envelope.
+Omission is the legacy harness/agent producer and canonicalizes to `agent`; `chat` identifies the
+chat producer. The bounded marker is carried through the existing queue and governance paths and
+does not change authority, approval, risk, or disposition.
+
 ### D3 - `applyChangeset` is one bounded, fail-closed action
 
 `applyChangeset` is a new content-mutation action with:
@@ -152,18 +163,19 @@ platform restrictions, mode/risk approval, and separately approved delivery. The
 classifier is not rewired in this issue; later runtime work must evaluate the central matrix and
 enforce the resulting effect before queueing or applying.
 
-Audit and evidence remain redacted and body-free: ids, digests, modes, effects, reason codes,
-contained file labels, counts, byte counts, statuses, and hashes only. Patch bodies, diagnostics
-messages, file contents, prompts, credentials, command logs, and private endpoints do not enter
-governance evidence.
+Audit and evidence remain redacted and body-free: ids, digests, modes, effects, reason codes, the
+bounded `agent | chat` action origin, contained file labels, counts, byte counts, statuses, and
+hashes only. Patch bodies, diagnostics messages, file contents, prompts, selections, credentials,
+command logs, and private endpoints do not enter governance evidence.
 
 ### D6 - Schema compatibility
 
 `EDITOR_AGENT_SCHEMA_VERSION`, `EDITOR_AGENT_AUDIT_SCHEMA_VERSION`,
 `CODING_WORKBENCH_SCHEMA_VERSION`, and `CODING_CONTEXT_SCHEMA_VERSION` remain `"1"`. All fields added
 to existing V1 envelopes are optional, and `applyChangeset` is a new action variant with its own
-required shape. Existing V1 snapshots, actions, results, and context contracts continue to validate.
-Every new editor-agent wire shape has a runtime guard.
+required shape. This includes the optional Issue #2119 action/audit origin; builders resolve an
+omitted action origin to `agent`. Existing V1 snapshots, actions, results, and context contracts
+continue to validate. Every new editor-agent wire shape has a runtime guard.
 
 ## Human-control invariant
 

@@ -15,15 +15,20 @@
 // No raw source content (snapshot text, text edits, patch bodies) is logged anywhere in this path.
 
 import type { ServerResponse } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
+  EDITOR_AGENT_SESSION_ID_MAX_BYTES,
+  EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
   classifyEditorAgentAction,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
+  isEditorAgentActiveBufferActionType,
+  isEditorAgentBridgeDecisionCapability,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
@@ -31,6 +36,8 @@ import {
   type EditorAgentAction,
   type EditorAgentActionPolicyDecision,
   type EditorAgentActionResult,
+  type EditorAgentActionResultRequest,
+  type EditorAgentBridgeSnapshotRequest,
   type EditorAgentConflictCode,
   type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
@@ -41,18 +48,15 @@ import {
   PatchApplyError,
   PatchValidationError,
   applyPatch,
-  computeFileContent,
+  inspectPatch,
   projectValidatedPatch,
   validatePatch,
-  type PatchFileChange,
+  type PatchInspection,
+  type PatchInspectionFile,
   type PatchValidation,
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
-import {
-  isDenied,
-  resolveWithinWorkspace,
-  type WorkspaceInfo,
-} from "@oscharko-dev/keiko-workspace";
+import { isDenied, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   errorBody,
@@ -64,7 +68,7 @@ import {
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
-import { editorAgentRegistry } from "./agentSessionRegistry.js";
+import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentAuditForTests,
   listEditorAgentActionAudit,
@@ -72,7 +76,7 @@ import {
 } from "./agentActionAudit.js";
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
-const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = 64 * 1024;
+const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
 
 type Changeset = NonNullable<EditorAgentAction["changeset"]>;
 type ChangesetFile = Changeset["files"][number];
@@ -98,6 +102,14 @@ const idempotency = new Map<string, QueuedRecord>();
 
 function hashRequest(body: string): string {
   return createHash("sha256").update(body).digest("hex");
+}
+
+function bridgeCapabilityDigest(capability: string): string {
+  return createHash("sha256").update(capability, "utf8").digest("hex");
+}
+
+function issueBridgeDecisionCapability(): string {
+  return randomBytes(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES).toString("base64url");
 }
 
 function rememberIdempotency(
@@ -272,16 +284,20 @@ interface ChangesetIssue {
   readonly file?: string | undefined;
 }
 
-interface DiskFileState {
-  readonly contentHash: string;
-  readonly version?: DocumentVersion | undefined;
-}
-
 interface ChangesetInspection {
   readonly validation: PatchValidation;
   readonly prepared: PreparedChangeset | null;
   readonly result: EditorAgentActionResult | null;
 }
+
+interface AdmissionInspection {
+  readonly patch?: PatchInspection | undefined;
+  readonly changeset?: ChangesetInspection | undefined;
+}
+
+type PreflightOutcome =
+  | { readonly ok: true; readonly inspection: AdmissionInspection }
+  | { readonly ok: false; readonly result: EditorAgentActionResult };
 
 interface ChangesetProjection {
   readonly kind: "ready";
@@ -366,18 +382,6 @@ function dirtyChangesetIssues(
     }));
 }
 
-function readDiskFileState(workspaceRoot: string, file: string): DiskFileState {
-  const absolute = resolveWithinWorkspace(workspaceRoot, file);
-  if (!nodeWorkspaceFs.exists(absolute)) return { contentHash: hashRequest("") };
-  const content = nodeWorkspaceFs.readFileUtf8(absolute);
-  const stat = nodeWorkspaceFs.stat(absolute);
-  const version =
-    stat.mtimeMs === undefined
-      ? undefined
-      : { sizeBytes: stat.size, modifiedAt: stat.mtimeMs, contentHash: hashRequest(content) };
-  return { contentHash: hashRequest(content), ...(version === undefined ? {} : { version }) };
-}
-
 function documentVersionsMatch(left: DocumentVersion, right: DocumentVersion): boolean {
   return (
     left.sizeBytes === right.sizeBytes &&
@@ -395,12 +399,12 @@ function changesetFileIsActive(file: string, snapshot: EditorAgentSessionSnapsho
 
 function versionPreconditionIssue(
   file: ChangesetFile,
-  state: DiskFileState,
+  inspection: PatchInspectionFile,
   snapshot: EditorAgentSessionSnapshot,
 ): ChangesetIssue | null {
   const expected = file.expectedDocumentVersion;
   if (expected === undefined) return null;
-  if (state.version === undefined) {
+  if (inspection.sourceVersion === undefined) {
     return {
       code: "PRECONDITION_REQUIRED",
       message: "The declared document version cannot be verified for this file.",
@@ -410,7 +414,14 @@ function versionPreconditionIssue(
   const activeVersion = changesetFileIsActive(file.file, snapshot)
     ? snapshot.documentVersion
     : undefined;
-  return documentVersionsMatch(expected, state.version) &&
+  if (changesetFileIsActive(file.file, snapshot) && activeVersion === undefined) {
+    return {
+      code: "PRECONDITION_REQUIRED",
+      message: "The active snapshot document version cannot be verified.",
+      file: normalizeWorkspaceRelativePath(file.file),
+    };
+  }
+  return documentVersionsMatch(expected, inspection.sourceVersion) &&
     (activeVersion === undefined || documentVersionsMatch(expected, activeVersion))
     ? null
     : {
@@ -422,7 +433,7 @@ function versionPreconditionIssue(
 
 function hashPreconditionIssue(
   file: ChangesetFile,
-  state: DiskFileState,
+  inspection: PatchInspectionFile,
   snapshot: EditorAgentSessionSnapshot,
 ): ChangesetIssue | null {
   const expected = file.expectedContentHash;
@@ -430,7 +441,15 @@ function hashPreconditionIssue(
   const activeHash = changesetFileIsActive(file.file, snapshot)
     ? snapshot.activeFileContentHash
     : undefined;
-  return expected === state.contentHash && (activeHash === undefined || expected === activeHash)
+  if (changesetFileIsActive(file.file, snapshot) && activeHash === undefined) {
+    return {
+      code: "PRECONDITION_REQUIRED",
+      message: "The active snapshot content hash cannot be verified.",
+      file: normalizeWorkspaceRelativePath(file.file),
+    };
+  }
+  return expected === inspection.sourceContentHash &&
+    (activeHash === undefined || expected === activeHash)
     ? null
     : {
         code: "CONTENT_HASH_MISMATCH",
@@ -442,36 +461,47 @@ function hashPreconditionIssue(
 function changesetPreconditionIssue(
   file: ChangesetFile,
   snapshot: EditorAgentSessionSnapshot,
+  inspections: ReadonlyMap<string, PatchInspectionFile>,
 ): ChangesetIssue | null {
-  try {
-    const state = readDiskFileState(snapshot.workspaceRoot, file.file);
-    return (
-      versionPreconditionIssue(file, state, snapshot) ??
-      hashPreconditionIssue(file, state, snapshot) ??
-      (file.expectedDocumentVersion === undefined && file.expectedContentHash === undefined
-        ? {
-            code: "PRECONDITION_REQUIRED",
-            message: "Every changeset file requires a verifiable precondition.",
-            file: normalizeWorkspaceRelativePath(file.file),
-          }
-        : null)
-    );
-  } catch {
+  const normalized = normalizeWorkspaceRelativePath(file.file);
+  const inspection = inspections.get(normalized);
+  if (inspection === undefined) {
     return {
       code: "PRECONDITION_REQUIRED",
       message: "The changeset file precondition could not be verified.",
-      file: normalizeWorkspaceRelativePath(file.file),
+      file: normalized,
     };
   }
+  return (
+    versionPreconditionIssue(file, inspection, snapshot) ??
+    hashPreconditionIssue(file, inspection, snapshot) ??
+    (file.expectedDocumentVersion === undefined && file.expectedContentHash === undefined
+      ? {
+          code: "PRECONDITION_REQUIRED",
+          message: "Every changeset file requires a verifiable precondition.",
+          file: normalized,
+        }
+      : null)
+  );
+}
+
+function inspectionsByPath(
+  files: readonly PatchInspectionFile[],
+): ReadonlyMap<string, PatchInspectionFile> {
+  return new Map(
+    files.map((file) => [normalizeWorkspaceRelativePath(file.change.path), file] as const),
+  );
 }
 
 function changesetPreconditionIssues(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  files: readonly PatchInspectionFile[],
 ): readonly ChangesetIssue[] {
   const issues: ChangesetIssue[] = [];
+  const inspections = inspectionsByPath(files);
   for (const file of action.changeset?.files ?? []) {
-    const issue = changesetPreconditionIssue(file, snapshot);
+    const issue = changesetPreconditionIssue(file, snapshot, inspections);
     if (issue !== null) issues.push(issue);
   }
   return issues;
@@ -500,16 +530,18 @@ function patchEditIssues(validation: PatchValidation): readonly ChangesetIssue[]
 function firstChangesetIssueGroup(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
-  validation: PatchValidation,
+  inspection: PatchInspection,
 ): readonly ChangesetIssue[] {
-  const groups = [
-    patchScopeIssues(validation),
-    changesetShapeIssues(action, validation),
-    dirtyChangesetIssues(action, snapshot),
-    changesetPreconditionIssues(action, snapshot),
-    patchEditIssues(validation),
-  ];
-  return groups.find((group) => group.length > 0) ?? [];
+  const scope = patchScopeIssues(inspection.validation);
+  if (scope.length > 0) return scope;
+  const shape = changesetShapeIssues(action, inspection.validation);
+  if (shape.length > 0) return shape;
+  const dirty = dirtyChangesetIssues(action, snapshot);
+  if (dirty.length > 0) return dirty;
+  const edits = patchEditIssues(inspection.validation);
+  if (inspection.files === null) return edits;
+  const preconditions = changesetPreconditionIssues(action, snapshot, inspection.files);
+  return preconditions.length > 0 ? preconditions : edits;
 }
 
 function changesetFileConflictResult(
@@ -564,16 +596,17 @@ function inspectChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
 ): ChangesetInspection {
-  const validation = validatePatch(
+  const inspection = inspectPatch(
     workspaceInfoFromRoot(snapshot.workspaceRoot),
     action.changeset?.patch ?? "",
     { fs: nodeWorkspaceFs },
   );
-  const issues = firstChangesetIssueGroup(action, snapshot, validation);
+  const validation = inspection.validation;
+  const issues = firstChangesetIssueGroup(action, snapshot, inspection);
   if (issues.length > 0) {
     return { validation, prepared: null, result: changesetConflict(action, issues) };
   }
-  const prepared = derivePreparedChangeset(action, validation, snapshot);
+  const prepared = derivePreparedChangeset(action, inspection.files ?? [], snapshot);
   if (prepared === null) {
     const issue = { code: "INVALID_EDITS" as const, message: "Changeset preview is not bounded." };
     return { validation, prepared: null, result: changesetConflict(action, [issue]) };
@@ -581,36 +614,31 @@ function inspectChangeset(
   return { validation, prepared, result: null };
 }
 
-function derivePreparedFile(
-  file: PatchFileChange,
-  snapshot: EditorAgentSessionSnapshot,
-): PreparedFile | null {
-  const absolute = resolveWithinWorkspace(snapshot.workspaceRoot, file.path);
-  const exists = nodeWorkspaceFs.exists(absolute);
-  const currentContent = exists ? nodeWorkspaceFs.readFileUtf8(absolute) : "";
-  const outcome = computeFileContent(file, exists ? currentContent : undefined);
+function derivePreparedFile(inspection: PatchInspectionFile): PreparedFile | null {
+  const currentContent = inspection.original ?? "";
+  const { change, outcome } = inspection;
   if (outcome.conflicts.length > 0) return null;
   const textEdit: PreparedTextEdit = wholeDocumentReplaceEdit(
     currentContent,
     outcome.content ?? "",
   );
   return {
-    file: normalizeWorkspaceRelativePath(file.path),
-    kind: file.kind,
+    file: normalizeWorkspaceRelativePath(change.path),
+    kind: change.kind,
     textEdits: [textEdit],
   };
 }
 
 function derivePreparedChangeset(
   action: EditorAgentAction,
-  validation: PatchValidation,
+  inspections: readonly PatchInspectionFile[],
   snapshot: EditorAgentSessionSnapshot,
 ): PreparedChangeset | null {
-  if (!validation.ok || validation.files.length === 0) return null;
+  if (inspections.length === 0) return null;
   try {
     const files: PreparedFile[] = [];
-    for (const file of validation.files) {
-      const preparedFile = derivePreparedFile(file, snapshot);
+    for (const inspection of inspections) {
+      const preparedFile = derivePreparedFile(inspection);
       if (preparedFile === null) return null;
       files.push(preparedFile);
     }
@@ -667,17 +695,12 @@ function mapPatchValidation(
 
 function patchValidationConflict(
   action: EditorAgentAction,
-  snapshot: EditorAgentSessionSnapshot,
+  inspection: PatchInspection | undefined,
 ): EditorAgentActionResult | null {
   if (action.type !== "applyPatch") return null;
-  const validation = validatePatch(
-    workspaceInfoFromRoot(snapshot.workspaceRoot),
-    action.patch ?? "",
-    {
-      fs: nodeWorkspaceFs,
-    },
-  );
-  return mapPatchValidation(action, validation);
+  return inspection === undefined
+    ? conflict(action, "INVALID_EDITS", "Patch inspection is unavailable.")
+    : mapPatchValidation(action, inspection.validation);
 }
 
 interface AgentTextEdit {
@@ -696,74 +719,80 @@ function wholeDocumentReplaceEdit(currentContent: string, postImage: string): Ag
   };
 }
 
-function deriveSingleFilePostImage(
-  file: PatchFileChange,
-  snapshot: EditorAgentSessionSnapshot,
-): AgentTextEdit | null {
-  const absolute = resolveWithinWorkspace(snapshot.workspaceRoot, file.path);
-  const exists = nodeWorkspaceFs.exists(absolute);
-  const currentContent = exists ? nodeWorkspaceFs.readFileUtf8(absolute) : "";
-  const outcome = computeFileContent(file, exists ? currentContent : undefined);
+function deriveSingleFilePostImage(inspection: PatchInspectionFile): AgentTextEdit | null {
+  const currentContent = inspection.original ?? "";
+  const { outcome } = inspection;
   if (outcome.content === null || outcome.conflicts.length > 0) return null;
   return wholeDocumentReplaceEdit(currentContent, outcome.content);
 }
 
 // Translates a queued, preflight-validated single-file applyPatch into the contract textEdits the
-// browser reviews and applies. Computing the post-image with keiko-tools' tested single-file apply
-// logic against the current on-disk content guarantees the cross-cutting invariant
+// browser reviews and applies. The post-image comes from keiko-tools' bounded admission snapshot,
+// which guarantees the cross-cutting invariant
 // applyTextEditsToText(currentContent, edits) === patchedSingleFileContent. Returns null when the
-// patch is not the expected single-file shape or its post-image cannot be derived (including any
-// filesystem/path error), so the caller fails the action rather than emitting an un-appliable one.
+// patch is not the expected single-file shape or its post-image cannot be derived, so the caller
+// fails the action rather than emitting an un-appliable one.
 // keiko-tools strips a/ b/ git prefixes; both the patch path and snapshot.activeFile are
 // workspace-relative POSIX paths. Normalize a leading ./ and backslashes so a legitimately
 // matching same-file patch is not rejected on a cosmetic difference.
 function normalizeWorkspaceRelativePath(path: string): string {
-  return path.replace(/\\/gu, "/").replace(/^\.\//u, "");
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function singlePatchInspectionFile(
+  inspection: PatchInspection | undefined,
+): PatchInspectionFile | null {
+  if (inspection === undefined || !inspection.validation.ok || inspection.files === null) {
+    return null;
+  }
+  return inspection.files.length === 1 ? (inspection.files[0] ?? null) : null;
+}
+
+function patchTargetsActiveFile(
+  file: PatchInspectionFile,
+  snapshot: EditorAgentSessionSnapshot,
+): boolean {
+  return (
+    snapshot.activeFile !== null &&
+    normalizeWorkspaceRelativePath(file.change.path) ===
+      normalizeWorkspaceRelativePath(snapshot.activeFile)
+  );
+}
+
+function derivePatchEditWithDiagnostic(
+  action: EditorAgentAction,
+  file: PatchInspectionFile,
+): AgentTextEdit | null {
+  try {
+    return deriveSingleFilePostImage(file);
+  } catch (error) {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: action.actionId,
+        operation: "editor.agent.applyPatch",
+        source: "editor.agent.derivePatch",
+        error,
+        redact: () => "Patch preview derivation failed.",
+      }),
+    );
+    return null;
+  }
 }
 
 function deriveAgentPatchTextEdits(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  inspection: PatchInspection | undefined,
 ): readonly AgentTextEdit[] | null {
-  // Intentional re-validation: preflight already validated this patch, but validatePatch is
-  // deterministic and pure over (workspace, patch, fs), so deriving here keeps this function
-  // self-contained without threading mutable validation state through the queue path.
-  const validation = validatePatch(
-    workspaceInfoFromRoot(snapshot.workspaceRoot),
-    action.patch ?? "",
-    { fs: nodeWorkspaceFs },
-  );
-  const file = validation.files.at(0);
-  if (!validation.ok || validation.files.length !== 1 || file === undefined) return null;
-  // The post-image is derived from the patch's file content but the browser applies it to the
-  // open buffer. Refuse to apply a patch that targets a different file than the open buffer.
-  if (
-    snapshot.activeFile === null ||
-    normalizeWorkspaceRelativePath(file.path) !==
-      normalizeWorkspaceRelativePath(snapshot.activeFile)
-  ) {
-    return null;
-  }
-  try {
-    const edit = deriveSingleFilePostImage(file, snapshot);
-    return edit === null ? null : [edit];
-  } catch (error) {
-    // GEN-SYNTH-COVERAGE-004 / W8 observability: a filesystem/derivation failure here previously
-    // vanished into a bare `catch {}` — the action failed with an opaque "patch could not be prepared"
-    // and the operator had no trace. Route the (redacted) cause to the diagnostic sink, keyed by the
-    // actionId, before failing the action. Never rethrows: derivation failure must still fail closed.
-    emitServerDiagnostic(
-      undefined,
-      serverDiagnosticFromError({
-        correlationId: action.actionId,
-        operation: `editor.agent.applyPatch ${normalizeWorkspaceRelativePath(file.path)}`,
-        source: "editor.agent.derivePatch",
-        error,
-        redact: (message) => message,
-      }),
-    );
-    return null;
-  }
+  const file = singlePatchInspectionFile(inspection);
+  if (file === null || !patchTargetsActiveFile(file, snapshot)) return null;
+  const edit = derivePatchEditWithDiagnostic(action, file);
+  return edit === null ? null : [edit];
 }
 
 // Builds the action envelope to broadcast to the bridge. For applyPatch the contract textEdits are
@@ -773,23 +802,24 @@ function deriveAgentPatchTextEdits(
 function buildEmitAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  inspection: AdmissionInspection,
 ): EditorAgentAction | null {
   if (action.type === "applyChangeset") {
-    const inspection = inspectChangeset(action, snapshot);
+    const changesetInspection = inspection.changeset;
     if (
-      inspection.result !== null ||
-      inspection.prepared === null ||
+      changesetInspection?.result !== null ||
+      changesetInspection.prepared === null ||
       action.changeset === undefined
     ) {
       return null;
     }
     return {
       ...action,
-      changeset: { ...action.changeset, prepared: inspection.prepared },
+      changeset: { ...action.changeset, prepared: changesetInspection.prepared },
     };
   }
   if (action.type !== "applyPatch") return action;
-  const textEdits = deriveAgentPatchTextEdits(action, snapshot);
+  const textEdits = deriveAgentPatchTextEdits(action, snapshot, inspection.patch);
   if (textEdits === null) return null;
   return { ...action, textEdits };
 }
@@ -799,6 +829,42 @@ function targetFile(
   snapshot: EditorAgentSessionSnapshot,
 ): string | null {
   return action.target?.file ?? snapshot.activeFile;
+}
+
+function bindActiveBufferTarget(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentAction {
+  if (!isEditorAgentActiveBufferActionType(action.type)) return action;
+  if (snapshot.activeFile === null || snapshot.activePaneId === null) return action;
+  return {
+    ...action,
+    target: {
+      ...action.target,
+      file: snapshot.activeFile,
+      paneId: snapshot.activePaneId,
+    },
+  };
+}
+
+function activeBufferTargetConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionResult | null {
+  if (!isEditorAgentActiveBufferActionType(action.type)) return null;
+  const claimedFile = action.target?.file;
+  const claimedPane = action.target?.paneId;
+  const fileMismatch =
+    snapshot.activeFile === null ||
+    (claimedFile !== undefined &&
+      normalizeWorkspaceRelativePath(claimedFile) !==
+        normalizeWorkspaceRelativePath(snapshot.activeFile));
+  const paneMismatch =
+    snapshot.activePaneId === null ||
+    (claimedPane !== undefined && claimedPane !== snapshot.activePaneId);
+  return fileMismatch || paneMismatch
+    ? conflict(action, "OUT_OF_SCOPE", "Action target does not match the active editor buffer.")
+    : null;
 }
 
 // A direct write needs at least one asserted pin that the current snapshot can verify. Missing
@@ -841,47 +907,132 @@ function conflict(
 
 // The Issue #1391/#1394 structural write gates, unchanged: a doubly-invalid write reports its most
 // specific failure. Non-write actions have no structural gate.
-function structuralWriteConflict(
+function snapshotWriteConflict(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
 ): EditorAgentActionResult | null {
-  if (!isEditorAgentWriteActionType(action.type)) return null;
-  if (action.type === "applyChangeset") return inspectChangeset(action, snapshot).result;
   return (
     dirtyBufferConflict(action, snapshot) ??
     documentVersionConflict(action, snapshot) ??
     contentHashConflict(action, snapshot) ??
     containmentConflict(action, snapshot) ??
-    sensitivePathConflict(action, snapshot) ??
+    sensitivePathConflict(action, snapshot)
+  );
+}
+
+function actionWriteConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  inspection: AdmissionInspection,
+): EditorAgentActionResult | null {
+  return (
     textEditsConflict(action) ??
-    patchValidationConflict(action, snapshot) ??
+    patchValidationConflict(action, inspection.patch) ??
     preconditionConflict(action, snapshot)
   );
+}
+
+function structuralWriteConflict(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  inspection: AdmissionInspection,
+): EditorAgentActionResult | null {
+  if (!isEditorAgentWriteActionType(action.type)) return null;
+  if (action.type === "applyChangeset") {
+    return inspection.changeset === undefined
+      ? conflict(action, "INVALID_EDITS", "Changeset inspection is unavailable.")
+      : inspection.changeset.result;
+  }
+  return (
+    snapshotWriteConflict(action, snapshot) ?? actionWriteConflict(action, snapshot, inspection)
+  );
+}
+
+function inspectAdmissionAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): AdmissionInspection {
+  if (action.type === "applyChangeset") {
+    return { changeset: inspectChangeset(action, snapshot) };
+  }
+  if (action.type === "applyPatch") {
+    return {
+      patch: inspectPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), action.patch ?? "", {
+        fs: nodeWorkspaceFs,
+      }),
+    };
+  }
+  return {};
 }
 
 // Returns a structured conflict result when the action must not be admitted to the queue, or null when
 // it is clear to enqueue. The structural gates run first (above); the Issue #1392 liveness gate runs
 // last so any otherwise-valid action for a session with no live bridge is answered with the structured
 // NO_ACTIVE_BRIDGE conflict (AC1) rather than queued where it could never be executed.
-function preflight(action: EditorAgentAction): EditorAgentActionResult | null {
-  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+function preflight(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): PreflightOutcome {
   if (snapshot === undefined) {
-    return conflict(action, "NO_ACTIVE_SESSION", "No active browser bridge is registered.");
+    return {
+      ok: false,
+      result: conflict(action, "NO_ACTIVE_SESSION", "No active browser bridge is registered."),
+    };
   }
-  const structural = structuralWriteConflict(action, snapshot);
-  if (structural !== null) return structural;
+  const targetConflict = activeBufferTargetConflict(action, snapshot);
+  if (targetConflict !== null) return { ok: false, result: targetConflict };
+  const inspection = inspectAdmissionAction(action, snapshot);
+  const structural = structuralWriteConflict(action, snapshot, inspection);
+  if (structural !== null) return { ok: false, result: structural };
   if (!editorAgentRegistry.hasLiveBridge(action.sessionId)) {
-    return conflict(
-      action,
-      "NO_ACTIVE_BRIDGE",
-      "No live browser bridge is connected for this session.",
-    );
+    return {
+      ok: false,
+      result: conflict(
+        action,
+        "NO_ACTIVE_BRIDGE",
+        "No live browser bridge is connected for this session.",
+      ),
+    };
   }
-  return null;
+  return { ok: true, inspection };
 }
 
 export function handleEditorAgentSessions(): RouteResult {
-  return { status: 200, body: { sessions: editorAgentRegistry.listSessions() } };
+  const sessions = editorAgentRegistry
+    .listSessions()
+    .map((snapshot) => shapeSnapshot(snapshot, "none", 0));
+  return { status: 200, body: { sessions } };
+}
+
+function bridgeCapabilityError(): RouteResult {
+  return {
+    status: 403,
+    body: errorBody(
+      "BRIDGE_CAPABILITY_INVALID",
+      "A valid browser bridge decision capability is required.",
+    ),
+  };
+}
+
+function registerBridgeSnapshot(request: EditorAgentBridgeSnapshotRequest): RouteResult {
+  const existing = editorAgentRegistry.snapshotFor(request.snapshot.sessionId);
+  const supplied = request.bridgeDecisionCapability;
+  if (
+    existing !== undefined &&
+    supplied !== undefined &&
+    editorAgentRegistry.refreshSnapshot(request.snapshot, bridgeCapabilityDigest(supplied))
+  ) {
+    return { status: 200, body: { snapshot: request.snapshot } };
+  }
+  const capability = issueBridgeDecisionCapability();
+  const digest = bridgeCapabilityDigest(capability);
+  const registered =
+    existing === undefined
+      ? editorAgentRegistry.registerSnapshot(request.snapshot, digest)
+      : editorAgentRegistry.rotateSnapshotCapability(request.snapshot, digest);
+  return registered
+    ? { status: 200, body: { snapshot: request.snapshot, bridgeDecisionCapability: capability } }
+    : bridgeCapabilityError();
 }
 
 export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<RouteResult> {
@@ -892,8 +1043,7 @@ export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<Rout
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   if ("kind" in parsed.value) {
-    editorAgentRegistry.registerSnapshot(parsed.value.snapshot);
-    return { status: 200, body: { snapshot: parsed.value.snapshot } };
+    return registerBridgeSnapshot(parsed.value);
   }
   const selected = editorAgentRegistry.selectSnapshot(parsed.value.sessionId);
   if (selected === undefined) return { status: 200, body: { snapshot: null } };
@@ -910,6 +1060,7 @@ function resolveActionTargetPath(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
 ): string | null {
+  if (isEditorAgentActiveBufferActionType(action.type)) return snapshot?.activeFile ?? null;
   return action.target?.file ?? snapshot?.activeFile ?? null;
 }
 
@@ -923,7 +1074,11 @@ function decideActionPolicy(
   const targetPath = resolveActionTargetPath(action, snapshot);
   const targetSensitive =
     targetPath !== null && isContainedAgentPath(targetPath) && isDenied(targetPath);
-  return classifyEditorAgentAction(action.type, { targetPath, targetSensitive });
+  return classifyEditorAgentAction(action.type, {
+    targetPath,
+    targetSensitive,
+    origin: action.origin,
+  });
 }
 
 // Issue #1395 (AC1) — record one content-free audit entry for this action at its admission decision.
@@ -1130,18 +1285,59 @@ function handleChangesetResult(
   return finishChangesetResult(action, snapshot, result);
 }
 
-function handleReportedActionResult(result: EditorAgentActionResult): RouteResult {
-  const action = editorAgentRegistry.takePendingAction(result.sessionId, result.actionId);
-  if (action === undefined && result.status === "succeeded") {
+type ResultLeaseValidation =
+  | { readonly ok: true; readonly capabilityDigest: string }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function validateResultLease(request: EditorAgentActionResultRequest): ResultLeaseValidation {
+  const capability = request.bridgeDecisionCapability;
+  if (capability === undefined) return { ok: false, response: bridgeCapabilityError() };
+  const capabilityDigest = bridgeCapabilityDigest(capability);
+  if (
+    !editorAgentRegistry.matchesBridgeDecisionCapabilityDigest(
+      request.result.sessionId,
+      capabilityDigest,
+    )
+  ) {
+    return { ok: false, response: bridgeCapabilityError() };
+  }
+  if (!editorAgentRegistry.hasLiveBridge(request.result.sessionId)) {
+    return {
+      ok: false,
+      response: {
+        status: 409,
+        body: errorBody("BRIDGE_LEASE_INACTIVE", "The browser bridge lease is not live."),
+      },
+    };
+  }
+  return { ok: true, capabilityDigest };
+}
+
+function handleReportedActionResult(request: EditorAgentActionResultRequest): RouteResult {
+  const lease = validateResultLease(request);
+  if (!lease.ok) return lease.response;
+  const { result } = request;
+  if (result.status === "queued") {
+    return {
+      status: 400,
+      body: errorBody("INVALID_ACTION_RESULT_STATUS", "A browser result must be terminal."),
+    };
+  }
+  const action = editorAgentRegistry.takePendingAction(
+    result.sessionId,
+    result.actionId,
+    lease.capabilityDigest,
+  );
+  if (action === undefined) {
     return {
       status: 409,
       body: errorBody(
         "ACTION_RESULT_NOT_PENDING",
-        "No pending action matches this successful result.",
+        "No pending action matches this terminal result.",
       ),
     };
   }
-  if (action?.type === "applyChangeset") return handleChangesetResult(action, result);
+  if (action.type === "applyChangeset") return handleChangesetResult(action, result);
   editorAgentRegistry.reportResult(result);
   return { status: 200, body: { result } };
 }
@@ -1154,7 +1350,7 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
   if (!isEditorAgentAction(parsed.value)) {
-    return handleReportedActionResult(parsed.value.result);
+    return handleReportedActionResult(parsed.value);
   }
   const action = parsed.value;
   const requestHash = hashRequest(JSON.stringify(action));
@@ -1173,14 +1369,14 @@ export async function handleEditorAgentActions(ctx: RouteContext): Promise<Route
   }
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   const decision = decideActionPolicy(action, snapshot);
-  const failed = preflight(action);
-  if (failed !== null) {
-    rememberIdempotency(action.idempotencyKey, requestHash, failed);
-    auditAction(action, snapshot, decision, failed);
-    editorAgentRegistry.reportResult(failed);
-    return { status: 409, body: { result: failed } };
+  const admission = preflight(action, snapshot);
+  if (!admission.ok) {
+    rememberIdempotency(action.idempotencyKey, requestHash, admission.result);
+    auditAction(action, snapshot, decision, admission.result);
+    editorAgentRegistry.reportResult(admission.result);
+    return { status: 409, body: { result: admission.result } };
   }
-  return queueAndEmitAction(action, requestHash, snapshot, decision);
+  return queueAndEmitAction(action, requestHash, snapshot, decision, admission.inspection);
 }
 
 function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {
@@ -1198,15 +1394,18 @@ function queueAndEmitAction(
   requestHash: string,
   snapshot: EditorAgentSessionSnapshot | undefined,
   decision: EditorAgentActionPolicyDecision,
+  inspection: AdmissionInspection,
 ): RouteResult {
-  const emitAction = snapshot === undefined ? null : buildEmitAction(action, snapshot);
+  const boundAction = snapshot === undefined ? action : bindActiveBufferTarget(action, snapshot);
+  const emitAction =
+    snapshot === undefined ? null : buildEmitAction(boundAction, snapshot, inspection);
   if (emitAction === null) {
     const result = failedResult(action, "Patch could not be prepared for review.");
     rememberIdempotency(action.idempotencyKey, requestHash, result);
     auditAction(action, snapshot, decision, result);
     return { status: 409, body: { result } };
   }
-  const outcome = editorAgentRegistry.queueAction(action, emitAction);
+  const outcome = editorAgentRegistry.queueAction(boundAction, emitAction);
   rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
   auditAction(action, snapshot, decision, outcome.result);
   if (outcome.kind === "rejected") {
@@ -1217,13 +1416,82 @@ function queueAndEmitAction(
   return { status: 202, body: { result: outcome.result } };
 }
 
+interface AuthenticatedBridgeConnection {
+  readonly sessionId: string;
+  readonly capabilityDigest: string;
+}
+
+type EventBridgeSelection =
+  | {
+      readonly ok: true;
+      readonly connections: readonly AuthenticatedBridgeConnection[] | undefined;
+    }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function isBoundedSessionId(value: string): boolean {
+  return value.length > 0 && Buffer.byteLength(value, "utf8") <= EDITOR_AGENT_SESSION_ID_MAX_BYTES;
+}
+
+function eventBridgeQueryHasValidShape(
+  sessionIds: readonly string[],
+  capabilities: readonly string[],
+): boolean {
+  return (
+    sessionIds.length > 0 &&
+    sessionIds.length <= EDITOR_AGENT_MAX_SESSIONS &&
+    capabilities.length === sessionIds.length &&
+    new Set(sessionIds).size === sessionIds.length
+  );
+}
+
+function authenticateBridgeConnection(
+  sessionId: string,
+  capability: string | undefined,
+): AuthenticatedBridgeConnection | null {
+  if (!isBoundedSessionId(sessionId) || !isEditorAgentBridgeDecisionCapability(capability)) {
+    return null;
+  }
+  const capabilityDigest = bridgeCapabilityDigest(capability);
+  return editorAgentRegistry.matchesBridgeDecisionCapabilityDigest(sessionId, capabilityDigest)
+    ? { sessionId, capabilityDigest }
+    : null;
+}
+
+function parseEventBridgeSelection(ctx: RouteContext): EventBridgeSelection {
+  const sessionIds = ctx.url.searchParams.getAll("sessionId");
+  const capabilities = ctx.url.searchParams.getAll("bridgeDecisionCapability");
+  if (sessionIds.length === 0 && capabilities.length === 0) {
+    return { ok: true, connections: undefined };
+  }
+  if (!eventBridgeQueryHasValidShape(sessionIds, capabilities)) {
+    return { ok: false, response: bridgeCapabilityError() };
+  }
+  const connections: AuthenticatedBridgeConnection[] = [];
+  for (const [index, sessionId] of sessionIds.entries()) {
+    const connection = authenticateBridgeConnection(sessionId, capabilities[index]);
+    if (connection === null) return { ok: false, response: bridgeCapabilityError() };
+    connections.push(connection);
+  }
+  return { ok: true, connections };
+}
+
+function scrubBridgeCapabilitiesFromRequestUrl(ctx: RouteContext): void {
+  ctx.url.searchParams.delete("bridgeDecisionCapability");
+  if (ctx.req.url === undefined) return;
+  try {
+    const sanitized = new URL(ctx.req.url, "http://127.0.0.1");
+    sanitized.searchParams.delete("bridgeDecisionCapability");
+    ctx.req.url = `${sanitized.pathname}${sanitized.search}`;
+  } catch {
+    ctx.req.url = "/api/editor/agent/events";
+  }
+}
+
 export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
-  const sessionIds = ctx.url.searchParams
-    .getAll("sessionId")
-    .map((sessionId) => sessionId.trim())
-    .filter((sessionId) => sessionId.length > 0);
-  openAgentSseStream(ctx, sessionIds.length === 0 ? undefined : sessionIds);
-  return STREAMING;
+  const selection = parseEventBridgeSelection(ctx);
+  scrubBridgeCapabilitiesFromRequestUrl(ctx);
+  if (!selection.ok) return selection.response;
+  return openAgentSseStream(ctx, selection.connections);
 }
 
 // Issue #1395 (ADR-0062, AC4) — read-only feed of the bounded audit ledger so users can inspect what
@@ -1235,13 +1503,23 @@ export function handleEditorAgentAudit(ctx: RouteContext): RouteResult {
 }
 
 function connectEditorAgentSessions(
-  sessionIds: readonly string[] | undefined,
+  connections: readonly AuthenticatedBridgeConnection[] | undefined,
   subscriber: (event: EditorAgentEvent) => void,
-): () => void {
-  if (sessionIds === undefined) return editorAgentRegistry.connect(undefined, subscriber);
-  const disposers = [...new Set(sessionIds)].map((sessionId) =>
-    editorAgentRegistry.connect(sessionId, subscriber),
-  );
+): (() => void) | undefined {
+  if (connections === undefined) return editorAgentRegistry.connect(undefined, subscriber);
+  const disposers: (() => void)[] = [];
+  for (const connection of connections) {
+    const dispose = editorAgentRegistry.connectAuthenticated(
+      connection.sessionId,
+      connection.capabilityDigest,
+      subscriber,
+    );
+    if (dispose === undefined) {
+      for (const prior of disposers) prior();
+      return undefined;
+    }
+    disposers.push(dispose);
+  }
   return (): void => {
     for (const dispose of disposers) dispose();
   };
@@ -1251,20 +1529,25 @@ function connectEditorAgentSessions(
 // `?sessionId=` is present) or a global observer. The disposer drops the subscription — and thus the
 // bridge-liveness contribution — when the response closes (AC1: a dropped bridge makes the session
 // unavailable again).
-function openAgentSseStream(ctx: RouteContext, sessionIds: readonly string[] | undefined): void {
+function openAgentSseStream(
+  ctx: RouteContext,
+  connections: readonly AuthenticatedBridgeConnection[] | undefined,
+): HandlerOutcome {
   const res: ServerResponse = ctx.res;
-  res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
   const subscriber = (event: EditorAgentEvent): void => {
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
     if (!res.write(frame)) res.destroy();
   };
-  const dispose = connectEditorAgentSessions(sessionIds, subscriber);
+  const dispose = connectEditorAgentSessions(connections, subscriber);
+  if (dispose === undefined) return bridgeCapabilityError();
+  res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
   res.write(readyMessage());
   ctx.req.on("close", () => {
     res.end();
   });
   res.on("close", dispose);
+  return STREAMING;
 }
 
 export function _resetEditorAgentStateForTests(): void {

@@ -1,10 +1,64 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { AppWindow } from "../windows/types";
+import type { EditorSelectionHandoff } from "./cards/editorSelectionHandoff";
 
 type UpdateCfg = (patch: AppWindow["cfg"]) => void;
+
+const chatSessionMock = vi.hoisted(() => ({
+  activeChat: {
+    id: "chat-1",
+    title: "Chat 1",
+    status: "open",
+    projectPath: "/repo",
+  } as
+    | {
+        readonly id: string;
+        readonly title: string;
+        readonly status: string;
+        readonly projectPath: string;
+      }
+    | undefined,
+  activeProject: { path: "/repo", available: true } as
+    { readonly path: string; readonly available: boolean } | undefined,
+  chats: [{ id: "chat-1", title: "Chat 1", status: "open", projectPath: "/repo" }] as {
+    readonly id: string;
+    readonly title: string;
+    readonly status: string;
+    readonly projectPath: string;
+  }[],
+  projects: [{ path: "/repo", available: true }] as {
+    readonly path: string;
+    readonly available: boolean;
+  }[],
+  loading: false,
+  noEligibleModels: false,
+  openChat: vi.fn<(chat: { readonly id: string }) => Promise<void>>(() => Promise.resolve()),
+  openNewChat: vi.fn<
+    (
+      project?: { readonly path: string; readonly available: boolean },
+      title?: string,
+    ) => Promise<
+      | {
+          readonly id: string;
+          readonly title: string;
+          readonly status: string;
+          readonly projectPath: string;
+        }
+      | undefined
+    >
+  >(() => Promise.resolve(undefined)),
+  openProject: vi.fn<
+    (project: { readonly path: string; readonly available: boolean }) => Promise<void>
+  >(() => Promise.resolve()),
+  selectedModel: "model-1" as string | undefined,
+  sendMessage: vi.fn<(options?: { readonly text?: string }) => Promise<void>>(() =>
+    Promise.resolve(),
+  ),
+  sending: false,
+}));
 
 vi.mock("../ChatWindow", () => ({
   ChatWindow: ({
@@ -46,12 +100,19 @@ vi.mock("../ChatWindow", () => ({
 vi.mock("../context/ChatSessionContext", () => ({
   ChatSessionProvider: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
   useChatSessionContext: () => ({
-    activeChat: { id: "chat-1", title: "Chat 1", status: "open" },
-    activeProject: { path: "/repo" },
-    chats: [{ id: "chat-1", title: "Chat 1", status: "open" }],
-    loading: false,
-    openChat: vi.fn(),
-    openNewChat: vi.fn(async () => ({ id: "created-chat", title: "Created chat" })),
+    activeChat: chatSessionMock.activeChat,
+    activeProject: chatSessionMock.activeProject,
+    chats: chatSessionMock.chats,
+    projects: chatSessionMock.projects,
+    loading: chatSessionMock.loading,
+    models: [{ id: "model-1" }],
+    noEligibleModels: chatSessionMock.noEligibleModels,
+    openChat: chatSessionMock.openChat,
+    openNewChat: chatSessionMock.openNewChat,
+    openProject: chatSessionMock.openProject,
+    selectedModel: chatSessionMock.selectedModel,
+    sendMessage: chatSessionMock.sendMessage,
+    sending: chatSessionMock.sending,
   }),
 }));
 
@@ -159,6 +220,7 @@ vi.mock("./cards/EditorWidget", () => ({
     revealLineEnd,
     revealRequestId,
     onWorkspaceChange,
+    onAskSelection,
   }: {
     readonly root?: string;
     readonly file?: string;
@@ -177,6 +239,7 @@ vi.mock("./cards/EditorWidget", () => ({
       openFiles?: readonly string[];
       layoutJson?: string;
     }) => void;
+    readonly onAskSelection?: ((handoff: EditorSelectionHandoff) => boolean) | undefined;
   }) => (
     <div data-testid="editor-widget">
       <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}:${String(revealLineStart ?? "")}:${String(revealLineEnd ?? "")}:${revealRequestId ?? ""}`}</span>
@@ -192,6 +255,19 @@ vi.mock("./cards/EditorWidget", () => ({
         }
       >
         Change editor workspace
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onAskSelection?.({
+            file: "src/app.ts",
+            range: { start: { line: 1, column: 2 }, end: { line: 2, column: 4 } },
+            text: "const selected = true;\r\n",
+            truncated: false,
+          })
+        }
+      >
+        Ask editor selection
       </button>
     </div>
   ),
@@ -462,6 +538,26 @@ function makeCtx(): WindowRenderContext & {
   };
 }
 
+beforeEach(() => {
+  chatSessionMock.activeChat = {
+    id: "chat-1",
+    title: "Chat 1",
+    status: "open",
+    projectPath: "/repo",
+  };
+  chatSessionMock.activeProject = { path: "/repo", available: true };
+  chatSessionMock.chats = [chatSessionMock.activeChat];
+  chatSessionMock.projects = [chatSessionMock.activeProject];
+  chatSessionMock.loading = false;
+  chatSessionMock.noEligibleModels = false;
+  chatSessionMock.selectedModel = "model-1";
+  chatSessionMock.sending = false;
+  chatSessionMock.openChat.mockReset().mockResolvedValue(undefined);
+  chatSessionMock.openNewChat.mockReset().mockResolvedValue(undefined);
+  chatSessionMock.openProject.mockReset().mockResolvedValue(undefined);
+  chatSessionMock.sendMessage.mockReset().mockResolvedValue(undefined);
+});
+
 describe("workspace widget renderer registry", () => {
   it("registers a renderer for every declared window type", () => {
     expect(missingWindowRenderTypes()).toEqual([]);
@@ -478,6 +574,217 @@ describe("workspace widget renderer registry", () => {
       expect(ctx.updateCfg).toHaveBeenCalledWith({ title: "Chat 1" });
     });
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
+  });
+
+  it("routes a selection to its exact originating project before one-use send", async () => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/origin";
+    const wrongRoot = "/workspace/wrong";
+    const originProject = { path: originRoot, available: true };
+    const originChat = {
+      id: "chat-origin",
+      title: "Origin chat",
+      status: "open",
+      projectPath: originRoot,
+    };
+    const sentRoots: string[] = [];
+    chatSessionMock.activeProject = { path: wrongRoot, available: true };
+    chatSessionMock.activeChat = {
+      id: "chat-wrong",
+      title: "Wrong chat",
+      status: "open",
+      projectPath: wrongRoot,
+    };
+    chatSessionMock.chats = [chatSessionMock.activeChat];
+    chatSessionMock.projects = [chatSessionMock.activeProject, originProject];
+    chatSessionMock.openProject.mockImplementation(async (project) => {
+      chatSessionMock.activeProject = project;
+      chatSessionMock.activeChat = originChat;
+      chatSessionMock.chats = [originChat];
+    });
+    chatSessionMock.sendMessage.mockImplementation(async () => {
+      sentRoots.push(
+        `${chatSessionMock.activeProject?.path ?? "missing"}:${chatSessionMock.activeChat?.projectPath ?? "missing"}`,
+      );
+    });
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    expect(ctx.openWindow).toHaveBeenCalledWith("chat", {
+      selectionHandoffId: expect.any(String),
+    });
+    expect(typeof selectionHandoffId).toBe("string");
+    expect(JSON.stringify(openCfg)).not.toContain("const selected = true");
+    expect(JSON.stringify(openCfg)).not.toContain(originRoot);
+    if (typeof selectionHandoffId !== "string") return;
+
+    const chatCfg = { chatId: "chat-wrong", selectionHandoffId };
+    view.rerender(<>{WIN_TYPES.chat.render(chatCfg, ctx)}</>);
+    await waitFor(() => expect(chatSessionMock.openProject).toHaveBeenCalledWith(originProject));
+    await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(sentRoots).toEqual([`${originRoot}:${originRoot}`]);
+    const prompt = chatSessionMock.sendMessage.mock.calls[0]?.[0]?.text;
+    expect(prompt).toContain('Root-relative file (JSON): "src/app.ts"');
+    expect(prompt).toContain("Range: L2:C3-L3:C5");
+    expect(prompt).toContain('"const selected = true;\\r\\n"');
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "chat-origin",
+      title: "Origin chat",
+      selectionHandoffId: undefined,
+    });
+    expect(ctx.focusWindow).toHaveBeenCalledWith("ctx-window");
+    expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain(originRoot);
+    expect(JSON.stringify(ctx.updateCfg.mock.calls)).not.toContain("const selected = true");
+
+    view.rerender(<>{WIN_TYPES.chat.render(chatCfg, ctx)}</>);
+    await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+  });
+
+  it.each([
+    ["missing", []],
+    ["unavailable", [{ path: "/workspace/unavailable", available: false }]],
+  ])(
+    "discards and announces a handoff whose originating project is %s",
+    async (_case, projects) => {
+      const ctx = makeCtx();
+      const unavailableRoot = "/workspace/unavailable";
+      chatSessionMock.projects = projects;
+      const view = render(
+        <>{WIN_TYPES.editor.render({ root: unavailableRoot, file: "src/app.ts" }, ctx)}</>,
+      );
+
+      fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+      const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+      const selectionHandoffId = openCfg?.["selectionHandoffId"];
+      if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+      view.rerender(<>{WIN_TYPES.chat.render({ selectionHandoffId }, ctx)}</>);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Chat is unavailable for this workspace.",
+      );
+      expect(chatSessionMock.openProject).not.toHaveBeenCalled();
+      expect(chatSessionMock.openNewChat).not.toHaveBeenCalled();
+      expect(chatSessionMock.sendMessage).not.toHaveBeenCalled();
+      expect(ctx.updateCfg).toHaveBeenCalledWith({ selectionHandoffId: undefined });
+    },
+  );
+
+  it("discards and announces when exact-project routing does not establish an exact chat", async () => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/origin";
+    chatSessionMock.activeProject = { path: "/workspace/wrong", available: true };
+    chatSessionMock.activeChat = {
+      id: "chat-wrong",
+      title: "Wrong chat",
+      status: "open",
+      projectPath: "/workspace/wrong",
+    };
+    chatSessionMock.projects = [
+      chatSessionMock.activeProject,
+      { path: originRoot, available: true },
+    ];
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(<>{WIN_TYPES.chat.render({ selectionHandoffId }, ctx)}</>);
+
+    await waitFor(() => expect(chatSessionMock.openProject).toHaveBeenCalledOnce());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not open chat for this selection.",
+    );
+    expect(chatSessionMock.sendMessage).not.toHaveBeenCalled();
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ selectionHandoffId: undefined });
+  });
+
+  it("opens an existing exact-root chat before consuming an active-chat mismatch", async () => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/origin";
+    const originProject = { path: originRoot, available: true };
+    const originChat = {
+      id: "chat-origin",
+      title: "Origin chat",
+      status: "open",
+      projectPath: originRoot,
+    };
+    chatSessionMock.activeProject = originProject;
+    chatSessionMock.activeChat = {
+      id: "chat-wrong",
+      title: "Wrong chat",
+      status: "open",
+      projectPath: "/workspace/wrong",
+    };
+    chatSessionMock.projects = [originProject];
+    chatSessionMock.chats = [chatSessionMock.activeChat, originChat];
+    chatSessionMock.openChat.mockImplementation(async () => {
+      chatSessionMock.activeChat = originChat;
+    });
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(<>{WIN_TYPES.chat.render({ selectionHandoffId }, ctx)}</>);
+
+    await waitFor(() => expect(chatSessionMock.openChat).toHaveBeenCalledWith(originChat));
+    await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(chatSessionMock.openProject).not.toHaveBeenCalled();
+    const openOrder = chatSessionMock.openChat.mock.invocationCallOrder[0];
+    const sendOrder = chatSessionMock.sendMessage.mock.invocationCallOrder[0];
+    expect(openOrder).toBeDefined();
+    expect(sendOrder).toBeDefined();
+    if (openOrder === undefined || sendOrder === undefined) return;
+    expect(sendOrder).toBeGreaterThan(openOrder);
+  });
+
+  it("creates one exact-root chat when the originating project has no open chat", async () => {
+    const ctx = makeCtx();
+    const originRoot = "/workspace/origin";
+    const originProject = { path: originRoot, available: true };
+    const createdChat = {
+      id: "chat-created",
+      title: "Created chat",
+      status: "open",
+      projectPath: originRoot,
+    };
+    chatSessionMock.activeProject = originProject;
+    chatSessionMock.activeChat = undefined;
+    chatSessionMock.projects = [originProject];
+    chatSessionMock.chats = [];
+    chatSessionMock.openNewChat.mockImplementation(async () => {
+      chatSessionMock.activeChat = createdChat;
+      chatSessionMock.chats = [createdChat];
+      return createdChat;
+    });
+    const view = render(
+      <>{WIN_TYPES.editor.render({ root: originRoot, file: "src/app.ts" }, ctx)}</>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ask editor selection" }));
+    const openCfg = ctx.openWindow.mock.calls.at(-1)?.[1] as AppWindow["cfg"] | undefined;
+    const selectionHandoffId = openCfg?.["selectionHandoffId"];
+    if (typeof selectionHandoffId !== "string") throw new Error("selection handoff id missing");
+    view.rerender(<>{WIN_TYPES.chat.render({ selectionHandoffId }, ctx)}</>);
+
+    await waitFor(() => expect(chatSessionMock.openNewChat).toHaveBeenCalledWith(originProject));
+    await waitFor(() => expect(chatSessionMock.sendMessage).toHaveBeenCalledOnce());
+    expect(chatSessionMock.openNewChat).toHaveBeenCalledOnce();
+    expect(ctx.updateCfg).toHaveBeenCalledWith({
+      chatId: "chat-created",
+      title: "Created chat",
+      selectionHandoffId: undefined,
+    });
   });
 
   it("maps window cfg into widget props and follow-up workspace actions", async () => {

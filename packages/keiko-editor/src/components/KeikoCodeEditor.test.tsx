@@ -31,6 +31,7 @@ interface CapturedEditor {
     empty: boolean;
   }) => void;
   runSaveAction: () => void;
+  runAction: (id: string, editor: unknown) => void;
   formatRuns: () => number;
   saveKeybinding: () => number | undefined;
   focus: ReturnType<typeof vi.fn>;
@@ -132,7 +133,7 @@ vi.mock("@monaco-editor/react", () => {
     editor: { defineTheme: vi.fn(), setModelMarkers: vi.fn() },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
     KeyMod: { CtrlCmd: 2048, Alt: 512 },
-    KeyCode: { KeyS: 49, KeyT: 53, F2: 60 },
+    KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
     languages: {
       CompletionItemKind: {
         Text: 1,
@@ -170,7 +171,11 @@ vi.mock("@monaco-editor/react", () => {
     },
   };
   interface FakeEditorShape {
-    addAction: (descriptor: { keybindings?: number[]; run: () => void }) => { dispose: () => void };
+    addAction: (descriptor: {
+      id: string;
+      keybindings?: number[];
+      run: (editor?: unknown) => void;
+    }) => { dispose: () => void };
     getAction: (id: string) => { run: () => void } | null;
     onDidChangeCursorPosition: (
       listener: (e: { position: { lineNumber: number; column: number } }) => void,
@@ -212,6 +217,7 @@ vi.mock("@monaco-editor/react", () => {
     container: { current: HTMLDivElement | null };
     disposed: { action: boolean; cursor: boolean; selection: boolean };
     saveRun: () => void;
+    actionRuns: Map<string, (editor?: unknown) => void>;
     formatRunCount: number;
     saveKeybindings: readonly number[] | undefined;
     cursorListener: ((e: { position: { lineNumber: number; column: number } }) => void) | null;
@@ -236,6 +242,7 @@ vi.mock("@monaco-editor/react", () => {
       container: { current: null },
       disposed: { action: false, cursor: false, selection: false },
       saveRun: (): void => undefined,
+      actionRuns: new Map(),
       formatRunCount: 0,
       saveKeybindings: undefined,
       cursorListener: null,
@@ -271,8 +278,13 @@ vi.mock("@monaco-editor/react", () => {
     );
     s.fakeEditor = {
       addAction: (descriptor): { dispose: () => void } => {
-        s.saveRun = descriptor.run;
-        s.saveKeybindings = descriptor.keybindings;
+        s.actionRuns.set(descriptor.id, descriptor.run);
+        if (descriptor.id === "keiko.editor.save") {
+          s.saveRun = (): void => {
+            descriptor.run();
+          };
+          s.saveKeybindings = descriptor.keybindings;
+        }
         return {
           dispose: (): void => {
             s.disposed.action = true;
@@ -345,6 +357,11 @@ vi.mock("@monaco-editor/react", () => {
       },
       runSaveAction: (): void => {
         s.saveRun();
+      },
+      runAction: (id, editor): void => {
+        const run = s.actionRuns.get(id);
+        if (run === undefined) throw new Error(`missing editor action ${id}`);
+        run(editor);
       },
       formatRuns: (): number => s.formatRunCount,
       saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
@@ -620,6 +637,37 @@ describe("KeikoCodeEditor — selection and cursor reporting", () => {
       empty: true,
     });
     expect(onSelectionChange).toHaveBeenCalledWith(null);
+  });
+
+  it("runs Ask Keiko through the mounted action with the latest host callback", async () => {
+    const initialHandler = vi.fn();
+    const latestHandler = vi.fn();
+    const { rerender } = render(
+      <KeikoCodeEditor {...baseProps({ onAskKeikoAboutSelection: initialHandler })} />,
+    );
+    await flushMount();
+    rerender(<KeikoCodeEditor {...baseProps({ onAskKeikoAboutSelection: latestHandler })} />);
+    const selection = {
+      startLineNumber: 1,
+      startColumn: 7,
+      endLineNumber: 1,
+      endColumn: 12,
+      isEmpty: (): boolean => false,
+    };
+    const getValueInRange = vi.fn(() => "value");
+
+    captured.editor?.runAction("keiko.editor.askKeikoAboutSelection", {
+      getSelection: () => selection,
+      getModel: () => ({ getValueInRange }),
+    });
+
+    expect(initialHandler).not.toHaveBeenCalled();
+    expect(getValueInRange).toHaveBeenCalledWith(selection);
+    expect(latestHandler).toHaveBeenCalledWith({
+      textMode: "selection",
+      range: { start: { line: 0, column: 6 }, end: { line: 0, column: 11 } },
+      text: "value",
+    });
   });
 });
 

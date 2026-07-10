@@ -41,7 +41,7 @@ export interface FakeEditor {
 export const fakeMonaco = {
   editor: { defineTheme: vi.fn() },
   KeyMod: { CtrlCmd: 2048, Alt: 512 },
-  KeyCode: { KeyS: 49, KeyT: 53, F2: 60 },
+  KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
 };
 
 export function buildBuffer(overrides?: Partial<EditorBuffer["content"]>): EditorBuffer {

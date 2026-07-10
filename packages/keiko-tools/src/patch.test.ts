@@ -1,7 +1,24 @@
-import { linkSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatch, projectValidatedPatch, renderDryRun, validatePatch } from "./patch.js";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+import {
+  applyPatch,
+  inspectPatch,
+  projectValidatedPatch,
+  renderDryRun,
+  type PatchInspection,
+  type PatchInspectionFile,
+  validatePatch,
+} from "./patch.js";
 import {
   CommandCancelledError,
   PatchApplyDisabledError,
@@ -9,7 +26,8 @@ import {
   PatchValidationError,
 } from "./errors.js";
 import { makeWorkspace, recordingWriter } from "./_support.js";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 let root: string;
 let info: WorkspaceInfo;
@@ -39,6 +57,122 @@ function liveSignal(): AbortSignal {
 // A modify diff turning "one\ntwo\n" into "one\nTWO\n".
 const MODIFY_DIFF = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n";
 const CREATE_DIFF = "--- /dev/null\n+++ b/src/new.txt\n@@ -0,0 +1,1 @@\n+created\n";
+const DELETE_DIFF = "--- a/src/old.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-old\n";
+const SOURCE_FILE_MAX_BYTES = 1_000_000;
+const SOURCE_TOTAL_MAX_BYTES = 4_000_000;
+
+function modifyFirstLineDiff(path: string, before = "old", after = "new"): string {
+  return `--- a/${path}\n+++ b/${path}\n@@ -1,1 +1,1 @@\n-${before}\n+${after}\n`;
+}
+
+function sourceWithByteLength(bytes: number): string {
+  const prefix = "old\n";
+  return `${prefix}${"x".repeat(bytes - Buffer.byteLength(prefix, "utf8"))}`;
+}
+
+function withFs(overrides: Partial<WorkspaceFs>): WorkspaceFs {
+  return { ...nodeWorkspaceFs, ...overrides };
+}
+
+function requiredInspectionFile(inspection: PatchInspection, path: string): PatchInspectionFile {
+  const file = inspection.files?.find((candidate) => candidate.change.path === path);
+  if (file === undefined) throw new Error("expected inspected patch file");
+  return file;
+}
+
+function requiredSourceVersion(
+  file: PatchInspectionFile,
+): NonNullable<PatchInspectionFile["sourceVersion"]> {
+  if (file.sourceVersion === undefined) throw new Error("expected inspected source version");
+  return file.sourceVersion;
+}
+
+describe("inspectPatch", () => {
+  it("returns one coherent safe snapshot per distinct create, modify, and delete source", () => {
+    write("src/x.txt", "one\ntwo\n");
+    write("src/old.txt", "old\n");
+    const reads: string[] = [];
+    const fs = withFs({
+      readFileUtf8: (absolutePath): string => {
+        reads.push(absolutePath);
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+    });
+
+    const inspection = inspectPatch(info, MODIFY_DIFF + CREATE_DIFF + DELETE_DIFF, { fs });
+    const modified = requiredInspectionFile(inspection, "src/x.txt");
+    const created = requiredInspectionFile(inspection, "src/new.txt");
+    const deleted = requiredInspectionFile(inspection, "src/old.txt");
+    const modifiedVersion = requiredSourceVersion(modified);
+
+    expect(inspection.validation.ok).toBe(true);
+    expect(reads).toEqual([join(root, "src/x.txt"), join(root, "src/old.txt")]);
+    expect(modified.original).toBe("one\ntwo\n");
+    expect(modified.outcome).toEqual({ content: "one\nTWO\n", conflicts: [] });
+    expect(modified.sourceContentHash).toBe(sha256Hex("one\ntwo\n"));
+    expect(modifiedVersion).toMatchObject({
+      sizeBytes: 8,
+      contentHash: sha256Hex("one\ntwo\n"),
+    });
+    expect(modifiedVersion.modifiedAt).toBe(nodeWorkspaceFs.stat(join(root, "src/x.txt")).mtimeMs);
+    expect(created).toMatchObject({
+      original: undefined,
+      outcome: { content: "created\n", conflicts: [] },
+      sourceContentHash: sha256Hex(""),
+    });
+    expect(created.sourceVersion).toBeUndefined();
+    expect(deleted.original).toBe("old\n");
+    expect(deleted.outcome).toEqual({ content: null, conflicts: [] });
+  });
+
+  it("reads a duplicated source path only once", () => {
+    write("src/x.txt", "one\ntwo\n");
+    const reads: string[] = [];
+    const fs = withFs({
+      readFileUtf8: (absolutePath): string => {
+        reads.push(absolutePath);
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+    });
+
+    const inspection = inspectPatch(info, MODIFY_DIFF + MODIFY_DIFF, { fs });
+
+    expect(inspection.files).toHaveLength(2);
+    expect(reads).toEqual([join(root, "src/x.txt")]);
+  });
+
+  it("returns no source snapshots for denied and oversized sources without reading them", () => {
+    const oversizedPath = "src/oversized.txt";
+    write(oversizedPath, sourceWithByteLength(SOURCE_FILE_MAX_BYTES + 1));
+    const reads: string[] = [];
+    const fs = withFs({
+      readFileUtf8: (absolutePath): string => {
+        reads.push(absolutePath);
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+    });
+
+    const denied = inspectPatch(info, modifyFirstLineDiff(".env"), { fs });
+    const oversized = inspectPatch(info, modifyFirstLineDiff(oversizedPath), { fs });
+
+    expect(denied.files).toBeNull();
+    expect(denied.validation.reasons[0]?.code).toBe("path-denied");
+    expect(oversized.files).toBeNull();
+    expect(oversized.validation.reasons[0]?.code).toBe("size-limit");
+    expect(reads).toEqual([]);
+  });
+
+  it("does not let a successful inspection bypass fresh apply validation", () => {
+    write("src/x.txt", "one\ntwo\n");
+    expect(inspectPatch(info, MODIFY_DIFF).validation.ok).toBe(true);
+    write("src/x.txt", "one\nsix\n");
+
+    expect(() =>
+      applyPatch(info, MODIFY_DIFF, { applyEnabled: true, signal: liveSignal() }),
+    ).toThrow(PatchValidationError);
+    expect(read("src/x.txt")).toBe("one\nsix\n");
+  });
+});
 
 describe("validatePatch — rejections", () => {
   it("rejects an out-of-workspace target path", () => {
@@ -85,6 +219,170 @@ describe("validatePatch — rejections", () => {
     });
     expect(v.ok).toBe(false);
     expect(v.reasons.map((r) => r.code)).toContain("file-limit");
+  });
+
+  it("accepts source files exactly at the per-file and aggregate byte caps", () => {
+    const paths = ["src/a.txt", "src/b.txt", "src/c.txt", "src/d.txt"];
+    for (const path of paths) {
+      write(path, sourceWithByteLength(SOURCE_FILE_MAX_BYTES));
+    }
+
+    const validation = validatePatch(info, paths.map((path) => modifyFirstLineDiff(path)).join(""));
+
+    expect(SOURCE_FILE_MAX_BYTES * paths.length).toBe(SOURCE_TOTAL_MAX_BYTES);
+    expect(validation.ok).toBe(true);
+    expect(validation.reasons).toEqual([]);
+  });
+
+  it("rejects a source file one byte over the per-file cap before reading it", () => {
+    const path = "src/x.txt";
+    const reads: string[] = [];
+    write(path, sourceWithByteLength(SOURCE_FILE_MAX_BYTES + 1));
+    const fs = withFs({
+      readFileUtf8: (absolutePath: string): string => {
+        reads.push(absolutePath);
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+    });
+
+    const validation = validatePatch(info, modifyFirstLineDiff(path), { fs });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons).toEqual([
+      {
+        code: "size-limit",
+        message: "source file exceeds the per-file byte limit",
+        path,
+      },
+    ]);
+    expect(reads).toEqual([]);
+  });
+
+  it("rejects aggregate source bytes one byte over the cap before the excess read", () => {
+    const cappedPaths = ["src/a.txt", "src/b.txt", "src/c.txt", "src/d.txt"];
+    const excessPath = "src/e.txt";
+    const reads: string[] = [];
+    for (const path of cappedPaths) {
+      write(path, sourceWithByteLength(SOURCE_FILE_MAX_BYTES));
+    }
+    write(excessPath, "x");
+    const fs = withFs({
+      readFileUtf8: (absolutePath: string): string => {
+        reads.push(absolutePath);
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+    });
+    const diff = [
+      ...cappedPaths.map((path) => modifyFirstLineDiff(path)),
+      modifyFirstLineDiff(excessPath, "x", "y"),
+    ].join("");
+
+    const validation = validatePatch(info, diff, { fs });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons).toEqual([
+      {
+        code: "size-limit",
+        message: "source files exceed the aggregate byte limit",
+        path: excessPath,
+      },
+    ]);
+    expect(reads).not.toContain(join(root, excessPath));
+  });
+
+  it("rejects a non-regular source without reading it", () => {
+    const path = "src/x.txt";
+    const target = join(root, path);
+    let reads = 0;
+    write(path, "old\n");
+    const fs = withFs({
+      stat: (absolutePath) =>
+        absolutePath === target
+          ? { size: 4, isFile: false, isDirectory: true, isSymbolicLink: false, hardLinkCount: 1 }
+          : nodeWorkspaceFs.stat(absolutePath),
+      readFileUtf8: (absolutePath: string): string => {
+        reads += 1;
+        return nodeWorkspaceFs.readFileUtf8(absolutePath);
+      },
+    });
+
+    const validation = validatePatch(info, modifyFirstLineDiff(path), { fs });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons).toEqual([
+      { code: "path-denied", message: "source target is not a regular file", path },
+    ]);
+    expect(reads).toBe(0);
+  });
+
+  it("rejects a source that grows after stat with a fixed content-free result", () => {
+    const path = "src/x.txt";
+    const target = join(root, path);
+    write(path, "old\nWORKSPACE_ONLY_SECRET");
+    const fs = withFs({
+      stat: (absolutePath) => {
+        const stat = nodeWorkspaceFs.stat(absolutePath);
+        return absolutePath === target ? { ...stat, size: stat.size - 1 } : stat;
+      },
+    });
+
+    const validation = validatePatch(info, modifyFirstLineDiff(path), { fs });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons).toEqual([
+      { code: "path-denied", message: "source file changed during validation", path },
+    ]);
+    expect(JSON.stringify(validation)).not.toContain(root);
+    expect(JSON.stringify(validation)).not.toContain("WORKSPACE_ONLY_SECRET");
+  });
+
+  it("rejects a source that shrinks after stat with the same fixed rejection", () => {
+    const path = "src/x.txt";
+    const target = join(root, path);
+    write(path, "old\nWORKSPACE_ONLY_SECRET");
+    const fs = withFs({
+      readFileUtf8: (absolutePath: string): string =>
+        absolutePath === target ? "old\n" : nodeWorkspaceFs.readFileUtf8(absolutePath),
+    });
+
+    const validation = validatePatch(info, modifyFirstLineDiff(path), { fs });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons).toEqual([
+      { code: "path-denied", message: "source file changed during validation", path },
+    ]);
+    expect(JSON.stringify(validation)).not.toContain(root);
+    expect(JSON.stringify(validation)).not.toContain("WORKSPACE_ONLY_SECRET");
+  });
+
+  it("redacts stat and read failures behind fixed source rejection messages", () => {
+    const path = "src/x.txt";
+    const target = join(root, path);
+    write(path, "old\n");
+    const statFailure = validatePatch(info, modifyFirstLineDiff(path), {
+      fs: withFs({
+        stat: (absolutePath) => {
+          if (absolutePath === target) throw new Error(`STAT_SECRET ${absolutePath}`);
+          return nodeWorkspaceFs.stat(absolutePath);
+        },
+      }),
+    });
+    const readFailure = validatePatch(info, modifyFirstLineDiff(path), {
+      fs: withFs({
+        readFileUtf8: (absolutePath: string): string => {
+          throw new Error(`READ_SECRET ${absolutePath}`);
+        },
+      }),
+    });
+
+    expect(statFailure.reasons).toEqual([
+      { code: "path-denied", message: "source file could not be inspected safely", path },
+    ]);
+    expect(readFailure.reasons).toEqual([
+      { code: "path-denied", message: "source file could not be read safely", path },
+    ]);
+    expect(JSON.stringify([statFailure, readFailure])).not.toContain(root);
+    expect(JSON.stringify([statFailure, readFailure])).not.toContain("SECRET");
   });
 
   it("reports a context-mismatch conflict", () => {
@@ -219,6 +517,7 @@ describe("validatePatch — rejections", () => {
     const validation = validatePatch(info, diff);
     expect(validation.ok).toBe(false);
     expect(validation.reasons.map((reason) => reason.code)).toContain("path-denied");
+    expect(JSON.stringify(validation)).not.toContain(root);
     expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
       PatchValidationError,
     );
@@ -333,6 +632,23 @@ describe("applyPatch — fail-closed", () => {
     const result = applyPatch(info, CREATE_DIFF, { applyEnabled: true, signal: liveSignal() });
     expect(result.created).toEqual(["src/new.txt"]);
     expect(read("src/new.txt")).toBe("created\n");
+  });
+
+  it("applies normal create, modify, and delete changes in one transaction", () => {
+    write("src/x.txt", "one\ntwo\n");
+    write("src/old.txt", "old\n");
+
+    const result = applyPatch(info, MODIFY_DIFF + CREATE_DIFF + DELETE_DIFF, {
+      applyEnabled: true,
+      signal: liveSignal(),
+    });
+
+    expect(result.changedFiles).toEqual(["src/x.txt", "src/new.txt", "src/old.txt"]);
+    expect(result.created).toEqual(["src/new.txt"]);
+    expect(result.deleted).toEqual(["src/old.txt"]);
+    expect(read("src/x.txt")).toBe("one\nTWO\n");
+    expect(read("src/new.txt")).toBe("created\n");
+    expect(existsSync(join(root, "src/old.txt"))).toBe(false);
   });
 
   it("throws PatchValidationError on an invalid patch and writes nothing", () => {

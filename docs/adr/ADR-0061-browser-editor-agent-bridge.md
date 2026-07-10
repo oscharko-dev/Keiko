@@ -9,6 +9,21 @@ Accepted
 > multi-file changeset. The bridge remains responsible for Monaco state and reconciliation after a
 > governed server transaction.
 
+> **Amended by Issue #2119 (2026-07-10).** Editor selections can enter the existing chat send
+> lifecycle through a bounded local handoff, and chat-origin code proposals return through this same
+> bridge and existing EditorRuntimeWidget review. No second bridge, transport, or review owner is
+> introduced.
+
+> **Amended by Epic #2091 trust-path hardening (2026-07-10).** The bridge keeps its decision
+> capability only in bounded module memory and attaches it to the existing snapshot/result POST
+> shapes and session-scoped SSE query. Snapshot bootstrap is serialized per session. Local handlers
+> register immediately, but the shared EventSource includes only subscribers whose latest bootstrap
+> succeeded and has an exact capability; an unready editor cannot block ready editors, and a later
+> successful debounce retry activates its existing handler. The bridge and `EditorRuntimeWidget`
+> both verify exact active file/pane identity before active-buffer mutation; navigation and layout
+> semantics remain unchanged. Validated terminal SSE results are exposed through an optional,
+> non-retaining callback so the runtime can clear only the matching staged review.
+
 ## Context
 
 Issues #1394 ([ADR-0058](ADR-0058-safe-apply-edits-and-patch-workflow.md)), #1391 ([ADR-0059](ADR-0059-agent-editor-public-contracts.md)), and #1392 ([ADR-0060](ADR-0060-agent-editor-session-registry-and-queue.md)) together define: a frozen, schema-versioned wire contract; server-side BFF preflight and queueing; and a live SSE bridge liveness mechanism. Issue #1393 closes the remaining browser-side gap: three action types — `moveTab`, `splitPane`, and `setSelection` — are stubbed in `EditorRuntimeWidget.executeAgentAction` to respond `status: "failed"` with the message `"Action must be executed by the editor layout controller."` This message is accurate but leaves those three protocol-level actions permanently unexecuted.
@@ -61,6 +76,43 @@ The frozen `EditorAgentActionResult` carries `status`, `message`, `conflict.{cod
 ### D6 — Existing security gates reused; no new gate code introduced (AC3, AC5)
 
 CSRF/same-origin protection is centralized in `server.ts` (ADR-0060 D4). The browser bridge makes no new BFF routes. Workspace containment (`isContainedAgentPath`) is already imported in the pane runtime; `dispatchEditorAgentAction` reuses it for `moveTab` file targets without new code. `splitPane` and `setSelection` carry no file paths and cannot escape containment by construction. The `OUT_OF_SCOPE` conflict code is frozen in the contract (ADR-0059 AC3).
+
+### D7 — Issue #2119: one bridge for selection-to-chat and chat-to-review
+
+Selection-to-chat remains an in-browser handoff layered on the existing Monaco selection capture
+and chat window orchestration. A bounded, expiring, one-use opaque id opens or targets the existing
+chat surface, which consumes the selection and calls the existing `sendMessage` lifecycle once its
+project, chat, and model prerequisites are ready. It does not widen the editor-agent event union or
+add a route, stream, session registry, or message bus.
+
+The handoff's in-memory entry carries its exact originating workspace root; window configuration
+and persistence carry only the opaque id. `ChatWindowSessionHost` routes with the existing
+`openProject`, `openChat`, and `openNewChat` methods, then requires exact equality among the bound
+root, `activeProject.path`, and `activeChat.projectPath` immediately before one-use consumption and
+`sendMessage`. An unavailable, expired, or unresolved project/chat is discarded and announced
+locally instead of waiting indefinitely or sending through the currently selected project.
+
+For the return direction, `ChatWindow` exposes a typed callback only to settled assistant Markdown
+and only when the active chat supplies a non-empty workspace root exactly equal to the active
+project path. The callback calls the chat apply core once with the exact block text, language, and
+chat-owned root. The core submits `applyPatch` or `applyChangeset` through the existing editor-agent
+route family. The optional `origin: "chat"` field distinguishes this producer while preserving
+schema version `"1"`; omission remains the legacy agent producer and resolves to `agent` before
+queueing.
+
+The bridge receives chat-origin actions from the same validated SSE stream as agent-origin actions.
+It does not special-case a second apply or review protocol: existing controller dispatch,
+EditorRuntimeWidget review, Accept/Reject, result posting, and Monaco reconciliation remain the sole
+owners. SafeMarkdown displays only preparing, queued, bounded conflict-code, or unavailable/retry
+state and never treats queue admission as applied content.
+
+Code Apply exists only while the active chat root exactly equals the active project root and is
+submitted with the chat root, never a linked-root fallback. Queue submission mints one action and
+idempotency identity. The browser reuses it for the existing 409/429 replay and for at most one
+uncertain network, 5xx/timeout, or invalid-success replay. If uncertainty remains, the state becomes
+non-retriable `outcome-unknown`, preserving the possibility that the original 202 already created
+the review action. A bounded, content-free message/block terminal-state cache retains that lock
+across transcript virtualization remounts and prevents the button from minting a duplicate.
 
 ## Consequences
 

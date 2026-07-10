@@ -25,6 +25,8 @@ import type {
   PatchConflict,
   PatchFileChange,
   PatchHunk,
+  PatchInspection,
+  PatchInspectionFile,
   PatchLimits,
   PatchRejection,
   PatchRejectionCode,
@@ -133,6 +135,7 @@ describe("keiko-tools public surface", () => {
     // Patch:
     expect(typeof tools.applyPatch).toBe("function");
     expect(typeof tools.buildRestorePatch).toBe("function");
+    expect(typeof tools.inspectPatch).toBe("function");
     expect(typeof tools.renderDryRun).toBe("function");
     expect(typeof tools.validatePatch).toBe("function");
     expect(typeof tools.projectValidatedPatch).toBe("function");
@@ -239,6 +242,8 @@ describe("keiko-tools public surface", () => {
     pin<PatchConflict>();
     pin<PatchFileChange>();
     pin<PatchHunk>();
+    pin<PatchInspection>();
+    pin<PatchInspectionFile>();
     pin<PatchLimits>();
     pin<PatchRejection>();
     pin<PatchRejectionCode>();

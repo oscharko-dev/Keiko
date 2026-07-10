@@ -9,6 +9,15 @@ Accepted
 > effect is enforced and then mapped to the existing editor disposition; audit remains bounded and
 > redacted.
 
+> **Amended by Issue #2119 (2026-07-10).** Governance and audit carry the bounded action origin
+> (`agent | chat`), defaulting omitted legacy values to `agent`. The existing bounded,
+> workspace-relative `targetPath` audit metadata remains unchanged.
+
+> **Amended by Epic #2091 trust-path hardening (2026-07-10).** Policy and audit derive active-buffer
+> targets from the verified live snapshot rather than caller-claimed metadata. Wire identifier and
+> target-path byte bounds make the count-bounded in-memory ledger byte-bounded as well; capability
+> plaintext and digests never enter audit records.
+
 ## Context
 
 Issues #1394 ([ADR-0058](ADR-0058-safe-apply-edits-and-patch-workflow.md)), #1391
@@ -75,21 +84,28 @@ because `keiko-contracts` is a leaf package it cannot import `keiko-workspace`, 
 computes the `targetSensitive` boolean and passes it into the pure classifier.
 
 The classifier does **not** re-check #1394 structural preconditions (version/hash/overlap); it
-governs policy posture only, respecting those gates as upstream preconditions.
+governs policy posture only, respecting those gates as upstream preconditions. Issue #2119 adds the
+resolved action origin to the decision for audit propagation; origin does not change disposition.
 
 ### D2 — Bounded, content-free audit record; in-memory session-scoped ledger
 
 `editor-agent-governance.ts` also defines `EditorAgentActionAuditRecord`
 (`EDITOR_AGENT_AUDIT_SCHEMA_VERSION = "1"`), a content-free envelope modelled on
 `MemoryAuditEvent` and `patchApplyEvidence`: `auditId`, `occurredAt`, `sessionId`, `actionId`,
-`actionType`, `effectClass`, `mutating`, `disposition`, optional `denyReason`/`reviewReason`,
-`outcome` (the existing `EditorAgentActionStatus`), optional `conflictCode`/`failureCode`, an
-optional workspace-relative `targetPath`, content-free counts (`editCount`, `patchByteLength`), and
-a bounded, redacted `summary` (≤ `EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS`). The pure builder
-`buildEditorAgentActionAuditRecord` accepts only bounded inputs — it never receives `textEdits`
-content or a patch body — so the record _structurally cannot_ carry raw source text. The server
-additionally runs the record through `keiko-security`'s `createAuditRedactor` + `deepRedactStrings`
-(defense-in-depth) before it enters the ledger, scrubbing any secret-shaped substring.
+`actionType`, bounded `origin`, `effectClass`, `mutating`, `disposition`, optional
+`denyReason`/`reviewReason`, `outcome` (the existing `EditorAgentActionStatus`), optional
+`conflictCode`/`failureCode`, an optional workspace-relative `targetPath`, content-free counts
+(`editCount`, `patchByteLength`), and a bounded, redacted `summary` (≤
+`EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS`). The pure builder accepts only bounded inputs — it never
+receives `textEdits` content, a patch body, a prompt, or a selection body — so the record
+_structurally cannot_ carry raw producer content. The server additionally runs the record through
+`keiko-security`'s `createAuditRedactor` + `deepRedactStrings` (defense-in-depth) before it enters the
+ledger, scrubbing any secret-shaped substring.
+
+The origin property is additive and optional in the V1 record type. The builder always emits a
+resolved value: explicit `chat` stays `chat`; omitted legacy action/decision values become `agent`.
+Origin is caller-asserted, bounded audit annotation rather than provenance attestation. It never
+grants authority, satisfies approval, changes risk, or affects policy disposition.
 
 Storage decision: a **bounded in-memory, per-session, append-only ledger** in the BFF
 (`agentActionAudit.ts`), FIFO-evicted (bounded entries per session, bounded session count, mirroring
@@ -128,8 +144,11 @@ bounded audit record + ledger, and the read-only UI panel.
   security strengthening: `applyTextEdits`/`save`/`format` to a deny-listed path (e.g. `.env`) were
   previously blocked only on the patch path and are now denied across all write actions, surfaced as
   the existing `OUT_OF_SCOPE` conflict so no new wire conflict code is introduced.
-- The audit record is content-free by construction and by redaction; raw source text and secrets
-  cannot reach the ledger or the UI.
+- The audit record is content-free by construction and by redaction; raw source text, patch bodies,
+  prompt/selection bodies, and secrets cannot reach the ledger or the UI. The bounded,
+  workspace-relative target path remains inspectable metadata.
+- Audit consumers can distinguish the agent/harness and chat producers without receiving producer
+  content, while legacy actions deterministically audit as `agent`.
 - The ledger is ephemeral and bounded; it backs a "recent actions" view, not a compliance archive.
   Durable persistence and Git/command-action governance are documented follow-ups.
 

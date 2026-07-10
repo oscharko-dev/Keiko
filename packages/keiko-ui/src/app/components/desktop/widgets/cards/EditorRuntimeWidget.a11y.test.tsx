@@ -30,6 +30,7 @@ import {
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -85,6 +86,7 @@ vi.mock("next/dynamic", () => {
 });
 
 const BASE_VERSION = { sizeBytes: 12, modifiedAt: 1, contentHash: "a".repeat(64) };
+const BRIDGE_DECISION_CAPABILITY = "A".repeat(43);
 
 const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
@@ -196,8 +198,16 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
 }
 
 beforeEach(() => {
+  _resetEditorAgentBridgeStateForTests();
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
-  vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
+  vi.mocked(postEditorAgentSessionSnapshot).mockImplementation((_snapshot, currentCapability) =>
+    Promise.resolve({
+      snapshot: null,
+      ...(currentCapability === undefined
+        ? { bridgeDecisionCapability: BRIDGE_DECISION_CAPABILITY }
+        : {}),
+    }),
+  );
   vi.mocked(postEditorAgentActionResult).mockResolvedValue({
     result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
   });
@@ -206,6 +216,7 @@ beforeEach(() => {
 afterEach(() => {
   surface.props = null;
   diffSurface.props = null;
+  _resetEditorAgentBridgeStateForTests();
   restoreEventSource();
   agentActionSeq = 0;
   vi.clearAllMocks();
@@ -239,7 +250,7 @@ async function renderWithPatchReview(): Promise<{
   act(() => {
     source.emitAction(
       agentAction(sessionId, "applyPatch", {
-        target: { file: "src/app.ts" },
+        target: { file: "src/app.ts", paneId: "pane-1" },
         textEdits: [
           {
             range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
@@ -332,6 +343,8 @@ describe("EditorRuntimeWidget agent actions — focus management (A11Y)", () => 
       source.emitAction(
         agentAction(sessionId, "setSelection", {
           target: {
+            file: "src/app.ts",
+            paneId: "pane-1",
             selection: {
               start: { line: 1, character: 2 },
               end: { line: 1, character: 5 },

@@ -9,6 +9,18 @@ Accepted
 > runtime work reuses this registry/queue while governed server transactions apply atomically and
 > the browser reconciles open Monaco buffers.
 
+> **Amended by Epic #2091 trust-path hardening (2026-07-10).** First snapshot registration issues a
+> lease-bound browser decision capability and the registry retains only its SHA-256 digest. Existing
+> sessions require that capability for normal refresh and result claims. Missing or stale capability
+> re-registration rotates the capability only while that session has zero authenticated bridges and
+> zero pending actions. Every session-scoped SSE connection authenticates its exact session/capability
+> pairs before registry connection; global observers receive only body-free result metadata.
+>
+> A session admits at most one pending mutating action while bounded nonmutating queueing remains
+> available. Immediate actions retain the 15-second deadline; `applyPatch` and `applyChangeset`
+> reviews use a bounded 30-minute deadline. Timeout removes the pending claim, so every later terminal
+> report is rejected, regardless of its reported status.
+
 ## Context
 
 Issue #1392 (Epic #1491) owns the BFF runtime that lets agents discover live editor sessions and queue
