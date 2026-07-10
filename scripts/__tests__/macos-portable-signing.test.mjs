@@ -151,6 +151,17 @@ function macFinalizeStage() {
   );
   write(join(resources, "runtime", "sidecars", "opencode-compatible", "LICENSE.txt"), "license");
   write(join(resources, "app", "index.js"), "signed app");
+  write(join(resources, "app", "package.json"), '{"name":"@oscharko-dev/keiko"}\n');
+  write(
+    join(resources, ".portable", "setup-manifest.json"),
+    `${JSON.stringify({
+      bootstrapUpdateEligible: false,
+      platformTarget: "macos-arm64",
+      primaryLauncher: "Keiko.app",
+      runtime: { nodeArchitecture: "arm64", nodePlatform: "darwin" },
+      stable: true,
+    })}\n`,
+  );
   write(join(payloadRoot, "support", "keiko-support.sh"), "#!/bin/sh\n");
   const manifest = macManifest();
   const manifestPath = join(stage, "manifest", "portable-manifest.json");
@@ -400,6 +411,94 @@ describe("macOS portable signing inventory", () => {
     );
     expect(readFileSync(fixture.archivePath)).toEqual(archiveBefore);
     expect(readFileSync(sourceNode)).toEqual(sourceNodeBefore);
+  });
+
+  it("rejects every mutated signed-candidate setup field before extraction", async () => {
+    const setupMutations = [
+      ["wrong-platform", (setup) => (setup.platformTarget = "macos-x64")],
+      ["wrong-launcher", (setup) => (setup.primaryLauncher = "Other.app")],
+      ["bootstrap-true", (setup) => (setup.bootstrapUpdateEligible = true)],
+      ["bootstrap-missing", (setup) => Reflect.deleteProperty(setup, "bootstrapUpdateEligible")],
+      ["wrong-node-platform", (setup) => (setup.runtime.nodePlatform = "win32")],
+      ["wrong-node-architecture", (setup) => (setup.runtime.nodeArchitecture = "x64")],
+      ["stable-false", (setup) => (setup.stable = false)],
+      ["stable-missing", (setup) => Reflect.deleteProperty(setup, "stable")],
+    ];
+    const mutations = [
+      [
+        "missing-support",
+        (fixture) => rmSync(join(fixture.stage, "payload", "Keiko", "support", "keiko-support.sh")),
+      ],
+      [
+        "missing-setup",
+        (fixture) => rmSync(join(fixture.resources, ".portable", "setup-manifest.json")),
+      ],
+      ...setupMutations.map(([name, mutate]) => [
+        name,
+        (fixture) => {
+          const path = join(fixture.resources, ".portable", "setup-manifest.json");
+          const setup = JSON.parse(readFileSync(path, "utf8"));
+          mutate(setup);
+          writeFileSync(path, JSON.stringify(setup));
+        },
+      ]),
+      [
+        "symlink-package",
+        (fixture) => {
+          const path = join(fixture.resources, "app", "package.json");
+          rmSync(path);
+          symlinkSync(join(fixture.resources, "app", "index.js"), path);
+        },
+      ],
+      [
+        "hardlink-support",
+        (fixture) => {
+          const path = join(fixture.stage, "payload", "Keiko", "support", "keiko-support.sh");
+          rmSync(path);
+          linkSync(join(fixture.resources, "app", "index.js"), path);
+        },
+      ],
+    ];
+    if (process.platform !== "win32") {
+      mutations.push([
+        "special-package",
+        (fixture) => {
+          const path = join(fixture.resources, "app", "package.json");
+          rmSync(path);
+          if (spawnSync("mkfifo", [path], { stdio: "ignore" }).status !== 0)
+            throw new Error("mkfifo fixture failed");
+        },
+      ]);
+    }
+    for (const [name, mutate] of mutations) {
+      const fixture = macFinalizeStage();
+      await main([
+        "finalize",
+        "--stage-root",
+        fixture.stage,
+        "--expected-inventory",
+        fixture.inventoryPath,
+        "--verification-input",
+        fixture.inputPath,
+      ]);
+      mutate(fixture);
+      const disposable = join(dirname(fixture.stage), `keiko-isolated-macos-smoke-${name}`);
+      roots.push(disposable);
+      let extracted = false;
+      await expect(
+        prepareIsolatedMacSmoke({
+          "artifact-root": fixture.stage,
+          "disposable-root": disposable,
+          "runner-temp": dirname(fixture.stage),
+          extractor: () => {
+            extracted = true;
+          },
+          target: "macos-arm64",
+        }),
+        name,
+      ).rejects.toThrow(/portable launch\/setup smoke failed/u);
+      expect(extracted, name).toBe(false);
+    }
   });
 });
 

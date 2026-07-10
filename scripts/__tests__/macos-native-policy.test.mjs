@@ -214,6 +214,53 @@ describe("macOS production result and credential lifecycle", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("runs a valid isolated payload terminally with credential and file channels scrubbed", () => {
+    const runnerTemp = root();
+    const disposable = join(runnerTemp, "keiko-isolated-macos-smoke-valid");
+    const resources = join(disposable, "Keiko", "Keiko.app", "Contents", "Resources");
+    const executable = `#!/bin/sh
+test -z "\${GITHUB_ENV:-}"
+test -z "\${GITHUB_TOKEN:-}"
+test -z "\${ACTIONS_RUNTIME_TOKEN:-}"
+test -z "\${APPLE_TEAM_ID:-}"
+exit 0
+`;
+    const node = join(resources, "runtime", "node", "bin", "node");
+    const sidecar = join(resources, "runtime", "sidecars", "worker", "bin", "worker");
+    mkdirSync(join(resources, "runtime", "node", "bin"), { recursive: true });
+    mkdirSync(join(resources, "runtime", "sidecars", "worker", "bin"), { recursive: true });
+    writeFileSync(node, executable);
+    writeFileSync(sidecar, executable);
+    chmodSync(node, 0o700);
+    chmodSync(sidecar, 0o700);
+    writeFileSync(
+      join(disposable, "smoke-plan.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        sidecarExecutables: ["runtime/sidecars/worker/bin/worker"],
+        target: "macos-arm64",
+      }),
+    );
+    const result = spawnSync(
+      "bash",
+      ["scripts/run-isolated-macos-payload-smoke.sh", "macos-arm64", disposable],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          ACTIONS_RUNTIME_TOKEN: "runtime-secret",
+          GITHUB_ENV: join(runnerTemp, "github-env"),
+          GITHUB_TOKEN: "github-secret",
+          RUNNER_TEMP: runnerTemp,
+        },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+    expect(existsSync(disposable)).toBe(false);
+  });
+
   it("best-effort cleanup removes material and clears env even when keychain deletion fails", async () => {
     for (const shouldFail of [false, true]) {
       const runnerTemp = root();
