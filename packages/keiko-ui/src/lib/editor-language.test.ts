@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   mapWireToEditorCodeActionsResponse,
   mapWireToEditorDefinitionResponse,
+  mapWireToEditorCallHierarchyResponse,
+  mapWireToEditorInlayHintsResponse,
   mapWireToEditorDiagnosticsResponse,
   mapWireToEditorFormattingResponse,
   mapWireToEditorHoverResponse,
@@ -105,6 +107,39 @@ describe("mapWireToEditorDefinitionResponse", () => {
     expect(response.locations[0]).toEqual({
       path: "src/def.ts",
       range: { start: { line: 1, column: 4 }, end: { line: 1, column: 9 } },
+    });
+  });
+});
+
+describe("new navigation result adapters", () => {
+  it("maps call hierarchy items, every call site, and inlay-hint positions", () => {
+    const item = {
+      name: "target",
+      kind: "function" as const,
+      path: "src/a.ts",
+      range,
+      selectionRange: range,
+    };
+    const hierarchy = mapWireToEditorCallHierarchyResponse(REQUEST, {
+      roots: [
+        {
+          item,
+          incomingCalls: [{ item, fromRanges: [range, range] }],
+          outgoingCalls: [],
+        },
+      ],
+      truncated: false,
+    });
+    const hints = mapWireToEditorInlayHintsResponse(REQUEST, {
+      hints: [{ position: { line: 1, character: 4 }, label: "value:", kind: "parameter" }],
+      truncated: false,
+    });
+
+    expect(hierarchy.roots[0]?.incomingCalls[0]?.fromRanges).toHaveLength(2);
+    expect(hierarchy.roots[0]?.item.selectionRange.start.column).toBe(4);
+    expect(hints.hints[0]).toMatchObject({
+      position: { line: 1, column: 4 },
+      label: "value:",
     });
   });
 });

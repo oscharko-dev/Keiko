@@ -7,6 +7,10 @@
 
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import type {
+  LanguageCallHierarchyIncomingCall,
+  LanguageCallHierarchyItem,
+  LanguageCallHierarchyOutgoingCall,
+  LanguageCallHierarchyResult,
   LanguageCodeAction,
   LanguageCodeActionsResult,
   LanguageCompletionItem,
@@ -17,6 +21,8 @@ import type {
   LanguageDocumentSymbol,
   LanguageFormattingResult,
   LanguageHoverResult,
+  LanguageInlayHint,
+  LanguageInlayHintsResult,
   LanguageLocation,
   LanguageReferencesResult,
   LanguageRenameApplyResult,
@@ -177,6 +183,108 @@ export function sanitizeDefinition(
   return {
     locations: capped.map((location) => sanitizeLocation(location, limits)),
     truncated: raw.truncated || raw.locations.length > capped.length,
+  };
+}
+
+interface HierarchySanitizeBudget {
+  items: number;
+  callSites: number;
+  truncated: boolean;
+}
+
+function sanitizeHierarchyItem(
+  item: LanguageCallHierarchyItem,
+  limits: LanguageServiceLimits,
+): LanguageCallHierarchyItem {
+  return {
+    name: clip(item.name, limits.maxLabelChars),
+    kind: item.kind,
+    path: clip(item.path, limits.maxDetailChars),
+    range: item.range,
+    selectionRange: item.selectionRange,
+    ...(item.containerName === undefined
+      ? {}
+      : { containerName: clip(item.containerName, limits.maxLabelChars) }),
+  };
+}
+
+function sanitizeHierarchyRanges(
+  ranges: readonly import("@oscharko-dev/keiko-contracts").LanguageRange[],
+  limits: LanguageServiceLimits,
+  budget: HierarchySanitizeBudget,
+): readonly import("@oscharko-dev/keiko-contracts").LanguageRange[] {
+  const remaining = Math.max(0, limits.maxCallHierarchyCallSites - budget.callSites);
+  const capped = ranges.slice(0, remaining);
+  budget.callSites += capped.length;
+  if (capped.length < ranges.length) budget.truncated = true;
+  return capped;
+}
+
+function sanitizeHierarchyCalls<
+  T extends LanguageCallHierarchyIncomingCall | LanguageCallHierarchyOutgoingCall,
+>(
+  calls: readonly T[],
+  limits: LanguageServiceLimits,
+  budget: HierarchySanitizeBudget,
+): readonly T[] {
+  const sanitized: T[] = [];
+  for (const call of calls) {
+    if (budget.items >= limits.maxCallHierarchyItems) {
+      budget.truncated = true;
+      break;
+    }
+    budget.items += 1;
+    sanitized.push({
+      item: sanitizeHierarchyItem(call.item, limits),
+      fromRanges: sanitizeHierarchyRanges(call.fromRanges, limits, budget),
+    } as T);
+  }
+  return sanitized;
+}
+
+export function sanitizeCallHierarchy(
+  raw: LanguageCallHierarchyResult,
+  limits: LanguageServiceLimits,
+): LanguageCallHierarchyResult {
+  const budget: HierarchySanitizeBudget = { items: 0, callSites: 0, truncated: raw.truncated };
+  const roots = raw.roots.flatMap((root): LanguageCallHierarchyResult["roots"] => {
+    if (budget.items >= limits.maxCallHierarchyItems) {
+      budget.truncated = true;
+      return [];
+    }
+    budget.items += 1;
+    return [
+      {
+        item: sanitizeHierarchyItem(root.item, limits),
+        incomingCalls: sanitizeHierarchyCalls(root.incomingCalls, limits, budget),
+        outgoingCalls: sanitizeHierarchyCalls(root.outgoingCalls, limits, budget),
+      },
+    ];
+  });
+  return { roots, truncated: budget.truncated };
+}
+
+function sanitizeInlayHint(
+  hint: LanguageInlayHint,
+  limits: LanguageServiceLimits,
+): LanguageInlayHint {
+  return {
+    position: hint.position,
+    label: clip(hint.label, limits.maxLabelChars),
+    kind: hint.kind,
+    ...(hint.paddingLeft === undefined ? {} : { paddingLeft: hint.paddingLeft }),
+    ...(hint.paddingRight === undefined ? {} : { paddingRight: hint.paddingRight }),
+  };
+}
+
+export function sanitizeInlayHints(
+  raw: LanguageInlayHintsResult,
+  limits: LanguageServiceLimits,
+): LanguageInlayHintsResult {
+  const capped = raw.hints.slice(0, limits.maxInlayHints);
+  return {
+    hints: capped.map((hint) => sanitizeInlayHint(hint, limits)),
+    truncated: raw.truncated || capped.length < raw.hints.length,
   };
 }
 

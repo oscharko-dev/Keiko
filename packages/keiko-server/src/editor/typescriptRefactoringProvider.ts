@@ -7,6 +7,9 @@ import type {
   LanguageCodeAction,
   LanguageCodeActionKind,
   LanguageCodeActionsResult,
+  LanguageInlayHint,
+  LanguageInlayHintKind,
+  LanguageInlayHintsResult,
   LanguagePosition,
   LanguageRange,
   LanguageRenameApplyResult,
@@ -19,7 +22,12 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 import ts from "typescript";
-import { computeLineStarts, positionToOffset, spanToRange } from "./textOffsets.js";
+import {
+  computeLineStarts,
+  offsetToPosition,
+  positionToOffset,
+  spanToRange,
+} from "./textOffsets.js";
 import type { TypescriptProjectHandle } from "./typescriptProjectService.js";
 
 export interface TypescriptRefactoringError {
@@ -52,6 +60,17 @@ const USER_PREFERENCES: ts.UserPreferences = {
   provideRefactorNotApplicableReason: false,
 };
 
+const INLAY_HINT_PREFERENCES: ts.UserPreferences = {
+  includeInlayParameterNameHints: "all",
+  includeInlayParameterNameHintsWhenArgumentMatchesName: true,
+  includeInlayFunctionParameterTypeHints: true,
+  includeInlayVariableTypeHints: true,
+  includeInlayVariableTypeHintsWhenTypeMatchesName: true,
+  includeInlayPropertyDeclarationTypeHints: true,
+  includeInlayFunctionLikeReturnTypeHints: true,
+  includeInlayEnumMemberValueHints: true,
+};
+
 function offsetFor(project: TypescriptProjectHandle, position: LanguagePosition): number {
   return positionToOffset(project.overlayText, computeLineStarts(project.overlayText), position);
 }
@@ -72,6 +91,44 @@ function textEditFor(text: string, change: ts.TextChange): LanguageTextEdit {
 
 function error(code: LanguageServiceErrorCode, message: string): TypescriptRefactoringError {
   return { kind: "error", code, message };
+}
+
+function inlayHintKind(kind: ts.InlayHintKind): LanguageInlayHintKind {
+  if (kind === ts.InlayHintKind.Parameter) return "parameter";
+  if (kind === ts.InlayHintKind.Enum) return "enum";
+  return "type";
+}
+
+function inlayHintFor(project: TypescriptProjectHandle, hint: ts.InlayHint): LanguageInlayHint {
+  return {
+    position: offsetToPosition(
+      project.overlayText,
+      computeLineStarts(project.overlayText),
+      hint.position,
+    ),
+    label: hint.displayParts?.map((part) => part.text).join("") ?? hint.text,
+    kind: inlayHintKind(hint.kind),
+    ...(hint.whitespaceBefore === undefined ? {} : { paddingLeft: hint.whitespaceBefore }),
+    ...(hint.whitespaceAfter === undefined ? {} : { paddingRight: hint.whitespaceAfter }),
+  };
+}
+
+export function resolveTypescriptInlayHints(
+  project: TypescriptProjectHandle,
+  range: LanguageRange,
+): LanguageInlayHintsResult {
+  project.cancellation.throwIfCancellationRequested();
+  const offsets = rangeOffsets(project.overlayText, range);
+  const hints = project.service.provideInlayHints(
+    project.overlayPath,
+    { start: offsets.pos, length: offsets.end - offsets.pos },
+    INLAY_HINT_PREFERENCES,
+  );
+  const capped = hints.slice(0, project.limits.maxInlayHints);
+  return {
+    hints: capped.map((hint) => inlayHintFor(project, hint)),
+    truncated: project.truncated || capped.length < hints.length,
+  };
 }
 
 export function resolveTypescriptRenamePrepare(

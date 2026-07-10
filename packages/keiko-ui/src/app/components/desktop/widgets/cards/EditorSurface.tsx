@@ -93,6 +93,13 @@ export interface EditorSurfaceProps {
   readonly provideSymbols?: EditorSymbolsResolver | undefined;
   readonly provideFormatting?: EditorFormattingResolver | undefined;
   readonly provideDefinition?: EditorDefinitionResolver | undefined;
+  readonly provideTypeDefinition?: EditorDefinitionResolver | undefined;
+  readonly provideImplementation?: EditorDefinitionResolver | undefined;
+  readonly provideCallHierarchy?: KeikoCodeEditorProps["provideCallHierarchy"] | undefined;
+  readonly callHierarchyLabels?: KeikoCodeEditorProps["callHierarchyLabels"] | undefined;
+  readonly onRevealCallHierarchyLocation?:
+    KeikoCodeEditorProps["onRevealCallHierarchyLocation"] | undefined;
+  readonly provideInlayHints?: KeikoCodeEditorProps["provideInlayHints"] | undefined;
   readonly uriForPath?: KeikoCodeEditorProps["uriForPath"] | undefined;
   readonly provideReferences?: EditorReferencesResolver | undefined;
   readonly provideCodeActions?: EditorCodeActionsResolver | undefined;
@@ -180,6 +187,12 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
       provideSymbols={props.provideSymbols}
       provideFormatting={props.provideFormatting}
       provideDefinition={props.provideDefinition}
+      provideTypeDefinition={props.provideTypeDefinition}
+      provideImplementation={props.provideImplementation}
+      provideCallHierarchy={props.provideCallHierarchy}
+      callHierarchyLabels={props.callHierarchyLabels}
+      onRevealCallHierarchyLocation={props.onRevealCallHierarchyLocation}
+      provideInlayHints={props.provideInlayHints}
       uriForPath={props.uriForPath}
       provideReferences={props.provideReferences}
       provideCodeActions={props.provideCodeActions}

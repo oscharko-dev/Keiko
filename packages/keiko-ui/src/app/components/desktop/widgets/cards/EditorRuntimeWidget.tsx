@@ -63,6 +63,8 @@ import {
   testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCallHierarchyQuery,
+  type EditorCallHierarchyResolver,
   type EditorCodeActionsQuery,
   type EditorCodeActionsResolver,
   type EditorCompletionQuery,
@@ -85,6 +87,8 @@ import {
   type EditorHoverQuery,
   type EditorInlineCompletionResolver,
   type EditorInlineCompletionQuery,
+  type EditorInlayHintsQuery,
+  type EditorInlayHintsResolver,
   type EditorLanguageId,
   type EditorLocation,
   type EditorPosition,
@@ -127,6 +131,10 @@ import {
   requestEditorCompletion,
   requestEditorCodeActions,
   requestEditorDefinition,
+  requestEditorTypeDefinition,
+  requestEditorImplementation,
+  requestEditorCallHierarchy,
+  requestEditorInlayHints,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -146,6 +154,8 @@ import { mapWireToEditorTestGenerationOutcome } from "../../../../../lib/editor-
 import {
   mapWireToEditorDiagnosticsResponse,
   mapWireToEditorDefinitionResponse,
+  mapWireToEditorCallHierarchyResponse,
+  mapWireToEditorInlayHintsResponse,
   mapWireToEditorFormattingResponse,
   mapWireToEditorHoverResponse,
   mapWireToEditorCodeActionsResponse,
@@ -959,7 +969,11 @@ function providerOperationEnabled(
     | "symbols"
     | "formatting"
     | "definition"
+    | "typeDefinition"
+    | "implementation"
     | "references"
+    | "callHierarchy"
+    | "inlayHints"
     | "renamePrepare"
     | "renameApply"
     | "codeActions"
@@ -1351,6 +1365,10 @@ function EditorRuntimeWidget({
   const [currentSelection, setCurrentSelection] = useState<EditorRange | null>(null);
   // Issue #1205: live cursor and diagnostic-count state backing the unified status bar.
   const [cursor, setCursor] = useState<EditorPosition | null>(null);
+  const [callHierarchyRevealRequest, setCallHierarchyRevealRequest] = useState<
+    { readonly id: string; readonly range: EditorRange } | undefined
+  >(undefined);
+  const callHierarchyRevealSeqRef = useRef(0);
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<EditorDiagnosticsSummary | null>(
     null,
   );
@@ -2288,6 +2306,120 @@ function EditorRuntimeWidget({
     [file, hasTarget, openEditorFile, root],
   );
 
+  const provideTypeDefinition = useCallback<EditorDefinitionResolver>(
+    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, locations: [] };
+      }
+      const wire = await requestEditorTypeDefinition(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      const response = mapWireToEditorDefinitionResponse(query.request.request, wire);
+      const crossFile = response.locations.find((location) => location.path !== file);
+      if (crossFile !== undefined) {
+        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
+      }
+      return response;
+    },
+    [file, hasTarget, openEditorFile, root],
+  );
+
+  const provideImplementation = useCallback<EditorDefinitionResolver>(
+    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, locations: [] };
+      }
+      const wire = await requestEditorImplementation(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      const response = mapWireToEditorDefinitionResponse(query.request.request, wire);
+      const crossFile = response.locations.find((location) => location.path !== file);
+      if (crossFile !== undefined) {
+        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
+      }
+      return response;
+    },
+    [file, hasTarget, openEditorFile, root],
+  );
+
+  const provideCallHierarchy = useCallback<EditorCallHierarchyResolver>(
+    async (query: EditorCallHierarchyQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, roots: [] };
+      }
+      const wire = await requestEditorCallHierarchy(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      return mapWireToEditorCallHierarchyResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const provideInlayHints = useCallback<EditorInlayHintsResolver>(
+    async (query: EditorInlayHintsQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, hints: [] };
+      }
+      const wire = await requestEditorInlayHints(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          range: editorRangeToWire(query.request.range),
+        },
+        signal,
+      );
+      return mapWireToEditorInlayHintsResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const revealCallHierarchyLocation = useCallback(
+    (location: EditorLocation): void => {
+      if (location.path === file) {
+        callHierarchyRevealSeqRef.current += 1;
+        setCallHierarchyRevealRequest({
+          id: `call-hierarchy:${String(callHierarchyRevealSeqRef.current)}`,
+          range: location.range,
+        });
+        return;
+      }
+      openCrossFileLocation({ root, file, location, openEditorFile });
+    },
+    [file, openEditorFile, root],
+  );
+
   const provideReferences = useCallback<EditorReferencesResolver>(
     async (query: EditorReferencesQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
@@ -2438,6 +2570,14 @@ function EditorRuntimeWidget({
     providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
   const definitionEnabled =
     providerOperationEnabled(languageProvider, "definition") && !largeFileDegraded;
+  const typeDefinitionEnabled =
+    providerOperationEnabled(languageProvider, "typeDefinition") && !largeFileDegraded;
+  const implementationEnabled =
+    providerOperationEnabled(languageProvider, "implementation") && !largeFileDegraded;
+  const callHierarchyEnabled =
+    providerOperationEnabled(languageProvider, "callHierarchy") && !largeFileDegraded;
+  const inlayHintsEnabled =
+    providerOperationEnabled(languageProvider, "inlayHints") && !largeFileDegraded;
   const referencesEnabled =
     providerOperationEnabled(languageProvider, "references") && !largeFileDegraded;
   const renameEnabled =
@@ -4031,7 +4171,19 @@ function EditorRuntimeWidget({
             },
           },
         }
-      : (outlineSelectionRequest ?? lineRevealRequest);
+      : (callHierarchyRevealRequest ?? outlineSelectionRequest ?? lineRevealRequest);
+  const callHierarchyLabels = useMemo(
+    () => ({
+      title: commonT("editor.callHierarchy.title"),
+      incoming: commonT("editor.callHierarchy.incoming"),
+      outgoing: commonT("editor.callHierarchy.outgoing"),
+      callSite: commonT("editor.callHierarchy.callSite"),
+      empty: commonT("editor.callHierarchy.empty"),
+      close: commonT("editor.callHierarchy.close"),
+      command: commonT("editor.callHierarchy.command"),
+    }),
+    [commonT],
+  );
   useEffect(() => {
     if (agentSelectionRequest !== null) consumeSelectionRequest();
   }, [agentSelectionRequest, consumeSelectionRequest]);
@@ -4228,7 +4380,19 @@ function EditorRuntimeWidget({
         provideSymbols={symbolsEnabled ? provideSymbols : undefined}
         provideFormatting={formattingEnabled ? provideFormatting : undefined}
         provideDefinition={definitionEnabled ? provideDefinition : undefined}
-        uriForPath={definitionEnabled || referencesEnabled ? uriForPath : undefined}
+        provideTypeDefinition={typeDefinitionEnabled ? provideTypeDefinition : undefined}
+        provideImplementation={implementationEnabled ? provideImplementation : undefined}
+        provideCallHierarchy={callHierarchyEnabled ? provideCallHierarchy : undefined}
+        callHierarchyLabels={callHierarchyEnabled ? callHierarchyLabels : undefined}
+        onRevealCallHierarchyLocation={
+          callHierarchyEnabled ? revealCallHierarchyLocation : undefined
+        }
+        provideInlayHints={inlayHintsEnabled ? provideInlayHints : undefined}
+        uriForPath={
+          definitionEnabled || typeDefinitionEnabled || implementationEnabled || referencesEnabled
+            ? uriForPath
+            : undefined
+        }
         provideReferences={referencesEnabled ? provideReferences : undefined}
         provideCodeActions={codeActionsEnabled ? provideCodeActions : undefined}
         provideSignatureHelp={signatureHelpEnabled ? provideSignatureHelp : undefined}

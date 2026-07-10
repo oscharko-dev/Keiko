@@ -51,6 +51,10 @@ import {
   requestEditorCodeActions,
   requestEditorCompletion,
   requestEditorDefinition,
+  requestEditorTypeDefinition,
+  requestEditorImplementation,
+  requestEditorCallHierarchy,
+  requestEditorInlayHints,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -719,6 +723,36 @@ describe("language-intelligence helpers (Issue #1201)", () => {
           position: { line: 0, character: 1 },
         }),
       }),
+    );
+  });
+
+  it("posts type-definition, implementation, call-hierarchy, and inlay-hints operations", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse({
+          operation: "navigation",
+          result: { locations: [], roots: [], hints: [] },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo();\n",
+    };
+
+    await requestEditorTypeDefinition({ ...input, position: { line: 0, character: 1 } });
+    await requestEditorImplementation({ ...input, position: { line: 0, character: 1 } });
+    await requestEditorCallHierarchy({ ...input, position: { line: 0, character: 1 } });
+    await requestEditorInlayHints({
+      ...input,
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+    });
+
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).operation)).toEqual(
+      ["typeDefinition", "implementation", "callHierarchy", "inlayHints"],
     );
   });
 

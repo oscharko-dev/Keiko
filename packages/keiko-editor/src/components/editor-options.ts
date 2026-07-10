@@ -41,6 +41,8 @@ export interface BuildEditorOptionsArgs {
    * enabled only when true; absent/false keeps the parameter-hints UI disabled.
    */
   readonly signatureHelpEnabled?: boolean | undefined;
+  /** Whether the governed TypeScript/JavaScript inlay-hints provider is wired. */
+  readonly inlayHintsEnabled?: boolean | undefined;
   /**
    * Whether the buffer is in large-file degraded mode (Issue #1207, ADR-0042 D3.6: buffers > 500 KB
    * or > 10,000 lines). Defaults to false. In degraded mode the per-render/per-keystroke-expensive
@@ -112,6 +114,7 @@ function buildAssistanceOptions(
   hoverEnabled: boolean,
   codeActionsEnabled: boolean,
   signatureHelpEnabled: boolean,
+  inlayHintsEnabled: boolean,
 ): EditorConstructionOptions {
   return {
     // Force below-line placement so top-of-editor diagnostics do not render under Keiko window chrome.
@@ -137,7 +140,7 @@ function buildAssistanceOptions(
     lightbulb: {
       enabled: (codeActionsEnabled ? "on" : "off") as monaco.editor.ShowLightbulbIconMode,
     },
-    inlayHints: { enabled: "off" },
+    inlayHints: { enabled: inlayHintsEnabled ? "on" : "off" },
   };
 }
 
@@ -176,6 +179,7 @@ export function buildEditorOptions(
   const hoverEnabled = args.hoverEnabled ?? false;
   const codeActionsEnabled = args.codeActionsEnabled ?? false;
   const signatureHelpEnabled = args.signatureHelpEnabled ?? false;
+  const inlayHintsEnabled = args.inlayHintsEnabled ?? false;
   // Large-file degraded mode (Issue #1207, ADR-0042 D3.6). On buffers > 500 KB or > 10,000 lines the
   // per-render/per-keystroke-expensive features are disabled and Monaco's large-file optimizations are
   // engaged, so typing stays within the < 50 ms main-thread budget. Normal buffers are unaffected.
@@ -190,6 +194,7 @@ export function buildEditorOptions(
       hoverEnabled,
       codeActionsEnabled,
       signatureHelpEnabled,
+      inlayHintsEnabled,
     ),
     ...buildChromeOptions(),
     multiCursorModifier: "alt",
