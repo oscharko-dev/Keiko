@@ -58,6 +58,7 @@ export const PORTABLE_VERIFICATION_STATUSES = Object.freeze([
 ]);
 export const PORTABLE_MANIFEST_VALIDATION_CONTEXTS = Object.freeze([
   "staging",
+  "non-production",
   "candidate",
   "published",
   "published-contract",
@@ -116,6 +117,14 @@ const FORBIDDEN_PATH_PARTS = [
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function usesZeroReleaseIdentity(options) {
+  return new Set(["staging", "non-production", "candidate"]).has(options.context);
+}
+
+function requiresProductionVerification(options) {
+  return !new Set(["staging", "non-production"]).has(options.context);
 }
 
 function push(failures, path, message) {
@@ -244,7 +253,7 @@ function validateRelease(manifest, failures, options) {
 }
 
 function validateReleaseIdentity(releaseId, failures, options) {
-  if (options.context === "staging" || options.context === "candidate") {
+  if (usesZeroReleaseIdentity(options)) {
     if (releaseId !== 0)
       push(failures, "release.releaseId", "must be 0 before GitHub Release upload");
     return;
@@ -278,7 +287,7 @@ function validateArtifact(manifest, failures, options) {
 }
 
 function validateAssetIdentity(assetId, failures, options) {
-  if (options.context === "staging" || options.context === "candidate") {
+  if (usesZeroReleaseIdentity(options)) {
     if (assetId !== 0) push(failures, "artifact.assetId", "must be 0 before GitHub Release upload");
     return;
   }
@@ -298,10 +307,10 @@ function validateProvenance(manifest, failures, options) {
   digestAt(provenance, "packagedAppTreeSha256", "provenance", failures, options);
   const runId = numberAt(provenance, "buildWorkflowRunId", "provenance", failures);
   const runAttempt = numberAt(provenance, "buildWorkflowAttempt", "provenance", failures);
-  if (options.context !== "staging" && runId === 0) {
+  if (requiresProductionVerification(options) && runId === 0) {
     push(failures, "provenance.buildWorkflowRunId", "must be greater than 0");
   }
-  if (options.context !== "staging" && runAttempt === 0) {
+  if (requiresProductionVerification(options) && runAttempt === 0) {
     push(failures, "provenance.buildWorkflowAttempt", "must be greater than 0");
   }
   relativePathAt(provenance, "provenanceStatementPath", "provenance", failures);
@@ -507,10 +516,11 @@ function validateSecurity(manifest, failures, options) {
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, "security.signatureKind", `must be ${target.signatureKind}`);
   }
-  if (options.context !== "staging" && !signatureVerified) {
+  if (requiresProductionVerification(options) && !signatureVerified) {
     push(failures, "security.signatureVerified", "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures);
+  validateLifecycleVerificationContext(policy, status, "security", options, failures);
   validateVerificationCheckConsistency(
     target,
     signatureVerified,
@@ -601,10 +611,11 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, `${signingPath}.signatureKind`, `must be ${target.signatureKind}`);
   }
-  if (options.context !== "staging" && !verified) {
+  if (requiresProductionVerification(options) && !verified) {
     push(failures, `${signingPath}.signatureVerified`, "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures, signingPath);
+  validateLifecycleVerificationContext(policy, status, signingPath, options, failures);
   validateVerificationCheckConsistency(
     target,
     signatureVerified,
@@ -622,6 +633,30 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     options,
     path,
   );
+}
+
+function validateLifecycleVerificationContext(policy, status, path, options, failures) {
+  if (options.context === "non-production") {
+    if (!new Set(["development", "pull-request"]).has(policy)) {
+      push(
+        failures,
+        `${path}.verificationPolicy`,
+        "must be development or pull-request in non-production lifecycle context",
+      );
+    }
+    return;
+  }
+  const expected =
+    options.context === "staging"
+      ? { policy: "staging", status: "unverified-staging" }
+      : { policy: "production", status: "verified-production" };
+  if (policy !== expected.policy || status !== expected.status) {
+    push(
+      failures,
+      `${path}.verificationStatus`,
+      `verification must match ${options.context} lifecycle context (${expected.policy}/${expected.status})`,
+    );
+  }
 }
 
 function validateSidecarVerificationChecks(signing, target, path, failures) {
@@ -687,7 +722,7 @@ function validateSidecarNotarization(target, required, verified, failures, optio
   if (required !== macosTarget) {
     push(failures, `${path}.signing.notarizationRequired`, `must be ${String(macosTarget)}`);
   }
-  if (macosTarget && options.context !== "staging" && !verified) {
+  if (macosTarget && requiresProductionVerification(options) && !verified) {
     push(failures, `${path}.signing.notarizationVerified`, "must be true for macOS targets");
   }
   if (!macosTarget && verified) {
@@ -759,7 +794,7 @@ function validateTargetNotarization(target, required, verified, failures, option
   if (required !== macosTarget) {
     push(failures, "security.notarizationRequired", `must be ${String(macosTarget)}`);
   }
-  if (macosTarget && options.context !== "staging" && !verified) {
+  if (macosTarget && requiresProductionVerification(options) && !verified) {
     push(failures, "security.notarizationVerified", "must be true for macOS targets");
   }
   if (!macosTarget && verified) {
@@ -914,7 +949,7 @@ function validateUpdatePredicates(manifest, update, failures, options) {
       );
     }
   }
-  if (options.context !== "staging" && !verified) {
+  if (requiresProductionVerification(options) && !verified) {
     push(
       failures,
       "updateEligibility.requiredPredicates.platformSignatureLocallyVerified",

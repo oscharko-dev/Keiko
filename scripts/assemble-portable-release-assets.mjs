@@ -24,6 +24,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const BUNDLE_MANIFEST_NAME = "portable-assets.json";
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024;
 
 function fail(message) {
   throw new Error(`assemble-portable-release-assets: ${message}`);
@@ -75,7 +76,7 @@ function contained(root, candidate) {
   return value === "" || (!value.startsWith(`..${sep}`) && value !== "..");
 }
 
-function regularContainedFile(root, relativePath, label) {
+function regularContainedFile(root, relativePath, label, maxBytes = MAX_EVIDENCE_BYTES) {
   const candidate = resolve(root, relativePath);
   if (!contained(root, candidate)) fail(`${label} escapes the target artifact`);
   let entry;
@@ -87,8 +88,7 @@ function regularContainedFile(root, relativePath, label) {
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1)
     fail(`${label} must be a regular unlinked file`);
   if (!contained(root, realpathSync(candidate))) fail(`${label} escapes the target artifact`);
-  if (entry.size === 0 || entry.size > MAX_EVIDENCE_BYTES)
-    fail(`${label} has an invalid bounded size`);
+  if (entry.size === 0 || entry.size > maxBytes) fail(`${label} has an invalid bounded size`);
   return candidate;
 }
 
@@ -250,6 +250,13 @@ function readJson(path, label) {
 function assertEvidenceText(path, label) {
   const text = readFileSync(path, "utf8");
   const failures = findPortableMetadataRedactionFailures(text, label);
+  if (/\.(?:json|jsonl)$/u.test(path)) {
+    try {
+      failures.push(...findPortableMetadataRedactionFailures(JSON.parse(text), label));
+    } catch {
+      fail(`${label} must contain valid JSON`);
+    }
+  }
   if (failures.length > 0) fail(`${label} contains forbidden metadata`);
   return text;
 }
@@ -257,10 +264,9 @@ function assertEvidenceText(path, label) {
 function assertEvidence(stageRoot, manifest, target) {
   assertChecksumEvidence(stageRoot, manifest, target);
   assertSigningAndProvenanceEvidence(stageRoot, manifest, target);
-  const sbom = readJson(
-    regularContainedFile(stageRoot, manifest.evidence.sbomPath, "SBOM evidence"),
-    "SBOM evidence",
-  );
+  const sbomPath = regularContainedFile(stageRoot, manifest.evidence.sbomPath, "SBOM evidence");
+  assertEvidenceText(sbomPath, "SBOM evidence");
+  const sbom = readJson(sbomPath, "SBOM evidence");
   if (sbom.bomFormat !== "CycloneDX") fail(`${target.platformTarget} SBOM evidence is invalid`);
   assertEvidenceText(
     regularContainedFile(stageRoot, manifest.evidence.licenseNoticePath, "license evidence"),
@@ -284,6 +290,7 @@ function assertSigningAndProvenanceEvidence(stageRoot, manifest, target) {
     manifest.security.verificationSummaryPath,
     "signing summary",
   );
+  assertEvidenceText(summaryPath, "signing summary");
   if (
     JSON.stringify(readJson(summaryPath, "signing summary")) !==
     JSON.stringify(portableVerificationSummaryForManifest(manifest))
@@ -347,9 +354,16 @@ function assertSidecarEvidence(stageRoot, manifest, target) {
     ) {
       fail(`${target.platformTarget} sidecar payload does not match its manifest`);
     }
-    for (const evidence of [sidecar.licenseEvidence, sidecar.sbomEvidence]) {
+    for (const [evidence, requiresCycloneDx] of [
+      [sidecar.licenseEvidence, false],
+      [sidecar.sbomEvidence, true],
+    ]) {
       const relativePath = relative(sidecar.payloadRootPath, evidence.path);
       const path = regularContainedFile(root, relativePath, "sidecar evidence");
+      assertEvidenceText(path, "sidecar evidence");
+      if (requiresCycloneDx && readJson(path, "sidecar SBOM evidence").bomFormat !== "CycloneDX") {
+        fail(`${target.platformTarget} sidecar SBOM evidence is invalid`);
+      }
       if (createHash("sha256").update(readFileSync(path)).digest("hex") !== evidence.sha256) {
         fail(`${target.platformTarget} sidecar evidence digest does not match`);
       }
@@ -366,6 +380,7 @@ async function loadTarget(options, target) {
     downloaded,
     target.assetName,
     `${target.platformTarget} archive`,
+    MAX_ARCHIVE_BYTES,
   );
   const manifestPath = regularContainedFile(
     downloaded,

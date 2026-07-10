@@ -178,11 +178,14 @@ jobs:
       - name: Publish package
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
           KEIKO_PORTABLE_ASSETS_MANIFEST: ${{ steps.portable_assets.outputs.manifest }}
+          KEIKO_PORTABLE_ASSETS_REPOSITORY: ${{ github.repository }}
           KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
           KEIKO_PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
           KEIKO_PORTABLE_ASSETS_SOURCE_SHA: ${{ github.sha }}
           KEIKO_PORTABLE_ASSETS_TAG: ${{ github.ref_name }}
+          KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: .github/workflows/portable-assets.yml
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
