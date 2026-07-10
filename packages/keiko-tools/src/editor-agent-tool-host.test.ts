@@ -220,6 +220,70 @@ describe("EditorAgentToolHost route dispatch", () => {
     });
   });
 
+  it.each(["references", "renamePrepare", "signatureHelp"] as const)(
+    "queues the %s symbol navigation operation",
+    async (operation) => {
+      const route = recordingRoute();
+      await execute(host(route), "editor_navigate_symbol", {
+        sessionId: "session-1",
+        idempotencyKey: IDEMPOTENCY_KEY,
+        file: "src/a.ts",
+        operation,
+        position: { line: 0, character: 0 },
+      });
+      expect(JSON.parse(route.requests[0]?.body ?? "null")).toMatchObject({
+        type: "navigateSymbol",
+        navigateSymbol: { operation },
+      });
+    },
+  );
+
+  it("queues code actions with diagnostics and a range", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_navigate_symbol", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      file: "src/a.ts",
+      operation: "codeActions",
+      position: { line: 0, character: 0 },
+      range: RANGE,
+      diagnostics: [
+        { range: RANGE, severity: "error", message: "error", source: "ts", code: "E1" },
+        { range: RANGE, severity: "warning", message: "warning", source: "ts" },
+        { range: RANGE, severity: "info", message: "info", source: "ts" },
+        { range: RANGE, severity: "hint", message: "hint", source: "ts" },
+      ],
+    });
+    const action = JSON.parse(route.requests[0]?.body ?? "null") as EditorAgentAction;
+    expect(action.navigateSymbol).toMatchObject({ operation: "codeActions", range: RANGE });
+    expect(action.navigateSymbol?.diagnostics).toHaveLength(4);
+  });
+
+  it("queues a fully scoped text search with optional filters", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_search_workspace", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      query: "parse config",
+      mode: "text",
+      caseSensitive: true,
+      includeGlobs: ["src/**/*.ts"],
+      excludeGlobs: ["**/*.test.ts"],
+      maxResults: 10,
+      scopePath: "src",
+    });
+    const action = JSON.parse(route.requests[0]?.body ?? "null") as EditorAgentAction;
+    expect(action.searchWorkspace).toMatchObject({
+      mode: "text",
+      query: "parse config",
+      caseSensitive: true,
+      includeGlobs: ["src/**/*.ts"],
+      excludeGlobs: ["**/*.test.ts"],
+      maxResults: 10,
+      scopePath: "src",
+    });
+  });
+
   it.each([
     [
       "applyTextEdits",
@@ -371,6 +435,50 @@ describe("EditorAgentToolHost route dispatch", () => {
   ])("rejects a missing model idempotency key for %s", async (toolName, args) => {
     const route = recordingRoute();
     const result = await execute(host(route), toolName, args);
+    expect(parseOutput(result)).toMatchObject({
+      ok: false,
+      error: { kind: "invalid-arguments", code: "INVALID_ARGUMENTS" },
+    });
+    expect(route.requests).toHaveLength(0);
+  });
+
+  it.each([
+    ["invalid operation", { operation: "implementation" }],
+    ["missing code-action extras", { operation: "codeActions" }],
+    ["unexpected code-action extras", { operation: "definition", range: RANGE }],
+  ])("rejects %s for symbol navigation", async (_label, extras) => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_navigate_symbol", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      file: "src/a.ts",
+      position: { line: 0, character: 0 },
+      ...extras,
+    });
+    expect(parseOutput(result)).toMatchObject({
+      ok: false,
+      error: { kind: "invalid-arguments", code: "INVALID_ARGUMENTS" },
+    });
+    expect(route.requests).toHaveLength(0);
+  });
+
+  it.each([
+    ["invalid mode", { mode: "regex" }],
+    ["invalid caseSensitive", { mode: "text", caseSensitive: "yes" }],
+    ["invalid includeGlobs type", { mode: "text", includeGlobs: "src" }],
+    ["empty includeGlob", { mode: "text", includeGlobs: [""] }],
+    [
+      "too many includeGlobs",
+      { mode: "text", includeGlobs: Array.from({ length: 33 }, () => "*.ts") },
+    ],
+  ])("rejects %s for workspace search", async (_label, extras) => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_search_workspace", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      query: "query",
+      ...extras,
+    });
     expect(parseOutput(result)).toMatchObject({
       ok: false,
       error: { kind: "invalid-arguments", code: "INVALID_ARGUMENTS" },
