@@ -145,7 +145,8 @@ function escapeLiteralForRegex(value: string): string {
 function patternForRequest(
   request: WorkspaceSearchRequest | WorkspaceReplacePreviewRequest,
 ): string {
-  return request.mode === "literal" ? escapeLiteralForRegex(request.query) : request.query;
+  const pattern = request.mode === "literal" ? escapeLiteralForRegex(request.query) : request.query;
+  return "wholeWord" in request && request.wholeWord === true ? `\\b(?:${pattern})\\b` : pattern;
 }
 
 function queryForRequest(
@@ -302,12 +303,20 @@ function lineForOffset(offsets: readonly number[], offset: number): number {
   return line;
 }
 
+function expandCaptureGroupReferences(replacement: string, match: RegExpExecArray): string {
+  return replacement.replace(/\$([1-9]\d*)/gu, (reference, indexText: string) => {
+    return match[Number.parseInt(indexText, 10)] ?? reference;
+  });
+}
+
 function editForMatch(
   offsets: readonly number[],
   startOffset: number,
-  text: string,
+  match: RegExpExecArray,
   replacement: string,
+  expandCaptures: boolean,
 ): WorkspaceReplacePreviewEdit {
+  const text = match[0];
   const endOffset = startOffset + text.length;
   const startLineIndex = lineForOffset(offsets, startOffset);
   const endLineIndex = lineForOffset(offsets, endOffset);
@@ -321,7 +330,7 @@ function editForMatch(
       endColumn: endOffset - endLineOffset + 1,
     },
     originalText: text,
-    newText: replacement,
+    newText: expandCaptures ? expandCaptureGroupReferences(replacement, match) : replacement,
   };
 }
 
@@ -336,6 +345,7 @@ function editsForContent(
   content: string,
   regex: RegExp,
   replacement: string,
+  expandCaptures: boolean,
 ): readonly WorkspaceReplacePreviewEdit[] {
   const offsets = lineOffsets(content);
   const edits: WorkspaceReplacePreviewEdit[] = [];
@@ -345,7 +355,9 @@ function editsForContent(
     regex.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(line)) !== null) {
-      edits.push(editForMatch(offsets, lineStart + match.index, match[0], replacement));
+      edits.push(
+        editForMatch(offsets, lineStart + match.index, match, replacement, expandCaptures),
+      );
       if (match[0].length === 0) regex.lastIndex += 1;
     }
   }
@@ -357,6 +369,7 @@ function buildReplaceFileEdit(
   path: string,
   regex: RegExp,
   replacement: string,
+  expandCaptures: boolean,
 ): WorkspaceReplacePreviewFileEdit | undefined {
   const content = readWorkspaceFile(
     scope.workspace,
@@ -364,7 +377,7 @@ function buildReplaceFileEdit(
     { maxBytes: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned },
     nodeWorkspaceFs,
   );
-  const edits = editsForContent(content.text, regex, replacement);
+  const edits = editsForContent(content.text, regex, replacement, expandCaptures);
   return edits.length === 0
     ? undefined
     : { path, baseContentHash: contentHash(content.text), edits };
@@ -398,7 +411,13 @@ function buildReplacePreviewFiles(
   const files: WorkspaceReplacePreviewFileEdit[] = [];
   for (const path of paths) {
     if (files.length >= request.maxFiles) break;
-    const file = buildReplaceFileEdit(scope, path, regex, request.replacement);
+    const file = buildReplaceFileEdit(
+      scope,
+      path,
+      regex,
+      request.replacement,
+      request.mode === "regex",
+    );
     if (file !== undefined) files.push(file);
   }
   return files;
@@ -431,6 +450,7 @@ function parseWorkspaceSearchRequest(body: Record<string, unknown>): WorkspaceSe
     query: body.query as string,
     mode: body.mode as WorkspaceSearchRequest["mode"],
     caseSensitive: body.caseSensitive as boolean,
+    ...(body.wholeWord === undefined ? {} : { wholeWord: body.wholeWord as boolean }),
     includeGlobs: body.includeGlobs as readonly string[],
     excludeGlobs: body.excludeGlobs as readonly string[],
     maxResults: body.maxResults as number,

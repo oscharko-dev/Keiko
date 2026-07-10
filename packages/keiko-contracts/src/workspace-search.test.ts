@@ -73,6 +73,16 @@ describe("workspace search wire validators", () => {
     );
   });
 
+  it("accepts an optional whole-word flag and rejects non-boolean values", () => {
+    expect(validateWorkspaceSearchRequest({ ...searchRequest(), wholeWord: true })).toEqual({
+      ok: true,
+    });
+    expectInvalidWithReason(
+      validateWorkspaceSearchRequest({ ...searchRequest(), wholeWord: "yes" }),
+      "wholeWord",
+    );
+  });
+
   it("rejects empty and whitespace-only queries", () => {
     expectInvalidWithReason(validateWorkspaceSearchRequest(searchRequest({ query: "" })), "query");
     expectInvalidWithReason(
