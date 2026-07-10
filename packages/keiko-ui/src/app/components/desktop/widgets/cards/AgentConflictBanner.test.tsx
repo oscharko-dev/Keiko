@@ -8,7 +8,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -37,9 +38,29 @@ function renderBanner(
   };
 }
 
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});
+
 // ─── Structure & ARIA ────────────────────────────────────────────────────────
 
 describe("AgentConflictBanner — structure", () => {
+  it("localizes conflict recovery controls when German is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <AgentConflictBanner
+          code="NO_ACTIVE_BRIDGE"
+          message="No live browser bridge is connected."
+          onDismiss={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Keine aktive Editorverbindung")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ausblenden" })).toBeInTheDocument();
+  });
+
   it("renders role=alertdialog so screen readers announce the conflict and expect an action", () => {
     renderBanner("DIRTY");
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();

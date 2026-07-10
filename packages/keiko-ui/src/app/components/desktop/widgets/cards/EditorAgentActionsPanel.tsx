@@ -23,11 +23,13 @@ import type {
   EditorAgentActionAuditRecord,
   EditorAgentActionDisposition,
 } from "../../../../../lib/types";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 
-const DISPOSITION_LABEL: Record<EditorAgentActionDisposition, string> = {
-  allowed: "Allowed",
-  "review-required": "Review required",
-  denied: "Denied",
+const DISPOSITION_LABEL_KEY: Record<EditorAgentActionDisposition, MessageKey> = {
+  allowed: "editor.agentActions.disposition.allowed",
+  "review-required": "editor.agentActions.disposition.reviewRequired",
+  denied: "editor.agentActions.disposition.denied",
 };
 
 // Disposition is signalled by the text label above; colour only reinforces it (WCAG 1.4.1).
@@ -53,33 +55,38 @@ interface FilterOption<T extends string> {
   readonly label: string;
 }
 
+interface FilterOptionDefinition<T extends string> {
+  readonly value: T;
+  readonly labelKey: MessageKey;
+}
+
 const ACTION_TYPE_OPTIONS = [
-  { value: "all", label: "All action types" },
-  { value: "openFile", label: "Open file" },
-  { value: "focusTab", label: "Focus tab" },
-  { value: "moveTab", label: "Move tab" },
-  { value: "splitPane", label: "Split pane" },
-  { value: "setSelection", label: "Set selection" },
-  { value: "format", label: "Format" },
-  { value: "save", label: "Save" },
-  { value: "applyTextEdits", label: "Apply text edits" },
-  { value: "applyPatch", label: "Apply patch" },
-  { value: "applyChangeset", label: "Apply changeset" },
-] as const satisfies readonly FilterOption<ActionTypeFilter>[];
+  { value: "all", labelKey: "editor.agentActions.action.all" },
+  { value: "openFile", labelKey: "editor.agentActions.action.openFile" },
+  { value: "focusTab", labelKey: "editor.agentActions.action.focusTab" },
+  { value: "moveTab", labelKey: "editor.agentActions.action.moveTab" },
+  { value: "splitPane", labelKey: "editor.agentActions.action.splitPane" },
+  { value: "setSelection", labelKey: "editor.agentActions.action.setSelection" },
+  { value: "format", labelKey: "editor.agentActions.action.format" },
+  { value: "save", labelKey: "editor.agentActions.action.save" },
+  { value: "applyTextEdits", labelKey: "editor.agentActions.action.applyTextEdits" },
+  { value: "applyPatch", labelKey: "editor.agentActions.action.applyPatch" },
+  { value: "applyChangeset", labelKey: "editor.agentActions.action.applyChangeset" },
+] as const satisfies readonly FilterOptionDefinition<ActionTypeFilter>[];
 
 const DISPOSITION_OPTIONS = [
-  { value: "all", label: "All dispositions" },
-  { value: "allowed", label: DISPOSITION_LABEL.allowed },
-  { value: "review-required", label: DISPOSITION_LABEL["review-required"] },
-  { value: "denied", label: DISPOSITION_LABEL.denied },
-] as const satisfies readonly FilterOption<DispositionFilter>[];
+  { value: "all", labelKey: "editor.agentActions.disposition.all" },
+  { value: "allowed", labelKey: "editor.agentActions.disposition.allowed" },
+  { value: "review-required", labelKey: "editor.agentActions.disposition.reviewRequired" },
+  { value: "denied", labelKey: "editor.agentActions.disposition.denied" },
+] as const satisfies readonly FilterOptionDefinition<DispositionFilter>[];
 
 const TIME_RANGE_OPTIONS = [
-  { value: "all", label: "All time" },
-  { value: "past-hour", label: "Past hour" },
-  { value: "past-day", label: "Past 24 hours" },
-  { value: "past-week", label: "Past 7 days" },
-] as const satisfies readonly FilterOption<TimeRangeFilter>[];
+  { value: "all", labelKey: "editor.agentActions.timeRange.all" },
+  { value: "past-hour", labelKey: "editor.agentActions.timeRange.pastHour" },
+  { value: "past-day", labelKey: "editor.agentActions.timeRange.pastDay" },
+  { value: "past-week", labelKey: "editor.agentActions.timeRange.pastWeek" },
+] as const satisfies readonly FilterOptionDefinition<TimeRangeFilter>[];
 
 const HOUR_MS = 60 * 60 * 1000;
 const TIME_RANGE_MS: Record<Exclude<TimeRangeFilter, "all">, number> = {
@@ -158,6 +165,16 @@ const ROW_STYLE: CSSProperties = {
   color: "var(--text-secondary)",
 };
 
+function translateOptions<T extends string>(
+  definitions: readonly FilterOptionDefinition<T>[],
+  t: I18nTranslate,
+): readonly FilterOption<T>[] {
+  return definitions.map((definition) => ({
+    value: definition.value,
+    label: t(definition.labelKey),
+  }));
+}
+
 function FilterSelect<T extends string>({
   label,
   value,
@@ -198,30 +215,32 @@ function AuditFilterControls({
   onActionTypeChange,
   onDispositionChange,
   onTimeRangeChange,
+  t,
 }: {
   readonly filters: AuditFilters;
   readonly onActionTypeChange: (value: ActionTypeFilter) => void;
   readonly onDispositionChange: (value: DispositionFilter) => void;
   readonly onTimeRangeChange: (value: TimeRangeFilter) => void;
+  readonly t: I18nTranslate;
 }): ReactNode {
   return (
-    <div style={FILTER_GROUP_STYLE} role="group" aria-label="Filter recent agent actions">
+    <div style={FILTER_GROUP_STYLE} role="group" aria-label={t("editor.agentActions.filterGroup")}>
       <FilterSelect
-        label="Action type"
+        label={t("editor.agentActions.filter.actionType")}
         value={filters.actionType}
-        options={ACTION_TYPE_OPTIONS}
+        options={translateOptions(ACTION_TYPE_OPTIONS, t)}
         onChange={onActionTypeChange}
       />
       <FilterSelect
-        label="Disposition"
+        label={t("editor.agentActions.filter.disposition")}
         value={filters.disposition}
-        options={DISPOSITION_OPTIONS}
+        options={translateOptions(DISPOSITION_OPTIONS, t)}
         onChange={onDispositionChange}
       />
       <FilterSelect
-        label="Time range"
+        label={t("editor.agentActions.filter.timeRange")}
         value={filters.timeRange}
-        options={TIME_RANGE_OPTIONS}
+        options={translateOptions(TIME_RANGE_OPTIONS, t)}
         onChange={onTimeRangeChange}
       />
     </div>
@@ -260,14 +279,29 @@ function filterRecords(
   return records.filter((record) => matchesFilters(record, filters, now));
 }
 
-function rowSummary(record: EditorAgentActionAuditRecord): string {
-  const target = record.targetPath === undefined ? "" : ` on ${record.targetPath}`;
+function rowSummary(record: EditorAgentActionAuditRecord, t: I18nTranslate): string {
+  const target =
+    record.targetPath === undefined
+      ? ""
+      : t("editor.agentActions.rowTarget", { path: record.targetPath });
   const reason = record.denyReason ?? record.reviewReason;
-  const because = reason === undefined ? "" : ` (${reason})`;
-  return `${record.actionType}${target}: ${DISPOSITION_LABEL[record.disposition]}, ${record.outcome}${because}`;
+  const because = reason === undefined ? "" : t("editor.agentActions.rowReason", { reason });
+  return t("editor.agentActions.rowSummary", {
+    action: record.actionType,
+    target,
+    disposition: t(DISPOSITION_LABEL_KEY[record.disposition]),
+    outcome: record.outcome,
+    reason: because,
+  });
 }
 
-function AuditRow({ record }: { readonly record: EditorAgentActionAuditRecord }): ReactNode {
+function AuditRow({
+  record,
+  t,
+}: {
+  readonly record: EditorAgentActionAuditRecord;
+  readonly t: I18nTranslate;
+}): ReactNode {
   const occurredAt = new Date(record.occurredAt);
   return (
     <li style={ROW_STYLE} data-testid="agent-action-row">
@@ -286,7 +320,7 @@ function AuditRow({ record }: { readonly record: EditorAgentActionAuditRecord })
         style={{ color: DISPOSITION_COLOR[record.disposition], fontWeight: "var(--weight-medium)" }}
         data-disposition={record.disposition}
       >
-        {DISPOSITION_LABEL[record.disposition]}
+        {t(DISPOSITION_LABEL_KEY[record.disposition])}
       </span>
       <span style={{ color: "var(--text-caption-color, var(--text-secondary))" }}>
         {record.outcome}
@@ -294,7 +328,7 @@ function AuditRow({ record }: { readonly record: EditorAgentActionAuditRecord })
       <time dateTime={occurredAt.toISOString()} style={{ color: "var(--text-secondary)" }}>
         {occurredAt.toLocaleTimeString()}
       </time>
-      <span className="sr-only">{rowSummary(record)}</span>
+      <span className="sr-only">{rowSummary(record, t)}</span>
     </li>
   );
 }
@@ -336,10 +370,12 @@ function AuditFeed({
   records,
   visibleRecords,
   errored,
+  t,
 }: {
   readonly records: readonly EditorAgentActionAuditRecord[];
   readonly visibleRecords: readonly EditorAgentActionAuditRecord[];
   readonly errored: boolean;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (errored) {
     return (
@@ -349,14 +385,14 @@ function AuditFeed({
         aria-live="polite"
         data-testid="agent-actions-error"
       >
-        Unable to load recent agent actions.
+        {t("editor.agentActions.loadError")}
       </p>
     );
   }
   if (records.length === 0) {
     return (
       <p style={{ ...ROW_STYLE, color: "var(--text-secondary)", margin: 0 }}>
-        No recent agent editor actions.
+        {t("editor.agentActions.empty")}
       </p>
     );
   }
@@ -368,14 +404,14 @@ function AuditFeed({
         aria-atomic="true"
         data-testid="agent-actions-no-match"
       >
-        No agent editor actions match the current filters.
+        {t("editor.agentActions.noMatch")}
       </p>
     );
   }
   return (
     <ul style={LIST_STYLE} aria-live="polite" aria-relevant="additions">
       {visibleRecords.map((record) => (
-        <AuditRow key={record.auditId} record={record} />
+        <AuditRow key={record.auditId} record={record} t={t} />
       ))}
     </ul>
   );
@@ -385,6 +421,7 @@ export function EditorAgentActionsPanel({
   agentSessionId,
   refreshNonce,
 }: EditorAgentActionsPanelProps): ReactNode {
+  const t = useTranslate();
   const { records, errored } = useAuditRecords(agentSessionId, refreshNonce);
   const [actionType, setActionType] = useState<ActionTypeFilter>("all");
   const [disposition, setDisposition] = useState<DispositionFilter>("all");
@@ -395,17 +432,18 @@ export function EditorAgentActionsPanel({
   return (
     <section
       style={PANEL_STYLE}
-      aria-label="Recent agent editor actions"
+      aria-label={t("editor.agentActions.panelLabel")}
       data-testid="agent-actions-panel"
     >
-      <h3 style={TITLE_STYLE}>Recent agent actions</h3>
+      <h3 style={TITLE_STYLE}>{t("editor.agentActions.title")}</h3>
       <AuditFilterControls
         filters={filters}
         onActionTypeChange={setActionType}
         onDispositionChange={setDisposition}
         onTimeRangeChange={setTimeRange}
+        t={t}
       />
-      <AuditFeed records={records} visibleRecords={visibleRecords} errored={errored} />
+      <AuditFeed records={records} visibleRecords={visibleRecords} errored={errored} t={t} />
     </section>
   );
 }

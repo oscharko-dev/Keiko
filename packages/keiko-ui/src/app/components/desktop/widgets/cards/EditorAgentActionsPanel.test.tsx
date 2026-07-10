@@ -9,6 +9,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import type { EditorAgentActionAuditRecord } from "../../../../../lib/types";
 
 const fetchEditorAgentAudit = vi.fn();
@@ -45,9 +46,27 @@ function record(over: Partial<EditorAgentActionAuditRecord> = {}): EditorAgentAc
 afterEach(() => {
   fetchEditorAgentAudit.mockReset();
   vi.restoreAllMocks();
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
 describe("EditorAgentActionsPanel", () => {
+  it("localizes the audit controls and dispositions when German is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    fetchEditorAgentAudit.mockResolvedValue({ records: [record()] });
+    render(
+      <I18nProvider>
+        <EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />
+      </I18nProvider>,
+    );
+
+    expect(
+      await screen.findByRole("region", { name: "Letzte Agentenaktionen im Editor" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Aktionstyp" })).toHaveValue("all");
+    expect(screen.getByRole("option", { name: "Alle Aktionstypen" })).toBeInTheDocument();
+    expect(screen.getByText("Prüfung erforderlich")).toBeInTheDocument();
+  });
+
   it("lists recent agent actions with action type, target, and disposition label (AC4)", async () => {
     fetchEditorAgentAudit.mockResolvedValue({ records: [record()] });
     render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);

@@ -18,6 +18,7 @@
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { useEffect, useId, useRef } from "react";
 import type { EditorAgentActionResult } from "../../../../../lib/types";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 export type AgentConflictCode = NonNullable<EditorAgentActionResult["conflict"]>["code"];
 
@@ -29,28 +30,28 @@ export interface AgentConflictBannerProps {
   readonly onDismiss: () => void;
 }
 
-function conflictTitle(code: AgentConflictCode): string {
+function conflictTitle(code: AgentConflictCode, t: I18nTranslate): string {
   switch (code) {
     case "DIRTY":
-      return "Unsaved changes conflict";
+      return t("editor.agentConflict.title.dirty");
     case "VERSION_MISMATCH":
-      return "File version mismatch";
+      return t("editor.agentConflict.title.versionMismatch");
     case "CONTENT_HASH_MISMATCH":
-      return "File content mismatch";
+      return t("editor.agentConflict.title.contentHashMismatch");
     case "INVALID_EDITS":
-      return "Invalid agent edits";
+      return t("editor.agentConflict.title.invalidEdits");
     case "OUT_OF_SCOPE":
-      return "Action out of scope";
+      return t("editor.agentConflict.title.outOfScope");
     case "NO_ACTIVE_SESSION":
-      return "No active editor session";
+      return t("editor.agentConflict.title.noActiveSession");
     case "NO_ACTIVE_BRIDGE":
-      return "No live editor bridge";
+      return t("editor.agentConflict.title.noActiveBridge");
     case "PRECONDITION_REQUIRED":
-      return "Missing write precondition";
+      return t("editor.agentConflict.title.preconditionRequired");
     case "POLICY_DENIED":
-      return "Action denied by policy";
+      return t("editor.agentConflict.title.policyDenied");
     case "APPROVAL_REQUIRED":
-      return "Action approval required";
+      return t("editor.agentConflict.title.approvalRequired");
   }
 }
 
@@ -60,6 +61,7 @@ function ConflictActions({
   onReload,
   onDismiss,
   primaryRef,
+  t,
 }: {
   readonly code: AgentConflictCode;
   readonly onSave: (() => void) | undefined;
@@ -68,16 +70,17 @@ function ConflictActions({
   // GEN-UI-A11Y-005: focus lands on the primary recovery action on mount (Save for DIRTY, Reload for a
   // version/content mismatch, else the sole Dismiss).
   readonly primaryRef: RefObject<HTMLButtonElement>;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (code === "DIRTY") {
     return (
       <div className="ai-danger-act">
         <button type="button" className="ed-save" onClick={onSave} ref={primaryRef}>
-          Save
+          {t("common.save")}
         </button>
         {/* A11Y-4: use ed-save (neutral) not ed-reload (reload semantic is misleading for Dismiss) */}
         <button type="button" className="ed-save" onClick={onDismiss}>
-          Dismiss
+          {t("common.dismiss")}
         </button>
       </div>
     );
@@ -86,10 +89,10 @@ function ConflictActions({
     return (
       <div className="ai-danger-act">
         <button type="button" className="ed-reload" onClick={onReload} ref={primaryRef}>
-          Reload
+          {t("editor.agentConflict.reload")}
         </button>
         <button type="button" className="ed-reload" onClick={onDismiss}>
-          Dismiss
+          {t("common.dismiss")}
         </button>
       </div>
     );
@@ -97,7 +100,7 @@ function ConflictActions({
   return (
     <div className="ai-danger-act">
       <button type="button" className="ed-reload" onClick={onDismiss} ref={primaryRef}>
-        Dismiss
+        {t("common.dismiss")}
       </button>
     </div>
   );
@@ -110,6 +113,7 @@ export function AgentConflictBanner({
   onReload,
   onDismiss,
 }: AgentConflictBannerProps): ReactNode {
+  const t = useTranslate();
   const titleId = useId();
   const bodyId = useId();
   // GEN-UI-A11Y-005: this is a recoverable conflict prompt that demands a choice, so it is an
@@ -136,7 +140,7 @@ export function AgentConflictBanner({
     >
       <div className="ai-danger-h">
         <span className="tt" id={titleId}>
-          {conflictTitle(code)}
+          {conflictTitle(code, t)}
         </span>
       </div>
       <p id={bodyId}>
@@ -149,6 +153,7 @@ export function AgentConflictBanner({
         onReload={onReload}
         onDismiss={onDismiss}
         primaryRef={primaryRef}
+        t={t}
       />
     </div>
   );
