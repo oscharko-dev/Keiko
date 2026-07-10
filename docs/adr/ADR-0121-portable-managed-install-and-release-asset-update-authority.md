@@ -187,14 +187,20 @@ certificate profile. The GitHub workload authenticates to Azure with environment
 only `Artifact Signing Certificate Profile Signer` at the certificate-profile resource scope. Azure
 retains the non-exportable signing key and provides the RFC 3161 timestamp service. Repository,
 environment, or runner secrets must not contain a Windows signing private key or an Azure client
-secret. A `PublicTrust Test` profile is forbidden for production.
+secret. A `PublicTrust Test` profile is forbidden for production. The account and profile aliases
+select the signing resource but are not recoverable signer identity. Every signed PE must verify both a
+valid Public Trust/code-signing chain and the exact reviewed subscriber identity-validation EKU
+`1.3.6.1.4.1.311.97.<subscriber suffix>`. The workflow must not pin a rotating leaf thumbprint, public
+key, or certificate subject.
 
 macOS production artifacts use a Developer ID Application identity with hardened runtime. Every
 embedded Mach-O is signed leaf-to-root before the app; each target app is submitted with a team App
 Store Connect API key through `notarytool`, accepted, stapled, and assessed locally before its final
 archive is created. Apple certificate/key material exists only as protected environment secrets and is
 decoded into owner-only, per-run temporary storage and a generated temporary keychain. Cleanup is
-unconditional and a cleanup failure fails the job.
+unconditional and a cleanup failure fails the job. The notarization key is a dedicated team key with
+the least-privilege `Developer` role; broader roles and unrelated use are forbidden. Team keys apply
+across all apps and cannot be restricted to Keiko alone, so this operational isolation is mandatory.
 
 Production signing is permitted only on protected native runners for a reviewed stable tag in the
 `portable-release-signing` GitHub environment. The same native job must sign, calculate or verify the
@@ -207,10 +213,12 @@ assessment, or partial target completion fails closed and cannot produce or prom
 
 The evidence remains the existing portable manifest and `evidence/signing-verification.json`
 projection. Provider logs, certificate bodies, notarization logs, credentials, private paths, and raw
-stdout/stderr are forbidden. Azure's short-lived leaf certificate rotation is not an identity change:
-verification binds the Public Trust chain and reviewed certificate profile rather than pinning a leaf
-thumbprint or key. An intentional publisher/profile identity change requires a reviewed amendment to
-the signing contract and renewed qualification.
+stdout/stderr are forbidden. The raw subscriber EKU is protected configuration and must not appear in
+posted or committed evidence. Azure's short-lived leaf certificate rotation is not an identity change:
+verification binds the Public Trust/code-signing chain and reviewed subscriber identity-validation EKU
+rather than pinning a leaf thumbprint, public key, certificate subject, account, or profile alias. An
+intentional subscriber identity EKU change requires a reviewed amendment to the signing contract and
+renewed qualification.
 
 Authenticode establishes publisher and artifact integrity but does not guarantee that Microsoft
 SmartScreen will suppress warnings for every new file hash. SmartScreen reputation remains a
@@ -248,7 +256,8 @@ Security review for implementation under this ADR must cover:
 - **Signing workload identity.** Production signing is restricted by both the protected GitHub
   environment and exact stable-tag workflow guards. Azure federation is repository- and
   environment-bound, uses no client secret, and grants signer authority only at the selected
-  certificate profile.
+  certificate profile. Every PE must independently match the reviewed subscriber identity-validation
+  EKU as well as the Public Trust/code-signing chain.
 - **Ephemeral Apple material.** Imported Developer ID and notarization credentials are masked,
   owner-readable only, never passed on command lines, and removed in an always-run cleanup step
   together with the temporary keychain. Cleanup failure blocks promotion.

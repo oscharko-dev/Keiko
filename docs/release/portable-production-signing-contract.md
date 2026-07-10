@@ -52,8 +52,13 @@ smallest job scope. Signing jobs never receive `contents: write`.
   validation scope, and do not grant `Owner`, `Contributor`, or `Artifact Signing Identity Verifier`.
 - Signing: SHA-256 file digest plus Azure's RFC 3161 timestamp service.
 - Key custody: Azure-managed HSM; no exportable Windows signing key enters GitHub.
-- Identity binding: verify the Public Trust chain and the reviewed profile/publisher alias. Azure
-  rotates its short-lived leaf certificate, so leaf thumbprints and public keys must not be pinned.
+- Resource selection: the account and certificate-profile aliases select where the workflow signs;
+  they are not embedded in the certificate and are not recoverable or durable signer identity.
+- Identity binding: every signed PE must have a valid Public Trust/code-signing chain and the exact
+  reviewed subscriber identity-validation EKU
+  `1.3.6.1.4.1.311.97.<subscriber suffix>`. Azure rotates its short-lived leaf certificate, so leaf
+  thumbprints, public keys, and certificate subjects must not be pinned. The native producer sets the
+  existing `publisherChainVerified` input to `true` only when both checks pass on every PE.
 
 Azure account/profile creation and organization validation are external prerequisites. The repository
 workflow must remain testable without them and fail closed when they are unavailable.
@@ -63,7 +68,10 @@ workflow must remain testable without them and fail closed when they are unavail
 - Identity: Developer ID Application certificate with hardened runtime.
 - Signing order: sign every embedded Mach-O and nested code object leaf-to-root, then sign the app
   bundle. Both `macos-arm64` and `macos-x64` are independently signed and verified.
-- Notarization: a **team** App Store Connect API key with `notarytool`; individual keys are forbidden.
+- Notarization: a dedicated **team** App Store Connect API key assigned the least-privilege `Developer`
+  role with `notarytool`. Individual keys, broader roles, and unrelated use are forbidden. Team keys
+  apply across all apps and cannot be limited to Keiko, so the dedicated key and protected environment
+  are the required isolation boundary.
 - Completion: wait for an accepted notarization result, staple the ticket, validate the staple, and
   run the local Gatekeeper assessment before the archive is finalized.
 - Identity binding: compare the verified signer with the reviewed
@@ -81,32 +89,37 @@ All references are scoped to `portable-release-signing`. Values are provisioned 
 Names may be documented; live values must not appear in commits, manifests, evidence, logs, issues, or
 pull requests.
 
-| Reference                                         | GitHub storage                 | Purpose                                           |
-| ------------------------------------------------- | ------------------------------ | ------------------------------------------------- |
-| `AZURE_CLIENT_ID`                                 | Environment variable (`vars`)  | OIDC workload application/client id               |
-| `AZURE_TENANT_ID`                                 | Environment variable (`vars`)  | Azure tenant id                                   |
-| `AZURE_SUBSCRIPTION_ID`                           | Environment variable (`vars`)  | Azure subscription selection                      |
-| `AZURE_ARTIFACT_SIGNING_ENDPOINT`                 | Environment variable (`vars`)  | Artifact Signing service endpoint                 |
-| `AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME`             | Environment variable (`vars`)  | Basic account alias                               |
-| `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME` | Environment variable (`vars`)  | Approved PublicTrust profile alias                |
-| `APPLE_DEVELOPER_ID_IDENTITY`                     | Environment variable (`vars`)  | Reviewed Developer ID identity alias              |
-| `APPLE_TEAM_ID`                                   | Environment variable (`vars`)  | Reviewed Apple team id                            |
-| `APPLE_NOTARY_KEY_ID`                             | Environment variable (`vars`)  | Team App Store Connect key id                     |
-| `APPLE_NOTARY_ISSUER_ID`                          | Environment variable (`vars`)  | Team App Store Connect issuer id                  |
-| `APPLE_DEVELOPER_ID_CERT_P12_BASE64`              | Environment secret (`secrets`) | Base64-encoded Developer ID certificate bundle    |
-| `APPLE_DEVELOPER_ID_CERT_PASSWORD`                | Environment secret (`secrets`) | Password for the certificate bundle               |
-| `APPLE_NOTARY_KEY_P8_BASE64`                      | Environment secret (`secrets`) | Base64-encoded team App Store Connect private key |
+| Reference                                         | GitHub storage                 | Purpose                                          |
+| ------------------------------------------------- | ------------------------------ | ------------------------------------------------ |
+| `AZURE_CLIENT_ID`                                 | Environment variable (`vars`)  | OIDC workload application/client id              |
+| `AZURE_TENANT_ID`                                 | Environment variable (`vars`)  | Azure tenant id                                  |
+| `AZURE_SUBSCRIPTION_ID`                           | Environment variable (`vars`)  | Azure subscription selection                     |
+| `AZURE_ARTIFACT_SIGNING_ENDPOINT`                 | Environment variable (`vars`)  | Artifact Signing service endpoint                |
+| `AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME`             | Environment variable (`vars`)  | Basic account alias                              |
+| `AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME` | Environment variable (`vars`)  | Approved PublicTrust profile alias               |
+| `AZURE_ARTIFACT_SIGNING_IDENTITY_EKU`             | Environment variable (`vars`)  | Full reviewed subscriber identity-validation EKU |
+| `APPLE_DEVELOPER_ID_IDENTITY`                     | Environment variable (`vars`)  | Reviewed Developer ID identity alias             |
+| `APPLE_TEAM_ID`                                   | Environment variable (`vars`)  | Reviewed Apple team id                           |
+| `APPLE_NOTARY_KEY_ID`                             | Environment variable (`vars`)  | Dedicated Developer-role team key id             |
+| `APPLE_NOTARY_ISSUER_ID`                          | Environment variable (`vars`)  | Dedicated team key issuer id                     |
+| `APPLE_DEVELOPER_ID_CERT_P12_BASE64`              | Environment secret (`secrets`) | Base64-encoded Developer ID certificate bundle   |
+| `APPLE_DEVELOPER_ID_CERT_PASSWORD`                | Environment secret (`secrets`) | Password for the certificate bundle              |
+| `APPLE_NOTARY_KEY_P8_BASE64`                      | Environment secret (`secrets`) | Base64 dedicated Developer-role team notary key  |
 
-`AZURE_CLIENT_ID`, tenant/subscription identifiers, service location, account/profile aliases, and
-Apple public identifiers are configuration, not authentication secrets. They remain environment
-variables so rotation and environment review are centralized. There is deliberately no
-`AZURE_CLIENT_SECRET` reference.
+`AZURE_CLIENT_ID`, tenant/subscription identifiers, service location, account/profile aliases, the
+full reviewed subscriber identity-validation EKU, and Apple public identifiers are configuration, not
+authentication secrets. They remain protected environment variables so rotation and environment review
+are centralized. `AZURE_ARTIFACT_SIGNING_IDENTITY_EKU` must contain the complete
+`1.3.6.1.4.1.311.97.<subscriber suffix>` value, not a prefix or certificate-profile alias. There is
+deliberately no `AZURE_CLIENT_SECRET` reference.
 
 Content-free evidence may retain the existing target, stable tag, source commit, SHA-256 digests,
-Booleans, enums, and bounded reason codes. The approved profile/identity aliases are comparison inputs;
-the current verifier projects their successful comparison into platform Booleans and does not add the
-alias values to `signing-verification.json`. Private material and raw provider/tool output are never
-evidence.
+Booleans, enums, bounded reason codes, and an approved resource/identity alias where an existing schema
+allows it. The raw subscriber EKU must not appear in posted or committed evidence; native verification
+reduces its comparison to a workflow-local bounded identity-match Boolean. The current verifier does
+not add that field: its producer sets the existing `publisherChainVerified` Boolean to `true` only when
+the chain and exact identity match both pass on every PE. `signing-verification.json` retains its
+existing schema. Private material and raw provider/tool output are never evidence.
 
 ## Native provenance and verification handshake
 
@@ -116,7 +129,9 @@ Signing success is not a caller declaration. For each target, one protected nati
 2. stage the target and determine the pre-signing payload scope;
 3. sign every required executable or code object;
 4. verify the complete signed payload using native platform tools;
-5. compare the verified publisher/profile with the stable reviewed identity alias;
+5. on Windows, require the Public Trust/code-signing chain and exact configured subscriber
+   identity-validation EKU on every PE; on macOS, compare the verified signer with the stable reviewed
+   identity alias;
 6. finalize the archive, calculate its SHA-256 digest, and bind the verified payload result to that
    archive without modifying it afterward;
 7. create the bounded verifier input and run `scripts/verify-portable-runtime-signing.mjs` with
@@ -180,20 +195,20 @@ sidecar fields.
 Only these existing bounded reason codes may be supplied or emitted; provider-specific text must never
 be copied into evidence:
 
-| Code                                 | Exact use                                                                                  |
-| ------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `credential-unavailable`             | A protected credential becomes unavailable or unusable after the native phase has started. |
-| `verification-tool-unavailable`      | The required native signing/verifying tool cannot be executed.                             |
-| `verification-input-missing`         | The production verifier receives no input, or a manifest sidecar has no matching input.    |
-| `windows-publisher-chain-unverified` | Derived whenever `publisherChainVerified` is false.                                        |
-| `windows-timestamp-unverified`       | Derived whenever `timestampVerified` is false.                                             |
-| `macos-developer-id-unverified`      | Derived whenever `developerIdVerified` is false.                                           |
-| `macos-notarization-unverified`      | Derived whenever `notarizationVerified` is false.                                          |
-| `macos-staple-unverified`            | Derived whenever `stapleVerified` is false.                                                |
-| `macos-assessment-unverified`        | Derived whenever `assessmentVerified` is false.                                            |
-| `staging-unverified`                 | Emitted for the secret-free staging policy.                                                |
-| `non-production-artifact`            | Emitted for development or pull-request verification.                                      |
-| `non-production-unsigned-allowed`    | Emitted with unsigned development or pull-request verification.                            |
+| Code                                 | Exact use                                                                                      |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `credential-unavailable`             | A protected credential becomes unavailable or unusable after the native phase has started.     |
+| `verification-tool-unavailable`      | The required native signing/verifying tool cannot be executed.                                 |
+| `verification-input-missing`         | The production verifier receives no input, or a manifest sidecar has no matching input.        |
+| `windows-publisher-chain-unverified` | Derived when `publisherChainVerified` is false, including a PE chain or identity-EKU mismatch. |
+| `windows-timestamp-unverified`       | Derived whenever `timestampVerified` is false.                                                 |
+| `macos-developer-id-unverified`      | Derived whenever `developerIdVerified` is false.                                               |
+| `macos-notarization-unverified`      | Derived whenever `notarizationVerified` is false.                                              |
+| `macos-staple-unverified`            | Derived whenever `stapleVerified` is false.                                                    |
+| `macos-assessment-unverified`        | Derived whenever `assessmentVerified` is false.                                                |
+| `staging-unverified`                 | Emitted for the secret-free staging policy.                                                    |
+| `non-production-artifact`            | Emitted for development or pull-request verification.                                          |
+| `non-production-unsigned-allowed`    | Emitted with unsigned development or pull-request verification.                                |
 
 Preflight failure before native signing starts, including a missing required environment variable or a
 failed stable-tag guard, terminates the job before creating a production verifier input and may produce
@@ -223,14 +238,18 @@ environment, request OIDC, read Apple secrets, or become production evidence. In
 
 ## Rotation, revocation, and outage response
 
-Routine secret replacement must not require a repository change. Stage and verify the replacement in
-the protected environment before removing the previous Apple credential or changing an Azure workload
-reference. Because Azure rotates short-lived leaf certificates, normal leaf rotation requires no
-configuration or thumbprint change.
+Routine secret or resource replacement must not require a repository change. Stage and verify the
+replacement in the protected environment before removing the previous Apple credential or changing an
+Azure workload, account, or profile reference. The dedicated Apple replacement key must retain the
+`Developer` role and no unrelated use. Because Azure rotates short-lived leaf certificates, normal leaf
+rotation requires no configuration or thumbprint change when the reviewed subscriber EKU remains the
+same.
 
-An intentional Azure certificate-profile/publisher or Apple Developer ID team/identity change is a
-trust-boundary change: amend this contract through review, update the stable alias, rerun platform
-qualification, and invalidate earlier identity-bound receipts before promotion.
+An intentional Azure subscriber identity EKU or Apple Developer ID team/identity change is a
+trust-boundary change: amend this contract through review, update the protected expected identity,
+rerun platform qualification, and invalidate earlier identity-bound receipts before promotion. An
+Azure account/profile alias change with the same verified subscriber EKU is resource rotation, not
+durable signer-identity rotation, but it still requires replacement verification before use.
 
 On suspected compromise:
 
@@ -257,10 +276,12 @@ SmartScreen reputation is observed but is not asserted as a Keiko-controlled out
 ## Child implementation interfaces
 
 - **#2200 (Windows):** implements the protected native Windows signing job, exact Azure trust/RBAC
-  boundary, digest and profile/publisher binding, Windows verifier input, and fail-closed upload.
+  boundary, `AZURE_ARTIFACT_SIGNING_IDENTITY_EKU`, valid Public Trust/code-signing chain plus exact EKU
+  verification on every PE, digest binding, Windows verifier input, and fail-closed upload. Account and
+  profile aliases remain resource selectors, not signer identity.
 - **#2201 (macOS):** implements both protected native macOS targets, leaf-to-root hardened-runtime
-  signing, per-run credential/keychain hygiene, notarization/stapling/assessment, identity binding,
-  macOS verifier input, and fail-closed upload.
+  signing, dedicated Developer-role team notary key, per-run credential/keychain hygiene,
+  notarization/stapling/assessment, identity binding, macOS verifier input, and fail-closed upload.
 - **#2202 (qualification):** proves all three target artifacts and their sidecars arrive from the native
   jobs with matching digests, identities, manifests, summaries, and release-impact bindings; proves
   staging/manual paths remain secret-free; and proves the assembler/publisher cannot create success.
