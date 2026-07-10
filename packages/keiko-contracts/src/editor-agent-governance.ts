@@ -68,6 +68,8 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   applyTextEdits: "content-mutation",
   applyPatch: "content-mutation",
   applyChangeset: "content-mutation",
+  navigateSymbol: "navigation",
+  searchWorkspace: "navigation",
 };
 
 // Pure editor navigation and layout do not consume workspace or delivery authority. Mutating and
@@ -104,6 +106,8 @@ export const EDITOR_AGENT_ACTION_APPROVAL_RISK: Readonly<
   applyTextEdits: "medium",
   applyPatch: "medium",
   applyChangeset: "high",
+  navigateSymbol: "low",
+  searchWorkspace: "low",
 };
 
 // The mutating action set — the classes that change buffer/file content or have an external effect.

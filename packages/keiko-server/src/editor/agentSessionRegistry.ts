@@ -196,6 +196,8 @@ function bodyFreeResult(result: EditorAgentActionResult): EditorAgentActionResul
             ...(file.conflict === undefined ? {} : { conflict: bodyFreeConflict(file.conflict) }),
           })),
         }),
+    // Server-resolved navigation/search data is returned only to the direct action caller; global
+    // observers and bridge streams remain content-free by construction.
   };
 }
 

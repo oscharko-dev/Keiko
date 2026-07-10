@@ -5,6 +5,8 @@ const TOOL_NAMES = [
   "editor_list_sessions",
   "editor_snapshot",
   "editor_navigate",
+  "editor_navigate_symbol",
+  "editor_search_workspace",
   "editor_propose_edit",
   "editor_propose_changeset",
 ] as const;
@@ -29,8 +31,31 @@ function assertStrictObjects(value: unknown): void {
 }
 
 describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
-  it("exposes exactly the five corrected child tools", () => {
+  it("exposes the governed editor tool set", () => {
     expect(EDITOR_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual(TOOL_NAMES);
+  });
+
+  it("exposes bounded symbol-navigation and workspace-search schemas", () => {
+    expect(
+      EDITOR_AGENT_TOOL_DEFINITIONS.find((tool) => tool.name === "editor_navigate_symbol")
+        ?.parameters,
+    ).toMatchObject({
+      required: ["sessionId", "idempotencyKey", "file", "operation", "position"],
+      additionalProperties: false,
+      properties: {
+        operation: {
+          enum: ["definition", "references", "renamePrepare", "codeActions", "signatureHelp"],
+        },
+      },
+    });
+    expect(
+      EDITOR_AGENT_TOOL_DEFINITIONS.find((tool) => tool.name === "editor_search_workspace")
+        ?.parameters,
+    ).toMatchObject({
+      required: ["sessionId", "idempotencyKey", "query", "mode"],
+      additionalProperties: false,
+      properties: { mode: { enum: ["text", "symbol"] } },
+    });
   });
 
   it("deep-freezes every definition and strict object schema", () => {

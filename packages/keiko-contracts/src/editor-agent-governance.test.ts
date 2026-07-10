@@ -37,6 +37,8 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "applyTextEdits",
   "applyPatch",
   "applyChangeset",
+  "navigateSymbol",
+  "searchWorkspace",
 ];
 
 const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
@@ -53,6 +55,8 @@ const NON_MUTATING: readonly EditorAgentActionType[] = [
   "moveTab",
   "splitPane",
   "setSelection",
+  "navigateSymbol",
+  "searchWorkspace",
 ];
 
 function ctx(over: Partial<EditorAgentActionPolicyContext> = {}): EditorAgentActionPolicyContext {
@@ -89,6 +93,8 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.openFile).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.focusTab).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.setSelection).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.navigateSymbol).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.searchWorkspace).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.moveTab).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.splitPane).toBe("layout");
   });
@@ -96,6 +102,16 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
   it("marks exactly the mutating action set as mutating (AC1)", () => {
     for (const type of CONTENT_MUTATIONS) expect(isMutatingEditorAgentAction(type)).toBe(true);
     for (const type of NON_MUTATING) expect(isMutatingEditorAgentAction(type)).toBe(false);
+  });
+
+  it("keeps server-resolved navigation actions baseline-allowed", () => {
+    for (const type of ["navigateSymbol", "searchWorkspace"] as const) {
+      const decision = classifyEditorAgentAction(type, ctx());
+      expect(decision.disposition).toBe("allowed");
+      expect(
+        composeEditorAgentActionPolicyDecision(decision, authority("governed-assist"), "low"),
+      ).toMatchObject({ disposition: "allowed", effectClass: "navigation" });
+    }
   });
 });
 
