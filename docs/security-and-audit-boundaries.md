@@ -2,7 +2,7 @@
 
 Keiko is a local coding assistant. It is designed for reviewable work in regulated engineering
 environments, not for unattended code changes or hosted multi-user operation. An optional feedback
-action may send one user-reviewed, canonical redacted report outbound to a separately deployed
+action may send one user-reviewed, canonical sanitized report outbound to a separately deployed
 operator service; that narrow egress does not turn the local product into a hosted server.
 
 ## Enforced controls
@@ -19,7 +19,7 @@ operator service; that narrow egress does not turn the local product into a host
 | Undo scope             | Undo/redo must not rewrite evidence, applied patches, verification records, or model-call records.                                                                                                                                                                                                                                                                                                                  |
 | Credentials            | API tokens and related secrets are accepted only from local configuration, local environment, or explicit local setup flows. Persisted local credentials (model-gateway API keys, Figma PAT) are sealed with AES-256-GCM in local vaults; `keiko.config.json` holds only references, never plaintext secrets (ADR-0046). They are never returned to the browser, logged intentionally, or serialized into evidence. |
 | Memory                 | The memory vault is local-only and uses approved Keiko state locations. Workspace-local memory paths are rejected. Audit events are redacted before persistence.                                                                                                                                                                                                                                                    |
-| Feedback submission    | Remote feedback is disabled unless an operator configures one exact HTTPS origin. The local BFF may then send the exact previewed canonical redacted JSON bytes through `gatewayFetch` to fixed `POST /v1/feedback/reports`; it accepts no user-controlled URL, redirect, path, query, credential, original file object, raw log, multipart body, or browser-direct remote request (ADR-0125).                      |
+| Feedback submission    | Remote feedback is disabled unless an operator configures one exact HTTPS origin. The local BFF may send only the exact previewed canonical sanitized JSON through `gatewayFetch` to fixed `POST /v1/feedback/reports`; it accepts no user URL/redirect/path/query/credential, original or quarantined unit, local disposition sidecar, file object, raw log, multipart body, or browser-direct request (ADR-0125). |
 | Hosted feedback intake | Anonymous intake/receipt operations, redacted queue storage, abuse controls, semantic dedupe, OIDC/server authorization, maintainer review, and GitHub App credentials belong to a separately deployed operator service. They are not `createUiServer` routes or `keiko-server` authentication responsibilities.                                                                                                    |
 
 ## Workspace trust-boundary rules
@@ -40,33 +40,56 @@ redaction primitives, and architecture/test gates.
 [ADR-0125](adr/ADR-0125-governed-feedback-intake.md) separates two security boundaries:
 
 - **Local Keiko plane.** `createUiServer` stays bound to loopback and owns only report assembly,
-  the bounded deterministic strict-UTF-8 accepted-text predicate, redaction, canonicalization,
-  preview, explicit confirmation, and the optional outbound call. No hosted queue, OIDC session,
-  maintainer role, remote listener, GitHub App key, or multi-user state belongs in `keiko-server`.
+  the bounded strict-UTF-8 accepted-text predicate, structural detection, deterministic disposition,
+  canonicalization, local recovery sidecar, preview, explicit confirmation, and optional outbound
+  call. No hosted queue, OIDC session, maintainer role, remote listener, GitHub App key, or multi-user
+  state belongs in `keiko-server`.
 - **Operator-hosted intake plane.** A separately deployed service owns the one anonymous submit
   endpoint and a distinct OIDC-authenticated, server-authorized maintainer plane. It stores only
-  validated redacted reports and content-free audit. Each keyed abuse bucket starts at `00:00 UTC`
+  validated sanitized reports and content-free audit. Each keyed abuse bucket starts at `00:00 UTC`
   with `key_id=YYYY-MM-DD`, closes at the next `00:00`, and expires exactly 48 hours from start (24
   hours after close). Current/immediately previous keys cover every live bucket; the previous key is
   destroyed when its last bucket expires. It never persists or logs a raw IP or forwarding header.
   An independently keyed,
   domain-separated semantic HMAC rotates every 90 days with a versioned UTC activation key id, uses
-  one active plus at most two retained keys, and dedupes only the canonical already-redacted semantic
+  one active plus at most two retained keys, and dedupes only the canonical already-sanitized semantic
   projection without refreshing the 180-day digest TTL. A predecessor is destroyed when its final
   digest expires. Approved items alone may reach a narrow, configured-repository,
   issue-create/marker-lookup GitHub App adapter with exactly `Issues: read/write` plus GitHub's
   mandatory `Metadata: read` permission.
 
 Preview and submit use the same immutable canonical bytes and a SHA-256 integrity digest distinct
-from semantic dedupe. The hosted service rejects contract, validation, canonicalization, or
-redaction drift instead of changing the report after preview. V1 is JSON and text-only: local
+from semantic dedupe; public prefill/copy maps only the same canonical semantic projection. The
+hosted service rejects contract, validation, canonicalization, or sanitization drift instead of
+changing the report after preview. V1 is JSON and text-only: local
 extraction rejects known PDF/image/archive/executable magic, invalid UTF-8, NUL, prohibited controls,
 and unsafe format characters, then omits original bytes, paths, names, and file metadata. Bytes that
 pass are accepted text; Keiko makes no broader binary-detection claim. A negative MIME/extension
 signal may reject, but `text/plain`, `.txt`, or a rename never establishes safety. Raw logs are
 blocked through known-signature rejection and may be replaced only by a handwritten sanitized
-summary. The existing pattern/literal redactor is not a semantic customer-data classifier, so user
-preview and maintainer review remain mandatory.
+summary.
+
+For accepted text, detection and disposition are separate. Redact only complete high-confidence
+spans. Ambiguous credential-like content requires structural evidence and quarantines the smallest
+safe unit: a complete quoted/structured value, the rest of a line from an unterminated/malformed
+value boundary, or—only when needed—an optional field/section or attachment. Preserve safe remainder;
+omit an exhausted optional unit and continue; block a required field only when no meaningful safe
+content remains. Binary, oversized, raw-log, or structurally unprocessable input remains blocked.
+The raw draft/quarantined units stay transient local. Recovery is edit/rescan, optional-unit removal,
+or continue with safe omission; no caller or UI can `send anyway`.
+
+The canonical wire contains sanitized values and redaction engine/rule-code/count provenance only.
+Its structured `summary.title` and `summary.description` members are scanned and hosted-verified
+independently, while one combined 4 KiB UTF-8 cap reserves the two-LF title-to-description display
+boundary. This prevents cross-field credential/raw-log composition without weakening residual-content
+verification; downstream projections render title before description from those same values.
+A digest-paired local-memory sidecar carries closed disposition/reason/unit-kind codes and either a
+source draft-field id or snapshotted attachment ordinal for #2073 focus/recovery. It contains no
+offsets, excerpts, filenames, paths, or user labels and never enters the request, public prefill,
+evidence, logs, diagnostics, or durable UI state. The pipeline is deterministic, idempotent, bounded,
+and linear-time; ordinary password-policy/reset prose is preserved without structural credential
+evidence. Pattern/literal scanning is not a semantic customer-data classifier, so user preview and
+maintainer review remain mandatory.
 
 Every accepted submission, including a dedupe match, receives its own immutable receipt id,
 one-time secret, and expiry. The service stores only the secret hash. Fixed
@@ -74,7 +97,8 @@ one-time secret, and expiry. The service stores only the secret hash. Fixed
 `{ receiptId, status: "received" | "closed", expiresAt }`; all unknown, expired, malformed, or
 mismatched capabilities use one generic `404`.
 
-Hosted retention is bounded by data class: zero durable retention for raw/pre-redaction material;
+Feedback retention is bounded by data class: zero durable retention for raw/pre-redaction/quarantined
+material and the local disposition sidecar;
 90 days for open redacted payloads; 30 days for terminal payloads; 180 days for keyed canonical
 redacted dedupe summaries without duplicate-triggered refresh; 365 days for content-free audit; and
 exactly 48 hours from bucket start for abuse buckets (24 hours after close). Shorter limits apply to
@@ -104,6 +128,8 @@ GitHub Security Advisory process in [`SECURITY.md`](../SECURITY.md).
 - The workspace foundation does not introduce WebRTC; that surface is not approved.
 - Pattern and configured-literal redaction cannot prove that arbitrary customer, proprietary, or
   personal data has been removed.
+- Structural disposition may remove benign adjacent text; deterministic smallest-safe-unit rules,
+  safe-remainder preservation, and local edit/rescan recovery bound but do not eliminate that risk.
 - The local Keiko product is not a hosted web service and does not provide multi-user
   authentication. The optional operator-hosted feedback service is a separate deployment and trust
   boundary, not a supported hosting mode for `keiko-server`.

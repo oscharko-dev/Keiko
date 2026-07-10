@@ -15,12 +15,28 @@
 // creating a dependency on the QI package.
 
 const POSIX_ABSOLUTE_PATH_PATTERN =
-  /(^|[^A-Za-z0-9._~:/-])\/(?!\/)(?=[^\n\r"'`<>]*\/)[^\n\r"'`<>]+/gu;
+  /(^|[^A-Za-z0-9._~/-])\/(?!\/)(?=[^\n\r"'`<>]*\/)[^\n\r"'`<>]+/gu;
+const POSIX_SINGLE_SEGMENT_PATH_PATTERN = /(^|[^A-Za-z0-9._~/-])\/(?!\/)[^\s\n\r"'`<>,;]+/gu;
 const WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN =
-  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
-const WINDOWS_UNC_ABSOLUTE_PATH_PATTERN =
-  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)(?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+  /(^|[^A-Za-z0-9._~/-])[A-Za-z]:[\\/](?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+const WINDOWS_DRIVE_SINGLE_SEGMENT_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~/-])[A-Za-z]:[\\/][^\s\n\r"'`<>,;]+/gu;
+const WINDOWS_BACKSLASH_UNC_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~/-])\\\\(?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+const SLASH_UNC_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])\/\/(?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+const FILE_URI_ABSOLUTE_PATH_PATTERN = /\bfile:\/\/[A-Za-z0-9%._~!$&'()*+,;=:@\-/]+/giu;
 const CHAT_ROLE_MARKERS = ["user", "assistant", "system"] as const;
+const REDACTED_PATH = "[REDACTED_PATH]";
+
+export interface AbsolutePathRedactionResult {
+  readonly value: string;
+  readonly count: number;
+}
+
+interface MutablePathCount {
+  count: number;
+}
 
 // True for an invisible / text-reordering code point: bidi override/embedding/isolate,
 // zero-width joiners, BOM, LRM/RLM, the Arabic letter mark, and the U+2060..U+206F block
@@ -44,6 +60,29 @@ function isBidiOrZeroWidthCodePoint(cp: number): boolean {
 function isStrippableControlCodePoint(cp: number): boolean {
   if (cp === 0x09 || cp === 0x0a || cp === 0x0d) return false;
   return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f);
+}
+
+/** True when every UTF-16 code unit sequence represents a Unicode scalar value. */
+export function isUnicodeScalarString(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit < 0xd800 || unit > 0xdfff) continue;
+    if (unit > 0xdbff || index + 1 >= value.length) return false;
+    const trail = value.charCodeAt(index + 1);
+    if (trail < 0xdc00 || trail > 0xdfff) return false;
+    index += 1;
+  }
+  return true;
+}
+
+/** True for C0/C1/DEL controls other than the feedback-safe TAB and LF pair. */
+export function containsControlOtherThanTabOrLf(value: string): boolean {
+  for (const character of value) {
+    const point = character.codePointAt(0) ?? 0;
+    if (point === 0x09 || point === 0x0a) continue;
+    if (point <= 0x1f || (point >= 0x7f && point <= 0x9f)) return true;
+  }
+  return false;
 }
 
 /**
@@ -75,17 +114,45 @@ export function stripUnsafeFormatChars(value: string): string {
  * Redact filesystem-looking absolute paths, including paths whose directory names contain spaces.
  * This intentionally favours over-redaction after an absolute path over leaking a private path tail.
  */
+function replaceDirectPaths(value: string, pattern: RegExp, count: MutablePathCount): string {
+  pattern.lastIndex = 0;
+  const result = value.replace(pattern, () => {
+    count.count += 1;
+    return REDACTED_PATH;
+  });
+  pattern.lastIndex = 0;
+  return result;
+}
+
+function replacePrefixedPaths(value: string, pattern: RegExp, count: MutablePathCount): string {
+  pattern.lastIndex = 0;
+  const result = value.replace(pattern, (_match, prefix: string) => {
+    count.count += 1;
+    return `${prefix}${REDACTED_PATH}`;
+  });
+  pattern.lastIndex = 0;
+  return result;
+}
+
+/** Redact absolute paths and report the number of concrete path matches replaced. */
+export function redactAbsolutePathsWithCount(value: string): AbsolutePathRedactionResult {
+  const count: MutablePathCount = { count: 0 };
+  let output = replaceDirectPaths(value, FILE_URI_ABSOLUTE_PATH_PATTERN, count);
+  for (const pattern of [
+    POSIX_ABSOLUTE_PATH_PATTERN,
+    POSIX_SINGLE_SEGMENT_PATH_PATTERN,
+    WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN,
+    WINDOWS_DRIVE_SINGLE_SEGMENT_PATH_PATTERN,
+    WINDOWS_BACKSLASH_UNC_ABSOLUTE_PATH_PATTERN,
+    SLASH_UNC_ABSOLUTE_PATH_PATTERN,
+  ]) {
+    output = replacePrefixedPaths(output, pattern, count);
+  }
+  return { value: output, count: count.count };
+}
+
 export function redactAbsolutePaths(value: string): string {
-  return value
-    .replace(POSIX_ABSOLUTE_PATH_PATTERN, (_match, prefix: string) => `${prefix}[REDACTED_PATH]`)
-    .replace(
-      WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN,
-      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
-    )
-    .replace(
-      WINDOWS_UNC_ABSOLUTE_PATH_PATTERN,
-      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
-    );
+  return redactAbsolutePathsWithCount(value).value;
 }
 
 export function containsAbsolutePath(value: string): boolean {

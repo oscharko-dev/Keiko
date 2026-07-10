@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   containsAbsolutePath,
+  containsControlOtherThanTabOrLf,
   containsPseudoRoleMarker,
+  isUnicodeScalarString,
   redactAbsolutePaths,
+  redactAbsolutePathsWithCount,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
 
@@ -25,6 +28,14 @@ const DEPRECATED_FMT = String.fromCodePoint(0x206a); // inhibit symmetric swappi
 const NOMINAL_DIGIT_SHAPES = String.fromCodePoint(0x206f); // nominal digit shapes (deprecated fmt)
 
 describe("stripUnsafeFormatChars (GRD-001)", () => {
+  it("exposes strict scalar and TAB/LF-only control predicates", () => {
+    expect(isUnicodeScalarString("valid 😀 text")).toBe(true);
+    expect(isUnicodeScalarString(`invalid${String.fromCharCode(0xd800)}`)).toBe(false);
+    expect(containsControlOtherThanTabOrLf("tab\tand\nline feed")).toBe(false);
+    expect(containsControlOtherThanTabOrLf("carriage\rreturn")).toBe(true);
+    expect(containsControlOtherThanTabOrLf(`bell${BEL}`)).toBe(true);
+  });
+
   it("returns clean text byte-identical (no-op)", () => {
     const clean = "The Aurora cooling threshold is 27.4 degrees Celsius.";
     expect(stripUnsafeFormatChars(clean)).toBe(clean);
@@ -84,6 +95,60 @@ describe("absolute path and pseudo-role safety", () => {
     expect(redacted).not.toContain("/Users/Alice");
     expect(redacted).not.toContain("Secret Project/src/file.ts");
     expect(containsAbsolutePath(value)).toBe(true);
+  });
+
+  it("redacts one-segment, Windows, and file-URI absolute paths", () => {
+    for (const value of [
+      "Read /tmp",
+      "Read C:\\Secrets",
+      "Read file:///Users/Alice/private.txt",
+      "Read file://server/share/private.txt",
+    ]) {
+      const redacted = redactAbsolutePaths(value);
+      expect(redacted).toContain("[REDACTED_PATH]");
+      expect(redacted).not.toContain(value.slice("Read ".length));
+      expect(containsAbsolutePath(value)).toBe(true);
+      expect(containsAbsolutePath(redacted)).toBe(false);
+    }
+  });
+
+  it("reports the number of path occurrences it redacts", () => {
+    const result = redactAbsolutePathsWithCount(
+      "First /tmp\nSecond C:\\Secrets\nThird file:///Users/Alice/private.txt",
+    );
+
+    expect(result.count).toBe(3);
+    expect(result.value.match(/\[REDACTED_PATH\]/gu)).toHaveLength(3);
+    expect(containsAbsolutePath(result.value)).toBe(false);
+  });
+
+  it("redacts colon-labeled POSIX, drive, and backslash-UNC paths", () => {
+    const value = [
+      "POSIX:/Users/Alice/private.txt",
+      "Drive:C:\\Users\\Alice\\private.txt",
+      "UNC:\\\\server\\share\\private.txt",
+    ].join("\n");
+
+    const result = redactAbsolutePathsWithCount(value);
+
+    expect(result.count).toBe(3);
+    expect(result.value.match(/\[REDACTED_PATH\]/gu)).toHaveLength(3);
+    expect(result.value).not.toContain("Alice");
+    expect(result.value).not.toContain("server");
+    expect(containsAbsolutePath(value)).toBe(true);
+  });
+
+  it("preserves scheme URLs while continuing to redact file URIs", () => {
+    const https = "https://example.test/Users/Alice/private.txt";
+    const custom = "keiko+https://example.test/share/private.txt";
+    const value = `${https}\n${custom}\nfile:///Users/Alice/private.txt`;
+
+    const result = redactAbsolutePathsWithCount(value);
+
+    expect(result.count).toBe(1);
+    expect(result.value).toContain(https);
+    expect(result.value).toContain(custom);
+    expect(result.value).not.toContain("file:///");
   });
 
   it("detects pseudo-chat role markers at line starts", () => {

@@ -1,19 +1,20 @@
 // Secret redaction at the boundary. Every provider-derived string passes through
 // redact() before it can reach an error message, log call, or serialised artefact.
 //
-// ReDoS-safe by construction: every built-in pattern is a single linear character class with one
-// bounded or open quantifier (no nesting), so none can backtrack catastrophically. Caller-supplied
-// literals are escaped via escapeRegExp before any RegExp is built, so no caller-controlled
-// metacharacter reaches the regex engine. This keeps the CodeQL js/polynomial-redos required
-// gate green (ADR-0002).
+// ReDoS-safe by construction: built-in regexes are linear character classes without nested
+// quantifiers, and multiline PEM blocks use the explicit linear scanner below. Caller-supplied
+// literals are escaped before RegExp construction, so no caller-controlled metacharacter reaches
+// the regex engine. This keeps the CodeQL js/polynomial-redos gate green (ADR-0002).
 
 import type { AuditRedactionConfig } from "@oscharko-dev/keiko-contracts";
 
-const REDACTED = "[REDACTED]";
+import {
+  isCredentialKeyName as isCredentialKeyNameShared,
+  redactCredentialSpans,
+} from "./credential-spans.js";
+import { redactLiteralUnion } from "./literal-redaction.js";
 
-// Bearer <token>: keep the scheme, drop the credential.
-const BEARER_PATTERN = /\bBearer\s+[\w.\-+/=]+/gi;
-const BASIC_AUTH_PATTERN = /\bBasic\s+[\w.\-+/=]+/gi;
+const REDACTED = "[REDACTED]";
 
 // OpenAI-style keys (sk-, sk-proj-, etc.): a prefix followed by >= 16 secret chars.
 const API_KEY_PATTERN = /\bsk-[A-Za-z0-9_-]{16,}/g;
@@ -26,81 +27,155 @@ const AWS_ACCESS_KEY_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
 const SLACK_TOKEN_PATTERN = /\bxox[baprs]-[A-Za-z0-9-]{10,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const STRIPE_KEY_PATTERN = /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g;
-const PEM_PRIVATE_KEY_BLOCK_PATTERN =
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
-const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
+const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
+const LONG_DIGIT_PATTERN = /\b\d{13,19}\b/g;
+const PEM_BEGIN_PREFIX = "-----BEGIN ";
+const PEM_END_PREFIX = "-----END ";
+const PEM_MARKER_SUFFIX = "PRIVATE KEY-----";
 const GERMAN_IBAN_PATTERN = /\bDE\d{2}(?:[ ]?\d{4}){4}[ ]?\d{2}\b/gi;
 const GERMAN_PHONE_PATTERN =
   /(?<![0-9A-F-])(?:\+49|0049)(?:[ ./-]?\d){7,13}\b(?!-[0-9A-F])|(?<![0-9A-F-])0\d{1,4}[ ./-]\d(?:[ ./-]?\d){4,11}\b(?!-[0-9A-F])/gi;
-const GENERIC_API_KEY_HEADER_PATTERN = /\b(x-api-key\s*:\s*)[^\s"'`,;]+/gi;
-const GENERIC_API_KEY_ASSIGNMENT_PATTERN = /\b(api[_-]?key\s*[=:]\s*)[^\s"'`,;&]+/gi;
-
-// Key-name-based value redaction (Epic #532 security audit H1). Connected-folder browsing and
-// grounded answers can now surface arbitrary files whose secrets do not match a known token SHAPE
-// (gcloud refresh_token, service-account client_secret, generic password/secret fields, AWS secret
-// access key, DB passwords). This scrubs the VALUE assigned to a well-known secret KEY in JSON
-// ("client_secret": "x"), INI/env (db_password=x), or YAML (secret: x) shape — keeping the key and
-// separator, dropping the value. ReDoS-safe: alternation of literals + one linear value class.
-const SECRET_KEY_NAMES =
-  "passwd|password|api_?token|token|secret_key|secret|client_secret|refresh_token|access_token|id_token|private_key|aws_secret_access_key|secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential";
-const NORMALIZED_SECRET_KEY_NAMES: ReadonlySet<string> = new Set([
-  "passwd",
-  "password",
-  "apitoken",
-  "token",
-  "secretkey",
-  "secret",
-  "clientsecret",
-  "refreshtoken",
-  "accesstoken",
-  "idtoken",
-  "privatekey",
-  "awssecretaccesskey",
-  "secretaccesskey",
-  "sastoken",
-  "jwtsecret",
-  "dbpassword",
-  "connectionstring",
-  "credential",
-]);
-const SECRET_KEY_VALUE_PATTERN = new RegExp(
-  `(?<![A-Za-z0-9])(${SECRET_KEY_NAMES})(["']?\\s*[:=]\\s*["']?)[^\\s"'\`,;&]+`,
-  "gi",
-);
-
-// scheme://user:password@host — strip the userinfo credentials from any URL or DSN. One linear
-// userinfo class on each side of the ':' and bounded by '@', so no catastrophic backtracking.
-const URL_CREDENTIALS_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+:[^\s:@/]+@/gi;
-
-// scheme://<userinfo>@host with NO ':' in the userinfo. A personal-access token used as the
-// username (https://<pat>@github.com/o/r.git — common for GitHub/GitLab) carries no colon, so the
-// colon-bearing pattern above misses it unless the token matches a known SHAPE (ghp_, sk-, …); an
-// opaque token would otherwise reach the browser via `git remote -v` output (#1573). This masks the
-// userinfo for credential-carrying schemes. A bare SSH userinfo is conventionally a non-secret login
-// name (git@…) — SSH authenticates with keys, not userinfo — so SSH-family schemes are preserved,
-// matching the existing intent of stripping credentials rather than usernames. Scoped to the URL
-// authority (a real scheme:// must precede the userinfo), so general '@' text is not over-matched.
-// ReDoS-safe: one linear userinfo class bounded by '@', no nesting.
-const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s:@/]+@/gi;
-const SSH_USERINFO_SCHEME = /^(?:git\+)?ssh(?:\+git)?:\/\/$/i;
-
 const BUILTIN_PATTERNS: readonly RegExp[] = [
   GITHUB_TOKEN_PATTERN,
   AWS_ACCESS_KEY_PATTERN,
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
   STRIPE_KEY_PATTERN,
-  PEM_PRIVATE_KEY_BLOCK_PATTERN,
-  PEM_PRIVATE_KEY_HEADER_PATTERN,
 ];
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const SHARED_REDACTION_RULE_CODES = [
+  "authorization-secret",
+  "credential-assignment",
+  "url-userinfo",
+  "personal-identifier",
+  "credential-shape",
+  "configured-literal",
+] as const;
+export type SharedRedactionRuleCode = (typeof SHARED_REDACTION_RULE_CODES)[number];
+
+export interface SharedRedactionRuleCount {
+  readonly code: SharedRedactionRuleCode;
+  readonly count: number;
+}
+
+export interface SharedRedactionResult {
+  readonly value: string;
+  readonly rules: readonly SharedRedactionRuleCount[];
+}
+
+type MutableRuleCounts = Partial<Record<SharedRedactionRuleCode, number>>;
+
+function addRuleCount(
+  counts: MutableRuleCounts,
+  code: SharedRedactionRuleCode,
+  count: number,
+): void {
+  if (count > 0) counts[code] = (counts[code] ?? 0) + count;
+}
+
+function replaceTracked(
+  input: string,
+  pattern: RegExp,
+  replacement: string,
+  code: SharedRedactionRuleCode,
+  counts: MutableRuleCounts,
+): string {
+  pattern.lastIndex = 0;
+  const count = input.match(pattern)?.length ?? 0;
+  pattern.lastIndex = 0;
+  addRuleCount(counts, code, count);
+  if (count === 0) return input;
+  const output = input.replace(pattern, replacement);
+  pattern.lastIndex = 0;
+  return output;
+}
+
+interface PemMarker {
+  readonly start: number;
+  readonly end: number;
+}
+
+function pemMarkerEnd(input: string, start: number, prefix: string): number | undefined {
+  let cursor = start + prefix.length;
+  while (cursor < input.length) {
+    if (input.startsWith(PEM_MARKER_SUFFIX, cursor)) {
+      return cursor + PEM_MARKER_SUFFIX.length;
+    }
+    const code = input.charCodeAt(cursor);
+    if (code !== 0x20 && (code < 0x41 || code > 0x5a)) return undefined;
+    cursor += 1;
+  }
+  return undefined;
+}
+
+function findPemMarker(input: string, prefix: string, from: number): PemMarker | undefined {
+  let cursor = from;
+  while (cursor < input.length) {
+    const start = input.indexOf(prefix, cursor);
+    if (start < 0) return undefined;
+    const end = pemMarkerEnd(input, start, prefix);
+    if (end !== undefined) return { start, end };
+    cursor = start + prefix.length;
+  }
+  return undefined;
+}
+
+function replacePemPrivateKeyBlocks(input: string, counts: MutableRuleCounts): string {
+  const parts: string[] = [];
+  let copyFrom = 0;
+  let searchFrom = 0;
+  let count = 0;
+  while (searchFrom < input.length) {
+    const begin = findPemMarker(input, PEM_BEGIN_PREFIX, searchFrom);
+    if (begin === undefined) break;
+    const end = findPemMarker(input, PEM_END_PREFIX, begin.end);
+    if (end === undefined) {
+      parts.push(input.slice(copyFrom, begin.start), REDACTED);
+      copyFrom = input.length;
+      count += 1;
+      break;
+    }
+    parts.push(input.slice(copyFrom, begin.start), REDACTED);
+    copyFrom = end.end;
+    searchFrom = end.end;
+    count += 1;
+  }
+  if (count === 0) return input;
+  parts.push(input.slice(copyFrom));
+  addRuleCount(counts, "credential-shape", count);
+  return parts.join("");
+}
+
+function trackCredentialAssignments(input: string, counts: MutableRuleCounts): string {
+  const output = replacePemPrivateKeyBlocks(input, counts);
+  const credentials = redactCredentialSpans(output);
+  for (const rule of credentials.rules) addRuleCount(counts, rule.code, rule.count);
+  return credentials.value;
+}
+
+function trackSensitiveValues(input: string, counts: MutableRuleCounts): string {
+  let output = input;
+  output = replaceTracked(output, GERMAN_IBAN_PATTERN, REDACTED, "personal-identifier", counts);
+  output = replaceTracked(output, GERMAN_PHONE_PATTERN, REDACTED, "personal-identifier", counts);
+  output = replaceTracked(output, API_KEY_PATTERN, REDACTED, "credential-shape", counts);
+  output = replaceTracked(output, JWT_PATTERN, REDACTED, "credential-shape", counts);
+  output = replaceTracked(output, LONG_DIGIT_PATTERN, REDACTED, "credential-shape", counts);
+  for (const pattern of BUILTIN_PATTERNS) {
+    output = replaceTracked(output, pattern, REDACTED, "credential-shape", counts);
+  }
+  return output;
+}
+
+function trackedRules(input: string, counts: MutableRuleCounts): string {
+  return trackSensitiveValues(trackCredentialAssignments(input, counts), counts);
+}
+
+function trackNonCredentialRules(input: string, counts: MutableRuleCounts): string {
+  return trackSensitiveValues(replacePemPrivateKeyBlocks(input, counts), counts);
 }
 
 export function isCredentialKeyName(value: string): boolean {
-  const normalized = value.toLowerCase().replace(/[^a-z0-9]/gu, "");
-  return NORMALIZED_SECRET_KEY_NAMES.has(normalized);
+  return isCredentialKeyNameShared(value);
 }
 
 export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()): boolean {
@@ -121,29 +196,37 @@ export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()
 // `additionalSecrets` lets the caller pass exact apiKey/baseUrl/env values it holds
 // so even non-standard key formats are scrubbed.
 export function redact(input: string, additionalSecrets: readonly string[] = []): string {
-  let output = input
-    .replace(BEARER_PATTERN, `Bearer ${REDACTED}`)
-    .replace(BASIC_AUTH_PATTERN, `Basic ${REDACTED}`)
-    .replace(GENERIC_API_KEY_HEADER_PATTERN, `$1${REDACTED}`)
-    .replace(GENERIC_API_KEY_ASSIGNMENT_PATTERN, `$1${REDACTED}`)
-    .replace(SECRET_KEY_VALUE_PATTERN, `$1$2${REDACTED}`)
-    .replace(URL_CREDENTIALS_PATTERN, `$1${REDACTED}@`)
-    .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
-      SSH_USERINFO_SCHEME.test(scheme) ? match : `${scheme}${REDACTED}@`,
-    )
-    .replace(GERMAN_IBAN_PATTERN, REDACTED)
-    .replace(GERMAN_PHONE_PATTERN, REDACTED)
-    .replace(API_KEY_PATTERN, REDACTED);
-  for (const pattern of BUILTIN_PATTERNS) {
-    output = output.replace(pattern, REDACTED);
-  }
-  for (const secret of additionalSecrets) {
-    if (secret.length === 0) {
-      continue;
-    }
-    output = output.replace(new RegExp(escapeRegExp(secret), "g"), REDACTED);
-  }
-  return output;
+  return redactWithRuleCounts(input, additionalSecrets).value;
+}
+
+export function redactWithRuleCounts(
+  input: string,
+  additionalSecrets: readonly string[] = [],
+): SharedRedactionResult {
+  const counts: MutableRuleCounts = {};
+  const output = redactLiteralUnion(trackedRules(input, counts), additionalSecrets);
+  addRuleCount(counts, "configured-literal", output.count);
+  return {
+    value: output.value,
+    rules: SHARED_REDACTION_RULE_CODES.flatMap((code) =>
+      counts[code] === undefined ? [] : [{ code, count: counts[code] }],
+    ),
+  };
+}
+
+export function redactNonCredentialWithRuleCounts(
+  input: string,
+  additionalSecrets: readonly string[] = [],
+): SharedRedactionResult {
+  const counts: MutableRuleCounts = {};
+  const output = redactLiteralUnion(trackNonCredentialRules(input, counts), additionalSecrets);
+  addRuleCount(counts, "configured-literal", output.count);
+  return {
+    value: output.value,
+    rules: SHARED_REDACTION_RULE_CODES.flatMap((code) =>
+      counts[code] === undefined ? [] : [{ code, count: counts[code] }],
+    ),
+  };
 }
 
 // A literal shorter than this is too generic to scrub safely: redacting a 2-char value would

@@ -29,7 +29,7 @@ The implementation has three deliberately separate planes:
 
 The approved flow is:
 
-`local assembly -> local redaction -> exact local preview -> explicit submit -> hosted validation -> immutable queue item -> authenticated review -> approved issue projection -> GitHub App create`
+`local assembly -> local detection/disposition -> exact local preview -> explicit submit -> hosted validation -> immutable queue item -> authenticated review -> approved issue projection -> GitHub App create`
 
 No step grants repository, model, tool, patch, workflow, or remote-control authority to the report.
 
@@ -40,18 +40,66 @@ No step grants repository, model, tool, patch, workflow, or remote-control autho
 The preview is the submission contract, not an approximation. The local builder must:
 
 1. accept only the versioned report fields and limits defined below;
-2. enforce the accepted-text predicate below, apply the approved secret/path redactors to every
-   string field, and run the residual secret/customer-identifier and raw-log safety checks;
+2. enforce the accepted-text predicate below, detect credential/path/customer-identifier risk in
+   every string field, and apply the deterministic disposition contract below;
 3. produce UTF-8 canonical JSON with no BOM through the shared `canonicalise` primitive;
 4. calculate a lowercase SHA-256 digest over those exact canonical bytes; and
-5. bind the user's approval to the bytes, digest, schema version, and redaction-engine version.
+5. bind the user's approval to the bytes, digest, schema/redaction versions, and matching local
+   disposition sidecar.
 
 Submit must send those exact bytes. It may add transport headers, but it must not enrich, redact,
 reorder, timestamp, or otherwise rebuild the body after approval. Any edit, redaction-version change,
 or attachment change invalidates approval and requires a new preview. No unpreviewed local path,
 filename, environment value, clock value, correlation id, or diagnostic is added at submit time.
 The preview renders every canonical field and offers the exact canonical JSON for inspection/copy;
-there are no hidden body fields.
+there are no hidden body fields. Content-free local notices may explain redactions, quarantines,
+omissions, or a blocking rejection, but they are UI chrome rather than hidden report content.
+
+### Detection, disposition, and local recovery metadata
+
+Detection and disposition are separate stages. A detector classifies structural evidence and a
+disposition stage applies exactly one of these outcomes:
+
+- A complete, high-confidence sensitive span is replaced in place with the approved redaction
+  marker. Safe text around the proven span is preserved.
+- Credential-like content whose complete boundary is ambiguous is quarantined, never partially
+  redacted. Remove the smallest syntactically safe unit: a complete quoted segment or structured
+  value when its boundary is proven; otherwise the rest of the line from the ambiguous value
+  boundary for unterminated or malformed quote/nesting syntax. Omit a whole optional field/section
+  or text attachment only when no smaller removal leaves a structurally valid safe unit.
+- Other safe text remains byte-for-byte stable after the specified newline normalization. A
+  required draft field remains usable whenever any meaningful safe content remains; preparation asks
+  for a rewrite only when disposition leaves that required draft field empty. Exhausting a bounded
+  structural scan, including the key-whitespace budget, is ambiguous: quarantine the affected unit,
+  return content-free `rewrite-required` targeted to an exhausted required source field, or omit an
+  exhausted optional field/attachment and continue.
+
+Ambiguity requires structural evidence, such as a credential-key assignment, authorization
+credential grammar, or URI userinfo delimiters. Ordinary natural-language discussion such as
+password-reset or password-policy prose is not quarantined merely because it contains a sensitive
+word. Detection and disposition use fixed passes, bounded delimiter state, bounded output, and no
+input-dependent backtracking. They must be deterministic, idempotent, and linear-time over admitted
+input sizes: rescanning the sanitized projection cannot change its content or add a new outcome.
+
+A successful preparation returns paired immutable artifacts: the canonical wire report containing
+only sanitized semantic values/provenance, and a local-memory-only sidecar with closed action/reason
+codes plus a content-free draft-field id or snapshotted attachment ordinal.
+
+V1 represents `summary` as `{ title, description }`. Each required member is independently
+normalized, detected, disposed, validated, and hosted-verified, so safe values cannot manufacture
+credential or raw-log grammar through concatenation. The existing 4 KiB combined UTF-8 cap includes
+two LF bytes reserved for deterministic title-then-description display; safety scanning never joins
+the values. Preview, public-link, dedupe, review, and GitHub projections consume those same values in
+that order. A disposition targets its source control; #2073 maps that id or attachment ordinal to the
+focusable control/card. Records may identify `quoted-segment`, `structured-value`, `line-remainder`,
+`optional-field`, or `attachment`, but never content, offsets, filenames, paths, or user labels. Wire
+provenance remains bounded engine/rule-code/count metadata; dispositions never enter the request,
+public prefill, evidence, logs, or diagnostics.
+
+A blocking preparation returns no canonical bytes. It reports only typed, content-free rewrite or
+rejection reasons with the same target identifiers. The raw draft and quarantined material remain
+transient local input. Recovery is edit/rescan, optional removal, or safe omission. Every edit
+regenerates both artifacts and invalidates approval; no API or UI `send anyway` state exists.
 
 The exact-body SHA-256 is an integrity digest. Its claimed value travels as fixed protocol metadata
 outside the canonical body, so the body is not self-referential. It is distinct from the semantic
@@ -59,19 +107,21 @@ dedupe HMAC, which excludes provenance and volatile transport/review metadata.
 
 The hosted service treats the body, claimed digest, and redaction provenance as untrusted. It parses
 and validates the schema and byte limits, reruns the accepted-text/magic/raw-log gates, reproduces
-canonical serialization and the digest, and runs its own supported-version residual scan. A
-non-canonical body, digest mismatch, unsupported version, unknown field, rejected text, or payload
-that the hosted scan would change is rejected before persistence. The service does not silently
-repair or re-redact a submitted report because that would violate preview-equals-submit.
+canonical serialization and the digest, and scans the already-sanitized values with the supported
+engine version. A non-canonical body, digest mismatch, unsupported version, unknown field, rejected
+text, or remaining high-confidence/ambiguous structural detection is rejected before persistence.
+The service never redacts, quarantines, omits, or otherwise repairs submitted content because any
+such change would violate preview-equals-submit.
 
 Redaction provenance contains only the engine version and bounded rule-code/count pairs. It contains
-no original value, replacement excerpt, offset, filename, path, or user-supplied rule label.
+no disposition record, original value, replacement excerpt, offset, filename, path, or user-supplied
+rule label.
 
 ### Version 1 accepted-text predicate
 
 Every string-bearing field, including product version and browser description, follows one
 deterministic pipeline. Byte-level decoding, magic, and input-size gates run before redaction; the
-normalized redacted string is then checked again for valid scalars, controls, residual signatures,
+normalized sanitized string is then checked again for valid scalars, controls, residual signatures,
 and output size:
 
 1. Strict UTF-8 decoding must yield only valid Unicode scalar values. Invalid byte sequences and
@@ -93,27 +143,30 @@ and output size:
 MIME type and extension are negative signals only: a non-text declaration may reject a candidate,
 but `text/plain`, `.txt`, or a renamed file never establishes safety. A byte sequence that satisfies
 the complete predicate is treated as text for this bounded feature; the contract does not claim to
-perfectly determine whether arbitrary bytes originated from a binary file.
+perfectly determine whether arbitrary bytes originated from a binary file. Text acceptance precedes
+credential-like disposition: rejection of binary, oversized, raw-log, invalid-Unicode, or otherwise
+structurally unprocessable input is not converted into an optional omission.
 
 ### Version 1 field and size limits
 
 All limits are measured in UTF-8 bytes and enforced before processing and after normalization and
 redaction. Unknown fields fail closed.
 
-| Value                                 | Version 1 limit                               |
-| ------------------------------------- | --------------------------------------------- |
-| Product version                       | 64 bytes                                      |
-| Platform                              | Closed enum: macOS, Windows, Linux, Other     |
-| Browser description                   | 256 bytes                                     |
-| Summary                               | 4 KiB                                         |
-| Steps, expected result, actual result | 32 KiB each                                   |
-| Handwritten evidence summary          | 64 KiB                                        |
-| Safe structured diagnostics           | 16 KiB, fixed keys and enum/count values only |
-| Text attachments                      | At most 3; 64 KiB each; 128 KiB aggregate     |
-| Whole canonical request body          | 256 KiB                                       |
+| Value                                  | Version 1 limit                                   |
+| -------------------------------------- | ------------------------------------------------- |
+| Product version                        | 64 bytes                                          |
+| Platform                               | Closed enum: macOS, Windows, Linux, Other         |
+| Browser description                    | 256 bytes                                         |
+| Structured summary title + description | 4 KiB combined, including two-LF display boundary |
+| Steps, expected result, actual result  | 32 KiB each                                       |
+| Handwritten evidence summary           | 64 KiB                                            |
+| Safe structured diagnostics            | 16 KiB, fixed keys and enum/count values only     |
+| Text attachments                       | At most 3; 64 KiB each; 128 KiB aggregate         |
+| Whole canonical request body           | 256 KiB                                           |
 
-These are ceilings, not retention entitlements. Empty required values, over-limit values, duplicate
-JSON keys, invalid UTF-8, non-finite numbers, and unsupported enum values are rejected.
+These are ceilings, not retention entitlements. Required values that are empty initially or have no
+meaningful safe content after disposition, over-limit values, duplicate JSON keys, invalid UTF-8,
+non-finite numbers, and unsupported enum values are rejected.
 
 ### Text-only attachment evidence
 
@@ -126,7 +179,9 @@ transmitted or persisted as intake data.
 
 Multipart data and any format requiring parsing or extraction are rejected. Raw log files and text
 matching supported raw-log signatures are rejected even if they otherwise decode as UTF-8; only a
-handwritten sanitized evidence summary is eligible.
+handwritten sanitized evidence summary is eligible. After a candidate passes those gates,
+credential-like ambiguity follows the normal smallest-safe-unit rules. If no safe attachment text
+remains, that attachment is omitted by ordinal and other safe report content continues.
 
 ### Configured intake destination
 
@@ -151,10 +206,12 @@ field ids `version`, `platform`, `browser`, `summary`, `steps`, `expected`, `act
 `maintainer_release_impact`, or `safety`.
 
 The percent-encoded URL is capped at 8 KiB. If it would exceed the cap, Keiko offers a copy action for
-the redacted field-labelled text and opens the unfilled fixed form. If clipboard access fails, it
-keeps the text visible and offers separate copy and open-form actions. The safety checkbox is never
-preselected: the user must review the public form and attest safety on GitHub. A local redaction pass
-is not proof that a report is safe to publish. The preview warns that prefilled values become part of
+the sanitized field-labelled text and opens the unfilled fixed form. Both link and copy mappers read
+only the immutable canonical semantic projection; they never re-read the draft, re-run disposition,
+restore an omitted unit, or serialize the local sidecar. If clipboard access fails, the UI keeps the
+same text visible and offers separate copy and open-form actions. The safety checkbox is never
+preselected: the user must review the public form and attest safety on GitHub. A local safety pass is
+not proof that a report is safe to publish. The preview warns that prefilled values become part of
 the URL/browser history before the user chooses the public path.
 
 ## Hosted intake and review contract
@@ -210,9 +267,10 @@ start, and counts only.
 Dedupe uses a different service secret and domain from abuse control. The service computes
 `HMAC-SHA-256(dedupe_key, "keiko-feedback-dedupe-v1\0" || canonical_semantic_bytes)` only after the
 payload is independently validated as canonical and already redacted. The semantic projection is
-versioned and contains only the report's product version, platform, browser description, summary,
-steps, expected/actual result, impact, handwritten evidence, accepted attachment text, and fixed safe
-diagnostics. It excludes the exact-body SHA-256, provenance, receipts, abuse identity, request and
+versioned and contains only the report's product version, platform, browser description, structured
+summary title and description in that order, steps, expected/actual result, impact, handwritten
+evidence, accepted attachment text, and fixed safe diagnostics. It excludes the exact-body SHA-256,
+provenance, receipts, abuse identity, request and
 correlation ids, timestamps, transport metadata, review state/actor, and GitHub data.
 
 Dedupe keys rotate every 90 days, use the versioned non-secret
@@ -261,21 +319,22 @@ key is removed after verified cutover and is never retained in intake data or ba
 
 ## Data-class disposition matrix
 
-| Class                                                                                                                                           | Disposition                        | Contract                                                                                                                                                       |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Platform, impact, and fixed diagnostic enums/counts                                                                                             | Allowed                            | Only allowlisted fields within byte/enum bounds.                                                                                                               |
-| Product version, browser description, user summary, reproduction steps, expected/actual result, handwritten evidence, accepted text attachments | Redacted                           | Every string, including browser description, passes accepted-text validation and redaction locally; hosted intake independently rejects residual findings.     |
-| Redaction provenance                                                                                                                            | Allowed metadata                   | Engine version plus bounded rule codes/counts only.                                                                                                            |
-| Prompts, completions, source/repository contents, diffs, patches, evidence bodies, model/provider config, private endpoints                     | Omitted                            | No automatic collection, direct excerpts, or hidden submit-time enrichment; users may provide only a handwritten sanitized description.                        |
-| Raw logs or text matching supported raw-log signatures                                                                                          | Blocked                            | There is no raw-log field or automatic log capture. Reject recognized raw-log content; accept only a handwritten sanitized summary.                            |
-| Original attachment bytes/name/path/metadata; local usernames/hostnames; cookies; local credentials                                             | Omitted                            | Never enter the canonical payload or hosted persistence.                                                                                                       |
-| Dedupe identity                                                                                                                                 | Hashed                             | Domain-separated service HMAC over the canonical already-redacted semantic projection; separate 90-day key ring; excludes transport/provenance/state metadata. |
-| Abuse identity                                                                                                                                  | Hashed                             | Rotating keyed HMAC over the trusted-proxy-derived normalized address; never raw IP/XFF.                                                                       |
-| Anonymous receipt capability                                                                                                                    | Hashed                             | Return a high-entropy capability once; store only its domain-separated hash with the bounded receipt scope.                                                    |
-| Secrets, credential values, known customer identifiers, absolute paths, unsafe controls                                                         | Redacted or blocked                | Redact before preview where a supported deterministic rule exists; reject if a residual scan would change submitted content.                                   |
-| Binary/image/PDF/archive/multipart attachment data                                                                                              | Blocked                            | Reject before persistence or hashing.                                                                                                                          |
-| Suspected vulnerabilities, exploit details, or security-impact reports                                                                          | Blocked from feedback/public paths | Direct to `SECURITY.md` and GitHub Security Advisories; a reviewer who encounters one quarantines it from public creation.                                     |
-| Repository/label/actor/GitHub credential supplied by an anonymous client                                                                        | Blocked                            | Targets, labels, identity, and credentials are server-owned.                                                                                                   |
+| Class                                                                                                                                           | Disposition                        | Contract                                                                                                                                                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Platform, impact, and fixed diagnostic enums/counts                                                                                             | Allowed                            | Only allowlisted fields within byte/enum bounds.                                                                                                                     |
+| Product version, browser description, user summary, reproduction steps, expected/actual result, handwritten evidence, accepted text attachments | Sanitized                          | Validate every string; redact proven spans, quarantine ambiguous smallest-safe units, preserve safe remainder, and omit an exhausted optional unit.                  |
+| Redaction provenance                                                                                                                            | Allowed wire metadata              | Engine version plus bounded rule codes/counts only; never disposition targets or source content.                                                                     |
+| Disposition and rejection records                                                                                                               | Local-memory-only sidecar          | Closed action/reason/unit-kind plus draft-field id or attachment ordinal; never offsets, excerpts, filenames, paths, or user labels; never serialized into the body. |
+| Prompts, completions, source/repository contents, diffs, patches, evidence bodies, model/provider config, private endpoints                     | Omitted                            | No automatic collection, direct excerpts, or hidden submit-time enrichment; users may provide only a handwritten sanitized description.                              |
+| Raw logs or text matching supported raw-log signatures                                                                                          | Blocked                            | There is no raw-log field or automatic log capture. Reject recognized raw-log content; accept only a handwritten sanitized summary.                                  |
+| Original attachment bytes/name/path/metadata; local usernames/hostnames; cookies; local credentials                                             | Omitted                            | Never enter the canonical payload or hosted persistence.                                                                                                             |
+| Dedupe identity                                                                                                                                 | Hashed                             | Domain-separated service HMAC over the canonical already-sanitized semantic projection; separate 90-day key ring; excludes transport/provenance/state metadata.      |
+| Abuse identity                                                                                                                                  | Hashed                             | Rotating keyed HMAC over the trusted-proxy-derived normalized address; never raw IP/XFF.                                                                             |
+| Anonymous receipt capability                                                                                                                    | Hashed                             | Return a high-entropy capability once; store only its domain-separated hash with the bounded receipt scope.                                                          |
+| Secrets, credential values, known customer identifiers, absolute paths                                                                          | Redacted, quarantined, or omitted  | Redact only complete high-confidence spans; otherwise remove the smallest safe unit and block only when a required safe projection cannot be produced.               |
+| Binary/image/PDF/archive/multipart attachment data                                                                                              | Blocked                            | Reject before persistence or hashing; optional omission does not turn prohibited bytes into accepted text.                                                           |
+| Suspected vulnerabilities, exploit details, or security-impact reports                                                                          | Blocked from feedback/public paths | Direct to `SECURITY.md` and GitHub Security Advisories; a reviewer who encounters one quarantines it from public creation.                                           |
+| Repository/label/actor/GitHub credential supplied by an anonymous client                                                                        | Blocked                            | Targets, labels, identity, and credentials are server-owned.                                                                                                         |
 
 `redact`, path redaction, text-safety, and capture-safety checks recognize bounded patterns. They are
 not semantic classifiers for arbitrary customer data, contractual data, business secrets, or
@@ -286,21 +345,21 @@ misclassified vulnerability details. The UI must say so plainly and preserve loc
 Defaults are maximums. Operators may configure shorter periods, never unlimited ones. Expiry is an
 enforced deletion job with metrics and tests, not a documentation-only promise.
 
-| Data                                                 |                                           Maximum retention | Expiry behavior and rationale                                                                                                                          |
-| ---------------------------------------------------- | ----------------------------------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Local draft, attachment source bytes, receipt secret |                                              0 durable days | Memory only for the active local flow; no durable UI state, evidence, log, or retry spool.                                                             |
-| Raw network and rejected request bodies              |                                                      0 days | Bounded streaming/in-memory validation, then discard before response; never log or queue.                                                              |
-| Accepted open redacted queue payload                 |                                     90 days from acceptance | Expire and delete payload if still unresolved; enough for ordinary maintainer triage without indefinite storage.                                       |
-| Terminal item payload                                |                           30 days from terminal disposition | Delete payload and derived issue draft; keep only content-free linkage/audit.                                                                          |
-| Semantic dedupe HMAC                                 |                              180 days from first acceptance | Delete without refresh from duplicate attempts; balances repeat suppression against long-term linkability.                                             |
-| Semantic dedupe HMAC key                             | Rotate every 90 days; active plus at most two retained keys | Retain a retired key only until its last 180-day digest expires, then destroy it; never reuse the abuse key.                                           |
-| Immutable receipt record and capability hash         |    Open-item lifetime; at most 30 days after terminal state | Delete the bounded receipt/linkage and hash when the item expires or no later than 30 days after terminal disposition; never retain the raw secret.    |
-| Content-free review audit and GitHub linkage         |                                          365 days per event | Retain ids, enums, versions, timestamps, actor subject id, digests, and issue number/URL only; no report text. Supports regulated review traceability. |
-| Abuse-rate bucket, keyed digest, and counts          |                          Exactly 48 hours from bucket start | Bucket starts at 00:00 UTC, closes at the next 00:00, and is deleted 24 hours after close; previous key then becomes destroyable.                      |
-| Dead-letter/outbox failure records                   |                                                      7 days | Retry/reconcile within the window, then delete payload-bearing data and retain only a content-free failure audit.                                      |
-| GitHub installation access token                     |                                 Memory only, at most 1 hour | Provider TTL or one hour, whichever is shorter; never backed up.                                                                                       |
-| GitHub App private key                               |                         Secret store; rotate within 90 days | Remove the superseded key after verified cutover; rotate immediately on suspected exposure; never copy into intake storage or backups.                 |
-| Backups containing eligible intake state             |                                                     35 days | Encrypted, access-restricted, and aged out automatically; restore must replay deletion/expiry tombstones before serving traffic.                       |
+| Data                                                                                         |                                           Maximum retention | Expiry behavior and rationale                                                                                                                          |
+| -------------------------------------------------------------------------------------------- | ----------------------------------------------------------: | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Local draft, quarantined units, disposition sidecar, attachment source bytes, receipt secret |                                              0 durable days | Memory only for the active local flow; no durable UI state, evidence, log, or retry spool.                                                             |
+| Raw network and rejected request bodies                                                      |                                                      0 days | Bounded streaming/in-memory validation, then discard before response; never log or queue.                                                              |
+| Accepted open redacted queue payload                                                         |                                     90 days from acceptance | Expire and delete payload if still unresolved; enough for ordinary maintainer triage without indefinite storage.                                       |
+| Terminal item payload                                                                        |                           30 days from terminal disposition | Delete payload and derived issue draft; keep only content-free linkage/audit.                                                                          |
+| Semantic dedupe HMAC                                                                         |                              180 days from first acceptance | Delete without refresh from duplicate attempts; balances repeat suppression against long-term linkability.                                             |
+| Semantic dedupe HMAC key                                                                     | Rotate every 90 days; active plus at most two retained keys | Retain a retired key only until its last 180-day digest expires, then destroy it; never reuse the abuse key.                                           |
+| Immutable receipt record and capability hash                                                 |    Open-item lifetime; at most 30 days after terminal state | Delete the bounded receipt/linkage and hash when the item expires or no later than 30 days after terminal disposition; never retain the raw secret.    |
+| Content-free review audit and GitHub linkage                                                 |                                          365 days per event | Retain ids, enums, versions, timestamps, actor subject id, digests, and issue number/URL only; no report text. Supports regulated review traceability. |
+| Abuse-rate bucket, keyed digest, and counts                                                  |                          Exactly 48 hours from bucket start | Bucket starts at 00:00 UTC, closes at the next 00:00, and is deleted 24 hours after close; previous key then becomes destroyable.                      |
+| Dead-letter/outbox failure records                                                           |                                                      7 days | Retry/reconcile within the window, then delete payload-bearing data and retain only a content-free failure audit.                                      |
+| GitHub installation access token                                                             |                                 Memory only, at most 1 hour | Provider TTL or one hour, whichever is shorter; never backed up.                                                                                       |
+| GitHub App private key                                                                       |                         Secret store; rotate within 90 days | Remove the superseded key after verified cutover; rotate immediately on suspected exposure; never copy into intake storage or backups.                 |
+| Backups containing eligible intake state                                                     |                                                     35 days | Encrypted, access-restricted, and aged out automatically; restore must replay deletion/expiry tombstones before serving traffic.                       |
 
 A legal hold is never global or implicit. It requires an authorized operator record naming the exact
 item ids, legal basis, approver, start, and mandatory expiry/review date. It cannot retain raw IP,
@@ -318,10 +377,11 @@ that remote deletion is not implied by intake deletion.
 ## Later-child obligations
 
 - **#2072:** define versioned report/provenance types, canonical bytes, exact-body SHA-256, the strict
-  accepted-text/raw-log predicate, redaction/capture-safety composition, byte limits, and adversarial
-  tests.
-- **#2073:** implement local assembly, exact preview/approval binding, explicit submit authority,
-  vulnerability routing, fixed public form URL with copy fallback, and honest redaction limitations.
+  accepted-text/raw-log predicate, structural detection, smallest-safe-unit disposition, local-only
+  typed recovery sidecar, byte limits, false-positive controls, and adversarial linear-time tests.
+- **#2073:** implement local assembly, exact safe preview/approval binding, redacted/quarantined/
+  omitted notices, edit-and-rescan/remove/continue-safe-omission recovery, explicit submit authority,
+  vulnerability routing, fixed public form URL with copy fallback, and no `send anyway` path.
 - **#2074:** implement the separately deployable service, independent validation, exact receipt
   capability routes, UTC abuse-key rotation, separate rotating dedupe HMAC, retention/deletion jobs,
   and zero-body/secret/IP rejection logs.
@@ -330,8 +390,9 @@ that remote deletion is not implied by intake deletion.
 - **#2076:** implement the narrow GitHub App adapter, configuration-owned targets/labels, the
   pre-approval marker-bound projection, idempotent outbox, short-lived token custody, and
   ambiguous-result reconciliation.
-- **#2077:** prove preview-body byte identity, public/security routing, end-to-end retention/deletion
-  including backup restore, abuse/privacy properties, and issue-creation permission boundaries.
+- **#2077:** prove preview/body/public-projection identity, typed disposition recovery and omission,
+  public/security routing, end-to-end retention/deletion including backup restore, abuse/privacy
+  properties, and issue-creation permission boundaries.
 
 See also the [threat model](threat-model.md), [reuse analysis](reuse-analysis.md),
 [ADR-0125](../adr/ADR-0125-governed-feedback-intake.md), and

@@ -12,7 +12,35 @@ export {
   deepRedactStrings,
   isCredentialKeyName,
   objectContainsCredentialKey,
+  redactWithRuleCounts,
+  SHARED_REDACTION_RULE_CODES,
 } from "./redaction.js";
+export type {
+  SharedRedactionResult,
+  SharedRedactionRuleCode,
+  SharedRedactionRuleCount,
+} from "./redaction.js";
+
+export type { SensitiveTextSignal } from "./sensitive-text.js";
+export { looksLikeEuDePii, scanSensitiveText, SENSITIVE_TEXT_SIGNALS } from "./sensitive-text.js";
+
+export type {
+  FeedbackCanonicalBodyErrorCodeV1,
+  FeedbackCanonicalBodyV1,
+  FeedbackReportRedactionPolicyParseV1,
+  FeedbackReportRedactionPolicyV1,
+  PreparedFeedbackReportV1,
+  PrepareFeedbackReportResultV1,
+  VerifyCanonicalFeedbackReportBodyInputV1,
+  VerifyCanonicalFeedbackReportBodyResultV1,
+} from "./feedback-report.js";
+export {
+  FEEDBACK_CANONICAL_BODY_ERROR_CODES_V1,
+  FEEDBACK_REPORT_REDACTION_POLICY_LIMITS_V1,
+  parseFeedbackReportRedactionPolicyV1,
+  prepareFeedbackReportV1,
+  verifyCanonicalFeedbackReportBodyV1,
+} from "./feedback-report.js";
 
 export { assertValidRunId } from "./runid.js";
 

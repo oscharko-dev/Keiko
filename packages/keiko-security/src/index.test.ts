@@ -8,6 +8,8 @@ import { describe, it, expect } from "vitest";
 import {
   KEIKO_SECURITY_VERSION,
   redact,
+  redactWithRuleCounts,
+  SHARED_REDACTION_RULE_CODES,
   createAuditRedactor,
   deepRedactStrings,
   isCredentialKeyName,
@@ -42,6 +44,13 @@ import {
   sqliteErrorText,
   isSqliteCorruptionError,
   errorRecord,
+  looksLikeEuDePii,
+  FEEDBACK_CANONICAL_BODY_ERROR_CODES_V1,
+  FEEDBACK_REPORT_REDACTION_POLICY_LIMITS_V1,
+  prepareFeedbackReportV1,
+  scanSensitiveText,
+  SENSITIVE_TEXT_SIGNALS,
+  verifyCanonicalFeedbackReportBodyV1,
 } from "./index.js";
 
 describe("keiko-security package surface", () => {
@@ -51,10 +60,22 @@ describe("keiko-security package surface", () => {
 
   it("exposes the redaction primitives as callable functions", () => {
     expect(typeof redact).toBe("function");
+    expect(typeof redactWithRuleCounts).toBe("function");
+    expect(SHARED_REDACTION_RULE_CODES).toContain("credential-shape");
     expect(typeof createAuditRedactor).toBe("function");
     expect(typeof deepRedactStrings).toBe("function");
     expect(typeof isCredentialKeyName).toBe("function");
     expect(typeof objectContainsCredentialKey).toBe("function");
+  });
+
+  it("exposes feedback preparation and the shared sensitive-text classifier", () => {
+    expect(typeof prepareFeedbackReportV1).toBe("function");
+    expect(typeof verifyCanonicalFeedbackReportBodyV1).toBe("function");
+    expect(FEEDBACK_CANONICAL_BODY_ERROR_CODES_V1).toContain("digest-mismatch");
+    expect(FEEDBACK_REPORT_REDACTION_POLICY_LIMITS_V1.literalCount).toBeGreaterThan(0);
+    expect(typeof scanSensitiveText).toBe("function");
+    expect(typeof looksLikeEuDePii).toBe("function");
+    expect(SENSITIVE_TEXT_SIGNALS).toContain("raw-log-content");
   });
 
   it("exposes the runId validator as a callable function", () => {
