@@ -22,6 +22,8 @@ export const EN_MESSAGES = {
   "editor.callHierarchy.empty": "No calls found for this symbol.",
   "editor.callHierarchy.close": "Close call hierarchy",
   "editor.callHierarchy.command": "Show Call Hierarchy",
+  "editor.verification.run": "Run Verification",
+  "editor.verification.runReviewedChangeLabel": "Run verification for the reviewed change",
   "rail.figma": "Figma Snapshot",
   "rail.lightMode": "Light mode",
   "rail.darkMode": "Dark mode",

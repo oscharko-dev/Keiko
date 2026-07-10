@@ -4365,11 +4365,11 @@ function EditorRuntimeWidget({
             type="button"
             className="ed-reload"
             data-testid="agent-patch-run-verification"
-            aria-label="Run verification for the reviewed change"
+            aria-label={commonT("editor.verification.runReviewedChangeLabel")}
             disabled={agentPatchPending.applying || verification.verificationRunning}
             onClick={runDiffVerification}
           >
-            Run Verification
+            {commonT("editor.verification.run")}
           </button>
         </div>
       </div>

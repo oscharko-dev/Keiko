@@ -24,6 +24,8 @@ export const DE_MESSAGES = {
   "editor.callHierarchy.empty": "Für dieses Symbol wurden keine Aufrufe gefunden.",
   "editor.callHierarchy.close": "Aufrufhierarchie schließen",
   "editor.callHierarchy.command": "Aufrufhierarchie anzeigen",
+  "editor.verification.run": "Verifizierung ausführen",
+  "editor.verification.runReviewedChangeLabel": "Verifizierung für die geprüfte Änderung ausführen",
   "rail.figma": "Figma-Snapshot",
   "rail.lightMode": "Heller Modus",
   "rail.darkMode": "Dunkler Modus",
