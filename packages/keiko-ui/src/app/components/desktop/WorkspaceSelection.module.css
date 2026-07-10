@@ -17,18 +17,28 @@
   outline-offset: 5px;
 }
 
-.selectedWindow {
+/* Issue #2150 — rendered as a sibling overlay in Workspace.tsx (one per
+   selected window, z-indexed above the topmost window), NOT as styling on the
+   window element itself. A window's own box-shadow/pseudo-elements stack as
+   part of its own z-indexed box: wherever a higher-z window overlaps a
+   selected-but-lower-z window, the higher window's opaque body would paint
+   over the ring, making a correctly-selected window appear unselected. The
+   overlay is its own stacking context above every window, so it stays fully
+   visible regardless of window overlap or stacking order. */
+.selectionRing {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: var(--radius-surface);
+  pointer-events: none;
   box-shadow:
     0 0 0 2px var(--focus-ring),
-    0 0 0 7px color-mix(in oklch, var(--accent) 14%, transparent),
-    var(--card-shadow-raised);
+    0 0 0 7px color-mix(in oklch, var(--accent) 14%, transparent);
 }
 
-.selectedWindow::after {
+.selectionRing::after {
   position: absolute;
   inset: -5px;
-  z-index: -1;
-  pointer-events: none;
   content: "";
   border: 1px solid var(--accent-line);
   border-radius: inherit;
@@ -38,8 +48,8 @@
 @media (prefers-reduced-motion: reduce) {
   .marquee,
   .workspaceWindow,
-  .selectedWindow,
-  .selectedWindow::after {
+  .selectionRing,
+  .selectionRing::after {
     animation: none;
     transition: none;
   }

@@ -540,29 +540,42 @@ export function Workspace({
     };
   }, []);
 
-  // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
-  // focused. Guard event.target === event.currentTarget so arrow keys inside a
-  // focused window child are not captured here (those are handled by WindowFrame).
   const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
+    // Issue #2150 — selection commands (Escape/Ctrl+C/Ctrl+V) must fire from
+    // anywhere in the workspace subtree, not only when the bare <main> surface
+    // itself is focused: completing a marquee-select calls preventDefault() on
+    // pointerdown (Workspace.tsx startMarqueeSelection), which suppresses the
+    // browser's default focus-on-mousedown onto <main>, and clicking a window
+    // focuses that window's own section instead. Requiring literal
+    // target === currentTarget therefore made Ctrl+C/Ctrl+V no-op after the
+    // exact gestures users perform to build a selection. Per ADR-0123 D6, the
+    // only thing these commands must not steal is an embedded editor/terminal/
+    // text-input's own clipboard behavior — isTextEntryTarget is the existing
+    // guard for that, so it (not exact-target) is the right gate here.
+    if (!workspaceInteractionLocked() && !isTextEntryTarget(event.target)) {
+      if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (selection.selectedWindowIds.length > 0) {
+          api.clearSelection();
+          event.preventDefault();
+        }
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+        const key = event.key.toLowerCase();
+        if (key === "c") {
+          if (api.copySelectedWindows()) event.preventDefault();
+          return;
+        }
+        if (key === "v") {
+          if (api.pasteCopiedWindows()) event.preventDefault();
+          return;
+        }
+      }
+    }
+    // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
+    // focused. Guard event.target === event.currentTarget so arrow keys inside a
+    // focused window child are not captured here (those are handled by WindowFrame).
     if (event.target !== event.currentTarget) return;
-    const key = event.key.toLowerCase();
-    if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-      if (selection.selectedWindowIds.length > 0) {
-        api.clearSelection();
-        event.preventDefault();
-      }
-      return;
-    }
-    if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
-      if (key === "c") {
-        if (api.copySelectedWindows()) event.preventDefault();
-        return;
-      }
-      if (key === "v") {
-        if (api.pasteCopiedWindows()) event.preventDefault();
-        return;
-      }
-    }
     const base = 48;
     const step = event.shiftKey ? base * 4 : base;
     switch (event.key) {
@@ -1031,6 +1044,29 @@ export function Workspace({
                 selectedWindowCount={selectedWindowIds.size}
               />
             ))
+          : null}
+        {/* Issue #2150 — selection rings render as sibling overlays above every
+            window (z above the topmost window's own z) instead of as styling on
+            each window, so an overlapping higher-z window can never paint over a
+            selected-but-lower-z window's ring. See WorkspaceSelection.module.css
+            .selectionRing. */}
+        {visibleWins !== null
+          ? visibleWins
+              .filter((w) => selectedWindowIds.has(w.id))
+              .map((w) => (
+                <div
+                  key={`selection-ring-${w.id}`}
+                  className={selectionStyles.selectionRing}
+                  aria-hidden="true"
+                  data-testid={`selection-ring-${w.id}`}
+                  style={{
+                    width: w.w,
+                    height: w.h,
+                    zIndex: (top?.z ?? 0) + 1,
+                    transform: `translate3d(${String(w.x)}px, ${String(w.y)}px, 0)`,
+                  }}
+                />
+              ))
           : null}
       </div>
 
