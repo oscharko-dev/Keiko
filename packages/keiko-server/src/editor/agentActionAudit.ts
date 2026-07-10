@@ -72,7 +72,13 @@ function appendRecord(sessionId: string, record: EditorAgentActionAuditRecord): 
 export function recordEditorAgentActionAudit(
   input: EditorAgentAuditInput,
 ): EditorAgentActionAuditRecord | null {
-  if (!isMutatingEditorAgentAction(input.actionType) && input.decision.disposition !== "denied") {
+  const serverResolved =
+    input.actionType === "navigateSymbol" || input.actionType === "searchWorkspace";
+  if (
+    !isMutatingEditorAgentAction(input.actionType) &&
+    input.decision.disposition !== "denied" &&
+    !serverResolved
+  ) {
     return null;
   }
   try {
