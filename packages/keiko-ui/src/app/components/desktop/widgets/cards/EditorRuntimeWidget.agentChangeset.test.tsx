@@ -348,6 +348,43 @@ afterEach(() => {
 });
 
 describe("EditorRuntimeWidget applyChangeset review", () => {
+  it("applies an explicitly allowed changeset without staging review", async () => {
+    const disk = new Map<string, FilesContentResponse>([
+      ["src/active.ts", fileResponse("src/active.ts", ORIGINAL_ACTIVE, HASH_A)],
+      ["src/deleted.ts", fileResponse("src/deleted.ts", DELETED_CONTENT, HASH_B)],
+    ]);
+    vi.mocked(fetchFilesContent).mockImplementation(async (_root, path) => {
+      const response = disk.get(path);
+      if (response === undefined) throw new Error("missing fixture");
+      return response;
+    });
+    const rendered = await renderAgentEditor();
+    const action: EditorAgentAction = {
+      ...changesetAction(rendered.sessionId, "automatic-changeset"),
+      requiresReview: false,
+    };
+    vi.mocked(postEditorAgentActionResult).mockImplementation(async (body) => {
+      disk.set("src/active.ts", fileResponse("src/active.ts", UPDATED_ACTIVE, HASH_C, 2));
+      disk.set("src/created.ts", fileResponse("src/created.ts", CREATED_CONTENT, HASH_D, 2));
+      disk.delete("src/deleted.ts");
+      return {
+        result: terminalResult(action, body.result.status === "succeeded" ? "succeeded" : "failed"),
+      };
+    });
+
+    act(() => rendered.source.emitAction(action));
+
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe(UPDATED_ACTIVE);
+      expect(submittedResults()).toContainEqual(
+        expect.objectContaining({ actionId: action.actionId, status: "succeeded" }),
+      );
+    });
+    expect(screen.queryByRole("group", { name: "Agent changeset review" })).toBeNull();
+    expect(isDocumentDirty(surface.props!.fileModel)).toBe(false);
+    expect(rendered.onCloseOpenFile).toHaveBeenCalledWith("src/deleted.ts");
+  });
+
   it("reviews three files, submits Accept once, and reconciles authoritative disk state", async () => {
     const disk = new Map<string, FilesContentResponse>([
       ["src/active.ts", fileResponse("src/active.ts", ORIGINAL_ACTIVE, HASH_A)],

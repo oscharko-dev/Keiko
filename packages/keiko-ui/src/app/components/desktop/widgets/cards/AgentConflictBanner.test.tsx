@@ -237,6 +237,19 @@ describe("AgentConflictBanner — PRECONDITION_REQUIRED affordances", () => {
   });
 });
 
+describe("AgentConflictBanner — policy affordances", () => {
+  it.each([
+    ["POLICY_DENIED", "Action denied by policy"],
+    ["APPROVAL_REQUIRED", "Action approval required"],
+  ] as const)("renders the bounded title and only Dismiss for %s", (code, title) => {
+    renderBanner(code);
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
+});
+
 // ─── Focus + Escape (GEN-UI-A11Y-005) ────────────────────────────────────────
 
 describe("AgentConflictBanner — focus + keyboard (GEN-UI-A11Y-005)", () => {
@@ -280,7 +293,10 @@ describe("AgentConflictBanner — accessibility (jest-axe)", () => {
     "INVALID_EDITS",
     "OUT_OF_SCOPE",
     "NO_ACTIVE_SESSION",
+    "NO_ACTIVE_BRIDGE",
     "PRECONDITION_REQUIRED",
+    "POLICY_DENIED",
+    "APPROVAL_REQUIRED",
   ];
 
   it.each(allCodes)("has no axe violations for code %s", async (code) => {

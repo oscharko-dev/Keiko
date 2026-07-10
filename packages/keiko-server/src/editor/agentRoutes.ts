@@ -18,12 +18,15 @@ import type { ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import {
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES,
+  EDITOR_AGENT_ACTION_APPROVAL_RISK,
+  EDITOR_AGENT_WORKBENCH_ACTION_CLASS,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SESSION_ID_MAX_BYTES,
   EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
   classifyEditorAgentAction,
+  composeEditorAgentActionPolicyDecision,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
@@ -32,16 +35,20 @@ import {
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
+  validateCodingWorkbenchAuthorityEnvelope,
   validateAgentTextEdits,
   type EditorAgentAction,
+  type EditorAgentActionDenyReason,
   type EditorAgentActionPolicyDecision,
   type EditorAgentActionResult,
   type EditorAgentActionResultRequest,
+  type EditorAgentBridgeActionRequest,
   type EditorAgentBridgeSnapshotRequest,
   type EditorAgentConflictCode,
   type EditorAgentEvent,
   type EditorAgentSessionSnapshot,
   type EditorAgentSnapshotTextMode,
+  type CodingWorkbenchMode,
   type LanguageRange,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -68,12 +75,23 @@ import {
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
+import type { UiHandlerDeps } from "../deps.js";
+import type { AutonomousDeliveryConfirmation } from "../coding-runtime/autonomousDeliveryPolicy.js";
+import {
+  editorAgentAuthorityRegistry,
+  type EditorAgentAuthorityResolution,
+} from "./agentAuthorityRegistry.js";
 import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentAuditForTests,
   listEditorAgentActionAudit,
   recordEditorAgentActionAudit,
 } from "./agentActionAudit.js";
+
+type EditorAgentRouteDeps = Pick<
+  UiHandlerDeps,
+  "autonomousDeliveryApprovalStore" | "autonomousDeliveryDeploymentCeiling"
+>;
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
@@ -126,6 +144,10 @@ function rememberIdempotency(
 
 function isRouteResult(value: unknown): value is RouteResult {
   return typeof value === "object" && value !== null && "status" in value && "body" in value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function utf8Prefix(
@@ -795,15 +817,15 @@ function deriveAgentPatchTextEdits(
   return edit === null ? null : [edit];
 }
 
-// Builds the action envelope to broadcast to the bridge. For applyPatch the contract textEdits are
-// derived (whole-document replace) so the browser reviews a concrete edit; null means the patch could
-// not be prepared and the action must be failed rather than queued. Every other action type is
-// broadcast unchanged.
+// Builds the action envelope to broadcast to the bridge. Patch previews and the review requirement
+// are server-derived; null means the patch could not be prepared and must fail before queueing.
 function buildEmitAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   inspection: AdmissionInspection,
+  requiresReview: boolean,
 ): EditorAgentAction | null {
+  const browserAction = stripAuthorityReferences(action);
   if (action.type === "applyChangeset") {
     const changesetInspection = inspection.changeset;
     if (
@@ -814,14 +836,23 @@ function buildEmitAction(
       return null;
     }
     return {
-      ...action,
+      ...browserAction,
+      requiresReview,
       changeset: { ...action.changeset, prepared: changesetInspection.prepared },
     };
   }
-  if (action.type !== "applyPatch") return action;
+  if (action.type !== "applyPatch") return browserAction;
   const textEdits = deriveAgentPatchTextEdits(action, snapshot, inspection.patch);
   if (textEdits === null) return null;
-  return { ...action, textEdits };
+  return { ...browserAction, requiresReview, textEdits };
+}
+
+function stripAuthorityReferences(action: EditorAgentAction): EditorAgentAction {
+  const browserAction = { ...action };
+  delete browserAction.authorityRef;
+  delete browserAction.approvalRef;
+  delete browserAction.requiresReview;
+  return browserAction;
 }
 
 function targetFile(
@@ -1054,14 +1085,139 @@ export async function handleEditorAgentSnapshot(ctx: RouteContext): Promise<Rout
   };
 }
 
-// Issue #1395 (ADR-0062) — the workspace-relative target path an action governs, or null when it has
-// no file target. Used both for the policy decision and the (content-free) audit record.
-function resolveActionTargetPath(
+const EDITOR_AGENT_AUTHORITY_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "authorityEnvelope",
+  "confirmation",
+]);
+const EDITOR_AGENT_AUTHORITY_CONFIRMATION_KEYS = new Set([
+  "confirmed",
+  "approvalProofDigest",
+  "confirmedAt",
+]);
+
+function editorAgentDeploymentCeiling(deps: EditorAgentRouteDeps | undefined): CodingWorkbenchMode {
+  return deps?.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
+}
+
+function parseAuthorityConfirmation(value: unknown): AutonomousDeliveryConfirmation | undefined {
+  if (
+    !isRecord(value) ||
+    !Object.keys(value).every((key) => EDITOR_AGENT_AUTHORITY_CONFIRMATION_KEYS.has(key)) ||
+    value.confirmed !== true ||
+    typeof value.approvalProofDigest !== "string" ||
+    typeof value.confirmedAt !== "string"
+  ) {
+    return undefined;
+  }
+  return {
+    confirmed: true,
+    approvalProofDigest: value.approvalProofDigest,
+    confirmedAt: value.confirmedAt,
+  };
+}
+
+interface ParsedEditorAgentAuthorityRequest {
+  readonly envelope: unknown;
+  readonly confirmation: AutonomousDeliveryConfirmation;
+}
+
+function parseAuthorityRequest(
+  body: Record<string, unknown>,
+): ParsedEditorAgentAuthorityRequest | undefined {
+  const confirmation = parseAuthorityConfirmation(body.confirmation);
+  if (
+    body.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    !Object.keys(body).every((key) => EDITOR_AGENT_AUTHORITY_REQUEST_KEYS.has(key)) ||
+    body.authorityEnvelope === undefined ||
+    confirmation === undefined
+  ) {
+    return undefined;
+  }
+  return { envelope: body.authorityEnvelope, confirmation };
+}
+
+export async function handleEditorAgentAuthority(
+  ctx: RouteContext,
+  deps?: EditorAgentRouteDeps,
+): Promise<RouteResult> {
+  const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
+  if (isRouteResult(body)) return body;
+  const request = parseAuthorityRequest(body);
+  if (request === undefined) {
+    return { status: 400, body: errorBody("INVALID_REQUEST", "Authority request is invalid.") };
+  }
+  const parsed = validateCodingWorkbenchAuthorityEnvelope(request.envelope);
+  const ceiling = editorAgentDeploymentCeiling(deps);
+  const approvalStore = deps?.autonomousDeliveryApprovalStore;
+  const nowIso = new Date().toISOString();
+  if (
+    !parsed.ok ||
+    parsed.value.deploymentCeiling !== ceiling ||
+    approvalStore?.consume(parsed.value, request.confirmation, nowIso) !== true
+  ) {
+    return {
+      status: 403,
+      body: errorBody("AUTHORITY_PROOF_INVALID", "Authority confirmation was not accepted."),
+    };
+  }
+  const registration = editorAgentAuthorityRegistry.register(parsed.value, ceiling, nowIso);
+  if (!registration.ok) {
+    const code = registration.reason === "expired" ? "AUTHORITY_EXPIRED" : "AUTHORITY_INVALID";
+    return { status: 403, body: errorBody(code, "The Authority Envelope was not accepted.") };
+  }
+  return { status: 200, body: { authorityRef: registration.authorityRef } };
+}
+
+function resolveActionTargetPaths(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
-): string | null {
-  if (isEditorAgentActiveBufferActionType(action.type)) return snapshot?.activeFile ?? null;
-  return action.target?.file ?? snapshot?.activeFile ?? null;
+): readonly string[] {
+  if (action.type === "applyChangeset") {
+    return (action.changeset?.files ?? []).map((file) => file.file);
+  }
+  if (isEditorAgentActiveBufferActionType(action.type)) {
+    return optionalTargetPath(snapshot?.activeFile);
+  }
+  return optionalTargetPath(action.target?.file ?? snapshot?.activeFile);
+}
+
+function optionalTargetPath(path: string | null | undefined): readonly string[] {
+  return path === null || path === undefined ? [] : [path];
+}
+
+function governedActionTarget(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): { readonly targetPath: string | null; readonly targetSensitive: boolean } {
+  const paths = resolveActionTargetPaths(action, snapshot);
+  const escaping = paths.find((path) => !isContainedAgentPath(path));
+  const sensitive = paths.find((path) => isContainedAgentPath(path) && isDenied(path));
+  return {
+    targetPath: escaping ?? sensitive ?? paths[0] ?? null,
+    targetSensitive: sensitive !== undefined,
+  };
+}
+
+function denyByAuthority(
+  baseline: EditorAgentActionPolicyDecision,
+  denyReason: EditorAgentActionDenyReason,
+): EditorAgentActionPolicyDecision {
+  return {
+    disposition: "denied",
+    effectClass: baseline.effectClass,
+    origin: baseline.origin,
+    denyReason,
+  };
+}
+
+function authorityDenyReason(
+  resolution: Extract<EditorAgentAuthorityResolution, { readonly ok: false }>,
+): EditorAgentActionDenyReason {
+  if (resolution.reason === "expired") return "authority-expired";
+  return resolution.reason === "budget-exceeded"
+    ? "authority-budget-exceeded"
+    : "authority-invalid";
 }
 
 // Deterministic policy classification (AC2). Containment reuses the contract guard; sensitivity reuses
@@ -1070,15 +1226,58 @@ function resolveActionTargetPath(
 function decideActionPolicy(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
+  deps?: EditorAgentRouteDeps,
 ): EditorAgentActionPolicyDecision {
-  const targetPath = resolveActionTargetPath(action, snapshot);
-  const targetSensitive =
-    targetPath !== null && isContainedAgentPath(targetPath) && isDenied(targetPath);
-  return classifyEditorAgentAction(action.type, {
+  const { targetPath, targetSensitive } = governedActionTarget(action, snapshot);
+  const baseline = classifyEditorAgentAction(action.type, {
     targetPath,
     targetSensitive,
     origin: action.origin,
   });
+  if (baseline.disposition === "denied") return baseline;
+  if (action.approvalRef !== undefined) {
+    return denyByAuthority(baseline, "approval-reference-invalid");
+  }
+  if (EDITOR_AGENT_WORKBENCH_ACTION_CLASS[baseline.effectClass] === null) return baseline;
+  if (action.authorityRef === undefined) {
+    return denyByAuthority(baseline, "authority-missing");
+  }
+  if (snapshot === undefined) return denyByAuthority(baseline, "authority-invalid");
+  const resolution = editorAgentAuthorityRegistry.resolveForAction(
+    action.authorityRef,
+    action,
+    snapshot.workspaceRoot,
+    editorAgentDeploymentCeiling(deps),
+    new Date().toISOString(),
+  );
+  if (!resolution.ok) return denyByAuthority(baseline, authorityDenyReason(resolution));
+  return composeEditorAgentActionPolicyDecision(
+    baseline,
+    resolution.envelope,
+    EDITOR_AGENT_ACTION_APPROVAL_RISK[action.type],
+  );
+}
+
+function reserveActionAuthority(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  deps?: EditorAgentRouteDeps,
+): EditorAgentActionPolicyDecision | null {
+  if (EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass] === null) return null;
+  if (snapshot === undefined) return denyByAuthority(decision, "authority-invalid");
+  if (action.authorityRef === undefined) {
+    return denyByAuthority(decision, "authority-missing");
+  }
+  const reservation = editorAgentAuthorityRegistry.reserveForAction(
+    action.authorityRef,
+    action,
+    snapshot.workspaceRoot,
+    editorAgentDeploymentCeiling(deps),
+    actionPatchByteLength(action) ?? 0,
+    new Date().toISOString(),
+  );
+  return reservation.ok ? null : denyByAuthority(decision, authorityDenyReason(reservation));
 }
 
 // Issue #1395 (AC1) — record one content-free audit entry for this action at its admission decision.
@@ -1099,13 +1298,19 @@ function auditAction(
     outcome: result.status,
     conflictCode: result.conflict?.code,
     failureCode: result.failure?.code,
-    targetPath: resolveActionTargetPath(action, snapshot),
+    targetPath: governedActionTarget(action, snapshot).targetPath,
     editCount: action.type === "applyTextEdits" ? action.textEdits?.length : undefined,
     patchByteLength: actionPatchByteLength(action),
   });
 }
 
 function actionPatchByteLength(action: EditorAgentAction): number | undefined {
+  if (action.type === "applyTextEdits") {
+    return action.textEdits?.reduce(
+      (total, edit) => total + Buffer.byteLength(edit.newText, "utf8"),
+      0,
+    );
+  }
   const patch = action.type === "applyChangeset" ? action.changeset?.patch : action.patch;
   return patch === undefined ? undefined : Buffer.byteLength(patch, "utf8");
 }
@@ -1247,8 +1452,10 @@ function finishChangesetResult(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
   result: EditorAgentActionResult,
+  deps: EditorAgentRouteDeps | undefined,
+  decision = decideActionPolicy(action, snapshot, deps),
 ): RouteResult {
-  auditAction(action, snapshot, decideActionPolicy(action, snapshot), result);
+  auditAction(action, snapshot, decision, result);
   editorAgentRegistry.reportResult(result);
   return { status: 200, body: { result } };
 }
@@ -1256,6 +1463,7 @@ function finishChangesetResult(
 function handleChangesetResult(
   action: EditorAgentAction,
   reported: EditorAgentActionResult,
+  deps?: EditorAgentRouteDeps,
 ): RouteResult {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   if (reported.status !== "succeeded") {
@@ -1265,24 +1473,29 @@ function handleChangesetResult(
       "failed",
       "The browser rejected the changeset.",
     );
-    return finishChangesetResult(action, snapshot, failed);
+    return finishChangesetResult(action, snapshot, failed, deps);
   }
   if (snapshot === undefined) {
     const result = changesetConflict(action, [
       { code: "NO_ACTIVE_SESSION", message: "The browser session is no longer available." },
     ]);
-    return finishChangesetResult(action, snapshot, result);
+    return finishChangesetResult(action, snapshot, result, deps);
+  }
+  const decision = decideActionPolicy(action, snapshot, deps);
+  const policyConflict = policyAdmissionConflict(action, decision);
+  if (policyConflict !== null) {
+    return finishChangesetResult(action, snapshot, policyConflict, deps, decision);
   }
   const inspection = inspectChangeset(action, snapshot);
   if (inspection.result !== null) {
-    return finishChangesetResult(action, snapshot, inspection.result);
+    return finishChangesetResult(action, snapshot, inspection.result, deps, decision);
   }
   const projection = projectChangeset(action, snapshot, inspection.validation);
   const result =
     projection.kind === "conflict"
       ? projection.result
       : applyChangeset(action, snapshot, projection);
-  return finishChangesetResult(action, snapshot, result);
+  return finishChangesetResult(action, snapshot, result, deps, decision);
 }
 
 type ResultLeaseValidation =
@@ -1313,7 +1526,29 @@ function validateResultLease(request: EditorAgentActionResultRequest): ResultLea
   return { ok: true, capabilityDigest };
 }
 
-function handleReportedActionResult(request: EditorAgentActionResultRequest): RouteResult {
+function finishBrowserActionResult(result: EditorAgentActionResult): RouteResult {
+  editorAgentRegistry.reportResult(result);
+  return { status: 200, body: { result } };
+}
+
+function handlePatchResult(
+  action: EditorAgentAction,
+  reported: EditorAgentActionResult,
+  deps?: EditorAgentRouteDeps,
+): RouteResult {
+  if (reported.status !== "succeeded") return finishBrowserActionResult(reported);
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  const decision = decideActionPolicy(action, snapshot, deps);
+  const policyConflict = policyAdmissionConflict(action, decision);
+  if (policyConflict !== null) return finishBrowserActionResult(policyConflict);
+  const admission = preflight(action, snapshot);
+  return finishBrowserActionResult(admission.ok ? reported : admission.result);
+}
+
+function handleReportedActionResult(
+  request: EditorAgentActionResultRequest,
+  deps?: EditorAgentRouteDeps,
+): RouteResult {
   const lease = validateResultLease(request);
   if (!lease.ok) return lease.response;
   const { result } = request;
@@ -1337,46 +1572,202 @@ function handleReportedActionResult(request: EditorAgentActionResultRequest): Ro
       ),
     };
   }
-  if (action.type === "applyChangeset") return handleChangesetResult(action, result);
-  editorAgentRegistry.reportResult(result);
-  return { status: 200, body: { result } };
+  if (action.type === "applyChangeset") return handleChangesetResult(action, result, deps);
+  if (action.type === "applyPatch") return handlePatchResult(action, result, deps);
+  return finishBrowserActionResult(result);
 }
 
-export async function handleEditorAgentActions(ctx: RouteContext): Promise<RouteResult> {
+function actionHasBrowserReview(type: EditorAgentAction["type"]): boolean {
+  return type === "applyPatch" || type === "applyChangeset";
+}
+
+function policyAdmissionConflict(
+  action: EditorAgentAction,
+  decision: EditorAgentActionPolicyDecision,
+): EditorAgentActionResult | null {
+  if (decision.disposition === "denied") {
+    return conflict(action, "POLICY_DENIED", "The action is denied by editor policy.");
+  }
+  if (decision.disposition === "review-required" && !actionHasBrowserReview(action.type)) {
+    return conflict(action, "APPROVAL_REQUIRED", "The action requires explicit approval.");
+  }
+  return null;
+}
+
+function rejectActionRequest(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  decision: EditorAgentActionPolicyDecision,
+  result: EditorAgentActionResult,
+  requestHash: string,
+  status: 403 | 409,
+): RouteResult {
+  rememberIdempotency(action.idempotencyKey, requestHash, result);
+  auditAction(action, snapshot, decision, result);
+  editorAgentRegistry.reportResult(result);
+  return { status, body: { result } };
+}
+
+type BridgeActionLease =
+  | {
+      readonly ok: true;
+      readonly action: EditorAgentAction;
+      readonly snapshot: EditorAgentSessionSnapshot;
+    }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function validateBridgeActionLease(request: EditorAgentBridgeActionRequest): BridgeActionLease {
+  const { action, bridgeDecisionCapability } = request;
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  if (
+    snapshot === undefined ||
+    !actionHasBrowserReview(action.type) ||
+    action.authorityRef !== undefined ||
+    action.approvalRef !== undefined
+  ) {
+    return { ok: false, response: bridgeCapabilityError() };
+  }
+  const capabilityDigest = bridgeCapabilityDigest(bridgeDecisionCapability);
+  if (!editorAgentRegistry.hasValidBridgeLease(action.sessionId, capabilityDigest)) {
+    return { ok: false, response: bridgeCapabilityError() };
+  }
+  return { ok: true, action: { ...action, origin: "chat", requiresReview: true }, snapshot };
+}
+
+function attachBridgeActionAuthority(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps?: EditorAgentRouteDeps,
+): BridgeActionAuthorization {
+  const registration = editorAgentAuthorityRegistry.registerLocalBridge(
+    snapshot,
+    action,
+    editorAgentDeploymentCeiling(deps),
+    new Date().toISOString(),
+  );
+  if (!registration.ok) {
+    return {
+      ok: false,
+      response: {
+        status: 403,
+        body: errorBody("AUTHORITY_INVALID", "Local editor authority was not accepted."),
+      },
+    };
+  }
+  return {
+    ok: true,
+    action: { ...action, authorityRef: registration.authorityRef },
+  };
+}
+
+type BridgeActionAuthorization =
+  | { readonly ok: true; readonly action: EditorAgentAction }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function editorActionRequestHash(
+  value: EditorAgentAction | EditorAgentBridgeActionRequest,
+): string {
+  return hashRequest(
+    JSON.stringify(
+      isEditorAgentAction(value)
+        ? value
+        : { schemaVersion: value.schemaVersion, kind: value.kind, action: value.action },
+    ),
+  );
+}
+
+interface PreparedEditorActionRequest {
+  readonly action: EditorAgentAction;
+  readonly bridgeSnapshot?: EditorAgentSessionSnapshot | undefined;
+  readonly requestHash: string;
+}
+
+type EditorActionRequestPreparation =
+  | { readonly ok: true; readonly request: PreparedEditorActionRequest }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function prepareEditorActionRequest(
+  value: EditorAgentAction | EditorAgentBridgeActionRequest,
+): EditorActionRequestPreparation {
+  const requestHash = editorActionRequestHash(value);
+  if (isEditorAgentAction(value)) {
+    return { ok: true, request: { action: value, requestHash } };
+  }
+  const lease = validateBridgeActionLease(value);
+  return lease.ok
+    ? {
+        ok: true,
+        request: { action: lease.action, bridgeSnapshot: lease.snapshot, requestHash },
+      }
+    : lease;
+}
+
+function replayEditorAction(action: EditorAgentAction, requestHash: string): RouteResult | null {
+  const replay = idempotency.get(action.idempotencyKey);
+  if (replay === undefined) return null;
+  if (replay.requestHash !== requestHash) {
+    return {
+      status: 409,
+      body: errorBody(
+        "IDEMPOTENCY_CONFLICT",
+        "Idempotency-Key was reused with a different action.",
+      ),
+    };
+  }
+  return { status: 200, body: { result: replay.result } };
+}
+
+function admitEditorAction(
+  action: EditorAgentAction,
+  requestHash: string,
+  deps: EditorAgentRouteDeps | undefined,
+): RouteResult {
+  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  const decision = decideActionPolicy(action, snapshot, deps);
+  const admission = preflight(action, snapshot);
+  if (!admission.ok) {
+    return rejectActionRequest(action, snapshot, decision, admission.result, requestHash, 409);
+  }
+  const policyConflict = policyAdmissionConflict(action, decision);
+  if (policyConflict !== null) {
+    return rejectActionRequest(action, snapshot, decision, policyConflict, requestHash, 403);
+  }
+  const reservationDenial = reserveActionAuthority(action, snapshot, decision, deps);
+  if (reservationDenial !== null) {
+    const result = conflict(action, "POLICY_DENIED", "The action authority budget is exhausted.");
+    return rejectActionRequest(action, snapshot, reservationDenial, result, requestHash, 403);
+  }
+  return queueAndEmitAction(action, requestHash, snapshot, decision, admission.inspection);
+}
+
+export async function handleEditorAgentActions(
+  ctx: RouteContext,
+  deps?: EditorAgentRouteDeps,
+): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
   if (isRouteResult(body)) return body;
   const parsed = parseEditorAgentActionsPostBody(body);
   if (!parsed.ok) {
     return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
-  if (!isEditorAgentAction(parsed.value)) {
-    return handleReportedActionResult(parsed.value);
+  if (!isEditorAgentAction(parsed.value) && parsed.value.kind === "result") {
+    return handleReportedActionResult(parsed.value, deps);
   }
-  const action = parsed.value;
-  const requestHash = hashRequest(JSON.stringify(action));
-  const replay = idempotency.get(action.idempotencyKey);
-  if (replay !== undefined) {
-    if (replay.requestHash !== requestHash) {
-      return {
-        status: 409,
-        body: errorBody(
-          "IDEMPOTENCY_CONFLICT",
-          "Idempotency-Key was reused with a different action.",
-        ),
-      };
-    }
-    return { status: 200, body: { result: replay.result } };
+  const preparation = prepareEditorActionRequest(parsed.value);
+  if (!preparation.ok) return preparation.response;
+  const replay = replayEditorAction(preparation.request.action, preparation.request.requestHash);
+  if (replay !== null) return replay;
+  let { action } = preparation.request;
+  if (preparation.request.bridgeSnapshot !== undefined) {
+    const authorization = attachBridgeActionAuthority(
+      action,
+      preparation.request.bridgeSnapshot,
+      deps,
+    );
+    if (!authorization.ok) return authorization.response;
+    action = authorization.action;
   }
-  const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
-  const decision = decideActionPolicy(action, snapshot);
-  const admission = preflight(action, snapshot);
-  if (!admission.ok) {
-    rememberIdempotency(action.idempotencyKey, requestHash, admission.result);
-    auditAction(action, snapshot, decision, admission.result);
-    editorAgentRegistry.reportResult(admission.result);
-    return { status: 409, body: { result: admission.result } };
-  }
-  return queueAndEmitAction(action, requestHash, snapshot, decision, admission.inspection);
+  return admitEditorAction(action, preparation.request.requestHash, deps);
 }
 
 function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {
@@ -1397,8 +1788,12 @@ function queueAndEmitAction(
   inspection: AdmissionInspection,
 ): RouteResult {
   const boundAction = snapshot === undefined ? action : bindActiveBufferTarget(action, snapshot);
+  const requiresReview =
+    decision.disposition === "review-required" || boundAction.requiresReview === true;
   const emitAction =
-    snapshot === undefined ? null : buildEmitAction(boundAction, snapshot, inspection);
+    snapshot === undefined
+      ? null
+      : buildEmitAction(boundAction, snapshot, inspection, requiresReview);
   if (emitAction === null) {
     const result = failedResult(action, "Patch could not be prepared for review.");
     rememberIdempotency(action.idempotencyKey, requestHash, result);
@@ -1554,6 +1949,7 @@ export function _resetEditorAgentStateForTests(): void {
   idempotency.clear();
   editorAgentPatchWriterForTests = undefined;
   editorAgentRegistry.reset();
+  editorAgentAuthorityRegistry.reset();
   _resetEditorAgentAuditForTests();
 }
 

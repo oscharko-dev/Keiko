@@ -71,6 +71,7 @@ import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
+  EditorAgentBridgeActionRequest,
   EditorAgentBridgeDecisionCapability,
   EditorAgentAuditResponse,
   EditorAgentSessionSnapshot,
@@ -2151,6 +2152,22 @@ export async function queueEditorAgentAction(
   return fetchJson("/api/editor/agent/actions", {
     method: "POST",
     body: JSON.stringify(action),
+  });
+}
+
+export async function queueEditorAgentBridgeAction(
+  action: EditorAgentAction,
+  bridgeDecisionCapability: EditorAgentBridgeDecisionCapability,
+): Promise<EditorAgentActionQueuedResponse> {
+  const request: EditorAgentBridgeActionRequest = {
+    schemaVersion: action.schemaVersion,
+    kind: "action",
+    action,
+    bridgeDecisionCapability,
+  };
+  return fetchJson("/api/editor/agent/actions", {
+    method: "POST",
+    body: JSON.stringify(request),
   });
 }
 

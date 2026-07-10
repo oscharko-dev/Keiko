@@ -13,6 +13,7 @@ import {
   EDITOR_AGENT_ACTIVITY_RECENCY_MS,
   EDITOR_SNAPSHOT_DEBOUNCE_MS,
   MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS,
+  queueLocalEditorAgentAction,
   useEditorAgentBridge,
   type EditorAgentActionControllers,
   type UseEditorAgentBridgeParams,
@@ -20,6 +21,7 @@ import {
 
 const createSourceSpy = vi.fn();
 const postResultSpy = vi.hoisted(() => vi.fn());
+const queueBridgeActionSpy = vi.hoisted(() => vi.fn());
 
 function capability(character: string): string {
   return character.repeat(43);
@@ -44,6 +46,8 @@ async function flushBridgeMicrotasks(): Promise<void> {
 
 vi.mock("../../../../../lib/api", () => ({
   postEditorAgentActionResult: (body: unknown): unknown => postResultSpy(body),
+  queueEditorAgentBridgeAction: (action: unknown, capabilityValue: string): unknown =>
+    queueBridgeActionSpy(action, capabilityValue),
 }));
 
 vi.mock("../../../../../lib/safe-event-source", () => ({
@@ -113,6 +117,7 @@ function makeControllers(): EditorAgentActionControllers {
     activePaneId: "pane-1",
     activeFile: "src/a.ts",
     verifyActiveTarget: vi.fn(() => true),
+    verifyWritePrecondition: vi.fn(() => true),
     onSelectOpenFile: vi.fn(),
     formattingEnabled: true,
     formatRequest: { increment: vi.fn() },
@@ -131,7 +136,9 @@ beforeEach(() => {
   _resetEditorAgentBridgeStateForTests();
   createSourceSpy.mockReset();
   postResultSpy.mockReset();
+  queueBridgeActionSpy.mockReset();
   postResultSpy.mockResolvedValue({ result: { status: "succeeded" } });
+  queueBridgeActionSpy.mockResolvedValue({ result: { status: "queued" } });
   createSourceSpy.mockImplementation((url: string) => new FakeEventSource(url));
   (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
 });
@@ -223,6 +230,34 @@ describe("useEditorAgentBridge — snapshot debounce (GEN-PERF-EDITOR-002)", () 
     expect(postResultSpy).toHaveBeenCalledWith(
       expect.objectContaining({ bridgeDecisionCapability: capability }),
     );
+    const localAction = {
+      schemaVersion: "1",
+      actionId: "action-local",
+      idempotencyKey: "key-local",
+      sessionId: "session-capability",
+      type: "applyPatch",
+      patch: "patch",
+    } as const;
+    await queueLocalEditorAgentAction(localAction);
+    expect(queueBridgeActionSpy).toHaveBeenCalledWith(localAction, capability);
+  });
+
+  it("does not expose a local queue path before the bridge capability exists", async () => {
+    await expect(
+      queueLocalEditorAgentAction({
+        schemaVersion: "1",
+        actionId: "action-local",
+        idempotencyKey: "key-local",
+        sessionId: "missing-session",
+        type: "applyPatch",
+        patch: "patch",
+      }),
+    ).rejects.toEqual(
+      expect.objectContaining({
+        message: "The browser bridge decision capability is unavailable.",
+      }),
+    );
+    expect(queueBridgeActionSpy).not.toHaveBeenCalled();
   });
 });
 

@@ -49,6 +49,7 @@ function makeControllers(
     activePaneId: "pane-1",
     activeFile: "src/active.ts",
     verifyActiveTarget: vi.fn(() => true),
+    verifyWritePrecondition: vi.fn(() => true),
     onSelectOpenFile: vi.fn(),
     formattingEnabled: true,
     formatRequest: { increment: vi.fn() },
@@ -417,6 +418,17 @@ describe("dispatchEditorAgentAction — active-buffer target binding", () => {
 
     expect(result.status).toBe("conflict");
     expect(controllers.persist).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the Runtime write precondition rejects a stale action", () => {
+    const controllers = makeControllers({ verifyWritePrecondition: vi.fn(() => false) });
+    const result = dispatchEditorAgentAction(makeAction("applyPatch"), controllers);
+
+    expect(result).toMatchObject({
+      status: "conflict",
+      conflictCode: "VERSION_MISMATCH",
+    });
+    expect(controllers.applyPatch).not.toHaveBeenCalled();
   });
 
   it("rejects the bound pane when the active buffer no longer has a pane id", () => {

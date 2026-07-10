@@ -155,6 +155,8 @@ export interface EditorAgentAction {
   readonly origin?: EditorAgentActionOrigin | undefined;
   readonly authorityRef?: EditorAgentGovernedAuthorityReference | undefined;
   readonly approvalRef?: EditorAgentOneUseApprovalReference | undefined;
+  /** Server-derived on emitted patch/changeset actions; omission preserves legacy review behavior. */
+  readonly requiresReview?: boolean | undefined;
   readonly target?:
     | {
         readonly paneId?: string | undefined;
@@ -187,6 +189,8 @@ export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "confl
 //   - INVALID_EDITS          the edits/patch are structurally invalid (overlap, inverted, malformed).
 //   - OUT_OF_SCOPE           the target escapes the workspace root or the action is unsupported here.
 //   - PRECONDITION_REQUIRED  a write action omitted the mandatory version/hash precondition (AC2).
+//   - POLICY_DENIED          validated policy or authority denies the action.
+//   - APPROVAL_REQUIRED      policy requires a review mechanism not available for this action.
 export type EditorAgentConflictCode =
   | "DIRTY"
   | "VERSION_MISMATCH"
@@ -195,7 +199,9 @@ export type EditorAgentConflictCode =
   | "NO_ACTIVE_BRIDGE"
   | "INVALID_EDITS"
   | "OUT_OF_SCOPE"
-  | "PRECONDITION_REQUIRED";
+  | "PRECONDITION_REQUIRED"
+  | "POLICY_DENIED"
+  | "APPROVAL_REQUIRED";
 
 export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
   "DIRTY",
@@ -206,6 +212,8 @@ export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
   "INVALID_EDITS",
   "OUT_OF_SCOPE",
   "PRECONDITION_REQUIRED",
+  "POLICY_DENIED",
+  "APPROVAL_REQUIRED",
 ] as const;
 
 // Issue #1392 — structured lifecycle failure codes (status: "failed") raised AFTER an action is
@@ -297,7 +305,19 @@ export interface EditorAgentActionResultRequest {
   readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
 }
 
-export type EditorAgentActionsPostBody = EditorAgentAction | EditorAgentActionResultRequest;
+/**
+ * A browser-originated action request. The capability authenticates the live bridge only and is
+ * never copied onto the queued action or emitted over SSE.
+ */
+export interface EditorAgentBridgeActionRequest {
+  readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
+  readonly kind: "action";
+  readonly action: EditorAgentAction;
+  readonly bridgeDecisionCapability: EditorAgentBridgeDecisionCapability;
+}
+
+export type EditorAgentActionsPostBody =
+  EditorAgentAction | EditorAgentBridgeActionRequest | EditorAgentActionResultRequest;
 
 export interface EditorAgentSessionsResponse {
   readonly sessions: readonly EditorAgentSessionSnapshot[];
@@ -757,6 +777,7 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
       (reference) =>
         isEditorAgentOneUseApprovalReference(reference) && reference.actionId === value.actionId,
     ),
+    isUndefinedOr(value.requiresReview, (candidate) => typeof candidate === "boolean"),
     isActionTarget(value.target),
     isUndefinedOr(value.expectedDocumentVersion, isDocumentVersion),
     isUndefinedOr(value.expectedContentHash, isSha256Hex),
@@ -1065,28 +1086,72 @@ export function parseEditorAgentSnapshotRequest(
     : parseReadSnapshotRequest(value);
 }
 
+const EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "action",
+  "bridgeDecisionCapability",
+]);
+
+function parseBridgeActionRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorAgentBridgeActionRequest> {
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    !Object.keys(value).every((key) => EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS.has(key)) ||
+    !isEditorAgentAction(value.action) ||
+    !isEditorAgentBridgeDecisionCapability(value.bridgeDecisionCapability)
+  ) {
+    return { ok: false, errors: ["browser action request is invalid"] };
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "action",
+      action: { ...value.action, origin: resolveEditorAgentActionOrigin(value.action.origin) },
+      bridgeDecisionCapability: value.bridgeDecisionCapability,
+    },
+  };
+}
+
+function parseActionResultRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorAgentActionResultRequest> {
+  if (!isEditorAgentActionResult(value.result)) {
+    return { ok: false, errors: ["action result request is invalid"] };
+  }
+  const capability = value.bridgeDecisionCapability;
+  if (capability !== undefined && !isEditorAgentBridgeDecisionCapability(capability)) {
+    return { ok: false, errors: ["bridgeDecisionCapability must be a bounded capability"] };
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      result: value.result,
+      ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
+    },
+  };
+}
+
+function invalidActionsPostBody(): EditorAgentParseFail {
+  return {
+    ok: false,
+    errors: ["body must be an editor agent action, browser action request, or action result"],
+  };
+}
+
 export function parseEditorAgentActionsPostBody(
   value: unknown,
 ): EditorAgentParse<EditorAgentActionsPostBody> {
   if (isEditorAgentAction(value)) {
     return { ok: true, value: { ...value, origin: resolveEditorAgentActionOrigin(value.origin) } };
   }
-  if (isRecord(value) && value.kind === "result" && isEditorAgentActionResult(value.result)) {
-    const capability = value.bridgeDecisionCapability;
-    if (capability !== undefined && !isEditorAgentBridgeDecisionCapability(capability)) {
-      return { ok: false, errors: ["bridgeDecisionCapability must be a bounded capability"] };
-    }
-    return {
-      ok: true,
-      value: {
-        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-        kind: "result",
-        result: value.result,
-        ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
-      },
-    };
-  }
-  return { ok: false, errors: ["body must be an editor agent action or action result"] };
+  if (!isRecord(value)) return invalidActionsPostBody();
+  if (value.kind === "action") return parseBridgeActionRequest(value);
+  return value.kind === "result" ? parseActionResultRequest(value) : invalidActionsPostBody();
 }
 
 export function isEditorAgentBridgeDecisionCapability(

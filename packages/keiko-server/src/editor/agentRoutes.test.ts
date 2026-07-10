@@ -14,12 +14,19 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_SCHEMA_VERSION,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
   EDITOR_AGENT_SCHEMA_VERSION,
+  isEditorAgentAction,
   isEditorAgentSessionSnapshot,
+  resolveEffectiveCodingWorkbenchMode,
+  type CodingWorkbenchAuthorityEnvelope,
+  type CodingWorkbenchMode,
   type EditorAgentAction,
+  type EditorAgentGovernedAuthorityReference,
   type EditorAgentActionResult,
   type EditorAgentActionStatus,
   type EditorAgentEvent,
@@ -28,22 +35,29 @@ import {
 import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { STREAMING, type RouteContext } from "../routes.js";
+import { createAutonomousDeliveryApprovalStore } from "../coding-runtime/autonomousDeliveryApprovalStore.js";
 import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentStateForTests,
   _setEditorAgentPatchWriterForTests,
   handleEditorAgentActions,
+  handleEditorAgentAuthority,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
   handleEditorAgentSnapshot,
 } from "./agentRoutes.js";
 import type { EditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
+import {
+  editorAgentAuthorityRegistry,
+  editorAgentWorkspaceRootDigest,
+} from "./agentAuthorityRegistry.js";
 
 const HASH = "a".repeat(64);
 const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 65_536;
 const PATCH_SOURCE_LIMIT_BYTES = 1_000_000;
 let bridgeDecisionCapability: string | undefined;
+let agentAuthorityRef: EditorAgentGovernedAuthorityReference | undefined;
 const bridgeDecisionCapabilities = new Map<string, string>();
 type ChangesetFile = NonNullable<EditorAgentAction["changeset"]>["files"][number];
 
@@ -84,13 +98,114 @@ function responseBridgeCapability(body: unknown): string | undefined {
     : undefined;
 }
 
+function responseAuthorityRef(body: unknown): EditorAgentGovernedAuthorityReference | undefined {
+  if (!isRecord(body) || !isRecord(body.authorityRef)) return undefined;
+  const { runId, envelopeDigest } = body.authorityRef;
+  return typeof runId === "string" && typeof envelopeDigest === "string"
+    ? { runId, envelopeDigest }
+    : undefined;
+}
+
 function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
+function authorityEnvelope(
+  workspaceRoot: string,
+  requestedMode: CodingWorkbenchMode = "autonomous-delivery",
+  deploymentCeiling: CodingWorkbenchMode = "governed-assist",
+): CodingWorkbenchAuthorityEnvelope {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    runId: "run-2121",
+    localUser: "local-operator",
+    taskRefs: ["issue-2121"],
+    workspace: {
+      workspaceId: "workspace-1",
+      rootLabel: "workspace",
+      rootDigest: editorAgentWorkspaceRootDigest(workspaceRoot),
+    },
+    branch: {
+      baseRef: "dev",
+      headRef: "local-workspace",
+      allowDetachedHead: false,
+      allowedPrefixes: ["local-"],
+    },
+    requestedMode,
+    deploymentCeiling,
+    effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
+    runtimeSource: "keiko-sidecar",
+    actionClasses: CODING_WORKBENCH_ACTION_CLASSES,
+    connectorScopes: [],
+    modelProfile: {
+      profileId: "profile-1",
+      source: "keiko-model-gateway",
+      supportsStreaming: true,
+      supportsToolCalling: true,
+    },
+    commandPolicy: {
+      mode: "governed",
+      allow: [],
+      deny: [],
+      maxCommandTimeoutMs: 60_000,
+      requirePerCommandApproval: false,
+    },
+    networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    gates: ["human-approval", "branch-allowlist"],
+    budget: {
+      maxRuntimeMs: 60_000,
+      maxToolCalls: 20,
+      maxPromptTokens: 10_000,
+      maxPatchBytes: 65_536,
+    },
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    approvalProofDigest: HASH,
+  };
+}
+
+function authorityRouteRequest(
+  envelope: CodingWorkbenchAuthorityEnvelope,
+  deploymentCeiling: CodingWorkbenchMode = "governed-assist",
+): {
+  readonly body: Record<string, unknown>;
+  readonly deps: Parameters<typeof handleEditorAgentAuthority>[1];
+} {
+  const approvalStore = createAutonomousDeliveryApprovalStore();
+  return {
+    body: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      authorityEnvelope: envelope,
+      confirmation: approvalStore.issue(envelope, "2026-07-10T00:00:00.000Z"),
+    },
+    deps: {
+      autonomousDeliveryApprovalStore: approvalStore,
+      autonomousDeliveryDeploymentCeiling: deploymentCeiling,
+    },
+  };
+}
+
+function registerTestAuthority(
+  workspaceRoot: string,
+  requestedMode: CodingWorkbenchMode = "autonomous-delivery",
+): void {
+  const registered = editorAgentAuthorityRegistry.register(
+    authorityEnvelope(workspaceRoot, requestedMode),
+    "governed-assist",
+    new Date().toISOString(),
+  );
+  if (!registered.ok) throw new Error("expected editor authority registration");
+  agentAuthorityRef = registered.authorityRef;
+}
+
 function context(body: unknown = {}, path = "/api/editor/agent/actions"): RouteContext {
+  const requestBody =
+    isEditorAgentAction(body) &&
+    !Object.prototype.hasOwnProperty.call(body, "authorityRef") &&
+    agentAuthorityRef !== undefined
+      ? { ...body, authorityRef: agentAuthorityRef }
+      : body;
   const req = Readable.from([
-    Buffer.from(JSON.stringify(body), "utf8"),
+    Buffer.from(JSON.stringify(requestBody), "utf8"),
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
@@ -130,6 +245,7 @@ function action(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
     sessionId: "session-1",
     type: "save",
     expectedContentHash: HASH,
+    ...(agentAuthorityRef === undefined ? {} : { authorityRef: agentAuthorityRef }),
     ...overrides,
   };
 }
@@ -208,6 +324,7 @@ async function registerSnapshotOnly(
   overrides: Partial<EditorAgentSessionSnapshot> = {},
 ): Promise<void> {
   const nextSnapshot = { ...snapshot(), ...overrides };
+  registerTestAuthority(nextSnapshot.workspaceRoot);
   const existingCapability = bridgeDecisionCapabilities.get(nextSnapshot.sessionId);
   const registered = await handleEditorAgentSnapshot(
     context(
@@ -346,6 +463,7 @@ function lastEmittedAction(frames: string): EditorAgentAction {
 
 afterEach(() => {
   bridgeDecisionCapability = undefined;
+  agentAuthorityRef = undefined;
   bridgeDecisionCapabilities.clear();
   _resetEditorAgentStateForTests();
   vi.useRealTimers();
@@ -354,6 +472,49 @@ afterEach(() => {
 // ─── Original tests (unchanged) ────────────────────────────────────────────────────────────────
 
 describe("editor agent routes", () => {
+  it("registers a validated Authority Envelope and returns only its bounded reference", async () => {
+    const request = authorityRouteRequest(authorityEnvelope("/repo"));
+    const result = await handleEditorAgentAuthority(
+      context(request.body, "/api/editor/agent/authority"),
+      request.deps,
+    );
+    expect(result.status).toBe(200);
+    expect(responseAuthorityRef(result.body)).toEqual(
+      expect.objectContaining({ runId: "run-2121" }),
+    );
+    expect(JSON.stringify(result.body)).not.toContain("local-operator");
+    expect(JSON.stringify(result.body)).not.toContain("autonomous-delivery");
+    const replay = await handleEditorAgentAuthority(
+      context(request.body, "/api/editor/agent/authority"),
+      request.deps,
+    );
+    expect(replay.status).toBe(403);
+  });
+
+  it("rejects an Authority Envelope that is expired or exceeds the server ceiling", async () => {
+    const expiredEnvelope = {
+      ...authorityEnvelope("/repo"),
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    };
+    const expiredRequest = authorityRouteRequest(expiredEnvelope);
+    const expired = await handleEditorAgentAuthority(
+      context(expiredRequest.body, "/api/editor/agent/authority"),
+      expiredRequest.deps,
+    );
+    const wrongCeilingEnvelope = authorityEnvelope(
+      "/repo",
+      "supervised-coding",
+      "supervised-coding",
+    );
+    const wrongCeilingRequest = authorityRouteRequest(wrongCeilingEnvelope);
+    const wrongCeiling = await handleEditorAgentAuthority(
+      context(wrongCeilingRequest.body, "/api/editor/agent/authority"),
+      wrongCeilingRequest.deps,
+    );
+    expect(expired.status).toBe(403);
+    expect(wrongCeiling.status).toBe(403);
+  });
+
   it("registers browser snapshots and lists sessions", async () => {
     const registered = await handleEditorAgentSnapshot(
       context(
@@ -1212,6 +1373,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(parsed.action.textEdits).toBeDefined();
       expect(Array.isArray(parsed.action.textEdits)).toBe(true);
       expect(parsed.action.textEdits?.length ?? 0).toBeGreaterThanOrEqual(1);
+      expect(parsed.action.requiresReview).toBe(false);
 
       // The textEdits must produce the patched content when applied to the pre-image.
       // We verify this with applyTextEditsToText from @oscharko-dev/keiko-editor.
@@ -1225,6 +1387,77 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       }));
       const applied = applyTextEditsToText(preImage, mappedEdits);
       expect(applied).toContain("export const X = 99;");
+    });
+
+    it("revalidates the active snapshot before confirming a direct patch", async () => {
+      const srcDir = join(tmpDir, "src");
+      mkdirSync(srcDir);
+      writeFileSync(join(srcDir, "stale.ts"), "export const X = 1;\n", "utf8");
+      await registerSnapshot(tmpDir, "src/stale.ts");
+      const proposed = action({
+        type: "applyPatch",
+        actionId: "a-stale-confirmation",
+        idempotencyKey: "ik-stale-confirmation",
+        expectedContentHash: HASH,
+        patch: [
+          "--- a/src/stale.ts",
+          "+++ b/src/stale.ts",
+          "@@ -1 +1 @@",
+          "-export const X = 1;",
+          "+export const X = 2;",
+        ].join("\n"),
+      });
+
+      expect((await handleEditorAgentActions(context(proposed))).status).toBe(202);
+      await registerSnapshotOnly({
+        workspaceRoot: tmpDir,
+        activeFile: "src/stale.ts",
+        panes: [{ paneId: "pane-1", activeFile: "src/stale.ts", openFiles: ["src/stale.ts"] }],
+        dirtyFiles: ["src/stale.ts"],
+        activeFileContentHash: "b".repeat(64),
+      });
+      const result = await postActionResult(proposed, "succeeded");
+
+      expect(result.status).toBe(200);
+      expect(actionResultStatus(result.body)).toBe("conflict");
+      expect(actionConflictCode(result.body)).toBe("DIRTY");
+    });
+
+    it("revalidates Authority Envelope expiry before confirming a direct patch", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"));
+      const srcDir = join(tmpDir, "src");
+      mkdirSync(srcDir);
+      writeFileSync(join(srcDir, "expiry.ts"), "export const X = 1;\n", "utf8");
+      await registerSnapshot(tmpDir, "src/expiry.ts");
+      const expiring = authorityEnvelope(tmpDir);
+      const registered = editorAgentAuthorityRegistry.register(
+        { ...expiring, expiresAt: "2026-07-10T00:00:01.000Z" },
+        "governed-assist",
+        new Date().toISOString(),
+      );
+      if (!registered.ok) throw new Error("expected expiring authority registration");
+      agentAuthorityRef = registered.authorityRef;
+      const proposed = action({
+        type: "applyPatch",
+        actionId: "a-expired-confirmation",
+        idempotencyKey: "ik-expired-confirmation",
+        expectedContentHash: HASH,
+        patch: [
+          "--- a/src/expiry.ts",
+          "+++ b/src/expiry.ts",
+          "@@ -1 +1 @@",
+          "-export const X = 1;",
+          "+export const X = 2;",
+        ].join("\n"),
+      });
+
+      expect((await handleEditorAgentActions(context(proposed))).status).toBe(202);
+      vi.setSystemTime(new Date("2026-07-10T00:00:02.000Z"));
+      const result = await postActionResult(proposed, "succeeded");
+
+      expect(result.status).toBe(200);
+      expect(actionConflictCode(result.body)).toBe("POLICY_DENIED");
     });
 
     it("derives a single-file patch preview from its one bounded admission read", async () => {
@@ -2090,6 +2323,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
     const emitted = lastEmittedAction(bridge.frames());
+    expect(emitted.requiresReview).toBe(false);
     expect(emitted.changeset?.prepared?.files).toHaveLength(2);
     expect(JSON.stringify(emitted.changeset?.prepared)).not.toContain("FORGED_PREVIEW");
     expect(reads).toEqual([join(workspaceRoot, "src/a.txt"), join(workspaceRoot, "src/b.txt")]);
@@ -2450,9 +2684,187 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(serialized).not.toContain("AUDIT_SECRET_CONFLICT");
     expect(serialized).not.toContain("AUDIT_EXTERNAL");
   });
+
+  it("applies the Authority Envelope mode ceiling in the existing action route", async () => {
+    const arranged = arrangeTwoFiles();
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
+    ]);
+    registerTestAuthority(workspaceRoot, "supervised-coding");
+    const proposed = {
+      ...arranged.action,
+      authorityRef: agentAuthorityRef,
+      requiresReview: false,
+    };
+
+    expect((await handleEditorAgentActions(context(proposed))).status).toBe(202);
+    expect(lastEmittedAction(bridge.frames()).requiresReview).toBe(true);
+    expect(auditRecords()[0]).toMatchObject({
+      disposition: "review-required",
+      effectClass: "content-mutation",
+      reviewReason: "deterministic-risk-approval-required",
+    });
+  });
 });
 
 describe("agent editor action policy (Issue #1395 AC2)", () => {
+  it("keeps pure navigation outside Authority Envelope consumption", async () => {
+    await registerSnapshot();
+    const result = await handleEditorAgentActions(
+      context(
+        action({
+          type: "openFile",
+          authorityRef: undefined,
+          expectedContentHash: undefined,
+          target: { file: "src/a.ts" },
+        }),
+      ),
+    );
+
+    expect(result.status).toBe(202);
+    expect(actionResultStatus(result.body)).toBe("queued");
+  });
+
+  it("denies actions after the registered Authority Envelope budget is exhausted", async () => {
+    await registerSnapshot();
+    const limited = authorityEnvelope("/repo");
+    const registered = editorAgentAuthorityRegistry.register(
+      {
+        ...limited,
+        budget: { ...limited.budget, maxToolCalls: 1 },
+      },
+      "governed-assist",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("expected limited authority registration");
+    agentAuthorityRef = registered.authorityRef;
+    const first = action({ actionId: "budget-first", idempotencyKey: "budget-first-key" });
+    const second = action({ actionId: "budget-second", idempotencyKey: "budget-second-key" });
+
+    expect((await handleEditorAgentActions(context(first))).status).toBe(202);
+    const denied = await handleEditorAgentActions(context(second));
+
+    expect(denied.status).toBe(403);
+    expect(actionConflictCode(denied.body)).toBe("POLICY_DENIED");
+    expect(auditRecords().at(-1)?.denyReason).toBe("authority-budget-exceeded");
+  });
+
+  it("charges applyTextEdits payload bytes against the Authority Envelope patch budget", async () => {
+    await registerSnapshot();
+    const limited = authorityEnvelope("/repo");
+    const registered = editorAgentAuthorityRegistry.register(
+      {
+        ...limited,
+        budget: { ...limited.budget, maxPatchBytes: 3 },
+      },
+      "governed-assist",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("expected limited authority registration");
+    agentAuthorityRef = registered.authorityRef;
+
+    const denied = await handleEditorAgentActions(
+      context(applyTextEditsAction("four", "src/a.ts")),
+    );
+
+    expect(denied.status).toBe(403);
+    expect(actionConflictCode(denied.body)).toBe("POLICY_DENIED");
+    expect(auditRecords().at(-1)).toMatchObject({
+      denyReason: "authority-budget-exceeded",
+      patchByteLength: 4,
+    });
+  });
+
+  it("denies missing and forged agent authority before queue admission", async () => {
+    await registerSnapshot();
+    const missing = action({ authorityRef: undefined });
+    const forged = action({
+      actionId: "action-forged",
+      idempotencyKey: "idempotency-forged",
+      authorityRef: { runId: "run-2121", envelopeDigest: "b".repeat(64) },
+    });
+
+    const missingResult = await handleEditorAgentActions(context(missing));
+    const forgedResult = await handleEditorAgentActions(context(forged));
+
+    expect(missingResult.status).toBe(403);
+    expect(actionConflictCode(missingResult.body)).toBe("POLICY_DENIED");
+    expect(forgedResult.status).toBe(403);
+    expect(actionConflictCode(forgedResult.body)).toBe("POLICY_DENIED");
+    expect(auditRecords().map((record) => record.denyReason)).toEqual([
+      "authority-missing",
+      "authority-invalid",
+    ]);
+  });
+
+  it("binds a capability-backed local patch to server-derived Ask for approval authority", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-editor-local-authority-"));
+    try {
+      writeWorkspaceFile(root, "src/a.ts", "old\n");
+      await registerSnapshot(root, "src/a.ts");
+      const observer = connectBridge("session-1");
+      const proposed = action({
+        type: "applyPatch",
+        origin: "agent",
+        authorityRef: undefined,
+        target: { file: "src/a.ts", paneId: "pane-1" },
+        expectedContentHash: HASH,
+        patch: oneLineModifyPatch([{ file: "src/a.ts", before: "old", after: "new" }]),
+      });
+      const capability = bridgeDecisionCapability;
+      if (capability === undefined) throw new Error("expected bridge capability");
+      const request = {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "action",
+        action: proposed,
+        bridgeDecisionCapability: capability,
+      } as const;
+      const result = await handleEditorAgentActions(context(request));
+      const replay = await handleEditorAgentActions(context(request));
+      const forged = await handleEditorAgentActions(
+        context({ ...request, bridgeDecisionCapability: "B".repeat(43) }),
+      );
+      const unwrapped = await handleEditorAgentActions(
+        context({
+          ...proposed,
+          actionId: "action-unwrapped",
+          idempotencyKey: "idempotency-unwrapped",
+        }),
+      );
+
+      expect(result.status).toBe(202);
+      expect(replay.status).toBe(200);
+      expect(forged.status).toBe(403);
+      expect(unwrapped.status).toBe(403);
+      expect(auditRecords()[0]).toMatchObject({ disposition: "allowed", origin: "chat" });
+      expect(observer.frames()).toContain("editor-agent:action");
+      expect(observer.frames()).not.toContain("authorityRef");
+      expect(lastEmittedAction(observer.frames()).requiresReview).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for an unissued approval reference", async () => {
+    await registerSnapshot();
+    const result = await handleEditorAgentActions(
+      context(
+        action({
+          approvalRef: {
+            approvalId: "approval-unissued",
+            actionId: "action-1",
+            approvalProofDigest: HASH,
+            expiresAt: "2099-01-01T00:00:00.000Z",
+          },
+        }),
+      ),
+    );
+    expect(result.status).toBe(403);
+    expect(actionConflictCode(result.body)).toBe("POLICY_DENIED");
+    expect(auditRecords()[0]?.denyReason).toBe("approval-reference-invalid");
+  });
+
   it("denies a write to a deny-listed sensitive path with OUT_OF_SCOPE", async () => {
     await registerSnapshot();
     const result = await handleEditorAgentActions(context(applyTextEditsAction("x", ".env")));
@@ -2461,7 +2873,7 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
     expect(actionConflictCode(result.body)).toBe("OUT_OF_SCOPE");
   });
 
-  it("admits a contained, non-sensitive write for human review (review-required → queued)", async () => {
+  it("admits a contained, non-sensitive write under the current mode policy", async () => {
     await registerSnapshot();
     const result = await handleEditorAgentActions(context(applyTextEditsAction("hello")));
     expect(result.status).toBe(202);
@@ -2494,7 +2906,7 @@ describe("agent editor action audit (Issue #1395 AC1, AC3, AC4)", () => {
     const records = auditRecords();
     expect(records).toHaveLength(1);
     expect(records[0]?.actionType).toBe("applyTextEdits");
-    expect(records[0]?.disposition).toBe("review-required");
+    expect(records[0]?.disposition).toBe("allowed");
     expect(records[0]?.outcome).toBe("queued");
     expect(records[0]?.mutating).toBe(true);
     expect(records[0]?.editCount).toBe(1);

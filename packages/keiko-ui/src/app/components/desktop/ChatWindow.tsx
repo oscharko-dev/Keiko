@@ -3682,12 +3682,18 @@ export function ChatWindow({
       if (codeApplyWorkspaceRoot === undefined) {
         return { kind: "rejected" };
       }
-      const { queueChatEditorApply } = await import("@/lib/chat-editor-apply");
-      const outcome = await queueChatEditorApply({
-        codeBlockText,
-        language,
-        context: { workspaceRoot: codeApplyWorkspaceRoot },
-      });
+      const [{ queueChatEditorApply }, { queueLocalEditorAgentAction }] = await Promise.all([
+        import("@/lib/chat-editor-apply"),
+        import("./widgets/cards/editorAgentBridge"),
+      ]);
+      const outcome = await queueChatEditorApply(
+        {
+          codeBlockText,
+          language,
+          context: { workspaceRoot: codeApplyWorkspaceRoot },
+        },
+        { queueAction: queueLocalEditorAgentAction },
+      );
       return assistantCodeBlockApplyOutcome(outcome);
     },
     [codeApplyWorkspaceRoot],

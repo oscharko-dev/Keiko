@@ -38,6 +38,7 @@ import {
   openPdfCitationPreviewSession,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
+  queueEditorAgentBridgeAction,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   runGatewayReadiness,
@@ -80,12 +81,13 @@ describe("editor agent bridge capability serialization", () => {
     vi.unstubAllGlobals();
   });
 
-  it("attaches the capability only to the existing snapshot and result POST bodies", async () => {
+  it("attaches the capability only to explicit bridge request envelopes", async () => {
     const capability = "A".repeat(43);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ snapshot: null, bridgeDecisionCapability: capability }))
-      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }));
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }))
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "queued" } }));
     vi.stubGlobal("fetch", fetchMock);
     const snapshot = {
       schemaVersion: "1",
@@ -116,6 +118,15 @@ describe("editor agent bridge capability serialization", () => {
         status: "succeeded",
       },
     });
+    const action = {
+      schemaVersion: "1",
+      actionId: "action-2",
+      idempotencyKey: "key-2",
+      sessionId: "session-1",
+      type: "applyPatch",
+      patch: "patch",
+    } as const;
+    await queueEditorAgentBridgeAction(action, capability);
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -143,6 +154,18 @@ describe("editor agent bridge capability serialization", () => {
             sessionId: "session-1",
             status: "succeeded",
           },
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/editor/agent/actions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "action",
+          action,
+          bridgeDecisionCapability: capability,
         }),
       }),
     );

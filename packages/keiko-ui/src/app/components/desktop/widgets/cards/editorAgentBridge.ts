@@ -19,7 +19,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { postEditorAgentActionResult } from "../../../../../lib/api";
+import { postEditorAgentActionResult, queueEditorAgentBridgeAction } from "../../../../../lib/api";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   EditorAgentAction,
@@ -36,6 +36,7 @@ import {
   isEditorAgentActiveBufferActionType,
   isEditorAgentBridgeDecisionCapability,
   isEditorAgentEvent,
+  isEditorAgentWriteActionType,
 } from "../../../../../lib/types";
 
 /**
@@ -78,6 +79,8 @@ export interface EditorAgentActionControllers {
   readonly activeFile: string | undefined;
   /** Runtime-owned repeat check immediately before a controller mutation. */
   readonly verifyActiveTarget: (action: EditorAgentAction) => boolean;
+  /** Runtime-owned optimistic-concurrency check immediately before a write action. */
+  readonly verifyWritePrecondition: (action: EditorAgentAction) => boolean;
   /** Open/focus a file tab in this pane. */
   readonly onSelectOpenFile: ((file: string) => void) | undefined;
   /** Whether the host's deterministic formatter is available for the active language. */
@@ -151,6 +154,17 @@ function rememberBridgeCapability(sessionId: string, capability: string): boolea
   return true;
 }
 
+/** Queue an explicit local UI action without exposing the bridge capability to its caller. */
+export function queueLocalEditorAgentAction(
+  action: EditorAgentAction,
+): Promise<EditorAgentActionQueuedResponse> {
+  const capability = editorAgentDecisionCapabilities.get(action.sessionId)?.value;
+  if (capability === undefined) {
+    return Promise.reject(new Error("The browser bridge decision capability is unavailable."));
+  }
+  return queueEditorAgentBridgeAction(action, capability);
+}
+
 function normalizeActiveTarget(path: string): string {
   return path
     .replace(/\\/gu, "/")
@@ -179,6 +193,20 @@ function activeTargetConflict(
     status: "conflict",
     conflictCode: "OUT_OF_SCOPE",
     message: "Action target does not match the active editor buffer.",
+  };
+}
+
+function writePreconditionConflict(
+  action: EditorAgentAction,
+  controllers: EditorAgentActionControllers,
+): EditorAgentActionDescriptor | null {
+  if (!isEditorAgentWriteActionType(action.type) || controllers.verifyWritePrecondition(action)) {
+    return null;
+  }
+  return {
+    status: "conflict",
+    conflictCode: "VERSION_MISMATCH",
+    message: "The active editor buffer changed after action admission.",
   };
 }
 
@@ -274,6 +302,8 @@ export function dispatchEditorAgentAction(
 ): EditorAgentActionDescriptor {
   const targetConflict = activeTargetConflict(action, controllers);
   if (targetConflict !== null) return targetConflict;
+  const preconditionConflict = writePreconditionConflict(action, controllers);
+  if (preconditionConflict !== null) return preconditionConflict;
   switch (action.type) {
     case "openFile":
     case "focusTab":

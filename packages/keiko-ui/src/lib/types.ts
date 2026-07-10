@@ -225,6 +225,7 @@ export type {
   EditorAgentActionQueuedResponse,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
+  EditorAgentBridgeActionRequest,
   EditorAgentBridgeDecisionCapability,
   EditorAgentConflictCode,
   EditorAgentEvent,
@@ -241,6 +242,7 @@ export {
   isEditorAgentActiveBufferActionType,
   isEditorAgentBridgeDecisionCapability,
   isEditorAgentEvent,
+  isEditorAgentWriteActionType,
 } from "@oscharko-dev/keiko-contracts";
 
 // ─── Editor agent governance, policy, and audit (Issue #1395, ADR-0062) ─────────

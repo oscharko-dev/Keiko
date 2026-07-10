@@ -3387,12 +3387,15 @@ describe("ChatWindow assistant code apply (#2119)", () => {
     fireEvent.click(applyButton);
 
     await waitFor(() => expect(queueChatEditorApplyMock).toHaveBeenCalledOnce());
-    expect(queueChatEditorApplyMock.mock.calls[0]).toHaveLength(1);
-    expect(queueChatEditorApplyMock).toHaveBeenCalledWith({
-      codeBlockText: patch,
-      language: "diff",
-      context: { workspaceRoot },
-    });
+    expect(queueChatEditorApplyMock.mock.calls[0]).toHaveLength(2);
+    expect(queueChatEditorApplyMock).toHaveBeenCalledWith(
+      {
+        codeBlockText: patch,
+        language: "diff",
+        context: { workspaceRoot },
+      },
+      { queueAction: expect.any(Function) },
+    );
     const queuedInput = queueChatEditorApplyMock.mock.calls[0]?.[0];
     expect(Object.keys(queuedInput ?? {}).sort()).toEqual(["codeBlockText", "context", "language"]);
     expect(queuedInput).not.toHaveProperty("textEdits");

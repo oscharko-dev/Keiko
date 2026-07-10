@@ -249,6 +249,15 @@ function restoreEventSource(): void {
 }
 
 let agentActionSequence = 0;
+const INITIAL_AGENT_BUFFER_HASH =
+  "8de5c07db8deb3b75dedd9b5bc999669936cea181ae0033c27c4e2071a6e434d";
+const AGENT_WRITE_ACTION_TYPES = new Set<EditorAgentAction["type"]>([
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+  "applyChangeset",
+]);
 
 function agentAction(
   sessionId: string,
@@ -262,6 +271,9 @@ function agentAction(
     idempotencyKey: `idempotency-${agentActionSequence}`,
     sessionId,
     type,
+    ...(AGENT_WRITE_ACTION_TYPES.has(type)
+      ? { expectedContentHash: INITIAL_AGENT_BUFFER_HASH }
+      : {}),
     ...overrides,
   };
 }
@@ -2830,8 +2842,9 @@ describe("EditorWidget — agent bridge", () => {
     });
     await waitFor(() => {
       expect(agentResults().some((result) => result.message === "Save failed.")).toBe(false);
-      expect(agentResults().filter((result) => result.status === "succeeded")).toHaveLength(4);
-      expect(agentResults().filter((result) => result.status === "failed")).toHaveLength(6);
+      expect(agentResults().filter((result) => result.status === "succeeded")).toHaveLength(3);
+      expect(agentResults().filter((result) => result.status === "failed")).toHaveLength(5);
+      expect(agentResults().filter((result) => result.status === "conflict")).toHaveLength(2);
     });
     expect(agentResults()).toEqual(
       expect.arrayContaining([
@@ -3310,6 +3323,64 @@ describe("EditorWidget — Issue #1394 agent conflict and patch review", () => {
     expect(screen.getByTestId("agent-patch-accept").parentElement).toHaveStyle({
       flex: "0 0 auto",
     });
+  });
+
+  it("applies an explicitly allowed patch immediately without staging review", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+    const action = agentAction(sessionId, "applyPatch", {
+      requiresReview: false,
+      target: { file: "src/app.ts", paneId: "pane-1" },
+      textEdits: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+          newText: "const value = 42;\n",
+        },
+      ],
+    });
+    vi.mocked(postEditorAgentActionResult).mockResolvedValue({
+      result: patchResult(action, "succeeded"),
+    });
+
+    act(() => source.emitAction(action));
+
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe("const value = 42;\n");
+      expect(agentResults()).toContainEqual(
+        expect.objectContaining({ actionId: action.actionId, status: "succeeded" }),
+      );
+    });
+    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
+    expect(screen.queryByTestId("agent-patch-reject")).toBeNull();
+  });
+
+  it("rejects an allowed patch when the buffer changes after server admission", async () => {
+    const { source, sessionId } = await renderedAgentSession1394();
+    const action = agentAction(sessionId, "applyPatch", {
+      requiresReview: false,
+      target: { file: "src/app.ts", paneId: "pane-1" },
+      textEdits: [
+        {
+          range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+          newText: "const value = 42;\n",
+        },
+      ],
+    });
+    act(() => {
+      surface.props?.onContentChange({ text: "const local = true;\n", sizeBytes: 20 }, "human");
+      source.emitAction(action);
+    });
+
+    await waitFor(() => {
+      expect(agentResults()).toContainEqual(
+        expect.objectContaining({
+          actionId: action.actionId,
+          status: "conflict",
+          conflict: expect.objectContaining({ code: "VERSION_MISMATCH" }),
+        }),
+      );
+    });
+    expect(surface.props?.buffer.content.text).toBe("const local = true;\n");
+    expect(screen.queryByTestId("agent-patch-accept")).toBeNull();
   });
 
   it("posts chat-origin Accept before mutating the dirty buffer", async () => {

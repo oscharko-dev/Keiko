@@ -20,6 +20,14 @@ requires that valid live lease, a current matching snapshot, complete active-fil
 counterparts, dirty checks, and the existing disk revalidation before the atomic transaction. This
 does not add per-action approval or change the three-mode policy.
 
+Issue #2121 (2026-07-10) wires that policy into the existing editor-agent decision path. An
+Authority reference remains an opaque run id plus envelope digest; no caller-supplied mode is
+trusted. The server resolves the full validated envelope from a bounded registry, revalidates its
+workspace, expiry, deployment ceiling, action classes, and digest, derives deterministic action
+risk, and composes the baseline editor security decision with the central matrix using
+stricter-wins. The registry also enforces elapsed runtime, cumulative tool-call, and cumulative
+patch-byte budgets atomically for admitted editor actions.
+
 ## Context
 
 Keiko has two compatible foundations that now need one docking contract: the Coding Workbench's
@@ -35,8 +43,8 @@ by resource scope and risk; it is not a blanket save prohibition. The Authority 
 deployment ceiling, workspace containment, deny lists, secret-exfiltration prevention, platform
 restrictions, and delivery controls remain independent gates.
 
-This issue defines contracts and decisions only. Later children wire policy evaluation, producer
-tools, server transactions, Monaco reconciliation, and review UI behavior.
+The epic's ordered children apply this decision across policy evaluation, producer tools, server
+transactions, Monaco reconciliation, and review UI behavior.
 
 ## Decision
 
@@ -66,7 +74,7 @@ The legacy class ceiling is corrected consistently for all three modes: every
 `allowsCommandExecution`, and `allowsDeliverySubstrate` are true. These booleans mean an action can
 be represented and evaluated; they do not mean it is pre-approved. The tri-state resource
 evaluator, not the legacy class gate, determines whether external-file, internet, or delivery work
-needs approval. Runtime adoption of that evaluator is deferred to a later child.
+needs approval. The editor-agent route adopts that evaluator through the composition in D5.
 
 Independent gates combine with **stricter wins**: `denied` is stricter than `approval-required`,
 which is stricter than `allowed`. Missing, invalid, or expired authority; unsupported actions;
@@ -83,9 +91,11 @@ no second transport, session model, control plane, or external-file broker.
 
 `EditorAgentAction` gains optional, content-free references:
 
-- `authorityRef`: run id plus SHA-256 Authority Envelope digest.
-- `approvalRef`: approval id, bound action id, proof digest, and expiry. The server later consumes
-  this reference once; the contract never carries a reusable bearer secret.
+- `authorityRef`: run id plus SHA-256 Authority Envelope digest. The server accepts an external
+  envelope only with a server-minted, one-use confirmation and stores the validated full envelope
+  behind this opaque reference.
+- `approvalRef`: approval id, bound action id, proof digest, and expiry. An unissued reference fails
+  closed; the contract never carries a reusable bearer secret.
 
 Both fields stay optional so existing schema-version-`1` actions validate unchanged. Missing or
 invalid authority is a governance outcome, not a reason to reinterpret old V1 payloads.
@@ -94,6 +104,20 @@ Issue #2119 additionally adds optional `origin: "agent" | "chat"` on the same ac
 Omission is the legacy harness/agent producer and canonicalizes to `agent`; `chat` identifies the
 chat producer. The bounded marker is carried through the existing queue and governance paths and
 does not change authority, approval, risk, or disposition.
+
+The explicit local **Apply to editor** command uses an additive bridge-action request wrapper. Its
+memory-only bridge capability must match a live session lease. The server derives workspace and a
+narrow, action-bound Ask for approval authority, canonicalizes origin to `chat`, and removes both
+the capability and injected authority reference before SSE emission. A raw `origin: "chat"` value
+does not grant this authority. This explicit command remains a review workflow and therefore forces
+review even when its derived Ask for approval policy would otherwise allow the contained patch.
+
+For emitted `applyPatch` and `applyChangeset` actions, the server adds an optional
+`requiresReview` boolean derived from the composed decision. `review-required` always emits `true`;
+an admitted `allowed` action emits `false` unless its trusted workflow explicitly requests extra
+review. A caller-provided `false` can never weaken policy because the server overwrites it. Omission
+retains the legacy browser-review behavior, so old V1 producers and mixed-version deployments fail
+closed rather than applying silently.
 
 ### D3 - `applyChangeset` is one bounded, fail-closed action
 
@@ -112,7 +136,7 @@ any file is eligible. Any unverifiable action or file precondition fails the who
 applies nothing. After selection, the selected subpatch is derived and revalidated before one atomic
 transaction; a selected transaction either applies every selected file or rolls back every file.
 
-The later server implementation routes this through the existing `keiko-tools` patch validation and
+The server routes this through the existing `keiko-tools` patch validation and
 atomic apply/rollback path. Closed files may be changed by that governed server workspace
 transaction after the mode and Authority Envelope permit it. Open or dirty files remain governed by
 the live snapshot: version/hash and dirty-state conflicts are file-attributed, and successful server
@@ -120,9 +144,19 @@ results trigger browser Monaco reconciliation so an open buffer cannot silently 
 Browser reconciliation is not a second apply engine.
 
 Normal contained edits and saves do not gain a new per-action review merely because they are editor
-actions. When the mode matrix yields `approval-required`, the one-use approval is the gate. The
-human's explicit local activation of the task, mode, and Authority Envelope remains the local action
-that establishes bounded authority; no mode authorizes work outside that envelope.
+actions. When the mode matrix yields `approval-required`, admission requires an implemented explicit
+review mechanism. `applyPatch` and `applyChangeset` use the existing browser review; an action with
+no such mechanism fails as `APPROVAL_REQUIRED`. The human's explicit local activation of the task,
+mode, and Authority Envelope establishes bounded authority; no mode authorizes work outside that
+envelope.
+
+When the composed effect is `allowed`, `applyPatch` skips visible review but first checks the current
+browser content hash and sends the existing terminal confirmation. The server re-resolves authority
+and repeats structural preflight before the browser mutates the active buffer. An allowed
+`applyChangeset` likewise sends terminal confirmation immediately, commits through the same
+revalidated atomic server transaction, and reconciles Monaco from authoritative disk state. This
+changes only approval timing; structural, containment, version/hash, dirty-file, bridge-lease,
+transaction, and reconciliation gates are identical in reviewed and direct paths.
 
 Results gain bounded file-attributed entries with `succeeded`, `failed`, `conflict`, or
 `not-selected` status, and conflict details may name a contained file. The file result list shares
@@ -157,11 +191,25 @@ central policy effects as follows:
 - `approval-required` -> `review-required`
 - `denied` -> `denied`
 
-`applyChangeset` maps to `content-mutation`. Closed reason codes cover missing/invalid/expired
+`applyChangeset` maps to `content-mutation` and deterministic high risk. Issue #2121 maps
+`content-mutation` to `workspace-write` / `workspace-contained`, while pure editor navigation and
+layout remain outside the envelope and future `external-effect` maps to `delivery-substrate` /
+`delivery`. Closed reason codes cover missing/invalid/expired
 authority, invalid/expired/consumed approval references, unsupported actions, secret exfiltration,
 platform restrictions, mode/risk approval, and separately approved delivery. The existing
-classifier is not rewired in this issue; later runtime work must evaluate the central matrix and
-enforce the resulting effect before queueing or applying.
+classifier supplies the immutable containment/sensitivity baseline. The existing server decision
+path evaluates the central matrix and maps the stricter result to the editor disposition before
+queueing; approval-required changesets still pass through the existing bridge review before the
+server transaction can commit, while allowed changesets confirm directly. The Authority Envelope
+is resolved again immediately before that transaction, and every declared changeset target
+participates in policy and audit classification.
+
+Each non-exempt admitted action atomically reserves one Authority Envelope tool call and its patch
+body or inserted text-edit bytes. Reservations are cumulative per server-owned authority record; exceeding
+`maxToolCalls`, `maxPatchBytes`, or elapsed `maxRuntimeMs` fails as
+`authority-budget-exceeded`. Idempotent replay returns the retained result before reservation and
+therefore does not double-charge. Editor actions carry no prompt body, so this route consumes zero
+of `maxPromptTokens`.
 
 Audit and evidence remain redacted and body-free: ids, digests, modes, effects, reason codes, the
 bounded `agent | chat` action origin, contained file labels, counts, byte counts, statuses, and
@@ -173,9 +221,10 @@ command logs, and private endpoints do not enter governance evidence.
 `EDITOR_AGENT_SCHEMA_VERSION`, `EDITOR_AGENT_AUDIT_SCHEMA_VERSION`,
 `CODING_WORKBENCH_SCHEMA_VERSION`, and `CODING_CONTEXT_SCHEMA_VERSION` remain `"1"`. All fields added
 to existing V1 envelopes are optional, and `applyChangeset` is a new action variant with its own
-required shape. This includes the optional Issue #2119 action/audit origin; builders resolve an
-omitted action origin to `agent`. Existing V1 snapshots, actions, results, and context contracts
-continue to validate. Every new editor-agent wire shape has a runtime guard.
+required shape. This includes the optional Issue #2119 action/audit origin and the server-derived
+`requiresReview` hint; builders resolve an omitted action origin to `agent`, while browsers treat an
+omitted review hint as review-required. Existing V1 snapshots, actions, results, and context
+contracts continue to validate. Every new editor-agent wire shape has a runtime guard.
 
 ## Human-control invariant
 
@@ -185,19 +234,19 @@ Keiko then acts only inside that validated authority. Invalid or expired authori
 
 Commit, push, pull-request creation, merge, and authority-envelope widening are not ordinary file or
 network operations. They remain hard-denied or require a separate explicit local human approval.
-No contract in this issue performs a write, bypasses review, launches a process, or grants network
-access by itself.
+No contract in this issue performs a write, bypasses required approval, launches a process, or
+grants network access by itself.
 
 ## Consequences
 
 - Mode labels and approval behavior have one shared, testable contract matrix.
 - Ask for approval permits normal contained coding work instead of behaving as read-only mode.
-- Multi-file and closed-file changes can use one governed atomic server transaction in later work.
+- Multi-file and closed-file changes use one governed atomic server transaction after any
+  policy-required review.
 - Partial acceptance, diagnostics detail, and file conflicts are representable without schema churn.
-- Runtime consumers must adopt the tri-state evaluator and transaction/reconciliation design in
-  later children; contract availability alone does not make `applyChangeset` executable.
-- New named symbols are additive module exports. Root barrel/package-surface changes are outside this
-  issue's owned files and must be handled by the integration owner if public root imports are needed.
+- Runtime consumers use the tri-state evaluator and transaction/reconciliation design through the
+  existing editor-agent route, session, and browser bridge.
+- New named symbols are additive module exports and remain covered by the package-surface gate.
 
 ## Alternatives considered
 

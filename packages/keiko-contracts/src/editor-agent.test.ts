@@ -162,6 +162,26 @@ describe("editor agent contracts", () => {
       ok: true,
       value: { bridgeDecisionCapability: BRIDGE_CAPABILITY },
     });
+    const bridgeAction = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "action",
+      action: baseAction({ type: "applyPatch", patch: "patch", origin: "agent" }),
+      bridgeDecisionCapability: BRIDGE_CAPABILITY,
+    };
+    expect(parseEditorAgentActionsPostBody(bridgeAction)).toMatchObject({
+      ok: true,
+      value: { kind: "action", action: { origin: "agent" } },
+    });
+    expect(parseEditorAgentActionsPostBody({ ...bridgeAction, unknown: true })).toEqual({
+      ok: false,
+      errors: ["browser action request is invalid"],
+    });
+    expect(
+      parseEditorAgentActionsPostBody({
+        ...bridgeAction,
+        bridgeDecisionCapability: "invalid",
+      }),
+    ).toEqual({ ok: false, errors: ["browser action request is invalid"] });
   });
 
   it("byte-bounds identifiers and target metadata at the wire boundary", () => {
@@ -919,6 +939,13 @@ describe("write-action precondition rule (Issue #1391 AC2)", () => {
 });
 
 describe("governed applyChangeset contract (Issue #2114)", () => {
+  it("accepts only a boolean server-derived review requirement", () => {
+    expect(isEditorAgentAction({ ...changesetAction(), requiresReview: true })).toBe(true);
+    expect(isEditorAgentAction({ ...changesetAction(), requiresReview: false })).toBe(true);
+    expect(isEditorAgentAction({ ...changesetAction(), requiresReview: "false" })).toBe(false);
+    expect("requiresReview" in changesetAction()).toBe(false);
+  });
+
   it("accepts bounded authority and one-use approval references bound to the action", () => {
     const authorityRef = { runId: "run-2114", envelopeDigest: HASH };
     const approvalRef = {
@@ -1165,7 +1192,9 @@ describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
   it("enumerates the full structured taxonomy including PRECONDITION_REQUIRED and NO_ACTIVE_BRIDGE", () => {
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
-    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
+    expect(EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
+    expect(EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
+    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
     for (const code of EDITOR_AGENT_CONFLICT_CODES) {
       expect(isEditorAgentConflictCode(code)).toBe(true);
     }

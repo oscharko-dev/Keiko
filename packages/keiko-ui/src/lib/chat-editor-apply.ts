@@ -14,6 +14,7 @@ import {
   isRootRelativeFileIdentifier,
   resolveWorkspaceFileIdentifier,
   type EditorAgentAction,
+  type EditorAgentActionQueuedResponse,
   type EditorAgentActionOrigin,
   type EditorAgentActionResult,
   type EditorAgentConflictCode,
@@ -29,12 +30,7 @@ import {
   type StructuredPatch,
 } from "diff";
 
-import {
-  ApiError,
-  fetchEditorAgentSessions,
-  fetchFilesContent,
-  queueEditorAgentAction,
-} from "./api";
+import { ApiError, fetchEditorAgentSessions, fetchFilesContent } from "./api";
 
 export const CHAT_EDITOR_APPLY_MAX_FILE_BYTES = 1_000_000;
 export const CHAT_EDITOR_APPLY_MAX_TOTAL_CONTENT_BYTES = 4_000_000;
@@ -69,7 +65,7 @@ export interface ChatEditorApplyInput {
 export interface ChatEditorApplyDependencies {
   readonly fetchSessions: typeof fetchEditorAgentSessions;
   readonly fetchFileContent: typeof fetchFilesContent;
-  readonly queueAction: typeof queueEditorAgentAction;
+  readonly queueAction: (action: EditorAgentAction) => Promise<EditorAgentActionQueuedResponse>;
   readonly createNonce: () => string;
 }
 
@@ -141,7 +137,7 @@ type Step<T> =
 const DEFAULT_DEPENDENCIES: ChatEditorApplyDependencies = {
   fetchSessions: fetchEditorAgentSessions,
   fetchFileContent: fetchFilesContent,
-  queueAction: queueEditorAgentAction,
+  queueAction: () => Promise.reject(new Error("The editor bridge is unavailable.")),
   createNonce: secureNonce,
 };
 
