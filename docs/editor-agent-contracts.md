@@ -5,8 +5,10 @@ inspect and operate the live editor safely. It is defined in
 [`packages/keiko-contracts/src/editor-agent.ts`](../packages/keiko-contracts/src/editor-agent.ts),
 re-exported from the `@oscharko-dev/keiko-contracts` barrel, and consumed by the BFF
 ([`agentRoutes.ts`](../packages/keiko-server/src/editor/agentRoutes.ts)) and the browser bridge. The
-governing decision record is [ADR-0059](./adr/ADR-0059-agent-editor-public-contracts.md); the safe
-apply-edits hardening it builds on is [ADR-0058](./adr/ADR-0058-safe-apply-edits-and-patch-workflow.md).
+governing decision records are [ADR-0059](./adr/ADR-0059-agent-editor-public-contracts.md) and its
+current authority/changeset amendment,
+[ADR-0125](./adr/ADR-0125-governed-agent-docking-and-editor-changesets.md). The safe apply-edits
+hardening it builds on is [ADR-0058](./adr/ADR-0058-safe-apply-edits-and-patch-workflow.md).
 
 Owner: Issue #1391 (Epic #1491). Scope: contracts and the BFF validators that consume them — no
 server queue, browser bridge, patch application, or orchestration UI is defined here.
@@ -45,19 +47,30 @@ The bridge also posts a `kind: "snapshot"` request to register or refresh a full
 An `EditorAgentAction` is a request to operate the editor. Action types are:
 
 - Navigation / inspection: `openFile`, `focusTab`, `moveTab`, `splitPane`, `setSelection`.
-- Writes (mutate buffer or file content): `format`, `save`, `applyTextEdits`, `applyPatch`. These are
-  enumerated by `EDITOR_AGENT_WRITE_ACTION_TYPES` and recognised by `isEditorAgentWriteActionType`.
+- Writes (mutate buffer or file content): `format`, `save`, `applyTextEdits`, `applyPatch`,
+  `applyChangeset`. These are enumerated by `EDITOR_AGENT_WRITE_ACTION_TYPES` and recognised by
+  `isEditorAgentWriteActionType`.
 
 Every action carries:
 
 - **`idempotencyKey` (mandatory).** Re-posting the same key replays the prior result; reusing a key
   with a different body is a 409 `IDEMPOTENCY_CONFLICT`.
+- **Authority metadata (optional on the V1 wire).** `authorityRef` names a server-held validated
+  Authority Envelope by run id and digest. `approvalRef` is one-use and action-bound. `origin`
+  distinguishes `agent` from `chat` without granting authority. On emitted patch/changeset actions,
+  the server derives `requiresReview`; callers cannot weaken it, and omission preserves legacy
+  review behavior.
 - **Version/hash preconditions (mandatory for writes).** A write action must pin the document revision
   it expects to write against, via `expectedDocumentVersion` or `expectedContentHash` (either is
-  sufficient). A write that pins no revision is rejected with the structured `PRECONDITION_REQUIRED`
+  sufficient). `applyChangeset` instead requires at least one of those preconditions on every declared
+  file. A write that pins no revision is rejected with the structured `PRECONDITION_REQUIRED`
   conflict — there are no blind writes. Use `editorAgentActionHasWritePrecondition` /
   `editorAgentWritePreconditionError` to check this before sending. Navigation actions require no
   precondition.
+
+`applyChangeset` carries one bounded patch, a non-empty unique list of at most 50 contained files,
+and an optional non-empty `selectedFiles` subset. Whole-action validation occurs before selection;
+the selected projection then commits atomically or rolls back completely.
 
 ## Action results and the error taxonomy
 
@@ -71,13 +84,19 @@ conflict, a structured `conflict` object with a stable `code`. The full taxonomy
 | `VERSION_MISMATCH`      | the asserted `expectedDocumentVersion` no longer matches the document           |
 | `CONTENT_HASH_MISMATCH` | the asserted `expectedContentHash` no longer matches the document               |
 | `NO_ACTIVE_SESSION`     | no browser bridge is registered for the action's session                        |
+| `NO_ACTIVE_BRIDGE`      | a snapshot exists but no authenticated live bridge can execute the action       |
 | `INVALID_EDITS`         | the edits/patch are structurally invalid (overlap, inverted, malformed)         |
 | `OUT_OF_SCOPE`          | the target escapes the workspace root or the action is unsupported on this path |
 | `PRECONDITION_REQUIRED` | a write action omitted the mandatory version/hash precondition                  |
+| `POLICY_DENIED`         | authority, policy, containment, sensitivity, or another hard gate denies it     |
+| `APPROVAL_REQUIRED`     | policy requires review but this action has no implemented review mechanism      |
 
 `isEditorAgentConflictCode` validates a code against the taxonomy. The BFF preflight runs the
 structural gates first and the precondition gate last, so a doubly-invalid write reports its most
 specific structural failure while any otherwise-valid blind write reports `PRECONDITION_REQUIRED`.
+Changeset results may additionally carry one bounded, unique file-attributed result per declared
+file (`succeeded`, `failed`, `conflict`, or `not-selected`). `TIMED_OUT` and `QUEUE_FULL` remain
+post-admission lifecycle failures rather than conflicts.
 
 ## Events
 
@@ -101,6 +120,7 @@ The contract is throw-free and reusable by the UI, the BFF, tests, and future ag
 ## Privacy and trust posture
 
 Snapshots are content-free by default (AC1). Document versions and content hashes are one-way SHA-256
-digests, never file bytes, so they are safe to cross the browser wire and to log. Write actions must
-pin a revision (AC2), so an agent cannot overwrite a buffer whose revision it has not observed. Every
-failure is a structured, machine-discriminable conflict code (AC3) rather than free text.
+digests, never file bytes. Write actions must pin a revision (AC2), so an agent cannot overwrite a
+buffer whose revision it has not observed. Authority references, bridge capabilities, and diagnostic
+messages are never audit content. Every failure uses a bounded structured conflict or failure code
+(AC3) rather than unbounded free text.

@@ -1,7 +1,7 @@
 # Security Boundaries
 
-Keiko is a local coding assistant. It is designed for reviewable work in regulated engineering
-environments, not for unattended code changes or hosted multi-user operation.
+Keiko is a local coding assistant. It is designed for bounded, auditable work in regulated
+engineering environments, not for standing or unbounded authority or hosted multi-user operation.
 
 ## Enforced controls
 
@@ -11,7 +11,7 @@ environments, not for unattended code changes or hosted multi-user operation.
 | Model access          | Productive model calls route through `@oscharko-dev/keiko-model-gateway` only. UI and workspace surfaces do not bypass the gateway or import provider SDKs directly.                                                                                                                                                                                                                                                |
 | Workspace containment | Repository reads and writes stay inside the selected project path and pass through containment and `realpath` checks.                                                                                                                                                                                                                                                                                               |
 | Command execution     | Verification and tool execution route through `@oscharko-dev/keiko-tools` terminal-policy allowlists. Arbitrary shell execution is not an approved UI or workspace surface.                                                                                                                                                                                                                                         |
-| Patch application     | Generated patches are dry-run by default and require explicit review before application.                                                                                                                                                                                                                                                                                                                            |
+| Patch application     | Generated patches enter governed preflight. Review occurs when the shared mode/resource/risk policy returns `approval-required`; policy-allowed patches may apply inside a validated Authority Envelope without another prompt. Structural, containment, sensitive-path, secret, budget, transaction, and reconciliation gates remain mandatory.                                                                    |
 | Evidence              | Evidence is redacted before persistence and written only through approved evidence surfaces. Some evidence sub-manifests, including Quality Intelligence and Prompt Enhancement records, are integrity-hashed and fail reads when the hash no longer matches; this is tamper-evident, not tamper-proof, and does not encrypt the underlying local files.                                                            |
 | Durable UI state      | Raw secrets, customer data, private logs, and evidence payloads must not be stored in durable UI state. UI persistence may store only approved metadata such as evidence references.                                                                                                                                                                                                                                |
 | Undo scope            | Undo/redo must not rewrite evidence, applied patches, verification records, or model-call records.                                                                                                                                                                                                                                                                                                                  |
@@ -35,7 +35,8 @@ redaction primitives, and architecture/test gates.
 
 - Run Keiko only on repositories you are allowed to inspect.
 - Keep tokens, gateway config files, `.env`, `.keiko/`, and exported evidence out of version control unless your process explicitly requires them.
-- Review every proposed diff before applying it.
+- Review every diff that policy marks `approval-required`; inspect allowed changes through the
+  Changes and bounded audit surfaces as part of the delivery process.
 - Treat evidence and memory diagnostics as review material and handle them under your delivery process.
 - Stop immediately if a credential appears in output or evidence.
 
@@ -49,5 +50,5 @@ redaction primitives, and architecture/test gates.
 
 ## Practical rule
 
-Use Keiko as an assistant that prepares reviewable work. Do not use it as an autonomous release,
-merge, approval, or secret-handling system.
+Use Keiko as a bounded coding agent under one of the three confirmed autonomy modes. Do not treat
+**Full access** as autonomous release, merge, authority-widening, or secret-handling permission.

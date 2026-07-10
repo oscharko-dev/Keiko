@@ -400,9 +400,14 @@ describe("coding autonomy closeout QA matrix", () => {
       "autonomous closeout narrow viewport has no horizontal overflow",
     ],
     [
-      "operator runbook",
+      "operator runbook three-mode policy",
       "docs/qa/coding-workbench-operator-runbook.md",
-      "Autonomous Delivery can create or update a PR only through the governed gateway",
+      "| **Ask for approval** | `governed-assist`",
+    ],
+    [
+      "operator runbook delivery boundary",
+      "docs/qa/coding-workbench-operator-runbook.md",
+      "require separate explicit human approval in all three modes",
     ],
   ] as const)("keeps %s proof wired into the closeout ledger", (_label, filePath, expectedText) => {
     const absolutePath = resolve(process.cwd(), filePath);

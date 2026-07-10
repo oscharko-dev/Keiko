@@ -29,6 +29,12 @@ its companion blueprint. ADR-0045 performs the dependency review and records the
 out-of-process LSP decision, the staged rollout order, and the per-language security model; it relaxes
 nothing in this ADR.
 
+> **Authority semantics superseded in part by
+> [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).** The original blanket
+> patch-review wording below is historical. A human now establishes bounded authority by selecting
+> the task, mode, Authority Envelope, and deployment ceiling; policy-allowed editor changes may apply
+> without another prompt. Delivery actions and authority widening remain separately human-approved.
+
 ## Date
 
 2026-06-18

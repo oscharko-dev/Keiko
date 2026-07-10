@@ -94,9 +94,11 @@ The enhancer is safe by construction:
   they are flagged for review.
 - **No self-granted authority.** The enhanced prompt never grants tool execution, file writes, network
   egress, or secret access. Least privilege is the default.
-- **Human review for risky requests.** Agentic tasks and requests for tool/egress authority are
-  escalated to human review before any side-effecting action. High-stakes consequential advice is
-  returned as a rejected fail-safe result rather than a ready-to-use prompt.
+- **Human review for risky requests.** Agentic tasks and requests for tool/egress authority require
+  human review before a runtime mode and Authority Envelope establish bounded authority. During the
+  run, additional prompts follow the shared resource/risk policy rather than a blanket review rule.
+  High-stakes consequential advice is returned as a rejected fail-safe result rather than a
+  ready-to-use prompt.
 - **No secret disclosure.** The prompt forbids revealing secrets, credentials, or system instructions,
   and the evidence record stores only a stable redacted fingerprint plus a redacted, truncated excerpt
   of your draft — never an unredacted draft or known secret.
