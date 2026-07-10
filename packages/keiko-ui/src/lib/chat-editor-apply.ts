@@ -1,5 +1,12 @@
 import {
   DEFAULT_PATCH_LIMITS,
+  isEditorDocumentVersion,
+  isRootRelativeFileIdentifier,
+  resolveWorkspaceFileIdentifier,
+  type EditorDocumentVersion,
+  type LanguageRange,
+} from "@oscharko-dev/keiko-contracts";
+import {
   EDITOR_AGENT_ACTION_ID_MAX_BYTES,
   EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES,
   EDITOR_AGENT_SCHEMA_VERSION,
@@ -10,18 +17,13 @@ import {
   isEditorAgentActionResult,
   isEditorAgentConflictCode,
   isEditorAgentSessionSnapshot,
-  isEditorDocumentVersion,
-  isRootRelativeFileIdentifier,
-  resolveWorkspaceFileIdentifier,
   type EditorAgentAction,
   type EditorAgentActionQueuedResponse,
   type EditorAgentActionOrigin,
   type EditorAgentActionResult,
   type EditorAgentConflictCode,
   type EditorAgentSessionSnapshot,
-  type EditorDocumentVersion,
-  type LanguageRange,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 import {
   FILE_HEADERS_ONLY,
   createTwoFilesPatch,

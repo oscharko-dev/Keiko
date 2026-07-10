@@ -18,6 +18,14 @@
  * sets a one-shot `revealRequest` payload the host merges into the editor surface.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isContainedAgentPath,
+  isEditorAgentActiveBufferActionType,
+  isEditorAgentBridgeDecisionCapability,
+  isEditorAgentEvent,
+  isEditorAgentWriteActionType,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 
 import { postEditorAgentActionResult, queueEditorAgentBridgeAction } from "../../../../../lib/api";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
@@ -29,14 +37,6 @@ import type {
   EditorAgentActionResultRequest,
   EditorAgentSnapshotResponse,
   EditorAgentConflictCode,
-} from "../../../../../lib/types";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  isContainedAgentPath,
-  isEditorAgentActiveBufferActionType,
-  isEditorAgentBridgeDecisionCapability,
-  isEditorAgentEvent,
-  isEditorAgentWriteActionType,
 } from "../../../../../lib/types";
 
 /**

@@ -8,6 +8,7 @@ import { useChatSessionContext } from "../context/ChatSessionContext";
 import type { ChatSessionApi } from "../hooks/useChatSession";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { EditorWidgetProps } from "./cards/EditorWidget";
+import { useEditorAgentTranslate, type EditorAgentMessageKey } from "./cards/editor-agent-i18n";
 import {
   composeEditorSelectionPrompt,
   consumeEditorSelectionHandoff,
@@ -51,8 +52,10 @@ function stringArray(cfg: Record<string, unknown>, key: string): readonly string
   return values.length > 0 ? values : undefined;
 }
 
-type SelectionHandoffNoticeKey =
-  "editor.askSelection.chatUnavailable" | "editor.askSelection.openFailed";
+type SelectionHandoffNoticeKey = Extract<
+  EditorAgentMessageKey,
+  "editor.askSelection.chatUnavailable" | "editor.askSelection.openFailed"
+>;
 
 type SelectionHandoffRoute =
   | { readonly kind: "wait" }
@@ -207,7 +210,7 @@ export function ChatWindowSessionHost({
   readonly cfg: Record<string, unknown>;
   readonly ctx: WindowRenderContext;
 }): ReactNode {
-  const t = useTranslate();
+  const agentT = useEditorAgentTranslate();
   const session = useChatSessionContext();
   const creatingRef = useRef(false);
   const chatId = str(cfg, "chatId");
@@ -305,7 +308,7 @@ export function ChatWindowSessionHost({
     <>
       {handoff.noticeKey === null ? null : (
         <p className="lk-alert" role="alert">
-          {t(handoff.noticeKey)}
+          {agentT(handoff.noticeKey)}
         </p>
       )}
       {body}

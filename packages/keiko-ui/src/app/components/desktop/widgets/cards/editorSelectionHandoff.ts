@@ -1,8 +1,8 @@
+import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
   EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES,
-  isRootRelativeFileIdentifier,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 import type { EditorRange, EditorSelectionCapture } from "@oscharko-dev/keiko-editor";
 
 export const EDITOR_SELECTION_MAX_BYTES = 16 * 1024;

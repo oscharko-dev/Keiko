@@ -23,13 +23,17 @@ import type {
   EditorAgentActionAuditRecord,
   EditorAgentActionDisposition,
 } from "../../../../../lib/types";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
-import type { MessageKey } from "@/lib/i18n-messages.en";
+import { useTranslate } from "@/lib/i18n";
+import {
+  useEditorAgentTranslate,
+  type EditorAgentMessageKey,
+  type EditorAgentTranslate,
+} from "./editor-agent-i18n";
 
-const DISPOSITION_LABEL_KEY: Record<EditorAgentActionDisposition, MessageKey> = {
-  allowed: "editor.agentActions.disposition.allowed",
-  "review-required": "editor.agentActions.disposition.reviewRequired",
-  denied: "editor.agentActions.disposition.denied",
+const DISPOSITION_LABEL_KEY: Record<EditorAgentActionDisposition, EditorAgentMessageKey> = {
+  allowed: "actions.disposition.allowed",
+  "review-required": "actions.disposition.reviewRequired",
+  denied: "actions.disposition.denied",
 };
 
 // Disposition is signalled by the text label above; colour only reinforces it (WCAG 1.4.1).
@@ -57,35 +61,35 @@ interface FilterOption<T extends string> {
 
 interface FilterOptionDefinition<T extends string> {
   readonly value: T;
-  readonly labelKey: MessageKey;
+  readonly labelKey: EditorAgentMessageKey;
 }
 
 const ACTION_TYPE_OPTIONS = [
-  { value: "all", labelKey: "editor.agentActions.action.all" },
-  { value: "openFile", labelKey: "editor.agentActions.action.openFile" },
-  { value: "focusTab", labelKey: "editor.agentActions.action.focusTab" },
-  { value: "moveTab", labelKey: "editor.agentActions.action.moveTab" },
-  { value: "splitPane", labelKey: "editor.agentActions.action.splitPane" },
-  { value: "setSelection", labelKey: "editor.agentActions.action.setSelection" },
-  { value: "format", labelKey: "editor.agentActions.action.format" },
-  { value: "save", labelKey: "editor.agentActions.action.save" },
-  { value: "applyTextEdits", labelKey: "editor.agentActions.action.applyTextEdits" },
-  { value: "applyPatch", labelKey: "editor.agentActions.action.applyPatch" },
-  { value: "applyChangeset", labelKey: "editor.agentActions.action.applyChangeset" },
+  { value: "all", labelKey: "actions.action.all" },
+  { value: "openFile", labelKey: "actions.action.openFile" },
+  { value: "focusTab", labelKey: "actions.action.focusTab" },
+  { value: "moveTab", labelKey: "actions.action.moveTab" },
+  { value: "splitPane", labelKey: "actions.action.splitPane" },
+  { value: "setSelection", labelKey: "actions.action.setSelection" },
+  { value: "format", labelKey: "actions.action.format" },
+  { value: "save", labelKey: "actions.action.save" },
+  { value: "applyTextEdits", labelKey: "actions.action.applyTextEdits" },
+  { value: "applyPatch", labelKey: "actions.action.applyPatch" },
+  { value: "applyChangeset", labelKey: "actions.action.applyChangeset" },
 ] as const satisfies readonly FilterOptionDefinition<ActionTypeFilter>[];
 
 const DISPOSITION_OPTIONS = [
-  { value: "all", labelKey: "editor.agentActions.disposition.all" },
-  { value: "allowed", labelKey: "editor.agentActions.disposition.allowed" },
-  { value: "review-required", labelKey: "editor.agentActions.disposition.reviewRequired" },
-  { value: "denied", labelKey: "editor.agentActions.disposition.denied" },
+  { value: "all", labelKey: "actions.disposition.all" },
+  { value: "allowed", labelKey: "actions.disposition.allowed" },
+  { value: "review-required", labelKey: "actions.disposition.reviewRequired" },
+  { value: "denied", labelKey: "actions.disposition.denied" },
 ] as const satisfies readonly FilterOptionDefinition<DispositionFilter>[];
 
 const TIME_RANGE_OPTIONS = [
-  { value: "all", labelKey: "editor.agentActions.timeRange.all" },
-  { value: "past-hour", labelKey: "editor.agentActions.timeRange.pastHour" },
-  { value: "past-day", labelKey: "editor.agentActions.timeRange.pastDay" },
-  { value: "past-week", labelKey: "editor.agentActions.timeRange.pastWeek" },
+  { value: "all", labelKey: "actions.timeRange.all" },
+  { value: "past-hour", labelKey: "actions.timeRange.pastHour" },
+  { value: "past-day", labelKey: "actions.timeRange.pastDay" },
+  { value: "past-week", labelKey: "actions.timeRange.pastWeek" },
 ] as const satisfies readonly FilterOptionDefinition<TimeRangeFilter>[];
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -167,7 +171,7 @@ const ROW_STYLE: CSSProperties = {
 
 function translateOptions<T extends string>(
   definitions: readonly FilterOptionDefinition<T>[],
-  t: I18nTranslate,
+  t: EditorAgentTranslate,
 ): readonly FilterOption<T>[] {
   return definitions.map((definition) => ({
     value: definition.value,
@@ -215,30 +219,35 @@ function AuditFilterControls({
   onActionTypeChange,
   onDispositionChange,
   onTimeRangeChange,
+  saveLabel,
   t,
 }: {
   readonly filters: AuditFilters;
   readonly onActionTypeChange: (value: ActionTypeFilter) => void;
   readonly onDispositionChange: (value: DispositionFilter) => void;
   readonly onTimeRangeChange: (value: TimeRangeFilter) => void;
-  readonly t: I18nTranslate;
+  readonly saveLabel: string;
+  readonly t: EditorAgentTranslate;
 }): ReactNode {
+  const actionTypeOptions = translateOptions(ACTION_TYPE_OPTIONS, t).map((option) =>
+    option.value === "save" ? { ...option, label: saveLabel } : option,
+  );
   return (
-    <div style={FILTER_GROUP_STYLE} role="group" aria-label={t("editor.agentActions.filterGroup")}>
+    <div style={FILTER_GROUP_STYLE} role="group" aria-label={t("actions.filterGroup")}>
       <FilterSelect
-        label={t("editor.agentActions.filter.actionType")}
+        label={t("actions.filter.actionType")}
         value={filters.actionType}
-        options={translateOptions(ACTION_TYPE_OPTIONS, t)}
+        options={actionTypeOptions}
         onChange={onActionTypeChange}
       />
       <FilterSelect
-        label={t("editor.agentActions.filter.disposition")}
+        label={t("actions.filter.disposition")}
         value={filters.disposition}
         options={translateOptions(DISPOSITION_OPTIONS, t)}
         onChange={onDispositionChange}
       />
       <FilterSelect
-        label={t("editor.agentActions.filter.timeRange")}
+        label={t("actions.filter.timeRange")}
         value={filters.timeRange}
         options={translateOptions(TIME_RANGE_OPTIONS, t)}
         onChange={onTimeRangeChange}
@@ -279,14 +288,12 @@ function filterRecords(
   return records.filter((record) => matchesFilters(record, filters, now));
 }
 
-function rowSummary(record: EditorAgentActionAuditRecord, t: I18nTranslate): string {
+function rowSummary(record: EditorAgentActionAuditRecord, t: EditorAgentTranslate): string {
   const target =
-    record.targetPath === undefined
-      ? ""
-      : t("editor.agentActions.rowTarget", { path: record.targetPath });
+    record.targetPath === undefined ? "" : t("actions.rowTarget", { path: record.targetPath });
   const reason = record.denyReason ?? record.reviewReason;
-  const because = reason === undefined ? "" : t("editor.agentActions.rowReason", { reason });
-  return t("editor.agentActions.rowSummary", {
+  const because = reason === undefined ? "" : t("actions.rowReason", { reason });
+  return t("actions.rowSummary", {
     action: record.actionType,
     target,
     disposition: t(DISPOSITION_LABEL_KEY[record.disposition]),
@@ -300,7 +307,7 @@ function AuditRow({
   t,
 }: {
   readonly record: EditorAgentActionAuditRecord;
-  readonly t: I18nTranslate;
+  readonly t: EditorAgentTranslate;
 }): ReactNode {
   const occurredAt = new Date(record.occurredAt);
   return (
@@ -375,7 +382,7 @@ function AuditFeed({
   readonly records: readonly EditorAgentActionAuditRecord[];
   readonly visibleRecords: readonly EditorAgentActionAuditRecord[];
   readonly errored: boolean;
-  readonly t: I18nTranslate;
+  readonly t: EditorAgentTranslate;
 }): ReactNode {
   if (errored) {
     return (
@@ -385,14 +392,14 @@ function AuditFeed({
         aria-live="polite"
         data-testid="agent-actions-error"
       >
-        {t("editor.agentActions.loadError")}
+        {t("actions.loadError")}
       </p>
     );
   }
   if (records.length === 0) {
     return (
       <p style={{ ...ROW_STYLE, color: "var(--text-secondary)", margin: 0 }}>
-        {t("editor.agentActions.empty")}
+        {t("actions.empty")}
       </p>
     );
   }
@@ -404,7 +411,7 @@ function AuditFeed({
         aria-atomic="true"
         data-testid="agent-actions-no-match"
       >
-        {t("editor.agentActions.noMatch")}
+        {t("actions.noMatch")}
       </p>
     );
   }
@@ -421,7 +428,9 @@ export function EditorAgentActionsPanel({
   agentSessionId,
   refreshNonce,
 }: EditorAgentActionsPanelProps): ReactNode {
+  const agentT = useEditorAgentTranslate();
   const t = useTranslate();
+  const saveLabel = t("common.save");
   const { records, errored } = useAuditRecords(agentSessionId, refreshNonce);
   const [actionType, setActionType] = useState<ActionTypeFilter>("all");
   const [disposition, setDisposition] = useState<DispositionFilter>("all");
@@ -432,18 +441,19 @@ export function EditorAgentActionsPanel({
   return (
     <section
       style={PANEL_STYLE}
-      aria-label={t("editor.agentActions.panelLabel")}
+      aria-label={agentT("actions.panelLabel")}
       data-testid="agent-actions-panel"
     >
-      <h3 style={TITLE_STYLE}>{t("editor.agentActions.title")}</h3>
+      <h3 style={TITLE_STYLE}>{agentT("actions.title")}</h3>
       <AuditFilterControls
         filters={filters}
         onActionTypeChange={setActionType}
         onDispositionChange={setDisposition}
         onTimeRangeChange={setTimeRange}
-        t={t}
+        saveLabel={saveLabel}
+        t={agentT}
       />
-      <AuditFeed records={records} visibleRecords={visibleRecords} errored={errored} t={t} />
+      <AuditFeed records={records} visibleRecords={visibleRecords} errored={errored} t={agentT} />
     </section>
   );
 }

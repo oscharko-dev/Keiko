@@ -115,6 +115,10 @@ import {
   type WorkspaceReplacePreviewTextRange,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isEditorAgentActiveBufferActionType,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
+import {
   ApiError,
   fetchEditorLanguageCapabilities,
   postEditorAgentSessionSnapshot,
@@ -164,10 +168,6 @@ import type {
   LanguageServiceCapabilities,
   EditorTestGenerationWireTarget,
 } from "../../../../../lib/types";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  isEditorAgentActiveBufferActionType,
-} from "../../../../../lib/types";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
@@ -178,6 +178,7 @@ import {
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
+import { useEditorAgentTranslate } from "./editor-agent-i18n";
 import {
   postEditorAgentResult,
   postEditorAgentResultRequest,
@@ -1223,7 +1224,8 @@ function EditorRuntimeWidget({
   onOutlineStateChange,
   outlineRevealRequest,
 }: EditorRuntimeWidgetProps): ReactNode {
-  const t = useTranslate();
+  const commonT = useTranslate();
+  const t = useEditorAgentTranslate();
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
   const editorModelScope = useMemo(
@@ -4452,7 +4454,7 @@ function EditorRuntimeWidget({
               }}
               aria-disabled={saveUnavailable}
             >
-              {saveStatus === "saving" ? "Saving…" : "Save"}
+              {saveStatus === "saving" ? commonT("common.saving") : commonT("common.save")}
             </button>
           ) : null}
         </div>

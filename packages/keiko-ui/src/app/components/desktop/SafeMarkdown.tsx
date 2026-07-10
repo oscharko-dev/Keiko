@@ -23,7 +23,7 @@ import {
 } from "react";
 import type { EditorAgentConflictCode } from "@oscharko-dev/keiko-contracts";
 import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import {
   highlightLines,
   langOf,
@@ -40,6 +40,10 @@ import {
   type RepositoryReferenceRoot,
 } from "./repositoryReferences";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import {
+  useEditorAgentTranslate,
+  type EditorAgentTranslate,
+} from "./widgets/cards/editor-agent-i18n";
 
 export interface AssistantCodeBlockApplyRequest {
   readonly codeBlockText: string;
@@ -175,15 +179,15 @@ function applyStateFromOutcome(outcome: AssistantCodeBlockApplyOutcome): ApplySt
   return { kind: outcome.kind };
 }
 
-function applyButtonLabel(state: ApplyState, t: I18nTranslate): string {
+function applyButtonLabel(state: ApplyState, t: EditorAgentTranslate, retryLabel: string): string {
   if (state.kind === "idle") return t("chat.codeApply.action");
   if (state.kind === "preparing") return t("chat.codeApply.preparing");
   if (state.kind === "queued") return t("chat.codeApply.queued");
   if (state.kind === "outcome-unknown") return t("chat.codeApply.outcomeUnknown");
-  return t("chat.codeApply.retry");
+  return retryLabel;
 }
 
-function applyStatusLabel(state: ApplyState, t: I18nTranslate): string {
+function applyStatusLabel(state: ApplyState, t: EditorAgentTranslate): string {
   if (state.kind === "idle") return "";
   if (state.kind === "conflict") return t("chat.codeApply.conflict", { code: state.code });
   if (state.kind === "rejected") return t("chat.codeApply.unavailable");
@@ -202,7 +206,8 @@ function ApplyCodeBlockButton({
   readonly onApply: AssistantCodeBlockApply;
   readonly stateKey: string | undefined;
 }): ReactNode {
-  const t = useTranslate();
+  const commonT = useTranslate();
+  const t = useEditorAgentTranslate();
   const [state, setState] = useState<ApplyState>(() => cachedApplyState(stateKey));
   const inFlight = useRef(false);
   const handleApply = useCallback((): void => {
@@ -224,7 +229,7 @@ function ApplyCodeBlockButton({
         },
       );
   }, [language, onApply, stateKey, text]);
-  const label = applyButtonLabel(state, t);
+  const label = applyButtonLabel(state, t, commonT("common.retry"));
   const status = applyStatusLabel(state, t);
   const disabled =
     state.kind === "preparing" || state.kind === "queued" || state.kind === "outcome-unknown";

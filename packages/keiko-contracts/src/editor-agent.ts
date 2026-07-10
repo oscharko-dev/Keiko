@@ -1,5 +1,8 @@
 import type { EditorDocumentVersion } from "./editor-session.js";
 import type { LanguageDiagnosticSeverity, LanguageRange } from "./language-service.js";
+import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
+
+export { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath };
 
 export const EDITOR_AGENT_SCHEMA_VERSION = "1" as const;
 export const EDITOR_AGENT_CHANGESET_MAX_FILES = 50;
@@ -13,7 +16,6 @@ export const EDITOR_AGENT_SESSION_ID_MAX_BYTES = 256;
 export const EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES = 256;
 export const EDITOR_AGENT_WINDOW_ID_MAX_BYTES = 256;
 export const EDITOR_AGENT_PANE_ID_MAX_BYTES = 256;
-export const EDITOR_AGENT_TARGET_PATH_MAX_BYTES = 4_096;
 export const EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES = 4_096;
 export const EDITOR_AGENT_SNAPSHOT_MAX_PANES = 32;
 export const EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE = 256;
@@ -1009,15 +1011,6 @@ export function validateAgentTextEdits(
     index += 1;
   }
   return overlapError(edits);
-}
-
-export function isContainedAgentPath(candidate: string): boolean {
-  if (!isBoundedTargetPath(candidate)) return false;
-  if (candidate.startsWith("/")) return false;
-  if (/^[A-Za-z]:/u.test(candidate)) return false;
-  if (candidate.includes("\u0000")) return false;
-  const segments = candidate.split(/[/\\]/u);
-  return !segments.includes("..");
 }
 
 function parseBridgeSnapshotRequest(

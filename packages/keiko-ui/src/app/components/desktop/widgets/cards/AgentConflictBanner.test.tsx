@@ -58,7 +58,7 @@ describe("AgentConflictBanner — structure", () => {
     );
 
     expect(await screen.findByText("Keine aktive Editorverbindung")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Ausblenden" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Ausblenden" })).toBeInTheDocument();
   });
 
   it("renders role=alertdialog so screen readers announce the conflict and expect an action", () => {

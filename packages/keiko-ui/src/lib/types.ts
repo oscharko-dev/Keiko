@@ -236,15 +236,6 @@ export type {
   EditorAgentSnapshotResponse,
   EditorAgentSnapshotTextMode,
 } from "@oscharko-dev/keiko-contracts";
-export {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  isContainedAgentPath,
-  isEditorAgentActiveBufferActionType,
-  isEditorAgentBridgeDecisionCapability,
-  isEditorAgentEvent,
-  isEditorAgentWriteActionType,
-} from "@oscharko-dev/keiko-contracts";
-
 // ─── Editor agent governance, policy, and audit (Issue #1395, ADR-0062) ─────────
 export type {
   EditorAgentActionAuditRecord,
@@ -252,7 +243,6 @@ export type {
   EditorAgentActionEffectClass,
   EditorAgentAuditResponse,
 } from "@oscharko-dev/keiko-contracts";
-export { isEditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 
 // ─── Deterministic context-engineering layer (ADR-0052 / ADR-0057) ──────────────────
 // The context-status panel (ContextStatusPanel.tsx) needs the lane-id literal union and the

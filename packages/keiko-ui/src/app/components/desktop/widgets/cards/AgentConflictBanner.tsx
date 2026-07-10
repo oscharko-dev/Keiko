@@ -19,6 +19,7 @@ import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { useEffect, useId, useRef } from "react";
 import type { EditorAgentActionResult } from "../../../../../lib/types";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 
 export type AgentConflictCode = NonNullable<EditorAgentActionResult["conflict"]>["code"];
 
@@ -30,28 +31,28 @@ export interface AgentConflictBannerProps {
   readonly onDismiss: () => void;
 }
 
-function conflictTitle(code: AgentConflictCode, t: I18nTranslate): string {
+function conflictTitle(code: AgentConflictCode, t: EditorAgentTranslate): string {
   switch (code) {
     case "DIRTY":
-      return t("editor.agentConflict.title.dirty");
+      return t("conflict.title.dirty");
     case "VERSION_MISMATCH":
-      return t("editor.agentConflict.title.versionMismatch");
+      return t("conflict.title.versionMismatch");
     case "CONTENT_HASH_MISMATCH":
-      return t("editor.agentConflict.title.contentHashMismatch");
+      return t("conflict.title.contentHashMismatch");
     case "INVALID_EDITS":
-      return t("editor.agentConflict.title.invalidEdits");
+      return t("conflict.title.invalidEdits");
     case "OUT_OF_SCOPE":
-      return t("editor.agentConflict.title.outOfScope");
+      return t("conflict.title.outOfScope");
     case "NO_ACTIVE_SESSION":
-      return t("editor.agentConflict.title.noActiveSession");
+      return t("conflict.title.noActiveSession");
     case "NO_ACTIVE_BRIDGE":
-      return t("editor.agentConflict.title.noActiveBridge");
+      return t("conflict.title.noActiveBridge");
     case "PRECONDITION_REQUIRED":
-      return t("editor.agentConflict.title.preconditionRequired");
+      return t("conflict.title.preconditionRequired");
     case "POLICY_DENIED":
-      return t("editor.agentConflict.title.policyDenied");
+      return t("conflict.title.policyDenied");
     case "APPROVAL_REQUIRED":
-      return t("editor.agentConflict.title.approvalRequired");
+      return t("conflict.title.approvalRequired");
   }
 }
 
@@ -61,6 +62,7 @@ function ConflictActions({
   onReload,
   onDismiss,
   primaryRef,
+  reloadLabel,
   t,
 }: {
   readonly code: AgentConflictCode;
@@ -70,6 +72,7 @@ function ConflictActions({
   // GEN-UI-A11Y-005: focus lands on the primary recovery action on mount (Save for DIRTY, Reload for a
   // version/content mismatch, else the sole Dismiss).
   readonly primaryRef: RefObject<HTMLButtonElement>;
+  readonly reloadLabel: string;
   readonly t: I18nTranslate;
 }): ReactNode {
   if (code === "DIRTY") {
@@ -89,7 +92,7 @@ function ConflictActions({
     return (
       <div className="ai-danger-act">
         <button type="button" className="ed-reload" onClick={onReload} ref={primaryRef}>
-          {t("editor.agentConflict.reload")}
+          {reloadLabel}
         </button>
         <button type="button" className="ed-reload" onClick={onDismiss}>
           {t("common.dismiss")}
@@ -113,6 +116,7 @@ export function AgentConflictBanner({
   onReload,
   onDismiss,
 }: AgentConflictBannerProps): ReactNode {
+  const agentT = useEditorAgentTranslate();
   const t = useTranslate();
   const titleId = useId();
   const bodyId = useId();
@@ -140,7 +144,7 @@ export function AgentConflictBanner({
     >
       <div className="ai-danger-h">
         <span className="tt" id={titleId}>
-          {conflictTitle(code, t)}
+          {conflictTitle(code, agentT)}
         </span>
       </div>
       <p id={bodyId}>
@@ -153,6 +157,7 @@ export function AgentConflictBanner({
         onReload={onReload}
         onDismiss={onDismiss}
         primaryRef={primaryRef}
+        reloadLabel={agentT("conflict.reload")}
         t={t}
       />
     </div>
