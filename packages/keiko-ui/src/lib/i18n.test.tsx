@@ -61,6 +61,26 @@ describe("resolveLocale", () => {
   });
 });
 
+describe("I18nProvider lazy catalog transition", () => {
+  it("keeps locale and translated text on one catalog until German is ready", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+
+    render(
+      <I18nProvider>
+        <Probe />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTestId("locale")).toHaveTextContent("en");
+    expect(screen.getByTestId("label")).toHaveTextContent("Settings");
+    expect(document.documentElement.lang).toBe("en");
+    expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
+    await waitFor(() => expect(screen.getByTestId("locale")).toHaveTextContent("de"));
+    expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen");
+    expect(document.documentElement.lang).toBe("de");
+  });
+});
+
 describe("translate", () => {
   it("interpolates named values from the default catalog", () => {
     expect(translate("en", "workspace.selection.many", { count: 3 })).toBe(

@@ -102,6 +102,8 @@ export interface EditorSurfaceProps {
   readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
   /** Host handler for the palette/keybinding "Generate Tests" command (Issue #1205). */
   readonly onGenerateTests?: (() => void) | undefined;
+  /** Host handler for the selection-only Ask Keiko command (Issue #2119). */
+  readonly onAskKeikoAboutSelection?: KeikoCodeEditorProps["onAskKeikoAboutSelection"] | undefined;
   /** Host handler for the F2 Rename Symbol command (Epic #2089, Issue #2105). */
   readonly onRenameSymbol?: (() => void) | undefined;
   /**
@@ -185,6 +187,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
       formatRequestNonce={props.formatRequestNonce}
       onDiagnosticsSummary={props.onDiagnosticsSummary}
       onGenerateTests={props.onGenerateTests}
+      onAskKeikoAboutSelection={props.onAskKeikoAboutSelection}
       onRenameSymbol={props.onRenameSymbol}
       showStatusFooter={props.showStatusFooter}
     />

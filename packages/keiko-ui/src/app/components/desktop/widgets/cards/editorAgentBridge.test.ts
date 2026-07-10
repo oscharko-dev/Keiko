@@ -13,6 +13,13 @@ import { dispatchEditorAgentAction, type EditorAgentActionControllers } from "./
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 let seq = 0;
+const ACTIVE_BUFFER_ACTIONS = new Set<EditorAgentAction["type"]>([
+  "setSelection",
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+]);
 
 function makeAction(
   type: EditorAgentAction["type"],
@@ -20,13 +27,16 @@ function makeAction(
   overrides: Partial<EditorAgentAction> = {},
 ): EditorAgentAction {
   seq += 1;
+  const resolvedTarget = ACTIVE_BUFFER_ACTIONS.has(type)
+    ? { file: "src/active.ts", paneId: "pane-1", ...target }
+    : target;
   return {
     schemaVersion: "1",
     actionId: `action-${seq}`,
     idempotencyKey: `ik-${seq}`,
     sessionId: `session-${seq}`,
     type,
-    ...(target !== undefined ? { target } : {}),
+    ...(resolvedTarget !== undefined ? { target: resolvedTarget } : {}),
     ...overrides,
   };
 }
@@ -36,6 +46,10 @@ function makeControllers(
 ): EditorAgentActionControllers {
   return {
     paneId: "pane-1",
+    activePaneId: "pane-1",
+    activeFile: "src/active.ts",
+    verifyActiveTarget: vi.fn(() => true),
+    verifyWritePrecondition: vi.fn(() => true),
     onSelectOpenFile: vi.fn(),
     formattingEnabled: true,
     formatRequest: { increment: vi.fn() },
@@ -43,6 +57,7 @@ function makeControllers(
     currentText: () => "text",
     applyTextEdits: vi.fn(),
     applyPatch: vi.fn(),
+    applyChangeset: vi.fn(),
     onSplitPane: vi.fn(),
     onMoveTab: vi.fn(),
     onRequestSelectionReveal: vi.fn(),
@@ -168,6 +183,24 @@ describe("dispatchEditorAgentAction — applyPatch", () => {
     const result = dispatchEditorAgentAction(action, controllers);
     expect(result).toEqual({ status: "deferred" });
     expect(controllers.applyPatch).toHaveBeenCalledWith(action);
+  });
+});
+
+// ─── applyChangeset ───────────────────────────────────────────────────────────
+
+describe("dispatchEditorAgentAction — applyChangeset", () => {
+  it("returns deferred and delegates to the applyChangeset controller", () => {
+    const controllers = makeControllers();
+    const action = makeAction("applyChangeset");
+    const result = dispatchEditorAgentAction(action, controllers);
+    expect(result).toEqual({ status: "deferred" });
+    expect(controllers.applyChangeset).toHaveBeenCalledWith(action);
+  });
+
+  it("fails closed when the changeset controller is unavailable", () => {
+    const controllers = makeControllers({ applyChangeset: undefined });
+    const result = dispatchEditorAgentAction(makeAction("applyChangeset"), controllers);
+    expect(result).toEqual({ status: "failed", message: "Provider unavailable." });
   });
 });
 
@@ -326,5 +359,104 @@ describe("dispatchEditorAgentAction — setSelection", () => {
       actionId: action.actionId,
       selection,
     });
+  });
+});
+
+describe("dispatchEditorAgentAction — active-buffer target binding", () => {
+  it.each(["format", "save", "applyTextEdits", "applyPatch", "setSelection"] as const)(
+    "rejects %s before mutation when the claimed file differs from the active buffer",
+    (type) => {
+      const controllers = makeControllers();
+      const action = makeAction(type, {
+        file: "src/other.ts",
+        selection:
+          type === "setSelection"
+            ? { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }
+            : undefined,
+      });
+      const result = dispatchEditorAgentAction(action, controllers);
+
+      expect(result).toEqual({
+        status: "conflict",
+        conflictCode: "OUT_OF_SCOPE",
+        message: "Action target does not match the active editor buffer.",
+      });
+      expect(controllers.verifyActiveTarget).not.toHaveBeenCalled();
+      expect(controllers.persist).not.toHaveBeenCalled();
+      expect(controllers.formatRequest.increment).not.toHaveBeenCalled();
+      expect(controllers.applyTextEdits).not.toHaveBeenCalled();
+      expect(controllers.applyPatch).not.toHaveBeenCalled();
+      expect(controllers.onRequestSelectionReveal).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a pane mismatch and invokes the Runtime verifier for a normalized match", () => {
+    const controllers = makeControllers();
+    const selection = {
+      start: { line: 0, character: 0 },
+      end: { line: 0, character: 1 },
+    };
+    const mismatch = dispatchEditorAgentAction(
+      makeAction("setSelection", { paneId: "pane-other", selection }),
+      controllers,
+    );
+    const matching = makeAction("setSelection", {
+      paneId: "pane-1",
+      file: "./src/active.ts",
+      selection,
+    });
+    const accepted = dispatchEditorAgentAction(matching, controllers);
+
+    expect(mismatch.status).toBe("conflict");
+    expect(accepted.status).toBe("succeeded");
+    expect(controllers.verifyActiveTarget).toHaveBeenCalledWith(matching);
+  });
+
+  it("fails closed when the Runtime target verifier rejects a stale action", () => {
+    const controllers = makeControllers({ verifyActiveTarget: vi.fn(() => false) });
+    const result = dispatchEditorAgentAction(makeAction("save"), controllers);
+
+    expect(result.status).toBe("conflict");
+    expect(controllers.persist).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the Runtime write precondition rejects a stale action", () => {
+    const controllers = makeControllers({ verifyWritePrecondition: vi.fn(() => false) });
+    const result = dispatchEditorAgentAction(makeAction("applyPatch"), controllers);
+
+    expect(result).toMatchObject({
+      status: "conflict",
+      conflictCode: "VERSION_MISMATCH",
+    });
+    expect(controllers.applyPatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects the bound pane when the active buffer no longer has a pane id", () => {
+    const controllers = makeControllers({ activePaneId: undefined });
+    const result = dispatchEditorAgentAction(makeAction("format"), controllers);
+
+    expect(result.status).toBe("conflict");
+    expect(controllers.formatRequest.increment).not.toHaveBeenCalled();
+  });
+
+  it("rejects a claimed pane when the active buffer has no pane id", () => {
+    const controllers = makeControllers({ activePaneId: undefined });
+    const result = dispatchEditorAgentAction(
+      makeAction("format", { paneId: "pane-unverified" }),
+      controllers,
+    );
+
+    expect(result.status).toBe("conflict");
+    expect(controllers.formatRequest.increment).not.toHaveBeenCalled();
+  });
+
+  it("rejects an active-buffer action missing its server-bound file or pane", () => {
+    const controllers = makeControllers();
+    const missingFile = makeAction("format", undefined, { target: { paneId: "pane-1" } });
+    const missingPane = makeAction("format", undefined, { target: { file: "src/active.ts" } });
+
+    expect(dispatchEditorAgentAction(missingFile, controllers).status).toBe("conflict");
+    expect(dispatchEditorAgentAction(missingPane, controllers).status).toBe("conflict");
+    expect(controllers.formatRequest.increment).not.toHaveBeenCalled();
   });
 });

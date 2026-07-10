@@ -215,11 +215,23 @@ const contextRequest: EditorContextRequest = {
 
 const contextEntry: EditorContextEntry = {
   sourceKind: "repo-search",
+  sourceTier: "first-party-workspace",
   id: "entry-1",
   score: 0.91,
   rank: 0,
   citationRef: "cite-1",
   byteCount: 256,
+  truncated: false,
+};
+
+const editorStateContextEntry: EditorContextEntry = {
+  sourceKind: "editor-state",
+  sourceTier: "first-party-workspace",
+  id: "editor-state-1",
+  score: 1,
+  rank: 0,
+  citationRef: "editor-state",
+  byteCount: 128,
   truncated: false,
 };
 
@@ -272,6 +284,7 @@ const crossBoundaryInstances: Readonly<Record<string, unknown>> = {
   recentEditSummary,
   recentEditContext,
   contextRequest,
+  editorStateContextEntry,
   contextReady: contextResults[0],
   contextDegraded: contextResults[1],
   contextUnavailable: contextResults[2],
@@ -332,6 +345,7 @@ describe("content-free types carry no content-bearing key", () => {
     modelProvenance,
     contextRequest,
     contextEntry,
+    editorStateContextEntry,
     contextPack,
     contextOmission,
     recentEditSummary,

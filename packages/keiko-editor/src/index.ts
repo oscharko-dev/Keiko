@@ -153,6 +153,7 @@ export type {
   EditorContextPurpose,
   EditorContextRequest,
   EditorContextSourceKind,
+  EditorContextSourceTier,
   EditorContextEntry,
   EditorContextOmissionReason,
   EditorContextOmission,
@@ -514,6 +515,8 @@ export type {
   KeikoEditorLoadState,
   EditorContentDelta,
   EditorRevealRequest,
+  EditorSelectionCapture,
+  AskKeikoAboutSelectionHandler,
 } from "./components/types.js";
 // The controlled component renders the host-owned save lifecycle; these pure helpers let a host
 // (e.g. keiko-ui in #1196) drive `saveStatus` and detect optimistic-concurrency conflicts
@@ -588,14 +591,21 @@ export type {
 export {
   MONACO_BUILTIN_ACTION_IDS,
   EDITOR_COMMAND_KEYBINDINGS,
+  EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_ID,
+  EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_LABEL,
   EDITOR_GENERATE_TESTS_ACTION_ID,
   EDITOR_GENERATE_TESTS_ACTION_LABEL,
+  buildAskKeikoAboutSelectionKeybinding,
+  buildAskKeikoAboutSelectionActionDescriptor,
+  buildAskKeikoAboutSelectionRunHandler,
   buildGenerateTestsKeybinding,
   buildGenerateTestsActionDescriptor,
 } from "./components/command-actions.js";
 export type {
   KeybindingDisplay,
   CommandActionKeys,
+  AskKeikoAboutSelectionCommandActionKeys,
+  AskKeikoAboutSelectionActionArgs,
   GenerateTestsActionArgs,
 } from "./components/command-actions.js";
 export { deriveEditorStatusBar, editorLanguageLabel } from "./components/status-bar.js";

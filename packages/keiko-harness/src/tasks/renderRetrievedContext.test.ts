@@ -54,11 +54,14 @@ describe("renderRetrievedContext", () => {
           sourceTier: "indexed-knowledge",
           citationRef: "design.pdf",
         }),
+        excerpt("third", { sourceKind: "editor-state", citationRef: "workspace.ts" }),
       ]),
     );
     expect(rendered).toContain("[1] Active file (first-party-workspace) — foo.ts");
     expect(rendered).toContain("[2] Knowledge base (indexed-knowledge) — design.pdf");
+    expect(rendered).toContain("[3] Editor state (first-party-workspace) — workspace.ts");
     expect(rendered.indexOf("[1]")).toBeLessThan(rendered.indexOf("[2]"));
+    expect(rendered.indexOf("[2]")).toBeLessThan(rendered.indexOf("[3]"));
   });
 
   it("falls back to the citation id when no citationRef is present", () => {

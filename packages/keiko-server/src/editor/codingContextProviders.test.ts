@@ -2,16 +2,25 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  type EditorAgentDiagnostic,
+  type EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import {
+  runEditorStateProvider,
   runLocalKnowledgeProvider,
   runMemoryProvider,
   runRepoSearchProvider,
   type ProviderContext,
+  type ProviderOutcome,
+  type RawExcerpt,
 } from "./codingContextProviders.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { buildLocalKnowledgeScope } from "./localKnowledgeRetrieval.js";
 
 const tmpDirs: string[] = [];
@@ -69,13 +78,212 @@ function providerCtx(overrides: Partial<ProviderContext> = {}): ProviderContext 
   };
 }
 
+function diagnostic(
+  severity: EditorAgentDiagnostic["severity"],
+  message: string,
+): EditorAgentDiagnostic {
+  return {
+    severity,
+    range: { start: { line: 3, character: 5 }, end: { line: 3, character: 11 } },
+    message,
+  };
+}
+
+function editorSnapshot(
+  overrides: Partial<EditorAgentSessionSnapshot> = {},
+): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId: "editor-session-1",
+    windowId: "window-1",
+    workspaceRoot: "/workspace",
+    activePaneId: "pane-1",
+    panes: [{ paneId: "pane-1", activeFile: "src/main.ts", openFiles: ["src/main.ts"] }],
+    dirtyFiles: ["src/main.ts", "src/helper.ts"],
+    activeFile: "src/main.ts",
+    cursor: { line: 3, character: 5 },
+    selection: { start: { line: 3, character: 5 }, end: { line: 3, character: 11 } },
+    diagnosticsSummary: { errors: 7, warnings: 8, infos: 9 },
+    textMode: "none",
+    updatedAt: 1_700_000_000_000,
+    ...overrides,
+  };
+}
+
+interface ParsedEditorState {
+  readonly dirtyFiles?: readonly string[];
+  readonly diagnosticsDetail?: {
+    readonly items?: readonly EditorAgentDiagnostic[];
+    readonly truncated?: boolean;
+  } | null;
+}
+
+function parseEditorState(text: string | undefined): ParsedEditorState {
+  return JSON.parse(text ?? "{}") as ParsedEditorState;
+}
+
+function firstExcerpt(outcome: ProviderOutcome): RawExcerpt {
+  const excerpt = outcome.excerpts[0];
+  if (excerpt === undefined) {
+    throw new Error("expected one editor-state excerpt");
+  }
+  return excerpt;
+}
+
 afterEach(() => {
+  editorAgentRegistry.reset();
   for (const vault of vaults.splice(0)) {
     vault.close();
   }
   for (const dir of tmpDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("runEditorStateProvider", () => {
+  it("returns one same-root excerpt with active state and every diagnostic severity", () => {
+    const hintWithExtraMetadata = {
+      ...diagnostic("hint", "Hint detail"),
+      leakedSessionId: "editor-session-1",
+      leakedWorkspaceRoot: "/workspace",
+    };
+    editorAgentRegistry.registerSnapshot(
+      editorSnapshot({
+        diagnosticsDetail: {
+          items: [
+            diagnostic("error", "Error detail"),
+            diagnostic("warning", "Warning detail"),
+            diagnostic("info", "Info detail"),
+            hintWithExtraMetadata,
+          ],
+          truncated: false,
+        },
+      }),
+    );
+    const outcome = runEditorStateProvider(providerCtx({ realRoot: "/workspace" }), {
+      sessionId: "editor-session-1",
+    });
+
+    expect(outcome.omission).toBeUndefined();
+    expect(outcome.excerpts).toHaveLength(1);
+    const excerpt = firstExcerpt(outcome);
+    expect(excerpt.sourceKind).toBe("editor-state");
+    expect(excerpt.citationRef).toBe("main.ts");
+    expect(excerpt.text).toContain('"activeFile": "src/main.ts"');
+    expect(excerpt.text).toContain('"errors": 7');
+    expect(excerpt.text).toContain('"warnings": 8');
+    expect(excerpt.text).toContain('"infos": 9');
+    for (const severity of ["error", "warning", "info", "hint"]) {
+      expect(excerpt.text).toContain(`"severity": "${severity}"`);
+    }
+    expect(excerpt.text).not.toContain("/workspace");
+    expect(excerpt.text).not.toContain("editor-session-1");
+    expect(excerpt.id).not.toContain("editor-session-1");
+  });
+
+  it("returns the exact unavailable omission for a missing or aborted session", () => {
+    const expected = {
+      excerpts: [],
+      omission: { sourceKind: "editor-state", reason: "unavailable" },
+    };
+    expect(
+      runEditorStateProvider(providerCtx({ realRoot: "/workspace" }), {
+        sessionId: "missing-session",
+      }),
+    ).toEqual(expected);
+
+    const controller = new AbortController();
+    controller.abort();
+    expect(
+      runEditorStateProvider(providerCtx({ realRoot: "/workspace", signal: controller.signal }), {
+        sessionId: "editor-session-1",
+      }),
+    ).toEqual(expected);
+  });
+
+  it("denies a snapshot from a different workspace without returning text", () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot({ workspaceRoot: "/other-workspace" }));
+    const outcome = runEditorStateProvider(providerCtx({ realRoot: "/workspace" }), {
+      sessionId: "editor-session-1",
+    });
+
+    expect(outcome).toEqual({
+      excerpts: [],
+      omission: { sourceKind: "editor-state", reason: "denied" },
+    });
+  });
+
+  it("strips hostile format characters before redacting diagnostic and path secrets", () => {
+    const secret = ["sk-", "editor-state-test-1234567890abcdef"].join("");
+    const zeroWidth = String.fromCodePoint(0x200b);
+    const bidiOverride = String.fromCodePoint(0x202e);
+    const splitSecret = secret.replace("editor", `edi${zeroWidth}tor`);
+    const hostilePath = `src/${splitSecret}${bidiOverride}.ts`;
+    editorAgentRegistry.registerSnapshot(
+      editorSnapshot({
+        activeFile: hostilePath,
+        dirtyFiles: [hostilePath],
+        diagnosticsDetail: {
+          items: [diagnostic("error", `Leaked ${splitSecret}${bidiOverride}`)],
+          truncated: false,
+        },
+      }),
+    );
+    const context = providerCtx({
+      realRoot: "/workspace",
+      deps: baseDeps({ redactor: buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }) }),
+    });
+    const excerpt = firstExcerpt(
+      runEditorStateProvider(context, { sessionId: "editor-session-1" }),
+    );
+
+    expect(excerpt.text).toContain("[REDACTED]");
+    expect(excerpt.citationRef).toContain("[REDACTED]");
+    expect(`${excerpt.text}${excerpt.citationRef ?? ""}`).not.toContain(secret);
+    expect(`${excerpt.text}${excerpt.citationRef ?? ""}`).not.toContain(zeroWidth);
+    expect(`${excerpt.text}${excerpt.citationRef ?? ""}`).not.toContain(bidiOverride);
+  });
+
+  it("caps dirty paths and diagnostic detail and propagates upstream truncation", () => {
+    const dirtyFiles = Array.from({ length: 60 }, (_, index) => `src/dirty-${String(index)}.ts`);
+    const items = Array.from({ length: 48 }, (_, index) =>
+      diagnostic("hint", `Hint ${String(index)}`),
+    );
+    editorAgentRegistry.registerSnapshot(
+      editorSnapshot({ dirtyFiles, diagnosticsDetail: { items, truncated: true } }),
+    );
+    const outcome = runEditorStateProvider(
+      providerCtx({ realRoot: "/workspace", maxBytesPerExcerpt: 65_536 }),
+      { sessionId: "editor-session-1" },
+    );
+    const excerpt = firstExcerpt(outcome);
+    const parsed = parseEditorState(excerpt.text);
+
+    expect(parsed.dirtyFiles).toHaveLength(32);
+    expect(parsed.diagnosticsDetail?.items).toHaveLength(32);
+    expect(parsed.diagnosticsDetail?.truncated).toBe(true);
+    expect(excerpt.truncated).toBe(true);
+  });
+
+  it("byte-clamps the prepared excerpt and marks it truncated", () => {
+    editorAgentRegistry.registerSnapshot(
+      editorSnapshot({
+        dirtyFiles: [],
+        diagnosticsDetail: {
+          items: [diagnostic("warning", "Long diagnostic ".repeat(100))],
+          truncated: false,
+        },
+      }),
+    );
+    const outcome = runEditorStateProvider(
+      providerCtx({ realRoot: "/workspace", maxBytesPerExcerpt: 96 }),
+      { sessionId: "editor-session-1" },
+    );
+    const excerpt = firstExcerpt(outcome);
+
+    expect(new TextEncoder().encode(excerpt.text).length).toBeLessThanOrEqual(96);
+    expect(excerpt.truncated).toBe(true);
+  });
 });
 
 describe("buildLocalKnowledgeScope", () => {

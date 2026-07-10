@@ -19,6 +19,17 @@ const NOT_RUN_FUNNEL = {
   antiTautology: "not-run",
 } as const;
 
+const CONTEXT_SOURCE_CASES = [
+  { sourceKind: "repo-search", sourceTier: "first-party-workspace" },
+  { sourceKind: "connected-context", sourceTier: "first-party-workspace" },
+  { sourceKind: "local-knowledge", sourceTier: "indexed-knowledge" },
+  { sourceKind: "memory", sourceTier: "retained-memory" },
+  { sourceKind: "quality-intelligence", sourceTier: "derived-evidence" },
+  { sourceKind: "workflow-context", sourceTier: "derived-evidence" },
+  { sourceKind: "files-focus", sourceTier: "first-party-workspace" },
+  { sourceKind: "editor-state", sourceTier: "first-party-workspace" },
+] as const;
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -88,6 +99,43 @@ describe("mapWireToEditorTestGenerationOutcome", () => {
     expect(deferred.status).toBe("deferred");
     if (deferred.status === "deferred") {
       expect(deferred.context?.entries).toEqual([]);
+    }
+  });
+
+  it("preserves editor-state source/tier and the existing context provenance values", () => {
+    const entries = CONTEXT_SOURCE_CASES.map((source, index) => ({
+      ...source,
+      id: `context-${String(index)}`,
+      score: 1 - index * 0.05,
+      rank: index,
+      citationRef: `citation-${String(index)}`,
+      byteCount: index + 1,
+      truncated: false,
+    }));
+    const omissions = [
+      { sourceKind: "files-focus", reason: "not-ready" },
+      { sourceKind: "editor-state", reason: "out-of-budget" },
+    ] as const;
+    const outcome = mapWireToEditorTestGenerationOutcome(REQUEST, {
+      schemaVersion: "1",
+      status: "deferred",
+      reason: "context only",
+      funnel: NOT_RUN_FUNNEL,
+      context: {
+        schemaVersion: "1",
+        purpose: "test-generation",
+        entries,
+        usedBytes: entries.reduce((total, entry) => total + entry.byteCount, 0),
+        budgetBytes: 64,
+        droppedForBudget: 0,
+        omissions,
+      },
+    });
+
+    expect(outcome.status).toBe("deferred");
+    if (outcome.status === "deferred") {
+      expect(outcome.context?.entries).toEqual(entries);
+      expect(outcome.context?.omissions).toEqual(omissions);
     }
   });
 

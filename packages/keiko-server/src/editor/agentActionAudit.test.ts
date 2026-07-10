@@ -10,7 +10,7 @@ import {
   type EditorAgentAuditInput,
 } from "./agentActionAudit.js";
 
-const REVIEW = classifyEditorAgentAction("applyTextEdits", {
+const BASELINE = classifyEditorAgentAction("applyTextEdits", {
   targetPath: "src/a.ts",
   targetSensitive: false,
 });
@@ -27,7 +27,7 @@ function input(over: Partial<EditorAgentAuditInput> = {}): EditorAgentAuditInput
     sessionId: "session-1",
     actionId: "action-1",
     actionType: "applyTextEdits",
-    decision: REVIEW,
+    decision: BASELINE,
     outcome: "queued",
     targetPath: "src/a.ts",
     ...over,
@@ -45,7 +45,7 @@ describe("agent editor action audit ledger (Issue #1395)", () => {
     const records = listEditorAgentActionAudit("session-1");
     expect(records).toHaveLength(1);
     expect(records[0]?.actionType).toBe("applyTextEdits");
-    expect(records[0]?.disposition).toBe("review-required");
+    expect(records[0]?.disposition).toBe("allowed");
     expect(records[0]?.outcome).toBe("queued");
     expect(records[0]?.editCount).toBe(2);
     expect(records[0]?.mutating).toBe(true);

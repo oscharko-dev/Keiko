@@ -839,40 +839,7 @@ function validateAuthorityEffectiveMode(value: Record<string, unknown>, errors: 
       "authorityEnvelope.effectiveMode must be the fail-closed minimum of requestedMode and deploymentCeiling",
     );
   }
-  const commandPolicy = isRecord(value.commandPolicy) ? value.commandPolicy : undefined;
-  const networkPolicy = isRecord(value.networkPolicy) ? value.networkPolicy : undefined;
   validateCommandPolicyActionClassConsistency(value, errors);
-  if (value.effectiveMode === "governed-assist") {
-    validateGovernedAssistAuthorityConstraints(value, commandPolicy, networkPolicy, errors);
-  }
-}
-
-function validateGovernedAssistAuthorityConstraints(
-  value: Record<string, unknown>,
-  commandPolicy: Record<string, unknown> | undefined,
-  networkPolicy: Record<string, unknown> | undefined,
-  errors: string[],
-): void {
-  if (commandPolicy?.mode !== "deny") {
-    errors.push(
-      "authorityEnvelope.commandPolicy.mode must be deny when effectiveMode is governed-assist",
-    );
-  }
-  if (networkPolicy?.mode !== "deny-all") {
-    errors.push(
-      "authorityEnvelope.networkPolicy.mode must be deny-all when effectiveMode is governed-assist",
-    );
-  }
-  if (hasWriteCapableConnectorScope(value.connectorScopes)) {
-    errors.push(
-      "authorityEnvelope.connectorScopes must not include write-capable scopes when effectiveMode is governed-assist",
-    );
-  }
-  if (hasWriteCapableConnectorScope(networkPolicy?.connectorScopes)) {
-    errors.push(
-      "authorityEnvelope.networkPolicy.connectorScopes must not include write-capable scopes when effectiveMode is governed-assist",
-    );
-  }
 }
 
 function validateNetworkPolicyConnectorScopesConsistency(

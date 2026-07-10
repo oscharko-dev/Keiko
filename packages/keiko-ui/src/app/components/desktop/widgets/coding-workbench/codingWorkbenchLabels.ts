@@ -1,8 +1,9 @@
-import type {
-  CodingWorkbenchMode,
-  CodingWorkbenchModelSource,
-  CodingWorkbenchRuntimeEvent,
-  CodingWorkbenchRuntimeHealth,
+import {
+  CODING_WORKBENCH_MODE_POLICIES,
+  type CodingWorkbenchMode,
+  type CodingWorkbenchModelSource,
+  type CodingWorkbenchRuntimeEvent,
+  type CodingWorkbenchRuntimeHealth,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   CodingWorkbenchProjection,
@@ -27,15 +28,11 @@ export function cx(...classes: readonly (string | undefined)[]): string {
 }
 
 export function modeLabel(mode: CodingWorkbenchMode): string {
-  if (mode === "governed-assist") return "Governed Assist";
-  if (mode === "supervised-coding") return "Supervised Coding";
-  return "Autonomous Delivery";
+  return CODING_WORKBENCH_MODE_POLICIES[mode].display.label;
 }
 
 export function modeDescription(mode: CodingWorkbenchMode): string {
-  if (mode === "governed-assist") return "Read and verify, no workspace writes.";
-  if (mode === "supervised-coding") return "Privileged actions require just-in-time approval.";
-  return "Delivery substrate actions require an approved envelope.";
+  return CODING_WORKBENCH_MODE_POLICIES[mode].display.description;
 }
 
 export function modelSourceLabel(source: CodingWorkbenchModelSource): string {

@@ -195,6 +195,7 @@ import {
 } from "./editor/hotExitRoutes.js";
 import {
   handleEditorAgentActions,
+  handleEditorAgentAuthority,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
@@ -762,6 +763,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/editor/agent/actions",
     handler: handleEditorAgentActions,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/agent/authority",
+    handler: handleEditorAgentAuthority,
   },
   {
     method: "GET",

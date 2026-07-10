@@ -85,6 +85,8 @@ export const DE_MESSAGES = {
     "Zugriff auf die Zwischenablage fehlgeschlagen. Wähle die Antwort manuell aus und kopiere sie.",
   "chat.copy.copied": "Kopiert",
   "chat.copy.message": "Antwort kopieren",
+  // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
+  // workspace shell does not preload editor-only translations.
   "chat.regenerate.cancelled": "Regenerierung abgebrochen",
   "chat.regenerate.running": "Antwort wird neu generiert",
   "chat.regenerate.cancel": "Regenerierung abbrechen",

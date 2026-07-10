@@ -11,6 +11,7 @@ export type EditorHostCapability =
   | "provideInlineCompletions"
   | "provideDiagnostics"
   | "provideContext"
+  | "askKeikoAboutSelection"
   | "generateTests"
   | "renameSymbol"
   | "previewPatch"
@@ -32,6 +33,7 @@ export type EditorCommandId =
   // `editor.action.inlineSuggest.hide`), so it needs no host capability.
   | "editor.rejectInlineCompletion"
   | "editor.generateTests"
+  | "editor.askKeikoAboutSelection"
   | "editor.renameSymbol"
   // Issue #1205: run verification over a generated patch (governed, off in v1 — see `runVerification`).
   | "editor.runVerification"
@@ -56,9 +58,8 @@ export interface EditorCommandContext {
   readonly readOnly: boolean;
   readonly dirty: boolean;
   /**
-   * Whether the editor has a non-empty selection. Exposed for the host's keybinding/menu layer; the
-   * built-in availability gates do not depend on it (selection-scoped commands arrive with their
-   * owning issues, e.g. test generation from a selection).
+   * Whether the editor has a non-empty selection. Selection-scoped commands use this to remain
+   * unavailable instead of silently widening their input to the active buffer.
    */
   readonly hasSelection: boolean;
   readonly inlineCompletionVisible: boolean;

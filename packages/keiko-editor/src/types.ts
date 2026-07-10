@@ -784,11 +784,16 @@ export type EditorContextSourceKind =
   | "memory"
   | "quality-intelligence"
   | "workflow-context"
-  | "files-focus";
+  | "files-focus"
+  | "editor-state";
+
+export type EditorContextSourceTier =
+  "first-party-workspace" | "indexed-knowledge" | "retained-memory" | "derived-evidence";
 
 /** Content-free provider provenance: a citation pointer and accounting, never the excerpt itself. */
 export interface EditorContextEntry {
   readonly sourceKind: EditorContextSourceKind;
+  readonly sourceTier: EditorContextSourceTier;
   readonly id: string;
   readonly score: number;
   readonly rank: number;

@@ -36,6 +36,9 @@ import {
   fetchUpdateSessionStatus,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
+  postEditorAgentActionResult,
+  postEditorAgentSessionSnapshot,
+  queueEditorAgentBridgeAction,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   runGatewayReadiness,
@@ -72,6 +75,102 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("editor agent bridge capability serialization", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("attaches the capability only to explicit bridge request envelopes", async () => {
+    const capability = "A".repeat(43);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ snapshot: null, bridgeDecisionCapability: capability }))
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }))
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "queued" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const snapshot = {
+      schemaVersion: "1",
+      sessionId: "session-1",
+      windowId: "window-1",
+      workspaceRoot: "/repo",
+      activePaneId: "pane-1",
+      panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+      dirtyFiles: [],
+      activeFile: "src/a.ts",
+      cursor: null,
+      selection: null,
+      diagnosticsSummary: null,
+      activeFileContentHash: "a".repeat(64),
+      textMode: "none",
+      updatedAt: 1,
+    } as const;
+
+    await postEditorAgentSessionSnapshot(snapshot, capability);
+    await postEditorAgentActionResult({
+      schemaVersion: "1",
+      kind: "result",
+      bridgeDecisionCapability: capability,
+      result: {
+        schemaVersion: "1",
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "succeeded",
+      },
+    });
+    const action = {
+      schemaVersion: "1",
+      actionId: "action-2",
+      idempotencyKey: "key-2",
+      sessionId: "session-1",
+      type: "applyPatch",
+      patch: "patch",
+    } as const;
+    await queueEditorAgentBridgeAction(action, capability);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/editor/agent/snapshot",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "snapshot",
+          snapshot,
+          bridgeDecisionCapability: capability,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/agent/actions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "result",
+          bridgeDecisionCapability: capability,
+          result: {
+            schemaVersion: "1",
+            actionId: "action-1",
+            sessionId: "session-1",
+            status: "succeeded",
+          },
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/editor/agent/actions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "action",
+          action,
+          bridgeDecisionCapability: capability,
+        }),
+      }),
+    );
+  });
+});
 
 describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
   afterEach(() => {

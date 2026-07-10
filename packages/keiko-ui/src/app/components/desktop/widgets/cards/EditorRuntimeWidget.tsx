@@ -34,12 +34,14 @@ import {
   useRef,
   useState,
   type ButtonHTMLAttributes,
+  type CSSProperties,
   type ReactNode,
   type Reducer,
 } from "react";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   applyTextEditsToText,
+  buildPatchPreview,
   buildTestGenerationPreview,
   buildRenamePreview,
   createEditorRequestId,
@@ -113,6 +115,10 @@ import {
   type WorkspaceReplacePreviewTextRange,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  isEditorAgentActiveBufferActionType,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
+import {
   ApiError,
   fetchEditorLanguageCapabilities,
   postEditorAgentSessionSnapshot,
@@ -133,6 +139,7 @@ import {
   requestEditorTestGeneration,
   saveFilesContent,
 } from "../../../../../lib/api";
+import { useTranslate } from "../../../../../lib/i18n";
 import { mapWireToEditorCompletionResponse } from "../../../../../lib/editor-completion";
 import { mapWireToEditorInlineCompletionResponse } from "../../../../../lib/editor-inline-completion";
 import { mapWireToEditorTestGenerationOutcome } from "../../../../../lib/editor-test-generation";
@@ -148,6 +155,9 @@ import {
 } from "../../../../../lib/editor-language";
 import type {
   EditorAgentAction,
+  EditorAgentActionResult,
+  EditorAgentActionResultRequest,
+  EditorAgentSnapshotResponse,
   EditorAgentPaneSnapshot,
   EditorCompletionContextSelectors,
   EditorDocumentVersion,
@@ -158,7 +168,6 @@ import type {
   LanguageServiceCapabilities,
   EditorTestGenerationWireTarget,
 } from "../../../../../lib/types";
-import { EDITOR_AGENT_SCHEMA_VERSION } from "../../../../../lib/types";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../../hooks/useWorkspace.types";
 import { Icons } from "../../Icons";
 import { useEditorThemeVariant } from "../../hooks/useEditorThemeVariant";
@@ -169,11 +178,14 @@ import {
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
+import { useEditorAgentTranslate } from "./editor-agent-i18n";
 import {
   postEditorAgentResult,
+  postEditorAgentResultRequest,
   useEditorAgentBridge,
   type EditorAgentActionControllers,
 } from "./editorAgentBridge";
+import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
@@ -190,6 +202,16 @@ import {
 } from "./editorHotExitStore";
 import { LruSessionCache } from "./editorSessionCache";
 import { readableTabCapacity, visibleTabsForCapacity } from "./editorTabViewport";
+import type {
+  EditorAgentReconciliationEntry,
+  EditorAgentReconciliationRequest,
+} from "./editorAgentReconciliationQueue";
+import { normalizeEditorFile } from "./editorPaneGeometry";
+import {
+  captureEditorSelection,
+  type EditorSelectionAskRequest,
+  type EditorSelectionHandoff,
+} from "./editorSelectionHandoff";
 import {
   documentSessionKey,
   documentUri,
@@ -207,6 +229,112 @@ const EditorDiffSurface = dynamic<EditorDiffSurfaceProps>(() => import("./Editor
   ssr: false,
   loading: () => <div className="ed-host-loading" aria-hidden="true" />,
 });
+
+const EDITOR_REVIEW_SURFACE_STYLE: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  width: "100%",
+  height: "100%",
+  minWidth: 0,
+  minHeight: 0,
+};
+
+const EDITOR_REVIEW_DIFF_GROUP_STYLE: CSSProperties = {
+  flex: "1 1 auto",
+  width: "100%",
+  minWidth: 0,
+  minHeight: 0,
+};
+
+const EDITOR_REVIEW_ACTIONS_STYLE: CSSProperties = {
+  flex: "0 0 auto",
+};
+
+const EDITOR_AGENT_PRESENCE_STYLE: CSSProperties = {
+  minHeight: 30,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "5px 12px",
+  borderTop: "1px solid color-mix(in oklch, var(--text-secondary) 18%, transparent)",
+  borderBottom: "1px solid color-mix(in oklch, var(--text-secondary) 18%, transparent)",
+  color: "var(--text-secondary)",
+  fontSize: "var(--text-body-sm)",
+};
+
+const EDITOR_AGENT_PRESENCE_MARKER_STYLE: CSSProperties = {
+  width: 3,
+  height: 14,
+  flex: "0 0 auto",
+  borderRadius: 2,
+};
+
+type EditorAgentPresenceKind = "detached" | "idle" | "active" | "review";
+
+interface EditorAgentPresenceView {
+  readonly color: string;
+  readonly kind: EditorAgentPresenceKind;
+  readonly label: string;
+}
+
+function editorAgentPresenceView(args: {
+  readonly inFlightActionCount: number;
+  readonly recentlyActive: boolean;
+  readonly reviewPendingCount: number;
+}): EditorAgentPresenceView {
+  if (args.reviewPendingCount > 0) {
+    return {
+      color: "var(--feedback-warning)",
+      kind: "review",
+      label: args.recentlyActive
+        ? "Agent attached - review required"
+        : "Agent review required - no recent activity",
+    };
+  }
+  if (!args.recentlyActive) {
+    return {
+      color: "var(--text-secondary)",
+      kind: "detached",
+      label: "Agent not attached - no recent activity",
+    };
+  }
+  if (args.inFlightActionCount > 0) {
+    const noun = args.inFlightActionCount === 1 ? "action" : "actions";
+    return {
+      color: "var(--accent)",
+      kind: "active",
+      label: `Agent attached - ${String(args.inFlightActionCount)} ${noun} in progress`,
+    };
+  }
+  return {
+    color: "var(--feedback-success)",
+    kind: "idle",
+    label: "Agent attached - idle",
+  };
+}
+
+function EditorAgentPresenceIndicator(props: {
+  readonly inFlightActionCount: number;
+  readonly recentlyActive: boolean;
+  readonly reviewPendingCount: number;
+}): ReactNode {
+  const view = editorAgentPresenceView(props);
+  return (
+    <div
+      aria-atomic="true"
+      aria-live="polite"
+      data-presence-state={view.kind}
+      data-testid="agent-presence-indicator"
+      style={EDITOR_AGENT_PRESENCE_STYLE}
+    >
+      <span
+        aria-hidden="true"
+        style={{ ...EDITOR_AGENT_PRESENCE_MARKER_STYLE, background: view.color }}
+      />
+      <span>{view.label}</span>
+    </div>
+  );
+}
 
 interface MonacoCompatibleEditorUri {
   readonly scheme: string;
@@ -351,6 +479,7 @@ export interface EditorRuntimeWidgetProps {
   readonly revealLineEnd?: number | undefined;
   readonly revealRequestId?: string | undefined;
   readonly dirtyFiles?: readonly string[] | undefined;
+  readonly onAskSelection?: ((handoff: EditorSelectionHandoff) => boolean) | undefined;
   readonly onSelectOpenFile?: ((file: string) => void) | undefined;
   readonly onSplitPane?: ((paneId: string, direction: "row" | "column") => void) | undefined;
   readonly onMoveTab?: ((fromPaneId: string, file: string, toPaneId: string) => void) | undefined;
@@ -360,6 +489,11 @@ export interface EditorRuntimeWidgetProps {
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
   readonly onExternalSaveComplete?:
     ((requestId: number, paneId: string, file: string, ok: boolean) => void) | undefined;
+  readonly agentReconciliationRequest?: EditorAgentReconciliationRequest | undefined;
+  readonly onAgentChangesetCommitted?:
+    ((entries: readonly EditorAgentReconciliationEntry[]) => void) | undefined;
+  readonly onAgentReconciliationComplete?:
+    ((requestId: number, paneId: string) => void) | undefined;
   readonly tabInsertTarget?: EditorTabInsertTarget | undefined;
   readonly renderTabHandle?:
     | ((
@@ -877,6 +1011,185 @@ function buildAgentPatchDiffModel(
   };
 }
 
+type AgentPreparedChangeset = NonNullable<NonNullable<EditorAgentAction["changeset"]>["prepared"]>;
+type AgentPreparedChangesetFile = AgentPreparedChangeset["files"][number];
+
+interface AgentChangesetReviewState {
+  readonly action: EditorAgentAction;
+  readonly model: PatchPreviewModel;
+  readonly applying: boolean;
+}
+
+interface AgentPatchReviewState {
+  readonly action: EditorAgentAction;
+  readonly original: string;
+  readonly modified: string;
+  readonly applying: boolean;
+}
+
+interface AgentReviewDecisionIntent {
+  readonly actionKey: string;
+  readonly decision: "accept" | "reject";
+}
+
+interface BoundedActionMemory {
+  readonly order: string[];
+  readonly values: Set<string>;
+}
+
+type ChangesetSourceResult =
+  | { readonly status: "ready"; readonly sources: Readonly<Record<string, PatchPreviewSource>> }
+  | {
+      readonly status: "failed" | "conflict";
+      readonly message: string;
+      readonly conflictCode?: AgentConflictCode | undefined;
+    };
+
+const AGENT_CHANGESET_ACTION_MEMORY_LIMIT = 128;
+
+function normalizeAgentChangesetPath(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function runtimeAgentTargetMatches(
+  action: EditorAgentAction,
+  activeFile: string | undefined,
+  activePaneId: string | undefined,
+): boolean {
+  if (!isEditorAgentActiveBufferActionType(action.type)) return true;
+  if (activeFile === undefined) return false;
+  const claimedFile = action.target?.file;
+  const claimedPane = action.target?.paneId;
+  return (
+    (claimedFile === undefined ||
+      normalizeAgentChangesetPath(claimedFile) === normalizeAgentChangesetPath(activeFile)) &&
+    (claimedPane === undefined || (activePaneId !== undefined && claimedPane === activePaneId))
+  );
+}
+
+function runtimeAgentWritePreconditionMatches(
+  action: EditorAgentAction,
+  activeContentHash: string | null,
+): boolean {
+  if (action.type === "applyChangeset") return true;
+  const expectedHash =
+    action.expectedContentHash ?? action.expectedDocumentVersion?.contentHash ?? null;
+  return activeContentHash !== null && expectedHash !== null && activeContentHash === expectedHash;
+}
+
+function rememberAgentChangesetAction(memory: BoundedActionMemory, key: string): boolean {
+  if (memory.values.has(key)) return false;
+  memory.values.add(key);
+  memory.order.push(key);
+  while (memory.order.length > AGENT_CHANGESET_ACTION_MEMORY_LIMIT) {
+    const evicted = memory.order.shift();
+    if (evicted !== undefined) memory.values.delete(evicted);
+  }
+  return true;
+}
+
+function agentActionKey(action: EditorAgentAction): string {
+  return `${action.sessionId}\u0000${action.actionId}`;
+}
+
+function agentResultKey(result: EditorAgentActionResult): string {
+  return `${result.sessionId}\u0000${result.actionId}`;
+}
+
+function resultMatchesAction(result: EditorAgentActionResult, action: EditorAgentAction): boolean {
+  return result.sessionId === action.sessionId && result.actionId === action.actionId;
+}
+
+function exactPatchTargetMatches(
+  action: EditorAgentAction,
+  activeFile: string | undefined,
+  activePaneId: string | undefined,
+): boolean {
+  return (
+    activeFile !== undefined &&
+    activePaneId !== undefined &&
+    action.target?.file !== undefined &&
+    action.target.paneId === activePaneId &&
+    normalizeAgentChangesetPath(action.target.file) === normalizeAgentChangesetPath(activeFile)
+  );
+}
+
+function preparedChangesetForReview(action: EditorAgentAction): AgentPreparedChangeset | null {
+  const changeset = action.changeset;
+  const prepared = changeset?.prepared;
+  if (changeset === undefined || prepared === undefined) return null;
+  const declared = new Set(changeset.files.map((entry) => normalizeAgentChangesetPath(entry.file)));
+  const preparedPaths = prepared.files.map((entry) => normalizeAgentChangesetPath(entry.file));
+  if (declared.size !== preparedPaths.length) return null;
+  if (preparedPaths.some((path) => !declared.has(path))) return null;
+  const selected = changeset.selectedFiles?.map(normalizeAgentChangesetPath);
+  if (selected === undefined) return prepared;
+  const selectedPaths = new Set(selected);
+  const files = prepared.files.filter((entry) =>
+    selectedPaths.has(normalizeAgentChangesetPath(entry.file)),
+  );
+  return files.length === selectedPaths.size && files.length > 0 ? { files } : null;
+}
+
+function agentReviewDecisionRequest(
+  action: EditorAgentAction,
+  status: "succeeded" | "failed",
+  message?: string,
+): EditorAgentActionResultRequest {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    kind: "result",
+    result: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: action.actionId,
+      sessionId: action.sessionId,
+      status,
+      ...(message === undefined ? {} : { message }),
+    },
+  };
+}
+
+function succeededPreparedChangesetFiles(
+  action: EditorAgentAction,
+  result: EditorAgentActionResult,
+): readonly AgentPreparedChangesetFile[] | null {
+  const prepared = action.changeset?.prepared;
+  if (result.status !== "succeeded" || prepared === undefined || result.files === undefined) {
+    return null;
+  }
+  const statuses = new Map(
+    result.files.map((entry) => [normalizeAgentChangesetPath(entry.file), entry]),
+  );
+  if (statuses.size !== prepared.files.length) return null;
+  for (const file of prepared.files) {
+    const status = statuses.get(normalizeAgentChangesetPath(file.file))?.status;
+    if (status !== "succeeded" && status !== "not-selected") return null;
+  }
+  return prepared.files.filter(
+    (file) => statuses.get(normalizeAgentChangesetPath(file.file))?.status === "succeeded",
+  );
+}
+
+function completeChangesetPreview(model: PatchPreviewModel, expectedFiles: number): boolean {
+  return (
+    model.fileCount === expectedFiles &&
+    model.totalFileCount === expectedFiles &&
+    model.omittedFileCount === 0 &&
+    model.unsupportedCount === 0 &&
+    model.binaryCount === 0 &&
+    !model.truncated &&
+    model.files.every((entry) => entry.diffable && !entry.truncated)
+  );
+}
+
+function changesetSourceExceedsLimit(content: string, maxBytes: number | null): boolean {
+  return maxBytes !== null && UTF8_ENCODER.encode(content).length > maxBytes;
+}
+
 function EditorRuntimeWidget({
   windowId,
   paneId,
@@ -889,6 +1202,7 @@ function EditorRuntimeWidget({
   revealRequestId,
   openFiles,
   dirtyFiles,
+  onAskSelection,
   onSelectOpenFile,
   onSplitPane,
   onMoveTab,
@@ -897,6 +1211,9 @@ function EditorRuntimeWidget({
   openEditorFile,
   externalSaveRequest,
   onExternalSaveComplete,
+  agentReconciliationRequest,
+  onAgentChangesetCommitted,
+  onAgentReconciliationComplete,
   tabInsertTarget,
   renderTabHandle,
   toolbarExtras,
@@ -907,6 +1224,8 @@ function EditorRuntimeWidget({
   onOutlineStateChange,
   outlineRevealRequest,
 }: EditorRuntimeWidgetProps): ReactNode {
+  const commonT = useTranslate();
+  const t = useEditorAgentTranslate();
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
   const editorModelScope = useMemo(
@@ -1056,11 +1375,28 @@ function EditorRuntimeWidget({
     readonly code: AgentConflictCode;
     readonly message: string;
   } | null>(null);
-  const [agentPatchPending, setAgentPatchPending] = useState<{
-    readonly action: EditorAgentAction;
-    readonly original: string;
-    readonly modified: string;
-  } | null>(null);
+  const [agentPatchPending, setAgentPatchPending] = useState<AgentPatchReviewState | null>(null);
+  const [agentChangesetPending, setAgentChangesetPending] =
+    useState<AgentChangesetReviewState | null>(null);
+  const agentPatchPendingRef = useRef<AgentPatchReviewState | null>(null);
+  agentPatchPendingRef.current = agentPatchPending;
+  const agentChangesetPendingRef = useRef<AgentChangesetReviewState | null>(null);
+  agentChangesetPendingRef.current = agentChangesetPending;
+  const agentPatchActiveActionRef = useRef<string | null>(null);
+  const agentPatchAutomaticRef = useRef<AgentPatchReviewState | null>(null);
+  const agentChangesetActiveActionRef = useRef<string | null>(null);
+  const agentChangesetAutomaticRef = useRef<EditorAgentAction | null>(null);
+  const agentChangesetSeenRef = useRef<BoundedActionMemory>({ order: [], values: new Set() });
+  const agentPatchDecisionRef = useRef<BoundedActionMemory>({ order: [], values: new Set() });
+  const agentChangesetDecisionRef = useRef<BoundedActionMemory>({ order: [], values: new Set() });
+  const agentPatchSettlementRef = useRef<BoundedActionMemory>({ order: [], values: new Set() });
+  const agentChangesetSettlementRef = useRef<BoundedActionMemory>({
+    order: [],
+    values: new Set(),
+  });
+  const agentPatchDecisionIntentRef = useRef<AgentReviewDecisionIntent | null>(null);
+  const agentChangesetDecisionIntentRef = useRef<AgentReviewDecisionIntent | null>(null);
+  const agentTerminalResultHandlerRef = useRef<(result: EditorAgentActionResult) => void>(() => {});
   const [renameReview, setRenameReview] = useState<{
     readonly changeset: LanguageRenameChangeset;
     readonly model: PatchPreviewModel;
@@ -1075,7 +1411,7 @@ function EditorRuntimeWidget({
   // A11Y-2: focus the Accept button whenever a patch review appears.
   const patchAcceptButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (agentPatchPending !== null) {
+    if (agentPatchPending !== null && !agentPatchPending.applying) {
       patchAcceptButtonRef.current?.focus();
     }
   }, [agentPatchPending]);
@@ -1111,6 +1447,8 @@ function EditorRuntimeWidget({
   const contentSizeBytes = contentBytes.length;
   const activeContentHash =
     activeContentDigest?.content === content ? activeContentDigest.hash : null;
+  const activeContentDigestRef = useRef(activeContentDigest);
+  activeContentDigestRef.current = activeContentDigest;
   const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -1521,6 +1859,7 @@ function EditorRuntimeWidget({
   const onContentChange = useCallback(
     (next: EditorContentDelta, origin: EditorChangeOrigin): void => {
       setActiveHostEditRequest(undefined);
+      contentRef.current = next.text;
       setContent(next.text);
       setFileModel((model: EditorFileModel | null) =>
         model === null ? model : editorFileModelReducer(model, { type: "edited", origin }),
@@ -2225,6 +2564,25 @@ function EditorRuntimeWidget({
   const announceToolbarNotice = useCallback((reason: string): void => {
     setToolbarNotice((current) => (current === reason ? `\u200B${reason}` : reason));
   }, []);
+  const handleAskSelection = useCallback(
+    (selection: EditorSelectionAskRequest): void => {
+      const relativeFile =
+        root === undefined || file === undefined ? "" : normalizeEditorFile(root, file);
+      const captured = captureEditorSelection(relativeFile, selection);
+      if (!captured.ok) {
+        announceToolbarNotice(t("editor.askSelection.selectText"));
+        return;
+      }
+      if (relativeFile.length === 0 || onAskSelection === undefined) {
+        announceToolbarNotice(t("editor.askSelection.chatUnavailable"));
+        return;
+      }
+      if (!onAskSelection(captured.handoff)) {
+        announceToolbarNotice(t("editor.askSelection.openFailed"));
+      }
+    },
+    [announceToolbarNotice, file, onAskSelection, root, t],
+  );
   const saveUnavailableReason = (): string => {
     if (!hasTarget) return "No file open to save.";
     if (saveStatus === "saving") return "Already saving.";
@@ -2384,6 +2742,73 @@ function EditorRuntimeWidget({
           sources: { [buffer.content.relativePath]: { content: buffer.content } },
         })
       : null;
+  const agentReviewActive =
+    recoveryCompare ||
+    agentPatchPending !== null ||
+    agentChangesetPending !== null ||
+    renameReview !== null ||
+    testGenerationPreview !== null;
+  const agentReviewActiveRef = useRef(agentReviewActive);
+  agentReviewActiveRef.current = agentReviewActive;
+
+  const loadAgentChangesetSources = useCallback(
+    async (prepared: AgentPreparedChangeset): Promise<ChangesetSourceResult> => {
+      if (root === undefined) return { status: "failed", message: "Workspace is unavailable." };
+      const sources: Record<string, PatchPreviewSource> = {};
+      for (const entry of prepared.files) {
+        if (entry.kind === "create") {
+          sources[entry.file] = patchPreviewSourceFromText(entry.file, "");
+          continue;
+        }
+        if (entry.file === file) {
+          if (dirtyRef.current) {
+            return {
+              status: "conflict",
+              conflictCode: "DIRTY",
+              message: `Changeset target ${entry.file} has unsaved changes.`,
+            };
+          }
+          sources[entry.file] = patchPreviewSourceFromText(entry.file, contentRef.current);
+          continue;
+        }
+        const cached = sessionCacheRef.current.get(documentSessionKey(root, entry.file));
+        if (cached?.fileModel !== null && cached?.fileModel !== undefined) {
+          if (isDocumentDirty(cached.fileModel)) {
+            return {
+              status: "conflict",
+              conflictCode: "DIRTY",
+              message: `Changeset target ${entry.file} has unsaved changes.`,
+            };
+          }
+          if (changesetSourceExceedsLimit(cached.content, cached.maxBytes)) {
+            return {
+              status: "failed",
+              message: `Changeset target ${entry.file} is read-only in the editor.`,
+            };
+          }
+          if (cached.loadState.status === "ready") {
+            sources[entry.file] = patchPreviewSourceFromText(entry.file, cached.content);
+            continue;
+          }
+        }
+        const response = await fetchFilesContent(root, entry.file);
+        if (
+          normalizeAgentChangesetPath(response.path) !== normalizeAgentChangesetPath(entry.file)
+        ) {
+          return { status: "failed", message: "Changeset source did not match its target." };
+        }
+        if (changesetSourceExceedsLimit(response.content, response.maxBytes)) {
+          return {
+            status: "failed",
+            message: `Changeset target ${entry.file} is read-only in the editor.`,
+          };
+        }
+        sources[entry.file] = patchPreviewSourceFromText(entry.file, response.content);
+      }
+      return { status: "ready", sources };
+    },
+    [file, root],
+  );
 
   // Issue #1205: derive the unified status-bar view model from host state. Diagnostics are surfaced
   // only for governed source files (where the deterministic language service runs); the
@@ -2488,6 +2913,7 @@ function EditorRuntimeWidget({
     () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
     [generatedId, root, windowId],
   );
+  const effectiveAgentPaneId = activePaneId ?? paneId ?? "pane-1";
   const shouldSubscribeToAgentActions =
     paneId === undefined || activePaneId === undefined || paneId === activePaneId;
   const agentDocumentVersion = useMemo(
@@ -2508,81 +2934,262 @@ function EditorRuntimeWidget({
   // Issue #1392 — post the current pane snapshot to the BFF. Wrapped in `useCallback` so the bridge
   // hook's register effect re-fires exactly when a snapshot dimension changes (its identity is the
   // dependency). Registration is best-effort and must never affect editing.
-  const registerAgentSnapshot = useCallback((): void => {
-    if (!hasTarget || root === undefined || file === undefined || activeContentHash === null)
-      return;
-    const snapshot = {
-      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-      sessionId: agentSessionId,
-      windowId: windowId ?? "editor",
-      workspaceRoot: root,
-      activePaneId: activePaneId ?? paneId ?? null,
-      panes: layoutPanes ?? [
-        {
-          paneId: paneId ?? "pane-1",
-          activeFile: file,
-          openFiles: documentTabs,
-        },
-      ],
-      dirtyFiles: effectiveDirtyFiles.size > 0 ? [...effectiveDirtyFiles] : [],
-      activeFile: file,
-      cursor: cursor === null ? null : { line: cursor.line, character: cursor.column },
-      selection: rangeToAgentRange(currentSelection),
+  const registerAgentSnapshot = useCallback(
+    (bridgeDecisionCapability: string | undefined): Promise<EditorAgentSnapshotResponse | void> => {
+      if (!hasTarget || root === undefined || file === undefined || activeContentHash === null)
+        return Promise.resolve();
+      const snapshot = {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        sessionId: agentSessionId,
+        windowId: windowId ?? "editor",
+        workspaceRoot: root,
+        activePaneId: effectiveAgentPaneId,
+        panes: layoutPanes ?? [
+          {
+            paneId: paneId ?? "pane-1",
+            activeFile: file,
+            openFiles: documentTabs,
+          },
+        ],
+        dirtyFiles: effectiveDirtyFiles.size > 0 ? [...effectiveDirtyFiles] : [],
+        activeFile: file,
+        cursor: cursor === null ? null : { line: cursor.line, character: cursor.column },
+        selection: rangeToAgentRange(currentSelection),
+        diagnosticsSummary,
+        // Issue #1379 AC4 (ADR-0067 D6): content-free language-provider availability for the active
+        // file, derived from the descriptor we already computed. The synthetic id:"none" maps to
+        // providerId:null for honesty; null overall when there is no active language.
+        languageCapability:
+          completionLanguage === undefined
+            ? null
+            : {
+                languageId: completionLanguage,
+                providerId:
+                  languageProvider !== null && languageProvider.id !== "none"
+                    ? languageProvider.id
+                    : null,
+                available: languageProvider?.availability === "available",
+                ...(languageProvider?.unavailableReason !== undefined
+                  ? { unavailableReason: languageProvider.unavailableReason }
+                  : {}),
+              },
+        ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
+        activeFileContentHash: activeContentHash,
+        textMode: "none" as const,
+      };
+      // GEN-PERF-EDITOR-002 — dedupe: skip the POST when every snapshot dimension is
+      // identical to the last one we sent (the debounce upstream collapses bursts; this
+      // additionally suppresses re-posting an unchanged snapshot). `updatedAt` is stamped
+      // only when we actually send, so it never falsely defeats the equality check.
+      const signature = JSON.stringify(snapshot);
+      if (signature === lastPostedSnapshotSignatureRef.current) return Promise.resolve();
+      lastPostedSnapshotSignatureRef.current = signature;
+      return postEditorAgentSessionSnapshot(
+        { ...snapshot, updatedAt: Date.now() },
+        bridgeDecisionCapability,
+      ).catch(() => {
+        if (lastPostedSnapshotSignatureRef.current === signature) {
+          lastPostedSnapshotSignatureRef.current = null;
+        }
+      });
+    },
+    [
+      activeContentHash,
+      agentSessionId,
+      currentSelection,
+      cursor,
+      completionLanguage,
       diagnosticsSummary,
-      // Issue #1379 AC4 (ADR-0067 D6): content-free language-provider availability for the active
-      // file, derived from the descriptor we already computed. The synthetic id:"none" maps to
-      // providerId:null for honesty; null overall when there is no active language.
-      languageCapability:
-        completionLanguage === undefined
-          ? null
-          : {
-              languageId: completionLanguage,
-              providerId:
-                languageProvider !== null && languageProvider.id !== "none"
-                  ? languageProvider.id
-                  : null,
-              available: languageProvider?.availability === "available",
-              ...(languageProvider?.unavailableReason !== undefined
-                ? { unavailableReason: languageProvider.unavailableReason }
-                : {}),
-            },
-      ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
-      activeFileContentHash: activeContentHash,
-      textMode: "none" as const,
-    };
-    // GEN-PERF-EDITOR-002 — dedupe: skip the POST when every snapshot dimension is
-    // identical to the last one we sent (the debounce upstream collapses bursts; this
-    // additionally suppresses re-posting an unchanged snapshot). `updatedAt` is stamped
-    // only when we actually send, so it never falsely defeats the equality check.
-    const signature = JSON.stringify(snapshot);
-    if (signature === lastPostedSnapshotSignatureRef.current) return;
-    lastPostedSnapshotSignatureRef.current = signature;
-    void postEditorAgentSessionSnapshot({ ...snapshot, updatedAt: Date.now() }).catch(() => {
-      // Agent bridge registration is best-effort and must never affect editing.
-    });
-  }, [
-    activePaneId,
-    activeContentHash,
-    agentSessionId,
-    currentSelection,
-    cursor,
-    completionLanguage,
-    diagnosticsSummary,
-    documentTabs,
-    effectiveDirtyFiles,
-    agentDocumentVersion,
-    file,
-    hasTarget,
-    languageProvider,
-    layoutPanes,
-    paneId,
-    root,
-    windowId,
-  ]);
+      documentTabs,
+      effectiveAgentPaneId,
+      effectiveDirtyFiles,
+      agentDocumentVersion,
+      file,
+      hasTarget,
+      languageProvider,
+      layoutPanes,
+      paneId,
+      root,
+      windowId,
+    ],
+  );
+
+  const verifyActiveAgentTarget = useCallback(
+    (action: EditorAgentAction): boolean =>
+      runtimeAgentTargetMatches(action, file, effectiveAgentPaneId),
+    [effectiveAgentPaneId, file],
+  );
+  const verifyAgentWritePrecondition = useCallback((action: EditorAgentAction): boolean => {
+    const digest = activeContentDigestRef.current;
+    const currentHash = digest?.content === contentRef.current ? digest.hash : null;
+    return runtimeAgentWritePreconditionMatches(action, currentHash);
+  }, []);
+  const verifyExactPatchTarget = useCallback(
+    (action: EditorAgentAction): boolean =>
+      exactPatchTargetMatches(action, file, effectiveAgentPaneId),
+    [effectiveAgentPaneId, file],
+  );
+
+  const prepareAgentChangesetReview = useCallback(
+    async (action: EditorAgentAction, prepared: AgentPreparedChangeset): Promise<void> => {
+      const actionKey = agentActionKey(action);
+      let staged = false;
+      try {
+        const sourceResult = await loadAgentChangesetSources(prepared);
+        if (sourceResult.status !== "ready") {
+          postEditorAgentResult(
+            action,
+            sourceResult.status,
+            sourceResult.message,
+            sourceResult.conflictCode,
+          );
+          return;
+        }
+        const patch = buildEditorAgentChangesetPatch({
+          actionId: action.actionId,
+          prepared,
+        });
+        const model = buildPatchPreview({
+          patch,
+          sources: sourceResult.sources,
+        });
+        if (!completeChangesetPreview(model, prepared.files.length)) {
+          postEditorAgentResult(action, "failed", "Changeset preview is incomplete or truncated.");
+          return;
+        }
+        if (
+          agentChangesetSettlementRef.current.values.has(actionKey) ||
+          agentChangesetActiveActionRef.current !== actionKey
+        ) {
+          return;
+        }
+        if (agentReviewActiveRef.current || agentPatchActiveActionRef.current !== null) {
+          postEditorAgentResult(action, "failed", "Another editor review is already active.");
+          return;
+        }
+        const review = { action, model, applying: false };
+        agentChangesetPendingRef.current = review;
+        setAgentChangesetPending(review);
+        staged = true;
+      } catch (error) {
+        postEditorAgentResult(
+          action,
+          "failed",
+          error instanceof Error ? error.message : "Changeset review could not be prepared.",
+        );
+      } finally {
+        if (!staged && agentChangesetActiveActionRef.current === actionKey) {
+          agentChangesetActiveActionRef.current = null;
+        }
+      }
+    },
+    [loadAgentChangesetSources],
+  );
+
+  const clearAutomaticAgentChangeset = useCallback((action: EditorAgentAction): void => {
+    const actionKey = agentActionKey(action);
+    const automatic = agentChangesetAutomaticRef.current;
+    if (automatic !== null && agentActionKey(automatic) === actionKey) {
+      agentChangesetAutomaticRef.current = null;
+    }
+    if (agentChangesetActiveActionRef.current === actionKey) {
+      agentChangesetActiveActionRef.current = null;
+    }
+  }, []);
+
+  const clearAutomaticAgentPatch = useCallback((action: EditorAgentAction): void => {
+    const actionKey = agentActionKey(action);
+    const automatic = agentPatchAutomaticRef.current;
+    if (automatic !== null && agentActionKey(automatic.action) === actionKey) {
+      agentPatchAutomaticRef.current = null;
+    }
+    if (agentPatchActiveActionRef.current === actionKey) {
+      agentPatchActiveActionRef.current = null;
+    }
+  }, []);
+
+  const confirmAutomaticAgentPatch = useCallback(
+    (action: EditorAgentAction): void => {
+      void postEditorAgentResultRequest(action, agentReviewDecisionRequest(action, "succeeded"))
+        .then((response) => {
+          if (
+            response.result.status === "queued" ||
+            !resultMatchesAction(response.result, action)
+          ) {
+            clearAutomaticAgentPatch(action);
+            announceToolbarNotice(t("editor.agentReview.unconfirmed"));
+            return;
+          }
+          agentTerminalResultHandlerRef.current(response.result);
+        })
+        .catch(() => announceToolbarNotice(t("editor.agentReview.awaitingResult")));
+    },
+    [announceToolbarNotice, clearAutomaticAgentPatch, t],
+  );
+
+  const confirmAutomaticAgentChangeset = useCallback(
+    (action: EditorAgentAction): void => {
+      void postEditorAgentResultRequest(action, agentReviewDecisionRequest(action, "succeeded"))
+        .then((response) => {
+          if (
+            response.result.status === "queued" ||
+            !resultMatchesAction(response.result, action)
+          ) {
+            clearAutomaticAgentChangeset(action);
+            announceToolbarNotice(t("editor.agentReview.unconfirmed"));
+            return;
+          }
+          agentTerminalResultHandlerRef.current(response.result);
+        })
+        .catch(() => announceToolbarNotice(t("editor.agentReview.awaitingResult")));
+    },
+    [announceToolbarNotice, clearAutomaticAgentChangeset, t],
+  );
+
+  const applyAgentChangesetAction = useCallback(
+    (action: EditorAgentAction): void => {
+      const actionKey = agentActionKey(action);
+      if (!rememberAgentChangesetAction(agentChangesetSeenRef.current, actionKey)) return;
+      const prepared = preparedChangesetForReview(action);
+      if (prepared === null) {
+        postEditorAgentResult(action, "failed", "Missing or malformed prepared changeset.");
+        return;
+      }
+      if (largeFileDegraded) {
+        postEditorAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
+        return;
+      }
+      if (
+        agentReviewActiveRef.current ||
+        agentPatchActiveActionRef.current !== null ||
+        agentChangesetActiveActionRef.current !== null
+      ) {
+        postEditorAgentResult(action, "failed", "Another editor review is already active.");
+        return;
+      }
+      agentChangesetActiveActionRef.current = actionKey;
+      if (action.requiresReview === false) {
+        agentChangesetAutomaticRef.current = action;
+        confirmAutomaticAgentChangeset(action);
+        return;
+      }
+      void prepareAgentChangesetReview(action, prepared);
+    },
+    [confirmAutomaticAgentChangeset, largeFileDegraded, prepareAgentChangesetReview],
+  );
 
   // Issue #1394 (ADR-0058 D3): apply text edits, guarded for read-only/large-file buffers (AC4 risk #5).
   const applyAgentTextEditsAction = useCallback(
     (action: EditorAgentAction): void => {
+      if (!verifyActiveAgentTarget(action)) {
+        postEditorAgentResult(
+          action,
+          "conflict",
+          "Action target does not match the active editor buffer.",
+          "OUT_OF_SCOPE",
+        );
+        return;
+      }
       if (action.textEdits === undefined) {
         postEditorAgentResult(action, "failed", "Missing text edits.");
         return;
@@ -2601,6 +3208,7 @@ function EditorRuntimeWidget({
       try {
         // F2: compute BEFORE setContent so OverlappingPatchEditError is caught by this try/catch.
         const next = applyTextEditsToText(contentRef.current, mapped);
+        contentRef.current = next;
         setContent(next);
         setFileModel((model) =>
           model === null
@@ -2623,19 +3231,18 @@ function EditorRuntimeWidget({
         }
       }
     },
-    [largeFileDegraded],
+    [largeFileDegraded, verifyActiveAgentTarget],
   );
 
-  // Issue #1394 (ADR-0058 D3): applyPatch — server pre-validates and emits textEdits; the browser
-  // computes modified content and enters an explicit review state (AC user-review-before-destructive).
+  // Issue #1394 (ADR-0058 D3): applyPatch — server pre-validates and emits concrete textEdits.
+  // Legacy or policy-reviewed actions enter review; explicitly allowed actions apply immediately.
   const applyAgentPatchAction = useCallback(
     (action: EditorAgentAction): void => {
-      const targetFile = action.target?.file;
-      if (targetFile !== undefined && targetFile !== file) {
+      if (!verifyExactPatchTarget(action)) {
         postEditorAgentResult(
           action,
           "conflict",
-          "Patch targets a file not open in this pane.",
+          "Action target does not match the active editor buffer.",
           "OUT_OF_SCOPE",
         );
         return;
@@ -2648,6 +3255,14 @@ function EditorRuntimeWidget({
         postEditorAgentResult(action, "failed", "Editor is read-only; cannot apply agent edits.");
         return;
       }
+      if (
+        agentReviewActiveRef.current ||
+        agentPatchActiveActionRef.current !== null ||
+        agentChangesetActiveActionRef.current !== null
+      ) {
+        postEditorAgentResult(action, "failed", "Another editor review is already active.");
+        return;
+      }
       const mapped = action.textEdits.map((edit) => ({
         range: {
           start: { line: edit.range.start.line, column: edit.range.start.character },
@@ -2658,7 +3273,15 @@ function EditorRuntimeWidget({
       try {
         const original = contentRef.current;
         const modified = applyTextEditsToText(original, mapped);
-        setAgentPatchPending({ action, original, modified });
+        const review = { action, original, modified, applying: false };
+        agentPatchActiveActionRef.current = agentActionKey(action);
+        if (action.requiresReview === false) {
+          agentPatchAutomaticRef.current = review;
+          confirmAutomaticAgentPatch(action);
+          return;
+        }
+        agentPatchPendingRef.current = review;
+        setAgentPatchPending(review);
       } catch (error) {
         const isOverlap = error instanceof Error && error.name === "OverlappingPatchEditError";
         postEditorAgentResult(
@@ -2669,7 +3292,7 @@ function EditorRuntimeWidget({
         );
       }
     },
-    [file, largeFileDegraded],
+    [confirmAutomaticAgentPatch, largeFileDegraded, verifyExactPatchTarget],
   );
 
   // Issue #1393 (ADR-0061 D2): the controller bundle the pure dispatcher calls. The two layout
@@ -2680,6 +3303,10 @@ function EditorRuntimeWidget({
   const agentControllers = useMemo<EditorAgentActionControllers>(
     () => ({
       paneId,
+      activePaneId: effectiveAgentPaneId,
+      activeFile: file,
+      verifyActiveTarget: verifyActiveAgentTarget,
+      verifyWritePrecondition: verifyAgentWritePrecondition,
       onSelectOpenFile,
       formattingEnabled,
       formatRequest: { increment: () => setFormatRequestNonce((value) => value + 1) },
@@ -2687,32 +3314,594 @@ function EditorRuntimeWidget({
       currentText: () => contentRef.current,
       applyTextEdits: applyAgentTextEditsAction,
       applyPatch: applyAgentPatchAction,
+      applyChangeset: applyAgentChangesetAction,
       onSplitPane,
       onMoveTab,
       onRequestSelectionReveal: undefined,
     }),
     [
       applyAgentPatchAction,
+      applyAgentChangesetAction,
       applyAgentTextEditsAction,
+      effectiveAgentPaneId,
+      file,
       formattingEnabled,
       onMoveTab,
       onSelectOpenFile,
       onSplitPane,
       paneId,
       persist,
+      verifyActiveAgentTarget,
+      verifyAgentWritePrecondition,
     ],
   );
 
   // Issue #1395 — bump on any agent activity so the recent-actions audit panel re-fetches its feed.
   const [auditRefreshNonce, setAuditRefreshNonce] = useState(0);
-  const { agentSelectionRequest, consumeSelectionRequest } = useEditorAgentBridge({
+  const handleBridgeTerminalResult = useCallback((result: EditorAgentActionResult): void => {
+    agentTerminalResultHandlerRef.current(result);
+  }, []);
+  const handleBridgeConflict = useCallback(
+    (conflict: { readonly code: AgentConflictCode }): void => {
+      setAgentConflict({ code: conflict.code, message: t("editor.agentReview.conflict") });
+    },
+    [t],
+  );
+  const { agentSelectionRequest, bridgeState, consumeSelectionRequest } = useEditorAgentBridge({
     agentSessionId,
     controllers: agentControllers,
     enabled: shouldSubscribeToAgentActions,
     registerSnapshot: registerAgentSnapshot,
-    onConflict: setAgentConflict,
+    onConflict: handleBridgeConflict,
     onAgentActivity: () => setAuditRefreshNonce((nonce) => nonce + 1),
+    onTerminalResult: handleBridgeTerminalResult,
   });
+  // Issue #2120 (ADR-0058 through ADR-0062): only staged, undecided reviews are labelled as
+  // requiring a human decision. Generic in-flight bridge actions remain ordinary activity.
+  const agentReviewPendingCount =
+    Number(agentPatchPending !== null && !agentPatchPending.applying) +
+    Number(agentChangesetPending !== null && !agentChangesetPending.applying);
+
+  const adoptActiveChangesetResponse = useCallback(
+    (path: string, response: FilesContentResponse): void => {
+      if (root === undefined || activeSessionKeyRef.current !== documentSessionKey(root, path)) {
+        return;
+      }
+      const snapshot = cleanEditorSessionSnapshot({
+        root,
+        path,
+        modelScope: editorModelScope,
+        response,
+      });
+      contentRef.current = response.content;
+      setContent(response.content);
+      setFileModel(snapshot.fileModel);
+      setModifiedAt(response.modifiedAt);
+      setVersion(response.session.version);
+      setMaxBytes(response.maxBytes);
+      setLoadState({ status: "ready" });
+      setSaveStatus("idle");
+      setSaveError(undefined);
+      setRecoverySnapshot(null);
+      setRecoveryCompare(false);
+      setRecoveryDiskBaseline(null);
+      setActiveHostEditRequest(undefined);
+    },
+    [editorModelScope, root],
+  );
+
+  const reconcileAgentChangesetDeletion = useCallback(
+    async (path: string): Promise<string | null> => {
+      if (root === undefined) return "Workspace is unavailable after changeset commit.";
+      const sessionKey = documentSessionKey(root, path);
+      const cached = sessionCacheRef.current.get(sessionKey);
+      const cachedDirty =
+        cached?.fileModel !== null && cached?.fileModel !== undefined
+          ? isDocumentDirty(cached.fileModel)
+          : false;
+      if ((activeSessionKeyRef.current === sessionKey && dirtyRef.current) || cachedDirty) {
+        return `Committed deletion ${path} has newer unsaved editor changes.`;
+      }
+      sessionCacheRef.current.delete(sessionKey);
+      onDirtyChange?.(path, false);
+      await deleteHotExitSnapshotBestEffort(root, path);
+      if (documentTabs.includes(path)) {
+        if (onCloseOpenFile === undefined) {
+          return `Committed deletion ${path} could not be closed in this editor.`;
+        }
+        try {
+          const closed = await onCloseOpenFile(path);
+          if (closed === false) return `Committed deletion ${path} could not be closed.`;
+        } catch {
+          return `Committed deletion ${path} could not be closed.`;
+        }
+      }
+      return null;
+    },
+    [documentTabs, onCloseOpenFile, onDirtyChange, root],
+  );
+
+  const reconcileAgentChangesetFile = useCallback(
+    async (entry: EditorAgentReconciliationEntry): Promise<string | null> => {
+      if (entry.kind === "delete") return reconcileAgentChangesetDeletion(entry.file);
+      if (root === undefined) return "Workspace is unavailable after changeset commit.";
+      const sessionKey = documentSessionKey(root, entry.file);
+      const cached = sessionCacheRef.current.get(sessionKey);
+      const cachedDirty =
+        cached?.fileModel !== null && cached?.fileModel !== undefined
+          ? isDocumentDirty(cached.fileModel)
+          : false;
+      if ((entry.file === file && dirtyRef.current) || cachedDirty) {
+        return `Committed file ${entry.file} has newer unsaved editor changes.`;
+      }
+      try {
+        const response = await fetchFilesContent(root, entry.file);
+        if (
+          normalizeAgentChangesetPath(response.path) !== normalizeAgentChangesetPath(entry.file)
+        ) {
+          return `Committed file ${entry.file} returned mismatched metadata.`;
+        }
+        const latestCached = sessionCacheRef.current.get(sessionKey);
+        const latestCachedDirty =
+          latestCached?.fileModel !== null && latestCached?.fileModel !== undefined
+            ? isDocumentDirty(latestCached.fileModel)
+            : false;
+        if ((activeSessionKeyRef.current === sessionKey && dirtyRef.current) || latestCachedDirty) {
+          return `Committed file ${entry.file} has newer unsaved editor changes.`;
+        }
+        const snapshot = cleanEditorSessionSnapshot({
+          root,
+          path: entry.file,
+          modelScope: editorModelScope,
+          response,
+        });
+        sessionCacheRef.current.set(sessionKey, snapshot);
+        adoptActiveChangesetResponse(entry.file, response);
+        onDirtyChange?.(entry.file, false);
+        await deleteHotExitSnapshotBestEffort(root, entry.file);
+        return null;
+      } catch {
+        return `Committed file ${entry.file} could not be refreshed from disk.`;
+      }
+    },
+    [
+      adoptActiveChangesetResponse,
+      editorModelScope,
+      file,
+      onDirtyChange,
+      reconcileAgentChangesetDeletion,
+      root,
+    ],
+  );
+
+  const reconcileAgentChangeset = useCallback(
+    async (entries: readonly EditorAgentReconciliationEntry[]): Promise<readonly string[]> => {
+      const failures: string[] = [];
+      for (const entry of entries) {
+        const failure = await reconcileAgentChangesetFile(entry);
+        if (failure !== null) failures.push(failure);
+      }
+      return failures;
+    },
+    [reconcileAgentChangesetFile],
+  );
+
+  useEffect(() => {
+    if (
+      agentReconciliationRequest === undefined ||
+      paneId === undefined ||
+      onAgentReconciliationComplete === undefined
+    ) {
+      return;
+    }
+    let active = true;
+    const applicable = agentReconciliationRequest.entries.filter((entry) =>
+      documentTabs.includes(entry.file),
+    );
+    const reconcile =
+      applicable.length === 0 ? Promise.resolve([]) : reconcileAgentChangeset(applicable);
+    void reconcile
+      .then((failures) => {
+        if (active && failures.length > 0) {
+          setAgentConflict({
+            code: "VERSION_MISMATCH",
+            message: t("editor.agentReview.reconcileFailed"),
+          });
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAgentConflict({
+            code: "VERSION_MISMATCH",
+            message: t("editor.agentReview.reconcileFailed"),
+          });
+        }
+      })
+      .finally(() => {
+        if (active) onAgentReconciliationComplete(agentReconciliationRequest.requestId, paneId);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    agentReconciliationRequest,
+    documentTabs,
+    onAgentReconciliationComplete,
+    paneId,
+    reconcileAgentChangeset,
+    t,
+  ]);
+
+  const notifyAgentChangesetCommitted = useCallback(
+    (entries: readonly AgentPreparedChangesetFile[]): void => {
+      onAgentChangesetCommitted?.(entries.map((entry) => ({ file: entry.file, kind: entry.kind })));
+    },
+    [onAgentChangesetCommitted],
+  );
+
+  const clearAgentPatchReview = useCallback((action: EditorAgentAction): void => {
+    const actionKey = agentActionKey(action);
+    if (agentPatchPendingRef.current !== null) {
+      const currentKey = agentActionKey(agentPatchPendingRef.current.action);
+      if (currentKey === actionKey) agentPatchPendingRef.current = null;
+    }
+    setAgentPatchPending((current) =>
+      current !== null && agentActionKey(current.action) === actionKey ? null : current,
+    );
+    if (agentPatchActiveActionRef.current === actionKey) agentPatchActiveActionRef.current = null;
+    if (agentPatchDecisionIntentRef.current?.actionKey === actionKey) {
+      agentPatchDecisionIntentRef.current = null;
+    }
+  }, []);
+
+  const clearAgentChangesetReview = useCallback((action: EditorAgentAction): void => {
+    const actionKey = agentActionKey(action);
+    if (agentChangesetPendingRef.current !== null) {
+      const currentKey = agentActionKey(agentChangesetPendingRef.current.action);
+      if (currentKey === actionKey) agentChangesetPendingRef.current = null;
+    }
+    setAgentChangesetPending((current) =>
+      current !== null && agentActionKey(current.action) === actionKey ? null : current,
+    );
+    if (agentChangesetActiveActionRef.current === actionKey) {
+      agentChangesetActiveActionRef.current = null;
+    }
+    if (agentChangesetDecisionIntentRef.current?.actionKey === actionKey) {
+      agentChangesetDecisionIntentRef.current = null;
+    }
+  }, []);
+
+  const beginAgentPatchDecision = useCallback(
+    (review: AgentPatchReviewState, decision: "accept" | "reject"): boolean => {
+      const actionKey = agentActionKey(review.action);
+      if (!rememberAgentChangesetAction(agentPatchDecisionRef.current, actionKey)) return false;
+      agentPatchDecisionIntentRef.current = { actionKey, decision };
+      const applying = { ...review, applying: true };
+      agentPatchPendingRef.current = applying;
+      setAgentPatchPending(applying);
+      return true;
+    },
+    [],
+  );
+
+  const beginAgentChangesetDecision = useCallback(
+    (review: AgentChangesetReviewState, decision: "accept" | "reject"): boolean => {
+      const actionKey = agentActionKey(review.action);
+      if (!rememberAgentChangesetAction(agentChangesetDecisionRef.current, actionKey)) return false;
+      agentChangesetDecisionIntentRef.current = { actionKey, decision };
+      const applying = { ...review, applying: true };
+      agentChangesetPendingRef.current = applying;
+      setAgentChangesetPending(applying);
+      return true;
+    },
+    [],
+  );
+
+  const surfaceAgentReviewResult = useCallback(
+    (result: EditorAgentActionResult, decision: "accept" | "reject" | undefined): void => {
+      if (decision === "reject" && result.status === "failed" && result.failure === undefined) {
+        announceToolbarNotice(t("editor.agentReview.rejected"));
+      } else if (result.failure?.code === "TIMED_OUT") {
+        announceToolbarNotice(t("editor.agentReview.timedOut"));
+      } else if (result.status === "conflict" && result.conflict !== undefined) {
+        setAgentConflict({
+          code: result.conflict.code,
+          message: t("editor.agentReview.conflict"),
+        });
+      } else {
+        announceToolbarNotice(t("editor.agentReview.failed"));
+      }
+    },
+    [announceToolbarNotice, t],
+  );
+
+  const commitSettledAgentPatch = useCallback(
+    (review: AgentPatchReviewState): boolean => {
+      if (
+        largeFileDegraded ||
+        !verifyExactPatchTarget(review.action) ||
+        contentRef.current !== review.original
+      ) {
+        setAgentConflict({ code: "VERSION_MISMATCH", message: t("editor.agentReview.stale") });
+        return false;
+      }
+      contentRef.current = review.modified;
+      setContent(review.modified);
+      setFileModel((model) =>
+        model === null
+          ? model
+          : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
+      );
+      setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
+      return true;
+    },
+    [largeFileDegraded, t, verifyExactPatchTarget],
+  );
+
+  const settleAutomaticAgentPatchResult = useCallback(
+    (result: EditorAgentActionResult): boolean => {
+      const review = agentPatchAutomaticRef.current;
+      if (review === null || !resultMatchesAction(result, review.action)) return false;
+      const actionKey = agentResultKey(result);
+      rememberAgentChangesetAction(agentPatchSettlementRef.current, actionKey);
+      if (result.status !== "succeeded") {
+        clearAutomaticAgentPatch(review.action);
+        surfaceAgentReviewResult(result, undefined);
+        return true;
+      }
+      commitSettledAgentPatch(review);
+      clearAutomaticAgentPatch(review.action);
+      return true;
+    },
+    [clearAutomaticAgentPatch, commitSettledAgentPatch, surfaceAgentReviewResult],
+  );
+
+  const settleAutomaticAgentChangesetResult = useCallback(
+    (result: EditorAgentActionResult): boolean => {
+      const action = agentChangesetAutomaticRef.current;
+      if (action === null || !resultMatchesAction(result, action)) return false;
+      const actionKey = agentResultKey(result);
+      rememberAgentChangesetAction(agentChangesetSettlementRef.current, actionKey);
+      if (result.status !== "succeeded") {
+        clearAutomaticAgentChangeset(action);
+        surfaceAgentReviewResult(result, undefined);
+        return true;
+      }
+      const succeeded = succeededPreparedChangesetFiles(action, result);
+      if (succeeded === null || succeeded.length === 0) {
+        setAgentConflict({ code: "INVALID_EDITS", message: t("editor.agentReview.failed") });
+        clearAutomaticAgentChangeset(action);
+        return true;
+      }
+      notifyAgentChangesetCommitted(succeeded);
+      void reconcileAgentChangeset(succeeded)
+        .then((failures) => {
+          if (failures.length > 0) {
+            setAgentConflict({
+              code: "VERSION_MISMATCH",
+              message: t("editor.agentReview.reconcileFailed"),
+            });
+          }
+        })
+        .catch(() => {
+          setAgentConflict({
+            code: "VERSION_MISMATCH",
+            message: t("editor.agentReview.reconcileFailed"),
+          });
+        })
+        .finally(() => clearAutomaticAgentChangeset(action));
+      return true;
+    },
+    [
+      clearAutomaticAgentChangeset,
+      notifyAgentChangesetCommitted,
+      reconcileAgentChangeset,
+      surfaceAgentReviewResult,
+      t,
+    ],
+  );
+
+  const settleAgentPatchResult = useCallback(
+    (result: EditorAgentActionResult): boolean => {
+      const actionKey = agentResultKey(result);
+      if (agentPatchSettlementRef.current.values.has(actionKey)) return true;
+      if (settleAutomaticAgentPatchResult(result)) return true;
+      const review = agentPatchPendingRef.current;
+      if (review === null || !resultMatchesAction(result, review.action)) return false;
+      const intent = agentPatchDecisionIntentRef.current;
+      if (result.status !== "succeeded") {
+        rememberAgentChangesetAction(agentPatchSettlementRef.current, actionKey);
+        clearAgentPatchReview(review.action);
+        surfaceAgentReviewResult(result, intent?.decision);
+        return true;
+      }
+      if (intent?.actionKey !== actionKey || intent.decision !== "accept" || !review.applying) {
+        rememberAgentChangesetAction(agentPatchSettlementRef.current, actionKey);
+        clearAgentPatchReview(review.action);
+        announceToolbarNotice(t("editor.agentReview.unexpectedSuccess"));
+        return true;
+      }
+      rememberAgentChangesetAction(agentPatchSettlementRef.current, actionKey);
+      commitSettledAgentPatch(review);
+      clearAgentPatchReview(review.action);
+      return true;
+    },
+    [
+      announceToolbarNotice,
+      clearAgentPatchReview,
+      commitSettledAgentPatch,
+      settleAutomaticAgentPatchResult,
+      surfaceAgentReviewResult,
+      t,
+    ],
+  );
+
+  const settleAgentChangesetResult = useCallback(
+    (result: EditorAgentActionResult): boolean => {
+      const actionKey = agentResultKey(result);
+      if (agentChangesetSettlementRef.current.values.has(actionKey)) return true;
+      const review = agentChangesetPendingRef.current;
+      if (review === null || !resultMatchesAction(result, review.action)) {
+        if (settleAutomaticAgentChangesetResult(result)) return true;
+        if (agentChangesetActiveActionRef.current !== actionKey) return false;
+        rememberAgentChangesetAction(agentChangesetSettlementRef.current, actionKey);
+        agentChangesetActiveActionRef.current = null;
+        if (result.status === "succeeded") {
+          announceToolbarNotice(t("editor.agentReview.unexpectedSuccess"));
+        } else {
+          surfaceAgentReviewResult(result, undefined);
+        }
+        return true;
+      }
+      const intent = agentChangesetDecisionIntentRef.current;
+      if (result.status !== "succeeded") {
+        rememberAgentChangesetAction(agentChangesetSettlementRef.current, actionKey);
+        clearAgentChangesetReview(review.action);
+        surfaceAgentReviewResult(result, intent?.decision);
+        return true;
+      }
+      if (intent?.actionKey !== actionKey || intent.decision !== "accept" || !review.applying) {
+        rememberAgentChangesetAction(agentChangesetSettlementRef.current, actionKey);
+        clearAgentChangesetReview(review.action);
+        announceToolbarNotice(t("editor.agentReview.unexpectedSuccess"));
+        return true;
+      }
+      rememberAgentChangesetAction(agentChangesetSettlementRef.current, actionKey);
+      const succeeded = succeededPreparedChangesetFiles(review.action, result);
+      if (succeeded === null || succeeded.length === 0) {
+        setAgentConflict({ code: "INVALID_EDITS", message: t("editor.agentReview.failed") });
+        clearAgentChangesetReview(review.action);
+        return true;
+      }
+      notifyAgentChangesetCommitted(succeeded);
+      void reconcileAgentChangeset(succeeded)
+        .then((failures) => {
+          if (failures.length > 0) {
+            setAgentConflict({
+              code: "VERSION_MISMATCH",
+              message: t("editor.agentReview.reconcileFailed"),
+            });
+          }
+        })
+        .catch(() => {
+          setAgentConflict({
+            code: "VERSION_MISMATCH",
+            message: t("editor.agentReview.reconcileFailed"),
+          });
+        })
+        .finally(() => clearAgentChangesetReview(review.action));
+      return true;
+    },
+    [
+      announceToolbarNotice,
+      clearAgentChangesetReview,
+      notifyAgentChangesetCommitted,
+      reconcileAgentChangeset,
+      settleAutomaticAgentChangesetResult,
+      surfaceAgentReviewResult,
+      t,
+    ],
+  );
+
+  const settleAgentTerminalResult = useCallback(
+    (result: EditorAgentActionResult): void => {
+      if (settleAgentPatchResult(result)) return;
+      settleAgentChangesetResult(result);
+    },
+    [settleAgentChangesetResult, settleAgentPatchResult],
+  );
+  agentTerminalResultHandlerRef.current = settleAgentTerminalResult;
+
+  const handlePatchDecisionPostError = useCallback(
+    (action: EditorAgentAction, error: unknown): void => {
+      const review = agentPatchPendingRef.current;
+      if (review === null || agentActionKey(review.action) !== agentActionKey(action)) return;
+      if (error instanceof ApiError && error.status === 409) {
+        clearAgentPatchReview(action);
+        announceToolbarNotice(t("editor.agentReview.unconfirmed"));
+        return;
+      }
+      announceToolbarNotice(t("editor.agentReview.awaitingResult"));
+    },
+    [announceToolbarNotice, clearAgentPatchReview, t],
+  );
+
+  const handleChangesetDecisionPostError = useCallback(
+    (action: EditorAgentAction, error: unknown): void => {
+      const review = agentChangesetPendingRef.current;
+      if (review === null || agentActionKey(review.action) !== agentActionKey(action)) return;
+      if (error instanceof ApiError && error.status === 409) {
+        clearAgentChangesetReview(action);
+        announceToolbarNotice(t("editor.agentReview.unconfirmed"));
+        return;
+      }
+      announceToolbarNotice(t("editor.agentReview.awaitingResult"));
+    },
+    [announceToolbarNotice, clearAgentChangesetReview, t],
+  );
+
+  const submitAgentPatchDecision = useCallback(
+    (review: AgentPatchReviewState, decision: "accept" | "reject"): void => {
+      if (!beginAgentPatchDecision(review, decision)) return;
+      const status = decision === "accept" ? "succeeded" : "failed";
+      const message = decision === "reject" ? t("editor.agentReview.rejected") : undefined;
+      void postEditorAgentResultRequest(
+        review.action,
+        agentReviewDecisionRequest(review.action, status, message),
+      )
+        .then((response) => {
+          if (
+            response.result.status === "queued" ||
+            !resultMatchesAction(response.result, review.action)
+          ) {
+            handlePatchDecisionPostError(review.action, new ApiError("RESULT_MISMATCH", "", 409));
+            return;
+          }
+          settleAgentPatchResult(response.result);
+        })
+        .catch((error: unknown) => handlePatchDecisionPostError(review.action, error));
+    },
+    [beginAgentPatchDecision, handlePatchDecisionPostError, settleAgentPatchResult, t],
+  );
+
+  const submitAgentChangesetDecision = useCallback(
+    (review: AgentChangesetReviewState, decision: "accept" | "reject"): void => {
+      if (!beginAgentChangesetDecision(review, decision)) return;
+      const status = decision === "accept" ? "succeeded" : "failed";
+      const message = decision === "reject" ? t("editor.agentReview.rejected") : undefined;
+      void postEditorAgentResultRequest(
+        review.action,
+        agentReviewDecisionRequest(review.action, status, message),
+      )
+        .then((response) => {
+          if (
+            response.result.status === "queued" ||
+            !resultMatchesAction(response.result, review.action)
+          ) {
+            handleChangesetDecisionPostError(
+              review.action,
+              new ApiError("RESULT_MISMATCH", "", 409),
+            );
+            return;
+          }
+          settleAgentChangesetResult(response.result);
+        })
+        .catch((error: unknown) => handleChangesetDecisionPostError(review.action, error));
+    },
+    [beginAgentChangesetDecision, handleChangesetDecisionPostError, settleAgentChangesetResult, t],
+  );
+
+  const handleAgentChangesetAccept = useCallback((): void => {
+    const review = agentChangesetPendingRef.current;
+    if (review === null || review.applying) return;
+    submitAgentChangesetDecision(review, "accept");
+  }, [submitAgentChangesetDecision]);
+
+  const handleAgentChangesetReject = useCallback((): void => {
+    const review = agentChangesetPendingRef.current;
+    if (review === null || review.applying) return;
+    submitAgentChangesetDecision(review, "reject");
+  }, [submitAgentChangesetDecision]);
 
   const recoveryDiskChanged =
     recoverySnapshot !== null &&
@@ -2722,32 +3911,32 @@ function EditorRuntimeWidget({
 
   // Issue #1394 (ADR-0058 D3): handlers for the agent-patch review Accept/Reject buttons.
   const handleAgentPatchAccept = useCallback((): void => {
-    if (agentPatchPending === null) return;
-    if (largeFileDegraded) {
-      postEditorAgentResult(
-        agentPatchPending.action,
-        "failed",
-        "Editor is read-only; cannot apply agent edits.",
-      );
-      setAgentPatchPending(null);
+    const review = agentPatchPendingRef.current;
+    if (review === null || review.applying) return;
+    const targetMatches = verifyExactPatchTarget(review.action);
+    const contentMatches = contentRef.current === review.original;
+    if (!targetMatches || !contentMatches || largeFileDegraded) {
+      const code = !targetMatches || largeFileDegraded ? "OUT_OF_SCOPE" : "VERSION_MISMATCH";
+      const message = t("editor.agentReview.stale");
+      postEditorAgentResult(review.action, "conflict", message, code);
+      setAgentConflict({ code, message });
+      clearAgentPatchReview(review.action);
       return;
     }
-    setContent(agentPatchPending.modified);
-    setFileModel((model) =>
-      model === null
-        ? model
-        : editorFileModelReducer(model, { type: "edited", origin: "applied-patch" }),
-    );
-    setSaveStatus((status) => saveStatusReducer(status, { type: "edited" }));
-    postEditorAgentResult(agentPatchPending.action, "succeeded");
-    setAgentPatchPending(null);
-  }, [agentPatchPending, largeFileDegraded]);
+    submitAgentPatchDecision(review, "accept");
+  }, [
+    clearAgentPatchReview,
+    largeFileDegraded,
+    submitAgentPatchDecision,
+    t,
+    verifyExactPatchTarget,
+  ]);
 
   const handleAgentPatchReject = useCallback((): void => {
-    if (agentPatchPending === null) return;
-    postEditorAgentResult(agentPatchPending.action, "failed", "Patch rejected by user.");
-    setAgentPatchPending(null);
-  }, [agentPatchPending]);
+    const review = agentPatchPendingRef.current;
+    if (review === null || review.applying) return;
+    submitAgentPatchDecision(review, "reject");
+  }, [submitAgentPatchDecision]);
 
   const handleRenameAccept = useCallback((): void => {
     if (renameReview === null || root === undefined) return;
@@ -2855,8 +4044,12 @@ function EditorRuntimeWidget({
       file,
     );
     panel = (
-      <>
-        <div role="group" aria-label={`Compare recovered changes for ${file ?? "this file"}`}>
+      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+        <div
+          role="group"
+          aria-label={`Compare recovered changes for ${file ?? "this file"}`}
+          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
+        >
           <span className="sr-only">
             Side-by-side comparison of the file on disk and the recovered unsaved changes. Keep
             local restores the recovered changes; use disk keeps the file on disk.
@@ -2867,7 +4060,7 @@ function EditorRuntimeWidget({
             themeVariant={themeVariant}
           />
         </div>
-        <div className="ed-toolbar-actions">
+        <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           <button
             ref={recoveryCompareButtonRef}
             type="button"
@@ -2883,7 +4076,39 @@ function EditorRuntimeWidget({
             Close compare
           </button>
         </div>
-      </>
+      </div>
+    );
+  } else if (agentChangesetPending !== null) {
+    panel = (
+      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
+        <div
+          role="group"
+          aria-label="Agent changeset review"
+          aria-busy={agentChangesetPending.applying}
+          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
+        >
+          <span className="sr-only">
+            Review every changed file before applying this agent changeset to disk.
+          </span>
+          <span className="sr-only" aria-live="polite">
+            {agentChangesetPending.applying
+              ? t("editor.agentReview.applying")
+              : t("editor.agentReview.ready")}
+          </span>
+          <EditorDiffSurface
+            model={agentChangesetPending.model}
+            loadState={{ status: "ready" }}
+            themeVariant={themeVariant}
+            actions={{
+              canApply: !agentChangesetPending.applying,
+              canReject: !agentChangesetPending.applying,
+              canRunVerification: false,
+            }}
+            onApply={handleAgentChangesetAccept}
+            onReject={handleAgentChangesetReject}
+          />
+        </div>
+      </div>
     );
   } else if (agentPatchPending !== null) {
     const patchDiffModel = buildAgentPatchDiffModel(
@@ -2892,11 +4117,21 @@ function EditorRuntimeWidget({
       file,
     );
     panel = (
-      <>
+      <div style={EDITOR_REVIEW_SURFACE_STYLE}>
         {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
-        <div aria-label={`Agent patch review for ${file ?? "this file"}`}>
+        <div
+          role="group"
+          aria-label={`Agent patch review for ${agentPatchPending.action.target?.file ?? "this file"}`}
+          aria-busy={agentPatchPending.applying}
+          style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
+        >
           <span className="sr-only">
             Agent generated a patch. Review the changes and accept to apply or reject to discard.
+          </span>
+          <span className="sr-only" aria-live="polite">
+            {agentPatchPending.applying
+              ? t("editor.agentReview.applying")
+              : t("editor.agentReview.ready")}
           </span>
           <EditorDiffSurface
             model={patchDiffModel}
@@ -2904,7 +4139,7 @@ function EditorRuntimeWidget({
             themeVariant={themeVariant}
           />
         </div>
-        <div className="ed-toolbar-actions">
+        <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
           <button
             ref={patchAcceptButtonRef}
@@ -2912,6 +4147,7 @@ function EditorRuntimeWidget({
             className="ed-save"
             data-testid="agent-patch-accept"
             aria-label="Accept agent patch and apply changes"
+            disabled={agentPatchPending.applying}
             onClick={handleAgentPatchAccept}
           >
             Accept
@@ -2921,12 +4157,13 @@ function EditorRuntimeWidget({
             className="ed-reload"
             data-testid="agent-patch-reject"
             aria-label="Reject agent patch and discard changes"
+            disabled={agentPatchPending.applying}
             onClick={handleAgentPatchReject}
           >
             Reject
           </button>
         </div>
-      </>
+      </div>
     );
   } else if (renameReview !== null) {
     panel = (
@@ -2998,6 +4235,7 @@ function EditorRuntimeWidget({
         hostEditRequest={activeHostEditRequest}
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
+        onAskKeikoAboutSelection={onAskSelection === undefined ? undefined : handleAskSelection}
         onRenameSymbol={canRename ? runRename : undefined}
         showStatusFooter={false}
       />
@@ -3216,7 +4454,7 @@ function EditorRuntimeWidget({
               }}
               aria-disabled={saveUnavailable}
             >
-              {saveStatus === "saving" ? "Saving…" : "Save"}
+              {saveStatus === "saving" ? commonT("common.saving") : commonT("common.save")}
             </button>
           ) : null}
         </div>
@@ -3322,6 +4560,11 @@ function EditorRuntimeWidget({
           }}
         />
       ) : null}
+      <EditorAgentPresenceIndicator
+        inFlightActionCount={bridgeState.inFlightActionCount}
+        recentlyActive={bridgeState.recentlyAttached}
+        reviewPendingCount={agentReviewPendingCount}
+      />
       <EditorAgentActionsPanel agentSessionId={agentSessionId} refreshNonce={auditRefreshNonce} />
       {hasTarget ? (
         <EditorBreadcrumbBar filePath={file} path={breadcrumbPath} onReveal={revealSymbol} />

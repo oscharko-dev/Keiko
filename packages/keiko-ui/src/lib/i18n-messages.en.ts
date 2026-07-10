@@ -81,6 +81,8 @@ export const EN_MESSAGES = {
   "chat.copy.failedStatus": "Clipboard access failed. Select the answer manually and copy it.",
   "chat.copy.copied": "Copied",
   "chat.copy.message": "Copy answer",
+  // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
+  // workspace shell does not preload editor-only translations.
   "chat.regenerate.cancelled": "Regeneration cancelled",
   "chat.regenerate.running": "Regenerating response",
   "chat.regenerate.cancel": "Cancel regeneration",
