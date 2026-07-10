@@ -93,6 +93,20 @@ static export on the macOS host produced `7addaa756fa874840c315d5683a31800317ddc
 and therefore failed the byte-exact freshness comparison against Linux `ba49c148...`; this expected
 platform difference is recorded rather than treated as authoritative.
 
+## Editor performance evidence
+
+`npm run test:e2e:editor-perf` regenerated `docs/release/1209-perf-evidence.json` from the packaged
+production UI on reachable commit `3c0cce1b355fcf41ef77bbbc29753e487f9616ad`:
+
+- B4 cold start: p50 853 ms / p95 854 ms against 1,500 / 2,500 ms budgets;
+- B5 keystrokes: captured with zero long tasks and 0 ms maximum long-task duration;
+- B6 interaction: p75 24 ms against the 200 ms budget;
+- B11 memory: supported and measured across two cycles;
+- editor worker loaded, with no TypeScript or other language worker loaded.
+
+`npm run check:perf-evidence` passed for both workspace and editor evidence and confirmed each
+commit stamp is reachable from the current branch.
+
 ## Final local gates
 
 | Command                                                           | Current branch result                                        |
