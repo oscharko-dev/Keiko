@@ -95,6 +95,7 @@ type EditorAgentRouteDeps = Pick<
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
+const MAX_ACTIVE_BRIDGE_STREAMS = 256;
 
 type Changeset = NonNullable<EditorAgentAction["changeset"]>;
 type ChangesetFile = Changeset["files"][number];
@@ -117,6 +118,7 @@ interface QueuedRecord {
 // limit or retain raw action content (text edits, patch bodies) on a long-lived server.
 const MAX_IDEMPOTENCY_ENTRIES = 1024;
 const idempotency = new Map<string, QueuedRecord>();
+const activeBridgeStreams = new Map<string, () => void>();
 
 function hashRequest(body: string): string {
   return createHash("sha256").update(body).digest("hex");
@@ -1031,6 +1033,7 @@ function preflight(
 export function handleEditorAgentSessions(): RouteResult {
   const sessions = editorAgentRegistry
     .listSessions()
+    .filter((snapshot) => editorAgentRegistry.hasLiveBridge(snapshot.sessionId))
     .map((snapshot) => shapeSnapshot(snapshot, "none", 0));
   return { status: 200, body: { sessions } };
 }
@@ -1820,11 +1823,16 @@ type EventBridgeSelection =
   | {
       readonly ok: true;
       readonly connections: readonly AuthenticatedBridgeConnection[] | undefined;
+      readonly bridgeStreamId: string | undefined;
     }
   | { readonly ok: false; readonly response: RouteResult };
 
 function isBoundedSessionId(value: string): boolean {
   return value.length > 0 && Buffer.byteLength(value, "utf8") <= EDITOR_AGENT_SESSION_ID_MAX_BYTES;
+}
+
+function isBridgeStreamId(value: string | undefined): value is string {
+  return typeof value === "string" && /^[a-f0-9]{32}$/u.test(value);
 }
 
 function eventBridgeQueryHasValidShape(
@@ -1855,10 +1863,15 @@ function authenticateBridgeConnection(
 function parseEventBridgeSelection(ctx: RouteContext): EventBridgeSelection {
   const sessionIds = ctx.url.searchParams.getAll("sessionId");
   const capabilities = ctx.url.searchParams.getAll("bridgeDecisionCapability");
-  if (sessionIds.length === 0 && capabilities.length === 0) {
-    return { ok: true, connections: undefined };
+  const bridgeStreamIds = ctx.url.searchParams.getAll("bridgeStreamId");
+  if (sessionIds.length === 0 && capabilities.length === 0 && bridgeStreamIds.length === 0) {
+    return { ok: true, connections: undefined, bridgeStreamId: undefined };
   }
-  if (!eventBridgeQueryHasValidShape(sessionIds, capabilities)) {
+  if (
+    !eventBridgeQueryHasValidShape(sessionIds, capabilities) ||
+    bridgeStreamIds.length !== 1 ||
+    !isBridgeStreamId(bridgeStreamIds[0])
+  ) {
     return { ok: false, response: bridgeCapabilityError() };
   }
   const connections: AuthenticatedBridgeConnection[] = [];
@@ -1867,15 +1880,17 @@ function parseEventBridgeSelection(ctx: RouteContext): EventBridgeSelection {
     if (connection === null) return { ok: false, response: bridgeCapabilityError() };
     connections.push(connection);
   }
-  return { ok: true, connections };
+  return { ok: true, connections, bridgeStreamId: bridgeStreamIds[0] };
 }
 
 function scrubBridgeCapabilitiesFromRequestUrl(ctx: RouteContext): void {
   ctx.url.searchParams.delete("bridgeDecisionCapability");
+  ctx.url.searchParams.delete("bridgeStreamId");
   if (ctx.req.url === undefined) return;
   try {
     const sanitized = new URL(ctx.req.url, "http://127.0.0.1");
     sanitized.searchParams.delete("bridgeDecisionCapability");
+    sanitized.searchParams.delete("bridgeStreamId");
     ctx.req.url = `${sanitized.pathname}${sanitized.search}`;
   } catch {
     ctx.req.url = "/api/editor/agent/events";
@@ -1886,7 +1901,7 @@ export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
   const selection = parseEventBridgeSelection(ctx);
   scrubBridgeCapabilitiesFromRequestUrl(ctx);
   if (!selection.ok) return selection.response;
-  return openAgentSseStream(ctx, selection.connections);
+  return openAgentSseStream(ctx, selection.connections, selection.bridgeStreamId);
 }
 
 // Issue #1395 (ADR-0062, AC4) — read-only feed of the bounded audit ledger so users can inspect what
@@ -1899,6 +1914,7 @@ export function handleEditorAgentAudit(ctx: RouteContext): RouteResult {
 
 function connectEditorAgentSessions(
   connections: readonly AuthenticatedBridgeConnection[] | undefined,
+  bridgeStreamId: string | undefined,
   subscriber: (event: EditorAgentEvent) => void,
 ): (() => void) | undefined {
   if (connections === undefined) return editorAgentRegistry.connect(undefined, subscriber);
@@ -1915,9 +1931,30 @@ function connectEditorAgentSessions(
     }
     disposers.push(dispose);
   }
-  return (): void => {
+  const disposeConnections = (): void => {
     for (const dispose of disposers) dispose();
   };
+  if (bridgeStreamId === undefined) {
+    disposeConnections();
+    return undefined;
+  }
+  const prior = activeBridgeStreams.get(bridgeStreamId);
+  if (prior === undefined && activeBridgeStreams.size >= MAX_ACTIVE_BRIDGE_STREAMS) {
+    disposeConnections();
+    return undefined;
+  }
+  prior?.();
+  let active = true;
+  const disposeStream = (): void => {
+    if (!active) return;
+    active = false;
+    if (activeBridgeStreams.get(bridgeStreamId) === disposeStream) {
+      activeBridgeStreams.delete(bridgeStreamId);
+    }
+    disposeConnections();
+  };
+  activeBridgeStreams.set(bridgeStreamId, disposeStream);
+  return disposeStream;
 }
 
 // Opens the SSE stream and registers the connection as either one or more session bridges (when
@@ -1927,13 +1964,14 @@ function connectEditorAgentSessions(
 function openAgentSseStream(
   ctx: RouteContext,
   connections: readonly AuthenticatedBridgeConnection[] | undefined,
+  bridgeStreamId: string | undefined,
 ): HandlerOutcome {
   const res: ServerResponse = ctx.res;
   const subscriber = (event: EditorAgentEvent): void => {
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
     if (!res.write(frame)) res.destroy();
   };
-  const dispose = connectEditorAgentSessions(connections, subscriber);
+  const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
   if (dispose === undefined) return bridgeCapabilityError();
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
@@ -1946,6 +1984,8 @@ function openAgentSseStream(
 }
 
 export function _resetEditorAgentStateForTests(): void {
+  for (const dispose of activeBridgeStreams.values()) dispose();
+  activeBridgeStreams.clear();
   idempotency.clear();
   editorAgentPatchWriterForTests = undefined;
   editorAgentRegistry.reset();

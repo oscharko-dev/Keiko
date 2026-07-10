@@ -60,6 +60,7 @@ const PATCH_SOURCE_LIMIT_BYTES = 1_000_000;
 let bridgeDecisionCapability: string | undefined;
 let agentAuthorityRef: EditorAgentGovernedAuthorityReference | undefined;
 const bridgeDecisionCapabilities = new Map<string, string>();
+let bridgeStreamSequence = 0;
 type ChangesetFile = NonNullable<EditorAgentAction["changeset"]>["files"][number];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -257,6 +258,7 @@ function action(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
 function connectBridge(
   sessionId: string | readonly string[] | undefined,
   capabilityOverride?: string | readonly string[] | null,
+  bridgeStreamIdOverride?: string,
 ): {
   readonly frames: () => string;
   readonly close: () => void;
@@ -288,6 +290,12 @@ function connectBridge(
     return capabilityOverride === null ? undefined : bridgeDecisionCapabilities.get(id);
   });
   const queryParts = sessionIds.map((id) => `sessionId=${encodeURIComponent(id)}`);
+  if (sessionIds.length > 0) {
+    bridgeStreamSequence += 1;
+    queryParts.push(
+      `bridgeStreamId=${bridgeStreamIdOverride ?? bridgeStreamSequence.toString(16).padStart(32, "0")}`,
+    );
+  }
   for (const capability of capabilities) {
     if (capability !== undefined) {
       queryParts.push(`bridgeDecisionCapability=${encodeURIComponent(capability)}`);
@@ -466,6 +474,7 @@ afterEach(() => {
   bridgeDecisionCapability = undefined;
   agentAuthorityRef = undefined;
   bridgeDecisionCapabilities.clear();
+  bridgeStreamSequence = 0;
   _resetEditorAgentStateForTests();
   vi.useRealTimers();
 });
@@ -516,7 +525,7 @@ describe("editor agent routes", () => {
     expect(wrongCeiling.status).toBe(403);
   });
 
-  it("registers browser snapshots and lists sessions", async () => {
+  it("lists only browser sessions with a live authenticated bridge", async () => {
     const registered = await handleEditorAgentSnapshot(
       context(
         {
@@ -528,8 +537,57 @@ describe("editor agent routes", () => {
       ),
     );
     expect(registered.status).toBe(200);
+    expect(handleEditorAgentSessions().body).toEqual({ sessions: [] });
+    const capability = responseBridgeCapability(registered.body);
+    if (capability === undefined) throw new Error("expected bridge capability");
+    const bridge = connectBridge("session-1", capability);
     expect(handleEditorAgentSessions().body).toMatchObject({
       sessions: [expect.objectContaining({ sessionId: "session-1" })],
+    });
+    bridge.close();
+    expect(handleEditorAgentSessions().body).toEqual({ sessions: [] });
+  });
+
+  it("switches pane discovery by bridge liveness while retaining idle snapshots", async () => {
+    await registerSnapshotOnly({ sessionId: "pane-session-1", windowId: "window-pane-1" });
+    await registerSnapshotOnly({ sessionId: "pane-session-2", windowId: "window-pane-2" });
+    const firstCapability = bridgeDecisionCapabilities.get("pane-session-1");
+    const secondCapability = bridgeDecisionCapabilities.get("pane-session-2");
+    if (firstCapability === undefined || secondCapability === undefined) {
+      throw new Error("expected pane bridge capabilities");
+    }
+
+    const first = connectBridge("pane-session-1", firstCapability);
+    expect(handleEditorAgentSessions().body).toMatchObject({
+      sessions: [{ sessionId: "pane-session-1" }],
+    });
+    first.close();
+    const second = connectBridge("pane-session-2", secondCapability);
+    expect(handleEditorAgentSessions().body).toMatchObject({
+      sessions: [{ sessionId: "pane-session-2" }],
+    });
+    expect(editorAgentRegistry.snapshotFor("pane-session-1")).toBeDefined();
+    expect(editorAgentRegistry.snapshotFor("pane-session-2")).toBeDefined();
+    second.close();
+  });
+
+  it("replaces stale liveness when one browser stream reconnects with a new pane session", async () => {
+    await registerSnapshotOnly({ sessionId: "pane-session-1", windowId: "window-pane-1" });
+    await registerSnapshotOnly({ sessionId: "pane-session-2", windowId: "window-pane-2" });
+    const firstCapability = bridgeDecisionCapabilities.get("pane-session-1");
+    const secondCapability = bridgeDecisionCapabilities.get("pane-session-2");
+    if (firstCapability === undefined || secondCapability === undefined) {
+      throw new Error("expected pane bridge capabilities");
+    }
+    const streamId = "f".repeat(32);
+
+    connectBridge("pane-session-1", firstCapability, streamId);
+    connectBridge("pane-session-2", secondCapability, streamId);
+
+    expect(editorAgentRegistry.hasLiveBridge("pane-session-1")).toBe(false);
+    expect(editorAgentRegistry.hasLiveBridge("pane-session-2")).toBe(true);
+    expect(handleEditorAgentSessions().body).toMatchObject({
+      sessions: [{ sessionId: "pane-session-2" }],
     });
   });
 
@@ -546,6 +604,8 @@ describe("editor agent routes", () => {
       ),
     );
     const capability = responseBridgeCapability(registered.body);
+    if (capability === undefined) throw new Error("expected bridge capability");
+    const bridge = connectBridge("session-1", capability);
 
     expect(capability).toHaveLength(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS);
     const discovery = JSON.stringify(handleEditorAgentSessions().body);
@@ -556,6 +616,8 @@ describe("editor agent routes", () => {
     });
     expect(observer.frames()).not.toContain("PRIVATE_SNAPSHOT_TEXT");
     expect(observer.frames()).not.toContain(capability);
+    bridge.close();
+    observer.close();
   });
 
   it("rotates a stale capability only while the existing session is idle", async () => {
@@ -1331,7 +1393,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
         res: fakeRes,
         params: {},
         url: new URL(
-          `http://localhost/api/editor/agent/events?sessionId=session-1&bridgeDecisionCapability=${encodeURIComponent(capability)}`,
+          `http://localhost/api/editor/agent/events?sessionId=session-1&bridgeStreamId=${"e".repeat(32)}&bridgeDecisionCapability=${encodeURIComponent(capability)}`,
         ),
       });
 

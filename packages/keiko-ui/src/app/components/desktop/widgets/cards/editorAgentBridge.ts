@@ -589,6 +589,7 @@ let editorAgentResultListener: EventListener | null = null;
 // tear down and re-open the stream. `null` means "no stream is currently open".
 let editorAgentConnectedSessionKey: string | null = null;
 let editorAgentRestartScheduled = false;
+let editorAgentBridgeStreamId: string | null = null;
 
 interface ReadySubscribedSession {
   readonly sessionId: string;
@@ -611,8 +612,20 @@ function currentSessionKey(sessions: readonly ReadySubscribedSession[]): string 
     .join("\u0000");
 }
 
+function bridgeStreamId(): string | null {
+  if (editorAgentBridgeStreamId !== null) return editorAgentBridgeStreamId;
+  if (globalThis.crypto === undefined) return null;
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  editorAgentBridgeStreamId = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return editorAgentBridgeStreamId;
+}
+
 function editorAgentEventUrl(sessions: readonly ReadySubscribedSession[]): string | null {
+  const streamId = bridgeStreamId();
+  if (streamId === null) return null;
   const params = new URLSearchParams();
+  params.set("bridgeStreamId", streamId);
   for (const { sessionId, capability } of sessions) {
     params.append("sessionId", sessionId);
     params.append("bridgeDecisionCapability", capability.value);
@@ -760,6 +773,7 @@ export function _resetEditorAgentBridgeStateForTests(): void {
   editorAgentReadySessions.clear();
   editorAgentCapabilityGeneration = 0;
   editorAgentRestartScheduled = false;
+  editorAgentBridgeStreamId = null;
 }
 
 /**

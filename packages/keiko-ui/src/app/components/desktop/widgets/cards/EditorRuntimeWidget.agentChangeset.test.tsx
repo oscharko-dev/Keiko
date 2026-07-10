@@ -291,6 +291,9 @@ type CloseFileMock = ReturnType<typeof vi.fn<(file: string) => boolean>>;
 
 async function renderAgentEditor(
   onCloseOpenFile: CloseFileMock = vi.fn<(file: string) => boolean>(() => true),
+  onAgentChangesetCommitted?: (
+    entries: readonly { readonly file: string; readonly kind: "create" | "modify" | "delete" }[],
+  ) => void,
 ): Promise<{
   readonly source: FakeEventSource;
   readonly sessionId: string;
@@ -305,6 +308,7 @@ async function renderAgentEditor(
       file="src/active.ts"
       openFiles={["src/active.ts", "src/deleted.ts"]}
       onCloseOpenFile={onCloseOpenFile}
+      onAgentChangesetCommitted={onAgentChangesetCommitted}
     />,
   );
   await screen.findByTestId("editor-surface");
@@ -348,6 +352,41 @@ afterEach(() => {
 });
 
 describe("EditorRuntimeWidget applyChangeset review", () => {
+  it("refreshes a clean active model from a host reconciliation request", async () => {
+    installFakeEventSource();
+    const onComplete = vi.fn();
+    vi.mocked(fetchFilesContent)
+      .mockResolvedValueOnce(fileResponse("src/active.ts", ORIGINAL_ACTIVE, HASH_A))
+      .mockResolvedValueOnce(fileResponse("src/active.ts", UPDATED_ACTIVE, HASH_C, 2));
+    const baseProps = {
+      windowId: "changeset-target",
+      root: "/repo",
+      file: "src/active.ts",
+      openFiles: ["src/active.ts"],
+      paneId: "pane-2",
+      activePaneId: "pane-1",
+      onAgentReconciliationComplete: onComplete,
+    } as const;
+    const view = render(<EditorRuntimeWidget {...baseProps} />);
+    await screen.findByTestId("editor-surface");
+    expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
+
+    view.rerender(
+      <EditorRuntimeWidget
+        {...baseProps}
+        agentReconciliationRequest={{
+          requestId: 7,
+          entries: [{ file: "src/active.ts", kind: "modify" }],
+        }}
+      />,
+    );
+
+    await waitFor(() => expect(surface.props?.buffer.content.text).toBe(UPDATED_ACTIVE));
+    expect(isDocumentDirty(surface.props!.fileModel)).toBe(false);
+    expect(onComplete).toHaveBeenCalledOnce();
+    expect(onComplete).toHaveBeenCalledWith(7, "pane-2");
+  });
+
   it("applies an explicitly allowed changeset without staging review", async () => {
     const disk = new Map<string, FilesContentResponse>([
       ["src/active.ts", fileResponse("src/active.ts", ORIGINAL_ACTIVE, HASH_A)],
@@ -358,7 +397,8 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
       if (response === undefined) throw new Error("missing fixture");
       return response;
     });
-    const rendered = await renderAgentEditor();
+    const onCommitted = vi.fn();
+    const rendered = await renderAgentEditor(undefined, onCommitted);
     const action: EditorAgentAction = {
       ...changesetAction(rendered.sessionId, "automatic-changeset"),
       requiresReview: false,
@@ -383,6 +423,11 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
     expect(screen.queryByRole("group", { name: "Agent changeset review" })).toBeNull();
     expect(isDocumentDirty(surface.props!.fileModel)).toBe(false);
     expect(rendered.onCloseOpenFile).toHaveBeenCalledWith("src/deleted.ts");
+    expect(onCommitted).toHaveBeenCalledWith([
+      { file: "src/created.ts", kind: "create" },
+      { file: "src/active.ts", kind: "modify" },
+      { file: "src/deleted.ts", kind: "delete" },
+    ]);
   });
 
   it("reviews three files, submits Accept once, and reconciles authoritative disk state", async () => {

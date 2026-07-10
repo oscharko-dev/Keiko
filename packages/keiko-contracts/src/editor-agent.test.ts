@@ -184,6 +184,60 @@ describe("editor agent contracts", () => {
     ).toEqual({ ok: false, errors: ["browser action request is invalid"] });
   });
 
+  it("rejects snapshot and result wrappers with incompatible outer schemas", () => {
+    const snapshotRequest = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "snapshot",
+      snapshot: snapshot(),
+    } as const;
+    const resultRequest = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "succeeded",
+      },
+    } as const;
+
+    for (const invalid of [
+      { ...snapshotRequest, schemaVersion: undefined },
+      { ...snapshotRequest, schemaVersion: "999" },
+      { ...snapshotRequest, additional: true },
+    ]) {
+      expect(parseEditorAgentSnapshotRequest(invalid)).toMatchObject({ ok: false });
+    }
+    for (const invalid of [
+      { ...resultRequest, schemaVersion: undefined },
+      { ...resultRequest, schemaVersion: "999" },
+      { ...resultRequest, additional: true },
+    ]) {
+      expect(parseEditorAgentActionsPostBody(invalid)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("rejects payload fields that do not belong to the declared action type", () => {
+    const textEdit = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+      newText: "replacement",
+    } as const;
+    const foreignPatch = {
+      ...baseAction({ type: "applyTextEdits" }),
+      textEdits: [textEdit],
+      patch: "secret",
+    };
+    const foreignEdits = {
+      ...baseAction({ type: "save" }),
+      textEdits: [textEdit],
+    };
+
+    expect(isEditorAgentAction(foreignPatch)).toBe(false);
+    expect(isEditorAgentAction(foreignEdits)).toBe(false);
+    expect(parseEditorAgentActionsPostBody(foreignPatch)).toMatchObject({ ok: false });
+    expect(parseEditorAgentActionsPostBody(foreignEdits)).toMatchObject({ ok: false });
+  });
+
   it("canonicalizes action and result envelopes before they cross the bridge boundary", () => {
     const canary = "CAPABILITY_AUTHORITY_CANARY";
     const action = changesetAction();

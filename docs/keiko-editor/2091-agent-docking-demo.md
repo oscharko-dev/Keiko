@@ -34,6 +34,9 @@ This script uses a disposable repository containing no secrets or private data.
    reconciles to disk, no tab remains dirty, and Save status reads `Saved`.
 6. Repeat with an allowed workspace-contained changeset in **Ask for approval** or **Full access**.
    Confirm no review surface appears, the transaction completes, and Monaco reconciles.
+7. Split the two changed files into separate panes and switch focus between them. Confirm only the
+   active pane is discoverable to Chat, then apply a reviewed changeset and verify both visible
+   Monaco models refresh from disk without becoming dirty.
 
 ## Presence, policy, and audit
 
@@ -56,6 +59,6 @@ Run:
 npm run test:e2e:editor-agent-docking-2122
 ```
 
-The suite covers selection-grounded Ask/response, Chat Apply Reject/Accept/Save, a reviewed
-multi-file transaction, an allowed direct multi-file transaction, Monaco reconciliation, filesystem
-state, presence, and content-free audit evidence against the real BFF.
+The suite covers selection-grounded Ask/response, Chat Apply Reject/Accept/Save, reviewed and direct
+multi-file transactions, split-pane bridge supersession and model reconciliation, filesystem state,
+presence, and content-free audit evidence against the real BFF.

@@ -203,6 +203,53 @@ describe("EditorAgentAuthorityRegistry", () => {
     ).toEqual({ ok: false, reason: "budget-exceeded" });
   });
 
+  it("does not reset cumulative budgets when the same envelope is registered again", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const limited = envelope({
+      budget: {
+        maxRuntimeMs: 1_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 1,
+        maxPatchBytes: 5,
+      },
+    });
+    const registered = registry.register(limited, "autonomous-delivery", NOW);
+    if (!registered.ok) throw new Error("expected registration");
+    expect(
+      registry.reserveForAction(
+        registered.authorityRef,
+        action(),
+        ROOT,
+        "autonomous-delivery",
+        5,
+        NOW,
+      ),
+    ).toMatchObject({ ok: true });
+
+    expect(registry.register(limited, "autonomous-delivery", NOW)).toEqual(registered);
+    expect(
+      registry.reserveForAction(
+        registered.authorityRef,
+        action({ actionId: "action-2", idempotencyKey: "key-2" }),
+        ROOT,
+        "autonomous-delivery",
+        0,
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "budget-exceeded" });
+    expect(
+      registry.resolve(
+        registered.authorityRef,
+        ROOT,
+        "autonomous-delivery",
+        "2026-07-09T12:00:01.001Z",
+      ),
+    ).toEqual({ ok: false, reason: "budget-exceeded" });
+    expect(registry.register(limited, "autonomous-delivery", "2026-07-09T12:00:01.001Z")).toEqual(
+      registered,
+    );
+  });
+
   it("fails closed when one patch or elapsed runtime exceeds its envelope budget", () => {
     const registry = new EditorAgentAuthorityRegistry();
     const limited = envelope({

@@ -201,6 +201,10 @@ import {
 } from "./editorHotExitStore";
 import { LruSessionCache } from "./editorSessionCache";
 import { readableTabCapacity, visibleTabsForCapacity } from "./editorTabViewport";
+import type {
+  EditorAgentReconciliationEntry,
+  EditorAgentReconciliationRequest,
+} from "./editorAgentReconciliationQueue";
 import { normalizeEditorFile } from "./editorPaneGeometry";
 import {
   captureEditorSelection,
@@ -484,6 +488,11 @@ export interface EditorRuntimeWidgetProps {
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
   readonly onExternalSaveComplete?:
     ((requestId: number, paneId: string, file: string, ok: boolean) => void) | undefined;
+  readonly agentReconciliationRequest?: EditorAgentReconciliationRequest | undefined;
+  readonly onAgentChangesetCommitted?:
+    ((entries: readonly EditorAgentReconciliationEntry[]) => void) | undefined;
+  readonly onAgentReconciliationComplete?:
+    ((requestId: number, paneId: string) => void) | undefined;
   readonly tabInsertTarget?: EditorTabInsertTarget | undefined;
   readonly renderTabHandle?:
     | ((
@@ -1201,6 +1210,9 @@ function EditorRuntimeWidget({
   openEditorFile,
   externalSaveRequest,
   onExternalSaveComplete,
+  agentReconciliationRequest,
+  onAgentChangesetCommitted,
+  onAgentReconciliationComplete,
   tabInsertTarget,
   renderTabHandle,
   toolbarExtras,
@@ -3350,7 +3362,9 @@ function EditorRuntimeWidget({
 
   const adoptActiveChangesetResponse = useCallback(
     (path: string, response: FilesContentResponse): void => {
-      if (root === undefined || path !== file) return;
+      if (root === undefined || activeSessionKeyRef.current !== documentSessionKey(root, path)) {
+        return;
+      }
       const snapshot = cleanEditorSessionSnapshot({
         root,
         path,
@@ -3371,19 +3385,24 @@ function EditorRuntimeWidget({
       setRecoveryDiskBaseline(null);
       setActiveHostEditRequest(undefined);
     },
-    [editorModelScope, file, root],
+    [editorModelScope, root],
   );
 
   const reconcileAgentChangesetDeletion = useCallback(
     async (path: string): Promise<string | null> => {
       if (root === undefined) return "Workspace is unavailable after changeset commit.";
-      sessionCacheRef.current.delete(documentSessionKey(root, path));
+      const sessionKey = documentSessionKey(root, path);
+      const cached = sessionCacheRef.current.get(sessionKey);
+      const cachedDirty =
+        cached?.fileModel !== null && cached?.fileModel !== undefined
+          ? isDocumentDirty(cached.fileModel)
+          : false;
+      if ((activeSessionKeyRef.current === sessionKey && dirtyRef.current) || cachedDirty) {
+        return `Committed deletion ${path} has newer unsaved editor changes.`;
+      }
+      sessionCacheRef.current.delete(sessionKey);
       onDirtyChange?.(path, false);
       await deleteHotExitSnapshotBestEffort(root, path);
-      const openInAnotherPane =
-        layoutPanes?.some(
-          (layoutPane) => layoutPane.paneId !== paneId && layoutPane.openFiles.includes(path),
-        ) === true;
       if (documentTabs.includes(path)) {
         if (onCloseOpenFile === undefined) {
           return `Committed deletion ${path} could not be closed in this editor.`;
@@ -3395,16 +3414,13 @@ function EditorRuntimeWidget({
           return `Committed deletion ${path} could not be closed.`;
         }
       }
-      if (openInAnotherPane) {
-        return `Committed deletion ${path} remains open in another editor pane.`;
-      }
       return null;
     },
-    [documentTabs, layoutPanes, onCloseOpenFile, onDirtyChange, paneId, root],
+    [documentTabs, onCloseOpenFile, onDirtyChange, root],
   );
 
   const reconcileAgentChangesetFile = useCallback(
-    async (entry: AgentPreparedChangesetFile): Promise<string | null> => {
+    async (entry: EditorAgentReconciliationEntry): Promise<string | null> => {
       if (entry.kind === "delete") return reconcileAgentChangesetDeletion(entry.file);
       if (root === undefined) return "Workspace is unavailable after changeset commit.";
       const sessionKey = documentSessionKey(root, entry.file);
@@ -3422,6 +3438,14 @@ function EditorRuntimeWidget({
           normalizeAgentChangesetPath(response.path) !== normalizeAgentChangesetPath(entry.file)
         ) {
           return `Committed file ${entry.file} returned mismatched metadata.`;
+        }
+        const latestCached = sessionCacheRef.current.get(sessionKey);
+        const latestCachedDirty =
+          latestCached?.fileModel !== null && latestCached?.fileModel !== undefined
+            ? isDocumentDirty(latestCached.fileModel)
+            : false;
+        if ((activeSessionKeyRef.current === sessionKey && dirtyRef.current) || latestCachedDirty) {
+          return `Committed file ${entry.file} has newer unsaved editor changes.`;
         }
         const snapshot = cleanEditorSessionSnapshot({
           root,
@@ -3449,7 +3473,7 @@ function EditorRuntimeWidget({
   );
 
   const reconcileAgentChangeset = useCallback(
-    async (entries: readonly AgentPreparedChangesetFile[]): Promise<readonly string[]> => {
+    async (entries: readonly EditorAgentReconciliationEntry[]): Promise<readonly string[]> => {
       const failures: string[] = [];
       for (const entry of entries) {
         const failure = await reconcileAgentChangesetFile(entry);
@@ -3458,6 +3482,59 @@ function EditorRuntimeWidget({
       return failures;
     },
     [reconcileAgentChangesetFile],
+  );
+
+  useEffect(() => {
+    if (
+      agentReconciliationRequest === undefined ||
+      paneId === undefined ||
+      onAgentReconciliationComplete === undefined
+    ) {
+      return;
+    }
+    let active = true;
+    const applicable = agentReconciliationRequest.entries.filter((entry) =>
+      documentTabs.includes(entry.file),
+    );
+    const reconcile =
+      applicable.length === 0 ? Promise.resolve([]) : reconcileAgentChangeset(applicable);
+    void reconcile
+      .then((failures) => {
+        if (active && failures.length > 0) {
+          setAgentConflict({
+            code: "VERSION_MISMATCH",
+            message: t("editor.agentReview.reconcileFailed"),
+          });
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAgentConflict({
+            code: "VERSION_MISMATCH",
+            message: t("editor.agentReview.reconcileFailed"),
+          });
+        }
+      })
+      .finally(() => {
+        if (active) onAgentReconciliationComplete(agentReconciliationRequest.requestId, paneId);
+      });
+    return () => {
+      active = false;
+    };
+  }, [
+    agentReconciliationRequest,
+    documentTabs,
+    onAgentReconciliationComplete,
+    paneId,
+    reconcileAgentChangeset,
+    t,
+  ]);
+
+  const notifyAgentChangesetCommitted = useCallback(
+    (entries: readonly AgentPreparedChangesetFile[]): void => {
+      onAgentChangesetCommitted?.(entries.map((entry) => ({ file: entry.file, kind: entry.kind })));
+    },
+    [onAgentChangesetCommitted],
   );
 
   const clearAgentPatchReview = useCallback((action: EditorAgentAction): void => {
@@ -3594,6 +3671,7 @@ function EditorRuntimeWidget({
         clearAutomaticAgentChangeset(action);
         return true;
       }
+      notifyAgentChangesetCommitted(succeeded);
       void reconcileAgentChangeset(succeeded)
         .then((failures) => {
           if (failures.length > 0) {
@@ -3612,7 +3690,13 @@ function EditorRuntimeWidget({
         .finally(() => clearAutomaticAgentChangeset(action));
       return true;
     },
-    [clearAutomaticAgentChangeset, reconcileAgentChangeset, surfaceAgentReviewResult, t],
+    [
+      clearAutomaticAgentChangeset,
+      notifyAgentChangesetCommitted,
+      reconcileAgentChangeset,
+      surfaceAgentReviewResult,
+      t,
+    ],
   );
 
   const settleAgentPatchResult = useCallback(
@@ -3687,6 +3771,7 @@ function EditorRuntimeWidget({
         clearAgentChangesetReview(review.action);
         return true;
       }
+      notifyAgentChangesetCommitted(succeeded);
       void reconcileAgentChangeset(succeeded)
         .then((failures) => {
           if (failures.length > 0) {
@@ -3708,6 +3793,7 @@ function EditorRuntimeWidget({
     [
       announceToolbarNotice,
       clearAgentChangesetReview,
+      notifyAgentChangesetCommitted,
       reconcileAgentChangeset,
       settleAutomaticAgentChangesetResult,
       surfaceAgentReviewResult,

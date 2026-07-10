@@ -54,6 +54,29 @@ preconditions, conflicts, and per-file results. Unknown fields are not retained.
 `agentRoutes.test.ts` additionally proves unknown capability and authority canaries are absent from
 target SSE, terminal results, and audit records.
 
+### High: identical authority registration reset cumulative budgets
+
+The authority registry previously replaced an existing run-id/envelope-digest record, resetting
+elapsed time, tool calls, and patch bytes. Registration is now idempotent for an identical record;
+exhausted records remain present and denied until envelope expiry or explicit revocation.
+`agentAuthorityRegistry.test.ts` exhausts usage and runtime, re-registers the same envelope, and
+proves both budgets remain exceeded.
+
+### High: delayed SSE close retained stale pane liveness
+
+Pane snapshots are intentionally retained, but transport close delivery could lag after an active
+pane switch and leave both old and new sessions discoverable. Each browser page now presents one
+random, memory-only stream id. A newly authenticated stream atomically replaces that stream id's
+prior server subscription, while genuinely independent browser pages remain ambiguous and fail
+closed. Stream ids and capabilities are scrubbed from request URLs after authentication.
+
+### Medium: wrapper schemas and action payload variants were too permissive
+
+Snapshot and result wrappers now require exact schema version `"1"`, kind, and allowed outer keys.
+Action payload fields are type-discriminated, preventing an `applyTextEdits` action from carrying an
+uncounted patch. Existing server-prepared `applyPatch` text edits remain valid. Contract and route
+tests cover missing or foreign schema versions, additional keys, and type-foreign payloads.
+
 No unresolved high or critical finding remains after these fixes.
 
 ## Adversarial verification matrix
@@ -65,9 +88,10 @@ No unresolved high or critical finding remains after these fixes.
 | `applyChangeset` sensitive paths | safe member followed by `.env`, `.ssh/id_rsa`, `.keiko/state.json`, or `.aws/credentials`; no reads or writes to the denied member | `agentRoutes.test.ts`: generated `rejects a safe plus deny-listed ... changeset` matrix         |
 | `applyChangeset` escape          | safe member plus `../outside.txt`; absolute member; target replaced after queueing by an outward symlink                           | `agentRoutes.test.ts`: escaping-member matrix and commit-time outward-symlink test              |
 | Whole-action preconditions       | stale second member; live snapshot made unverifiable; unselected members still validated                                           | `agentRoutes.test.ts`: stale-member, verifiable-counterpart, and selected-file projection tests |
-| Authority and capability         | missing/wrong/replayed bridge capability; expired changeset authority; unknown-field smuggling                                     | `agentRoutes.test.ts`: bridge lease, changeset expiry, and canonical-wire tests                 |
+| Authority and capability         | missing/wrong/replayed bridge capability; expired changeset authority; delayed stream close; unknown-field smuggling               | `agentRoutes.test.ts`: bridge lease/supersession, changeset expiry, and canonical-wire tests    |
 | Atomicity                        | browser rejection; stale member; writer failure on a later member; replay; forged result                                           | `agentRoutes.test.ts`: apply-none, rollback, idempotency, and forged-result tests               |
-| Authority budgets                | cumulative tool calls and UTF-8 patch bytes; elapsed runtime; text-edit bytes                                                      | `agentAuthorityRegistry.test.ts` and `agentRoutes.test.ts` Authority Envelope budget tests      |
+| Authority budgets                | cumulative tool calls and UTF-8 patch bytes; elapsed runtime; text-edit bytes; identical re-registration                           | `agentAuthorityRegistry.test.ts` and `agentRoutes.test.ts` Authority Envelope budget tests      |
+| Cross-pane reconciliation        | active-pane switching; stale retained snapshots; clean peer model; dirty/delete rechecks; bounded queue                            | route, queue, runtime, and `editor-agent-docking-2122` split-pane tests                         |
 | Diagnostics/context              | item/message caps, ingest rejection, truncation, unsafe-format stripping, redaction                                                | `editor-agent.test.ts`, `agentRoutes.test.ts`, and `codingContextProviders.test.ts`             |
 
 The credential-path case intentionally uses a well-known credential store (`.aws/credentials`). A
@@ -92,7 +116,8 @@ Review timing follows policy rather than an obsolete blanket Save rule:
 - Chat **Apply to editor** is an explicit review workflow. Accept changes the active buffer, marks it
   dirty, and requires explicit Save before that buffer reaches disk.
 
-The #2122 Playwright suite verifies all three paths against the real BFF and filesystem.
+The #2122 Playwright suite verifies all three paths plus active split-pane bridge switching and
+two-visible-model reconciliation against the real BFF and filesystem.
 
 ## Audit and data handling
 
@@ -104,6 +129,7 @@ session-bound, and consumed through a live bridge lease.
 
 ## Disposition
 
-Security review: **passed after two high-severity fixes**. Sensitive-path, containment,
+Security review: **passed after four high-severity fixes and one medium hardening group**.
+Sensitive-path, containment,
 precondition, authority, capability, budget, atomicity, and redaction controls have named passing
 regression coverage. No governance gate or deny was weakened.

@@ -28,6 +28,11 @@ risk, and composes the baseline editor security decision with the central matrix
 stricter-wins. The registry also enforces elapsed runtime, cumulative tool-call, and cumulative
 patch-byte budgets atomically for admitted editor actions.
 
+Epic #2091 closeout makes registration of the same run-id/envelope-digest pair idempotent without
+resetting registration time or cumulative usage. Runtime- or usage-exhausted records remain denied
+until envelope expiry or explicit revocation, so re-confirming identical authority cannot restart a
+budget.
+
 ## Context
 
 Keiko has two compatible foundations that now need one docking contract: the Coding Workbench's
@@ -94,6 +99,9 @@ time and bytes, and sends the BFF's `X-Keiko-CSRF: 1` mutation guard on POST req
 and result parsing emits a deep canonical projection of every recognized wire field before route or
 SSE handling. Unknown top-level or nested fields are not retained, so callers cannot smuggle bridge
 capabilities, Authority Envelope bodies, or parallel policy data through structurally valid actions.
+Snapshot/action/result wrappers require exact schema version `"1"`, exact kind, and closed outer
+key sets. Action payload fields are type-discriminated; server-prepared `applyPatch` text edits are
+allowed, while a foreign patch on `applyTextEdits` is rejected before admission or byte accounting.
 
 `EditorAgentAction` gains optional, content-free references:
 
@@ -163,6 +171,16 @@ and repeats structural preflight before the browser mutates the active buffer. A
 revalidated atomic server transaction, and reconciles Monaco from authoritative disk state. This
 changes only approval timing; structural, containment, version/hash, dirty-file, bridge-lease,
 transaction, and reconciliation gates are identical in reviewed and direct paths.
+
+Pane-scoped sessions remain the browser ownership boundary from ADR-0061. Discovery returns only
+sessions with a live authenticated SSE bridge. A random page-scoped stream id lets a reconnect
+supersede the same page's previous liveness contribution even if socket-close notification is
+delayed; the id and bridge capabilities are scrubbed from request URLs after authentication.
+After a successful multi-file commit, `EditorWidget` queues content-free `{file, kind}`
+reconciliation requests only for other affected panes. The bounded per-pane FIFO serializes
+commits, compacts at its cap, and is pruned on pane removal or workspace replacement. Every target
+runtime rechecks active identity and dirty state after its disk read before adopting authoritative
+content into its own cache and Monaco model.
 
 Results gain bounded file-attributed entries with `succeeded`, `failed`, `conflict`, or
 `not-selected` status, and conflict details may name a contained file. The file result list shares

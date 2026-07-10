@@ -124,16 +124,16 @@ export class EditorAgentAuthorityRegistry {
       return { ok: false, reason: "invalid" };
     }
     if (expired(nowIso, parsed.value.expiresAt)) return { ok: false, reason: "expired" };
-    this.evictInactive(nowIso);
     const digest = editorAgentAuthorityEnvelopeDigest(parsed.value);
     const authorityRef = { runId: parsed.value.runId, envelopeDigest: digest };
-    if (
-      !this.records.has(recordKey(authorityRef)) &&
-      this.records.size >= EDITOR_AGENT_AUTHORITY_MAX_RECORDS
-    ) {
+    const key = recordKey(authorityRef);
+    const existing = this.records.get(key);
+    if (existing !== undefined) return { ok: true, authorityRef };
+    this.evictInactive(nowIso);
+    if (this.records.size >= EDITOR_AGENT_AUTHORITY_MAX_RECORDS) {
       return { ok: false, reason: "invalid" };
     }
-    this.records.set(recordKey(authorityRef), {
+    this.records.set(key, {
       envelope: parsed.value,
       digest,
       registeredAtMs: Date.parse(nowIso),
@@ -187,7 +187,6 @@ export class EditorAgentAuthorityRegistry {
       return { ok: false, reason: "expired" };
     }
     if (runtimeBudgetExceeded(record, nowIso)) {
-      this.records.delete(key);
       return { ok: false, reason: "budget-exceeded" };
     }
     return this.recordMatches(record, reference, workspaceRoot, deploymentCeiling)
@@ -271,7 +270,7 @@ export class EditorAgentAuthorityRegistry {
 
   private evictInactive(nowIso: string): void {
     for (const [key, record] of this.records) {
-      if (expired(nowIso, record.envelope.expiresAt) || runtimeBudgetExceeded(record, nowIso)) {
+      if (expired(nowIso, record.envelope.expiresAt)) {
         this.records.delete(key);
       }
     }

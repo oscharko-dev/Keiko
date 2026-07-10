@@ -17,6 +17,7 @@ import {
   createEditorWorkspace,
   openEditorWorkspace,
   seedEditorWindow,
+  splitActivePane,
 } from "./support/editorWorkspace.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -136,6 +137,18 @@ async function waitForEditorSession(request: APIRequestContext, root: string): P
   const sessionId = await editorSessionId(request, root);
   if (sessionId === null) throw new Error("Editor session did not register.");
   return sessionId;
+}
+
+async function liveEditorSessionIds(
+  request: APIRequestContext,
+  root: string,
+): Promise<readonly string[]> {
+  const response = await request.get("/api/editor/agent/sessions");
+  if (!response.ok()) return [];
+  const body = (await response.json()) as { sessions?: readonly SessionSummary[] };
+  return (body.sessions ?? [])
+    .filter((candidate) => candidate.workspaceRoot === root)
+    .flatMap((candidate) => (typeof candidate.sessionId === "string" ? [candidate.sessionId] : []));
 }
 
 async function registerAuthority(
@@ -394,5 +407,76 @@ test("governed-assist commits an allowed changeset without staging review", asyn
     workspace.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "active = 2" }),
   ).toBeVisible();
   await expectAuditEvidence(request, sessionId, actionId, "allowed");
+  expect(pageErrors).toEqual([]);
+});
+
+test("split panes keep one live session and reconcile a committed changeset in both models", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const { root } = createEditorWorkspace([
+    { path: ACTIVE_FILE, content: ACTIVE_BEFORE },
+    { path: CLOSED_FILE, content: CLOSED_BEFORE },
+  ]);
+  await seedEditorWindow(page, {
+    root,
+    active: ACTIVE_FILE,
+    openFiles: [ACTIVE_FILE, CLOSED_FILE],
+    windowId: "editor-agent-docking-2122-split",
+    resetWorkspace: true,
+  });
+  const eventSessionSets: string[][] = [];
+  page.on("request", (browserRequest) => {
+    const url = new URL(browserRequest.url());
+    if (url.pathname === "/api/editor/agent/events") {
+      eventSessionSets.push(url.searchParams.getAll("sessionId"));
+    }
+  });
+  const pageErrors = collectPageErrors(page);
+  await page.goto("/");
+  const workspace = await openEditorWorkspace(page);
+  await splitActivePane(workspace, ACTIVE_FILE, "right");
+  const panes = workspace.locator(EDITOR_SELECTORS.pane);
+  await expect(panes).toHaveCount(2);
+  const closedPane = panes.nth(0);
+  const activePane = panes.nth(1);
+  await closedPane.locator(`${EDITOR_SELECTORS.tabHit}[data-tip="${CLOSED_FILE}"]`).click();
+  await expect(
+    closedPane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "closed = 1" }),
+  ).toBeVisible();
+  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
+  const secondSession = (await liveEditorSessionIds(request, root))[0];
+  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
+
+  await activePane.locator(`${EDITOR_SELECTORS.tabHit}[data-tip="${ACTIVE_FILE}"]`).click();
+  await expect(
+    activePane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "active = 1" }),
+  ).toBeVisible();
+  await expect.poll(() => eventSessionSets.at(-1)).toHaveLength(1);
+  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
+  const sessionId = await waitForEditorSession(request, root);
+  expect(sessionId).not.toBe(secondSession);
+
+  const envelope = authorityEnvelope(root, "supervised-coding", "run-2122-model");
+  const authorityRef = await registerAuthority(request, envelope);
+  const actionId = `e2e-changeset-split-2122-${String(Date.now())}`;
+  await proposeChangeset(request, sessionId, authorityRef, actionId);
+  const review = activePane.getByRole("group", { name: "Agent changeset review" });
+  await expect(review).toBeVisible();
+  const terminalResponse = waitForTerminalChangesetResponse(page, actionId);
+  await review.getByTestId("keiko-diff-apply").click();
+  expect((await terminalResponse).ok()).toBe(true);
+
+  await expect(
+    activePane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "active = 2" }),
+  ).toBeVisible();
+  await expect(
+    closedPane.locator(`${EDITOR_SELECTORS.monaco} .view-line`).filter({ hasText: "closed = 2" }),
+  ).toBeVisible();
+  await expect(workspace.locator(`${EDITOR_SELECTORS.tab}[data-dirty="true"]`)).toHaveCount(0);
+  await expect.poll(async () => liveEditorSessionIds(request, root)).toHaveLength(1);
+  expect(readFileSync(join(root, ACTIVE_FILE), "utf8")).toBe(ACTIVE_AFTER);
+  expect(readFileSync(join(root, CLOSED_FILE), "utf8")).toBe(CLOSED_AFTER);
   expect(pageErrors).toEqual([]);
 });

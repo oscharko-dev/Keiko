@@ -781,8 +781,10 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     isActionTarget(value.target),
     isUndefinedOr(value.expectedDocumentVersion, isDocumentVersion),
     isUndefinedOr(value.expectedContentHash, isSha256Hex),
-    isUndefinedOr(value.textEdits, isTextEditArray),
-    isUndefinedOr(value.patch, isString),
+    value.type === "applyTextEdits" || value.type === "applyPatch"
+      ? isUndefinedOr(value.textEdits, isTextEditArray)
+      : value.textEdits === undefined,
+    value.type === "applyPatch" ? isUndefinedOr(value.patch, isString) : value.patch === undefined,
     value.type === "applyChangeset"
       ? isEditorAgentChangeset(value.changeset)
       : value.changeset === undefined,
@@ -1021,7 +1023,12 @@ export function isContainedAgentPath(candidate: string): boolean {
 function parseBridgeSnapshotRequest(
   value: Record<string, unknown>,
 ): EditorAgentParse<EditorAgentBridgeSnapshotRequest> {
-  if (!isEditorAgentSessionSnapshot(value.snapshot)) {
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    value.kind !== "snapshot" ||
+    !Object.keys(value).every((key) => EDITOR_AGENT_BRIDGE_SNAPSHOT_REQUEST_KEYS.has(key)) ||
+    !isEditorAgentSessionSnapshot(value.snapshot)
+  ) {
     return { ok: false, errors: ["snapshot must be a valid editor agent session snapshot"] };
   }
   if (
@@ -1042,6 +1049,13 @@ function parseBridgeSnapshotRequest(
     },
   };
 }
+
+const EDITOR_AGENT_BRIDGE_SNAPSHOT_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "snapshot",
+  "bridgeDecisionCapability",
+]);
 
 function parseReadSnapshotRequest(
   value: Record<string, unknown>,
@@ -1188,11 +1202,14 @@ function canonicalEditorAgentAction(action: EditorAgentAction): EditorAgentActio
     ...(action.expectedContentHash === undefined
       ? {}
       : { expectedContentHash: action.expectedContentHash }),
-    ...(action.textEdits === undefined
+    ...((action.type !== "applyTextEdits" && action.type !== "applyPatch") ||
+    action.textEdits === undefined
       ? {}
       : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) }),
-    ...(action.patch === undefined ? {} : { patch: action.patch }),
-    ...(action.changeset === undefined ? {} : { changeset: canonicalChangeset(action.changeset) }),
+    ...(action.type !== "applyPatch" || action.patch === undefined ? {} : { patch: action.patch }),
+    ...(action.type !== "applyChangeset" || action.changeset === undefined
+      ? {}
+      : { changeset: canonicalChangeset(action.changeset) }),
   };
 }
 
@@ -1237,6 +1254,13 @@ const EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS = new Set([
   "bridgeDecisionCapability",
 ]);
 
+const EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "result",
+  "bridgeDecisionCapability",
+]);
+
 function parseBridgeActionRequest(
   value: Record<string, unknown>,
 ): EditorAgentParse<EditorAgentBridgeActionRequest> {
@@ -1262,7 +1286,12 @@ function parseBridgeActionRequest(
 function parseActionResultRequest(
   value: Record<string, unknown>,
 ): EditorAgentParse<EditorAgentActionResultRequest> {
-  if (!isEditorAgentActionResult(value.result)) {
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    value.kind !== "result" ||
+    !Object.keys(value).every((key) => EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS.has(key)) ||
+    !isEditorAgentActionResult(value.result)
+  ) {
     return { ok: false, errors: ["action result request is invalid"] };
   }
   const capability = value.bridgeDecisionCapability;

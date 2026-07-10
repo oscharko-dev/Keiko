@@ -14,7 +14,7 @@ denials and the separate delivery approval boundary remain unchanged.
 
 ## End-to-end evidence
 
-`npm run test:e2e:editor-agent-docking-2122` passed locally on Chromium: **3 tests passed**.
+`npm run test:e2e:editor-agent-docking-2122` passed locally on Chromium: **4 tests passed**.
 
 The suite proves:
 
@@ -24,12 +24,15 @@ The suite proves:
   before Accept;
 - atomic multi-file commit, active-model reconciliation, clean tabs, and `Saved` state after Accept;
 - an allowed contained changeset with no visible review and no transient review surface;
+- split-pane focus switching with exactly one discoverable live session and no stale-session
+  ambiguity;
+- one atomic changeset reconciled into two simultaneously visible clean Monaco models;
 - queued and terminal content-free audit records with `review-required` or `allowed` disposition.
 
 Targeted security regressions passed:
 
-- `packages/keiko-contracts/src/editor-agent.test.ts`: **82 tests passed**;
-- `packages/keiko-server/src/editor/agentRoutes.test.ts`: **106 tests passed**;
+- `packages/keiko-contracts/src/editor-agent.test.ts`: **84 tests passed**;
+- `packages/keiko-server/src/editor/agentRoutes.test.ts`: **108 tests passed**;
 - `packages/keiko-tools/src/editor-agent-client.test.ts`: **52 tests passed**.
 
 See [the security review](./2091-agent-docking-security-review.md) for the threat-boundary matrix and
@@ -59,7 +62,7 @@ instrumentation.
 ## Authority Envelope disposition
 
 **Implemented and verified — editor agent actions are classified under Epic #1982's Authority
-Envelope as of commit `226e7bac0657140088e2a3eed91df1dc60ce1999`.**
+Envelope as of commit `abb7bfd1da07c72f96c740a49a48d5a14049081e`.**
 
 The integration uses the existing validated envelope contracts in
 `packages/keiko-contracts/src/coding-workbench.ts`. The server stores full envelopes in a bounded
@@ -101,7 +104,7 @@ platform difference is recorded rather than treated as authoritative.
 | `npm run arch:check:negative`                                     | Pass, 48 negative fixtures fired                             |
 | `npm run test:coverage:quality`                                   | Pass                                                         |
 | `npm run check:coverage:branches`                                 | Pass after raising only the `keiko-tools` ratchet            |
-| `npm run test:e2e:editor-agent-docking-2122`                      | Pass, 3 Chromium tests                                       |
+| `npm run test:e2e:editor-agent-docking-2122`                      | Pass, 4 Chromium tests                                       |
 | `npm run check:adr-index`                                         | Pass, 98 unique indexed ADRs                                 |
 | `npm run check:editor-doc-links`                                  | Pass, 23 documents                                           |
 | Linux `npm run build:ui && npm run check:editor-release-evidence` | Pass                                                         |
