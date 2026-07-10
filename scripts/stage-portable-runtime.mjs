@@ -407,14 +407,18 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
+// npm is `npm.cmd` on Windows, which spawnSync can only launch through a shell (a bare "npm"
+// yields spawnSync ENOENT); POSIX resolves the bare "npm" directly. The staging temp/pack paths are
+// created by mkdtempSync under the OS temp root, so no npm argument contains spaces — shell
+// arg-splitting is safe here. This is the only place staging shells out to npm.
+// SECURITY-SHELL-OK: shell is enabled only on win32 to resolve npm.cmd; all args are static
+// literals or mkdtemp-generated paths (no user/network input), so there is no injection surface.
+function runNpm(args, options = {}) {
+  return run("npm", args, { ...options, shell: process.platform === "win32" });
+}
+
 function packRoot(packDir) {
-  const result = run("npm", [
-    "pack",
-    "--silent",
-    "--ignore-scripts",
-    "--pack-destination",
-    packDir,
-  ]);
+  const result = runNpm(["pack", "--silent", "--ignore-scripts", "--pack-destination", packDir]);
   const tarballName = result.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
   if (tarballName === undefined) fail("npm pack did not report a tarball name");
   const tarball = join(packDir, tarballName);
@@ -423,12 +427,12 @@ function packRoot(packDir) {
 }
 
 function preparePackageSurface() {
-  run("npm", ["run", "build"]);
-  run("npm", ["run", "build:ui"]);
-  run("npm", ["run", "prepare:bin"]);
-  run("npm", ["run", "prune:package-build-artifacts"]);
-  run("npm", ["run", "prune:package-native-optionals"]);
-  run("npm", ["run", "check:package-surface"]);
+  runNpm(["run", "build"]);
+  runNpm(["run", "build:ui"]);
+  runNpm(["run", "prepare:bin"]);
+  runNpm(["run", "prune:package-build-artifacts"]);
+  runNpm(["run", "prune:package-native-optionals"]);
+  runNpm(["run", "check:package-surface"]);
 }
 
 function stagePackedPackage(tarball, extractRoot, stageRoot) {
