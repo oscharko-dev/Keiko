@@ -50,12 +50,22 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
 
+const originalPlatform = window.navigator.platform;
+
+function stubPlatform(platform: string): void {
+  Object.defineProperty(window.navigator, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
+
 beforeEach(() => {
   pushMock.mockReset();
 });
 
 afterEach(() => {
   window.localStorage.removeItem(I18N_STORAGE_KEY);
+  stubPlatform(originalPlatform);
 });
 
 // ---------------------------------------------------------------------------
@@ -556,6 +566,7 @@ describe("ConnectorGraph — with capsules", () => {
   });
 
   it("does not start capsule drag-out from right click or macOS control click", async () => {
+    stubPlatform("MacIntel");
     const capsule = makeCapsule({ id: makeCapsuleId("drag-blocked"), displayName: "Blocked KC" });
     const workspace = document.createElement("main");
     workspace.className = "workspace";

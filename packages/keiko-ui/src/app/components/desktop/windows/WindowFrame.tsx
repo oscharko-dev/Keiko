@@ -1120,9 +1120,12 @@ function WindowFrameImpl({
     }),
     [ew, eh, zoom],
   );
-  const windowClassName = selected
-    ? `window ${selectionStyles.workspaceWindow} ${selectionStyles.selectedWindow}`
-    : `window ${selectionStyles.workspaceWindow}`;
+  // Issue #2150 — the selected-state ring is rendered by Workspace.tsx as a
+  // z-indexed overlay above every window (see WorkspaceSelection.module.css
+  // .selectionRing), not as styling here, so it stays visible regardless of
+  // window overlap. `data-selected` below remains the source of truth for a11y
+  // and for that overlay to find this window's geometry.
+  const windowClassName = `window ${selectionStyles.workspaceWindow}`;
 
   return (
     // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this named window region is keyboard
