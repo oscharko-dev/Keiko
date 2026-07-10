@@ -43,7 +43,7 @@ finding disposition. See [the demo script](./2091-agent-docking-demo.md) for man
 `npm run test:coverage:quality` passed:
 
 - package run: 1,068 test files, 18,332 tests passed, 2 skipped;
-- UI run: 288 test files and 4,739 tests passed;
+- UI run: 288 test files and 4,741 tests passed;
 - all 26 governed file-level floors passed;
 - UI line coverage met the strict 88% release target.
 
@@ -54,7 +54,7 @@ finding disposition. See [the demo script](./2091-agent-docking-demo.md) for man
 | `keiko-tools`     | 89.91% |   80.02% |       80.02% | Pass, ratchet raised from 79.55% |
 | `keiko-harness`   | 91.21% |   86.61% |       85.00% | Pass                             |
 | `keiko-editor`    | 95.93% |   87.72% |       85.00% | Pass                             |
-| `keiko-ui`        | 88.69% |   77.06% |       76.70% | Pass                             |
+| `keiko-ui`        | 88.70% |   77.05% |       76.70% | Pass                             |
 
 No baseline floor is lowered. The Linux/CI metric remains authoritative when it differs from macOS
 instrumentation.
@@ -118,6 +118,8 @@ commit stamp is reachable from the current branch.
 | `npm run format:check`                                  | Pass                                                         |
 | `npm test`                                              | Pass, 1,062 files / 18,249 passed / 2 skipped                |
 | `npm run test:coverage:quality`                         | Pass, including file and branch ratchets                     |
+| `npm run test:coverage:ui`                              | Pass, 288 files / 4,741 tests                                |
+| `npm run check:ui-i18n`                                 | Pass, English and German catalogs complete                   |
 | `npm run arch:check`                                    | Pass, 2,833 modules / 7,900 dependencies                     |
 | `npm run arch:check:negative`                           | Pass, 48 negative fixtures fired                             |
 | `npm run build`                                         | Pass                                                         |
