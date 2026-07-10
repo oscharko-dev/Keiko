@@ -40,7 +40,6 @@ const RESULT_KEYS = Object.freeze(
     ...MAC_NATIVE_FIELDS,
     "cleanupSucceeded",
     "finalizerSucceeded",
-    "payloadSmokeVerified",
     "schemaVersion",
     "target",
   ].sort(),
@@ -87,7 +86,6 @@ function initialResult(target) {
     ...MAC_NATIVE_FIELDS.map((name) => [name, false]),
     ["cleanupSucceeded", false],
     ["finalizerSucceeded", false],
-    ["payloadSmokeVerified", false],
     ["schemaVersion", 1],
     ["target", target],
   ]);
@@ -105,12 +103,7 @@ export function readMacNativeResult(path, expectedTarget) {
   if (!exactKeys(value, RESULT_KEYS)) fail("native result is invalid");
   if (value.schemaVersion !== 1 || value.target !== expectedTarget)
     fail("native result is invalid");
-  for (const name of [
-    ...MAC_NATIVE_FIELDS,
-    "cleanupSucceeded",
-    "finalizerSucceeded",
-    "payloadSmokeVerified",
-  ]) {
+  for (const name of [...MAC_NATIVE_FIELDS, "cleanupSucceeded", "finalizerSucceeded"]) {
     if (typeof value[name] !== "boolean") fail("native result is invalid");
   }
   return value;
@@ -136,13 +129,16 @@ export function verificationChecksForNativeResult(result) {
   };
 }
 
-export function macNativeControlFlow(result, production = true) {
+export function macNativeControlFlow(
+  result,
+  { isolatedSmokeSucceeded = false, production = true } = {},
+) {
   const cleanupRuns = production;
-  const payloadSmokeRuns =
-    production && nativeSucceeded(result) && result.cleanupSucceeded === true;
-  const finalizeRuns = payloadSmokeRuns && result.payloadSmokeVerified === true;
+  const finalizeRuns = production && nativeSucceeded(result) && result.cleanupSucceeded === true;
   const uploadRuns = finalizeRuns && result.finalizerSucceeded === true;
-  return { cleanupRuns, finalizeRuns, payloadSmokeRuns, uploadRuns };
+  const isolatedSmokeRuns = uploadRuns;
+  const assembleRuns = isolatedSmokeRuns && isolatedSmokeSucceeded;
+  return { assembleRuns, cleanupRuns, finalizeRuns, isolatedSmokeRuns, uploadRuns };
 }
 
 export function assertSigningCredentialsCleared(env) {
@@ -184,6 +180,22 @@ function cleanupSuccess(options) {
   writeResult(required(options, "output"), result);
 }
 
+function cleanupAuthority(options) {
+  const target = required(options, "target");
+  assertTarget(target);
+  const result = readMacNativeResult(resolve(required(options, "input")), target);
+  const safeRoot = requiredBoolean(options, "safe-root");
+  const helperExecutable = requiredBoolean(options, "helper-executable");
+  if (result.setupSucceeded && result.importSucceeded && (!safeRoot || !helperExecutable))
+    fail("cleanup authority is missing after credential import");
+}
+
+function requiredBoolean(options, name) {
+  const value = required(options, name);
+  if (value !== "true" && value !== "false") fail(`--${name} is invalid`);
+  return value === "true";
+}
+
 function verificationInput(manifest, checks) {
   return {
     reasonCodes: [],
@@ -196,7 +208,7 @@ function verificationInput(manifest, checks) {
   };
 }
 
-function complete(options) {
+function writeVerificationInput(options) {
   const target = required(options, "target");
   assertTarget(target);
   assertSigningCredentialsCleared(process.env);
@@ -204,8 +216,6 @@ function complete(options) {
   const result = readMacNativeResult(input, target);
   if (!nativeSucceeded(result) || result.cleanupSucceeded !== true)
     fail("native verification or cleanup did not succeed");
-  result.payloadSmokeVerified = true;
-  writeResult(input, result);
   const stage = resolve(required(options, "stage-root"));
   const manifest = JSON.parse(
     readFileSync(join(stage, "manifest", "portable-manifest.json"), "utf8"),
@@ -224,7 +234,7 @@ function finalizerSuccess(options) {
   assertTarget(target);
   const input = resolve(required(options, "input"));
   const result = readMacNativeResult(input, target);
-  if (!nativeSucceeded(result) || !result.cleanupSucceeded || !result.payloadSmokeVerified)
+  if (!nativeSucceeded(result) || !result.cleanupSucceeded)
     fail("prior production phases did not succeed");
   result.finalizerSucceeded = true;
   writeResult(input, result);
@@ -234,8 +244,9 @@ export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
   if (command === "credentials-success") credentialsSuccess(options);
   else if (command === "static-success") staticSuccess(options);
+  else if (command === "cleanup-authority") cleanupAuthority(options);
   else if (command === "cleanup-success") cleanupSuccess(options);
-  else if (command === "complete") complete(options);
+  else if (command === "verification-input") writeVerificationInput(options);
   else if (command === "finalizer-success") finalizerSuccess(options);
   else fail("unsupported command");
 }

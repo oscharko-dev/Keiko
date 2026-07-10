@@ -26,6 +26,7 @@ import {
   sha256File,
   validatePortableManifest,
 } from "../portable-runtime.mjs";
+import { prepareIsolatedMacSmoke } from "../isolated-macos-production-smoke.mjs";
 
 const roots = [];
 function root() {
@@ -350,6 +351,55 @@ describe("macOS portable signing inventory", () => {
       ).rejects.toThrow();
       expect(paths.map((path) => readFileSync(path))).toEqual(before);
     }
+  });
+
+  it("isolates payload mutation from the uploaded artifact and source archive", async () => {
+    const fixture = macFinalizeStage();
+    await main([
+      "finalize",
+      "--stage-root",
+      fixture.stage,
+      "--expected-inventory",
+      fixture.inventoryPath,
+      "--verification-input",
+      fixture.inputPath,
+    ]);
+    const archiveBefore = readFileSync(fixture.archivePath);
+    const sourceNode = join(fixture.resources, "runtime", "node", "bin", "node");
+    const sourceNodeBefore = readFileSync(sourceNode);
+    const disposable = join(
+      dirname(fixture.stage),
+      `keiko-isolated-macos-smoke-${Date.now().toString(36)}`,
+    );
+    roots.push(disposable);
+    await prepareIsolatedMacSmoke({
+      "artifact-root": fixture.stage,
+      "disposable-root": disposable,
+      "runner-temp": dirname(fixture.stage),
+      extractor: (archive, destination) => {
+        const result = spawnSync("unzip", ["-q", archive, "-d", destination], {
+          stdio: "ignore",
+        });
+        if (result.status !== 0) throw new Error("fixture extraction failed");
+      },
+      target: "macos-arm64",
+    });
+    writeFileSync(
+      join(
+        disposable,
+        "Keiko",
+        "Keiko.app",
+        "Contents",
+        "Resources",
+        "runtime",
+        "node",
+        "bin",
+        "node",
+      ),
+      "poisoned disposable payload",
+    );
+    expect(readFileSync(fixture.archivePath)).toEqual(archiveBefore);
+    expect(readFileSync(sourceNode)).toEqual(sourceNodeBefore);
   });
 });
 

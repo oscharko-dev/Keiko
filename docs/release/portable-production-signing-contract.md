@@ -230,13 +230,22 @@ An exact bounded native observation record advances only after credential import
 verification really complete. The immediately following always-run cleanup best-effort deletes the
 temporary keychain and all decoded files and clears every persisted signing environment value even when
 one cleanup substep fails; any such failure still fails the job. Only after successful cleanup may the
-workflow execute the bundled Node JIT and sidecar runtime smokes. Target-aware shared finalization then
-recomputes the macOS `Resources/app` and sidecar trees, archive/provenance/checksum/reviewed bindings,
-and canonical signing summary. For routine certificate or team key rotation, replace only protected
-environment values, retain the dedicated Developer role and team scope, and rerun both architecture
-qualifications before selection. On rejection, timeout, outage, revocation, or suspected compromise,
-disable the environment/key, leave manual staging available, and never retry with an individual key,
-broader role, ad-hoc identity, unstapled app, or operator-supplied verification Boolean.
+protected job derive the bounded verification input. Target-aware shared finalization then recomputes
+the macOS `Resources/app` and sidecar trees, archive/provenance/checksum/reviewed bindings, and canonical
+signing summary before uploading an immutable candidate. The protected job never executes a bundled
+payload.
+
+A separate unprivileged native matrix downloads that immutable candidate without persisted checkout
+credentials, validates its target, manifest, evidence, and archive digest, and extracts a disposable
+copy with `ditto`. Its terminal step clears signing, token, OIDC, runtime-token, file-command, and shell
+injection channels before executing the Node JIT and manifest sidecar smokes. It deletes only the
+disposable copy and cannot upload or mutate the candidate consumed by assembly. Assembly requires this
+isolated smoke result in addition to both protected architecture results. For routine certificate or
+team key rotation, replace only protected environment values, retain the dedicated Developer role and
+team scope, and rerun both architecture qualifications before selection. On rejection, timeout,
+outage, revocation, or suspected compromise, disable the environment/key, leave manual staging
+available, and never retry with an individual key, broader role, ad-hoc identity, unstapled app, or
+operator-supplied verification Boolean.
 
 The exact current verifier input is a JSON object with no keys other than:
 

@@ -306,8 +306,6 @@ jobs:
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
       - name: Stage portable runtime from approved inputs
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
-      - name: Smoke test the unsigned staged artifact
-        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
       - name: Validate protected Apple configuration
         env:
           APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
@@ -337,14 +335,12 @@ jobs:
       - name: Remove temporary Apple signing material
         if: ${{ always() }}
         run: ./scripts/cleanup-macos-portable-signing.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-native-result.json"
-      - name: Smoke test signed payload after credential cleanup
-        run: ./scripts/smoke-macos-portable-payload.sh .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-native-result.json" "$RUNNER_TEMP/macos-verification-input.json"
+      - name: Derive bounded verification input after credential cleanup
+        run: node scripts/macos-native-policy.mjs verification-input --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --target ${{ matrix.platform_target }} --input "$RUNNER_TEMP/macos-native-result.json" --output "$RUNNER_TEMP/macos-verification-input.json"
       - name: Bind and verify the production macOS archive
         run: node scripts/macos-portable-signing.mjs finalize --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --expected-inventory "$RUNNER_TEMP/macos-code-verified.json" --verification-input "$RUNNER_TEMP/macos-verification-input.json"
       - name: Record canonical macOS finalizer success
         run: node scripts/macos-native-policy.mjs finalizer-success --target ${{ matrix.platform_target }} --input "$RUNNER_TEMP/macos-native-result.json"
-      - name: Smoke test the verified production artifact
-        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target ${{ matrix.platform_target }}
       - name: Upload verified macOS target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -353,10 +349,44 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  smoke-macos-production:
+    name: Isolated smoke portable asset (${{ matrix.platform_target }})
+    needs: stage-macos-production
+    if: ${{ needs.stage-macos-production.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform_target: macos-arm64
+            runner: macos-15
+          - platform_target: macos-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+      - name: Download immutable verified macOS artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: portable-stage-${{ matrix.platform_target }}
+          path: .isolated-macos-artifact/${{ matrix.platform_target }}
+      - name: Validate and extract disposable smoke copy
+        run: node scripts/isolated-macos-production-smoke.mjs prepare --artifact-root .isolated-macos-artifact/${{ matrix.platform_target }} --target ${{ matrix.platform_target }} --runner-temp "$RUNNER_TEMP" --disposable-root "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}"
+      - name: Execute bundled runtimes in isolated disposable copy
+        run: ./scripts/run-isolated-macos-payload-smoke.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}"
+
   assemble:
     name: Assemble reviewed portable asset bundle
-    needs: [stage, production-signing-preflight, stage-windows-production, stage-macos-production]
-    if: ${{ always() && ((github.event_name == 'workflow_dispatch' && needs.stage.result == 'success' && needs.production-signing-preflight.result == 'skipped' && needs.stage-windows-production.result == 'skipped' && needs.stage-macos-production.result == 'skipped') || (github.event_name == 'push' && !contains(github.ref_name, '-') && needs.stage.result == 'skipped' && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success')) }}
+    needs: [stage, production-signing-preflight, stage-windows-production, stage-macos-production, smoke-macos-production]
+    if: ${{ always() && ((github.event_name == 'workflow_dispatch' && needs.stage.result == 'success' && needs.production-signing-preflight.result == 'skipped' && needs.stage-windows-production.result == 'skipped' && needs.stage-macos-production.result == 'skipped' && needs.smoke-macos-production.result == 'skipped') || (github.event_name == 'push' && !contains(github.ref_name, '-') && needs.stage.result == 'skipped' && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.smoke-macos-production.result == 'success')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

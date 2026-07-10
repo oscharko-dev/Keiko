@@ -34,7 +34,6 @@ function resultFor(target, overrides = {}) {
     ...MAC_NATIVE_FIELDS.map((name) => [name, true]),
     ["cleanupSucceeded", true],
     ["finalizerSucceeded", true],
-    ["payloadSmokeVerified", true],
     ["schemaVersion", 1],
     ["target", target],
     ...Object.entries(overrides),
@@ -71,45 +70,51 @@ describe("macOS production native control flow", () => {
       for (const [failure, field] of failures) {
         const result = resultFor(target, { [field]: false });
         expect(macNativeControlFlow(result), `${target}:${failure}`).toEqual({
+          assembleRuns: false,
           cleanupRuns: true,
           finalizeRuns: false,
-          payloadSmokeRuns: false,
+          isolatedSmokeRuns: false,
           uploadRuns: false,
         });
       }
     }
   });
 
-  it("always cleans production, then independently gates smoke, finalize, and upload", () => {
+  it("independently gates protected finalization/upload and isolated smoke assembly", () => {
     const target = "macos-arm64";
     expect(macNativeControlFlow(resultFor(target, { cleanupSucceeded: false }))).toEqual({
+      assembleRuns: false,
       cleanupRuns: true,
       finalizeRuns: false,
-      payloadSmokeRuns: false,
-      uploadRuns: false,
-    });
-    expect(macNativeControlFlow(resultFor(target, { payloadSmokeVerified: false }))).toEqual({
-      cleanupRuns: true,
-      finalizeRuns: false,
-      payloadSmokeRuns: true,
+      isolatedSmokeRuns: false,
       uploadRuns: false,
     });
     expect(macNativeControlFlow(resultFor(target, { finalizerSucceeded: false }))).toEqual({
+      assembleRuns: false,
       cleanupRuns: true,
       finalizeRuns: true,
-      payloadSmokeRuns: true,
+      isolatedSmokeRuns: false,
       uploadRuns: false,
     });
     expect(macNativeControlFlow(resultFor(target))).toEqual({
+      assembleRuns: false,
       cleanupRuns: true,
       finalizeRuns: true,
-      payloadSmokeRuns: true,
+      isolatedSmokeRuns: true,
       uploadRuns: true,
     });
-    expect(macNativeControlFlow(resultFor(target), false)).toEqual({
+    expect(macNativeControlFlow(resultFor(target), { isolatedSmokeSucceeded: true })).toEqual({
+      assembleRuns: true,
+      cleanupRuns: true,
+      finalizeRuns: true,
+      isolatedSmokeRuns: true,
+      uploadRuns: true,
+    });
+    expect(macNativeControlFlow(resultFor(target), { production: false })).toEqual({
+      assembleRuns: false,
       cleanupRuns: false,
       finalizeRuns: false,
-      payloadSmokeRuns: false,
+      isolatedSmokeRuns: false,
       uploadRuns: false,
     });
   });
@@ -163,7 +168,7 @@ describe("macOS production result and credential lifecycle", () => {
         JSON.stringify({ artifact: { platformTarget: target }, sidecarRuntimes: [] }),
       );
       await main([
-        "complete",
+        "verification-input",
         "--stage-root",
         stage,
         "--target",
@@ -173,7 +178,6 @@ describe("macOS production result and credential lifecycle", () => {
         "--output",
         verification,
       ]);
-      expect(readMacNativeResult(path, target).payloadSmokeVerified).toBe(true);
       await main(["finalizer-success", "--target", target, "--input", path]);
       expect(readMacNativeResult(path, target).finalizerSucceeded).toBe(true);
       const extra = { ...readMacNativeResult(path, target), providerLog: "token=secret" };
@@ -182,7 +186,7 @@ describe("macOS production result and credential lifecycle", () => {
     }
   });
 
-  it("refuses completion while any signing credential remains", () => {
+  it("refuses verification-input derivation while any signing credential remains", () => {
     expect(() => assertSigningCredentialsCleared({ KEIKO_KEYCHAIN_PASSWORD: "secret" })).toThrow(
       /credentials were not cleared/u,
     );
@@ -239,6 +243,37 @@ describe("macOS production result and credential lifecycle", () => {
       expect(() => readFileSync(signingRoot)).toThrow();
       expect(readFileSync(githubEnv, "utf8")).toContain("KEIKO_KEYCHAIN_PASSWORD=\n");
       expect(readMacNativeResult(nativeResult, "macos-arm64").cleanupSucceeded).toBe(!shouldFail);
+    }
+  });
+
+  it("refuses cleanup attestation after import when the safe root or helper is absent", async () => {
+    for (const missing of ["root", "helper"]) {
+      const runnerTemp = root();
+      const nativeResult = join(runnerTemp, `native-${missing}.json`);
+      const githubEnv = join(runnerTemp, `github-env-${missing}`);
+      await main(["credentials-success", "--target", "macos-arm64", "--output", nativeResult]);
+      const signingRoot = join(runnerTemp, `keiko-macos-signing-missing-${missing}`);
+      if (missing === "helper") {
+        mkdirSync(signingRoot);
+        writeFileSync(join(signingRoot, "notary-key.p8"), "private material");
+      }
+      const result = spawnSync(
+        "bash",
+        ["scripts/cleanup-macos-portable-signing.sh", "macos-arm64", nativeResult],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            GITHUB_ENV: githubEnv,
+            KEIKO_SIGNING_TEMP_ROOT: missing === "root" ? "" : signingRoot,
+            RUNNER_TEMP: runnerTemp,
+          },
+        },
+      );
+      expect(result.status).not.toBe(0);
+      expect(readFileSync(githubEnv, "utf8")).toContain("KEIKO_KEYCHAIN_PASSWORD=\n");
+      expect(readMacNativeResult(nativeResult, "macos-arm64").cleanupSucceeded).toBe(false);
+      if (missing === "helper") expect(existsSync(signingRoot)).toBe(false);
     }
   });
 

@@ -348,6 +348,10 @@ describe("Windows Artifact Signing protected configuration", () => {
 describe("macOS portable production signing workflow", () => {
   const macJob = portableWorkflow.slice(
     portableWorkflow.indexOf("  stage-macos-production:"),
+    portableWorkflow.indexOf("\n  smoke-macos-production:"),
+  );
+  const smokeJob = portableWorkflow.slice(
+    portableWorkflow.indexOf("  smoke-macos-production:"),
     portableWorkflow.indexOf("\n  assemble:"),
   );
   const stagingJob = portableWorkflow.slice(
@@ -356,7 +360,7 @@ describe("macOS portable production signing workflow", () => {
   );
   const nativeScript = readFileSync("scripts/run-macos-portable-signing.sh", "utf8");
   const architectureCheck = readFileSync("scripts/check-macos-macho-architecture.sh", "utf8");
-  const payloadSmokeScript = readFileSync("scripts/smoke-macos-portable-payload.sh", "utf8");
+  const payloadSmokeScript = readFileSync("scripts/run-isolated-macos-payload-smoke.sh", "utf8");
   const emptyEntitlements = readFileSync(
     "native/portable-launcher/macos-entitlements.plist",
     "utf8",
@@ -386,25 +390,29 @@ describe("macOS portable production signing workflow", () => {
     expect(assemble).toContain("github.event_name == 'workflow_dispatch'");
     expect(assemble).toContain("needs.stage.result == 'success'");
     expect(assemble).toContain("needs.stage-macos-production.result == 'skipped'");
+    expect(assemble).toContain("needs.smoke-macos-production.result == 'skipped'");
     expect(assemble).toContain("github.event_name == 'push'");
     expect(assemble).toContain("!contains(github.ref_name, '-')");
     expect(assemble).toContain("needs.stage.result == 'skipped'");
     expect(assemble).toContain("needs.stage-macos-production.result == 'success'");
+    expect(assemble).toContain("needs.smoke-macos-production.result == 'success'");
     expect(assemble).not.toMatch(/result == 'success' \|\| needs\.[^.]+\.result == 'skipped'/u);
   });
 
-  it("runs static signing, cleanup, credential-free payload smoke, finalization, then upload", () => {
+  it("runs only static verification, cleanup, finalization, and upload in the protected job", () => {
     const signing = macJob.indexOf("Sign, notarize, staple, and verify the native artifact");
     const cleanup = macJob.indexOf("Remove temporary Apple signing material");
-    const payloadSmoke = macJob.indexOf("Smoke test signed payload after credential cleanup");
+    const verificationInput = macJob.indexOf(
+      "Derive bounded verification input after credential cleanup",
+    );
     const finalize = macJob.indexOf("Bind and verify the production macOS archive");
     const upload = macJob.indexOf("Upload verified macOS target artifact");
     expect(signing).toBeLessThan(cleanup);
-    expect(cleanup).toBeLessThan(payloadSmoke);
-    expect(payloadSmoke).toBeLessThan(finalize);
+    expect(cleanup).toBeLessThan(verificationInput);
+    expect(verificationInput).toBeLessThan(finalize);
     expect(finalize).toBeLessThan(upload);
-    expect(macJob.slice(cleanup, payloadSmoke)).toContain("if: ${{ always() }}");
-    expect(macJob.slice(cleanup, payloadSmoke)).not.toContain("continue-on-error");
+    expect(macJob.slice(cleanup, verificationInput)).toContain("if: ${{ always() }}");
+    expect(macJob.slice(cleanup, verificationInput)).not.toContain("continue-on-error");
     expect(nativeScript).not.toMatch(/codesign\s+--force[^\n]*--deep/u);
     expect(nativeScript).toContain("codesign --verify --deep --strict");
     expect(nativeScript).toContain("xcrun notarytool submit");
@@ -416,9 +424,8 @@ describe("macOS portable production signing workflow", () => {
     expect(nativeScript).toContain('verify_signed_path "$app" default');
     expect(nativeScript).not.toContain("new Function");
     expect(nativeScript).not.toContain("--version");
-    expect(payloadSmokeScript).toContain("new Function");
-    expect(payloadSmokeScript).toContain("--version");
-    expect(payloadSmokeScript).toContain('[[ -z "${!name:-}" ]]');
+    expect(macJob).not.toContain("smoke:portable-launch-setup");
+    expect(macJob).not.toContain("run-isolated-macos-payload-smoke.sh");
   });
 
   it("uses an empty default entitlement set and Node-only allow-jit", () => {
@@ -430,22 +437,37 @@ describe("macOS portable production signing workflow", () => {
     expect(nodeEntitlements.match(/<key>/gu)).toHaveLength(1);
   });
 
-  it("does not expose a workflow-selectable native verification bypass or payload credentials", () => {
+  it("isolates payload execution in a terminal unprivileged immutable-artifact job", () => {
     expect(macJob).not.toMatch(/KEIKO_NATIVE_(?:DEVELOPER|NOTARIZATION|STAPLE|ASSESSMENT)/u);
-    const smokeStep = macJob.slice(
-      macJob.indexOf("Smoke test signed payload after credential cleanup"),
-      macJob.indexOf("Bind and verify the production macOS archive"),
-    );
-    expect(smokeStep).not.toMatch(/secrets\.|APPLE_|KEIKO_KEYCHAIN|KEIKO_NOTARY/u);
+    expect(smokeJob).toContain("needs: stage-macos-production");
+    expect(smokeJob).toContain("platform_target: macos-arm64");
+    expect(smokeJob).toContain("runner: macos-15");
+    expect(smokeJob).toContain("platform_target: macos-x64");
+    expect(smokeJob).toContain("runner: macos-15-intel");
+    expect(smokeJob).toContain("persist-credentials: false");
+    expect(smokeJob).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
+    expect(smokeJob).not.toMatch(/environment:|secrets\.|id-token: write|upload-artifact/u);
+    expect(smokeJob).toContain("Download immutable verified macOS artifact");
+    const execute = smokeJob.indexOf("Execute bundled runtimes in isolated disposable copy");
+    expect(execute).toBeGreaterThan(0);
+    expect(smokeJob.slice(execute)).not.toMatch(/\n\s+- name:|\n\s+- uses:/u);
+    expect(payloadSmokeScript).toContain("new Function");
+    expect(payloadSmokeScript).toContain("--version");
+    expect(payloadSmokeScript).toContain("APPLE_DEVELOPER_ID_CERT_P12_BASE64");
+    expect(payloadSmokeScript).toContain('unset "$name"');
+    expect(payloadSmokeScript).toContain("unset GITHUB_ENV GITHUB_PATH GITHUB_OUTPUT");
+    expect(payloadSmokeScript).toContain("ACTIONS_ID_TOKEN_REQUEST_TOKEN");
+    expect(payloadSmokeScript).toContain("ACTIONS_RUNTIME_TOKEN");
+    expect(payloadSmokeScript).toContain("trap 'rm -rf");
     expect(portableWorkflow).not.toMatch(/test-mode|fake-provider|native-bypass/iu);
   });
 
-  it("makes cleanup the only post-failure step and blocks smoke/finalize/upload on cleanup failure", () => {
+  it("blocks protected upload on native failures and assembly on isolated smoke failure", () => {
     const steps = [
       { always: false, name: "Prepare temporary Developer ID and notary credentials" },
       { always: false, name: "Sign, notarize, staple, and verify the native artifact" },
       { always: true, name: "Remove temporary Apple signing material" },
-      { always: false, name: "Smoke test signed payload after credential cleanup" },
+      { always: false, name: "Derive bounded verification input after credential cleanup" },
       { always: false, name: "Bind and verify the production macOS archive" },
       { always: false, name: "Upload verified macOS target artifact" },
     ];
@@ -467,7 +489,7 @@ describe("macOS portable production signing workflow", () => {
         simulation.find((step) => step.name === "Remove temporary Apple signing material")?.ran,
       ).toBe(true);
       for (const name of [
-        "Smoke test signed payload after credential cleanup",
+        "Derive bounded verification input after credential cleanup",
         "Bind and verify the production macOS archive",
         "Upload verified macOS target artifact",
       ]) {
@@ -476,6 +498,23 @@ describe("macOS portable production signing workflow", () => {
         );
       }
     }
+    const finalizerFailure = simulate("Bind and verify the production macOS archive");
+    expect(
+      finalizerFailure.find((step) => step.name === "Upload verified macOS target artifact")?.ran,
+    ).toBe(false);
+    expect(smokeJob).toContain("needs.stage-macos-production.result == 'success'");
+    expect(portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"))).toContain(
+      "needs.smoke-macos-production.result == 'success'",
+    );
+  });
+
+  it("accepts only complete dispatch or stable states and rejects prerelease or smoke failure", () => {
+    const assembles = ({ dispatch, prerelease, smoke }) =>
+      dispatch ? smoke === "skipped" : !prerelease && smoke === "success";
+    expect(assembles({ dispatch: true, prerelease: false, smoke: "skipped" })).toBe(true);
+    expect(assembles({ dispatch: false, prerelease: false, smoke: "success" })).toBe(true);
+    expect(assembles({ dispatch: false, prerelease: true, smoke: "skipped" })).toBe(false);
+    expect(assembles({ dispatch: false, prerelease: false, smoke: "failure" })).toBe(false);
   });
 });
 import { spawnSync } from "node:child_process";
