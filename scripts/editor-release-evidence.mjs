@@ -409,6 +409,9 @@ if (process.argv[1] && process.argv[1].endsWith("editor-release-evidence.mjs")) 
     writeFileSync(outPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
     console.log(`Wrote ${relative(repoRoot, outPath)}`);
   } else {
+    console.error("KEIKO_DEBUG_RELEASE_EVIDENCE_JSON_START");
+    console.error(JSON.stringify(record, null, 2));
+    console.error("KEIKO_DEBUG_RELEASE_EVIDENCE_JSON_END");
     assertCommittedEvidenceFresh(repoRoot, record);
   }
   console.log(printReport(record));
