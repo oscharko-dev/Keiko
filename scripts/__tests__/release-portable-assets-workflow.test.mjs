@@ -29,7 +29,7 @@ const windowsNativePolicy = readFileSync("scripts/windows-portable-native-policy
 function productionStepPolicies() {
   const job = portableWorkflow.slice(
     portableWorkflow.indexOf("  stage-windows-production:"),
-    portableWorkflow.indexOf("\n  assemble:"),
+    portableWorkflow.indexOf("\n  stage-macos-production:"),
   );
   const matches = [...job.matchAll(/^ {6}- name: (.+)$/gmu)];
   return matches.map((match, index) => {
@@ -176,7 +176,7 @@ describe("release workflow portable asset manifest resolution", () => {
 
 describe("Windows portable production signing workflow", () => {
   it("keeps manual staging outside the protected Windows production job", () => {
-    expect(portableWorkflow).toContain("windows-signing-preflight:");
+    expect(portableWorkflow).toContain("production-signing-preflight:");
     expect(portableWorkflow).toContain("stage-windows-production:");
     expect(portableWorkflow).toContain("environment: portable-release-signing");
     expect(portableWorkflow).toContain("github.event_name == 'push'");
@@ -342,6 +342,90 @@ describe("Windows Artifact Signing protected configuration", () => {
         portableWorkflow.replace('"ui"]', '"drift"]'),
       ),
     ).toEqual(["RELEASE_REQUIRED_CHECKS"]);
+  });
+});
+
+describe("macOS portable production signing workflow", () => {
+  const macJob = portableWorkflow.slice(
+    portableWorkflow.indexOf("  stage-macos-production:"),
+    portableWorkflow.indexOf("\n  assemble:"),
+  );
+  const stagingJob = portableWorkflow.slice(
+    portableWorkflow.indexOf("  stage:"),
+    portableWorkflow.indexOf("\n  stage-windows-production:"),
+  );
+  const nativeScript = readFileSync("scripts/run-macos-portable-signing.sh", "utf8");
+  const emptyEntitlements = readFileSync(
+    "native/portable-launcher/macos-entitlements.plist",
+    "utf8",
+  );
+  const nodeEntitlements = readFileSync(
+    "native/portable-launcher/macos-node-entitlements.plist",
+    "utf8",
+  );
+
+  it("uses equal protected native jobs on explicit arm64 and Intel runners", () => {
+    expect(macJob).toContain("environment: portable-release-signing");
+    expect(macJob).toContain("platform_target: macos-arm64");
+    expect(macJob).toContain("runner: macos-15");
+    expect(macJob).toContain("platform_target: macos-x64");
+    expect(macJob).toContain("runner: macos-15-intel");
+    expect(macJob).not.toContain("id-token: write");
+  });
+
+  it("keeps dispatch staging secret-free and production artifacts out of the staging job", () => {
+    expect(stagingJob).toContain("github.event_name == 'workflow_dispatch'");
+    expect(stagingJob).not.toContain("secrets.");
+    expect(stagingJob).not.toContain("environment: portable-release-signing");
+  });
+
+  it("assembles only a complete dispatch set or a complete stable production set", () => {
+    const assemble = portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"));
+    expect(assemble).toContain("github.event_name == 'workflow_dispatch'");
+    expect(assemble).toContain("needs.stage.result == 'success'");
+    expect(assemble).toContain("needs.stage-macos-production.result == 'skipped'");
+    expect(assemble).toContain("github.event_name == 'push'");
+    expect(assemble).toContain("!contains(github.ref_name, '-')");
+    expect(assemble).toContain("needs.stage.result == 'skipped'");
+    expect(assemble).toContain("needs.stage-macos-production.result == 'success'");
+    expect(assemble).not.toMatch(/result == 'success' \|\| needs\.[^.]+\.result == 'skipped'/u);
+  });
+
+  it("runs leaf signing, notarization, stapling, verification, cleanup, finalization, then upload", () => {
+    const signing = macJob.indexOf("Sign, notarize, staple, and verify the native artifact");
+    const cleanup = macJob.indexOf("Remove temporary Apple signing material");
+    const finalize = macJob.indexOf("Bind and verify the production macOS archive");
+    const upload = macJob.indexOf("Upload verified macOS target artifact");
+    expect(signing).toBeLessThan(cleanup);
+    expect(cleanup).toBeLessThan(finalize);
+    expect(finalize).toBeLessThan(upload);
+    expect(macJob.slice(cleanup, finalize)).toContain("if: ${{ always() }}");
+    expect(macJob.slice(cleanup, finalize)).not.toContain("continue-on-error");
+    expect(nativeScript).not.toMatch(/codesign\s+--force[^\n]*--deep/u);
+    expect(nativeScript).toContain("codesign --verify --deep --strict");
+    expect(nativeScript).toContain("xcrun notarytool submit");
+    expect(nativeScript).toContain("xcrun stapler validate");
+    expect(nativeScript).toContain("spctl -a -t exec");
+    expect(nativeScript).toContain('lipo -archs "$path"');
+    expect(nativeScript).toContain('verify_signed_path "$payload/$relative" default');
+    expect(nativeScript).toContain('verify_signed_path "$app" default');
+  });
+
+  it("uses an empty default entitlement set and Node-only allow-jit", () => {
+    expect(emptyEntitlements).toContain("<dict/>");
+    expect(emptyEntitlements).not.toContain("com.apple.security");
+    expect(nodeEntitlements).toContain("com.apple.security.cs.allow-jit");
+    expect(nodeEntitlements).not.toContain("get-task-allow");
+    expect(nodeEntitlements).not.toContain("allow-unsigned-executable-memory");
+    expect(nodeEntitlements.match(/<key>/gu)).toHaveLength(1);
+  });
+
+  it("does not expose a workflow-selectable native verification bypass", () => {
+    expect(macJob).not.toMatch(/KEIKO_NATIVE_(?:DEVELOPER|NOTARIZATION|STAPLE|ASSESSMENT)/u);
+    expect(nativeScript).toContain("KEIKO_NATIVE_DEVELOPER_ID_VERIFIED");
+    expect(nativeScript).toContain("KEIKO_NATIVE_NOTARIZATION_VERIFIED");
+    expect(nativeScript).toContain("KEIKO_NATIVE_STAPLE_VERIFIED");
+    expect(nativeScript).toContain("KEIKO_NATIVE_ASSESSMENT_VERIFIED");
   });
 });
 import { spawnSync } from "node:child_process";

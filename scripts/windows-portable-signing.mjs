@@ -293,12 +293,16 @@ function rebindSidecars(manifest, payloadRoot) {
   }
 }
 
-export async function rebindArchive(stageRoot, manifest) {
+export async function rebindPortableSignedArchive(stageRoot, manifest) {
   const payloadContainer = join(stageRoot, "payload");
-  const payloadRoot = join(payloadContainer, "Keiko");
   const archivePath = join(stageRoot, manifest.artifact.assetName);
   rmSync(archivePath, { force: true });
   run("zip", ["-qr", archivePath, "Keiko"], payloadContainer);
+  await rebindExistingSignedArchive(stageRoot, manifest, archivePath);
+}
+
+export async function rebindExistingSignedArchive(stageRoot, manifest, archivePath) {
+  const payloadRoot = join(stageRoot, "payload", "Keiko");
   const archiveSha256 = await sha256File(archivePath);
   const provenancePath = join(stageRoot, "evidence", "provenance.intoto.jsonl");
   const provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
@@ -332,7 +336,7 @@ async function finalizeCommand(options) {
     fail("manifest target is not Windows x64");
   const verificationInputPath = resolve(required(options, "verification-input"));
   assertWindowsProductionVerificationInput(verificationInputPath, manifest);
-  await rebindArchive(stageRoot, manifest);
+  await rebindPortableSignedArchive(stageRoot, manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(
     process.execPath,
@@ -358,6 +362,8 @@ async function finalizeCommand(options) {
   }
   console.log("windows-portable-signing: verified production archive finalized");
 }
+
+export const rebindArchive = rebindPortableSignedArchive;
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);

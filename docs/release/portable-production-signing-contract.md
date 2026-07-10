@@ -197,6 +197,42 @@ the job to fail closed. Do not switch credential types, preserve a partial signe
 failure artifact, or substitute operator-supplied verification Booleans. Secret-free manual staging
 remains available while production signing is unavailable.
 
+### macOS operating procedure
+
+Stable tags reuse the unprotected reviewed-check preflight before two equally protected native jobs
+run on explicit Apple Silicon and Intel GitHub-hosted runners. Manual dispatch remains unsigned and
+never references the signing environment or Apple secrets. Each native job proves its runner
+architecture, stages the matching target, inventories Mach-O content rather than filename patterns,
+and requires the launcher, bundled Node runtime, and every manifest-declared sidecar executable.
+Links, hard links, special files, traversal, case collisions, missing target slices, or scope drift
+fail before signing.
+
+The keychain helper reads passwords only from protected environment state through Security.framework;
+passwords are never command-line arguments. P12 and team-key P8 bytes exist only in a new owner-only
+`RUNNER_TEMP` directory. The imported key receives an access list restricted to `/usr/bin/codesign`.
+Every Mach-O is signed explicitly deepest-first, nested bundles follow leaf objects, and `Keiko.app`
+is signed last. Signing never uses `--deep`. The launcher, OpenCode sidecar, libraries, and bundles use
+an empty entitlement set. The bundled Node executable alone receives
+`com.apple.security.cs.allow-jit`; `get-task-allow`, unsigned executable memory, disabled library
+validation, and copied upstream entitlements are forbidden. Every signature uses hardened runtime and
+Apple's secure timestamp.
+
+The app is submitted with the dedicated team App Store Connect key through `notarytool --wait` with a
+bounded timeout. Only exact `Accepted` proceeds; the response, submission identifier, archive, and raw
+native output remain transient and are deleted. The accepted ticket is stapled before `codesign --deep
+--strict`, staple validation, Gatekeeper assessment, identity/team/runtime/timestamp/entitlement checks,
+the Node JIT smoke, and sidecar runtime smoke. A final `ditto` ZIP is extracted and reverified; its exact
+Mach-O path/hash inventory must match the post-staple producer before shared manifest, provenance,
+sidecar, reviewed-binding, checksum, and signing-evidence projection occurs.
+
+An always-run cleanup deletes the temporary keychain through Security.framework and removes all decoded
+files before finalization or upload. Cleanup failure blocks promotion. For routine certificate or team
+key rotation, replace only protected environment values, retain the dedicated Developer role and team
+scope, and rerun both architecture qualifications before selection. On rejection, timeout, outage,
+revocation, or suspected compromise, disable the environment/key, leave manual staging available, and
+never retry with an individual key, broader role, ad-hoc identity, unstapled app, or operator-supplied
+verification Boolean.
+
 The exact current verifier input is a JSON object with no keys other than:
 
 ```json
