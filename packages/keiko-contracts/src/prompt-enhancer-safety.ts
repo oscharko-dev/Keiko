@@ -5,7 +5,7 @@
 // validate stage: a pure, deterministic assessment of whether an `EnhancedPrompt` upholds the safety
 // invariants the enhancer must never relax — trusted/untrusted channel separation (AC1), untrusted
 // content marked and unable to override instructions (AC2), no capability-grant / secret-disclosure
-// claims, an explicit human-review + least-privilege posture for risky agentic tasks (AC5), and an
+// claims, a human-confirmed authority + least-privilege posture for risky agentic tasks (AC5), and an
 // output-validation expectation for structured outputs. The result is a wire-safe
 // `PromptSafetyAssessment` the evidence model (#1313, keiko-evidence) and the server (#1314) can
 // transmit, persist, and render.
@@ -45,7 +45,7 @@ export type PromptSafetyRuleId =
   | "no-authority-grant"
   // Scope — the prompt never discloses secrets, credentials, or system/developer instructions.
   | "no-secret-or-system-prompt-disclosure"
-  // AC5 — risky agentic tasks require explicit human review before any side-effecting action.
+  // AC5 — risky agentic tasks require human review before bounded runtime authority is established.
   | "human-review-for-risky-actions"
   // AC5 — risky tasks carry least-privilege constraints (no self-authorized tool/file/egress/secret use).
   | "least-privilege-tool-access"
@@ -117,7 +117,7 @@ export const PROMPT_SAFETY_SEVERITIES: readonly PromptSafetySeverity[] = [
 // ─── Least-privilege constraints ────────────────────────────────────────────────────
 // Machine-readable, server-enforceable authorities the prompt is NOT permitted to imply. A generated
 // prompt always denies all of these by default (ADR-0044 §4); risky agentic tasks additionally require
-// human approval before any side-effecting action (AC5).
+// human review before a runtime mode and Authority Envelope can authorize side effects (AC5).
 export type LeastPrivilegeConstraint =
   | "no-tool-execution"
   | "no-file-write"
@@ -196,7 +196,7 @@ export const PROMPT_SAFETY_VIOLATION_DETAILS: Readonly<Record<PromptSafetyViolat
     "missing-secrecy-rule":
       "The prompt does not forbid disclosing secrets, credentials, or system instructions.",
     "missing-human-review":
-      "A risky agentic prompt does not require explicit human approval before side-effecting actions.",
+      "A risky agentic prompt does not require human-confirmed runtime authority and policy-driven approval for side effects.",
     "missing-least-privilege":
       "A risky agentic prompt does not constrain the model to least-privilege, approval-gated actions.",
     "missing-output-validation":
@@ -310,8 +310,9 @@ const TRUSTED_ASSUMPTION_PREFIX = "Assumption: ";
 
 // ─── Human-review derivation ──────────────────────────────────────────────────────────
 /**
- * Derive whether a task is risky enough to require human review before any side-effecting action
- * (AC5). Pure. A task is risky when it is agentic, requests tool/egress authority, or is critical.
+ * Derive whether a task is risky enough to require human review before bounded runtime authority is
+ * established (AC5). Pure. A task is risky when it is agentic, requests tool/egress authority, or
+ * is critical.
  */
 export function requiresHumanReviewForAnalysis(analysis: PromptTaskAnalysis): boolean {
   return (
@@ -344,7 +345,8 @@ export function summarizePromptSafety(
 
 /**
  * Compute the least-privilege constraint set for a task. Pure. Always denies tool/file/egress/secret
- * authority (least privilege by default); risky tasks additionally require human approval (AC5).
+ * authority (least privilege by default); risky tasks additionally require human-confirmed runtime
+ * authority (AC5).
  */
 export function leastPrivilegeForAnalysis(
   analysis: PromptTaskAnalysis,

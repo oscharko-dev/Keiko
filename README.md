@@ -265,9 +265,12 @@ The UI runs on loopback only. The `--host` option can validate a loopback host v
 
 1. Add a local project path.
 2. Select one of the configured chat models.
-3. Use chat or a workflow: Generate Tests, Investigate Bug, Explain Plan, or Verify.
-4. Review proposed diffs and evidence before applying any change.
-5. Keep generated evidence with the project review material when required by your delivery process.
+3. For coding agents, select **Ask for approval**, **Approve for me**, or **Full access** and confirm
+   the bounded task and Authority Envelope.
+4. Use chat or a workflow: Generate Tests, Investigate Bug, Explain Plan, or Verify.
+5. Review policy-required or workflow-presented diffs before accepting them; inspect directly applied
+   agent changes in the Changes and recent-agent-actions surfaces before delivery.
+6. Keep generated evidence with the project review material when required by your delivery process.
 
 Surface coverage is intentionally not identical. The UI is the primary surface for day-to-day use; the CLI remains available for focused inspection, verification, and automation.
 
@@ -567,7 +570,9 @@ Keiko is a local tool, not a remote service.
 - Credentials are redacted from logs, evidence, and browser responses.
 - Workspace reads are bounded by the selected local project path.
 - Commands are allowlisted and run without a shell.
-- Generated patches are dry-run by default and must be reviewed before application.
+- Generated patches enter governed preflight. Review is required when the shared mode/resource/risk
+  policy returns `approval-required`; policy-allowed patches may apply inside a validated Authority
+  Envelope without another prompt. Delivery remains separately human-approved.
 - Evidence is redacted before it is written, stored owner-only, and bounded by deterministic retention.
 
 The full per-surface posture — distinguishing file permissions, redaction, encryption, retention, and tamper evidence as independent controls — is the [local runtime-state contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/local-runtime-state-contract.md). A deterministic auditor (`npm run audit:local-state -- --state-dir <path>`) checks a real `.keiko` tree against it.

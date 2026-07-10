@@ -1,6 +1,7 @@
 # Coding Workbench Operator Runbook
 
-Status: operator and maintainer runbook for epic #1982 closeout.
+Status: current operator and maintainer runbook. ADR-0125 supersedes the original Epic #1982
+blanket-write semantics.
 
 ## Purpose
 
@@ -10,15 +11,23 @@ connector writes, and evidence stores remain separated by Keiko-owned contracts.
 
 ## Operating Modes
 
-| Mode                | Use when                                                         | Authority                                                                                  | Stop condition                                                                                 |
-| ------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| Governed Assist     | The operator wants plans, repository reads, and diff proposals.  | Read, verification projection, and read-only connector context.                            | Any file write, shell mutation, connector write, delivery, merge, or force-push.               |
-| Supervised Coding   | The operator wants scoped edits with explicit delivery approval. | Scoped file edits and verification; commit, push, PR, external writes require approval.    | Delivery action without prompt approval, raw evidence, or missing stop control.                |
-| Autonomous Delivery | The operator wants bounded issue-to-PR execution.                | Confirmed Authority Envelope, branch allowlist, connector scope, verification, PR gateway. | Missing/expired envelope, branch escape, missing scope, failed verification, or operator stop. |
+The machine values remain stable for wire compatibility. Operators use the three display labels:
 
-Autonomous Delivery can create or update a PR only through the governed gateway. It must not merge
-to `dev`, push outside the envelope branch, force-push, or mutate connector objects outside the
-declared task references.
+| Display mode         | Machine value         | Allowed without another prompt                                                         | Approval required                                                   |
+| -------------------- | --------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **Ask for approval** | `governed-assist`     | Workspace-contained actions at every risk                                              | External files, internet, and delivery at every risk                |
+| **Approve for me**   | `supervised-coding`   | Low/medium-risk workspace, external-file, and internet actions                         | High/critical-risk file or internet actions; delivery at every risk |
+| **Full access**      | `autonomous-delivery` | Workspace, external-file, and internet actions inside the validated Authority Envelope | Delivery at every risk                                              |
+
+Mode selection never overrides the effective-mode deployment ceiling, Authority Envelope,
+workspace and branch scope, deny lists, secret-exfiltration checks, platform restrictions, expiry,
+or budgets. An unknown or missing mode falls back to **Ask for approval**; missing, invalid, or
+expired required authority is denied.
+
+Commit, push, pull-request creation, and merge are delivery actions. They use the governed delivery
+gateways and require separate explicit human approval in all three modes. **Full access** does not
+authorize force-push, branch escape, or connector mutation outside declared task references and
+scopes.
 
 ## Runtime And Model Routing
 
@@ -33,18 +42,19 @@ declared task references.
 
 ## Authority Envelope Checklist
 
-Before an Autonomous Delivery run starts, verify:
+Before any governed coding run starts, verify:
 
 - The task reference names the issue being worked.
 - The base and head branches match the intended branch pair.
 - Allowed prefixes cover only the intended issue branch family.
-- The effective mode is `autonomous-delivery`.
-- The runtime source is `delivery-runner`.
+- The requested and effective mode match the intended display mode and deployment ceiling.
+- The runtime source is appropriate for the task; delivery work uses `delivery-runner`.
 - The model source is `keiko-model-gateway` for the managed sidecar path.
 - Action classes include only the authorities needed for the run.
 - Connector scopes include only the target source-control or issue-tracker scopes.
 - The network policy is connector-scoped egress, not broad browser access.
-- Gates include human approval, branch allowlist, verification-green, and policy review.
+- Gates include the human-confirmed envelope and every action-specific branch, verification, and
+  policy gate required by the granted classes.
 - The approval proof digest matches the operator-confirmed envelope.
 - The expiry and budgets are short enough for the bounded run.
 
@@ -53,9 +63,9 @@ Before an Autonomous Delivery run starts, verify:
 - The operator can stop a running sidecar from the workbench.
 - A stopped run records content-free stop status and must not continue writing files, commands, git
   state, connector state, or PRs.
-- Manual takeover means the operator continues outside Autonomous Delivery authority; any later
+- Manual takeover means the operator continues outside the run's Authority Envelope; any later
   automation must start from a fresh envelope and fresh verification.
-- If verification fails, Autonomous Delivery stops before PR handoff.
+- If verification fails, automated delivery stops before PR handoff.
 - If policy denies a scope, the correct recovery is to adjust the envelope or mode deliberately, not
   to retry through a lower-level tool.
 

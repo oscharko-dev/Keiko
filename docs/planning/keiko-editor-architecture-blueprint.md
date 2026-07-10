@@ -1,5 +1,12 @@
 # Keiko Editor — Architecture Reuse Audit and Delivery Blueprint
 
+> **Historical planning baseline.** The package and editor boundaries remain useful, but the blanket
+> patch-review and save semantics in this blueprint were superseded by
+> [ADR-0125](../adr/ADR-0125-governed-agent-docking-and-editor-changesets.md). Current behavior uses
+> **Ask for approval**, **Approve for me**, and **Full access** with one shared resource/risk policy;
+> policy-allowed changes do not require per-action approval, while delivery remains separately
+> human-approved.
+
 > Planning artifact for Issue [#1190](https://github.com/oscharko-dev/Keiko/issues/1190)
 > (Parent Epic [#1189](https://github.com/oscharko-dev/Keiko/issues/1189)).
 > Status: **Proposed** — pending human review. This document is the architecture authority for the
