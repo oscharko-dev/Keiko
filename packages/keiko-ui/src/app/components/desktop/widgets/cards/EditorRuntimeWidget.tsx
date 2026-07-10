@@ -178,7 +178,7 @@ import {
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
-import { useEditorAgentTranslate } from "./editor-agent-i18n";
+import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 import {
   postEditorAgentResult,
   postEditorAgentResultRequest,
@@ -277,39 +277,42 @@ interface EditorAgentPresenceView {
   readonly label: string;
 }
 
+// Issue #2120: presence labels are localized via `t`; do not reintroduce hardcoded English literals.
 function editorAgentPresenceView(args: {
   readonly inFlightActionCount: number;
   readonly recentlyActive: boolean;
   readonly reviewPendingCount: number;
+  readonly t: EditorAgentTranslate;
 }): EditorAgentPresenceView {
+  const { t } = args;
   if (args.reviewPendingCount > 0) {
     return {
       color: "var(--feedback-warning)",
       kind: "review",
-      label: args.recentlyActive
-        ? "Agent attached - review required"
-        : "Agent review required - no recent activity",
+      label: args.recentlyActive ? t("presence.review.active") : t("presence.review.idle"),
     };
   }
   if (!args.recentlyActive) {
     return {
       color: "var(--text-secondary)",
       kind: "detached",
-      label: "Agent not attached - no recent activity",
+      label: t("presence.detached"),
     };
   }
   if (args.inFlightActionCount > 0) {
-    const noun = args.inFlightActionCount === 1 ? "action" : "actions";
     return {
       color: "var(--accent)",
       kind: "active",
-      label: `Agent attached - ${String(args.inFlightActionCount)} ${noun} in progress`,
+      label:
+        args.inFlightActionCount === 1
+          ? t("presence.active.one")
+          : t("presence.active.many", { count: args.inFlightActionCount }),
     };
   }
   return {
     color: "var(--feedback-success)",
     kind: "idle",
-    label: "Agent attached - idle",
+    label: t("presence.idle"),
   };
 }
 
@@ -317,6 +320,7 @@ function EditorAgentPresenceIndicator(props: {
   readonly inFlightActionCount: number;
   readonly recentlyActive: boolean;
   readonly reviewPendingCount: number;
+  readonly t: EditorAgentTranslate;
 }): ReactNode {
   const view = editorAgentPresenceView(props);
   return (
@@ -4564,6 +4568,7 @@ function EditorRuntimeWidget({
         inFlightActionCount={bridgeState.inFlightActionCount}
         recentlyActive={bridgeState.recentlyAttached}
         reviewPendingCount={agentReviewPendingCount}
+        t={t}
       />
       <EditorAgentActionsPanel agentSessionId={agentSessionId} refreshNonce={auditRefreshNonce} />
       {hasTarget ? (

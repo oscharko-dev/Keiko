@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
   EDITOR_AGENT_SCHEMA_VERSION,
   type EditorAgentAction,
   type EditorAgentActionResult,
   type EditorAgentConflictCode,
+  type EditorAgentFailureCode,
   type EditorAgentSessionSnapshot,
   type ToolCallResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -346,6 +348,19 @@ function conflictResult(
   };
 }
 
+function failureResult(
+  code: EditorAgentFailureCode,
+  action: EditorAgentAction,
+): EditorAgentActionResult {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: action.actionId,
+    sessionId: action.sessionId,
+    status: "failed",
+    failure: { code, message: `redacted ${code}` },
+  };
+}
+
 describe("EditorAgentToolHost route outcomes", () => {
   it.each(EDITOR_AGENT_CONFLICT_CODES)("preserves the %s route conflict", async (code) => {
     const route = recordingRoute((action) => conflictResult(code, action));
@@ -431,4 +446,45 @@ describe("EditorAgentToolHost route outcomes", () => {
     expect(result.output).not.toContain("SECRET_VALUE");
     expect(result.output.length).toBeLessThan(512);
   });
+
+  // Issue #2116 — editor_propose_changeset had zero conflict/failure pass-through coverage, and
+  // the route-returned TIMED_OUT failure was never exercised through any tool at this layer.
+  it.each(EDITOR_AGENT_CONFLICT_CODES)(
+    "preserves the %s route conflict for a changeset proposal",
+    async (code) => {
+      const route = recordingRoute((action) => conflictResult(code, action));
+      const result = await execute(host(route), "editor_propose_changeset", {
+        sessionId: "session-1",
+        idempotencyKey: IDEMPOTENCY_KEY,
+        patch: "patch",
+        files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+      });
+      expect(parseOutput(result)).toMatchObject({
+        ok: true,
+        kind: "action-result",
+        result: { status: "conflict", conflict: { code } },
+      });
+    },
+  );
+
+  it.each(EDITOR_AGENT_FAILURE_CODES)(
+    "preserves the %s route failure for a changeset proposal",
+    async (code) => {
+      const route = recordingRoute((action) => failureResult(code, action));
+      const result = await execute(host(route), "editor_propose_changeset", {
+        sessionId: "session-1",
+        idempotencyKey: IDEMPOTENCY_KEY,
+        patch: "patch",
+        files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+      });
+      expect(parseOutput(result)).toMatchObject({
+        ok: true,
+        kind: "action-result",
+        result: {
+          status: "failed",
+          failure: { code, message: "Editor agent route detail redacted." },
+        },
+      });
+    },
+  );
 });

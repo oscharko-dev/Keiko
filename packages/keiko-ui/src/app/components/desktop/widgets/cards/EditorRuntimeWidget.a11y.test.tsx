@@ -28,6 +28,7 @@ import {
   postEditorAgentSessionSnapshot,
   saveFilesContent,
 } from "../../../../../lib/api";
+import { I18N_STORAGE_KEY, I18nProvider } from "../../../../../lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
@@ -252,6 +253,7 @@ afterEach(() => {
   agentActionSeq = 0;
   vi.clearAllMocks();
   vi.useRealTimers();
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
 /**
@@ -325,6 +327,35 @@ describe("EditorRuntimeWidget agent presence — accessibility (Issue #2120)", (
     const indicator = await screen.findByTestId("agent-presence-indicator");
     expect(indicator).toHaveAttribute("data-presence-state", "detached");
     expect(indicator).toHaveTextContent("Agent not attached - no recent activity");
+  });
+
+  it("renders the localized German presence label when Deutsch is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <I18nProvider>
+        <EditorRuntimeWidget
+          windowId="a11y-presence-de"
+          root="/repo"
+          file="src/app.ts"
+          paneId="pane-1"
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByTestId("agent-presence-indicator");
+    // The locale catalog readiness flips asynchronously, so the presence label localizes on a
+    // later render than the indicator's first paint — wait for the German text to settle.
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+        "Agent nicht verbunden - keine aktuelle Aktivität",
+      );
+    });
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveAttribute(
+      "data-presence-state",
+      "detached",
+    );
   });
 
   it("is axe-clean and names an attached staged review without relying on colour", async () => {
