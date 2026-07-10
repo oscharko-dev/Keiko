@@ -231,7 +231,17 @@ async function readEditorBuffer(editorWindow: Locator): Promise<string> {
   await expect(viewLines).toBeVisible();
   const lines = await viewLines.evaluate((container) =>
     Array.from(container.querySelectorAll<HTMLElement>(".view-line"))
-      .map((row) => ({ top: Number.parseInt(row.style.top, 10) || 0, text: row.textContent }))
+      .map((row) => {
+        const source = row.cloneNode(true);
+        if (!(source instanceof HTMLElement)) return { top: 0, text: "" };
+        // Monaco renders inlay hints and other virtual text as dynamically styled inline
+        // decorations inside the view line. They are not part of the editor model, so exclude them
+        // when this test verifies the actual buffer after accepting or rejecting a review.
+        source.querySelectorAll('[class*="dyn-rule-"]').forEach((decoration) => {
+          decoration.remove();
+        });
+        return { top: Number.parseInt(row.style.top, 10) || 0, text: source.textContent };
+      })
       .sort((left, right) => left.top - right.top)
       .map((row) => row.text.replaceAll("\u00a0", " ")),
   );

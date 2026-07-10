@@ -425,6 +425,57 @@ export type {
   MonacoUriForPath,
 } from "./components/definition-bridge.js";
 export {
+  registerKeikoTypeDefinitionProvider,
+  TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
+} from "./components/type-definition-bridge.js";
+export type {
+  MonacoTypeDefinitionProvider,
+  MonacoTypeDefinitionRegistrar,
+  RegisterKeikoTypeDefinitionProviderArgs,
+} from "./components/type-definition-bridge.js";
+export {
+  registerKeikoImplementationProvider,
+  IMPLEMENTATION_ELIGIBLE_LANGUAGES,
+} from "./components/implementation-bridge.js";
+export type {
+  MonacoImplementationProvider,
+  MonacoImplementationRegistrar,
+  RegisterKeikoImplementationProviderArgs,
+} from "./components/implementation-bridge.js";
+export {
+  createKeikoInlayHintsProvider,
+  registerKeikoInlayHintsProvider,
+  INLAY_HINTS_ELIGIBLE_LANGUAGES,
+} from "./components/inlay-hints-bridge.js";
+export type {
+  EditorInlayHintKind,
+  EditorInlayHint,
+  EditorInlayHintsRequest,
+  EditorInlayHintsQuery,
+  EditorInlayHintsResponse,
+  EditorInlayHintsResolver,
+  MonacoInlayHint,
+  MonacoInlayHintList,
+  MonacoInlayHintsProvider,
+  MonacoInlayHintsRegistrar,
+} from "./components/inlay-hints-bridge.js";
+export {
+  EDITOR_CALL_HIERARCHY_ACTION_ID,
+  registerKeikoCallHierarchyAction,
+  CALL_HIERARCHY_ELIGIBLE_LANGUAGES,
+} from "./components/call-hierarchy-bridge.js";
+export type {
+  EditorCallHierarchyItem,
+  EditorCallHierarchyCall,
+  EditorCallHierarchyRoot,
+  EditorCallHierarchyRequest,
+  EditorCallHierarchyQuery,
+  EditorCallHierarchyResponse,
+  EditorCallHierarchyResolver,
+  CallHierarchyActionLabels,
+} from "./components/call-hierarchy-bridge.js";
+export type { CallHierarchyPanelLabels } from "./components/CallHierarchyPanel.js";
+export {
   createKeikoReferencesProvider,
   registerKeikoReferencesProvider,
   referenceToMonacoLocation,

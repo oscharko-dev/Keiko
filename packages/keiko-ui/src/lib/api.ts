@@ -131,6 +131,8 @@ import type {
   WorkspaceReplacePreviewResponse,
   WorkspaceSymbolSearchRequest,
   WorkspaceSymbolSearchResponse,
+  LanguageCallHierarchyResult,
+  LanguageInlayHintsResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
   validateGitHistoryResponse,
@@ -1997,6 +1999,89 @@ export async function requestEditorDefinition(
         root: input.root,
         document: languageDocument(input),
         position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+async function requestEditorLocationOperation(
+  operation: "typeDefinition" | "implementation",
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageDefinitionResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation,
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export function requestEditorTypeDefinition(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  return requestEditorLocationOperation("typeDefinition", input, signal);
+}
+
+export function requestEditorImplementation(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  return requestEditorLocationOperation("implementation", input, signal);
+}
+
+export async function requestEditorCallHierarchy(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageCallHierarchyResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageCallHierarchyResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "callHierarchy",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorInlayHints(
+  input: EditorLanguageRequestInput & { readonly range: LanguageRange },
+  signal?: AbortSignal,
+): Promise<LanguageInlayHintsResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageInlayHintsResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "inlayHints",
+        root: input.root,
+        document: languageDocument(input),
+        range: input.range,
       }),
       ...(signal === undefined ? {} : { signal }),
     },

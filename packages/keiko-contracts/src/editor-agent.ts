@@ -1,5 +1,10 @@
 import type { EditorDocumentVersion } from "./editor-session.js";
-import type { LanguageDiagnosticSeverity, LanguageRange } from "./language-service.js";
+import type {
+  LanguageDiagnostic,
+  LanguageDiagnosticSeverity,
+  LanguagePosition,
+  LanguageRange,
+} from "./language-service.js";
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
 import {
   parseEditorVerificationRunRequest,
@@ -27,6 +32,10 @@ export const EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES = 512;
 export const EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES = 262_144;
 export const EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES = 65_536;
 export const EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS = 1_024;
+export const EDITOR_AGENT_ACTION_DATA_MAX_BYTES = 256 * 1024;
+export const EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES = 1_000_000;
+export const EDITOR_AGENT_SEARCH_MAX_QUERY_CHARS = 200;
+export const EDITOR_AGENT_SEARCH_MAX_RESULTS = 200;
 export const EDITOR_AGENT_EVENT_ID_MAX_BYTES = 256;
 export const EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES = 32;
 export const EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS = 43;
@@ -110,6 +119,36 @@ export interface EditorAgentSessionSnapshot {
   readonly updatedAt: number;
 }
 
+export type EditorAgentNavigateSymbolOperation =
+  "definition" | "references" | "renamePrepare" | "codeActions" | "signatureHelp";
+
+export const EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS: readonly EditorAgentNavigateSymbolOperation[] =
+  ["definition", "references", "renamePrepare", "codeActions", "signatureHelp"] as const;
+
+export interface EditorAgentNavigateSymbolRequest {
+  readonly operation: EditorAgentNavigateSymbolOperation;
+  readonly document: {
+    readonly path: string;
+    readonly languageId: string;
+    readonly text?: string | undefined;
+  };
+  readonly position: LanguagePosition;
+  readonly range?: LanguageRange | undefined;
+  readonly diagnostics?: readonly LanguageDiagnostic[] | undefined;
+}
+
+export type EditorAgentSearchWorkspaceMode = "text" | "symbol";
+
+export interface EditorAgentSearchWorkspaceRequest {
+  readonly mode: EditorAgentSearchWorkspaceMode;
+  readonly query: string;
+  readonly caseSensitive?: boolean | undefined;
+  readonly includeGlobs?: readonly string[] | undefined;
+  readonly excludeGlobs?: readonly string[] | undefined;
+  readonly maxResults?: number | undefined;
+  readonly scopePath?: string | undefined;
+}
+
 export type EditorAgentActionType =
   | "openFile"
   | "focusTab"
@@ -123,7 +162,9 @@ export type EditorAgentActionType =
   | "applyChangeset"
   // Issue #2210 (ADR-0126 D5): a governed, non-mutating request to run a verification through Issue
   // #2211's route. Added for policy classification; NOT dispatched to the browser bridge.
-  | "requestVerification";
+  | "requestVerification"
+  | "navigateSymbol"
+  | "searchWorkspace";
 
 // Issue #2210 (ADR-0126 D5): an agent-originated verification request uses the same wire shape as the
 // human editor route request (kinds/targetPath/requestId). Aliased to avoid duplicating the shape;
@@ -192,6 +233,8 @@ export interface EditorAgentAction {
     readonly { readonly range: LanguageRange; readonly newText: string }[] | undefined;
   readonly patch?: string | undefined;
   readonly changeset?: EditorAgentChangeset | undefined;
+  readonly navigateSymbol?: EditorAgentNavigateSymbolRequest | undefined;
+  readonly searchWorkspace?: EditorAgentSearchWorkspaceRequest | undefined;
 }
 
 export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "conflict";
@@ -276,6 +319,8 @@ export interface EditorAgentActionResult {
   readonly conflict?: EditorAgentConflictDetail | undefined;
   readonly failure?: EditorAgentActionFailure | undefined;
   readonly files?: readonly EditorAgentFileActionResult[] | undefined;
+  /** Bounded server-resolved data for read-only actions; never included in global audit/SSE projections. */
+  readonly data?: Readonly<Record<string, unknown>> | undefined;
 }
 
 export type EditorAgentEvent =
@@ -376,6 +421,8 @@ const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "applyPatch",
   "applyChangeset",
   "requestVerification",
+  "navigateSymbol",
+  "searchWorkspace",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -771,6 +818,83 @@ function isActionTarget(value: unknown): value is NonNullable<EditorAgentAction[
   ].every(Boolean);
 }
 
+function isBoundedStringArray(value: unknown, maxItems: number): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maxItems &&
+    value.every((entry) => isNonEmptyString(entry) && entry.length <= 200)
+  );
+}
+
+function isNavigateSymbolOperation(value: unknown): value is EditorAgentNavigateSymbolOperation {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS.includes(value as EditorAgentNavigateSymbolOperation)
+  );
+}
+
+function isLanguageDiagnosticArray(value: unknown): value is readonly LanguageDiagnostic[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS &&
+    value.every(
+      (item) => isEditorAgentDiagnostic(item) && isRecord(item) && isNonEmptyString(item.source),
+    )
+  );
+}
+
+function isNavigateSymbolDocument(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isBoundedTargetPath(value.path) &&
+    isBoundedNonEmptyString(value.languageId, 128) &&
+    isUndefinedOr(value.text, (text) =>
+      isUtf8StringWithin(text, EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES),
+    )
+  );
+}
+
+function isNavigateSymbolRequest(value: unknown): value is EditorAgentNavigateSymbolRequest {
+  if (!isRecord(value) || !isNavigateSymbolOperation(value.operation)) return false;
+  if (!isNavigateSymbolDocument(value.document) || !isPosition(value.position)) return false;
+  if (!isUndefinedOr(value.range, isRange)) return false;
+  if (!isUndefinedOr(value.diagnostics, isLanguageDiagnosticArray)) return false;
+  return value.operation === "codeActions"
+    ? value.range !== undefined && value.diagnostics !== undefined
+    : value.range === undefined && value.diagnostics === undefined;
+}
+
+function isSearchWorkspaceRequest(value: unknown): value is EditorAgentSearchWorkspaceRequest {
+  return (
+    isRecord(value) &&
+    (value.mode === "text" || value.mode === "symbol") &&
+    isBoundedNonEmptyString(value.query, EDITOR_AGENT_SEARCH_MAX_QUERY_CHARS) &&
+    isUndefinedOr(value.caseSensitive, (candidate) => typeof candidate === "boolean") &&
+    isUndefinedOr(value.includeGlobs, (candidate) => isBoundedStringArray(candidate, 32)) &&
+    isUndefinedOr(value.excludeGlobs, (candidate) => isBoundedStringArray(candidate, 32)) &&
+    isUndefinedOr(
+      value.maxResults,
+      (candidate) =>
+        typeof candidate === "number" &&
+        Number.isInteger(candidate) &&
+        candidate > 0 &&
+        candidate <= EDITOR_AGENT_SEARCH_MAX_RESULTS,
+    ) &&
+    isUndefinedOr(value.scopePath, isBoundedTargetPath)
+  );
+}
+
+function isEditorAgentActionData(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (!isRecord(value)) return false;
+  try {
+    return (
+      new TextEncoder().encode(JSON.stringify(value)).length <= EDITOR_AGENT_ACTION_DATA_MAX_BYTES
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isTextEdit(
   value: unknown,
 ): value is { readonly range: LanguageRange; readonly newText: string } {
@@ -809,6 +933,12 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     value.type === "applyChangeset"
       ? isEditorAgentChangeset(value.changeset)
       : value.changeset === undefined,
+    value.type === "navigateSymbol"
+      ? isNavigateSymbolRequest(value.navigateSymbol)
+      : value.navigateSymbol === undefined,
+    value.type === "searchWorkspace"
+      ? isSearchWorkspaceRequest(value.searchWorkspace)
+      : value.searchWorkspace === undefined,
   ].every(Boolean);
 }
 
@@ -933,7 +1063,8 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
     isUndefinedOr(value.message, isBoundedResultMessage) &&
     isOptionalEditorAgentConflictDetail(value.conflict) &&
     isEditorAgentFailureDetail(value.failure) &&
-    isEditorAgentFileActionResultArray(value.files)
+    isEditorAgentFileActionResultArray(value.files) &&
+    isUndefinedOr(value.data, isEditorAgentActionData)
   );
 }
 
@@ -1180,23 +1311,86 @@ function canonicalChangeset(changeset: EditorAgentChangeset): EditorAgentChanges
   };
 }
 
-function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
-  if (action.type === "applyTextEdits") {
-    return action.textEdits === undefined
+function canonicalNavigateSymbolRequest(
+  request: NonNullable<EditorAgentAction["navigateSymbol"]>,
+): NonNullable<EditorAgentAction["navigateSymbol"]> {
+  return {
+    operation: request.operation,
+    document: {
+      path: request.document.path,
+      languageId: request.document.languageId,
+      ...(request.document.text === undefined ? {} : { text: request.document.text }),
+    },
+    position: canonicalPosition(request.position),
+    ...(request.range === undefined ? {} : { range: canonicalRange(request.range) }),
+    ...(request.diagnostics === undefined
       ? {}
-      : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) };
-  }
-  if (action.type === "applyPatch") {
-    return {
-      ...(action.textEdits === undefined
+      : { diagnostics: request.diagnostics.map(canonicalDiagnostic) }),
+  };
+}
+
+function canonicalSearchWorkspaceRequest(
+  request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+): NonNullable<EditorAgentAction["searchWorkspace"]> {
+  return {
+    mode: request.mode,
+    query: request.query,
+    ...(request.caseSensitive === undefined ? {} : { caseSensitive: request.caseSensitive }),
+    ...(request.includeGlobs === undefined ? {} : { includeGlobs: [...request.includeGlobs] }),
+    ...(request.excludeGlobs === undefined ? {} : { excludeGlobs: [...request.excludeGlobs] }),
+    ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
+    ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
+  };
+}
+
+function canonicalTextEditsPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  return action.textEdits === undefined
+    ? {}
+    : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) };
+}
+
+function canonicalPatchPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  return {
+    ...canonicalTextEditsPayload(action),
+    ...(action.patch === undefined ? {} : { patch: action.patch }),
+  };
+}
+
+function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  switch (action.type) {
+    case "applyTextEdits":
+      return canonicalTextEditsPayload(action);
+    case "applyPatch":
+      return canonicalPatchPayload(action);
+    case "applyChangeset":
+      return action.changeset === undefined
         ? {}
-        : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) }),
-      ...(action.patch === undefined ? {} : { patch: action.patch }),
-    };
+        : { changeset: canonicalChangeset(action.changeset) };
+    case "navigateSymbol":
+      return action.navigateSymbol === undefined
+        ? {}
+        : { navigateSymbol: canonicalNavigateSymbolRequest(action.navigateSymbol) };
+    case "searchWorkspace":
+      return action.searchWorkspace === undefined
+        ? {}
+        : { searchWorkspace: canonicalSearchWorkspaceRequest(action.searchWorkspace) };
+    default:
+      return {};
   }
-  return action.type === "applyChangeset" && action.changeset !== undefined
-    ? { changeset: canonicalChangeset(action.changeset) }
-    : {};
+}
+
+function canonicalPosition(position: LanguagePosition): LanguagePosition {
+  return { line: position.line, character: position.character };
+}
+
+function canonicalDiagnostic(diagnostic: LanguageDiagnostic): LanguageDiagnostic {
+  return {
+    range: canonicalRange(diagnostic.range),
+    severity: diagnostic.severity,
+    message: diagnostic.message,
+    source: diagnostic.source,
+    ...(diagnostic.code === undefined ? {} : { code: diagnostic.code }),
+  };
 }
 
 function canonicalEditorAgentAction(action: EditorAgentAction): EditorAgentAction {
@@ -1268,6 +1462,7 @@ function canonicalActionResult(result: EditorAgentActionResult): EditorAgentActi
       ? {}
       : { failure: { code: result.failure.code, message: result.failure.message } }),
     ...(result.files === undefined ? {} : { files: result.files.map(canonicalFileActionResult) }),
+    ...(result.data === undefined ? {} : { data: result.data }),
   };
 }
 

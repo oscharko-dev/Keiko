@@ -338,6 +338,12 @@ export function dispatchEditorAgentAction(
         status: "failed",
         message: "Verification runs are not dispatched through the editor bridge.",
       };
+    case "navigateSymbol":
+    case "searchWorkspace":
+      return {
+        status: "failed",
+        message: "Server-resolved editor actions cannot execute in the browser bridge.",
+      };
   }
 }
 

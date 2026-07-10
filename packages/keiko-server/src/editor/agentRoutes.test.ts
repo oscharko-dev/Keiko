@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
@@ -36,7 +37,9 @@ import {
 import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { STREAMING, type RouteContext } from "../routes.js";
+import type { UiHandlerDeps } from "../deps.js";
 import { createAutonomousDeliveryApprovalStore } from "../coding-runtime/autonomousDeliveryApprovalStore.js";
+import * as workspaceSearchRoutes from "./workspaceSearchRoutes.js";
 import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentStateForTests,
@@ -477,6 +480,129 @@ afterEach(() => {
   bridgeStreamSequence = 0;
   _resetEditorAgentStateForTests();
   vi.useRealTimers();
+});
+
+describe("server-resolved navigation and search actions (#2218)", () => {
+  it("resolves a definition through the existing language handler", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-nav-"));
+    const store = createInMemoryUiStore();
+    mkdirSync(join(root, "src"), { recursive: true });
+    const text = "const target = 1;\ntarget;\n";
+    writeFileSync(join(root, "src", "a.ts"), text, "utf8");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "navigateSymbol",
+            expectedContentHash: undefined,
+            target: {
+              file: "src/a.ts",
+              selection: {
+                start: { line: 1, character: 0 },
+                end: { line: 1, character: 0 },
+              },
+            },
+            navigateSymbol: {
+              operation: "definition",
+              document: { path: "src/a.ts", languageId: "typescript", text },
+              position: { line: 1, character: 0 },
+            },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(200);
+      const result = actionResult(response.body);
+      expect(result.status).toBe("succeeded");
+      expect(result.data).toMatchObject({ operation: "definition" });
+      const data = result.data as {
+        readonly result: {
+          readonly locations: readonly {
+            readonly path: string;
+            readonly range: { readonly start: { readonly line: number } };
+          }[];
+        };
+      };
+      expect(data.result.locations[0]?.path).toBe("src/a.ts");
+      expect(data.result.locations[0]?.range.start.line).toBe(0);
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({ actionType: "navigateSymbol", mutating: false }),
+      ]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns bounded ranked workspace-search results through the existing search handler", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-search-"));
+    const store = createInMemoryUiStore();
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "export function parseConfig(): void {}\n", "utf8");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "searchWorkspace",
+            expectedContentHash: undefined,
+            searchWorkspace: { mode: "text", query: "parseConfig", maxResults: 1 },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(200);
+      const result = actionResult(response.body);
+      expect(result.status).toBe("succeeded");
+      const data = result.data as {
+        readonly results: readonly { readonly path: string; readonly score: number }[];
+        readonly truncated: boolean;
+      };
+      expect(data.results[0]?.path).toBe("src/a.ts");
+      expect(typeof data.results[0]?.score).toBe("number");
+      expect(data.truncated).toBe(false);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects sensitive server-resolved targets before invoking a handler", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-containment-"));
+    const store = createInMemoryUiStore();
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    try {
+      const searchHandler = vi.spyOn(workspaceSearchRoutes, "handleEditorWorkspaceSearch");
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "searchWorkspace",
+            expectedContentHash: undefined,
+            target: { file: ".env" },
+            searchWorkspace: { mode: "text", query: "SECRET", scopePath: ".env" },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("OUT_OF_SCOPE");
+      expect(searchHandler).not.toHaveBeenCalled();
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({
+          actionType: "searchWorkspace",
+          disposition: "denied",
+          denyReason: "denied-sensitive-path",
+        }),
+      ]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Original tests (unchanged) ────────────────────────────────────────────────────────────────

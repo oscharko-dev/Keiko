@@ -722,6 +722,8 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "applyTextEdits",
   "applyPatch",
   "applyChangeset",
+  "navigateSymbol",
+  "searchWorkspace",
 ];
 
 const NON_WRITE_ACTION_TYPES = [
@@ -754,8 +756,33 @@ function changesetAction(): EditorAgentAction {
   });
 }
 
+function navigateSymbolAction(): EditorAgentAction {
+  return baseAction({
+    type: "navigateSymbol",
+    target: {
+      file: "src/a.ts",
+      selection: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } },
+    },
+    navigateSymbol: {
+      operation: "definition",
+      document: { path: "src/a.ts", languageId: "typescript", text: "const a = 1;\na;" },
+      position: { line: 1, character: 0 },
+    },
+  });
+}
+
+function searchWorkspaceAction(): EditorAgentAction {
+  return baseAction({
+    type: "searchWorkspace",
+    searchWorkspace: { mode: "text", query: "needle", maxResults: 10 },
+  });
+}
+
 function validActionForType(type: EditorAgentActionType): EditorAgentAction {
-  return type === "applyChangeset" ? changesetAction() : baseAction({ type });
+  if (type === "applyChangeset") return changesetAction();
+  if (type === "navigateSymbol") return navigateSymbolAction();
+  if (type === "searchWorkspace") return searchWorkspaceAction();
+  return baseAction({ type });
 }
 
 describe("schema version compatibility (Issue #1391)", () => {

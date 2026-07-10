@@ -172,6 +172,7 @@ function redactActionResult(result: EditorAgentActionResult): EditorAgentActionR
     ...(result.files === undefined
       ? {}
       : { files: result.files.map((file) => redactFileResult(file)) }),
+    ...(result.data === undefined ? {} : { data: result.data }),
   };
 }
 
@@ -217,6 +218,7 @@ function redactUnknownActionResult(value: unknown): unknown {
       : value.files === undefined
         ? {}
         : { files: value.files }),
+    ...(value.data === undefined ? {} : { data: value.data }),
   };
 }
 

@@ -6,11 +6,14 @@ import {
   isVerificationKind,
   type EditorAgentAction,
   type EditorAgentActionQueuedResponse,
+  type EditorAgentNavigateSymbolOperation,
   type EditorAgentSessionsResponse,
+  type EditorAgentSearchWorkspaceMode,
   type EditorAgentSnapshotResponse,
   type EditorAgentSnapshotTextMode,
   type EditorAgentVerificationResult,
   type EditorAgentVerificationRunRequest,
+  type LanguageDiagnostic,
   type ToolCallRequest,
   type ToolCallResult,
   type ToolPort,
@@ -128,6 +131,32 @@ function parseSelection(value: unknown): Selection {
   return { start: parsePosition(value.start), end: parsePosition(value.end) };
 }
 
+function parseLanguageDiagnostic(value: unknown): LanguageDiagnostic {
+  if (!isRecord(value)) throw new InvalidArgumentsError("Diagnostic must be an object.");
+  expectOnly(value, ["range", "severity", "message", "source", "code"]);
+  const severity = value.severity;
+  if (
+    severity !== "error" &&
+    severity !== "warning" &&
+    severity !== "info" &&
+    severity !== "hint"
+  ) {
+    throw new InvalidArgumentsError("Diagnostic severity is invalid.");
+  }
+  return {
+    range: parseSelection(value.range),
+    severity,
+    message: requireText(value, "message"),
+    source: requireString(value, "source"),
+    ...(value.code === undefined ? {} : { code: requireString(value, "code") }),
+  };
+}
+
+function parseLanguageDiagnostics(value: unknown): readonly LanguageDiagnostic[] {
+  if (!Array.isArray(value)) throw new InvalidArgumentsError("Diagnostics array is required.");
+  return value.map(parseLanguageDiagnostic);
+}
+
 function parseDocumentVersion(value: unknown): DocumentVersion {
   if (!isRecord(value)) throw new InvalidArgumentsError("Document version must be an object.");
   expectOnly(value, ["sizeBytes", "modifiedAt", "contentHash"]);
@@ -169,6 +198,23 @@ function optionalStringArray(value: unknown): readonly string[] | undefined {
   });
   if (new Set(strings).size !== strings.length) {
     throw new InvalidArgumentsError("Selected files must be unique.");
+  }
+  return strings;
+}
+
+function optionalSearchStringArray(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!isUnknownArray(value)) {
+    throw new InvalidArgumentsError("Search globs must be a string array.");
+  }
+  const strings = value.map((item) => {
+    if (typeof item !== "string" || item.length === 0) {
+      throw new InvalidArgumentsError("Search globs must be a string array.");
+    }
+    return item;
+  });
+  if (strings.length > 32) {
+    throw new InvalidArgumentsError("Search globs exceed their bound.");
   }
   return strings;
 }
@@ -228,6 +274,122 @@ function invalidOutput(message: string): EditorAgentToolOutput {
   };
 }
 
+interface ParsedNavigateSymbolArguments {
+  readonly sessionId: string;
+  readonly file: string;
+  readonly request: NonNullable<EditorAgentAction["navigateSymbol"]>;
+}
+
+function navigateSymbolOperation(value: unknown): EditorAgentNavigateSymbolOperation {
+  if (
+    value === "definition" ||
+    value === "references" ||
+    value === "renamePrepare" ||
+    value === "codeActions" ||
+    value === "signatureHelp"
+  ) {
+    return value;
+  }
+  throw new InvalidArgumentsError("Symbol navigation operation is invalid.");
+}
+
+function validateNavigateSymbolExtras(
+  operation: EditorAgentNavigateSymbolOperation,
+  range: Selection | undefined,
+  diagnostics: readonly LanguageDiagnostic[] | undefined,
+): void {
+  const hasExtras = range !== undefined || diagnostics !== undefined;
+  if (operation === "codeActions" && (range === undefined || diagnostics === undefined)) {
+    throw new InvalidArgumentsError("Code actions require range and diagnostics.");
+  }
+  if (operation !== "codeActions" && hasExtras) {
+    throw new InvalidArgumentsError("Range and diagnostics are only valid for code actions.");
+  }
+}
+
+function parseNavigateSymbolArguments(
+  args: Record<string, unknown>,
+): ParsedNavigateSymbolArguments {
+  expectOnly(args, [
+    "sessionId",
+    "idempotencyKey",
+    "file",
+    "operation",
+    "position",
+    "languageId",
+    "text",
+    "range",
+    "diagnostics",
+  ]);
+  const operation = navigateSymbolOperation(args.operation);
+  const file = requireString(args, "file");
+  const position = parsePosition(args.position);
+  const range = args.range === undefined ? undefined : parseSelection(args.range);
+  const diagnostics =
+    args.diagnostics === undefined ? undefined : parseLanguageDiagnostics(args.diagnostics);
+  validateNavigateSymbolExtras(operation, range, diagnostics);
+  const languageId = optionalString(args, "languageId") ?? "typescript";
+  const text = args.text === undefined ? undefined : requireText(args, "text");
+  return {
+    sessionId: requireString(args, "sessionId"),
+    file,
+    request: {
+      operation,
+      document: { path: file, languageId, ...(text === undefined ? {} : { text }) },
+      position,
+      ...(range === undefined ? {} : { range }),
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+    },
+  };
+}
+
+interface ParsedSearchWorkspaceArguments {
+  readonly sessionId: string;
+  readonly scopePath: string | undefined;
+  readonly request: NonNullable<EditorAgentAction["searchWorkspace"]>;
+}
+
+function searchWorkspaceMode(value: unknown): EditorAgentSearchWorkspaceMode {
+  if (value === "text" || value === "symbol") return value;
+  throw new InvalidArgumentsError("Workspace search mode is invalid.");
+}
+
+function parseSearchWorkspaceArguments(
+  args: Record<string, unknown>,
+): ParsedSearchWorkspaceArguments {
+  expectOnly(args, [
+    "sessionId",
+    "idempotencyKey",
+    "query",
+    "mode",
+    "caseSensitive",
+    "includeGlobs",
+    "excludeGlobs",
+    "maxResults",
+    "scopePath",
+  ]);
+  if (args.caseSensitive !== undefined && typeof args.caseSensitive !== "boolean") {
+    throw new InvalidArgumentsError("Argument 'caseSensitive' must be boolean.");
+  }
+  const includeGlobs = optionalSearchStringArray(args.includeGlobs);
+  const excludeGlobs = optionalSearchStringArray(args.excludeGlobs);
+  const maxResults = optionalPositiveInteger(args, "maxResults");
+  const scopePath = optionalString(args, "scopePath");
+  return {
+    sessionId: requireString(args, "sessionId"),
+    scopePath,
+    request: {
+      mode: searchWorkspaceMode(args.mode),
+      query: requireString(args, "query"),
+      ...(args.caseSensitive === undefined ? {} : { caseSensitive: args.caseSensitive }),
+      ...(includeGlobs === undefined ? {} : { includeGlobs }),
+      ...(excludeGlobs === undefined ? {} : { excludeGlobs }),
+      ...(maxResults === undefined ? {} : { maxResults }),
+      ...(scopePath === undefined ? {} : { scopePath }),
+    },
+  };
+}
+
 export class EditorAgentToolHost implements ToolPort {
   private readonly client: EditorAgentHttpClient;
   private readonly authorityRef: AuthorityReference;
@@ -283,6 +445,10 @@ export class EditorAgentToolHost implements ToolPort {
         return this.snapshot(request);
       case "editor_navigate":
         return this.navigate(request);
+      case "editor_navigate_symbol":
+        return this.navigateSymbol(request);
+      case "editor_search_workspace":
+        return this.searchWorkspace(request);
       case "editor_propose_edit":
         return this.proposeEdit(request);
       case "editor_propose_changeset":
@@ -361,6 +527,33 @@ export class EditorAgentToolHost implements ToolPort {
       throw new InvalidArgumentsError("Navigation type is invalid.");
     }
     return this.sendAction({ ...this.actionBase(args, sessionId, type), target }, request.signal);
+  }
+
+  private navigateSymbol(request: ToolCallRequest): Promise<EditorAgentToolOutput> {
+    const args = request.arguments;
+    const parsed = parseNavigateSymbolArguments(args);
+    const action: EditorAgentAction = {
+      ...this.actionBase(args, parsed.sessionId, "navigateSymbol"),
+      type: "navigateSymbol",
+      target: {
+        file: parsed.file,
+        selection: { start: parsed.request.position, end: parsed.request.position },
+      },
+      navigateSymbol: parsed.request,
+    };
+    return this.sendAction(action, request.signal);
+  }
+
+  private searchWorkspace(request: ToolCallRequest): Promise<EditorAgentToolOutput> {
+    const args = request.arguments;
+    const parsed = parseSearchWorkspaceArguments(args);
+    const action: EditorAgentAction = {
+      ...this.actionBase(args, parsed.sessionId, "searchWorkspace"),
+      type: "searchWorkspace",
+      ...(parsed.scopePath === undefined ? {} : { target: { file: parsed.scopePath } }),
+      searchWorkspace: parsed.request,
+    };
+    return this.sendAction(action, request.signal);
   }
 
   private proposeEdit(request: ToolCallRequest): Promise<EditorAgentToolOutput> {

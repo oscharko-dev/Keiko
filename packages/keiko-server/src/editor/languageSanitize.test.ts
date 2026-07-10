@@ -5,11 +5,13 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import {
   sanitizeCodeActions,
+  sanitizeCallHierarchy,
   sanitizeCompletion,
   sanitizeDefinition,
   sanitizeDiagnostics,
   sanitizeFormatting,
   sanitizeHover,
+  sanitizeInlayHints,
   sanitizeReferences,
   sanitizeRenameApply,
   sanitizeRenamePrepare,
@@ -400,5 +402,53 @@ describe("sanitizeSignatureHelp", () => {
     expect(result.activeSignature).toBe(null);
     expect(result.returnedCount).toBe(1);
     expect(result.truncated).toBe(true);
+  });
+});
+
+describe("sanitizeCallHierarchy and sanitizeInlayHints", () => {
+  it("clips labels and centrally caps hierarchy items, call sites, and inlay hints", () => {
+    const item = {
+      name: `target${BIDI}unsafe`,
+      kind: "function" as const,
+      path: "src/target.ts",
+      range,
+      selectionRange: range,
+    };
+    const hierarchy = sanitizeCallHierarchy(
+      {
+        roots: [
+          {
+            item,
+            incomingCalls: [{ item, fromRanges: [range, range] }],
+            outgoingCalls: [{ item, fromRanges: [range] }],
+          },
+        ],
+        truncated: false,
+      },
+      {
+        ...tinyLimits,
+        maxCallHierarchyItems: 2,
+        maxCallHierarchyCallSites: 1,
+      },
+    );
+    const hints = sanitizeInlayHints(
+      {
+        hints: [
+          { position: { line: 0, character: 1 }, label: `value${BIDI}:`, kind: "parameter" },
+          { position: { line: 1, character: 1 }, label: ": string", kind: "type" },
+        ],
+        truncated: false,
+      },
+      { ...tinyLimits, maxInlayHints: 1 },
+    );
+
+    expect(hierarchy.roots[0]?.item.name).toBe("targe");
+    expect(hierarchy.roots[0]?.incomingCalls[0]?.fromRanges).toHaveLength(1);
+    expect(hierarchy.roots[0]?.outgoingCalls).toEqual([]);
+    expect(hierarchy.truncated).toBe(true);
+    expect(hints.hints).toEqual([
+      { position: { line: 0, character: 1 }, label: "value", kind: "parameter" },
+    ]);
+    expect(hints.truncated).toBe(true);
   });
 });

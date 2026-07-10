@@ -5,6 +5,8 @@ const TOOL_NAMES = [
   "editor_list_sessions",
   "editor_snapshot",
   "editor_navigate",
+  "editor_navigate_symbol",
+  "editor_search_workspace",
   "editor_propose_edit",
   "editor_propose_changeset",
   "editor_request_verification",
@@ -30,7 +32,7 @@ function assertStrictObjects(value: unknown): void {
 }
 
 describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
-  it("exposes exactly the six governed child tools", () => {
+  it("exposes the governed editor tool set", () => {
     expect(EDITOR_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual(TOOL_NAMES);
   });
 
@@ -48,6 +50,29 @@ describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
       },
       required: ["sessionId", "kind"],
       additionalProperties: false,
+    });
+  });
+
+  it("exposes bounded symbol-navigation and workspace-search schemas", () => {
+    expect(
+      EDITOR_AGENT_TOOL_DEFINITIONS.find((tool) => tool.name === "editor_navigate_symbol")
+        ?.parameters,
+    ).toMatchObject({
+      required: ["sessionId", "idempotencyKey", "file", "operation", "position"],
+      additionalProperties: false,
+      properties: {
+        operation: {
+          enum: ["definition", "references", "renamePrepare", "codeActions", "signatureHelp"],
+        },
+      },
+    });
+    expect(
+      EDITOR_AGENT_TOOL_DEFINITIONS.find((tool) => tool.name === "editor_search_workspace")
+        ?.parameters,
+    ).toMatchObject({
+      required: ["sessionId", "idempotencyKey", "query", "mode"],
+      additionalProperties: false,
+      properties: { mode: { enum: ["text", "symbol"] } },
     });
   });
 

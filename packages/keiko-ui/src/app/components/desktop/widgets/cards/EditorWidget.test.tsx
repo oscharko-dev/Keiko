@@ -23,6 +23,10 @@ import {
   requestEditorCompletion,
   requestEditorCodeActions,
   requestEditorDefinition,
+  requestEditorTypeDefinition,
+  requestEditorImplementation,
+  requestEditorCallHierarchy,
+  requestEditorInlayHints,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -72,6 +76,10 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorSymbols: vi.fn(),
     requestEditorFormatting: vi.fn(),
     requestEditorDefinition: vi.fn(),
+    requestEditorTypeDefinition: vi.fn(),
+    requestEditorImplementation: vi.fn(),
+    requestEditorCallHierarchy: vi.fn(),
+    requestEditorInlayHints: vi.fn(),
     requestEditorReferences: vi.fn(),
     requestEditorRenamePrepare: vi.fn(),
     requestEditorRenameApply: vi.fn(),
@@ -152,7 +160,11 @@ const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
         "symbols",
         "formatting",
         "definition",
+        "typeDefinition",
+        "implementation",
         "references",
+        "callHierarchy",
+        "inlayHints",
         "codeActions",
         "signatureHelp",
         "renamePrepare",
@@ -1652,6 +1664,11 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
         with: expect.any(Function),
       }),
     );
+    expect(surface.props?.provideTypeDefinition).toBeDefined();
+    expect(surface.props?.provideImplementation).toBeDefined();
+    expect(surface.props?.provideCallHierarchy).toBeDefined();
+    expect(surface.props?.provideInlayHints).toBeDefined();
+    expect(surface.props?.callHierarchyLabels?.title).toBe("Call hierarchy");
 
     const references = surface.props?.provideReferences;
     expect(references).toBeDefined();
@@ -1758,6 +1775,10 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
     expect(surface.props?.provideSymbols).toBeUndefined();
     expect(surface.props?.provideFormatting).toBeUndefined();
     expect(surface.props?.provideDefinition).toBeUndefined();
+    expect(surface.props?.provideTypeDefinition).toBeUndefined();
+    expect(surface.props?.provideImplementation).toBeUndefined();
+    expect(surface.props?.provideCallHierarchy).toBeUndefined();
+    expect(surface.props?.provideInlayHints).toBeUndefined();
     expect(surface.props?.provideReferences).toBeUndefined();
     expect(surface.props?.provideCodeActions).toBeUndefined();
     expect(surface.props?.provideSignatureHelp).toBeUndefined();

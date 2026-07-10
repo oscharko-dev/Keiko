@@ -71,6 +71,29 @@ import {
   type MonacoUriLike,
 } from "./definition-bridge.js";
 import {
+  TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
+  registerKeikoTypeDefinitionProvider,
+  type MonacoTypeDefinitionRegistrar,
+} from "./type-definition-bridge.js";
+import {
+  IMPLEMENTATION_ELIGIBLE_LANGUAGES,
+  registerKeikoImplementationProvider,
+  type MonacoImplementationRegistrar,
+} from "./implementation-bridge.js";
+import {
+  INLAY_HINTS_ELIGIBLE_LANGUAGES,
+  registerKeikoInlayHintsProvider,
+  type EditorInlayHintsResolver,
+  type MonacoInlayHintsRegistrar,
+} from "./inlay-hints-bridge.js";
+import {
+  registerKeikoCallHierarchyAction,
+  type CallHierarchyActionLabels,
+  type EditorCallHierarchyResolver,
+  type EditorCallHierarchyResponse,
+  type MonacoCallHierarchyEditor,
+} from "./call-hierarchy-bridge.js";
+import {
   REFERENCES_ELIGIBLE_LANGUAGES,
   registerKeikoReferencesProvider,
   type MonacoReferenceRegistrar,
@@ -222,6 +245,24 @@ export interface WireEditorDefinition {
   readonly languages?: readonly EditorLanguageId[] | undefined;
 }
 
+export interface WireEditorInlayHints {
+  readonly resolve: EditorInlayHintsResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+export interface WireEditorCallHierarchy {
+  readonly resolve: EditorCallHierarchyResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly documentLanguage: EditorLanguageId;
+  readonly labels: CallHierarchyActionLabels;
+  readonly onResult: (response: EditorCallHierarchyResponse) => void;
+}
+
 /** Host-injected find-references wiring (Epic #2089); absent when unsupported. */
 export interface WireEditorReferences {
   readonly resolve: EditorReferencesResolver;
@@ -256,6 +297,7 @@ export interface WireEditorSignatureHelp {
 export interface MountEditor {
   addAction(descriptor: monaco.editor.IActionDescriptor): monaco.IDisposable;
   getAction(id: string): { run: () => void | Promise<void> } | null;
+  getPosition?(): { readonly lineNumber: number; readonly column: number } | null;
   onDidChangeCursorPosition(
     listener: (event: { position: monaco.Position }) => void,
   ): monaco.IDisposable;
@@ -276,6 +318,8 @@ export interface MountEditor {
   ): boolean;
   pushUndoStop?(): boolean;
   getModel?(): {
+    getValue?(): string;
+    readonly uri?: MonacoUriLike;
     getLineCount(): number;
     getLineMaxColumn(lineNumber: number): number;
   } | null;
@@ -317,6 +361,10 @@ export interface WireEditorOnMountArgs {
   readonly formatting?: WireEditorFormatting | undefined;
   /** Go-to-definition wiring (Epic #2089); absent when the host supplies no resolver. */
   readonly definition?: WireEditorDefinition | undefined;
+  readonly typeDefinition?: WireEditorDefinition | undefined;
+  readonly implementation?: WireEditorDefinition | undefined;
+  readonly callHierarchy?: WireEditorCallHierarchy | undefined;
+  readonly inlayHints?: WireEditorInlayHints | undefined;
   /** Find-references wiring (Epic #2089); absent when the host supplies no resolver. */
   readonly references?: WireEditorReferences | undefined;
   /** Code-action wiring (Epic #2089); absent when the host supplies no resolver. */
@@ -550,6 +598,81 @@ function installDefinitionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   });
 }
 
+function installTypeDefinitionProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.typeDefinition;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoTypeDefinitionRegistrar;
+  if (typeof registrar.registerTypeDefinitionProvider !== "function") return null;
+  return registerKeikoTypeDefinitionProvider({
+    languages: registrar,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguages: wiring.languages ?? TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+    uriForPath: normalizeUriForPath(args.monaco.Uri, wiring.uriForPath),
+  });
+}
+
+function installImplementationProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.implementation;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoImplementationRegistrar;
+  if (typeof registrar.registerImplementationProvider !== "function") return null;
+  return registerKeikoImplementationProvider({
+    languages: registrar,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguages: wiring.languages ?? IMPLEMENTATION_ELIGIBLE_LANGUAGES,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+    uriForPath: normalizeUriForPath(args.monaco.Uri, wiring.uriForPath),
+  });
+}
+
+function installInlayHintsProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.inlayHints;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoInlayHintsRegistrar;
+  if (typeof registrar.registerInlayHintsProvider !== "function") return null;
+  return registerKeikoInlayHintsProvider({
+    languages: registrar,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguages: wiring.languages ?? INLAY_HINTS_ELIGIBLE_LANGUAGES,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+  });
+}
+
+function installCallHierarchyAction(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.callHierarchy;
+  const editor = args.editor;
+  const model = editor.getModel?.();
+  if (
+    wiring === undefined ||
+    typeof editor.getPosition !== "function" ||
+    model === null ||
+    model === undefined ||
+    typeof model.getValue !== "function" ||
+    model.uri === undefined
+  )
+    return null;
+  return registerKeikoCallHierarchyAction({
+    editor: editor as unknown as MonacoCallHierarchyEditor,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguage: wiring.documentLanguage,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+    labels: wiring.labels,
+    onResult: wiring.onResult,
+  });
+}
+
 // Registers the find-references provider. Shift+F12 remains Monaco-native; Keiko adds no keybinding.
 function installReferencesProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
   const references = args.references;
@@ -750,6 +873,10 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const symbolsSub = installDocumentSymbolProvider(args);
   const formattingSub = installFormattingProvider(args);
   const definitionSub = installDefinitionProvider(args);
+  const typeDefinitionSub = installTypeDefinitionProvider(args);
+  const implementationSub = installImplementationProvider(args);
+  const callHierarchySub = installCallHierarchyAction(args);
+  const inlayHintsSub = installInlayHintsProvider(args);
   const referencesSub = installReferencesProvider(args);
   const codeActionsSub = installCodeActionProvider(args);
   const signatureHelpSub = installSignatureHelpProvider(args);
@@ -765,6 +892,10 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     symbolsSub,
     formattingSub,
     definitionSub,
+    typeDefinitionSub,
+    implementationSub,
+    callHierarchySub,
+    inlayHintsSub,
     referencesSub,
     codeActionsSub,
     signatureHelpSub,

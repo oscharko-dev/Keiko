@@ -22,6 +22,7 @@ import type {
   EditorHostEditRequest,
   EditorHoverResolver,
   EditorInlineCompletionResolver,
+  EditorLocation,
   EditorPosition,
   EditorRange,
   EditorReferencesResolver,
@@ -31,6 +32,9 @@ import type {
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
 import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
+import type { CallHierarchyPanelLabels } from "./CallHierarchyPanel.js";
+import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
+import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
 
 export interface EditorUriLike {
@@ -172,6 +176,10 @@ export interface KeikoCodeEditorProps {
    * native go-to-definition provider; the host owns the governed BFF call.
    */
   readonly provideDefinition?: EditorDefinitionResolver | undefined;
+  /** Host-injected Go to Type Definition resolver (Issue #2216). */
+  readonly provideTypeDefinition?: EditorDefinitionResolver | undefined;
+  /** Host-injected Go to Implementation resolver (Issue #2216). */
+  readonly provideImplementation?: EditorDefinitionResolver | undefined;
   /** Resolve a workspace-relative location path to the host-owned Monaco model URI. */
   readonly uriForPath?: EditorUriForPath | undefined;
   /**
@@ -179,6 +187,12 @@ export interface KeikoCodeEditorProps {
    * native find-references provider; the host owns the governed BFF call.
    */
   readonly provideReferences?: EditorReferencesResolver | undefined;
+  /** Host-injected call-hierarchy resolver and localized tree labels (Issue #2216). */
+  readonly provideCallHierarchy?: EditorCallHierarchyResolver | undefined;
+  readonly callHierarchyLabels?: CallHierarchyPanelLabels | undefined;
+  readonly onRevealCallHierarchyLocation?: ((location: EditorLocation) => void) | undefined;
+  /** Host-injected inlay-hints resolver rendered by Monaco's native hint surface (Issue #2216). */
+  readonly provideInlayHints?: EditorInlayHintsResolver | undefined;
   /**
    * Host-injected code-action resolver (Epic #2089). When present, the editor registers Monaco's
    * lightbulb provider and enables the lightbulb UI. Edits are limited to the active model.

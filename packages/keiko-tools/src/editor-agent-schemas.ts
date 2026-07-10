@@ -152,6 +152,50 @@ const REQUEST_VERIFICATION_PARAMETERS = objectSchema(
   ["sessionId", "kind"],
 );
 
+const LANGUAGE_DIAGNOSTIC_SCHEMA = objectSchema(
+  {
+    range: RANGE_SCHEMA,
+    severity: { type: "string", enum: ["error", "warning", "info", "hint"] },
+    message: { type: "string", minLength: 1 },
+    source: { type: "string", minLength: 1 },
+    code: { type: "string", minLength: 1 },
+  },
+  ["range", "severity", "message", "source"],
+);
+
+const NAVIGATE_SYMBOL_PARAMETERS = objectSchema(
+  {
+    sessionId: { type: "string", minLength: 1 },
+    idempotencyKey: IDEMPOTENCY_KEY_SCHEMA,
+    file: { type: "string", minLength: 1 },
+    operation: {
+      type: "string",
+      enum: ["definition", "references", "renamePrepare", "codeActions", "signatureHelp"],
+    },
+    position: POSITION_SCHEMA,
+    languageId: { type: "string", minLength: 1 },
+    text: { type: "string" },
+    range: RANGE_SCHEMA,
+    diagnostics: { type: "array", items: LANGUAGE_DIAGNOSTIC_SCHEMA },
+  },
+  ["sessionId", "idempotencyKey", "file", "operation", "position"],
+);
+
+const SEARCH_WORKSPACE_PARAMETERS = objectSchema(
+  {
+    sessionId: { type: "string", minLength: 1 },
+    idempotencyKey: IDEMPOTENCY_KEY_SCHEMA,
+    query: { type: "string", minLength: 1, maxLength: 200 },
+    mode: { type: "string", enum: ["text", "symbol"] },
+    caseSensitive: { type: "boolean", default: false },
+    includeGlobs: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 32 },
+    excludeGlobs: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 32 },
+    maxResults: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+    scopePath: { type: "string", minLength: 1 },
+  },
+  ["sessionId", "idempotencyKey", "query", "mode"],
+);
+
 export const EDITOR_AGENT_TOOL_DEFINITIONS: readonly ToolDefinition[] = deepFreeze([
   {
     name: "editor_list_sessions",
@@ -168,6 +212,18 @@ export const EDITOR_AGENT_TOOL_DEFINITIONS: readonly ToolDefinition[] = deepFree
     description:
       "Queue an openFile, focusTab, or setSelection action for a governed editor session.",
     parameters: NAVIGATE_PARAMETERS,
+  },
+  {
+    name: "editor_navigate_symbol",
+    description:
+      "Resolve a TypeScript/JavaScript definition, references, rename candidates, code actions, or signature help through the governed editor action queue.",
+    parameters: NAVIGATE_SYMBOL_PARAMETERS,
+  },
+  {
+    name: "editor_search_workspace",
+    description:
+      "Search workspace text or symbols through the governed editor action queue with bounded ranked results.",
+    parameters: SEARCH_WORKSPACE_PARAMETERS,
   },
   {
     name: "editor_propose_edit",

@@ -71,6 +71,8 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   applyPatch: "content-mutation",
   applyChangeset: "content-mutation",
   requestVerification: "execution",
+  navigateSymbol: "navigation",
+  searchWorkspace: "navigation",
 };
 
 // Pure editor navigation and layout do not consume workspace or delivery authority. Mutating and
@@ -116,6 +118,8 @@ export const EDITOR_AGENT_ACTION_APPROVAL_RISK: Readonly<
   // Non-mutating, closed-set (no free-form argv). Provisional per ADR-0126 D5: Issue #2214 is the
   // first real caller to compose this through the registry and may revise it.
   requestVerification: "low",
+  navigateSymbol: "low",
+  searchWorkspace: "low",
 };
 
 // The mutating action set — the classes that change buffer/file content or have an external effect.
