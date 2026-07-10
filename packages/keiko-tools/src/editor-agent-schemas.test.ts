@@ -9,6 +9,7 @@ const TOOL_NAMES = [
   "editor_search_workspace",
   "editor_propose_edit",
   "editor_propose_changeset",
+  "editor_request_verification",
 ] as const;
 
 function assertFrozen(value: unknown): void {
@@ -33,6 +34,23 @@ function assertStrictObjects(value: unknown): void {
 describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
   it("exposes the governed editor tool set", () => {
     expect(EDITOR_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual(TOOL_NAMES);
+  });
+
+  // Issue #2214 AC1 — the verification tool has a valid, model-consumable, strict JSON Schema.
+  it("exposes editor_request_verification with a bounded verification-kind schema", () => {
+    const tool = EDITOR_AGENT_TOOL_DEFINITIONS.find(
+      (definition) => definition.name === "editor_request_verification",
+    );
+    expect(tool?.parameters).toMatchObject({
+      type: "object",
+      properties: {
+        sessionId: { type: "string", minLength: 1 },
+        kind: { type: "string", enum: ["test", "targeted-test", "typecheck", "lint", "build"] },
+        targetPath: { type: "string", minLength: 1 },
+      },
+      required: ["sessionId", "kind"],
+      additionalProperties: false,
+    });
   });
 
   it("exposes bounded symbol-navigation and workspace-search schemas", () => {

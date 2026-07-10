@@ -188,6 +188,8 @@ import {
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
+import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import { removePaneDiagnostics, setPaneDiagnostics } from "./editorProblemsStore";
 import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 import {
   postEditorAgentResult,
@@ -1244,6 +1246,40 @@ function EditorRuntimeWidget({
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
   const t = useEditorAgentTranslate();
+  // Issue #2212 (ADR-0126) — verification run state for the status bar + diff-review affordances,
+  // derived from the same governed route/stream the palette uses (server-authoritative via SSE).
+  const verification = useEditorVerificationRun({
+    root: root ?? "",
+    activeFile: file !== undefined && file.length > 0 ? file : null,
+  });
+  const {
+    runFileTests: runVerificationFileTests,
+    runWorkspaceVerification,
+    verifiableTarget,
+  } = verification;
+  // Issue #2212 — the diff-review "Run Verification" intent: verify the reviewed file's tests when a
+  // counterpart resolves, else fall back to a workspace typecheck. Available only when idle.
+  const runDiffVerification = useCallback((): void => {
+    if (verifiableTarget !== null) {
+      runVerificationFileTests();
+    } else {
+      runWorkspaceVerification("typecheck");
+    }
+  }, [runVerificationFileTests, runWorkspaceVerification, verifiableTarget]);
+  // Issue #2213 (ADR-0126) — feed this pane's diagnostics (keyed by path) into the workspace Problems
+  // panel store, and remove them when the pane closes or switches file. Language diagnostics are
+  // inherently bounded to currently-open buffers; the panel copy must not imply full-workspace coverage.
+  const onPaneDiagnostics = useCallback(
+    (diagnostics: readonly EditorDiagnostic[]): void => {
+      if (file !== undefined && file.length > 0) setPaneDiagnostics(file, diagnostics);
+    },
+    [file],
+  );
+  useEffect(() => {
+    return (): void => {
+      if (file !== undefined && file.length > 0) removePaneDiagnostics(file);
+    };
+  }, [file]);
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
   const editorModelScope = useMemo(
@@ -2962,8 +2998,12 @@ function EditorRuntimeWidget({
     currentSelection === null
       ? undefined
       : currentSelection.end.line - currentSelection.start.line + 1;
+  // Issue #2212 (ADR-0126) — precedence: while a verification run is active (or has a not-yet-dismissed
+  // terminal result), its content-free {label, busy} owns the single status-bar `run` slot; otherwise
+  // it falls back to the existing test-generation-derived value unchanged.
   const statusBarRun: EditorStatusRun | undefined =
-    testGenStatusLabel.length > 0 ? { label: testGenStatusLabel, busy: testGenBusy } : undefined;
+    verification.statusBarRun ??
+    (testGenStatusLabel.length > 0 ? { label: testGenStatusLabel, busy: testGenBusy } : undefined);
   const statusBarViewModel =
     fileModel === null
       ? null
@@ -4258,10 +4298,11 @@ function EditorRuntimeWidget({
             actions={{
               canApply: !agentChangesetPending.applying,
               canReject: !agentChangesetPending.applying,
-              canRunVerification: false,
+              canRunVerification: !verification.verificationRunning,
             }}
             onApply={handleAgentChangesetAccept}
             onReject={handleAgentChangesetReject}
+            onRunVerification={runDiffVerification}
           />
         </div>
       </div>
@@ -4318,6 +4359,18 @@ function EditorRuntimeWidget({
           >
             Reject
           </button>
+          {/* Issue #2212 (ADR-0126) — activate the run-verification intent on this custom-button
+              review surface (no built-in KeikoDiffEditor action bar here). Idle-gated. */}
+          <button
+            type="button"
+            className="ed-reload"
+            data-testid="agent-patch-run-verification"
+            aria-label={commonT("editor.verification.runReviewedChangeLabel")}
+            disabled={agentPatchPending.applying || verification.verificationRunning}
+            onClick={runDiffVerification}
+          >
+            {commonT("editor.verification.run")}
+          </button>
         </div>
       </div>
     );
@@ -4327,9 +4380,14 @@ function EditorRuntimeWidget({
         model={renameReview.model}
         loadState={{ status: "ready" }}
         themeVariant={themeVariant}
-        actions={{ canApply: true, canReject: true, canRunVerification: false }}
+        actions={{
+          canApply: true,
+          canReject: true,
+          canRunVerification: !verification.verificationRunning,
+        }}
         onApply={handleRenameAccept}
         onReject={handleRenameReject}
+        onRunVerification={runDiffVerification}
       />
     );
   } else if (testGenerationPreview !== null) {
@@ -4402,6 +4460,7 @@ function EditorRuntimeWidget({
         revealRequest={surfaceRevealRequest}
         hostEditRequest={activeHostEditRequest}
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
+        onDiagnostics={diagnosticsEnabled ? onPaneDiagnostics : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
         onAskKeikoAboutSelection={onAskSelection === undefined ? undefined : handleAskSelection}
         onRenameSymbol={canRename ? runRename : undefined}

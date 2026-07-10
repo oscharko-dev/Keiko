@@ -176,18 +176,20 @@ describe("policy classifier (Issue #1395 AC2)", () => {
 });
 
 describe("Authority Envelope composition (Issue #2121)", () => {
-  it("maps all four effect classes onto the shared Workbench vocabulary", () => {
+  it("maps all effect classes onto the shared Workbench vocabulary", () => {
     expect(EDITOR_AGENT_WORKBENCH_ACTION_CLASS).toEqual({
       navigation: null,
       layout: null,
       "content-mutation": "workspace-write",
       "external-effect": "delivery-substrate",
+      execution: "verification",
     });
     expect(EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE).toEqual({
       navigation: null,
       layout: null,
       "content-mutation": "workspace-contained",
       "external-effect": "delivery",
+      execution: "workspace-contained",
     });
   });
 
@@ -428,5 +430,58 @@ describe("audit record guard", () => {
     expect(isEditorAgentActionAuditRecord({ ...valid, disposition: "nope" })).toBe(false);
     expect(isEditorAgentActionAuditRecord({ ...valid, origin: "automation" })).toBe(false);
     expect(isEditorAgentActionAuditRecord(null)).toBe(false);
+  });
+});
+
+describe("execution effect class + requestVerification (Issue #2210, ADR-0126 D4/D5)", () => {
+  it("maps requestVerification to the execution effect class", () => {
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.requestVerification).toBe("execution");
+    expect(Object.keys(EDITOR_AGENT_ACTION_EFFECT_CLASS)).toContain("requestVerification");
+    expect(Object.keys(EDITOR_AGENT_ACTION_APPROVAL_RISK)).toContain("requestVerification");
+  });
+
+  it("maps execution onto the existing verification / workspace-contained vocabulary (non-null)", () => {
+    // Non-null in BOTH tables so compose gates it through the Authority Envelope rather than
+    // short-circuiting it like navigation/layout — the invariant the agent-access child issue needs.
+    expect(EDITOR_AGENT_WORKBENCH_ACTION_CLASS.execution).toBe("verification");
+    expect(EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE.execution).toBe("workspace-contained");
+    expect(EDITOR_AGENT_WORKBENCH_ACTION_CLASS.execution).not.toBeNull();
+    expect(EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE.execution).not.toBeNull();
+  });
+
+  it("classifies requestVerification as low approval risk and non-mutating", () => {
+    expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification).toBe("low");
+    expect(isMutatingEditorAgentAction("requestVerification")).toBe(false);
+  });
+
+  it("baseline-allows a contained request and denies escape/sensitive targets", () => {
+    expect(classifyEditorAgentAction("requestVerification", ctx()).disposition).toBe("allowed");
+    const escape = classifyEditorAgentAction("requestVerification", ctx({ targetPath: "../x.ts" }));
+    expect(escape.disposition).toBe("denied");
+    expect(escape.denyReason).toBe("workspace-boundary-escape");
+    const sensitive = classifyEditorAgentAction(
+      "requestVerification",
+      ctx({ targetSensitive: true }),
+    );
+    expect(sensitive.disposition).toBe("denied");
+    expect(sensitive.denyReason).toBe("denied-sensitive-path");
+  });
+
+  it("gates an execution request through the Authority Envelope (stricter-wins)", () => {
+    const baseline = classifyEditorAgentAction("requestVerification", ctx());
+    const granted = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: ["verification"] }),
+      "low",
+    );
+    expect(granted.disposition).not.toBe("denied");
+    // An envelope WITHOUT the verification action class denies it — never short-circuited to allowed.
+    const withheld = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: [] }),
+      "low",
+    );
+    expect(withheld.disposition).toBe("denied");
+    expect(withheld.denyReason).toBe("mode-policy-denied");
   });
 });

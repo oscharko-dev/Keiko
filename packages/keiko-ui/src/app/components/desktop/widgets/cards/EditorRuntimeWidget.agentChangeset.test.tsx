@@ -592,10 +592,12 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
     expect(diffSurface.props?.actions).toEqual({
       canApply: true,
       canReject: true,
-      canRunVerification: false,
+      // Issue #2212 (ADR-0126) — the run-verification intent is now activated (idle → available).
+      canRunVerification: true,
     });
     expect(diffSurface.props?.onApply).toBeTypeOf("function");
     expect(diffSurface.props?.onReject).toBeTypeOf("function");
+    expect(diffSurface.props?.onRunVerification).toBeTypeOf("function");
     // applyTextEdits would mutate and report immediately instead of staging EditorDiffSurface.
     expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
     expect(submittedResults().filter((result) => result.actionId === action.actionId)).toHaveLength(

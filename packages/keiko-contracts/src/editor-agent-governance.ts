@@ -50,10 +50,12 @@ export const EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS = 200;
 // Every action type maps to exactly one effect class. The class drives both the policy disposition
 // and whether the action is audited. `external-effect` is defined for the future Git/command action
 // types named in the issue scope ("when available"); it has NO members in the current action
-// contract. The `Record<EditorAgentActionType, …>` makes the table exhaustive at compile time, so a
-// future action type cannot be added to the union without being given a class here.
+// contract. `execution` (Issue #2210, ADR-0126 D4) governs agent-triggered verification runs — a
+// non-mutating but sandbox-consuming effect, gated through the Authority Envelope like a mutation.
+// The `Record<EditorAgentActionType, …>` makes the table exhaustive at compile time, so a future
+// action type cannot be added to the union without being given a class here.
 export type EditorAgentActionEffectClass =
-  "navigation" | "layout" | "content-mutation" | "external-effect";
+  "navigation" | "layout" | "content-mutation" | "external-effect" | "execution";
 
 export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   Record<EditorAgentActionType, EditorAgentActionEffectClass>
@@ -68,6 +70,7 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   applyTextEdits: "content-mutation",
   applyPatch: "content-mutation",
   applyChangeset: "content-mutation",
+  requestVerification: "execution",
   navigateSymbol: "navigation",
   searchWorkspace: "navigation",
 };
@@ -82,6 +85,9 @@ export const EDITOR_AGENT_WORKBENCH_ACTION_CLASS: Readonly<
   layout: null,
   "content-mutation": "workspace-write",
   "external-effect": "delivery-substrate",
+  // Non-null so a verification run is gated through the Authority Envelope, not short-circuited like
+  // navigation/layout. Reuses the existing `verification` action class — no new policy vocabulary.
+  execution: "verification",
 };
 
 export const EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE: Readonly<
@@ -91,6 +97,9 @@ export const EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE: Readonly<
   layout: null,
   "content-mutation": "workspace-contained",
   "external-effect": "delivery",
+  // Verification runs execute scoped to the project root; reuse the existing workspace-contained
+  // scope rather than inventing a verification scope (ADR-0126 D4).
+  execution: "workspace-contained",
 };
 
 export const EDITOR_AGENT_ACTION_APPROVAL_RISK: Readonly<
@@ -106,6 +115,9 @@ export const EDITOR_AGENT_ACTION_APPROVAL_RISK: Readonly<
   applyTextEdits: "medium",
   applyPatch: "medium",
   applyChangeset: "high",
+  // Non-mutating, closed-set (no free-form argv). Provisional per ADR-0126 D5: Issue #2214 is the
+  // first real caller to compose this through the registry and may revise it.
+  requestVerification: "low",
   navigateSymbol: "low",
   searchWorkspace: "low",
 };
@@ -251,6 +263,22 @@ function classifyContentMutation(
   return allowedDecision("content-mutation", origin);
 }
 
+// A verification request (ADR-0126 D4/D5) is non-mutating but still denied when its optional
+// targetPath escapes the workspace or matches the deny-list; a contained, non-sensitive request is
+// baseline-allowed, and the Authority Envelope may still make it approval-required at composition.
+function classifyExecution(
+  context: EditorAgentActionPolicyContext,
+  origin: EditorAgentActionOrigin,
+): EditorAgentActionPolicyDecision {
+  if (context.targetPath !== null && !isContainedAgentPath(context.targetPath)) {
+    return denyDecision("execution", "workspace-boundary-escape", origin);
+  }
+  if (context.targetSensitive) {
+    return denyDecision("execution", "denied-sensitive-path", origin);
+  }
+  return allowedDecision("execution", origin);
+}
+
 // Deterministic, fail-closed policy classifier (AC2). Pure: same (type, context) always yields the
 // same decision, which is required for replay-safe audit and for idempotent action handling. The
 // classifier governs policy posture only; it does NOT re-check the #1394 structural preconditions
@@ -269,6 +297,8 @@ export function classifyEditorAgentAction(
       return classifyContentMutation(context, origin);
     case "external-effect":
       return reviewDecision("external-effect", "external-effect-requires-review", origin);
+    case "execution":
+      return classifyExecution(context, origin);
   }
 }
 
@@ -467,7 +497,8 @@ export function isEditorAgentActionEffectClass(
     value === "navigation" ||
     value === "layout" ||
     value === "content-mutation" ||
-    value === "external-effect"
+    value === "external-effect" ||
+    value === "execution"
   );
 }
 

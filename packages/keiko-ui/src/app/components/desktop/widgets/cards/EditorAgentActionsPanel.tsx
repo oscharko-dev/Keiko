@@ -76,6 +76,7 @@ const ACTION_TYPE_OPTIONS = [
   { value: "applyTextEdits", labelKey: "actions.action.applyTextEdits" },
   { value: "applyPatch", labelKey: "actions.action.applyPatch" },
   { value: "applyChangeset", labelKey: "actions.action.applyChangeset" },
+  { value: "requestVerification", labelKey: "actions.action.requestVerification" },
 ] as const satisfies readonly FilterOptionDefinition<ActionTypeFilter>[];
 
 const DISPOSITION_OPTIONS = [

@@ -14,6 +14,8 @@ import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   defaultPostApplyVerification,
+  defaultPostApplyVerificationPreflight,
+  deniedVerificationSummary,
   notRunVerificationSummary,
   probeNetworkIsolation,
   requiresPostApplyVerificationPreflight,
@@ -66,6 +68,31 @@ describe("post-apply verification summaries (content-free)", () => {
     const s = skippedVerificationSummary();
     expect(s.outcome).toBe("skipped");
     expect(s.preApply).toBe(false);
+  });
+
+  it("denied summary is pre-apply and fail-closed when no enforcing backend exists", () => {
+    const s = deniedVerificationSummary();
+    expect(s.outcome).toBe("denied");
+    expect(s.preApply).toBe(true);
+    expect(s.networkEnforced).toBe(false);
+    expect(s.sandboxBackend).toBe("none");
+    expect(s.secretsRedacted).toBe(true);
+    expect(s.stepCount).toBe(0);
+  });
+});
+
+describe("defaultPostApplyVerificationPreflight", () => {
+  it("passes without probing when no targeted test would run (empty applied test files)", async () => {
+    const root = await mkdtemp(join(await realpath(tmpdir()), "keiko-preflight-"));
+    try {
+      const result = await defaultPostApplyVerificationPreflight({
+        realRoot: root,
+        appliedTestFiles: [],
+      });
+      expect(result.ok).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

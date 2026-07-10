@@ -399,6 +399,9 @@ function buildDiagnosticsWiring(
     onSummary: (summary): void => {
       latestProps.current.onDiagnosticsSummary?.(summary);
     },
+    onDiagnostics: (diagnostics): void => {
+      latestProps.current.onDiagnostics?.(diagnostics);
+    },
     ...(onOverviewMarkers === undefined ? {} : { onOverviewMarkers }),
   };
 }

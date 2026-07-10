@@ -49,6 +49,13 @@ export const DEFAULT_VERIFICATION_LIMITS: VerificationResourceLimits = {
   network: "none",
 } as const;
 
+// ─── Structured failure locations (Issue #2210, ADR-0126 D3) ─────────────────────
+// Bounds a later, best-effort parser (Issue #2211) may attach to VerificationResult.locations.
+// The parser reads the already-redacted, byte-capped CommandResult output and clamps to these caps
+// before attaching; the contract layer only defines the shape and its limits, never the parsing.
+export const VERIFICATION_MAX_FAILURE_LOCATIONS = 50;
+export const VERIFICATION_FAILURE_MESSAGE_MAX_CHARS = 512;
+
 // ─── Plan ─────────────────────────────────────────────────────────────────────────
 
 export interface VerificationStep {
@@ -70,6 +77,19 @@ export interface VerificationPlan {
 
 // ─── Result & report ───────────────────────────────────────────────────────────────
 
+// A structured, bounded failure location extracted from a verification step's output (ADR-0126 D3).
+// `file` is workspace-relative; `line`/`column` are 1-based when the underlying tool provides them.
+// `ruleId` carries a lint rule or diagnostic code (e.g. "TS2345", "no-unused-vars") when available.
+// `message` is a length-capped (VERIFICATION_FAILURE_MESSAGE_MAX_CHARS) excerpt of the diagnostic —
+// command-derived text that reaches the UI/summary projection but NEVER the audit ledger.
+export interface VerificationFailureLocation {
+  readonly file: string;
+  readonly line?: number | undefined;
+  readonly column?: number | undefined;
+  readonly message: string;
+  readonly ruleId?: string | undefined;
+}
+
 export interface VerificationResult {
   readonly kind: VerificationKind;
   readonly scriptName: string | undefined;
@@ -87,6 +107,9 @@ export interface VerificationResult {
   readonly appliedLimits: readonly ResourceLimitDecision[];
   // A short, redacted human explanation (e.g. "no script", "denied: ...", "memory ceiling").
   readonly detail?: string | undefined;
+  // Additive (Issue #2210, ADR-0126 D3): structured failure locations populated best-effort by the
+  // Issue #2211 parser. Absent on existing consumers and for kinds/formats it cannot parse.
+  readonly locations?: readonly VerificationFailureLocation[] | undefined;
 }
 
 export interface VerificationReport {

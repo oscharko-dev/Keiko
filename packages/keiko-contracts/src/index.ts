@@ -398,6 +398,7 @@ export type {
   EditorAgentSnapshotRequest,
   EditorAgentSnapshotResponse,
   EditorAgentSnapshotTextMode,
+  EditorAgentVerificationRequest,
 } from "./editor-agent.js";
 export {
   DEFAULT_EDITOR_AGENT_ACTION_ORIGIN,
@@ -456,6 +457,7 @@ export {
   isEditorAgentOneUseApprovalReference,
   isEditorAgentPreparedChangeset,
   isEditorAgentSessionSnapshot,
+  isEditorAgentVerificationRequest,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
@@ -1366,11 +1368,94 @@ export type {
   VerificationStep,
   VerificationPlan,
   VerificationResult,
+  VerificationFailureLocation,
   VerificationReport,
   ScriptCatalog,
   ScriptMapping,
 } from "./verification.js";
-export { DEFAULT_VERIFICATION_LIMITS } from "./verification.js";
+export {
+  DEFAULT_VERIFICATION_LIMITS,
+  VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
+  VERIFICATION_MAX_FAILURE_LOCATIONS,
+} from "./verification.js";
+
+// ─── Editor verification run/event envelope (Issue #2210, Epic #2092, ADR-0126) ──
+export type {
+  EditorVerificationRunState,
+  EditorVerificationRunRequest,
+  EditorVerificationRunRequestParse,
+  EditorVerificationRunRequestParseOk,
+  EditorVerificationRunRequestParseFail,
+  EditorVerificationRun,
+  EditorVerificationEventKind,
+  EditorVerificationRunStartedEvent,
+  EditorVerificationStepStartedEvent,
+  EditorVerificationStepCompletedEvent,
+  EditorVerificationRunCompletedEvent,
+  EditorVerificationRunCancelledEvent,
+  EditorVerificationRunFailedEvent,
+  EditorVerificationEvent,
+  EditorVerificationTrustState,
+  EditorVerificationCatalogEntry,
+  EditorVerificationCatalog,
+} from "./editor-verification.js";
+export {
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+  EDITOR_VERIFICATION_MAX_KINDS,
+  EDITOR_VERIFICATION_MAX_REQUEST_ID_LENGTH,
+  EDITOR_VERIFICATION_REASON_MAX_CHARS,
+  EDITOR_VERIFICATION_KINDS,
+  EDITOR_VERIFICATION_RUN_STATES,
+  EDITOR_VERIFICATION_EVENT_KINDS,
+  parseEditorVerificationRunRequest,
+  isVerificationKind,
+  isEditorVerificationRunState,
+  isEditorVerificationEventKind,
+  isEditorVerificationRun,
+  isEditorVerificationEvent,
+  isEditorVerificationCatalog,
+} from "./editor-verification.js";
+
+// ─── Editor problems aggregation (Issue #2210, Epic #2092, ADR-0126) ─────────────
+export type {
+  EditorProblemSeverity,
+  EditorProblemSource,
+  EditorProblemKind,
+  EditorProblem,
+  EditorProblemsSnapshot,
+} from "./editor-problems.js";
+export {
+  EDITOR_PROBLEMS_SCHEMA_VERSION,
+  EDITOR_PROBLEMS_PER_FILE_CAP,
+  EDITOR_PROBLEMS_TOTAL_CAP,
+  EDITOR_PROBLEM_MESSAGE_MAX_CHARS,
+  compareEditorProblems,
+  buildEditorProblemsSnapshot,
+  isEditorProblem,
+  isEditorProblemsSnapshot,
+  isEditorProblemSeverity,
+  isEditorProblemSource,
+} from "./editor-problems.js";
+
+// ─── Agent verification access (Issue #2214, Epic #2092, ADR-0126 D4/D5) ─────────
+export type {
+  EditorAgentVerificationRunRequest,
+  EditorAgentVerificationRunRequestParse,
+  EditorAgentVerificationRunRequestParseOk,
+  EditorAgentVerificationRunRequestParseFail,
+  RedactedVerificationStep,
+  RedactedVerificationReport,
+  EditorAgentVerificationDisposition,
+  EditorAgentVerificationResult,
+} from "./editor-agent-verification.js";
+export {
+  EDITOR_AGENT_VERIFICATION_SESSION_ID_MAX_CHARS,
+  EDITOR_AGENT_VERIFICATION_RUN_ID_MAX_CHARS,
+  EDITOR_AGENT_VERIFICATION_ENVELOPE_DIGEST_MAX_CHARS,
+  toRedactedVerificationReport,
+  parseEditorAgentVerificationRunRequest,
+  isEditorAgentVerificationResult,
+} from "./editor-agent-verification.js";
 
 // ─── Evaluations ────────────────────────────────────────────────────────────────
 export type {

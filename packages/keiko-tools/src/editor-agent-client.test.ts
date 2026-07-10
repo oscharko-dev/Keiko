@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_VERIFICATION_LIMITS,
   EDITOR_AGENT_SCHEMA_VERSION,
   type EditorAgentAction,
   type EditorAgentSessionSnapshot,
+  type EditorAgentVerificationRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createFetchEditorAgentHttpTransport,
+  DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+  DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS,
   EditorAgentHttpClient,
   type EditorAgentHttpTransport,
   type EditorAgentHttpTransportRequest,
@@ -516,5 +520,105 @@ describe("EditorAgentHttpClient", () => {
     });
     expect(JSON.stringify(result)).not.toContain("SECRET_VALUE");
     expect(JSON.stringify(result).length).toBeLessThan(512);
+  });
+});
+
+const VERIFY_REQUEST: EditorAgentVerificationRunRequest = {
+  schemaVersion: "1",
+  sessionId: "session-1",
+  kind: "typecheck",
+  authorityRef: { runId: "run-1", envelopeDigest: HASH },
+};
+
+const COMPLETED_BODY = JSON.stringify({
+  result: {
+    outcome: "completed",
+    report: {
+      overallStatus: "failed",
+      durationMs: 5,
+      counts: {
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        denied: 0,
+        "timed-out": 0,
+        cancelled: 0,
+        "resource-exceeded": 0,
+      },
+      steps: [{ kind: "typecheck", status: "failed", durationMs: 5 }],
+    },
+  },
+});
+
+function capturingScheduler(): {
+  readonly timeouts: number[];
+  readonly scheduler: EditorAgentTimeoutScheduler;
+} {
+  const timeouts: number[] = [];
+  return {
+    timeouts,
+    // Record the requested timeout but never fire it, so the transport response wins the race.
+    scheduler: { set: (_callback, timeoutMs) => timeouts.push(timeoutMs), clear: () => undefined },
+  };
+}
+
+describe("EditorAgentHttpClient.requestVerification", () => {
+  // Issue #2214 AC7 — the verification call must budget for a run up to the documented wall-time
+  // ceiling, NOT the shared 2-second default that would abort every real npm test/build.
+  it("uses a timeout that spans the verification wall-time ceiling, not the 2s default", async () => {
+    const captured = capturingScheduler();
+    const result = await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(COMPLETED_BODY),
+      scheduler: captured.scheduler,
+    }).requestVerification(VERIFY_REQUEST, new AbortController().signal);
+    expect(result).toMatchObject({ ok: true, value: { outcome: "completed" } });
+    expect(captured.timeouts).toEqual([DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS]);
+    expect(DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS).toBeGreaterThanOrEqual(
+      DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    );
+    expect(DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS).toBeGreaterThan(
+      DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+    );
+  });
+
+  it("keeps the fast 2s default for non-verification calls", async () => {
+    const captured = capturingScheduler();
+    await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(JSON.stringify({ sessions: [] })),
+      scheduler: captured.scheduler,
+    }).listSessions(new AbortController().signal);
+    expect(captured.timeouts).toEqual([DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS]);
+  });
+
+  it("honors an already-aborted caller signal for early cancellation", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await client({
+      request: () => new Promise(() => undefined),
+    }).requestVerification(VERIFY_REQUEST, controller.signal);
+    expect(result).toMatchObject({ ok: false, error: { kind: "cancelled", code: "CANCELLED" } });
+  });
+
+  it("surfaces a governance not-run disposition as a typed result", async () => {
+    const body = JSON.stringify({
+      result: { outcome: "not-run", disposition: "denied", reason: "authority-budget-exceeded" },
+    });
+    const result = await client(transportWith(body)).requestVerification(
+      VERIFY_REQUEST,
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      value: { outcome: "not-run", disposition: "denied", reason: "authority-budget-exceeded" },
+    });
+  });
+
+  it("rejects a malformed verification response at the trust boundary", async () => {
+    const result = await client(
+      transportWith(JSON.stringify({ result: { outcome: "??" } })),
+    ).requestVerification(VERIFY_REQUEST, new AbortController().signal);
+    expect(result).toMatchObject({ ok: false, error: { code: "MALFORMED_RESPONSE" } });
   });
 });

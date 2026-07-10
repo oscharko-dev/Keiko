@@ -35,6 +35,10 @@ const SearchPanel = dynamic(() => import("./panels/SearchPanel").then((mod) => m
   ssr: false,
   loading: windowChunkFallback,
 });
+const ProblemsPanel = dynamic(
+  () => import("./panels/ProblemsPanel").then((mod) => mod.ProblemsPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
 const PromptEnhancerPanel = dynamic(
   () => import("./panels/PromptEnhancerPanel").then((mod) => mod.PromptEnhancerPanel),
   { ssr: false, loading: windowChunkFallback },
@@ -303,6 +307,11 @@ registerWindowRender("settings", (_cfg, ctx) => (
 ));
 registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
+// Issue #2213 (Epic #2092, ADR-0126) — workspace Problems panel; jump-to-line via ctx.openEditorFile.
+registerWindowRender("problems", (cfg, ctx) => {
+  const root = resolveBoundRoot(ctx, str(cfg, "root"));
+  return <ProblemsPanel root={root ?? ""} openEditorFile={ctx.openEditorFile} />;
+});
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
   <PdfCitationPreviewWindow
     cfg={cfg}

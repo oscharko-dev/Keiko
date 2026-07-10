@@ -54,6 +54,10 @@ import {
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
 import {
+  createVerificationRunnerManager,
+  type VerificationRunnerManager,
+} from "./editor/verificationRunner.js";
+import {
   createUpdateSessionManager,
   type UpdateCompletionGate,
   type UpdateSessionManager,
@@ -294,6 +298,7 @@ export interface UiHandlerDeps {
   // exercise /api/commands/* keep their fixtures unchanged; production wiring creates one per BFF and
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
+  readonly verificationRunner?: VerificationRunnerManager | undefined;
   // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
   // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -1025,6 +1030,15 @@ function buildCommandRunner(options: {
   });
 }
 
+// Issue #2211 — the editor verification runner reuses the same project store as the command runner.
+// The workspace-trust decider is intentionally left at its fail-closed `() => false` default, matching
+// buildCommandRunner's current production wiring, until a future issue wires a real trust source for
+// BOTH surfaces. SSE-event redaction is applied at the route boundary (deps.redactor), so the manager
+// needs no redactor of its own.
+function buildVerificationRunner(options: { readonly store: UiStore }): VerificationRunnerManager {
+  return createVerificationRunnerManager({ store: options.store });
+}
+
 function buildUpdateSession(options: {
   readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
@@ -1427,6 +1441,7 @@ function seedInitialProject(
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
+  readonly verificationRunner: VerificationRunnerManager;
   readonly updateSession: UpdateSessionManager;
   readonly updatePreflight: UiHandlerDeps["updatePreflight"];
   readonly updateLocalState: UpdateLocalStateManager;
@@ -1504,6 +1519,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       env: args.options.env,
       liveRedactor: args.liveRedactor,
     }),
+    verificationRunner: buildVerificationRunner({ store: args.uiStore }),
     updateSession: buildUpdateSession({
       injected: args.options.updateSession,
       env: args.options.env,

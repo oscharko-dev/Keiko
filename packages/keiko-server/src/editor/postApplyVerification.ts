@@ -14,18 +14,26 @@
 // The node effects (sandbox probe, orchestrator run) sit behind an injectable port so the route's tests
 // drive deterministic outcomes without a sandbox backend.
 
-import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-tools";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   planDirectTargetedTests,
-  runVerification,
   type VerificationReport,
   type VerificationResult,
 } from "@oscharko-dev/keiko-verification";
 import { detectWorkspaceAt, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { EditorPatchVerificationSummary } from "@oscharko-dev/keiko-contracts";
+import {
+  executeVerificationEnforced,
+  probeNetworkIsolation,
+  type NetworkIsolationProbe,
+} from "./verificationExecution.js";
+
+// Re-exported for the existing postApplyVerification tests (Issue #2211): the implementation moved to
+// verificationExecution.ts, but the import path `./postApplyVerification.js` stays stable for callers.
+export { probeNetworkIsolation };
+export type { NetworkIsolationProbe };
 
 export interface PostApplyVerificationArgs {
   readonly realRoot: string;
@@ -125,29 +133,8 @@ export function deniedVerificationSummary(): EditorPatchVerificationSummary {
   };
 }
 
-interface NetworkIsolationProbe {
-  readonly available: boolean;
-  readonly backend: string;
-}
-
 function isRunnableTestFramework(workspace: WorkspaceInfo): boolean {
   return workspace.testFramework === "vitest" || workspace.testFramework === "jest";
-}
-
-// Probes whether THIS host can enforce a deny-by-default network-egress boundary for a run rooted at
-// `cwd` (filesystem inherited — the applied test runs against the real workspace). No untrusted command
-// is spawned during the probe. A network:"none" run is enforceable on more backends (macOS seatbelt,
-// Linux bubblewrap/unshare) than the execution-root boundary the assured pre-filter requires.
-export function probeNetworkIsolation(cwd: string): NetworkIsolationProbe {
-  const decision = planIsolatedRun(
-    { command: "node", args: [], cwd, network: "none" },
-    probeBackends(),
-    currentPlatform(),
-  );
-  return {
-    available: decision.kind === "wrapped" && decision.attestation.networkEnforced,
-    backend: decision.attestation.backend,
-  };
 }
 
 // Statuses that count as an actual test failure. `denied` is deliberately excluded: a denied step was
@@ -229,16 +216,12 @@ export const defaultPostApplyVerification: PostApplyVerificationPort = async (ar
   if (steps.length === 0) {
     return { summary: notRunVerificationSummary(), command: "none" };
   }
-  const probe = probeNetworkIsolation(args.realRoot);
-  const report = await runVerification(
-    { workspaceRoot: workspace.root, steps },
-    {
-      workspace,
-      signal: args.signal,
-      networkEnforcement: "enforce-or-fail-closed",
-      enforcedNetworkAvailable: probe.available,
-    },
-  );
+  const { report, probe } = await executeVerificationEnforced({
+    plan: { workspaceRoot: workspace.root, steps },
+    workspace,
+    signal: args.signal,
+    probeCwd: args.realRoot,
+  });
   return { summary: toSummary(report, probe), command: verificationCommand(workspace) };
 };
 

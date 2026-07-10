@@ -222,6 +222,12 @@ export interface RegisterKeikoDiagnosticsArgs {
   readonly onSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
   /** Ranges and diagnostic labels for the rounded Keiko overview marker overlay. */
   readonly onOverviewMarkers?: ((markers: readonly DiagnosticOverviewMarker[]) => void) | undefined;
+  /**
+   * Issue #2213 (ADR-0126) — the full per-diagnostic list (string severity, no Monaco-numbered leak)
+   * delivered to a host that aggregates diagnostics across panes (the workspace Problems panel). Fed
+   * `response.diagnostics` directly, so no host needs to depend on Monaco's numeric marker severity.
+   */
+  readonly onDiagnostics?: ((diagnostics: readonly EditorDiagnostic[]) => void) | undefined;
 }
 
 interface DiagnosticsState {
@@ -302,6 +308,7 @@ function runDiagnostics(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): 
       rt.args.markers.setModelMarkers(model, rt.args.owner, markers);
       rt.args.onSummary?.(summarizeDiagnostics(response.diagnostics));
       rt.args.onOverviewMarkers?.(markersToOverviewMarkers(markers));
+      rt.args.onDiagnostics?.(response.diagnostics);
     },
     () => {
       // A failure (network, abort, host error) leaves existing markers untouched and never throws.
