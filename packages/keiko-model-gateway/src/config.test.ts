@@ -1637,11 +1637,36 @@ describe("parseModelCapability — voice capability", () => {
       supportsSpeechInput: true,
       supportsSpeechOutput: true,
       supportsRealtimeVoice: true,
+      supportsSpeechSynthesisInstructions: true,
+      supportsSemanticTurnDetection: true,
+      realtimeTranscriptionModel: "gpt-realtime-whisper",
       voiceProviderLocality: "customer-hosted",
     };
     const parsed = parseModelCapability(raw, "capabilities[0]");
     expect(parsed.supportsRealtimeVoice).toBe(true);
+    expect(parsed.supportsSpeechSynthesisInstructions).toBe(true);
+    expect(parsed.supportsSemanticTurnDetection).toBe(true);
+    expect(parsed.realtimeTranscriptionModel).toBe("gpt-realtime-whisper");
     expect(parsed.voiceProviderLocality).toBe("customer-hosted");
+  });
+
+  it("rejects synthesis instructions without speech output", () => {
+    const raw = { ...validVoiceCapability(), supportsSpeechSynthesisInstructions: true };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+      /supportsSpeechSynthesisInstructions requires supportsSpeechOutput/u,
+    );
+  });
+
+  it("rejects realtime-only tuning without realtime voice", () => {
+    for (const field of ["supportsSemanticTurnDetection", "realtimeTranscriptionModel"] as const) {
+      const raw = {
+        ...validVoiceCapability(),
+        [field]: field === "supportsSemanticTurnDetection" ? true : "gpt-realtime-whisper",
+      };
+      expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(
+        new RegExp(`${field} requires supportsRealtimeVoice`, "u"),
+      );
+    }
   });
 });
 

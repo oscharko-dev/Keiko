@@ -50,14 +50,23 @@ interface SyntheticPreflightReportOptions {
 }
 
 function nextPatchVersion(version: string): string {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
-  if (match === null)
-    throw new Error(`SDK_VERSION must be stable semver for this test: ${version}`);
-  const [, major, minor, patch] = match;
-  if (major === undefined || minor === undefined || patch === undefined) {
-    throw new Error(`SDK_VERSION must include major, minor, and patch: ${version}`);
+  const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
+  if (stable !== null) {
+    const [, major, minor, patch] = stable;
+    if (major === undefined || minor === undefined || patch === undefined) {
+      throw new Error(`SDK_VERSION must include major, minor, and patch: ${version}`);
+    }
+    return `${major}.${minor}.${String(Number(patch) + 1)}`;
   }
-  return `${major}.${minor}.${String(Number(patch) + 1)}`;
+  // Prerelease SDK version (for example 0.2.15 during release-branch stabilization):
+  // the synthetic "next" release is that version's stable base, which the updater must treat
+  // as newer than the running prerelease.
+  const prerelease = /^((0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))-[0-9A-Za-z.-]+$/u.exec(version);
+  const base = prerelease?.[1];
+  if (base === undefined) {
+    throw new Error(`SDK_VERSION must be semver for this test: ${version}`);
+  }
+  return base;
 }
 
 function releaseImpactCatalog(
@@ -380,7 +389,7 @@ function impactInput(report: UpdatePreflightReport): {
   };
 }
 
-let server: Server;
+let server: Server | undefined;
 let staticRoot: string;
 let port: number;
 
@@ -389,7 +398,8 @@ async function listen(srv: Server): Promise<number> {
   return (srv.address() as AddressInfo).port;
 }
 
-async function closeServer(srv: Server = server): Promise<void> {
+async function closeServer(srv: Server | undefined = server): Promise<void> {
+  if (srv === undefined) return;
   await new Promise<void>((resolve) => {
     srv.close(() => {
       resolve();
@@ -450,306 +460,353 @@ afterEach(async () => {
 });
 
 describe("governed updater integration", () => {
-  it("detects a synthetic release and completes the safe BFF update session path", async () => {
-    const targetVersion = nextPatchVersion(SDK_VERSION);
-    const metadata = createMetadataFetch(targetVersion);
-    let runningVersion = SDK_VERSION;
-    const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
-    runCommandImpl.mockImplementation((input) => Promise.resolve(commandResult(input)));
-    const updateSession = createUpdateSessionManager({
-      processEnv: {},
-      detector: () =>
-        detectUpdateInstallMode({
-          packageRoot: INSTALL_ROOT,
-          packageName: PACKAGE_NAME,
-          packageManagerHint: "npm",
-          installScope: "global",
-        }),
-      currentVersion: () => runningVersion,
-      idFactory: () => "update-integration-session",
-      now: () => FIXED_NOW,
-      redactor: (value) => value.replaceAll("SECRET", "[REDACTED]"),
-      runCommandImpl,
-    });
-    const updatePreflight = createUpdatePreflightService({
-      currentVersion: SDK_VERSION,
-      bundledCatalog: releaseImpactCatalog(targetVersion, SDK_VERSION),
-      clock: () => new Date(FIXED_NOW),
-    });
-    await buildServer({
-      config: undefined,
-      configPresent: false,
-      evidenceStore: {
-        put: (): string => "",
-        list: (): readonly string[] => [],
-        get: (): string | undefined => undefined,
-        delete: (): void => undefined,
-      },
-      env: {},
-      redactor: buildRedactor({}),
-      registry: createRunRegistry(),
-      modelPortFactory: (): undefined => undefined,
-      store: createInMemoryUiStore(),
-      gatewayReadinessFetch: metadata.fetchImpl,
-      updatePreflight,
-      updateSession,
-    });
+  // The one-click session-path tests assume a STABLE current version: with a prerelease
+  // current (release-branch beta stabilization) the preflight intentionally degrades to
+  // manual-update-required / not one-click-eligible, which the dedicated prerelease test
+  // below pins instead.
+  const CURRENT_IS_PRERELEASE = SDK_VERSION.includes("-");
 
-    const preflightResponse = await fetch(`${baseUrl()}/api/update/preflight`);
-    const preflight = await readJson<UpdatePreflightReport>(preflightResponse);
+  it.runIf(CURRENT_IS_PRERELEASE)(
+    "treats a prerelease current version as manual-update-only (fail-closed)",
+    async () => {
+      const targetVersion = nextPatchVersion(SDK_VERSION);
+      const metadata = createMetadataFetch(targetVersion);
+      const updatePreflight = createUpdatePreflightService({
+        currentVersion: SDK_VERSION,
+        bundledCatalog: releaseImpactCatalog(targetVersion, SDK_VERSION),
+        clock: () => new Date(FIXED_NOW),
+      });
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: join(staticRoot, "evidence"),
+        env: { KEIKO_STATE_DIR: join(staticRoot, "state") },
+        uiDbPath: join(staticRoot, "ui.db"),
+        modelPortFactory: (): undefined => undefined,
+        updatePreflight,
+      });
+      await buildServer({ ...deps, gatewayReadinessFetch: metadata.fetchImpl });
 
-    expect(preflightResponse.status).toBe(200);
-    expect(preflight).toMatchObject({
-      currentVersion: SDK_VERSION,
-      targetVersion,
-      updateAvailable: true,
-      status: "update-available",
-      registryStatus: "ok",
-      releaseMetadataStatus: "live",
-      oneClickEligible: true,
-      manualUpdateRequired: false,
-    });
-    expect(metadata.calls()).toEqual([
-      "https://registry.npmjs.org/%40oscharko-dev%2Fkeiko",
-      `https://api.github.com/repos/oscharko-dev/keiko/releases/tags/v${targetVersion}`,
-    ]);
+      const preflightResponse = await fetch(`${baseUrl()}/api/update/preflight`);
+      const preflight = await readJson<UpdatePreflightReport>(preflightResponse);
 
-    const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion, requestId: "integration-test" }),
-    });
-    const started = await readJson<UpdateSession>(startedResponse);
-
-    expect(startedResponse.status).toBe(202);
-    expect(started).toMatchObject({
-      sessionId: "update-integration-session",
-      targetVersion,
-      phase: "preparing",
-    });
-
-    const restartRequired = await waitForPhase("restart-required");
-    expect(runCommandImpl).toHaveBeenCalledTimes(1);
-    expect(runCommandImpl.mock.calls[0]?.[0]).toMatchObject({
-      command: "npm",
-      args: ["install", "--global", "--ignore-scripts", `${PACKAGE_NAME}@${targetVersion}`],
-      cwd: undefined,
-    });
-    expect(restartRequired.activeSession).toMatchObject({
-      targetVersion,
-      phase: "restart-required",
-      restartRequired: true,
-      logs: { stdoutPreview: "installed token=[REDACTED]" },
-    });
-
-    runningVersion = targetVersion;
-    const verifiedResponse = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion }),
-    });
-    const verified = await readJson<UpdateSession>(verifiedResponse);
-    const finalStatus = await updateSessionStatus();
-
-    expect(verifiedResponse.status).toBe(200);
-    expect(verified).toMatchObject({
-      targetVersion,
-      phase: "succeeded",
-      restartRequired: false,
-    });
-    expect(finalStatus.activeSession).toBeUndefined();
-    expect(finalStatus.lastSession).toMatchObject({ targetVersion, phase: "succeeded" });
-  });
-
-  it("keeps a synthetic update pending until Local Knowledge reindex remediation completes", async () => {
-    const targetVersion = nextPatchVersion(SDK_VERSION);
-    const metadata = createMetadataFetch(targetVersion);
-    let runningVersion = SDK_VERSION;
-    const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
-    runCommandImpl.mockImplementation((input) => Promise.resolve(commandResult(input)));
-    const updateSession = createUpdateSessionManager({
-      processEnv: {},
-      detector: () =>
-        detectUpdateInstallMode({
-          packageRoot: INSTALL_ROOT,
-          packageName: PACKAGE_NAME,
-          packageManagerHint: "npm",
-          installScope: "global",
-        }),
-      currentVersion: () => runningVersion,
-      idFactory: () => "update-reindex-integration-session",
-      now: () => FIXED_NOW,
-      redactor: (value) => value.replaceAll("SECRET", "[REDACTED]"),
-      runCommandImpl,
-    });
-    const updatePreflight = createUpdatePreflightService({
-      currentVersion: SDK_VERSION,
-      bundledCatalog: releaseImpactCatalog(targetVersion, SDK_VERSION, {
-        localKnowledgeReindexRequired: true,
-      }),
-      clock: () => new Date(FIXED_NOW),
-    });
-    const stateDir = join(staticRoot, ".keiko-state");
-    await mkdir(stateDir, { recursive: true });
-    const updateLocalState = createUpdateLocalStateManager({
-      stateDir,
-      now: () => FIXED_NOW,
-      idFactory: () => "update-reindex-event",
-    });
-    const localKnowledge = fakeLocalKnowledgeRemediation();
-    const updateRemediation = createUpdateRemediationManager({
-      localState: updateLocalState,
-      localKnowledge,
-      now: () => FIXED_NOW,
-    });
-    await buildServer({
-      config: undefined,
-      configPresent: false,
-      evidenceStore: {
-        put: (): string => "",
-        list: (): readonly string[] => [],
-        get: (): string | undefined => undefined,
-        delete: (): void => undefined,
-      },
-      env: {},
-      redactor: buildRedactor({}),
-      registry: createRunRegistry(),
-      modelPortFactory: (): undefined => undefined,
-      store: createInMemoryUiStore(),
-      gatewayReadinessFetch: metadata.fetchImpl,
-      updatePreflight,
-      updateLocalState,
-      updateRemediation,
-      updateSession,
-    });
-
-    const preflightResponse = await fetch(`${baseUrl()}/api/update/preflight`);
-    const preflight = await readJson<UpdatePreflightReport>(preflightResponse);
-    const impact = impactInput(preflight);
-
-    expect(preflightResponse.status).toBe(200);
-    expect(preflight).toMatchObject({
-      currentVersion: SDK_VERSION,
-      targetVersion,
-      updateAvailable: true,
-      status: "update-available",
-      severity: "high",
-      affectedStateStores: ["local-knowledge"],
-      userActionRequired: true,
-      oneClickEligible: true,
-      manualUpdateRequired: false,
-    });
-    expect(preflight.impact?.remediations).toEqual(["local-knowledge-reindex-required"]);
-
-    const remediationStatusResponse = await fetch(`${baseUrl()}/api/update/remediation/status`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion, impact, persist: true }),
-    });
-    const remediationStatus =
-      await readJson<UpdateRemediationStatusReport>(remediationStatusResponse);
-
-    expect(remediationStatusResponse.status).toBe(200);
-    expect(remediationStatus).toMatchObject({
-      targetVersion,
-      overallStatus: "pending",
-      updateCanComplete: false,
-      affectedFeatures: [
-        {
-          featureId: "local-knowledge",
-          label: "Local Knowledge",
-          state: "unavailable",
-        },
-      ],
-    });
-    expect(remediationStatus.actions[0]).toMatchObject({
-      actionId: "local-knowledge-reindex:local-knowledge",
-      kind: "local-knowledge-reindex",
-      status: "pending",
-      canRun: true,
-      canDefer: true,
-      userApprovalRequired: true,
-      scopeCounts: { capsules: 2, documents: 11, vectors: 39 },
-    });
-
-    const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion, requestId: "reindex-integration-test" }),
-    });
-    const started = await readJson<UpdateSession>(startedResponse);
-
-    expect(startedResponse.status).toBe(202);
-    expect(started).toMatchObject({
-      sessionId: "update-reindex-integration-session",
-      targetVersion,
-      phase: "preparing",
-    });
-
-    const restartRequired = await waitForPhase("restart-required");
-    expect(restartRequired.activeSession).toMatchObject({
-      targetVersion,
-      phase: "restart-required",
-      restartRequired: true,
-    });
-
-    runningVersion = targetVersion;
-    const blockedRestartResponse = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion }),
-    });
-    const blockedRestart = await readJson<UpdateSession>(blockedRestartResponse);
-
-    expect(blockedRestartResponse.status).toBe(200);
-    expect(blockedRestart).toMatchObject({
-      targetVersion,
-      phase: "restart-required",
-      restartRequired: false,
-    });
-    expect(blockedRestart.message).toContain("Complete remaining remediation");
-
-    const actionResponse = await fetch(`${baseUrl()}/api/update/remediation/actions`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({
-        actionId: "local-knowledge-reindex:local-knowledge",
+      expect(preflightResponse.status).toBe(200);
+      expect(preflight).toMatchObject({
+        currentVersion: SDK_VERSION,
         targetVersion,
-        impact,
-        decision: "run",
-      }),
-    });
-    const completedRemediation = await readJson<UpdateRemediationStatusReport>(actionResponse);
+        status: "update-available",
+        updateAvailable: true,
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+      });
+    },
+  );
 
-    expect(actionResponse.status).toBe(200);
-    expect(localKnowledge.runs()).toBe(1);
-    expect(completedRemediation).toMatchObject({
-      targetVersion,
-      overallStatus: "completed",
-      updateCanComplete: true,
-    });
-    expect(completedRemediation.actions[0]).toMatchObject({
-      actionId: "local-knowledge-reindex:local-knowledge",
-      status: "completed",
-    });
+  it.skipIf(CURRENT_IS_PRERELEASE)(
+    "detects a synthetic release and completes the safe BFF update session path",
+    async () => {
+      const targetVersion = nextPatchVersion(SDK_VERSION);
+      const metadata = createMetadataFetch(targetVersion);
+      let runningVersion = SDK_VERSION;
+      const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+      runCommandImpl.mockImplementation((input) => Promise.resolve(commandResult(input)));
+      const updateSession = createUpdateSessionManager({
+        processEnv: {},
+        detector: () =>
+          detectUpdateInstallMode({
+            packageRoot: INSTALL_ROOT,
+            packageName: PACKAGE_NAME,
+            packageManagerHint: "npm",
+            installScope: "global",
+          }),
+        currentVersion: () => runningVersion,
+        idFactory: () => "update-integration-session",
+        now: () => FIXED_NOW,
+        redactor: (value) => value.replaceAll("SECRET", "[REDACTED]"),
+        runCommandImpl,
+      });
+      const updatePreflight = createUpdatePreflightService({
+        currentVersion: SDK_VERSION,
+        bundledCatalog: releaseImpactCatalog(targetVersion, SDK_VERSION),
+        clock: () => new Date(FIXED_NOW),
+      });
+      await buildServer({
+        config: undefined,
+        configPresent: false,
+        evidenceStore: {
+          put: (): string => "",
+          list: (): readonly string[] => [],
+          get: (): string | undefined => undefined,
+          delete: (): void => undefined,
+        },
+        env: {},
+        redactor: buildRedactor({}),
+        registry: createRunRegistry(),
+        modelPortFactory: (): undefined => undefined,
+        store: createInMemoryUiStore(),
+        gatewayReadinessFetch: metadata.fetchImpl,
+        updatePreflight,
+        updateSession,
+      });
 
-    const verifiedResponse = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
-      method: "POST",
-      headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion }),
-    });
-    const verified = await readJson<UpdateSession>(verifiedResponse);
-    const finalStatus = await updateSessionStatus();
+      const preflightResponse = await fetch(`${baseUrl()}/api/update/preflight`);
+      const preflight = await readJson<UpdatePreflightReport>(preflightResponse);
 
-    expect(verifiedResponse.status).toBe(200);
-    expect(verified).toMatchObject({
-      targetVersion,
-      phase: "succeeded",
-      restartRequired: false,
-    });
-    expect(finalStatus.activeSession).toBeUndefined();
-    expect(finalStatus.lastSession).toMatchObject({ targetVersion, phase: "succeeded" });
-  });
+      expect(preflightResponse.status).toBe(200);
+      expect(preflight).toMatchObject({
+        currentVersion: SDK_VERSION,
+        targetVersion,
+        updateAvailable: true,
+        status: "update-available",
+        registryStatus: "ok",
+        releaseMetadataStatus: "live",
+        oneClickEligible: true,
+        manualUpdateRequired: false,
+      });
+      expect(metadata.calls()).toEqual([
+        "https://registry.npmjs.org/%40oscharko-dev%2Fkeiko",
+        `https://api.github.com/repos/oscharko-dev/keiko/releases/tags/v${targetVersion}`,
+      ]);
+
+      const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ targetVersion, requestId: "integration-test" }),
+      });
+      const started = await readJson<UpdateSession>(startedResponse);
+
+      expect(startedResponse.status).toBe(202);
+      expect(started).toMatchObject({
+        sessionId: "update-integration-session",
+        targetVersion,
+        phase: "preparing",
+      });
+
+      const restartRequired = await waitForPhase("restart-required");
+      expect(runCommandImpl).toHaveBeenCalledTimes(1);
+      expect(runCommandImpl.mock.calls[0]?.[0]).toMatchObject({
+        command: "npm",
+        args: ["install", "--global", "--ignore-scripts", `${PACKAGE_NAME}@${targetVersion}`],
+        cwd: undefined,
+      });
+      expect(restartRequired.activeSession).toMatchObject({
+        targetVersion,
+        phase: "restart-required",
+        restartRequired: true,
+        logs: { stdoutPreview: "installed token=[REDACTED]" },
+      });
+
+      runningVersion = targetVersion;
+      const verifiedResponse = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ targetVersion }),
+      });
+      const verified = await readJson<UpdateSession>(verifiedResponse);
+      const finalStatus = await updateSessionStatus();
+
+      expect(verifiedResponse.status).toBe(200);
+      expect(verified).toMatchObject({
+        targetVersion,
+        phase: "succeeded",
+        restartRequired: false,
+      });
+      expect(finalStatus.activeSession).toBeUndefined();
+      expect(finalStatus.lastSession).toMatchObject({ targetVersion, phase: "succeeded" });
+    },
+  );
+
+  it.skipIf(CURRENT_IS_PRERELEASE)(
+    "keeps a synthetic update pending until Local Knowledge reindex remediation completes",
+    async () => {
+      const targetVersion = nextPatchVersion(SDK_VERSION);
+      const metadata = createMetadataFetch(targetVersion);
+      let runningVersion = SDK_VERSION;
+      const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+      runCommandImpl.mockImplementation((input) => Promise.resolve(commandResult(input)));
+      const updateSession = createUpdateSessionManager({
+        processEnv: {},
+        detector: () =>
+          detectUpdateInstallMode({
+            packageRoot: INSTALL_ROOT,
+            packageName: PACKAGE_NAME,
+            packageManagerHint: "npm",
+            installScope: "global",
+          }),
+        currentVersion: () => runningVersion,
+        idFactory: () => "update-reindex-integration-session",
+        now: () => FIXED_NOW,
+        redactor: (value) => value.replaceAll("SECRET", "[REDACTED]"),
+        runCommandImpl,
+      });
+      const updatePreflight = createUpdatePreflightService({
+        currentVersion: SDK_VERSION,
+        bundledCatalog: releaseImpactCatalog(targetVersion, SDK_VERSION, {
+          localKnowledgeReindexRequired: true,
+        }),
+        clock: () => new Date(FIXED_NOW),
+      });
+      const stateDir = join(staticRoot, ".keiko-state");
+      await mkdir(stateDir, { recursive: true });
+      const updateLocalState = createUpdateLocalStateManager({
+        stateDir,
+        now: () => FIXED_NOW,
+        idFactory: () => "update-reindex-event",
+      });
+      const localKnowledge = fakeLocalKnowledgeRemediation();
+      const updateRemediation = createUpdateRemediationManager({
+        localState: updateLocalState,
+        localKnowledge,
+        now: () => FIXED_NOW,
+      });
+      await buildServer({
+        config: undefined,
+        configPresent: false,
+        evidenceStore: {
+          put: (): string => "",
+          list: (): readonly string[] => [],
+          get: (): string | undefined => undefined,
+          delete: (): void => undefined,
+        },
+        env: {},
+        redactor: buildRedactor({}),
+        registry: createRunRegistry(),
+        modelPortFactory: (): undefined => undefined,
+        store: createInMemoryUiStore(),
+        gatewayReadinessFetch: metadata.fetchImpl,
+        updatePreflight,
+        updateLocalState,
+        updateRemediation,
+        updateSession,
+      });
+
+      const preflightResponse = await fetch(`${baseUrl()}/api/update/preflight`);
+      const preflight = await readJson<UpdatePreflightReport>(preflightResponse);
+      const impact = impactInput(preflight);
+
+      expect(preflightResponse.status).toBe(200);
+      expect(preflight).toMatchObject({
+        currentVersion: SDK_VERSION,
+        targetVersion,
+        updateAvailable: true,
+        status: "update-available",
+        severity: "high",
+        affectedStateStores: ["local-knowledge"],
+        userActionRequired: true,
+        oneClickEligible: true,
+        manualUpdateRequired: false,
+      });
+      expect(preflight.impact?.remediations).toEqual(["local-knowledge-reindex-required"]);
+
+      const remediationStatusResponse = await fetch(`${baseUrl()}/api/update/remediation/status`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ targetVersion, impact, persist: true }),
+      });
+      const remediationStatus =
+        await readJson<UpdateRemediationStatusReport>(remediationStatusResponse);
+
+      expect(remediationStatusResponse.status).toBe(200);
+      expect(remediationStatus).toMatchObject({
+        targetVersion,
+        overallStatus: "pending",
+        updateCanComplete: false,
+        affectedFeatures: [
+          {
+            featureId: "local-knowledge",
+            label: "Local Knowledge",
+            state: "unavailable",
+          },
+        ],
+      });
+      expect(remediationStatus.actions[0]).toMatchObject({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        kind: "local-knowledge-reindex",
+        status: "pending",
+        canRun: true,
+        canDefer: true,
+        userApprovalRequired: true,
+        scopeCounts: { capsules: 2, documents: 11, vectors: 39 },
+      });
+
+      const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ targetVersion, requestId: "reindex-integration-test" }),
+      });
+      const started = await readJson<UpdateSession>(startedResponse);
+
+      expect(startedResponse.status).toBe(202);
+      expect(started).toMatchObject({
+        sessionId: "update-reindex-integration-session",
+        targetVersion,
+        phase: "preparing",
+      });
+
+      const restartRequired = await waitForPhase("restart-required");
+      expect(restartRequired.activeSession).toMatchObject({
+        targetVersion,
+        phase: "restart-required",
+        restartRequired: true,
+      });
+
+      runningVersion = targetVersion;
+      const blockedRestartResponse = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ targetVersion }),
+      });
+      const blockedRestart = await readJson<UpdateSession>(blockedRestartResponse);
+
+      expect(blockedRestartResponse.status).toBe(200);
+      expect(blockedRestart).toMatchObject({
+        targetVersion,
+        phase: "restart-required",
+        restartRequired: false,
+      });
+      expect(blockedRestart.message).toContain("Complete remaining remediation");
+
+      const actionResponse = await fetch(`${baseUrl()}/api/update/remediation/actions`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({
+          actionId: "local-knowledge-reindex:local-knowledge",
+          targetVersion,
+          impact,
+          decision: "run",
+        }),
+      });
+      const completedRemediation = await readJson<UpdateRemediationStatusReport>(actionResponse);
+
+      expect(actionResponse.status).toBe(200);
+      expect(localKnowledge.runs()).toBe(1);
+      expect(completedRemediation).toMatchObject({
+        targetVersion,
+        overallStatus: "completed",
+        updateCanComplete: true,
+      });
+      expect(completedRemediation.actions[0]).toMatchObject({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        status: "completed",
+      });
+
+      const verifiedResponse = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ targetVersion }),
+      });
+      const verified = await readJson<UpdateSession>(verifiedResponse);
+      const finalStatus = await updateSessionStatus();
+
+      expect(verifiedResponse.status).toBe(200);
+      expect(verified).toMatchObject({
+        targetVersion,
+        phase: "succeeded",
+        restartRequired: false,
+      });
+      expect(finalStatus.activeSession).toBeUndefined();
+      expect(finalStatus.lastSession).toMatchObject({ targetVersion, phase: "succeeded" });
+    },
+  );
 
   it("finishes portable activation while release-impact remediation remains pending", async () => {
     const targetVersion = nextPatchVersion(SDK_VERSION);

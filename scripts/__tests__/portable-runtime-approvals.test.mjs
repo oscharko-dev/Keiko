@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  APPROVED_SIDECAR_ARCHIVE_HOSTS,
   loadPortableRuntimeApprovals,
   validatePortableRuntimeApprovals,
 } from "../portable-runtime-approvals.mjs";
@@ -110,6 +111,17 @@ function fixtureRepoRoot(approvals) {
   );
   return root;
 }
+
+describe("approved sidecar archive redirect hosts", () => {
+  it("allows the GitHub release-asset content host so real downloads (which 302-redirect) pass", () => {
+    // Regression: GitHub release-asset downloads redirect from github.com to
+    // release-assets.githubusercontent.com; the download validates the FINAL response host, so
+    // omitting it makes every CI sidecar download fail with "redirect target host is not approved".
+    expect(APPROVED_SIDECAR_ARCHIVE_HOSTS).toContain("release-assets.githubusercontent.com");
+    expect(APPROVED_SIDECAR_ARCHIVE_HOSTS).toContain("github.com");
+    expect(APPROVED_SIDECAR_ARCHIVE_HOSTS).toContain("raw.githubusercontent.com");
+  });
+});
 
 describe("portable runtime approvals validation", () => {
   it("accepts the committed approvals file", () => {

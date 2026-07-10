@@ -31,6 +31,11 @@ describe("format presenters", () => {
     expect(formatBytes(Number.POSITIVE_INFINITY)).toBe("0 B");
   });
 
+  it("uses the requested locale for decimal separators", () => {
+    expect(formatBytes(1536, "de-DE")).toBe("1,5 KB");
+    expect(formatBytes(1024 ** 3, "de-DE")).toBe("1 GB");
+  });
+
   it("formats bytes with higher precision for file size chips", () => {
     // Two decimals below magnitude 10; one at or above.
     expect(formatBytesPrecise(1024)).toBe("1.00 KB");

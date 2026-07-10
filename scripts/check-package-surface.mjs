@@ -39,9 +39,12 @@ function packFiles() {
   delete env.npm_package_json;
   // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs
   // prepack on `npm pack`); the build steps already ran before this check in the prepack chain.
+  // SECURITY-SHELL-OK: on Windows npm is npm.cmd, which spawnSync only launches through a shell;
+  // the argv is entirely static literals (no user/network input), so there is no injection surface.
   const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
     encoding: "utf8",
     env,
+    shell: process.platform === "win32",
   });
   if (result.status !== 0) {
     throw new Error(`npm pack --dry-run failed: ${result.stderr}`);
@@ -507,7 +510,12 @@ if (cliBin === undefined) {
   fail("the tarball does not include dist/cli/index.js.");
 }
 
-if ((cliBin.mode & 0o111) === 0) {
+// npm pack on Windows cannot record POSIX executable bits (the filesystem has none), so a tarball
+// built on a Windows runner never carries mode 0o111. The bit is a POSIX concern only — the Windows
+// portable launcher invokes `node.exe app\dist\cli\index.js` and never consults it — so this
+// assertion is enforced only when packing on a POSIX host (Linux CI, macOS). Building the app
+// tarball on win32 for the portable Windows target skips it.
+if (process.platform !== "win32" && (cliBin.mode & 0o111) === 0) {
   fail("dist/cli/index.js is not executable in the tarball (run `npm run prepare:bin`).");
 }
 

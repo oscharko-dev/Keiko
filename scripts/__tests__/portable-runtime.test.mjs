@@ -23,7 +23,12 @@ import {
   validatePortableManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
-import { appSurfaceFailures, assemblePortableStage } from "../stage-portable-runtime.mjs";
+import {
+  appSurfaceFailures,
+  assemblePortableStage,
+  isCrossDeviceError,
+  moveStagedDirectory,
+} from "../stage-portable-runtime.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -1152,7 +1157,40 @@ describe("verify-portable-runtime-signing", () => {
   });
 });
 
-describe("stage-portable-runtime", () => {
+// Portable v1 staging is stable-only by contract: stage-portable-runtime.mjs fails closed when
+// the root package version carries a prerelease suffix, so these end-to-end staging tests can
+// only run while the repository is on a stable version (dev). During release-branch beta
+// stabilization the suite is skipped and the always-on prerelease-guard test below pins the
+// fail-closed behavior instead.
+const REPO_VERSION_IS_PRERELEASE = ROOT_PACKAGE_VERSION.includes("-");
+
+describe("stage-portable-runtime prerelease guard", () => {
+  it("fails closed when the release tag does not match a stable root package version", () => {
+    const result = runStage([
+      "--target",
+      "macos-arm64",
+      "--node-version",
+      "22.23.1",
+      "--node-archive-url",
+      "https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-arm64.tar.gz",
+      "--node-sha256",
+      "0".repeat(64),
+      "--release-tag",
+      "v9.9.9-beta.1",
+      "--release-id",
+      "0",
+      "--commit-sha",
+      "a".repeat(40),
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "--release-tag must match the stable package version",
+    );
+  });
+});
+
+describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
   it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64");
@@ -1684,5 +1722,50 @@ describe("stage-portable-runtime", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("--release-tag must match the stable package version");
+  });
+});
+
+describe("moveStagedDirectory (cross-device promote)", () => {
+  it("classifies EXDEV/ENOTSUP as cross-device and other codes or non-errors as not", () => {
+    expect(isCrossDeviceError({ code: "EXDEV" })).toBe(true);
+    expect(isCrossDeviceError({ code: "ENOTSUP" })).toBe(true);
+    expect(isCrossDeviceError({ code: "ENOENT" })).toBe(false);
+    expect(isCrossDeviceError(null)).toBe(false);
+    expect(isCrossDeviceError("EXDEV")).toBe(false);
+  });
+
+  it("promotes via the same-device rename fast path", () => {
+    const root = tempDir();
+    const source = join(root, "stage");
+    const dest = join(root, "final");
+    mkdirSync(source, { recursive: true });
+    writeFileSync(join(source, "manifest.json"), "{}");
+    moveStagedDirectory(source, dest);
+    expect(existsSync(source)).toBe(false);
+    expect(readFileSync(join(dest, "manifest.json"), "utf8")).toBe("{}");
+  });
+
+  it("falls back to copy + remove when rename fails EXDEV (Windows C: -> D:)", () => {
+    const root = tempDir();
+    const source = join(root, "stage");
+    const dest = join(root, "final");
+    mkdirSync(join(source, "nested"), { recursive: true });
+    writeFileSync(join(source, "nested", "opencode"), "binary");
+    const renameAcrossDevices = () => {
+      throw Object.assign(new Error("EXDEV"), { code: "EXDEV" });
+    };
+    moveStagedDirectory(source, dest, renameAcrossDevices);
+    expect(existsSync(source)).toBe(false);
+    expect(readFileSync(join(dest, "nested", "opencode"), "utf8")).toBe("binary");
+  });
+
+  it("rethrows non-cross-device rename errors instead of silently copying", () => {
+    const root = tempDir();
+    const source = join(root, "stage");
+    mkdirSync(source, { recursive: true });
+    const renameDenied = () => {
+      throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+    };
+    expect(() => moveStagedDirectory(source, join(root, "final"), renameDenied)).toThrow("EACCES");
   });
 });

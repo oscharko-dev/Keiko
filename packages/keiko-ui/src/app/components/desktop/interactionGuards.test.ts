@@ -10,13 +10,24 @@ import {
   isWindowDragPointer,
 } from "./interactionGuards";
 
+const originalPlatform = window.navigator.platform;
+
+function stubPlatform(platform: string): void {
+  Object.defineProperty(window.navigator, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
+
 afterEach(() => {
   document.body.style.cursor = "";
   document.body.style.userSelect = "";
+  stubPlatform(originalPlatform);
 });
 
 describe("pointer guards", () => {
   it("treats a primary click as activation but a macOS ctrl+click as a context click, not a pan", () => {
+    stubPlatform("MacIntel");
     expect(isPrimaryActivationPointer({ button: 0, ctrlKey: false })).toBe(true);
     expect(isMacContextClick({ button: 0, ctrlKey: true })).toBe(true);
     expect(isPrimaryActivationPointer({ button: 0, ctrlKey: true })).toBe(false);
@@ -27,11 +38,25 @@ describe("pointer guards", () => {
     expect(isCanvasPanPointer({ button: 2, ctrlKey: false })).toBe(false);
   });
 
+  it("issue #2150 — on Windows/Linux, ctrl+left-click is NOT a mac context click, so it still activates the canvas (marquee toggle-select modifier)", () => {
+    stubPlatform("Win32");
+    expect(isMacContextClick({ button: 0, ctrlKey: true })).toBe(false);
+    expect(isPrimaryActivationPointer({ button: 0, ctrlKey: true })).toBe(true);
+    expect(isCanvasPanPointer({ button: 0, ctrlKey: true })).toBe(true);
+  });
+
   it("allows window header dragging with the primary and middle mouse buttons", () => {
+    stubPlatform("MacIntel");
     expect(isWindowDragPointer({ button: 0, ctrlKey: false })).toBe(true);
+    // On macOS, ctrl+left-click is the context-click convention, so it must not start a drag.
     expect(isWindowDragPointer({ button: 0, ctrlKey: true })).toBe(false);
     expect(isWindowDragPointer({ button: 1, ctrlKey: false })).toBe(true);
     expect(isWindowDragPointer({ button: 2, ctrlKey: false })).toBe(false);
+  });
+
+  it("issue #2150 — on Windows/Linux, ctrl+left-click still drags the window header (no mac context-click reinterpretation)", () => {
+    stubPlatform("Win32");
+    expect(isWindowDragPointer({ button: 0, ctrlKey: true })).toBe(true);
   });
 
   it("treats explicitly selectable text surfaces as interactive text targets", () => {

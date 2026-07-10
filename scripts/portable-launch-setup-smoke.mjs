@@ -9,6 +9,10 @@ import { validateStageRoot, validateStageTargets } from "./portable-launch-setup
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const FIXED_NOW = new Date("2026-07-06T00:00:00.000Z");
+// Deterministic fixture version for the simulated setup/relaunch journey. Kept independent
+// of the (possibly prerelease) root package version so the smoke behaves identically on dev
+// and on release-branch beta stabilization; portable v1 setup manifests are stable-only.
+const SMOKE_FIXTURE_VERSION = "9.9.9";
 
 function fail(message) {
   throw new Error(`portable launch/setup smoke failed: ${message}`);
@@ -51,7 +55,7 @@ function runtimeManifest(target) {
   };
 }
 
-function setupManifest(target, version = rootPackage.version) {
+function setupManifest(target, version = SMOKE_FIXTURE_VERSION) {
   return `${JSON.stringify(
     {
       schemaVersion: 1,
@@ -68,7 +72,7 @@ function setupManifest(target, version = rootPackage.version) {
   )}\n`;
 }
 
-function writeAppFixture(appRoot, version = rootPackage.version) {
+function writeAppFixture(appRoot, version = SMOKE_FIXTURE_VERSION) {
   mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
   writeFileSync(
     join(appRoot, "package.json"),
@@ -77,7 +81,7 @@ function writeAppFixture(appRoot, version = rootPackage.version) {
   writeFileSync(join(appRoot, "dist", "cli", "index.js"), "fixture cli\n");
 }
 
-function writeWindowsFixture(root, target, version = rootPackage.version) {
+function writeWindowsFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
   mkdirSync(join(root, "runtime", "node"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "support"), { recursive: true });
@@ -89,7 +93,7 @@ function writeWindowsFixture(root, target, version = rootPackage.version) {
   return root;
 }
 
-function writeMacFixture(root, target, version = rootPackage.version) {
+function writeMacFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
   const appRoot = join(root, "Keiko.app");
   const resources = join(appRoot, "Contents", "Resources");
   mkdirSync(join(appRoot, "Contents", "MacOS"), { recursive: true });
@@ -107,7 +111,7 @@ function writeMacFixture(root, target, version = rootPackage.version) {
   return appRoot;
 }
 
-function writeFixture(root, target, version = rootPackage.version) {
+function writeFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
   return target.nodePlatform === "win32"
     ? writeWindowsFixture(root, target, version)
     : writeMacFixture(root, target, version);
@@ -241,9 +245,9 @@ async function runFixtureManualUpgrade(target, root, runPortableCli, now) {
   const stateDir = join(base, "state");
   const env = targetEnv(target, home);
   const rootAfterSetup = managedRoot(target, home);
-  const oldVersion = previousStableVersion(rootPackage.version);
+  const oldVersion = previousStableVersion(SMOKE_FIXTURE_VERSION);
   const oldRoot = writeFixture(join(base, "old-download"), target, oldVersion);
-  const newRoot = writeFixture(join(base, "new-download"), target, rootPackage.version);
+  const newRoot = writeFixture(join(base, "new-download"), target, SMOKE_FIXTURE_VERSION);
   const first = capture();
   const firstCode = await runPortableCli(
     portableLaunchArgs(target, oldRoot, rootAfterSetup, stateDir),
@@ -300,8 +304,8 @@ async function runFixtureManualUpgradeClick(
     clickedNewerPackageStoppedServer: lifecycleCommands[0] === "stop",
     relaunchedAfterSwap: lifecycleCommands[1] === "start",
     upgradedPackageVersion:
-      registration.packageVersion === rootPackage.version &&
-      readManagedPackageVersion(target, rootAfterSetup) === rootPackage.version,
+      registration.packageVersion === SMOKE_FIXTURE_VERSION &&
+      readManagedPackageVersion(target, rootAfterSetup) === SMOKE_FIXTURE_VERSION,
     noRollbackPathUsed: !lifecycleCommands.includes("restart"),
   };
 }

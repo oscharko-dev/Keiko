@@ -6,12 +6,16 @@
 // audit can still identify the failure (same pattern as memoriaviva/format-error).
 
 import { ApiError } from "@/lib/api";
+import { translateLocalKnowledge, type I18nTranslate } from "./local-knowledge-i18n";
 
-export function formatError(error: unknown): string {
+const fallbackTranslate: I18nTranslate = (key, values) =>
+  translateLocalKnowledge("en", key, values);
+
+export function formatError(error: unknown, t: I18nTranslate = fallbackTranslate): string {
   if (error instanceof ApiError) {
     if (error.message.trim().length > 0) return `${error.message} (${error.code})`;
-    return `Something went wrong. Try again. (${error.code})`;
+    return t("localKnowledge.error.api", { code: error.code });
   }
   if (error instanceof Error && error.message.trim().length > 0) return error.message;
-  return "An unexpected error occurred.";
+  return t("localKnowledge.error.unexpected");
 }

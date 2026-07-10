@@ -40,7 +40,8 @@ client                                   BFF (/api/voice/control)            pro
   │       websocket, webrtc) ───────────  │   mediaTransport=webrtc
   │  ◀── capability.offer ─────────────── │
   │  ── signal.sdp.offer (SDP) ────────▶  │
-  │                                        │  ── POST /realtime/calls (application/sdp) ──▶
+  │                                        │  ── POST /realtime/calls ───────────────────▶
+  │                                        │     multipart: sdp + server session
   │                                        │  ◀── SDP answer ────────────────────────────
   │  ◀── media.track.state (negotiating)  │
   │  ◀── signal.sdp.answer (SDP) ───────  │
@@ -52,6 +53,9 @@ client                                   BFF (/api/voice/control)            pro
   mode (`VOICE_PROFILE_NEGOTIATION_MODE`) is rejected with `error` code `not-allowed-for-profile`.
 - The host performs the SDP exchange (`requestRealtimeNegotiation`); the browser never holds the
   provider credential (AC2). A negotiation failure returns `error` code `negotiation-failed`.
+- Standard-key providers receive the SDP and complete server-owned session configuration atomically as
+  GA multipart form data. Ephemeral-session providers receive that configuration when the host mints
+  the short-lived secret, followed by the raw SDP call.
 - Per-direction monotonic `seq` + idempotency on `(sessionId, seq)`; a re-sent `session.create` with
   the same `idempotencyKey` resumes the session and replays the bounded `replayable` buffer rather than
   creating a duplicate (protocol §7).
@@ -67,7 +71,9 @@ client                                   BFF (/api/voice/control)            pro
   answer SDP.
 - `hooks/useRealtimeVoice.ts` — the `idle → requesting → negotiating → connected` state machine, the
   Realtime data-channel parser bridge, committed transcript callbacks, barge-in/cancel routing, and the
-  deterministic teardown pattern shared with `useDictation`.
+  deterministic teardown pattern shared with `useDictation`. Its startup `session.update` is deliberately
+  narrow: without an explicit turn-detection profile it sends only the session type and cannot overwrite
+  server-owned instructions, tools, transcription, grounding posture, or MemoriaViva context.
 - The composer no longer renders a separate **Start realtime voice** button. The **Voice dialogue mode**
   switch starts this Realtime session directly when `supportsRealtimeVoice(capability)` **and**
   `realtimeVoiceTransportSupported()` (the browser exposes `getUserMedia` + `RTCPeerConnection`) are

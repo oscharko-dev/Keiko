@@ -13,6 +13,7 @@ import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRunSummary,
 } from "@oscharko-dev/keiko-contracts";
+import { useQiTranslate as useTranslate, type I18nTranslate } from "./qi-i18n";
 import { deleteQiRun, fetchQiRuns } from "@/lib/quality-intelligence-api";
 import { RunLauncher } from "./RunLauncher";
 import {
@@ -23,7 +24,7 @@ import {
   formatError,
   formatDate,
   runStatusLabel,
-  REVIEW_LABEL,
+  reviewLabel,
 } from "./qiShared";
 
 export interface QiHubPanelProps {
@@ -69,6 +70,7 @@ function RunRow({
   onOpen,
   onDelete,
   deleting,
+  t,
   openButtonRef,
 }: {
   readonly run: QualityIntelligenceUiRunSummary;
@@ -78,6 +80,7 @@ function RunRow({
   ) => void;
   readonly onDelete: (id: string) => void;
   readonly deleting: boolean;
+  readonly t: I18nTranslate;
   // Registers this row's Open button with the panel so a delete can park keyboard focus on a
   // surviving row's Open button after the deleted row unmounts (GEN-UI-FOCUS-003, WCAG 2.4.3).
   readonly openButtonRef?: (id: string, el: HTMLButtonElement | null) => void;
@@ -144,8 +147,14 @@ function RunRow({
         // the export preview "candidates", launcher/card "test cases").
         // Issue #282 A11y-2: append review state so screen-reader list-navigation announces the
         // artifact lifecycle state (AC1 — run-as-artifact has a visible + announced review state).
-        aria-label={`Open run ${run.id} — ${runStatusLabel(run.status)}, ${formatDate(run.requestedAt)}, ${cases.toString()} test case${cases !== 1 ? "s" : ""}, review ${REVIEW_LABEL[run.reviewState]}`}
-        title={`Open run ${run.id}`}
+        aria-label={t("qi.hub.openRunAria", {
+          runId: run.id,
+          status: runStatusLabel(run.status, t),
+          requestedAt: formatDate(run.requestedAt),
+          count: cases,
+          review: reviewLabel(run.reviewState, t),
+        })}
+        title={t("qi.hub.openRunTitle", { runId: run.id })}
       >
         {/* uiux-fix F038 C145: the wire summary carries no source label, so the opaque UUID
             prefix had zero recognition value as the primary line. Until the contract grows a
@@ -160,7 +169,7 @@ function RunRow({
         <ReviewBadge state={run.reviewState} />
         <span className="qi-run-id">{run.id.slice(0, 16)}…</span>
         <span className="qi-run-totals">
-          {run.totals.candidates.toString()} test case{run.totals.candidates !== 1 ? "s" : ""}
+          {t("qi.hub.testCaseCount", { count: run.totals.candidates })}
         </span>
       </button>
 
@@ -179,12 +188,12 @@ function RunRow({
             margin: "0 6px 0 0",
             flexShrink: 0,
           }}
-          aria-label={`Delete run ${formatDate(run.requestedAt)}`}
+          aria-label={t("qi.hub.deleteRunAria", { requestedAt: formatDate(run.requestedAt) })}
           onClick={() => {
             setConfirming(true);
           }}
         >
-          Delete
+          {t("common.delete")}
         </button>
       ) : (
         // Step 2: inline confirm strip — Confirm + Cancel as siblings in a group.
@@ -193,7 +202,9 @@ function RunRow({
         <div
           className="qi-cand-actions"
           role="group"
-          aria-label={`Confirm deleting run ${formatDate(run.requestedAt)}`}
+          aria-label={t("qi.hub.confirmDeleteGroup", {
+            requestedAt: formatDate(run.requestedAt),
+          })}
           style={{
             display: "flex",
             alignItems: "center",
@@ -207,7 +218,9 @@ function RunRow({
             type="button"
             className="qi-btn qi-btn-reject"
             style={{ minWidth: 0, padding: "4px 10px", fontSize: 12, flexShrink: 0 }}
-            aria-label={`Confirm delete of run ${formatDate(run.requestedAt)}`}
+            aria-label={t("qi.hub.confirmDeleteAria", {
+              requestedAt: formatDate(run.requestedAt),
+            })}
             aria-busy={deleting || undefined}
             // aria-disabled keeps the button focusable while in-flight (mirrors GovernedActionButton).
             aria-disabled={deleting || undefined}
@@ -216,11 +229,11 @@ function RunRow({
           >
             {deleting ? (
               <>
-                <span aria-hidden="true">Deleting…</span>
-                <span className="sr-only">Deleting run, please wait</span>
+                <span aria-hidden="true">{t("qi.hub.deleting")}</span>
+                <span className="sr-only">{t("qi.hub.deletingWait")}</span>
               </>
             ) : (
-              "Confirm delete"
+              t("qi.hub.confirmDelete")
             )}
           </button>
           <button
@@ -235,7 +248,7 @@ function RunRow({
             }}
             onKeyDown={handleKeyDownConfirm}
           >
-            Cancel
+            {t("common.cancel")}
           </button>
         </div>
       )}
@@ -260,6 +273,7 @@ export function QiHubPanel({
   fetchRunsImpl = fetchQiRuns,
   deleteImpl = deleteQiRun,
 }: QiHubPanelProps): ReactNode {
+  const t = useTranslate();
   const [runs, setRuns] = useState<readonly QualityIntelligenceUiRunSummary[]>([]);
   // uiux-fix F030 C277: the wire contract reports limit/totalRunIds/truncated explicitly so the
   // UI can render a "more available" indicator; the hub previously discarded them and silently
@@ -332,7 +346,7 @@ export function QiHubPanel({
       setError(null);
       try {
         await deleteImpl(runId);
-        setDeletedAnnounce("Run deleted.");
+        setDeletedAnnounce(t("qi.hub.deleted"));
         await loadRuns();
         // Park focus after the refetch commits the new list, so the target element exists in the
         // DOM. requestAnimationFrame lets React flush the removal of the deleted row first.
@@ -351,7 +365,7 @@ export function QiHubPanel({
         setDeletingId(null);
       }
     },
-    [deletingId, deleteImpl, loadRuns, runs],
+    [deletingId, deleteImpl, loadRuns, runs, t],
   );
 
   return (
@@ -367,13 +381,13 @@ export function QiHubPanel({
         connectedFigmaSnapshotSources={connectedFigmaSnapshotSources}
         connectedImageSources={connectedImageSources}
       />
-      <section className="qi-hub-runs" aria-label="Quality Intelligence runs">
+      <section className="qi-hub-runs" aria-label={t("qi.hub.runsAria")}>
         <header className="qi-col-header">
           {/* tabIndex=-1 makes the heading programmatically focusable so a delete that removes the
               last run can park keyboard focus here instead of stranding it on <body>
               (GEN-UI-FOCUS-003, WCAG 2.4.3). It is not in the tab order. */}
           <h2 className="qi-col-title" ref={runsHeadingRef} tabIndex={-1}>
-            Runs
+            {t("qi.hub.runs")}
           </h2>
           {!loading && error === null ? (
             <span className="qi-col-count">{totalRunIds.toString()}</span>
@@ -384,9 +398,12 @@ export function QiHubPanel({
             every refresh. Load errors announce via ErrorState's own role="alert". */}
         <p className="sr-only" role="status" aria-live="polite">
           {loading
-            ? "Loading runs…"
+            ? t("qi.hub.loadingRuns")
             : error === null
-              ? `Run list loaded: ${runs.length.toString()} run${runs.length === 1 ? "" : "s"}${truncated ? ` of ${totalRunIds.toString()}` : ""}.`
+              ? t("qi.hub.listLoaded", {
+                  shown: runs.length,
+                  total: truncated ? totalRunIds : runs.length,
+                })
               : ""}
         </p>
         {/* Dedicated live region for delete completion announcements — separate from the list
@@ -406,14 +423,12 @@ export function QiHubPanel({
             />
           ) : runs.length === 0 ? (
             <div className="lk-empty">
-              <p className="lk-empty-title">No runs yet</p>
-              <p className="lk-empty-body">
-                Start a run above — generated test cases open as cards on your workspace.
-              </p>
+              <p className="lk-empty-title">{t("qi.hub.empty.title")}</p>
+              <p className="lk-empty-body">{t("qi.hub.empty.body")}</p>
             </div>
           ) : (
             <>
-              <ul className="qi-run-list" aria-label="Run list">
+              <ul className="qi-run-list" aria-label={t("qi.hub.runList")}>
                 {runs.slice(0, visibleRuns).map((run) => (
                   <RunRow
                     key={run.id}
@@ -423,6 +438,7 @@ export function QiHubPanel({
                       void handleDelete(id);
                     }}
                     deleting={deletingId === run.id}
+                    t={t}
                     openButtonRef={registerOpenButton}
                   />
                 ))}
@@ -435,12 +451,12 @@ export function QiHubPanel({
                     setVisibleRuns((v) => v + INITIAL_VISIBLE_RUNS);
                   }}
                 >
-                  Show more runs ({(runs.length - visibleRuns).toString()} remaining)
+                  {t("qi.hub.showMoreRuns", { count: runs.length - visibleRuns })}
                 </button>
               ) : null}
               {truncated ? (
                 <p className="qi-runs-truncated" data-testid="qi-runs-truncated">
-                  {`Showing ${runs.length.toString()} of ${totalRunIds.toString()} runs.`}
+                  {t("qi.hub.truncated", { shown: runs.length, total: totalRunIds })}
                 </p>
               ) : null}
             </>

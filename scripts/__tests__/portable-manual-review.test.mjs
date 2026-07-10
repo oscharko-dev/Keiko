@@ -64,7 +64,9 @@ describe("portable manual review harness", () => {
   it("plans every first-class target and manual matrix scenario", () => {
     const plan = manualReviewPlan();
 
-    expect(plan.currentVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+    // The current root version may be a release-branch prerelease; the simulated TARGET of a
+    // portable manual review is always its stable base.
+    expect(plan.currentVersion).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u);
     expect(plan.targetVersion).toMatch(/^\d+\.\d+\.\d+$/u);
     expect(plan.targets.map((target) => target.platformTarget)).toEqual(
       PORTABLE_TARGETS.map((target) => target.platformTarget),

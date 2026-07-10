@@ -11,6 +11,7 @@
 
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { fetchConfig, updateChatConnectedScopes } from "@/lib/api";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type { Chat, ChatConnectedScope, GroundingLimits, SelectedScopeKind } from "@/lib/types";
@@ -52,16 +53,17 @@ export interface ScopeConnectButtonProps {
 function actionLabel(
   scopeKind: SelectedScopeKind,
   currentScopeKind: SelectedScopeKind | undefined,
+  t: I18nTranslate,
 ): string {
-  if (currentScopeKind !== undefined) return "Update connected scope";
-  if (scopeKind === "workspace-root") return "Connect repository";
-  if (scopeKind === "directory") return "Connect folder";
-  return "Connect to chat";
+  if (currentScopeKind !== undefined) return t("scope.connect.update");
+  if (scopeKind === "workspace-root") return t("scope.connect.repository");
+  if (scopeKind === "directory") return t("scope.connect.folder");
+  return t("scope.connect.chat");
 }
 
-function formatErrorMessage(error: unknown): string {
+function formatErrorMessage(error: unknown, t: I18nTranslate): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
-  return formatUserError(error, "Unable to connect scope.");
+  return formatUserError(error, t("scope.connect.error"));
 }
 
 function sameRelativePaths(left: readonly string[], right: readonly string[]): boolean {
@@ -89,6 +91,7 @@ export function ScopeConnectButton({
   now = Date.now,
   targetName,
 }: ScopeConnectButtonProps): ReactNode {
+  const t = useTranslate();
   const hintId = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,14 +130,16 @@ export function ScopeConnectButton({
   const atLimit =
     !isUpdate &&
     (connectedTotal >= cap || currentScopes.length >= groundingLimits.maxConnectedSources);
-  const limitHint = `Source limit reached (${String(connectedTotal)}/${String(cap)}). Disconnect a source first.`;
+  const limitHint = t("scope.connect.limitReached", { connected: connectedTotal, cap });
   const disabled = empty || busy || atLimit;
   const existingScopeKind = currentScopeKind ?? currentScopes[0]?.kind;
-  const label = actionLabel(scopeKind, existingScopeKind);
+  const label = actionLabel(scopeKind, existingScopeKind, t);
   // Distinguishable accessible name per target (WCAG 2.4.6, audit C214); the
   // visible label stays generic — the row itself shows the folder name.
-  const accessibleLabel = targetName !== undefined ? `${label}: ${targetName}` : label;
-  const tooltip = empty ? "Select a folder or file first" : atLimit ? limitHint : accessibleLabel;
+  const accessibleLabel =
+    targetName !== undefined ? t("scope.connect.targetAria", { label, target: targetName }) : label;
+  const emptyHint = t("scope.connect.selectFirst");
+  const tooltip = empty ? emptyHint : atLimit ? limitHint : accessibleLabel;
 
   async function handleClick(): Promise<void> {
     if (disabled) return;
@@ -150,7 +155,7 @@ export function ScopeConnectButton({
       const response = await updateScope(chatId, next);
       onConnected?.(response.chat);
     } catch (caught) {
-      setError(formatErrorMessage(caught));
+      setError(formatErrorMessage(caught, t));
     } finally {
       setBusy(false);
     }
@@ -172,7 +177,7 @@ export function ScopeConnectButton({
         className="scope-connect-btn"
         disabled={busy}
         aria-disabled={ariaDisabled}
-        aria-label={empty ? "Connect to chat (no selection)" : accessibleLabel}
+        aria-label={empty ? t("scope.connect.noSelectionAria") : accessibleLabel}
         aria-describedby={ariaDisabled ? hintId : undefined}
         title={tooltip}
         onClick={() => {
@@ -182,11 +187,11 @@ export function ScopeConnectButton({
           void handleClick();
         }}
       >
-        {busy ? "Connecting…" : label}
+        {busy ? t("scope.connect.connecting") : label}
       </button>
       {ariaDisabled ? (
         <span id={hintId} className="scope-connect-hint">
-          {empty ? "Select a folder or file first." : limitHint}
+          {empty ? t("scope.connect.selectFirstSentence") : limitHint}
         </span>
       ) : null}
       {error !== null ? (

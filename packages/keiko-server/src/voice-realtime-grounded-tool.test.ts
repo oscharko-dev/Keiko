@@ -330,7 +330,10 @@ describe("handleRealtimeGroundedVoiceTool", () => {
 
   it("runs the shared grounded pipeline with the verbatim user transcript and returns a Realtime-safe tool output", async () => {
     const chat = createChat();
-    const answer = groundedAnswer(chat.id);
+    const answer = groundedAnswer(chat.id, {
+      content:
+        "Das Fachkonzept beschreibt die [Bonitätsprüfung](https://example.invalid/fachkonzept) [1].",
+    });
     runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
 
     const result = await handleRealtimeGroundedVoiceTool(
@@ -354,17 +357,20 @@ describe("handleRealtimeGroundedVoiceTool", () => {
       toolOutput: {
         status: "ok",
         answer: answer.content,
+        spokenAnswer: "Das Fachkonzept beschreibt die Bonitätsprüfung.",
         groundingKind: "hybrid",
         elapsedMs: 37,
         persisted: {
           userMessageId: answer.userMessageId,
           assistantMessageId: answer.assistantMessageId,
         },
-        instruction:
-          "Speak this answer faithfully in a concise voice-friendly way. Do not add facts that are not in the answer.",
       },
     });
-    expect((result.body as { toolOutput: { citations: unknown[] } }).toolOutput.citations).toEqual([
+    const toolOutput = result.body as {
+      readonly toolOutput: { readonly instruction: string; readonly citations: readonly unknown[] };
+    };
+    expect(toolOutput.toolOutput.instruction).toContain("Do not read URLs");
+    expect(toolOutput.toolOutput.citations).toEqual([
       { marker: "[1]", label: "docs/fachkonzept.md", source: "Repository" },
       { marker: "[2]", label: "Fachkonzept.pdf", source: "Knowledge capsule: test" },
     ]);

@@ -5,6 +5,10 @@ import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { rebindCapsuleSourceRoot, type SourceIndexStats } from "@/lib/local-knowledge-api";
 import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
 import { pickWithNativeDialog } from "@/lib/native-file-dialog";
+import {
+  useLocalKnowledgeTranslate as useTranslate,
+  type I18nTranslate,
+} from "../local-knowledge-i18n";
 import { formatError } from "../format-error";
 
 interface SourceRebindControlProps {
@@ -19,10 +23,10 @@ function scopeRoot(scope: SourceIndexStats["scope"]): string {
   return scope.rootPath;
 }
 
-function scopeLabel(scope: SourceIndexStats["scope"]): string {
-  if (scope.kind === "repository") return "Replacement repository root";
-  if (scope.kind === "files") return "Replacement shared root";
-  return "Replacement folder root";
+function scopeLabel(scope: SourceIndexStats["scope"], t: I18nTranslate): string {
+  if (scope.kind === "repository") return t("localKnowledge.detail.rebind.repositoryRoot");
+  if (scope.kind === "files") return t("localKnowledge.detail.rebind.sharedRoot");
+  return t("localKnowledge.detail.rebind.folderRoot");
 }
 
 export function SourceRebindControl({
@@ -31,6 +35,7 @@ export function SourceRebindControl({
   onRebound,
   rebindImpl = rebindCapsuleSourceRoot,
 }: SourceRebindControlProps): ReactNode {
+  const t = useTranslate();
   const inputId = useId();
   const currentRoot = scopeRoot(source.scope);
   const [editing, setEditing] = useState(false);
@@ -46,7 +51,7 @@ export function SourceRebindControl({
   function openNativeRootPicker(): void {
     void pickWithNativeDialog({
       mode: "open-directory",
-      title: "Choose replacement root",
+      title: t("localKnowledge.detail.rebind.chooseRoot"),
       ...(trimmedRoot.length > 0 ? { defaultPath: trimmedRoot } : {}),
     }).then((outcome) => {
       if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
@@ -54,9 +59,9 @@ export function SourceRebindControl({
         setError(null);
         return;
       }
-      if (outcome.kind === "busy") setError("A native dialog is already open. Close it first.");
+      if (outcome.kind === "busy") setError(t("localKnowledge.nativeDialog.busy"));
       if (outcome.kind === "unsupported") {
-        setError("Native dialogs are unavailable on this platform. Enter the path manually.");
+        setError(t("localKnowledge.nativeDialog.unavailable"));
       }
       if (outcome.kind === "error") setError(outcome.message);
     });
@@ -83,7 +88,7 @@ export function SourceRebindControl({
       setEditing(false);
       onRebound();
     } catch (cause) {
-      setError(formatError(cause));
+      setError(formatError(cause, t));
     } finally {
       setBusy(false);
     }
@@ -92,13 +97,22 @@ export function SourceRebindControl({
   return (
     <div className="lkd-source-rebind">
       {!editing ? (
-        <button type="button" className="lk-btn lk-btn-ghost" onClick={openEditor}>
-          Rebind
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          title={t("localKnowledge.detail.help.rebind")}
+          onClick={openEditor}
+        >
+          {t("localKnowledge.detail.rebind.button")}
         </button>
       ) : (
         <div className="lkd-rebind-form">
-          <label htmlFor={inputId} className="dlg-label">
-            {scopeLabel(source.scope)}
+          <label
+            htmlFor={inputId}
+            className="dlg-label"
+            title={t("localKnowledge.detail.help.rebind")}
+          >
+            {scopeLabel(source.scope, t)}
           </label>
           <div className="lkd-connect-path-group">
             <input
@@ -120,12 +134,12 @@ export function SourceRebindControl({
               aria-describedby={nativeDialogSupported ? undefined : nativeNoteId}
               onClick={openNativeRootPicker}
             >
-              Browse
+              {t("common.browse")}
             </button>
           </div>
           {!nativeDialogSupported ? (
             <span id={nativeNoteId} className="dlg-note">
-              Native dialogs are unavailable on this platform. Enter the path manually.
+              {t("localKnowledge.nativeDialog.unavailable")}
             </span>
           ) : null}
           <div className="lkd-rebind-actions">
@@ -135,7 +149,7 @@ export function SourceRebindControl({
               disabled={busy}
               onClick={closeEditor}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               type="button"
@@ -144,7 +158,9 @@ export function SourceRebindControl({
               aria-busy={busy}
               onClick={() => void submit()}
             >
-              {busy ? "Rebinding..." : "Save root"}
+              {busy
+                ? t("localKnowledge.detail.rebind.saving")
+                : t("localKnowledge.detail.rebind.save")}
             </button>
           </div>
           {error !== null ? (

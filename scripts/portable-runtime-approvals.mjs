@@ -8,6 +8,12 @@ export const PORTABLE_RUNTIME_APPROVALS_FILE = "portable-runtime-approvals.json"
 export const APPROVED_NODE_ARCHIVE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
 export const APPROVED_SIDECAR_ARCHIVE_HOSTS = Object.freeze([
   "github.com",
+  // GitHub release-asset downloads (github.com/<o>/<r>/releases/download/...) 302-redirect to
+  // these content hosts. release-assets.githubusercontent.com is the current asset host;
+  // objects.githubusercontent.com is retained for older assets; raw.githubusercontent.com serves
+  // the license text. The download follows redirects and validates the FINAL response host, so all
+  // must be on the allowlist.
+  "release-assets.githubusercontent.com",
   "objects.githubusercontent.com",
   "raw.githubusercontent.com",
 ]);

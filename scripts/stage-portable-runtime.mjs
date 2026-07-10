@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -407,14 +408,18 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
+// npm is `npm.cmd` on Windows, which spawnSync can only launch through a shell (a bare "npm"
+// yields spawnSync ENOENT); POSIX resolves the bare "npm" directly. The staging temp/pack paths are
+// created by mkdtempSync under the OS temp root, so no npm argument contains spaces — shell
+// arg-splitting is safe here. This is the only place staging shells out to npm.
+// SECURITY-SHELL-OK: shell is enabled only on win32 to resolve npm.cmd; all args are static
+// literals or mkdtemp-generated paths (no user/network input), so there is no injection surface.
+function runNpm(args, options = {}) {
+  return run("npm", args, { ...options, shell: process.platform === "win32" });
+}
+
 function packRoot(packDir) {
-  const result = run("npm", [
-    "pack",
-    "--silent",
-    "--ignore-scripts",
-    "--pack-destination",
-    packDir,
-  ]);
+  const result = runNpm(["pack", "--silent", "--ignore-scripts", "--pack-destination", packDir]);
   const tarballName = result.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
   if (tarballName === undefined) fail("npm pack did not report a tarball name");
   const tarball = join(packDir, tarballName);
@@ -423,12 +428,12 @@ function packRoot(packDir) {
 }
 
 function preparePackageSurface() {
-  run("npm", ["run", "build"]);
-  run("npm", ["run", "build:ui"]);
-  run("npm", ["run", "prepare:bin"]);
-  run("npm", ["run", "prune:package-build-artifacts"]);
-  run("npm", ["run", "prune:package-native-optionals"]);
-  run("npm", ["run", "check:package-surface"]);
+  runNpm(["run", "build"]);
+  runNpm(["run", "build:ui"]);
+  runNpm(["run", "prepare:bin"]);
+  runNpm(["run", "prune:package-build-artifacts"]);
+  runNpm(["run", "prune:package-native-optionals"]);
+  runNpm(["run", "check:package-surface"]);
 }
 
 function stagePackedPackage(tarball, extractRoot, stageRoot) {
@@ -1436,10 +1441,32 @@ function validateGeneratedManifest(manifest) {
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
 }
 
+export function isCrossDeviceError(error) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EXDEV" || error.code === "ENOTSUP")
+  );
+}
+
+// Windows CI stages under the OS temp drive (C:) but promotes into the workspace checkout (D:),
+// so a same-filesystem rename fails with EXDEV. Fall back to a filesystem-agnostic recursive
+// copy + remove; macOS/Linux keep the atomic rename fast path. `renameImpl` is a seam for tests.
+export function moveStagedDirectory(sourceDir, destDir, renameImpl = renameSync) {
+  try {
+    renameImpl(sourceDir, destDir);
+  } catch (error) {
+    if (!isCrossDeviceError(error)) throw error;
+    cpSync(sourceDir, destDir, { recursive: true });
+    rmSync(sourceDir, { recursive: true, force: true });
+  }
+}
+
 function promoteStageRoot(options, paths) {
   if (options.dryRun) return;
   mkdirSync(resolve(options.outDir), { recursive: true });
-  renameSync(paths.stageRoot, paths.finalRoot);
+  moveStagedDirectory(paths.stageRoot, paths.finalRoot);
 }
 
 export async function runPortableStage(argv = process.argv.slice(2)) {

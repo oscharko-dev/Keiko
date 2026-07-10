@@ -12,7 +12,10 @@ export type RerankKind = "folder" | "connector";
 
 export interface RerankInput<P> {
   readonly kind: RerankKind;
-  readonly redactedText: string; // excerpt text ALREADY redacted by the caller (prompt-ready)
+  readonly redactedText: string; // excerpt text ALREADY redacted by the caller (prompt-ready); may
+  // be "" for a candidate whose hydration is deferred until after selection — see estimatedBytes.
+  readonly estimatedBytes?: number; // cheap proxy for the byte-budget check below when redactedText
+  // is deferred (""). Falls back to Buffer.byteLength(redactedText) when omitted.
   readonly engineScore: number; // native within-engine relevance (used ONLY for within-engine rank)
   readonly sourceLabel: string;
   readonly tieKey: string; // stable, unique-within-kind key for deterministic tie-break
@@ -72,7 +75,7 @@ function buildRanked<P>(inputs: readonly RerankInput<P>[]): readonly Ranked<P>[]
         input,
         engineRank,
         fusedScore: quantize(1 / (RRF_K + engineRank)),
-        bytes: Buffer.byteLength(input.redactedText, "utf8"),
+        bytes: input.estimatedBytes ?? Buffer.byteLength(input.redactedText, "utf8"),
       };
     });
   }

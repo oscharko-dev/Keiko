@@ -17,13 +17,13 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.2.14" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.2.15" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.14" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.15" as const;
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
@@ -3223,6 +3223,27 @@ export {
 } from "./task-workspace.js";
 
 // ─── Native OS file/folder dialog (Epic #1941, ADR-0118) ───────────────────────────
+export type {
+  LocalKnowledgeFileFilterDefinition,
+  LocalKnowledgeFileFilterId,
+} from "./local-knowledge-file-selection.js";
+export {
+  LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_CSV_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_TSV_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_STRUCTURED_DATA_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_TEXT_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_SCRIPT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_SOURCE_CODE_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_CONFIGURATION_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_FILE_FILTERS,
+} from "./local-knowledge-file-selection.js";
 export type {
   NativeFileDialogMode,
   NativeFileDialogSelectionKind,
