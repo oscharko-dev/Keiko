@@ -123,3 +123,54 @@ describe("extractFailureLocations — bounded (cap enforcement)", () => {
     expect(out).toHaveLength(VERIFICATION_MAX_FAILURE_LOCATIONS);
   });
 });
+
+describe("extractFailureLocations — branch edge cases (bounded parsing)", () => {
+  it("attributes an ESLint row with no rule-id and omits ruleId", () => {
+    const out = extractFailureLocations(
+      "lint",
+      cmd(["/repo/src/a.ts", "  3:7  error  Something is wrong"].join("\n")),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.line).toBe(3);
+    expect(out[0]?.ruleId).toBeUndefined();
+  });
+
+  it("ignores an ESLint row that appears before any file header", () => {
+    const out = extractFailureLocations(
+      "lint",
+      cmd(
+        [
+          "  9:9  error  Orphan row with no file  no-rule",
+          "/repo/src/b.ts",
+          "  1:1  error  Real  x",
+        ].join("\n"),
+      ),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.file).toBe("/repo/src/b.ts");
+  });
+
+  it("skips a pathological over-long line rather than matching it", () => {
+    const longFile = "s".repeat(5000);
+    const out = extractFailureLocations("typecheck", cmd(`${longFile}(1,1): error TS1: x`));
+    expect(out).toEqual([]);
+  });
+
+  it("uses a default message for a vitest frame with no preceding title", () => {
+    const out = extractFailureLocations("test", cmd("   at src/x.test.ts:3:9"));
+    expect(out).toHaveLength(1);
+    expect(out[0]?.message).toBe("Test failure");
+  });
+});
+
+describe("extractFailureLocations — message capping", () => {
+  it("caps an over-long diagnostic message to the contract character bound", () => {
+    const out = extractFailureLocations(
+      "typecheck",
+      cmd(`src/a.ts(1,1): error TS2: ${"x".repeat(900)}`),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]?.message.length ?? 0).toBeLessThanOrEqual(512);
+    expect(out[0]?.message.length ?? 0).toBeGreaterThan(400);
+  });
+});
