@@ -51,10 +51,13 @@ function isSafeBoundary(value: string): boolean {
   );
 }
 
-function boundedValueEnd(input: string, balancedEnd: number): number {
+function boundedValueEnd(input: string, balancedEnd: number, knownLineEnd?: number): number {
   let cursor = balancedEnd;
   while (isHorizontalWhitespace(input[cursor] ?? "")) cursor += 1;
-  return isSafeBoundary(input[cursor] ?? "") ? balancedEnd : lineValueEnd(input, balancedEnd);
+  if (isSafeBoundary(input[cursor] ?? "")) return balancedEnd;
+  return knownLineEnd !== undefined && balancedEnd <= knownLineEnd
+    ? knownLineEnd
+    : lineValueEnd(input, balancedEnd);
 }
 
 function rangeEquals(input: string, start: number, end: number, expected: string): boolean {
@@ -65,6 +68,7 @@ function quotedValueSpan(
   input: string,
   start: number,
   opening: string,
+  knownLineEnd?: number,
 ): StructuredCredentialSpan | undefined {
   const closedEnd = quotedEnd(input, start, opening);
   if (closedEnd === undefined) {
@@ -74,7 +78,7 @@ function quotedValueSpan(
       replacement: `${opening}${CREDENTIAL_REDACTED_SENTINEL}${opening}`,
     };
   }
-  const firstLineEnd = lineValueEnd(input, start);
+  const firstLineEnd = knownLineEnd ?? lineValueEnd(input, start);
   if (closedEnd > firstLineEnd) {
     return {
       start,
@@ -82,7 +86,7 @@ function quotedValueSpan(
       replacement: `${opening}${CREDENTIAL_REDACTED_SENTINEL}${opening}\n`,
     };
   }
-  const end = boundedValueEnd(input, closedEnd);
+  const end = boundedValueEnd(input, closedEnd, knownLineEnd);
   const exactSentinel =
     end === closedEnd && rangeEquals(input, start + 1, closedEnd - 1, CREDENTIAL_REDACTED_SENTINEL);
   return exactSentinel
@@ -181,16 +185,25 @@ function sentinelIsExact(input: string, start: number): boolean {
   return isSafeBoundary(input[cursor] ?? "");
 }
 
-function containerValueSpan(input: string, start: number): StructuredCredentialSpan | undefined {
+function containerValueSpan(
+  input: string,
+  start: number,
+  knownLineEnd?: number,
+): StructuredCredentialSpan | undefined {
   if (sentinelIsExact(input, start)) return undefined;
   const balancedEnd = balancedContainerEnd(input, start);
-  const end = balancedEnd === undefined ? input.length : boundedValueEnd(input, balancedEnd);
+  const end =
+    balancedEnd === undefined ? input.length : boundedValueEnd(input, balancedEnd, knownLineEnd);
   return { start, end, replacement: CREDENTIAL_REDACTED_SENTINEL };
 }
 
-function scalarValueSpan(input: string, start: number): StructuredCredentialSpan | undefined {
+function scalarValueSpan(
+  input: string,
+  start: number,
+  knownLineEnd?: number,
+): StructuredCredentialSpan | undefined {
   if (valueStartsAuthorization(input, start)) return undefined;
-  const end = lineValueEnd(input, start);
+  const end = knownLineEnd ?? lineValueEnd(input, start);
   let contentEnd = end;
   while (contentEnd > start && isHorizontalWhitespace(input[contentEnd - 1] ?? "")) {
     contentEnd -= 1;
@@ -204,17 +217,18 @@ function scalarValueSpan(input: string, start: number): StructuredCredentialSpan
 function structuredValueSpan(
   input: string,
   value: ValueStart,
+  knownLineEnd?: number,
 ): StructuredCredentialSpan | undefined {
   if (value.overflow) {
     return { start: value.start, end: input.length, replacement: CREDENTIAL_REDACTED_SENTINEL };
   }
   const opening = input[value.start] ?? "";
-  if (isQuote(opening)) return quotedValueSpan(input, value.start, opening);
-  if (isContainerOpening(opening)) return containerValueSpan(input, value.start);
+  if (isQuote(opening)) return quotedValueSpan(input, value.start, opening, knownLineEnd);
+  if (isContainerOpening(opening)) return containerValueSpan(input, value.start, knownLineEnd);
   if (opening === "|" || opening === ">") {
     return { start: value.start, end: input.length, replacement: CREDENTIAL_REDACTED_SENTINEL };
   }
-  return scalarValueSpan(input, value.start);
+  return scalarValueSpan(input, value.start, knownLineEnd);
 }
 
 function quarantinedDetection(
@@ -245,10 +259,11 @@ function quotedValueDetection(
   input: string,
   value: ValueStart,
   legacySpan: StructuredCredentialSpan,
+  knownLineEnd?: number,
 ): StructuredCredentialDetection {
   const opening = input[value.start] ?? "";
   const closedEnd = quotedEnd(input, value.start, opening);
-  const localEnd = lineValueEnd(input, value.start);
+  const localEnd = knownLineEnd ?? lineValueEnd(input, value.start);
   if (closedEnd === undefined) {
     return quarantinedDetection(
       legacySpan,
@@ -267,7 +282,7 @@ function quotedValueDetection(
       legacySpan.replacement,
     );
   }
-  return boundedValueEnd(input, closedEnd) === closedEnd
+  return boundedValueEnd(input, closedEnd, knownLineEnd) === closedEnd
     ? redactedDetection(legacySpan, "quoted-segment")
     : quarantinedDetection(legacySpan, value.start, localEnd, "line-remainder");
 }
@@ -276,22 +291,23 @@ function containerValueDetection(
   input: string,
   value: ValueStart,
   legacySpan: StructuredCredentialSpan,
+  knownLineEnd?: number,
 ): StructuredCredentialDetection {
   const balancedEnd = balancedContainerEnd(input, value.start);
   if (balancedEnd === undefined) {
     return quarantinedDetection(
       legacySpan,
       value.start,
-      lineValueEnd(input, value.start),
+      knownLineEnd ?? lineValueEnd(input, value.start),
       "line-remainder",
     );
   }
-  return boundedValueEnd(input, balancedEnd) === balancedEnd
+  return boundedValueEnd(input, balancedEnd, knownLineEnd) === balancedEnd
     ? redactedDetection(legacySpan, "structured-value")
     : quarantinedDetection(
         legacySpan,
         value.start,
-        lineValueEnd(input, value.start),
+        knownLineEnd ?? lineValueEnd(input, value.start),
         "line-remainder",
       );
 }
@@ -336,20 +352,24 @@ function blockScalarUnitEnd(input: string, start: number): number {
 export function structuredValueDetection(
   input: string,
   value: ValueStart,
+  knownLineEnd?: number,
 ): StructuredCredentialDetection | undefined {
-  const legacySpan = structuredValueSpan(input, value);
+  const legacySpan = structuredValueSpan(input, value, knownLineEnd);
   if (legacySpan === undefined) return undefined;
   if (value.overflow) {
     return quarantinedDetection(
       legacySpan,
       value.start,
-      lineValueEnd(input, value.start),
+      legacySpan.end,
       "line-remainder",
+      CREDENTIAL_REDACTED_SENTINEL,
     );
   }
   const opening = input[value.start] ?? "";
-  if (isQuote(opening)) return quotedValueDetection(input, value, legacySpan);
-  if (isContainerOpening(opening)) return containerValueDetection(input, value, legacySpan);
+  if (isQuote(opening)) return quotedValueDetection(input, value, legacySpan, knownLineEnd);
+  if (isContainerOpening(opening)) {
+    return containerValueDetection(input, value, legacySpan, knownLineEnd);
+  }
   if (opening === "|" || opening === ">") {
     return quarantinedDetection(
       legacySpan,

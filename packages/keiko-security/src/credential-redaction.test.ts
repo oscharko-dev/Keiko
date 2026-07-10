@@ -279,6 +279,40 @@ describe("shared credential redaction grammar", () => {
     );
   });
 
+  it("preserves empty-call code signatures but still redacts exact and structured keys", () => {
+    for (const code of [
+      "validateToken(): void { throw new Error('boom'); }",
+      "token(): string { return this.currentToken; }",
+      "password(): void { reset(); }",
+      "token(): string;",
+    ]) {
+      expect(redactWithRuleCounts(code)).toEqual({ value: code, rules: [] });
+    }
+    expectSingleRule("token: opaque", "token: [REDACTED]", "credential-assignment");
+    expectSingleRule("password=opaque", "password=[REDACTED]", "credential-assignment");
+    expectSingleRule(
+      'password(confirm)="opaque"',
+      'password(confirm)="[REDACTED]"',
+      "credential-assignment",
+    );
+    expectSingleRule(
+      'credentials.password.value="opaque"',
+      'credentials.password.value="[REDACTED]"',
+      "credential-assignment",
+    );
+  });
+
+  it("redacts two governed scalar assignments on one line independently", () => {
+    const input = "config: password=correcthorse; token=abcdefgh";
+    const first = redactWithRuleCounts(input);
+    expect(first).toEqual({
+      value: "config: password=[REDACTED]; token=[REDACTED]",
+      rules: [{ code: "credential-assignment", count: 2 }],
+    });
+    expect(scanSensitiveText(first.value)).toBeNull();
+    expect(redactWithRuleCounts(first.value)).toEqual({ value: first.value, rules: [] });
+  });
+
   it.each([
     ["https://password:secret@host/repo", "https://[REDACTED]@host/repo"],
     ["postgres://token:p:a@db/app", "postgres://[REDACTED]@db/app"],

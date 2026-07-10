@@ -9,6 +9,11 @@ import {
   type StructuredCredentialSpan,
 } from "./credential-structure-primitives.js";
 import { structuredValueDetection, valueStart } from "./credential-value-scan.js";
+import {
+  CredentialLineEndCache,
+  isEmptyCallColon,
+  scopeScalarDetection,
+} from "./credential-scalar-boundary.js";
 
 export { CREDENTIAL_REDACTED_SENTINEL } from "./credential-structure-primitives.js";
 export type {
@@ -20,21 +25,17 @@ export type {
 } from "./credential-structure-primitives.js";
 
 const MAX_KEY_CHARACTERS = 128;
-
 function isIdentifierStart(value: string): boolean {
   return /[A-Za-z_]/u.test(value);
 }
-
 function isIdentifierCharacter(value: string): boolean {
   return /[A-Za-z0-9_-]/u.test(value);
 }
-
 function urlAuthorityEnd(input: string, schemeColon: number): number {
   let cursor = schemeColon + 3;
   while (cursor < input.length && !/[\s/?#"'`<>]/u.test(input[cursor] ?? "")) cursor += 1;
   return cursor;
 }
-
 type CredentialScanEvent =
   | { readonly kind: "separator"; readonly index: number }
   | {
@@ -42,23 +43,19 @@ type CredentialScanEvent =
       readonly detection: StructuredCredentialDetection;
       readonly next: number;
     };
-
 interface CredentialScanPolicy {
   readonly isCredentialKey: CredentialKeyPredicate;
   readonly allowUnanchoredColon: boolean;
 }
-
 interface QuoteScanResult {
   readonly next: number;
   readonly detection?: StructuredCredentialDetection | undefined;
 }
-
 interface QuoteTermination {
   readonly next: number;
   readonly end: number;
   readonly closed: boolean;
 }
-
 function embeddedQuoteDetection(
   start: number,
   end: number,
@@ -78,7 +75,6 @@ function embeddedQuoteDetection(
     },
   };
 }
-
 function quoteEscapeNext(input: string, cursor: number, quote: string): number | undefined {
   const current = input[cursor] ?? "";
   const escaped = input[cursor + 1] ?? "";
@@ -313,6 +309,7 @@ function governedKeyBounds(
   const bounds = keyBounds(input, separator);
   if (bounds === undefined || !keyIsGoverned(input, bounds, policy.isCredentialKey))
     return undefined;
+  if (isEmptyCallColon(input, separator, bounds)) return undefined;
   const governed =
     input[separator] === "=" ||
     policy.allowUnanchoredColon ||
@@ -339,7 +336,6 @@ function overBudgetDetection(
     legacySpan: detection.legacySpan,
   };
 }
-
 export function structuredCredentialDetections(
   input: string,
   isCredentialKey: CredentialKeyPredicate,
@@ -347,6 +343,7 @@ export function structuredCredentialDetections(
 ): readonly StructuredCredentialDetection[] {
   const detections: StructuredCredentialDetection[] = [];
   const policy = { isCredentialKey, allowUnanchoredColon };
+  const lineEnds = new CredentialLineEndCache();
   let cursor = 0;
   while (cursor < input.length) {
     const event = nextCredentialEvent(input, cursor, policy);
@@ -362,12 +359,21 @@ export function structuredCredentialDetections(
       continue;
     }
     const value = valueStart(input, event.index);
-    const detection = structuredValueDetection(input, value);
+    const detection = structuredValueDetection(input, value, lineEnds.valueFor(input, value.start));
     if (detection === undefined) {
       cursor = Math.max(event.index + 1, value.start);
       continue;
     }
-    const bounded = bounds.overBudget ? overBudgetDetection(input, cursor, detection) : detection;
+    const scoped = bounds.overBudget
+      ? { detection, resumeAt: detection.end }
+      : scopeScalarDetection(input, value.start, detection, policy, governedKeyBounds);
+    if (scoped.detection === undefined) {
+      cursor = Math.max(scoped.resumeAt, event.index + 1);
+      continue;
+    }
+    const bounded = bounds.overBudget
+      ? overBudgetDetection(input, cursor, scoped.detection)
+      : scoped.detection;
     detections.push(bounded);
     cursor = Math.max(bounded.end, event.index + 1);
   }
