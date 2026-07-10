@@ -6,7 +6,7 @@ stage="$1"
 target="$2"
 inventory="$3"
 verified_inventory="$4"
-verification_input="$5"
+static_result="$5"
 payload="$stage/payload/Keiko"
 app="$payload/Keiko.app"
 scratch="$KEIKO_SIGNING_TEMP_ROOT/native"
@@ -19,7 +19,7 @@ sign_file() {
   local relative="$1" role="$2" path="$payload/$relative" entitlements
   entitlements="native/portable-launcher/macos-entitlements.plist"
   if [[ "$role" == "node-runtime" ]]; then entitlements="native/portable-launcher/macos-node-entitlements.plist"; fi
-  lipo -archs "$path" | tr ' ' '\n' | grep -Fxq "$required_arch"
+  scripts/check-macos-macho-architecture.sh "$path" "$required_arch"
   codesign --force --options runtime --timestamp --keychain "$KEIKO_KEYCHAIN_PATH" \
     --entitlements "$entitlements" --sign "$APPLE_DEVELOPER_ID_IDENTITY" "$path" >/dev/null 2>&1
 }
@@ -43,8 +43,7 @@ ditto -c -k --keepParent "$app" "$submission" >/dev/null 2>&1
 xcrun notarytool submit "$submission" --key "$KEIKO_NOTARY_KEY_PATH" \
   --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER_ID" \
   --wait --timeout 30m --output-format json > "$result" 2>/dev/null
-node -e 'const fs=require("fs"); const x=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if(x.status!=="Accepted") process.exit(1)' "$result"
-notarization_verified=true
+node scripts/macos-portable-signing.mjs notary-result --result "$result"
 rm -f "$submission" "$result"
 xcrun stapler staple "$app" >/dev/null 2>&1
 
@@ -78,14 +77,7 @@ done < <(node -e 'const x=require(process.argv[1]); for(const e of x.nestedBundl
 verify_signed_path "$app" default
 codesign --verify --deep --strict --verbose=2 "$app" >/dev/null 2>&1
 xcrun stapler validate "$app" >/dev/null 2>&1
-staple_verified=true
 spctl -a -t exec -vvv "$app" >/dev/null 2>&1
-"$app/Contents/Resources/runtime/node/bin/node" -e 'const f=new Function("x","return x+1"); for(let i=0;i<10000;i++) if(f(i)!==i+1) process.exit(1)' >/dev/null 2>&1
-while IFS= read -r executable; do "$payload/Keiko.app/Contents/Resources/$executable" --version >/dev/null 2>&1; done < <(
-  node -e 'const fs=require("fs"),m=JSON.parse(fs.readFileSync(process.argv[1])); for(const s of m.sidecarRuntimes||[]) console.log(s.executablePath)' "$stage/manifest/portable-manifest.json"
-)
-assessment_verified=true
-developer_id_verified=true
 
 node scripts/macos-portable-signing.mjs inventory --stage-root "$stage" --target "$target" --inventory "$verified_inventory"
 node scripts/macos-portable-signing.mjs compare-paths --expected-inventory "$inventory" --actual-inventory "$verified_inventory"
@@ -102,9 +94,5 @@ spctl -a -t exec -vvv "$extract/Keiko/Keiko.app" >/dev/null 2>&1
 node scripts/macos-portable-signing.mjs inventory-root --payload-root "$extract/Keiko" --target "$target" --inventory "$scratch/extracted-inventory.json"
 node scripts/macos-portable-signing.mjs compare-bytes --expected-inventory "$verified_inventory" --actual-inventory "$scratch/extracted-inventory.json"
 rm -rf "$extract"
-
-KEIKO_NATIVE_DEVELOPER_ID_VERIFIED="$developer_id_verified" \
-KEIKO_NATIVE_NOTARIZATION_VERIFIED="$notarization_verified" \
-KEIKO_NATIVE_STAPLE_VERIFIED="$staple_verified" \
-KEIKO_NATIVE_ASSESSMENT_VERIFIED="$assessment_verified" \
-  node scripts/macos-portable-signing.mjs verification-input --stage-root "$stage" --output "$verification_input"
+node scripts/macos-native-policy.mjs static-success --target "$target" --input "$static_result" \
+  --output "$static_result"

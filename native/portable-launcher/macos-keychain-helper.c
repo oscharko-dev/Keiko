@@ -6,6 +6,22 @@
 
 static int failed(OSStatus status) { return status == errSecSuccess ? 0 : 1; }
 
+static OSStatus require_one_identity(SecKeychainRef keychain) {
+  SecIdentitySearchRef search = NULL;
+  OSStatus status = SecIdentitySearchCreate(keychain, CSSM_KEYUSE_SIGN, &search);
+  if (failed(status)) return status;
+  CFIndex count = 0;
+  SecIdentityRef identity = NULL;
+  while ((status = SecIdentitySearchCopyNext(search, &identity)) == errSecSuccess) {
+    count++;
+    CFRelease(identity);
+    identity = NULL;
+  }
+  CFRelease(search);
+  if (status != errSecItemNotFound) return status;
+  return count == 1 ? errSecSuccess : errSecInvalidItemRef;
+}
+
 static CFDataRef read_file(const char *path) {
   FILE *file = fopen(path, "rb");
   if (file == NULL || fseek(file, 0, SEEK_END) != 0) return NULL;
@@ -75,14 +91,7 @@ static int setup(void) {
   SecExternalItemType type = kSecItemTypeAggregate;
   CFArrayRef items = NULL;
   status = SecItemImport(p12, NULL, &format, &type, 0, &parameters, keychain, &items);
-  CFIndex identity_count = 0;
-  if (!failed(status) && items != NULL) {
-    for (CFIndex index = 0; index < CFArrayGetCount(items); index++) {
-      CFTypeRef item = CFArrayGetValueAtIndex(items, index);
-      if (CFGetTypeID(item) == SecIdentityGetTypeID()) identity_count++;
-    }
-    if (identity_count != 1) status = errSecInvalidItemRef;
-  }
+  if (!failed(status)) status = require_one_identity(keychain);
   if (items) CFRelease(items);
 finish_import:
   if (key_attributes) CFRelease(key_attributes);

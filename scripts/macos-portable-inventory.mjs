@@ -64,7 +64,7 @@ function isMachO(path) {
 }
 
 function roleFor(path) {
-  if (path.startsWith("Keiko.app/Contents/Resources/runtime/node/")) return "node-runtime";
+  if (path === "Keiko.app/Contents/Resources/runtime/node/bin/node") return "node-runtime";
   if (path.startsWith("Keiko.app/Contents/Resources/runtime/sidecars/")) return "sidecar-runtime";
   return "default";
 }

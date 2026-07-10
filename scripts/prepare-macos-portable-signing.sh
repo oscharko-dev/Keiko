@@ -2,6 +2,8 @@
 set -euo pipefail
 umask 077
 
+target="$1"
+native_result="$2"
 root="$RUNNER_TEMP/keiko-macos-signing-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RANDOM}"
 keychain="$root/signing.keychain-db"
 p12="$root/developer-id.p12"
@@ -31,3 +33,4 @@ security find-identity -v -p codesigning "$keychain" > "$identity" 2>/dev/null
 [[ "$(grep -Ec '^[[:space:]]*[0-9]+\)' "$identity")" == "1" ]]
 [[ "$(grep -Fc "\"$APPLE_DEVELOPER_ID_IDENTITY\"" "$identity")" == "1" ]]
 rm -f "$identity" "$p12"
+node scripts/macos-native-policy.mjs credentials-success --target "$target" --output "$native_result"

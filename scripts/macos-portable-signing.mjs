@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Buffer } from "node:buffer";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -16,7 +16,7 @@ import {
   PortableVerificationInputError,
   readPortableVerificationInput,
 } from "./portable-verification-input.mjs";
-import { rebindExistingSignedArchive } from "./windows-portable-signing.mjs";
+import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
 
 const TEAM_PATTERN = /^[A-Z0-9]{10}$/u;
 const UUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
@@ -110,28 +110,16 @@ function assertProductionInput(path, manifest) {
   }
 }
 
-function writeVerificationInput(options) {
-  const stageRoot = resolve(options["stage-root"]);
-  const manifest = JSON.parse(
-    readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"),
-  );
-  const checks = {
-    assessmentVerified: process.env.KEIKO_NATIVE_ASSESSMENT_VERIFIED === "true",
-    developerIdVerified: process.env.KEIKO_NATIVE_DEVELOPER_ID_VERIFIED === "true",
-    notarizationVerified: process.env.KEIKO_NATIVE_NOTARIZATION_VERIFIED === "true",
-    stapleVerified: process.env.KEIKO_NATIVE_STAPLE_VERIFIED === "true",
-  };
-  if (!checksVerified(checks)) fail("native macOS verification did not succeed");
-  const input = {
-    reasonCodes: [],
-    verificationChecks: checks,
-    sidecarRuntimes: (manifest.sidecarRuntimes ?? []).map((sidecar) => ({
-      name: sidecar.name,
-      reasonCodes: [],
-      verificationChecks: checks,
-    })),
-  };
-  writeFileSync(resolve(options.output), `${JSON.stringify(input, null, 2)}\n`, { mode: 0o600 });
+export function assertAcceptedNotaryResult(path) {
+  let result;
+  try {
+    if (statSync(path).size > 65_536) fail("notarization result was not accepted");
+    result = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (error instanceof BoundedMacSigningError) throw error;
+    fail("notarization result was not accepted");
+  }
+  if (result?.status !== "Accepted") fail("notarization result was not accepted");
 }
 
 function parse(argv) {
@@ -240,7 +228,8 @@ export async function main(argv = process.argv.slice(2)) {
   else if (command === "inventory-root") inventoryRootCommand(options);
   else if (command === "compare-paths") compareCommand(options, false);
   else if (command === "compare-bytes") compareCommand(options, true);
-  else if (command === "verification-input") writeVerificationInput(options);
+  else if (command === "notary-result")
+    assertAcceptedNotaryResult(resolve(required(options, "result")));
   else if (command === "finalize") await finalize(options);
   else fail("unsupported command");
 }

@@ -355,6 +355,8 @@ describe("macOS portable production signing workflow", () => {
     portableWorkflow.indexOf("\n  stage-windows-production:"),
   );
   const nativeScript = readFileSync("scripts/run-macos-portable-signing.sh", "utf8");
+  const architectureCheck = readFileSync("scripts/check-macos-macho-architecture.sh", "utf8");
+  const payloadSmokeScript = readFileSync("scripts/smoke-macos-portable-payload.sh", "utf8");
   const emptyEntitlements = readFileSync(
     "native/portable-launcher/macos-entitlements.plist",
     "utf8",
@@ -391,24 +393,32 @@ describe("macOS portable production signing workflow", () => {
     expect(assemble).not.toMatch(/result == 'success' \|\| needs\.[^.]+\.result == 'skipped'/u);
   });
 
-  it("runs leaf signing, notarization, stapling, verification, cleanup, finalization, then upload", () => {
+  it("runs static signing, cleanup, credential-free payload smoke, finalization, then upload", () => {
     const signing = macJob.indexOf("Sign, notarize, staple, and verify the native artifact");
     const cleanup = macJob.indexOf("Remove temporary Apple signing material");
+    const payloadSmoke = macJob.indexOf("Smoke test signed payload after credential cleanup");
     const finalize = macJob.indexOf("Bind and verify the production macOS archive");
     const upload = macJob.indexOf("Upload verified macOS target artifact");
     expect(signing).toBeLessThan(cleanup);
-    expect(cleanup).toBeLessThan(finalize);
+    expect(cleanup).toBeLessThan(payloadSmoke);
+    expect(payloadSmoke).toBeLessThan(finalize);
     expect(finalize).toBeLessThan(upload);
-    expect(macJob.slice(cleanup, finalize)).toContain("if: ${{ always() }}");
-    expect(macJob.slice(cleanup, finalize)).not.toContain("continue-on-error");
+    expect(macJob.slice(cleanup, payloadSmoke)).toContain("if: ${{ always() }}");
+    expect(macJob.slice(cleanup, payloadSmoke)).not.toContain("continue-on-error");
     expect(nativeScript).not.toMatch(/codesign\s+--force[^\n]*--deep/u);
     expect(nativeScript).toContain("codesign --verify --deep --strict");
     expect(nativeScript).toContain("xcrun notarytool submit");
     expect(nativeScript).toContain("xcrun stapler validate");
     expect(nativeScript).toContain("spctl -a -t exec");
-    expect(nativeScript).toContain('lipo -archs "$path"');
+    expect(nativeScript).toContain("scripts/check-macos-macho-architecture.sh");
+    expect(architectureCheck).toContain('lipo -archs "$1" 2>/dev/null');
     expect(nativeScript).toContain('verify_signed_path "$payload/$relative" default');
     expect(nativeScript).toContain('verify_signed_path "$app" default');
+    expect(nativeScript).not.toContain("new Function");
+    expect(nativeScript).not.toContain("--version");
+    expect(payloadSmokeScript).toContain("new Function");
+    expect(payloadSmokeScript).toContain("--version");
+    expect(payloadSmokeScript).toContain('[[ -z "${!name:-}" ]]');
   });
 
   it("uses an empty default entitlement set and Node-only allow-jit", () => {
@@ -420,12 +430,52 @@ describe("macOS portable production signing workflow", () => {
     expect(nodeEntitlements.match(/<key>/gu)).toHaveLength(1);
   });
 
-  it("does not expose a workflow-selectable native verification bypass", () => {
+  it("does not expose a workflow-selectable native verification bypass or payload credentials", () => {
     expect(macJob).not.toMatch(/KEIKO_NATIVE_(?:DEVELOPER|NOTARIZATION|STAPLE|ASSESSMENT)/u);
-    expect(nativeScript).toContain("KEIKO_NATIVE_DEVELOPER_ID_VERIFIED");
-    expect(nativeScript).toContain("KEIKO_NATIVE_NOTARIZATION_VERIFIED");
-    expect(nativeScript).toContain("KEIKO_NATIVE_STAPLE_VERIFIED");
-    expect(nativeScript).toContain("KEIKO_NATIVE_ASSESSMENT_VERIFIED");
+    const smokeStep = macJob.slice(
+      macJob.indexOf("Smoke test signed payload after credential cleanup"),
+      macJob.indexOf("Bind and verify the production macOS archive"),
+    );
+    expect(smokeStep).not.toMatch(/secrets\.|APPLE_|KEIKO_KEYCHAIN|KEIKO_NOTARY/u);
+    expect(portableWorkflow).not.toMatch(/test-mode|fake-provider|native-bypass/iu);
+  });
+
+  it("makes cleanup the only post-failure step and blocks smoke/finalize/upload on cleanup failure", () => {
+    const steps = [
+      { always: false, name: "Prepare temporary Developer ID and notary credentials" },
+      { always: false, name: "Sign, notarize, staple, and verify the native artifact" },
+      { always: true, name: "Remove temporary Apple signing material" },
+      { always: false, name: "Smoke test signed payload after credential cleanup" },
+      { always: false, name: "Bind and verify the production macOS archive" },
+      { always: false, name: "Upload verified macOS target artifact" },
+    ];
+    const simulate = (failure) => {
+      let failed = false;
+      return steps.map((step) => {
+        const ran = step.always || !failed;
+        if (ran && step.name === failure) failed = true;
+        return { ...step, ran };
+      });
+    };
+    for (const failure of [
+      "Prepare temporary Developer ID and notary credentials",
+      "Sign, notarize, staple, and verify the native artifact",
+      "Remove temporary Apple signing material",
+    ]) {
+      const simulation = simulate(failure);
+      expect(
+        simulation.find((step) => step.name === "Remove temporary Apple signing material")?.ran,
+      ).toBe(true);
+      for (const name of [
+        "Smoke test signed payload after credential cleanup",
+        "Bind and verify the production macOS archive",
+        "Upload verified macOS target artifact",
+      ]) {
+        expect(simulation.find((step) => step.name === name)?.ran, `${failure}:${name}`).toBe(
+          false,
+        );
+      }
+    }
   });
 });
 import { spawnSync } from "node:child_process";

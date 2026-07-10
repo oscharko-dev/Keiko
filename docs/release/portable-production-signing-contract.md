@@ -219,19 +219,24 @@ Apple's secure timestamp.
 
 The app is submitted with the dedicated team App Store Connect key through `notarytool --wait` with a
 bounded timeout. Only exact `Accepted` proceeds; the response, submission identifier, archive, and raw
-native output remain transient and are deleted. The accepted ticket is stapled before `codesign --deep
---strict`, staple validation, Gatekeeper assessment, identity/team/runtime/timestamp/entitlement checks,
-the Node JIT smoke, and sidecar runtime smoke. A final `ditto` ZIP is extracted and reverified; its exact
-Mach-O path/hash inventory must match the post-staple producer before shared manifest, provenance,
-sidecar, reviewed-binding, checksum, and signing-evidence projection occurs.
+native output remain transient and are deleted. An issue-owned bounded parser reduces the notary result
+to exact acceptance without exposing malformed provider bytes. The accepted ticket is stapled before
+`codesign --deep --strict`, staple validation, Gatekeeper assessment, and explicit
+identity/team/runtime/timestamp/entitlement checks for every leaf, nested bundle, and the outer app. A
+final `ditto` ZIP is extracted and reverified; its exact Mach-O path/hash inventory must match the
+post-staple producer.
 
-An always-run cleanup deletes the temporary keychain through Security.framework and removes all decoded
-files before finalization or upload. Cleanup failure blocks promotion. For routine certificate or team
-key rotation, replace only protected environment values, retain the dedicated Developer role and team
-scope, and rerun both architecture qualifications before selection. On rejection, timeout, outage,
-revocation, or suspected compromise, disable the environment/key, leave manual staging available, and
-never retry with an individual key, broader role, ad-hoc identity, unstapled app, or operator-supplied
-verification Boolean.
+An exact bounded native observation record advances only after credential import and static native
+verification really complete. The immediately following always-run cleanup best-effort deletes the
+temporary keychain and all decoded files and clears every persisted signing environment value even when
+one cleanup substep fails; any such failure still fails the job. Only after successful cleanup may the
+workflow execute the bundled Node JIT and sidecar runtime smokes. Target-aware shared finalization then
+recomputes the macOS `Resources/app` and sidecar trees, archive/provenance/checksum/reviewed bindings,
+and canonical signing summary. For routine certificate or team key rotation, replace only protected
+environment values, retain the dedicated Developer role and team scope, and rerun both architecture
+qualifications before selection. On rejection, timeout, outage, revocation, or suspected compromise,
+disable the environment/key, leave manual staging available, and never retry with an individual key,
+broader role, ad-hoc identity, unstapled app, or operator-supplied verification Boolean.
 
 The exact current verifier input is a JSON object with no keys other than:
 

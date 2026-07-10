@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import {
   linkSync,
   mkdirSync,
@@ -14,10 +15,17 @@ import { URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  assertAcceptedNotaryResult,
   inventoryMacPortableCode,
   main,
   validateAppleSigningConfig,
 } from "../macos-portable-signing.mjs";
+import {
+  hashDirectoryTree,
+  portableVerificationSummaryForManifest,
+  sha256File,
+  validatePortableManifest,
+} from "../portable-runtime.mjs";
 
 const roots = [];
 function root() {
@@ -62,17 +70,137 @@ function payload() {
   write(join(path, "support", "keiko-support.sh"), Buffer.from("#!/bin/sh\n"));
   return path;
 }
+
+const macChecks = Object.freeze({
+  assessmentVerified: true,
+  developerIdVerified: true,
+  notarizationVerified: true,
+  stapleVerified: true,
+});
+
+function contractManifest() {
+  const contract = readFileSync("docs/release/portable-runtime-artifact-contract.md", "utf8");
+  const match = /## Manifest Schema Draft[\s\S]*?```json\n([\s\S]*?)\n```/u.exec(contract);
+  if (match?.[1] === undefined) throw new Error("manifest example missing");
+  return JSON.parse(match[1]);
+}
+
+function macManifest() {
+  const manifest = contractManifest();
+  const sidecar = manifest.sidecarRuntimes[0];
+  const binding = manifest.releaseImpact.reviewedBinding;
+  manifest.artifact.platformTarget = "macos-arm64";
+  manifest.artifact.assetName = "keiko-macos-arm64.zip";
+  manifest.runtime.nodePlatform = "darwin";
+  manifest.runtime.nodeArchitecture = "arm64";
+  manifest.runtime.nodeArchiveSha256 = "a".repeat(64);
+  manifest.provenance.rootPackageTarballSha256 = "b".repeat(64);
+  sidecar.platformTarget = "macos-arm64";
+  sidecar.executablePath = "runtime/sidecars/opencode-compatible/bin/opencode";
+  sidecar.licenseEvidence.sha256 = "c".repeat(64);
+  sidecar.sbomEvidence.sha256 = "d".repeat(64);
+  manifest.entrypoints.primaryLauncher = "Keiko.app";
+  manifest.entrypoints.supportLaunchers = ["support/keiko-support.sh"];
+  Object.assign(sidecar.signing, {
+    notarizationRequired: true,
+    notarizationVerified: true,
+    signatureKind: "developer-id-notarized",
+    verificationChecks: macChecks,
+  });
+  Object.assign(manifest.security, {
+    notarizationRequired: true,
+    notarizationVerified: true,
+    signatureKind: "developer-id-notarized",
+    verificationChecks: macChecks,
+  });
+  Object.assign(binding, {
+    assetName: manifest.artifact.assetName,
+    nodeRuntimeIdentity: "node-v24.0.0-darwin-arm64",
+    notarizationRequired: true,
+    notarizationVerified: true,
+    platformTarget: "macos-arm64",
+    signatureKind: "developer-id-notarized",
+    verificationChecks: macChecks,
+  });
+  binding.sidecarRuntimes = JSON.parse(JSON.stringify(manifest.sidecarRuntimes));
+  return manifest;
+}
+
+function verifiedInput(manifest, checks = macChecks) {
+  return {
+    reasonCodes: [],
+    sidecarRuntimes: manifest.sidecarRuntimes.map((sidecar) => ({
+      name: sidecar.name,
+      reasonCodes: [],
+      verificationChecks: checks,
+    })),
+    verificationChecks: checks,
+  };
+}
+
+function macFinalizeStage() {
+  const stage = root();
+  const payloadRoot = join(stage, "payload", "Keiko");
+  const resources = join(payloadRoot, "Keiko.app", "Contents", "Resources");
+  write(join(payloadRoot, "Keiko.app", "Contents", "MacOS", "Keiko"), macho());
+  write(join(resources, "runtime", "node", "bin", "node"), macho(0xfeedfacf, 1));
+  write(
+    join(resources, "runtime", "sidecars", "opencode-compatible", "bin", "opencode"),
+    macho(0xfeedfacf, 2),
+  );
+  write(join(resources, "runtime", "sidecars", "opencode-compatible", "LICENSE.txt"), "license");
+  write(join(resources, "app", "index.js"), "signed app");
+  write(join(payloadRoot, "support", "keiko-support.sh"), "#!/bin/sh\n");
+  const manifest = macManifest();
+  const manifestPath = join(stage, "manifest", "portable-manifest.json");
+  const provenancePath = join(stage, "evidence", "provenance.intoto.jsonl");
+  const checksumPath = join(stage, "evidence", "SHA256SUMS.txt");
+  const summaryPath = join(stage, "evidence", "signing-verification.json");
+  write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  write(provenancePath, `${JSON.stringify({ subjectDigest: "0".repeat(64) })}\n`);
+  write(checksumPath, "before\n");
+  write(summaryPath, "before\n");
+  const archivePath = join(stage, manifest.artifact.assetName);
+  const zipped = spawnSync("zip", ["-qr", archivePath, "Keiko"], {
+    cwd: join(stage, "payload"),
+  });
+  if (zipped.status !== 0) throw new Error("fixture zip failed");
+  const inventoryPath = join(stage, "inventory.json");
+  writeFileSync(
+    inventoryPath,
+    JSON.stringify(inventoryMacPortableCode(payloadRoot, "macos-arm64")),
+  );
+  const inputPath = join(stage, "verification-input.json");
+  writeFileSync(inputPath, JSON.stringify(verifiedInput(manifest)));
+  return {
+    archivePath,
+    checksumPath,
+    inputPath,
+    inventoryPath,
+    manifestPath,
+    provenancePath,
+    resources,
+    stage,
+    summaryPath,
+  };
+}
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop(), { recursive: true, force: true });
 });
 
 describe("macOS portable signing inventory", () => {
   it("detects thin/fat Mach-O content and assigns only Node the JIT role", () => {
-    const inventory = inventoryMacPortableCode(payload(), "macos-arm64");
+    const path = payload();
+    write(
+      join(path, "Keiko.app", "Contents", "Resources", "runtime", "node", "lib", "helper"),
+      macho(0xfeedfacf, 4),
+    );
+    const inventory = inventoryMacPortableCode(path, "macos-arm64");
     expect(inventory.codeObjects.map((entry) => [entry.relativePath, entry.role])).toEqual([
       ["Keiko.app/Contents/MacOS/Keiko", "default"],
       ["Keiko.app/Contents/Resources/app/addon.node", "default"],
       ["Keiko.app/Contents/Resources/runtime/node/bin/node", "node-runtime"],
+      ["Keiko.app/Contents/Resources/runtime/node/lib/helper", "default"],
       ["Keiko.app/Contents/Resources/runtime/sidecars/opencode/bin/opencode", "sidecar-runtime"],
     ]);
   });
@@ -153,6 +281,76 @@ describe("macOS portable signing inventory", () => {
       ).rejects.toThrow(/inventory|changed unexpectedly|executable is missing/u);
     }
   });
+
+  it("finalizes a real macOS layout against app resources and canonical evidence", async () => {
+    const fixture = macFinalizeStage();
+    await expect(
+      main([
+        "finalize",
+        "--stage-root",
+        fixture.stage,
+        "--expected-inventory",
+        fixture.inventoryPath,
+        "--verification-input",
+        fixture.inputPath,
+      ]),
+    ).resolves.toBeUndefined();
+
+    const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+    const archiveSha256 = await sha256File(fixture.archivePath);
+    const sidecarRoot = join(fixture.resources, "runtime", "sidecars", "opencode-compatible");
+    const provenance = JSON.parse(readFileSync(fixture.provenancePath, "utf8"));
+    const summary = JSON.parse(readFileSync(fixture.summaryPath, "utf8"));
+    expect(validatePortableManifest(manifest)).toEqual([]);
+    expect(manifest.artifact.sha256).toBe(archiveSha256);
+    expect(manifest.provenance.packagedAppTreeSha256).toBe(
+      hashDirectoryTree(join(fixture.resources, "app")),
+    );
+    expect(manifest.sidecarRuntimes[0].payloadSha256).toBe(hashDirectoryTree(sidecarRoot));
+    expect(manifest.sidecarRuntimes[0].sizeBytes).toBeGreaterThan(0);
+    expect(provenance.subjectDigest).toBe(archiveSha256);
+    expect(readFileSync(fixture.checksumPath, "utf8")).toBe(
+      `${archiveSha256}  keiko-macos-arm64.zip\n`,
+    );
+    expect(manifest.releaseImpact.reviewedBinding.archiveSha256).toBe(archiveSha256);
+    expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
+      manifest.sidecarRuntimes,
+    );
+    expect(summary).toEqual(portableVerificationSummaryForManifest(manifest));
+    expect(summary.status).toBe("verified-production");
+  });
+
+  it("leaves finalizer-owned bytes unchanged for false or malformed native input", async () => {
+    for (const kind of ["false", "malformed"]) {
+      const fixture = macFinalizeStage();
+      const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+      const input =
+        kind === "false"
+          ? verifiedInput(manifest, { ...macChecks, stapleVerified: false })
+          : { ...verifiedInput(manifest), rawProviderResponse: "secret-bearing" };
+      writeFileSync(fixture.inputPath, JSON.stringify(input));
+      const paths = [
+        fixture.archivePath,
+        fixture.manifestPath,
+        fixture.provenancePath,
+        fixture.checksumPath,
+        fixture.summaryPath,
+      ];
+      const before = paths.map((path) => readFileSync(path));
+      await expect(
+        main([
+          "finalize",
+          "--stage-root",
+          fixture.stage,
+          "--expected-inventory",
+          fixture.inventoryPath,
+          "--verification-input",
+          fixture.inputPath,
+        ]),
+      ).rejects.toThrow();
+      expect(paths.map((path) => readFileSync(path))).toEqual(before);
+    }
+  });
 });
 
 describe("macOS protected configuration and native result", () => {
@@ -198,6 +396,28 @@ describe("macOS protected configuration and native result", () => {
     ).toThrow(/notary key encoding/u);
   });
 
+  it("rejects malformed or secret-bearing notary responses with one bounded message", () => {
+    for (const content of [
+      "not json /private/secret",
+      JSON.stringify({ status: "Rejected", log: "token=secret" }),
+    ]) {
+      const path = join(root(), "notary.json");
+      writeFileSync(path, content);
+      expect(() => assertAcceptedNotaryResult(path)).toThrow(
+        "macos-portable-signing: notarization result was not accepted",
+      );
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/macos-portable-signing.mjs", "notary-result", "--result", path],
+        { encoding: "utf8" },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toBe("macos-portable-signing: notarization result was not accepted\n");
+      expect(result.stderr).not.toContain(path);
+      expect(result.stderr).not.toContain("token=secret");
+    }
+  });
+
   it("keeps key material non-extractable, sign-only, and scoped to one identity", () => {
     const helper = readFileSync(
       new URL("../../native/portable-launcher/macos-keychain-helper.c", import.meta.url),
@@ -206,7 +426,7 @@ describe("macOS protected configuration and native result", () => {
     expect(helper).toContain("kSecAttrCanSign");
     expect(helper).toContain("kSecAttrIsPermanent, kSecAttrIsSensitive");
     expect(helper).not.toContain("kSecAttrIsExtractable");
-    expect(helper).toContain("identity_count != 1");
+    expect(helper).toContain("count == 1");
     expect(helper).toContain("/usr/bin/codesign");
     const cleanup = readFileSync(
       new URL("../cleanup-macos-portable-signing.sh", import.meta.url),
@@ -214,41 +434,5 @@ describe("macOS protected configuration and native result", () => {
     );
     expect(cleanup).toContain("KEIKO_KEYCHAIN_PASSWORD=\\n");
     expect(cleanup).toContain('rm -rf "$root"');
-  });
-
-  it("cannot produce a verified input unless every native observation is true", async () => {
-    const stage = root();
-    mkdirSync(join(stage, "manifest"), { recursive: true });
-    writeFileSync(
-      join(stage, "manifest", "portable-manifest.json"),
-      JSON.stringify({ sidecarRuntimes: [] }),
-    );
-    const output = join(stage, "input.json");
-    const nativeEnv = {
-      KEIKO_NATIVE_ASSESSMENT_VERIFIED: "true",
-      KEIKO_NATIVE_DEVELOPER_ID_VERIFIED: "true",
-      KEIKO_NATIVE_NOTARIZATION_VERIFIED: "true",
-      KEIKO_NATIVE_STAPLE_VERIFIED: "true",
-    };
-    const previous = Object.fromEntries(
-      Object.keys(nativeEnv).map((name) => [name, process.env[name]]),
-    );
-    try {
-      for (const name of Object.keys(nativeEnv)) {
-        Object.assign(process.env, nativeEnv, { [name]: "false" });
-        await expect(
-          main(["verification-input", "--stage-root", stage, "--output", output]),
-        ).rejects.toThrow(/did not succeed/u);
-      }
-      Object.assign(process.env, nativeEnv);
-      await expect(
-        main(["verification-input", "--stage-root", stage, "--output", output]),
-      ).resolves.toBeUndefined();
-    } finally {
-      for (const [name, value] of Object.entries(previous)) {
-        if (value === undefined) Reflect.deleteProperty(process.env, name);
-        else process.env[name] = value;
-      }
-    }
   });
 });
