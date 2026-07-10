@@ -97,7 +97,7 @@ async function replaceCodingWindow(
 
 async function expectAutonomousWorkbench(page: Page): Promise<void> {
   await expect(page.locator('section[aria-label="Coding Workbench"][data-state]')).toBeVisible();
-  await expect(page.getByRole("radio", { name: /Autonomous Delivery/u })).toBeChecked();
+  await expect(page.getByRole("radio", { name: /Full access/u })).toBeChecked();
   await expect(page.getByText("Delivery runner")).toBeVisible();
   await expect(page.getByText("Keiko Gateway providers")).toBeVisible();
 }
