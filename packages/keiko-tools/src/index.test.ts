@@ -25,6 +25,8 @@ import type {
   PatchConflict,
   PatchFileChange,
   PatchHunk,
+  PatchInspection,
+  PatchInspectionFile,
   PatchLimits,
   PatchRejection,
   PatchRejectionCode,
@@ -89,6 +91,14 @@ import type {
   GitRecoveryCommand,
   GitStageCommand,
   GitUnstageCommand,
+  EditorAgentClientError,
+  EditorAgentClientErrorKind,
+  EditorAgentClientResult,
+  EditorAgentHttpTransport,
+  EditorAgentHttpTransportRequest,
+  EditorAgentHttpTransportResponse,
+  EditorAgentTimeoutScheduler,
+  EditorAgentToolOutput,
 } from "./index.js";
 
 describe("keiko-tools public surface", () => {
@@ -125,8 +135,10 @@ describe("keiko-tools public surface", () => {
     // Patch:
     expect(typeof tools.applyPatch).toBe("function");
     expect(typeof tools.buildRestorePatch).toBe("function");
+    expect(typeof tools.inspectPatch).toBe("function");
     expect(typeof tools.renderDryRun).toBe("function");
     expect(typeof tools.validatePatch).toBe("function");
+    expect(typeof tools.projectValidatedPatch).toBe("function");
     expect(typeof tools.normalizeUnifiedDiffHunks).toBe("function");
     expect(typeof tools.parseUnifiedDiff).toBe("function");
     expect(typeof tools.PatchParseError).toBe("function");
@@ -134,6 +146,12 @@ describe("keiko-tools public surface", () => {
     // Schemas + registry:
     expect(tools.TOOL_DEFINITIONS).toBeDefined();
     expect(typeof tools.WorkspaceToolHost).toBe("function");
+    expect(tools.EDITOR_AGENT_TOOL_DEFINITIONS).toHaveLength(7);
+    expect(typeof tools.EditorAgentHttpClient).toBe("function");
+    expect(typeof tools.createFetchEditorAgentHttpTransport).toBe("function");
+    expect(typeof tools.EditorAgentToolHost).toBe("function");
+    expect(tools.DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS).toBeGreaterThan(0);
+    expect(tools.DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES).toBeGreaterThan(0);
     // Terminal policy:
     expect(tools.TERMINAL_COMMAND_RULES).toBeDefined();
     expect(tools.TERMINAL_NO_FLAGS).toBeDefined();
@@ -189,6 +207,18 @@ describe("keiko-tools public surface", () => {
     expect(tools).not.toHaveProperty("readGitWorktreeSnapshot");
   });
 
+  it("exposes the editor agent host types", () => {
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<EditorAgentClientError>();
+    pin<EditorAgentClientErrorKind>();
+    pin<EditorAgentClientResult<unknown>>();
+    pin<EditorAgentHttpTransport>();
+    pin<EditorAgentHttpTransportRequest>();
+    pin<EditorAgentHttpTransportResponse>();
+    pin<EditorAgentTimeoutScheduler>();
+    pin<EditorAgentToolOutput>();
+  });
+
   it("each type-only export is reachable by name at compile time", () => {
     // verbatimModuleSyntax requires the type imports above to be used in a type position. A
     // phantom generic `pin<T>()` references the type argument at the call site without producing
@@ -212,6 +242,8 @@ describe("keiko-tools public surface", () => {
     pin<PatchConflict>();
     pin<PatchFileChange>();
     pin<PatchHunk>();
+    pin<PatchInspection>();
+    pin<PatchInspectionFile>();
     pin<PatchLimits>();
     pin<PatchRejection>();
     pin<PatchRejectionCode>();

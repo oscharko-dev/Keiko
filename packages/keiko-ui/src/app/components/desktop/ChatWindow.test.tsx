@@ -1,6 +1,6 @@
 // Issue #185 AC3 — tests for the grounded-request cancel button in ChatWindow.
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,8 +24,10 @@ import type {
   GroundedAnswer,
   LocalKnowledgeEvidenceCitation,
   ModelCapability,
+  ProjectWithAvailability,
 } from "@/lib/types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { queueChatEditorApply } from "@/lib/chat-editor-apply";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -45,6 +47,10 @@ vi.mock("@/lib/local-knowledge-api", async (importOriginal) => {
     fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
   };
 });
+
+vi.mock("@/lib/chat-editor-apply", () => ({
+  queueChatEditorApply: vi.fn(),
+}));
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -75,6 +81,17 @@ function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
     shortResult: undefined,
     taskType: undefined,
     ...overrides,
+  };
+}
+
+function makeProject(path: string): ProjectWithAvailability {
+  return {
+    path,
+    name: "Exact project",
+    favorite: false,
+    createdAt: 1,
+    lastOpenedAt: 2,
+    available: true,
   };
 }
 
@@ -178,6 +195,7 @@ const fetchCapsulesMock = vi.mocked(fetchCapsules);
 const fetchCapsuleSetsMock = vi.mocked(fetchCapsuleSets);
 const fetchFilesSearchMock = vi.mocked(fetchFilesSearch);
 const updateChatMock = vi.mocked(updateChat);
+const queueChatEditorApplyMock = vi.mocked(queueChatEditorApply);
 
 beforeEach(() => {
   clearKnowledgeCatalogCacheForTests();
@@ -194,6 +212,12 @@ beforeEach(() => {
     scannedFileCount: 0,
   });
   updateChatMock.mockReset();
+  queueChatEditorApplyMock.mockReset();
+  queueChatEditorApplyMock.mockResolvedValue({
+    kind: "rejected",
+    code: "QUEUE_FAILED",
+    message: "Test rejection.",
+  });
 });
 
 function makeCapsuleId(value: string): KnowledgeCapsuleId {
@@ -3331,5 +3355,145 @@ describe("ChatWindow MemoryActionCard rejected kind (#28)", () => {
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
     expect(screen.getByText("Memory proposal declined")).toBeInTheDocument();
     expect(screen.getByText("No reason provided")).toBeInTheDocument();
+  });
+});
+
+describe("ChatWindow assistant code apply (#2119)", () => {
+  it("queues a canonical assistant diff with the active chat's exact root only", async () => {
+    const workspaceRoot = "/workspace/Exact Root/";
+    const patch = "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new";
+    renderWindow(
+      makeSession({
+        activeProject: makeProject(workspaceRoot),
+        activeChat: makeChat({ projectPath: workspaceRoot }),
+        messages: [
+          makeMessage({ id: "u1", role: "user", content: "Please update it." }),
+          makeMessage({
+            id: "a1",
+            role: "assistant",
+            content: `\`\`\`diff\n${patch}\n\`\`\``,
+            timestamp: 2,
+          }),
+        ],
+      }),
+      { linkedRoots: ["/unrelated/repository"] },
+    );
+
+    const applyButton = screen.getByRole("button", { name: "Apply to editor" });
+    const header = applyButton.closest<HTMLElement>(".sm-code-block-header");
+    if (header === null) throw new Error("assistant code-block header missing");
+    expect(within(header).getByRole("button", { name: "Copy code block" })).toBeInTheDocument();
+
+    fireEvent.click(applyButton);
+
+    await waitFor(() => expect(queueChatEditorApplyMock).toHaveBeenCalledOnce());
+    expect(queueChatEditorApplyMock.mock.calls[0]).toHaveLength(2);
+    expect(queueChatEditorApplyMock).toHaveBeenCalledWith(
+      {
+        codeBlockText: patch,
+        language: "diff",
+        context: { workspaceRoot },
+      },
+      { queueAction: expect.any(Function) },
+    );
+    const queuedInput = queueChatEditorApplyMock.mock.calls[0]?.[0];
+    expect(Object.keys(queuedInput ?? {}).sort()).toEqual(["codeBlockText", "context", "language"]);
+    expect(queuedInput).not.toHaveProperty("textEdits");
+    expect(queuedInput?.context).not.toHaveProperty("activeFile");
+  });
+
+  it("renders only a bounded conflict code from a rich queue outcome", async () => {
+    const rawMessage = "private server outcome must not render";
+    queueChatEditorApplyMock.mockResolvedValue({
+      kind: "conflict",
+      code: "DIRTY",
+      message: rawMessage,
+    });
+    const workspaceRoot = "/workspace/exact";
+    renderWindow(
+      makeSession({
+        activeProject: makeProject(workspaceRoot),
+        activeChat: makeChat({ projectPath: workspaceRoot }),
+        messages: [
+          makeMessage({
+            id: "a-conflict",
+            role: "assistant",
+            content: "```ts\nconst answer = 42;\n```",
+          }),
+        ],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to editor" }));
+
+    expect(await screen.findByText("Conflict: DIRTY")).toBeInTheDocument();
+    expect(screen.queryByText(rawMessage)).toBeNull();
+  });
+
+  it("does not expose Apply for user, streaming, or callback-free plain content", () => {
+    const workspaceRoot = "/workspace/exact";
+    renderWindow(
+      makeSession({
+        activeProject: makeProject(workspaceRoot),
+        activeChat: makeChat({ projectPath: workspaceRoot }),
+        messages: [
+          makeMessage({ id: "u1", role: "user", content: "```ts\nuserCode();\n```" }),
+          makeMessage({ id: "a1", role: "assistant", content: "A plain settled answer." }),
+        ],
+        streamingAssistantMessage: makeMessage({
+          id: "a-stream",
+          role: "assistant",
+          content: "```ts\nstreamingCode();\n```",
+          timestamp: 3,
+        }),
+        sending: true,
+        sendStatus: "streaming",
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: "Apply to editor" })).toBeNull();
+    expect(queueChatEditorApplyMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed without an active project root and never falls back to linked roots", () => {
+    renderWindow(
+      makeSession({
+        activeProject: undefined,
+        activeChat: makeChat({ projectPath: "/chat/project" }),
+        messages: [
+          makeMessage({
+            id: "a1",
+            role: "assistant",
+            content: "```ts\nconst answer = 42;\n```",
+          }),
+        ],
+      }),
+      { linkedRoot: "/linked/repository" },
+    );
+
+    expect(screen.getByRole("button", { name: "Copy code block" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Apply to editor" })).toBeNull();
+    expect(queueChatEditorApplyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not expose Apply when the active chat belongs to another project", () => {
+    renderWindow(
+      makeSession({
+        activeProject: makeProject("/workspace/selected"),
+        activeChat: makeChat({ projectPath: "/workspace/chat" }),
+        messages: [
+          makeMessage({
+            id: "a1",
+            role: "assistant",
+            content: "```ts\nconst answer = 42;\n```",
+          }),
+        ],
+      }),
+      { linkedRoot: "/workspace/chat" },
+    );
+
+    expect(screen.getByRole("button", { name: "Copy code block" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Apply to editor" })).toBeNull();
+    expect(queueChatEditorApplyMock).not.toHaveBeenCalled();
   });
 });

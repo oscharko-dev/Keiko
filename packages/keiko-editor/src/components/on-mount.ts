@@ -16,9 +16,14 @@ import type { EditorLanguageId, EditorPosition, EditorRange } from "../index.js"
 import { registerKeikoEditorTheme, resolveEditorThemeTokensFromDom } from "../index.js";
 import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.js";
 import { buildSaveActionDescriptor } from "./keybindings.js";
-import { buildGenerateTestsActionDescriptor } from "./command-actions.js";
+import {
+  buildAskKeikoAboutSelectionActionDescriptor,
+  buildAskKeikoAboutSelectionRunHandler,
+  buildGenerateTestsActionDescriptor,
+} from "./command-actions.js";
 import { buildRenameSymbolActionDescriptor } from "./rename-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
+import type { AskKeikoAboutSelectionHandler } from "./types.js";
 import {
   COMPLETION_ELIGIBLE_LANGUAGES,
   registerKeikoCompletionProvider,
@@ -103,10 +108,15 @@ import {
 export interface MountMonaco {
   readonly editor: MonacoThemeRegistrar;
   readonly Uri?: { parse(value: string): MonacoUriLike };
-  // `Alt` is needed for the #1205 Generate Tests chord (`Cmd/Ctrl+Alt+T`); `CtrlCmd` for save.
+  // `Alt` is needed for the host-owned command chords; `CtrlCmd` also backs save.
   readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
-  // `KeyT` backs Generate Tests, `F2` backs Rename Symbol, and `KeyS` backs save.
-  readonly KeyCode: { readonly KeyS: number; readonly KeyT: number; readonly F2: number };
+  // `KeyK` backs Ask Keiko, `KeyT` Generate Tests, `F2` Rename Symbol, and `KeyS` save.
+  readonly KeyCode: {
+    readonly KeyS: number;
+    readonly KeyK: number;
+    readonly KeyT: number;
+    readonly F2: number;
+  };
   // The `languages` registry is present on the live `monaco` namespace; it is optional here so the
   // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
   // when it (or the completion args) is absent.
@@ -167,6 +177,8 @@ export interface WireEditorDiagnostics {
 export interface WireEditorCommands {
   /** Run the governed test-generation flow (#1202); bound to `Cmd/Ctrl+Alt+T`. */
   readonly generateTests?: (() => void) | undefined;
+  /** Hand the bounded active selection to the host chat flow (#2119); bound to Cmd/Ctrl+Alt+K. */
+  readonly askKeikoAboutSelection?: AskKeikoAboutSelectionHandler | undefined;
   /** Run the governed rename-symbol flow (#2105); bound to F2. */
   readonly renameSymbol?: (() => void) | undefined;
 }
@@ -682,6 +694,16 @@ function installCommandActions(args: WireEditorOnMountArgs): readonly monaco.IDi
         buildGenerateTestsActionDescriptor({
           keys: { KeyMod: args.monaco.KeyMod, KeyCode: args.monaco.KeyCode },
           run: commands.generateTests,
+        }),
+      ),
+    );
+  }
+  if (commands.askKeikoAboutSelection !== undefined) {
+    disposables.push(
+      args.editor.addAction(
+        buildAskKeikoAboutSelectionActionDescriptor({
+          keys: { KeyMod: args.monaco.KeyMod, KeyCode: args.monaco.KeyCode },
+          run: buildAskKeikoAboutSelectionRunHandler(commands.askKeikoAboutSelection),
         }),
       ),
     );

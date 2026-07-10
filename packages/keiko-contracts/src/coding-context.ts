@@ -44,7 +44,8 @@ export type CodingContextSourceKind =
   | "memory"
   | "quality-intelligence"
   | "workflow-context"
-  | "files-focus";
+  | "files-focus"
+  | "editor-state";
 
 export const CODING_CONTEXT_SOURCE_KINDS: readonly CodingContextSourceKind[] = [
   "repo-search",
@@ -54,6 +55,7 @@ export const CODING_CONTEXT_SOURCE_KINDS: readonly CodingContextSourceKind[] = [
   "quality-intelligence",
   "workflow-context",
   "files-focus",
+  "editor-state",
 ] as const;
 
 // OWASP LLM08/LLM01 trust tier. The tier is a provenance label for audit and consumer policy; it is
@@ -75,6 +77,7 @@ export const CODING_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
 > = {
   "repo-search": "first-party-workspace",
   "files-focus": "first-party-workspace",
+  "editor-state": "first-party-workspace",
   "connected-context": "first-party-workspace",
   "local-knowledge": "indexed-knowledge",
   memory: "retained-memory",
@@ -176,6 +179,7 @@ export type CodingContextScopeKind = "file" | "symbol" | "selection" | "changed-
 export interface CodingContextRequest {
   readonly schemaVersion: typeof CODING_CONTEXT_SCHEMA_VERSION;
   readonly purpose: CodingContextPurpose;
+  readonly editorSessionId?: string | undefined;
   readonly documentPath: string;
   readonly symbol: string | undefined;
   readonly queryText: string | undefined;
@@ -271,6 +275,10 @@ export function validateCodingContextRequest(value: unknown): CodingContextValid
   const checks: readonly (readonly [boolean, string])[] = [
     [value.schemaVersion === CODING_CONTEXT_SCHEMA_VERSION, "request.schemaVersion invalid"],
     [isCodingContextPurpose(value.purpose), "request.purpose invalid"],
+    [
+      value.editorSessionId === undefined || isNonEmptyString(value.editorSessionId),
+      "request.editorSessionId invalid",
+    ],
     [isNonEmptyString(value.documentPath), "request.documentPath empty"],
     [isOptionalString(value.symbol), "request.symbol invalid"],
     [isOptionalString(value.queryText), "request.queryText invalid"],

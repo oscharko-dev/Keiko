@@ -104,8 +104,8 @@ function toEditorPatch(
   };
 }
 
-// Maps the content-free coding-context wire pack to the editor context pack (drops the source tier,
-// which is a server-side audit label). Returns undefined when the response carried no context.
+// Maps the content-free coding-context wire pack to the editor context pack without changing source
+// provenance. Returns undefined when the response carried no context.
 function toEditorContext(
   request: EditorRequestIdentity,
   wire: EditorTestGenerationWireResponse,
@@ -115,6 +115,7 @@ function toEditorContext(
   }
   const entries: EditorContextEntry[] = wire.context.entries.map((entry) => ({
     sourceKind: entry.sourceKind,
+    sourceTier: entry.sourceTier,
     id: entry.id,
     score: entry.score,
     rank: entry.rank,

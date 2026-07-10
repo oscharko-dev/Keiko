@@ -625,25 +625,64 @@ describe("keiko-contracts package surface", () => {
     const mod = await import("./index.js");
     // Compatibility pin for the schema version constant: the public agent-editor contract is v1.
     expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+    expect(mod.EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS).toBe(128);
+    expect(mod.EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS).toBe(1_024);
+    expect(mod.EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS).toBe(1_024);
+    expect(mod.DEFAULT_EDITOR_AGENT_ACTION_ORIGIN).toBe("agent");
+    expect(mod.EDITOR_AGENT_ACTION_ORIGINS).toEqual(["agent", "chat"]);
+    expect(mod.EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES).toBe(32);
+    expect(mod.EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS).toBe(43);
+    expect(mod.EDITOR_AGENT_ACTION_ID_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SESSION_ID_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_TARGET_PATH_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_MAX_PANES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES).toBe(65_536);
     // AC1: the content-free default snapshot text mode is exported and is `none`.
     expect(mod.DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE).toBe("none");
     // AC3: the structured conflict-code taxonomy is exported in full, including PRECONDITION_REQUIRED
     // and the Issue #1392 NO_ACTIVE_BRIDGE liveness code.
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
-    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual(["QUEUE_FULL", "TIMED_OUT"]);
     // AC2: the write-action classification is exported as a single source of truth.
     expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
-      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+      ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),
     );
     expect(typeof mod.isEditorAgentEvent).toBe("function");
+    expect(typeof mod.isEditorAgentBridgeDecisionCapability).toBe("function");
+    expect(typeof mod.isEditorAgentActiveBufferActionType).toBe("function");
+    expect(typeof mod.isEditorAgentActionOrigin).toBe("function");
+    expect(typeof mod.resolveEditorAgentActionOrigin).toBe("function");
     expect(typeof mod.isEditorAgentWriteActionType).toBe("function");
     expect(typeof mod.editorAgentWritePreconditionError).toBe("function");
     expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
     expect(typeof mod.isEditorAgentConflictCode).toBe("function");
     expect(typeof mod.isEditorAgentFailureCode).toBe("function");
+    // Issue #2114 (ADR-0125 D3): the applyChangeset public contract surface — caps, changeset/
+    // conflict/file-result guards, and the authority/approval reference guards — is re-exported
+    // through the barrel so downstream packages import named symbols instead of re-deriving them.
+    expect(mod.EDITOR_AGENT_CHANGESET_MAX_FILES).toBe(50);
+    expect(mod.EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES).toBe(65_536);
+    expect(mod.EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS).toBe(2_000);
+    expect(mod.EDITOR_AGENT_REFERENCE_ID_MAX_CHARS).toBe(128);
+    expect(typeof mod.isEditorAgentChangeset).toBe("function");
+    expect(typeof mod.isEditorAgentChangesetFile).toBe("function");
+    expect(typeof mod.isEditorAgentConflictDetail).toBe("function");
+    expect(typeof mod.isEditorAgentDiagnostic).toBe("function");
+    expect(typeof mod.isEditorAgentDiagnosticsDetail).toBe("function");
+    expect(typeof mod.isEditorAgentFileActionResult).toBe("function");
+    expect(typeof mod.isEditorAgentGovernedAuthorityReference).toBe("function");
+    expect(typeof mod.isEditorAgentOneUseApprovalReference).toBe("function");
+    expect(typeof mod.isEditorAgentPreparedChangeset).toBe("function");
   });
 
   it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
@@ -652,17 +691,67 @@ describe("keiko-contracts package surface", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _Code = import("./index.js").EditorAgentConflictCode;
     type _Action = import("./index.js").EditorAgentAction;
+    type _ActionOrigin = import("./index.js").EditorAgentActionOrigin;
+    type _BridgeCapability = import("./index.js").EditorAgentBridgeDecisionCapability;
     type _Result = import("./index.js").EditorAgentActionResult;
     type _Event = import("./index.js").EditorAgentEvent;
+    type _Diagnostic = import("./index.js").EditorAgentDiagnostic;
+    type _DiagnosticsDetail = import("./index.js").EditorAgentDiagnosticsDetail;
     type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
     type _Request = import("./index.js").EditorAgentSnapshotRequest;
+    // Issue #2114 (ADR-0125 D3): changeset / prepared-changeset / conflict / file-result types.
+    type _Changeset = import("./index.js").EditorAgentChangeset;
+    type _ChangesetFile = import("./index.js").EditorAgentChangesetFile;
+    type _PreparedChangeset = import("./index.js").EditorAgentPreparedChangeset;
+    type _PreparedChangesetFile = import("./index.js").EditorAgentPreparedChangesetFile;
+    type _PreparedChangeKind = import("./index.js").EditorAgentPreparedChangeKind;
+    type _PreparedTextEdit = import("./index.js").EditorAgentPreparedTextEdit;
+    type _ConflictDetail = import("./index.js").EditorAgentConflictDetail;
+    type _FileActionResult = import("./index.js").EditorAgentFileActionResult;
+    type _FileActionStatus = import("./index.js").EditorAgentFileActionStatus;
     pin<_Code>();
     pin<_Action>();
+    pin<_ActionOrigin>();
+    pin<_BridgeCapability>();
     pin<_Result>();
     pin<_Event>();
+    pin<_Diagnostic>();
+    pin<_DiagnosticsDetail>();
     pin<_Snapshot>();
     pin<_Request>();
+    pin<_Changeset>();
+    pin<_ChangesetFile>();
+    pin<_PreparedChangeset>();
+    pin<_PreparedChangesetFile>();
+    pin<_PreparedChangeKind>();
+    pin<_PreparedTextEdit>();
+    pin<_ConflictDetail>();
+    pin<_FileActionResult>();
+    pin<_FileActionStatus>();
     expect(true).toBe(true);
+  });
+
+  it("coding workbench mode-policy contracts are reachable through the barrel (#2091)", async () => {
+    const mod = await import("./index.js");
+    expect(mod.CODING_WORKBENCH_POLICY_EFFECTS).toEqual(["allowed", "approval-required", "denied"]);
+    expect(mod.CODING_WORKBENCH_POLICY_RESOURCE_SCOPES).toEqual([
+      "workspace-contained",
+      "external-file",
+      "internet",
+      "delivery",
+    ]);
+    expect(mod.codingWorkbenchPolicyEffectFor("governed-assist", "internet", "low")).toBe(
+      "approval-required",
+    );
+    expect(mod.strictestCodingWorkbenchPolicyEffect("allowed", "approval-required")).toBe(
+      "approval-required",
+    );
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").CodingWorkbenchPolicyEffect>();
+    pin<import("./index.js").CodingWorkbenchPolicyResourceScope>();
+    pin<import("./index.js").CodingWorkbenchModeDisplay>();
+    pin<import("./index.js").CodingWorkbenchModeEffectMatrix>();
   });
 
   it("governed Git delivery contracts are reachable through the barrel (#471)", () => {

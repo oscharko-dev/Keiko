@@ -4,6 +4,12 @@
 
 Accepted (Issue #1986, 2026-07-07).
 
+> **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
+> `governed-assist` is displayed as **Ask for approval** and permits contained edits, saves, and
+> commands. All action classes are capability-admissible in every mode but are not thereby
+> pre-approved. The three machine values remain unchanged; tri-state resource/risk policy replaces
+> the stale read-mostly and blanket-write assumptions.
+
 ## Context
 
 Epic #1982 introduces the governed Coding Workbench. Later child issues will add the sidecar

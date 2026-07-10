@@ -18,11 +18,24 @@
 
 import {
   isContainedAgentPath,
+  isEditorAgentActionOrigin,
+  resolveEditorAgentActionOrigin,
+  type EditorAgentActionOrigin,
   type EditorAgentActionStatus,
   type EditorAgentActionType,
   type EditorAgentConflictCode,
   type EditorAgentFailureCode,
 } from "./editor-agent.js";
+import {
+  codingWorkbenchPolicyEffectFor,
+  decideCodingWorkbenchActionForMode,
+  strictestCodingWorkbenchPolicyEffect,
+  type CodingWorkbenchActionClass,
+  type CodingWorkbenchApprovalRisk,
+  type CodingWorkbenchAuthorityEnvelope,
+  type CodingWorkbenchPolicyEffect,
+  type CodingWorkbenchPolicyResourceScope,
+} from "./coding-workbench.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
@@ -54,6 +67,47 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   save: "content-mutation",
   applyTextEdits: "content-mutation",
   applyPatch: "content-mutation",
+  applyChangeset: "content-mutation",
+  navigateSymbol: "navigation",
+  searchWorkspace: "navigation",
+};
+
+// Pure editor navigation and layout do not consume workspace or delivery authority. Mutating and
+// external effects map onto the existing Workbench classes; no editor-specific policy vocabulary is
+// introduced (Issue #2121, ADR-0125).
+export const EDITOR_AGENT_WORKBENCH_ACTION_CLASS: Readonly<
+  Record<EditorAgentActionEffectClass, CodingWorkbenchActionClass | null>
+> = {
+  navigation: null,
+  layout: null,
+  "content-mutation": "workspace-write",
+  "external-effect": "delivery-substrate",
+};
+
+export const EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE: Readonly<
+  Record<EditorAgentActionEffectClass, CodingWorkbenchPolicyResourceScope | null>
+> = {
+  navigation: null,
+  layout: null,
+  "content-mutation": "workspace-contained",
+  "external-effect": "delivery",
+};
+
+export const EDITOR_AGENT_ACTION_APPROVAL_RISK: Readonly<
+  Record<EditorAgentActionType, CodingWorkbenchApprovalRisk>
+> = {
+  openFile: "low",
+  focusTab: "low",
+  setSelection: "low",
+  moveTab: "low",
+  splitPane: "low",
+  format: "low",
+  save: "low",
+  applyTextEdits: "medium",
+  applyPatch: "medium",
+  applyChangeset: "high",
+  navigateSymbol: "low",
+  searchWorkspace: "low",
 };
 
 // The mutating action set — the classes that change buffer/file content or have an external effect.
@@ -75,24 +129,70 @@ export const EDITOR_AGENT_ACTION_DISPOSITIONS: readonly EditorAgentActionDisposi
 
 // Content-free reason codes. A denied action carries exactly one deny reason; a review-required
 // action carries exactly one review reason; an allowed action carries neither.
-export type EditorAgentActionDenyReason = "workspace-boundary-escape" | "denied-sensitive-path";
+export type EditorAgentActionDenyReason =
+  | "workspace-boundary-escape"
+  | "denied-sensitive-path"
+  | "authority-missing"
+  | "authority-invalid"
+  | "authority-expired"
+  | "authority-budget-exceeded"
+  | "approval-reference-invalid"
+  | "approval-reference-expired"
+  | "approval-reference-consumed"
+  | "unsupported-action"
+  | "secret-exfiltration"
+  | "platform-restricted"
+  | "mode-policy-denied";
 
 export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyReason[] = [
   "workspace-boundary-escape",
   "denied-sensitive-path",
+  "authority-missing",
+  "authority-invalid",
+  "authority-expired",
+  "authority-budget-exceeded",
+  "approval-reference-invalid",
+  "approval-reference-expired",
+  "approval-reference-consumed",
+  "unsupported-action",
+  "secret-exfiltration",
+  "platform-restricted",
+  "mode-policy-denied",
 ] as const;
 
 export type EditorAgentActionReviewReason =
-  "content-mutation-requires-review" | "external-effect-requires-review";
+  | "content-mutation-requires-review"
+  | "external-effect-requires-review"
+  | "mode-approval-required"
+  | "deterministic-risk-approval-required"
+  | "delivery-human-approval-required";
 
 export const EDITOR_AGENT_ACTION_REVIEW_REASONS: readonly EditorAgentActionReviewReason[] = [
   "content-mutation-requires-review",
   "external-effect-requires-review",
+  "mode-approval-required",
+  "deterministic-risk-approval-required",
+  "delivery-human-approval-required",
 ] as const;
+
+export const EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT: Readonly<
+  Record<CodingWorkbenchPolicyEffect, EditorAgentActionDisposition>
+> = {
+  allowed: "allowed",
+  "approval-required": "review-required",
+  denied: "denied",
+} as const;
+
+export function editorAgentDispositionForPolicyEffect(
+  effect: CodingWorkbenchPolicyEffect,
+): EditorAgentActionDisposition {
+  return EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT[effect];
+}
 
 export interface EditorAgentActionPolicyDecision {
   readonly disposition: EditorAgentActionDisposition;
   readonly effectClass: EditorAgentActionEffectClass;
+  readonly origin?: EditorAgentActionOrigin | undefined;
   readonly denyReason?: EditorAgentActionDenyReason | undefined;
   readonly reviewReason?: EditorAgentActionReviewReason | undefined;
 }
@@ -103,39 +203,52 @@ export interface EditorAgentActionPolicyContext {
   // Server-computed: the target matches the always-on `keiko-workspace` deny-list (`.env`, `.ssh`,
   // `.keiko`, credentials, …). The leaf cannot import `keiko-workspace`, so the caller supplies it.
   readonly targetSensitive: boolean;
+  // Optional for schema-v1 compatibility. Omission is the agent/harness producer.
+  readonly origin?: EditorAgentActionOrigin | undefined;
 }
 
-const ALLOWED: EditorAgentActionPolicyDecision = {
-  disposition: "allowed",
-  effectClass: "navigation",
-};
+export type EditorAgentAuthorityPolicy = Pick<
+  CodingWorkbenchAuthorityEnvelope,
+  "requestedMode" | "deploymentCeiling" | "effectiveMode" | "actionClasses"
+>;
+
+function allowedDecision(
+  effectClass: EditorAgentActionEffectClass,
+  origin: EditorAgentActionOrigin,
+): EditorAgentActionPolicyDecision {
+  return { disposition: "allowed", effectClass, origin };
+}
 
 function denyDecision(
   effectClass: EditorAgentActionEffectClass,
   denyReason: EditorAgentActionDenyReason,
+  origin: EditorAgentActionOrigin,
 ): EditorAgentActionPolicyDecision {
-  return { disposition: "denied", effectClass, denyReason };
+  return { disposition: "denied", effectClass, origin, denyReason };
 }
 
 function reviewDecision(
   effectClass: EditorAgentActionEffectClass,
   reviewReason: EditorAgentActionReviewReason,
+  origin: EditorAgentActionOrigin,
 ): EditorAgentActionPolicyDecision {
-  return { disposition: "review-required", effectClass, reviewReason };
+  return { disposition: "review-required", effectClass, origin, reviewReason };
 }
 
-// A content mutation is denied when its target escapes the workspace root or matches the deny-list,
-// otherwise it requires human review (the existing #1394 browser diff-review is the review gate).
+// A content mutation is denied when its target escapes the workspace root or matches the deny-list.
+// A contained, non-sensitive mutation is baseline-allowed; the shared mode/resource/risk matrix may
+// still make it approval-required when the decisions are composed below.
 function classifyContentMutation(
   context: EditorAgentActionPolicyContext,
+  origin: EditorAgentActionOrigin,
 ): EditorAgentActionPolicyDecision {
   if (context.targetPath !== null && !isContainedAgentPath(context.targetPath)) {
-    return denyDecision("content-mutation", "workspace-boundary-escape");
+    return denyDecision("content-mutation", "workspace-boundary-escape", origin);
   }
   if (context.targetSensitive) {
-    return denyDecision("content-mutation", "denied-sensitive-path");
+    return denyDecision("content-mutation", "denied-sensitive-path", origin);
   }
-  return reviewDecision("content-mutation", "content-mutation-requires-review");
+  return allowedDecision("content-mutation", origin);
 }
 
 // Deterministic, fail-closed policy classifier (AC2). Pure: same (type, context) always yields the
@@ -147,15 +260,82 @@ export function classifyEditorAgentAction(
   context: EditorAgentActionPolicyContext,
 ): EditorAgentActionPolicyDecision {
   const effectClass = EDITOR_AGENT_ACTION_EFFECT_CLASS[type];
+  const origin = resolveEditorAgentActionOrigin(context.origin);
   switch (effectClass) {
     case "navigation":
     case "layout":
-      return { ...ALLOWED, effectClass };
+      return allowedDecision(effectClass, origin);
     case "content-mutation":
-      return classifyContentMutation(context);
+      return classifyContentMutation(context, origin);
     case "external-effect":
-      return reviewDecision("external-effect", "external-effect-requires-review");
+      return reviewDecision("external-effect", "external-effect-requires-review", origin);
   }
+}
+
+const EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION: Readonly<
+  Record<EditorAgentActionDisposition, CodingWorkbenchPolicyEffect>
+> = {
+  allowed: "allowed",
+  "review-required": "approval-required",
+  denied: "denied",
+};
+
+function reviewReasonForEnvelope(
+  effectClass: EditorAgentActionEffectClass,
+  risk: CodingWorkbenchApprovalRisk,
+): EditorAgentActionReviewReason {
+  if (effectClass === "external-effect") return "delivery-human-approval-required";
+  return risk === "high" || risk === "critical"
+    ? "deterministic-risk-approval-required"
+    : "mode-approval-required";
+}
+
+function envelopeModeEffect(
+  mode: EditorAgentAuthorityPolicy["effectiveMode"],
+  actionClass: CodingWorkbenchActionClass,
+  resourceScope: CodingWorkbenchPolicyResourceScope,
+  risk: CodingWorkbenchApprovalRisk,
+): CodingWorkbenchPolicyEffect {
+  const classEffect = decideCodingWorkbenchActionForMode(mode, actionClass).allowed
+    ? "allowed"
+    : "denied";
+  return strictestCodingWorkbenchPolicyEffect(
+    classEffect,
+    codingWorkbenchPolicyEffectFor(mode, resourceScope, risk),
+  );
+}
+
+// Compose immutable editor security posture with the shared Authority Envelope mode ceiling. The
+// most restrictive effect always wins; an envelope can never loosen a boundary/sensitivity denial.
+export function composeEditorAgentActionPolicyDecision(
+  decision: EditorAgentActionPolicyDecision,
+  authority: EditorAgentAuthorityPolicy,
+  risk: CodingWorkbenchApprovalRisk,
+): EditorAgentActionPolicyDecision {
+  const actionClass = EDITOR_AGENT_WORKBENCH_ACTION_CLASS[decision.effectClass];
+  const resourceScope = EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE[decision.effectClass];
+  if (actionClass === null || resourceScope === null) return decision;
+  const classEffect = authority.actionClasses.includes(actionClass) ? "allowed" : "denied";
+  const envelopeEffect = strictestCodingWorkbenchPolicyEffect(
+    classEffect,
+    envelopeModeEffect(authority.requestedMode, actionClass, resourceScope, risk),
+    envelopeModeEffect(authority.deploymentCeiling, actionClass, resourceScope, risk),
+    envelopeModeEffect(authority.effectiveMode, actionClass, resourceScope, risk),
+  );
+  const effective = strictestCodingWorkbenchPolicyEffect(
+    EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition],
+    envelopeEffect,
+  );
+  if (effective === EDITOR_AGENT_POLICY_EFFECT_BY_DISPOSITION[decision.disposition])
+    return decision;
+  if (effective === "denied") {
+    return denyDecision(decision.effectClass, "mode-policy-denied", decision.origin ?? "agent");
+  }
+  return reviewDecision(
+    decision.effectClass,
+    reviewReasonForEnvelope(decision.effectClass, risk),
+    decision.origin ?? "agent",
+  );
 }
 
 // ─── Bounded audit record (AC1, AC3) ──────────────────────────────────────────
@@ -168,6 +348,7 @@ export interface EditorAgentActionAuditRecord {
   readonly sessionId: string;
   readonly actionId: string;
   readonly actionType: EditorAgentActionType;
+  readonly origin?: EditorAgentActionOrigin | undefined;
   readonly effectClass: EditorAgentActionEffectClass;
   readonly mutating: boolean;
   readonly disposition: EditorAgentActionDisposition;
@@ -242,6 +423,7 @@ export function buildEditorAgentActionAuditRecord(
     sessionId: input.sessionId,
     actionId: input.actionId,
     actionType: input.actionType,
+    origin: resolveEditorAgentActionOrigin(input.decision.origin),
     effectClass: input.decision.effectClass,
     mutating: isMutatingEditorAgentAction(input.actionType),
     disposition: input.decision.disposition,
@@ -303,6 +485,7 @@ export function isEditorAgentActionAuditRecord(
     typeof value.occurredAt === "number" && Number.isFinite(value.occurredAt),
     typeof value.sessionId === "string" && value.sessionId.length > 0,
     typeof value.actionId === "string" && value.actionId.length > 0,
+    value.origin === undefined || isEditorAgentActionOrigin(value.origin),
     isEditorAgentActionEffectClass(value.effectClass),
     typeof value.mutating === "boolean",
     isEditorAgentActionDisposition(value.disposition),

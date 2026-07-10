@@ -157,7 +157,12 @@ function applyRevealRequest(
   clearRevealDecoration(refs);
   editor.focus();
   editor.setSelection(safeRange);
-  editor.setPosition({ lineNumber: safeRange.startLineNumber, column: safeRange.startColumn });
+  // Keep the whole-line highlight, but place the cursor at the actual symbol/reference column so
+  // cursor-derived breadcrumbs can resolve an indented nested symbol instead of only its parent.
+  editor.setPosition({
+    lineNumber: safeRange.startLineNumber,
+    column: Math.max(1, monacoRange.startColumn),
+  });
   editor.revealRangeInCenterIfOutsideViewport(safeRange);
   refs.revealDecorationIdsRef.current = editor.deltaDecorations(
     [],
@@ -401,6 +406,7 @@ function buildCommandsWiring(
 ): WireEditorCommands | undefined {
   if (
     latestProps.current.onGenerateTests === undefined &&
+    latestProps.current.onAskKeikoAboutSelection === undefined &&
     latestProps.current.onRenameSymbol === undefined
   ) {
     return undefined;
@@ -411,6 +417,13 @@ function buildCommandsWiring(
       : {
           generateTests: (): void => {
             latestProps.current.onGenerateTests?.();
+          },
+        }),
+    ...(latestProps.current.onAskKeikoAboutSelection === undefined
+      ? {}
+      : {
+          askKeikoAboutSelection: (selection): void => {
+            latestProps.current.onAskKeikoAboutSelection?.(selection);
           },
         }),
     ...(latestProps.current.onRenameSymbol === undefined
@@ -594,6 +607,7 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.provideCodeActions,
     props.provideSignatureHelp,
     props.onGenerateTests,
+    props.onAskKeikoAboutSelection,
     props.onRenameSymbol,
   ]
     .map(availabilityBit)

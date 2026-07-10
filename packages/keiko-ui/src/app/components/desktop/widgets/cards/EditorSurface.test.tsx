@@ -25,6 +25,7 @@ const captured: {
   provideSymbols: unknown;
   provideFormatting: unknown;
   formatRequestNonce: number | undefined;
+  onAskKeikoAboutSelection: unknown;
 } = {
   provideCompletions: undefined,
   completionTriggerCharacters: undefined,
@@ -35,6 +36,7 @@ const captured: {
   provideSymbols: undefined,
   provideFormatting: undefined,
   formatRequestNonce: undefined,
+  onAskKeikoAboutSelection: undefined,
 };
 vi.mock("@oscharko-dev/keiko-editor", () => ({
   KeikoCodeEditor: (props: {
@@ -49,6 +51,7 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
     provideSymbols?: unknown;
     provideFormatting?: unknown;
     formatRequestNonce?: number;
+    onAskKeikoAboutSelection?: unknown;
   }) => {
     captured.provideCompletions = props.provideCompletions;
     captured.completionTriggerCharacters = props.completionTriggerCharacters;
@@ -59,6 +62,7 @@ vi.mock("@oscharko-dev/keiko-editor", () => ({
     captured.provideSymbols = props.provideSymbols;
     captured.provideFormatting = props.provideFormatting;
     captured.formatRequestNonce = props.formatRequestNonce;
+    captured.onAskKeikoAboutSelection = props.onAskKeikoAboutSelection;
     return (
       <div
         data-testid="code-editor"
@@ -108,9 +112,18 @@ afterEach(() => {
   captured.provideSymbols = undefined;
   captured.provideFormatting = undefined;
   captured.formatRequestNonce = undefined;
+  captured.onAskKeikoAboutSelection = undefined;
 });
 
 describe("EditorSurface", () => {
+  it("forwards the host-owned Ask Keiko selection callback", () => {
+    ensureMonacoRuntime.mockReturnValue({ supported: true });
+    const onAskKeikoAboutSelection = vi.fn();
+    render(<EditorSurface {...buildProps({ onAskKeikoAboutSelection })} />);
+
+    expect(captured.onAskKeikoAboutSelection).toBe(onAskKeikoAboutSelection);
+  });
+
   it("passes the host file-load state through when the Monaco runtime is supported", () => {
     ensureMonacoRuntime.mockReturnValue({ supported: true });
     render(

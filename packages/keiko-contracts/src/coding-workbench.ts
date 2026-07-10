@@ -156,6 +156,29 @@ export type CodingWorkbenchApprovalRisk = "low" | "medium" | "high" | "critical"
 export const CODING_WORKBENCH_APPROVAL_RISKS: readonly CodingWorkbenchApprovalRisk[] =
   Object.freeze(["low", "medium", "high", "critical"] as const);
 
+export type CodingWorkbenchPolicyEffect = "allowed" | "approval-required" | "denied";
+
+export const CODING_WORKBENCH_POLICY_EFFECTS: readonly CodingWorkbenchPolicyEffect[] =
+  Object.freeze(["allowed", "approval-required", "denied"] as const);
+
+export type CodingWorkbenchPolicyResourceScope =
+  "workspace-contained" | "external-file" | "internet" | "delivery";
+
+export const CODING_WORKBENCH_POLICY_RESOURCE_SCOPES: readonly CodingWorkbenchPolicyResourceScope[] =
+  Object.freeze(["workspace-contained", "external-file", "internet", "delivery"] as const);
+
+export interface CodingWorkbenchModeDisplay {
+  readonly label: "Ask for approval" | "Approve for me" | "Full access";
+  readonly description: string;
+}
+
+export type CodingWorkbenchModeEffectMatrix = Readonly<
+  Record<
+    CodingWorkbenchPolicyResourceScope,
+    Readonly<Record<CodingWorkbenchApprovalRisk, CodingWorkbenchPolicyEffect>>
+  >
+>;
+
 export type CodingWorkbenchSupervisedPolicyReason =
   | "scoped-file-edit"
   | "out-of-scope-file-edit"
@@ -213,10 +236,14 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
   ] as const satisfies readonly CodingWorkbenchRuntimeEventKind[]);
 
 export interface CodingWorkbenchModePolicy {
+  // Capability admission is not pre-approval. Resource scope, risk, authority, and hard-deny gates
+  // still determine the tri-state effect for each concrete action.
   readonly allowedActionClasses: readonly CodingWorkbenchActionClass[];
   readonly allowsWorkspaceWrites: boolean;
   readonly allowsCommandExecution: boolean;
   readonly allowsDeliverySubstrate: boolean;
+  readonly display: CodingWorkbenchModeDisplay;
+  readonly effects: CodingWorkbenchModeEffectMatrix;
 }
 
 export type CodingWorkbenchPolicyDenialReason =
@@ -240,30 +267,124 @@ export const CODING_WORKBENCH_MODE_POLICIES: Readonly<
   Record<CodingWorkbenchMode, CodingWorkbenchModePolicy>
 > = Object.freeze({
   "governed-assist": {
-    allowedActionClasses: ["workspace-read", "verification", "connector-access"],
-    allowsWorkspaceWrites: false,
-    allowsCommandExecution: false,
-    allowsDeliverySubstrate: false,
-  },
-  "supervised-coding": {
-    allowedActionClasses: [
-      "workspace-read",
-      "workspace-write",
-      "command-execution",
-      "verification",
-      "connector-access",
-    ],
+    allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
     allowsWorkspaceWrites: true,
     allowsCommandExecution: true,
-    allowsDeliverySubstrate: false,
+    allowsDeliverySubstrate: true,
+    display: {
+      label: "Ask for approval",
+      description:
+        "Workspace-contained edits, saves, and commands proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
+    },
+    effects: {
+      "workspace-contained": {
+        low: "allowed",
+        medium: "allowed",
+        high: "allowed",
+        critical: "allowed",
+      },
+      "external-file": {
+        low: "approval-required",
+        medium: "approval-required",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+      internet: {
+        low: "approval-required",
+        medium: "approval-required",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+      delivery: {
+        low: "approval-required",
+        medium: "approval-required",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+    },
+  },
+  "supervised-coding": {
+    allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
+    allowsWorkspaceWrites: true,
+    allowsCommandExecution: true,
+    allowsDeliverySubstrate: true,
+    display: {
+      label: "Approve for me",
+      description:
+        "Low- and medium-risk file and internet operations proceed; high- and critical-risk actions require approval. Delivery remains separately human-approved.",
+    },
+    effects: {
+      "workspace-contained": {
+        low: "allowed",
+        medium: "allowed",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+      "external-file": {
+        low: "allowed",
+        medium: "allowed",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+      internet: {
+        low: "allowed",
+        medium: "allowed",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+      delivery: {
+        low: "approval-required",
+        medium: "approval-required",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+    },
   },
   "autonomous-delivery": {
     allowedActionClasses: CODING_WORKBENCH_ACTION_CLASSES,
     allowsWorkspaceWrites: true,
     allowsCommandExecution: true,
     allowsDeliverySubstrate: true,
+    display: {
+      label: "Full access",
+      description:
+        "File and internet operations within the validated Authority Envelope proceed without per-action approval. Delivery remains separately human-approved.",
+    },
+    effects: {
+      "workspace-contained": {
+        low: "allowed",
+        medium: "allowed",
+        high: "allowed",
+        critical: "allowed",
+      },
+      "external-file": {
+        low: "allowed",
+        medium: "allowed",
+        high: "allowed",
+        critical: "allowed",
+      },
+      internet: {
+        low: "allowed",
+        medium: "allowed",
+        high: "allowed",
+        critical: "allowed",
+      },
+      delivery: {
+        low: "approval-required",
+        medium: "approval-required",
+        high: "approval-required",
+        critical: "approval-required",
+      },
+    },
   },
 } as const satisfies Readonly<Record<CodingWorkbenchMode, CodingWorkbenchModePolicy>>);
+
+const CODING_WORKBENCH_POLICY_EFFECT_ORDER: Readonly<Record<CodingWorkbenchPolicyEffect, number>> =
+  Object.freeze({
+    allowed: 0,
+    "approval-required": 1,
+    denied: 2,
+  } as const satisfies Readonly<Record<CodingWorkbenchPolicyEffect, number>>);
 
 const CODING_WORKBENCH_MODE_ORDER: Readonly<Record<CodingWorkbenchMode, number>> = Object.freeze({
   "governed-assist": 0,
@@ -284,11 +405,6 @@ const CODING_WORKBENCH_ACTION_DENIAL_REASONS: Readonly<
 } as const satisfies Readonly<
   Record<CodingWorkbenchActionClass, CodingWorkbenchPolicyDenialReason>
 >);
-
-const CODING_WORKBENCH_WRITE_CAPABLE_CONNECTOR_SCOPES = new Set<CodingWorkbenchConnectorScope>([
-  "source-control.write",
-  "issue-tracker.write",
-]);
 
 export interface CodingWorkbenchWorkspaceIdentity {
   readonly workspaceId: string;
@@ -481,21 +597,37 @@ export function resolveEffectiveCodingWorkbenchMode(
     : ceiling;
 }
 
+export function codingWorkbenchPolicyEffectFor(
+  mode: CodingWorkbenchMode,
+  resourceScope: CodingWorkbenchPolicyResourceScope,
+  risk: CodingWorkbenchApprovalRisk,
+): CodingWorkbenchPolicyEffect {
+  return CODING_WORKBENCH_MODE_POLICIES[mode].effects[resourceScope][risk];
+}
+
+export function strictestCodingWorkbenchPolicyEffect(
+  first: CodingWorkbenchPolicyEffect,
+  ...rest: readonly CodingWorkbenchPolicyEffect[]
+): CodingWorkbenchPolicyEffect {
+  return rest.reduce(
+    (strictest, candidate) =>
+      CODING_WORKBENCH_POLICY_EFFECT_ORDER[candidate] >
+      CODING_WORKBENCH_POLICY_EFFECT_ORDER[strictest]
+        ? candidate
+        : strictest,
+    first,
+  );
+}
+
 export function decideCodingWorkbenchActionForMode(
   mode: CodingWorkbenchMode,
   actionClass: CodingWorkbenchActionClass,
   connectorScopes: readonly CodingWorkbenchConnectorScope[] = [],
 ): CodingWorkbenchActionPolicyDecision {
+  void connectorScopes;
   const policy = CODING_WORKBENCH_MODE_POLICIES[mode];
   if (!policy.allowedActionClasses.includes(actionClass)) {
     return denyCodingWorkbenchAction(actionClass);
-  }
-  if (
-    mode === "governed-assist" &&
-    actionClass === "connector-access" &&
-    hasWriteCapableCodingWorkbenchConnectorScope(connectorScopes)
-  ) {
-    return { allowed: false, reasonCode: "connector-write-denied" };
   }
   return { allowed: true };
 }
@@ -529,10 +661,4 @@ function denyCodingWorkbenchAction(
   actionClass: CodingWorkbenchActionClass,
 ): CodingWorkbenchActionPolicyDecision {
   return { allowed: false, reasonCode: CODING_WORKBENCH_ACTION_DENIAL_REASONS[actionClass] };
-}
-
-function hasWriteCapableCodingWorkbenchConnectorScope(
-  scopes: readonly CodingWorkbenchConnectorScope[],
-): boolean {
-  return scopes.some((scope) => CODING_WORKBENCH_WRITE_CAPABLE_CONNECTOR_SCOPES.has(scope));
 }

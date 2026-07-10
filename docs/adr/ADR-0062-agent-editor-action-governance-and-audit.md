@@ -4,6 +4,26 @@
 
 Accepted
 
+> **Superseded in part by [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).**
+> Contained content mutation is not blanket `review-required`. The central mode/resource/risk policy
+> effect is enforced and then mapped to the existing editor disposition; audit remains bounded and
+> redacted.
+
+> **Amended by Issue #2119 (2026-07-10).** Governance and audit carry the bounded action origin
+> (`agent | chat`), defaulting omitted legacy values to `agent`. The existing bounded,
+> workspace-relative `targetPath` audit metadata remains unchanged.
+
+> **Amended by Epic #2091 trust-path hardening (2026-07-10).** Policy and audit derive active-buffer
+> targets from the verified live snapshot rather than caller-claimed metadata. Wire identifier and
+> target-path byte bounds make the count-bounded in-memory ledger byte-bounded as well; capability
+> plaintext and digests never enter audit records.
+
+> **Amended by Issue #2121 (2026-07-10).** The classifier now establishes immutable editor security
+> posture, then composes it with ADR-0125's shared mode/resource/risk matrix. Contained, non-sensitive
+> mutations are baseline-allowed; the composed mode effect may require approval. Workspace-boundary
+> and sensitive-path denials remain stricter than every mode. The composed result now drives route
+> admission as well as audit.
+
 ## Context
 
 Issues #1394 ([ADR-0058](ADR-0058-safe-apply-edits-and-patch-workflow.md)), #1391
@@ -11,9 +31,9 @@ Issues #1394 ([ADR-0058](ADR-0058-safe-apply-edits-and-patch-workflow.md)), #139
 ([ADR-0060](ADR-0060-agent-editor-session-registry-and-queue.md)), and #1393
 ([ADR-0061](ADR-0061-browser-editor-agent-bridge.md)) together define the agent editor control
 plane: a frozen, schema-versioned wire contract; server-side BFF preflight, queueing, and SSE
-liveness; and a browser bridge that executes the nine-action protocol
+liveness; and a browser bridge that executes the ten-action protocol
 (`openFile`, `focusTab`, `moveTab`, `splitPane`, `setSelection`, `format`, `save`,
-`applyTextEdits`, `applyPatch`).
+`applyTextEdits`, `applyPatch`, `applyChangeset`).
 
 Issue #1395 closes the remaining governance gap. The control plane validates _structure_ (dirty
 buffers, version/hash preconditions, edit overlap, workspace containment) but does not classify the
@@ -49,42 +69,77 @@ action types is mapped to an `EditorAgentActionEffectClass`
 `external-effect` class is defined for the future Git/command action types but has no members in the
 current contract.
 
-A pure, deterministic, fail-closed classifier `classifyEditorAgentAction(type, context)` returns a
-disposition plus a content-free reason code:
+A pure, deterministic, fail-closed classifier `classifyEditorAgentAction(type, context)` establishes
+the action's baseline security posture. Issue #2121 then composes that decision with the shared
+Coding Workbench policy:
 
 - `navigation` / `layout` → `allowed`.
 - `content-mutation` whose target escapes the workspace root **or** matches the always-on
   workspace deny-list → `denied` (reason `workspace-boundary-escape` / `denied-sensitive-path`).
-- `content-mutation` otherwise → `review-required` (reason `content-mutation-requires-review`):
-  the action is admitted to the queue and the existing #1394 browser diff-review (Accept/Reject)
-  is the human review gate.
+- `content-mutation` otherwise → baseline `allowed`, then maps to Workbench `workspace-write` /
+  `workspace-contained`. `format` and `save` are low risk, `applyTextEdits` and `applyPatch` are
+  medium risk, and bounded multi-file `applyChangeset` is high risk.
 - `external-effect` (the future Git/command class, no members today) → `review-required` (reason
-  `external-effect-requires-review`): never `allowed` by default. This is the fail-closed posture —
-  the effect-class table is exhaustive at compile time (`Record<EditorAgentActionType, …>`), so any
-  future mutating action type must be assigned a class explicitly and the only mutating classes
-  default to a human gate, never to `allowed`.
+  `external-effect-requires-review`) and maps to Workbench `delivery-substrate` / `delivery`.
+
+Pure navigation and layout are exempt from the Authority Envelope because they change only editor
+UI state. For the in-scope classes, `composeEditorAgentActionPolicyDecision` evaluates the central
+mode/resource/risk matrix and selects the stricter effect using `denied > approval-required >
+allowed`. The baseline decision wins ties so its specific reason is preserved. Thus an envelope can
+never loosen containment or sensitive-path denial, while normal contained edits and saves follow
+the maintained Ask for approval, Approve for me, and Full access semantics from ADR-0125.
 
 Containment reuses the existing `isContainedAgentPath` contract guard. Sensitivity reuses
 `keiko-workspace`'s always-on `isDenied` deny-list (`.env`, `.ssh`, `.keiko`, credentials, etc.);
 because `keiko-contracts` is a leaf package it cannot import `keiko-workspace`, so the server
 computes the `targetSensitive` boolean and passes it into the pure classifier.
 
+For a multi-file changeset, classification considers every declared target. An escaping member is
+preferred as the audit target, then a deny-listed member, so a safe active file cannot mask an
+unsafe member in the decision or evidence.
+
 The classifier does **not** re-check #1394 structural preconditions (version/hash/overlap); it
-governs policy posture only, respecting those gates as upstream preconditions.
+governs policy posture only, respecting those gates as upstream preconditions. Issue #2119 adds the
+resolved action origin to the decision for audit propagation; origin does not change disposition.
+The route rejects `denied` as `POLICY_DENIED`. A `review-required` action is admitted only when its
+action type has the existing explicit browser review (`applyPatch` or `applyChangeset`); otherwise
+it is rejected as `APPROVAL_REQUIRED`.
+
+For admitted patch and changeset actions, the server projects the composed disposition into the
+additive `requiresReview` emission hint. Policy-required review cannot be disabled by a producer;
+the explicit local Chat Apply workflow may request stricter review. The browser applies only an
+explicit server-emitted `false` directly and treats omission as review-required for V1
+compatibility. Direct and reviewed changesets converge on the same server revalidation, atomic
+transaction, terminal result, and Monaco reconciliation path.
+
+Direct patches also converge on the existing terminal-confirmation path before mutation. The
+browser repeats the active-buffer hash precondition immediately before dispatch; the server then
+re-resolves Authority and repeats patch preflight before acknowledging success. The server-owned
+Authority registry atomically reserves cumulative tool calls plus patch or inserted text-edit bytes
+and enforces elapsed runtime. Exhaustion is a closed, content-free
+`authority-budget-exceeded` denial; idempotent replay does not consume the budget twice.
 
 ### D2 — Bounded, content-free audit record; in-memory session-scoped ledger
 
 `editor-agent-governance.ts` also defines `EditorAgentActionAuditRecord`
 (`EDITOR_AGENT_AUDIT_SCHEMA_VERSION = "1"`), a content-free envelope modelled on
 `MemoryAuditEvent` and `patchApplyEvidence`: `auditId`, `occurredAt`, `sessionId`, `actionId`,
-`actionType`, `effectClass`, `mutating`, `disposition`, optional `denyReason`/`reviewReason`,
-`outcome` (the existing `EditorAgentActionStatus`), optional `conflictCode`/`failureCode`, an
-optional workspace-relative `targetPath`, content-free counts (`editCount`, `patchByteLength`), and
-a bounded, redacted `summary` (≤ `EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS`). The pure builder
-`buildEditorAgentActionAuditRecord` accepts only bounded inputs — it never receives `textEdits`
-content or a patch body — so the record _structurally cannot_ carry raw source text. The server
-additionally runs the record through `keiko-security`'s `createAuditRedactor` + `deepRedactStrings`
-(defense-in-depth) before it enters the ledger, scrubbing any secret-shaped substring.
+`actionType`, bounded `origin`, `effectClass`, `mutating`, `disposition`, optional
+`denyReason`/`reviewReason`, `outcome` (the existing `EditorAgentActionStatus`), optional
+`conflictCode`/`failureCode`, an optional workspace-relative `targetPath`, content-free counts
+(`editCount`, `patchByteLength`), and a bounded, redacted `summary` (≤
+`EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS`). The pure builder accepts only bounded inputs — it never
+receives `textEdits` content, a patch body, a prompt, or a selection body — so the record
+_structurally cannot_ carry raw producer content. The server additionally runs the record through
+`keiko-security`'s `createAuditRedactor` + `deepRedactStrings` (defense-in-depth) before it enters the
+ledger, scrubbing any secret-shaped substring.
+
+The origin property is additive and optional in the V1 record type. The builder always emits a
+resolved value: explicit `chat` stays `chat`; omitted legacy action/decision values become `agent`.
+Origin is bounded audit annotation rather than authority. Ordinary producer origin remains
+caller-asserted. A local capability-backed browser action is canonicalized to `chat` by the server
+after live-lease validation. In neither path does origin grant authority, satisfy approval, change
+risk, or affect policy disposition.
 
 Storage decision: a **bounded in-memory, per-session, append-only ledger** in the BFF
 (`agentActionAudit.ts`), FIFO-evicted (bounded entries per session, bounded session count, mirroring
@@ -111,20 +166,23 @@ status conveyed by text not colour alone).
 
 The governance model reuses: the `MemoryAuditEvent` / `patchApplyEvidence` content-free envelope
 pattern, `keiko-security` redaction (`createAuditRedactor`, `deepRedactStrings`), the
-`voice-action-governance` three-way disposition precedent, the `isContainedAgentPath` /
-`isDenied` scope primitives, the existing BFF SSE fan-out, and the existing #1394 browser diff-review
-as the human "review-required" gate. The only net-new subsystems are the policy classifier, the
-bounded audit record + ledger, and the read-only UI panel.
+`voice-action-governance` three-way disposition precedent, the `isContainedAgentPath` / `isDenied`
+scope primitives, the shared Coding Workbench mode/resource/risk matrix, the existing BFF SSE
+fan-out, and the existing #1394 browser diff-review when approval is required. The only net-new
+subsystems are the policy classifier, the bounded audit record + ledger, and the read-only UI panel.
 
 ## Consequences
 
 - The agent editor gains an explicit, testable allow/deny/review-required policy and a bounded audit
   trail without weakening any existing structural gate. The sensitive-path denial is a strict
   security strengthening: `applyTextEdits`/`save`/`format` to a deny-listed path (e.g. `.env`) were
-  previously blocked only on the patch path and are now denied across all write actions, surfaced as
-  the existing `OUT_OF_SCOPE` conflict so no new wire conflict code is introduced.
-- The audit record is content-free by construction and by redaction; raw source text and secrets
-  cannot reach the ledger or the UI.
+  previously blocked only on the patch path and are now denied across all write actions. Structural
+  path violations remain `OUT_OF_SCOPE`; authority or composed-policy denial is `POLICY_DENIED`.
+- The audit record is content-free by construction and by redaction; raw source text, patch bodies,
+  prompt/selection bodies, and secrets cannot reach the ledger or the UI. The bounded,
+  workspace-relative target path remains inspectable metadata.
+- Audit consumers can distinguish the agent/harness and chat producers without receiving producer
+  content, while legacy actions deterministically audit as `agent`.
 - The ledger is ephemeral and bounded; it backs a "recent actions" view, not a compliance archive.
   Durable persistence and Git/command-action governance are documented follow-ups.
 
@@ -142,10 +200,9 @@ bounded audit record + ledger, and the read-only UI panel.
 
 ## Alternatives considered
 
-- **Add `POLICY_DENIED` / `REVIEW_REQUIRED` wire conflict codes.** Rejected: the
-  `EditorAgentConflictCode` table is a ratified contract surface; reusing `OUT_OF_SCOPE` for the
-  sensitive-path denial avoids contract churn and keeps the browser's exhaustive conflict switch
-  stable. The fine-grained governance reason lives in the audit record, not the wire code.
+- **Reuse `OUT_OF_SCOPE` for every policy outcome.** Rejected: structural target violations and
+  authority/mode denial are different failures. `POLICY_DENIED` and `APPROVAL_REQUIRED` preserve a
+  bounded wire distinction while the fine-grained reason remains in the redacted audit record.
 - **Durable `EvidenceStore` persistence now.** Deferred: out of scope per the issue (no long-term
   telemetry); it would require threading an evidence store + redactor through the action route. The
   record shape is kept compatible so this is a clean future addition.

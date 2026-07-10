@@ -170,6 +170,38 @@ describe("POST /api/editor/workspace-search", () => {
     expect(insensitiveBody.results.length).toBeGreaterThan(sensitiveBody.results.length);
   });
 
+  it("matches embedded identifiers only when whole-word search is disabled", async () => {
+    await writeFile(join(root, "src", "whole-word.ts"), "export const id = 1;\n", "utf8");
+    await writeFile(
+      join(root, "src", "embedded-word.ts"),
+      "export const userId = logId;\n",
+      "utf8",
+    );
+
+    const wholeWord = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "id", wholeWord: true })),
+      deps(),
+    );
+    const substring = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "id", wholeWord: false })),
+      deps(),
+    );
+
+    expect(wholeWord.status).toBe(200);
+    expect(substring.status).toBe(200);
+    const wholeWordPaths = (wholeWord.body as { results: { path: string }[] }).results.map(
+      (result) => result.path,
+    );
+    const substringPaths = (substring.body as { results: { path: string }[] }).results.map(
+      (result) => result.path,
+    );
+    expect(wholeWordPaths).toContain("src/whole-word.ts");
+    expect(wholeWordPaths).not.toContain("src/embedded-word.ts");
+    expect(substringPaths).toEqual(
+      expect.arrayContaining(["src/whole-word.ts", "src/embedded-word.ts"]),
+    );
+  });
+
   it("keeps user-facing workspace search lexical rather than semantic", async () => {
     const result = await handleEditorWorkspaceSearch(
       postContext(searchBody({ query: "configuration parser" })),
@@ -346,6 +378,54 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
       newText: "readConfig",
     });
     expect(after).toBe(before);
+  });
+
+  it("expands regex capture groups independently for every match", async () => {
+    await writeFile(join(root, "src", "calls.ts"), "alpha(); beta();\n", "utf8");
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "(\\w+)\\(\\)",
+          mode: "regex",
+          replacement: "call_$1()",
+          includeGlobs: ["src/calls.ts"],
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      files: { edits: { originalText: string; newText: string }[] }[];
+    };
+    expect(body.files[0]?.edits).toEqual([
+      expect.objectContaining({ originalText: "alpha()", newText: "call_alpha()" }),
+      expect.objectContaining({ originalText: "beta()", newText: "call_beta()" }),
+    ]);
+  });
+
+  it("expands only numeric capture references and keeps expression-like text literal", async () => {
+    await writeFile(join(root, "src", "bounded-replace.ts"), "safe();\n", "utf8");
+    const replacement = "$1:${globalThis.compromised = true}:$&:$`:$'";
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "(\\w+)\\(\\)",
+          mode: "regex",
+          replacement,
+          includeGlobs: ["src/bounded-replace.ts"],
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { files: { edits: { newText: string }[] }[] };
+    expect(body.files[0]?.edits[0]?.newText).toBe("safe:${globalThis.compromised = true}:$&:$`:$'");
   });
 
   it("recomputes matches from current on-disk content at preview time", async () => {

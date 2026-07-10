@@ -8,6 +8,12 @@ the reuse-first architecture and trust boundaries the remaining child issues imp
 no runtime behaviour; this is a planning decision record paired with the operational
 [Prompt Enhancer architecture blueprint](../prompt-enhancer/architecture-blueprint.md).
 
+> **Authority semantics amended by
+> [ADR-0125](ADR-0125-governed-agent-docking-and-editor-changesets.md).** Human review of a risky
+> Enhanced Prompt may establish a bounded runtime mode and Authority Envelope. The prompt remains
+> data rather than a capability; additional per-action approval follows the shared resource/risk
+> policy instead of a blanket side-effect rule.
+
 > **ADR numbering note.** Identifiers `ADR-0042` and `ADR-0043` are reserved by the concurrent
 > Keiko Editor epic on the `feat/keiko-editor` integration branch. This epic uses `ADR-0044` to keep
 > ADR identifiers globally unique across the project and avoid a same-number collision when the two

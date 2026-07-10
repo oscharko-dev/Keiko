@@ -1,22 +1,51 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_EDITOR_AGENT_ACTION_ORIGIN,
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
+  EDITOR_AGENT_ACTION_ID_MAX_BYTES,
+  EDITOR_AGENT_ACTION_ORIGINS,
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
+  EDITOR_AGENT_CHANGESET_MAX_FILES,
+  EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
   EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
+  EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_FAILURE_CODES,
+  EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES,
+  EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS,
+  EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_SCHEMA_VERSION,
+  EDITOR_AGENT_SESSION_ID_MAX_BYTES,
+  EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES,
+  EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE,
+  EDITOR_AGENT_SNAPSHOT_MAX_PANES,
+  EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES,
+  EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
+  EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
+  EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES,
   EDITOR_AGENT_WRITE_ACTION_TYPES,
   editorAgentActionHasWritePrecondition,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
+  isEditorAgentActionOrigin,
   isEditorAgentActionResult,
+  isEditorAgentBridgeDecisionCapability,
+  isEditorAgentChangeset,
   isEditorAgentConflictCode,
+  isEditorAgentDiagnostic,
+  isEditorAgentDiagnosticsDetail,
   isEditorAgentEvent,
   isEditorAgentFailureCode,
+  isEditorAgentFileActionResult,
+  isEditorAgentGovernedAuthorityReference,
+  isEditorAgentOneUseApprovalReference,
+  isEditorAgentPreparedChangeset,
   isEditorAgentSessionSnapshot,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
+  resolveEditorAgentActionOrigin,
   validateAgentTextEdits,
   type EditorAgentAction,
   type EditorAgentActionResult,
@@ -28,6 +57,7 @@ import {
 } from "./editor-agent.js";
 
 const HASH = "a".repeat(64);
+const BRIDGE_CAPABILITY = "A".repeat(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS);
 
 function snapshot(): EditorAgentSessionSnapshot {
   return {
@@ -94,6 +124,322 @@ describe("editor agent contracts", () => {
         },
       }),
     ).toMatchObject({ ok: true });
+  });
+
+  it("validates the additive browser bridge decision capability envelopes", () => {
+    expect(isEditorAgentBridgeDecisionCapability(BRIDGE_CAPABILITY)).toBe(true);
+    expect(
+      isEditorAgentBridgeDecisionCapability(
+        "A".repeat(EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS - 1),
+      ),
+    ).toBe(false);
+    expect(isEditorAgentBridgeDecisionCapability(`${BRIDGE_CAPABILITY.slice(1)}+`)).toBe(false);
+
+    expect(
+      parseEditorAgentSnapshotRequest({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "snapshot",
+        snapshot: snapshot(),
+        bridgeDecisionCapability: BRIDGE_CAPABILITY,
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { bridgeDecisionCapability: BRIDGE_CAPABILITY },
+    });
+    expect(
+      parseEditorAgentActionsPostBody({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        kind: "result",
+        bridgeDecisionCapability: BRIDGE_CAPABILITY,
+        result: {
+          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+          actionId: "action-1",
+          sessionId: "session-1",
+          status: "succeeded",
+        },
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { bridgeDecisionCapability: BRIDGE_CAPABILITY },
+    });
+    const bridgeAction = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "action",
+      action: baseAction({ type: "applyPatch", patch: "patch", origin: "agent" }),
+      bridgeDecisionCapability: BRIDGE_CAPABILITY,
+    };
+    expect(parseEditorAgentActionsPostBody(bridgeAction)).toMatchObject({
+      ok: true,
+      value: { kind: "action", action: { origin: "agent" } },
+    });
+    expect(parseEditorAgentActionsPostBody({ ...bridgeAction, unknown: true })).toEqual({
+      ok: false,
+      errors: ["browser action request is invalid"],
+    });
+    expect(
+      parseEditorAgentActionsPostBody({
+        ...bridgeAction,
+        bridgeDecisionCapability: "invalid",
+      }),
+    ).toEqual({ ok: false, errors: ["browser action request is invalid"] });
+  });
+
+  it("rejects snapshot and result wrappers with incompatible outer schemas", () => {
+    const snapshotRequest = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "snapshot",
+      snapshot: snapshot(),
+    } as const;
+    const resultRequest = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "succeeded",
+      },
+    } as const;
+
+    for (const invalid of [
+      { ...snapshotRequest, schemaVersion: undefined },
+      { ...snapshotRequest, schemaVersion: "999" },
+      { ...snapshotRequest, additional: true },
+    ]) {
+      expect(parseEditorAgentSnapshotRequest(invalid)).toMatchObject({ ok: false });
+    }
+    for (const invalid of [
+      { ...resultRequest, schemaVersion: undefined },
+      { ...resultRequest, schemaVersion: "999" },
+      { ...resultRequest, additional: true },
+    ]) {
+      expect(parseEditorAgentActionsPostBody(invalid)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("rejects payload fields that do not belong to the declared action type", () => {
+    const textEdit = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+      newText: "replacement",
+    } as const;
+    const foreignPatch = {
+      ...baseAction({ type: "applyTextEdits" }),
+      textEdits: [textEdit],
+      patch: "secret",
+    };
+    const foreignEdits = {
+      ...baseAction({ type: "save" }),
+      textEdits: [textEdit],
+    };
+
+    expect(isEditorAgentAction(foreignPatch)).toBe(false);
+    expect(isEditorAgentAction(foreignEdits)).toBe(false);
+    expect(parseEditorAgentActionsPostBody(foreignPatch)).toMatchObject({ ok: false });
+    expect(parseEditorAgentActionsPostBody(foreignEdits)).toMatchObject({ ok: false });
+  });
+
+  it("canonicalizes action and result envelopes before they cross the bridge boundary", () => {
+    const canary = "CAPABILITY_AUTHORITY_CANARY";
+    const action = changesetAction();
+    const parsedAction = parseEditorAgentActionsPostBody({
+      ...action,
+      bridgeDecisionCapability: canary,
+      authorityEnvelope: { canary },
+      changeset: {
+        ...action.changeset,
+        authorityEnvelope: { canary },
+        files: action.changeset?.files.map((file) => ({ ...file, capability: canary })),
+      },
+    });
+    expect(parsedAction).toMatchObject({ ok: true });
+    if (!parsedAction.ok) throw new Error("Expected the valid action to parse.");
+    expect(JSON.stringify(parsedAction.value)).not.toContain(canary);
+
+    const parsedResult = parseEditorAgentActionsPostBody({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "succeeded",
+        authorityEnvelope: { canary },
+        files: [{ file: "src/a.ts", status: "succeeded", capability: canary }],
+      },
+    });
+    expect(parsedResult).toMatchObject({ ok: true });
+    if (!parsedResult.ok) throw new Error("Expected the valid result to parse.");
+    expect(JSON.stringify(parsedResult.value)).not.toContain(canary);
+  });
+
+  it("byte-bounds identifiers and target metadata at the wire boundary", () => {
+    const oversizedActionId = "x".repeat(EDITOR_AGENT_ACTION_ID_MAX_BYTES + 1);
+    const oversizedSessionId = "x".repeat(EDITOR_AGENT_SESSION_ID_MAX_BYTES + 1);
+    const oversizedIdempotencyKey = "x".repeat(EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES + 1);
+    const oversizedTarget = "x".repeat(EDITOR_AGENT_TARGET_PATH_MAX_BYTES + 1);
+    expect(isEditorAgentAction({ ...baseAction(), actionId: oversizedActionId })).toBe(false);
+    expect(isEditorAgentAction({ ...baseAction(), sessionId: oversizedSessionId })).toBe(false);
+    expect(isEditorAgentAction({ ...baseAction(), idempotencyKey: oversizedIdempotencyKey })).toBe(
+      false,
+    );
+    expect(isEditorAgentAction({ ...baseAction(), target: { file: oversizedTarget } })).toBe(false);
+    expect(isEditorAgentSessionSnapshot({ ...snapshot(), activeFile: oversizedTarget })).toBe(
+      false,
+    );
+    expect(
+      isEditorAgentActionResult({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: oversizedActionId,
+        sessionId: "session-1",
+        status: "failed",
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentAction({
+        ...baseAction(),
+        actionId: "\u{1f600}".repeat(Math.floor(EDITOR_AGENT_ACTION_ID_MAX_BYTES / 4) + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds retained snapshot roots and metadata arrays", () => {
+    const panesAtLimit = Array.from({ length: EDITOR_AGENT_SNAPSHOT_MAX_PANES }, (_, index) => ({
+      paneId: `pane-${String(index)}`,
+      activeFile: null,
+      openFiles: [],
+    }));
+    const openFilesAtLimit = Array.from(
+      { length: EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE },
+      (_, index) => `src/open-${String(index)}.ts`,
+    );
+    const dirtyFilesAtLimit = Array.from(
+      { length: EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES },
+      (_, index) => `src/dirty-${String(index)}.ts`,
+    );
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        workspaceRoot: "r".repeat(EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES),
+        panes: panesAtLimit,
+        activeFile: null,
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({ ...snapshot(), panes: [...panesAtLimit, panesAtLimit[0]] }),
+    ).toBe(false);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        panes: [{ ...snapshot().panes[0], openFiles: openFilesAtLimit }],
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        panes: [{ ...snapshot().panes[0], openFiles: [...openFilesAtLimit, "src/extra.ts"] }],
+      }),
+    ).toBe(false);
+    expect(isEditorAgentSessionSnapshot({ ...snapshot(), dirtyFiles: dirtyFilesAtLimit })).toBe(
+      true,
+    );
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        dirtyFiles: [...dirtyFilesAtLimit, "src/extra.ts"],
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        workspaceRoot: "r".repeat(EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("caps aggregate snapshot path metadata at the exact byte boundary", () => {
+    const fullPath = "x".repeat(EDITOR_AGENT_TARGET_PATH_MAX_BYTES);
+    const pathsAtLimit = Array.from(
+      { length: EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES / fullPath.length },
+      () => fullPath,
+    );
+    const bounded = {
+      ...snapshot(),
+      panes: [{ paneId: "pane-1", activeFile: null, openFiles: pathsAtLimit }],
+      activeFile: null,
+      dirtyFiles: [],
+    };
+    expect(isEditorAgentSessionSnapshot(bounded)).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...bounded,
+        panes: [{ ...bounded.panes[0], openFiles: [...pathsAtLimit, "x"] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("caps retained snapshot text at 64 KiB of UTF-8", () => {
+    const asciiAtLimit = "x".repeat(EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES);
+    const emojiAtLimit = "\u{1f600}".repeat(EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES / 4);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: asciiAtLimit,
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: `${asciiAtLimit}x`,
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: emojiAtLimit,
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...snapshot(),
+        textMode: "activeFile",
+        text: `${emojiAtLimit}x`,
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds every action-result message field by Unicode code points", () => {
+    const atLimit = "\u{1f600}".repeat(EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS);
+    const oversized = `${atLimit}\u{1f600}`;
+    const base = {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: "action-1",
+      sessionId: "session-1",
+      status: "failed" as const,
+    };
+    expect(isEditorAgentActionResult({ ...base, message: atLimit })).toBe(true);
+    expect(isEditorAgentActionResult({ ...base, message: oversized })).toBe(false);
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        status: "conflict",
+        conflict: { code: "INVALID_EDITS", message: oversized },
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        failure: { code: "TIMED_OUT", message: oversized },
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentActionResult({
+        ...base,
+        files: [{ file: "src/a.ts", status: "failed", message: oversized }],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -373,6 +719,9 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
+  "navigateSymbol",
+  "searchWorkspace",
 ];
 
 const NON_WRITE_ACTION_TYPES = [
@@ -394,9 +743,85 @@ function baseAction(overrides: Partial<EditorAgentAction> = {}): EditorAgentActi
   };
 }
 
+function changesetAction(): EditorAgentAction {
+  return baseAction({
+    type: "applyChangeset",
+    authorityRef: { runId: "run-2114", envelopeDigest: HASH },
+    changeset: {
+      patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+b\n",
+      files: [{ file: "src/a.ts", expectedContentHash: HASH }],
+    },
+  });
+}
+
+function navigateSymbolAction(): EditorAgentAction {
+  return baseAction({
+    type: "navigateSymbol",
+    target: {
+      file: "src/a.ts",
+      selection: { start: { line: 0, character: 1 }, end: { line: 0, character: 1 } },
+    },
+    navigateSymbol: {
+      operation: "definition",
+      document: { path: "src/a.ts", languageId: "typescript", text: "const a = 1;\na;" },
+      position: { line: 1, character: 0 },
+    },
+  });
+}
+
+function searchWorkspaceAction(): EditorAgentAction {
+  return baseAction({
+    type: "searchWorkspace",
+    searchWorkspace: { mode: "text", query: "needle", maxResults: 10 },
+  });
+}
+
+function validActionForType(type: EditorAgentActionType): EditorAgentAction {
+  if (type === "applyChangeset") return changesetAction();
+  if (type === "navigateSymbol") return navigateSymbolAction();
+  if (type === "searchWorkspace") return searchWorkspaceAction();
+  return baseAction({ type });
+}
+
 describe("schema version compatibility (Issue #1391)", () => {
   it("pins EDITOR_AGENT_SCHEMA_VERSION to the literal '1'", () => {
     expect(EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+  });
+});
+
+describe("bounded editor action origin (Issue #2119)", () => {
+  it("accepts only the canonical agent and chat wire values", () => {
+    expect(EDITOR_AGENT_ACTION_ORIGINS).toEqual(["agent", "chat"]);
+    expect(isEditorAgentActionOrigin("agent")).toBe(true);
+    expect(isEditorAgentActionOrigin("chat")).toBe(true);
+    expect(isEditorAgentActionOrigin("harness")).toBe(false);
+    expect(isEditorAgentActionOrigin("chat:conversation-1")).toBe(false);
+    expect(isEditorAgentActionOrigin("chat".repeat(1_000))).toBe(false);
+    expect(isEditorAgentActionOrigin({ producer: "chat" })).toBe(false);
+  });
+
+  it("keeps legacy origin-free actions valid and resolves them to the agent default", () => {
+    const legacy = baseAction({ type: "applyPatch", patch: "patch" });
+    expect("origin" in legacy).toBe(false);
+    expect(isEditorAgentAction(legacy)).toBe(true);
+    expect(DEFAULT_EDITOR_AGENT_ACTION_ORIGIN).toBe("agent");
+    expect(resolveEditorAgentActionOrigin(legacy.origin)).toBe("agent");
+
+    const parsed = parseEditorAgentActionsPostBody(legacy);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || "kind" in parsed.value) throw new Error("expected an action");
+    expect(parsed.value.origin).toBe("agent");
+  });
+
+  it("preserves chat and rejects any out-of-enum origin", () => {
+    const chatAction = baseAction({ type: "applyPatch", origin: "chat", patch: "patch" });
+    expect(isEditorAgentAction(chatAction)).toBe(true);
+    expect(resolveEditorAgentActionOrigin(chatAction.origin)).toBe("chat");
+    expect(parseEditorAgentActionsPostBody(chatAction)).toMatchObject({
+      ok: true,
+      value: { origin: "chat" },
+    });
+    expect(isEditorAgentAction({ ...chatAction, origin: "automation" })).toBe(false);
   });
 });
 
@@ -436,7 +861,7 @@ describe("snapshot text mode defaults to none (Issue #1391 AC1)", () => {
 describe("action validator covers every action type (Issue #1391)", () => {
   it("accepts a minimal valid action for each action type", () => {
     for (const type of ALL_ACTION_TYPES) {
-      expect(isEditorAgentAction(baseAction({ type }))).toBe(true);
+      expect(isEditorAgentAction(validActionForType(type))).toBe(true);
     }
   });
 
@@ -573,9 +998,9 @@ describe("event validator covers every event kind (Issue #1391)", () => {
 });
 
 describe("write-action precondition rule (Issue #1391 AC2)", () => {
-  it("lists exactly the four mutating action types", () => {
+  it("lists exactly the five mutating action types", () => {
     expect([...EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
-      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+      ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),
     );
   });
 
@@ -607,6 +1032,8 @@ describe("write-action precondition rule (Issue #1391 AC2)", () => {
     expect(editorAgentWritePreconditionError(byHash)).toBeNull();
     expect(editorAgentActionHasWritePrecondition(byVersion)).toBe(true);
     expect(editorAgentWritePreconditionError(byVersion)).toBeNull();
+    expect(editorAgentActionHasWritePrecondition(changesetAction())).toBe(true);
+    expect(editorAgentWritePreconditionError(changesetAction())).toBeNull();
   });
 
   it("never requires a precondition for a non-write action", () => {
@@ -626,11 +1053,263 @@ describe("write-action precondition rule (Issue #1391 AC2)", () => {
   });
 });
 
+describe("governed applyChangeset contract (Issue #2114)", () => {
+  it("accepts only a boolean server-derived review requirement", () => {
+    expect(isEditorAgentAction({ ...changesetAction(), requiresReview: true })).toBe(true);
+    expect(isEditorAgentAction({ ...changesetAction(), requiresReview: false })).toBe(true);
+    expect(isEditorAgentAction({ ...changesetAction(), requiresReview: "false" })).toBe(false);
+    expect("requiresReview" in changesetAction()).toBe(false);
+  });
+
+  it("accepts bounded authority and one-use approval references bound to the action", () => {
+    const authorityRef = { runId: "run-2114", envelopeDigest: HASH };
+    const approvalRef = {
+      approvalId: "approval-1",
+      actionId: "action-1",
+      approvalProofDigest: HASH,
+      expiresAt: "2026-07-09T12:00:00Z",
+    };
+    expect(isEditorAgentGovernedAuthorityReference(authorityRef)).toBe(true);
+    expect(isEditorAgentOneUseApprovalReference(approvalRef)).toBe(true);
+    expect(isEditorAgentAction({ ...changesetAction(), approvalRef })).toBe(true);
+    expect(
+      isEditorAgentAction({
+        ...changesetAction(),
+        approvalRef: { ...approvalRef, actionId: "other" },
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentGovernedAuthorityReference({ ...authorityRef, envelopeDigest: "raw" }),
+    ).toBe(false);
+  });
+
+  it("accepts one bounded patch, per-file preconditions, and selected-file acceptance", () => {
+    const action = changesetAction();
+    const changeset = {
+      ...action.changeset,
+      files: [
+        { file: "src/a.ts", expectedContentHash: HASH },
+        {
+          file: "src/b.ts",
+          expectedDocumentVersion: { sizeBytes: 4, modifiedAt: 2, contentHash: HASH },
+        },
+      ],
+      selectedFiles: ["src/b.ts"],
+    };
+    expect(isEditorAgentChangeset(changeset)).toBe(true);
+    expect(isEditorAgentAction({ ...action, changeset })).toBe(true);
+  });
+
+  it("compares declared and selected file identity after path normalization", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        files: [
+          { file: "src/a.ts", expectedContentHash: HASH },
+          { file: "./src/a.ts", expectedContentHash: HASH },
+        ],
+      }),
+    ).toBe(false);
+    expect(isEditorAgentChangeset({ ...changeset, selectedFiles: ["./src/a.ts"] })).toBe(true);
+  });
+
+  it("accepts fractional filesystem modification times in document preconditions", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        files: [
+          {
+            file: "src/a.ts",
+            expectedDocumentVersion: {
+              sizeBytes: 4,
+              modifiedAt: 1_700_000_000_000.125,
+              contentHash: HASH,
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts a bounded browser-safe prepared changeset preview", () => {
+    const prepared = {
+      files: [
+        {
+          file: "src/a.ts",
+          kind: "modify",
+          textEdits: [
+            {
+              range: { start: { line: 0, character: 0 }, end: { line: 1, character: 0 } },
+              newText: "b\n",
+            },
+          ],
+        },
+      ],
+    } as const;
+    const action = changesetAction();
+    expect(isEditorAgentPreparedChangeset(prepared)).toBe(true);
+    expect(
+      isEditorAgentAction({
+        ...action,
+        changeset: { ...action.changeset, prepared },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects malformed or unbounded prepared changeset previews", () => {
+    const edit = {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+      newText: "x",
+    } as const;
+    const preparedFile = { file: "src/a.ts", kind: "modify", textEdits: [edit] } as const;
+    expect(isEditorAgentPreparedChangeset({ files: [preparedFile] })).toBe(true);
+    expect(isEditorAgentPreparedChangeset({ files: [{ ...preparedFile, kind: "rename" }] })).toBe(
+      false,
+    );
+    expect(
+      isEditorAgentPreparedChangeset({
+        files: [
+          {
+            ...preparedFile,
+            textEdits: Array.from(
+              { length: EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS + 1 },
+              () => edit,
+            ),
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentPreparedChangeset({
+        files: [
+          {
+            ...preparedFile,
+            textEdits: [
+              { ...edit, newText: "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1) },
+            ],
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("fails closed for missing preconditions, nested idempotency, and invalid selections", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    expect(isEditorAgentChangeset({ ...changeset, files: [{ file: "src/a.ts" }] })).toBe(false);
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        files: [{ ...changeset.files[0], idempotencyKey: "second-key" }],
+      }),
+    ).toBe(false);
+    expect(isEditorAgentChangeset({ ...changeset, selectedFiles: ["src/missing.ts"] })).toBe(false);
+    expect(isEditorAgentChangeset({ ...changeset, selectedFiles: [] })).toBe(false);
+  });
+
+  it("enforces named changeset file and patch caps", () => {
+    const changeset = changesetAction().changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    const files = Array.from({ length: EDITOR_AGENT_CHANGESET_MAX_FILES + 1 }, (_, index) => ({
+      file: `src/${String(index)}.ts`,
+      expectedContentHash: HASH,
+    }));
+    expect(isEditorAgentChangeset({ ...changeset, files })).toBe(false);
+    expect(
+      isEditorAgentChangeset({
+        ...changeset,
+        patch: "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps existing schema-version-1 actions valid without additive fields", () => {
+    const legacy = baseAction({ type: "save", expectedContentHash: HASH });
+    expect(legacy.schemaVersion).toBe("1");
+    expect("authorityRef" in legacy).toBe(false);
+    expect("approvalRef" in legacy).toBe(false);
+    expect("changeset" in legacy).toBe(false);
+    expect(isEditorAgentAction(legacy)).toBe(true);
+  });
+});
+
+describe("bounded diagnostics detail and file-attributed results (Issue #2114)", () => {
+  const diagnostic = {
+    severity: "error",
+    range: { start: { line: 1, character: 2 }, end: { line: 1, character: 4 } },
+    message: "Type mismatch",
+  } as const;
+
+  it("accepts bounded diagnostics and an explicit truncation marker", () => {
+    const detail = { items: [diagnostic], truncated: true };
+    expect(isEditorAgentDiagnostic(diagnostic)).toBe(true);
+    expect(isEditorAgentDiagnosticsDetail(detail)).toBe(true);
+    expect(isEditorAgentSessionSnapshot({ ...snapshot(), diagnosticsDetail: detail })).toBe(true);
+  });
+
+  it("rejects oversized diagnostic lists and messages", () => {
+    expect(
+      isEditorAgentDiagnosticsDetail({
+        items: Array.from({ length: EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS + 1 }, () => diagnostic),
+        truncated: true,
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentDiagnostic({
+        ...diagnostic,
+        message: "x".repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS + 1),
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds diagnostic messages by Unicode code points", () => {
+    const emoji = "\u{1f600}";
+    expect(
+      isEditorAgentDiagnostic({
+        ...diagnostic,
+        message: emoji.repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS),
+      }),
+    ).toBe(true);
+    expect(
+      isEditorAgentDiagnostic({
+        ...diagnostic,
+        message: emoji.repeat(EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS + 1),
+      }),
+    ).toBe(false);
+    expect(isEditorAgentDiagnostic({ ...diagnostic, message: "" })).toBe(false);
+  });
+
+  it("validates file-attributed conflicts and selected-file outcomes", () => {
+    const fileResult = {
+      file: "src/a.ts",
+      status: "conflict",
+      conflict: { code: "VERSION_MISMATCH", message: "stale", file: "src/a.ts" },
+    } as const;
+    expect(isEditorAgentFileActionResult(fileResult)).toBe(true);
+    expect(
+      isEditorAgentActionResult({
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "conflict",
+        files: [fileResult, { file: "src/b.ts", status: "not-selected" }],
+      }),
+    ).toBe(true);
+    expect(isEditorAgentFileActionResult({ ...fileResult, file: "../outside.ts" })).toBe(false);
+  });
+});
+
 describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
   it("enumerates the full structured taxonomy including PRECONDITION_REQUIRED and NO_ACTIVE_BRIDGE", () => {
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
     expect(EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
-    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
+    expect(EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
+    expect(EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
+    expect(EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
     for (const code of EDITOR_AGENT_CONFLICT_CODES) {
       expect(isEditorAgentConflictCode(code)).toBe(true);
     }

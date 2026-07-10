@@ -17,9 +17,25 @@ work. It is a TypeScript monorepo (npm workspaces, Node ≥ 22) that ships as on
 
 **The human-control invariant — non-negotiable:**
 
-> Keiko never commits, pushes, opens pull requests, merges, or applies changes to a user's
-> repository without an explicit, local human action. Manifest-producing surfaces emit
-> **redacted** evidence for human review.
+> A local human selects or accepts the task, autonomy mode, Authority Envelope, and deployment
+> ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
+> when policy says `allowed`. Commit, push, pull-request creation, merge, and authority widening
+> remain separately human-approved delivery actions. Manifest-producing surfaces emit **redacted**
+> evidence for human review.
+
+The product has exactly three user-facing modes, governed by
+[ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md):
+
+- **Ask for approval** (`governed-assist`) allows workspace-contained work and asks before external
+  files, internet use, or delivery.
+- **Approve for me** (`supervised-coding`) allows low/medium-risk file and internet work and asks
+  before high/critical-risk work or delivery.
+- **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
+  Authority Envelope without per-action approval; delivery is still separately human-approved.
+
+Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
+sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
+restrictions fail closed.
 
 This shapes the product _and_ how you work on it:
 

@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 // vitest hoists the `vi.mock` factories below above this import, so the host loads the stubbed runtime.
 import { EditorWidget } from "./EditorWidget";
+import type { EditorSelectionHandoff } from "./editorSelectionHandoff";
 
 // Stub the heavy editor runtime so the HOST chrome (panes, split controls, resizers) can be tested in
 // isolation — and replace next/dynamic with a synchronous passthrough to that stub, since the host
@@ -12,10 +13,27 @@ import { EditorWidget } from "./EditorWidget";
 vi.mock("next/dynamic", () => ({
   __esModule: true,
   default: () => {
-    function RuntimeStub(props: { paneId?: string; toolbarExtras?: ReactNode }): ReactNode {
+    function RuntimeStub(props: {
+      paneId?: string;
+      toolbarExtras?: ReactNode;
+      onAskSelection?: ((handoff: EditorSelectionHandoff) => boolean) | undefined;
+    }): ReactNode {
       return (
         <div data-testid="pane-runtime" data-pane={props.paneId ?? "root"}>
           {props.toolbarExtras}
+          <button
+            type="button"
+            onClick={() =>
+              props.onAskSelection?.({
+                file: "src/a.ts",
+                range: { start: { line: 0, column: 0 }, end: { line: 0, column: 5 } },
+                text: "const",
+                truncated: false,
+              })
+            }
+          >
+            Ask selection from pane
+          </button>
         </div>
       );
     }
@@ -60,6 +78,21 @@ function splitParent(): HTMLElement {
 }
 
 describe("EditorWidget host — split resize gesture", () => {
+  it("forwards the selection handoff callback to the active pane runtime", async () => {
+    const onAskSelection = vi.fn<(handoff: EditorSelectionHandoff) => boolean>(() => true);
+    render(<EditorWidget root="/repo" file="src/a.ts" onAskSelection={onAskSelection} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Ask selection from pane" }));
+
+    expect(onAskSelection).toHaveBeenCalledOnce();
+    expect(onAskSelection).toHaveBeenCalledWith({
+      file: "src/a.ts",
+      range: { start: { line: 0, column: 0 }, end: { line: 0, column: 5 } },
+      text: "const",
+      truncated: false,
+    });
+  });
+
   it("commits the split ratio ONLY on pointer release — never on a move — and previews live via CSS", async () => {
     const onWorkspaceChange = vi.fn();
     render(

@@ -124,6 +124,9 @@ test("seeded chat window has no serious/critical axe violations @smoke", async (
   const chatWindow = page.getByRole("region", { name: "Chat — E2E a11y chat" });
   await expect(chatWindow).toBeVisible();
   await expect(chatWindow.getByRole("textbox", { name: "Chat message" })).toBeVisible();
+  await chatWindow.locator(".chatw-empty").evaluate(async (element) => {
+    await Promise.allSettled(element.getAnimations().map((animation) => animation.finished));
+  });
   const violations = unexplainedViolations(
     await runAxe(page, '.window[data-window-id="e2e-a11y-chat-window"]'),
   );

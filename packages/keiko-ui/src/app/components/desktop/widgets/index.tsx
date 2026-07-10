@@ -1,5 +1,5 @@
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useRef, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -12,7 +12,6 @@ import {
   connectedRunSourcesFromWindowCfg,
 } from "./quality-intelligence/connectedSources";
 import type { AgentRunCfg } from "./cards/AgentRunWidget";
-import type { ChatMessage } from "@/lib/types";
 
 function WindowChunkFallback(): ReactNode {
   const t = useTranslate();
@@ -20,10 +19,10 @@ function WindowChunkFallback(): ReactNode {
 }
 
 const windowChunkFallback = WindowChunkFallback;
-const ChatWindow = dynamic(() => import("../ChatWindow").then((mod) => mod.ChatWindow), {
-  ssr: false,
-  loading: windowChunkFallback,
-});
+const ChatWindowSessionHost = dynamic(
+  () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.ChatWindowSessionHost),
+  { ssr: false, loading: windowChunkFallback },
+);
 const ProjectPanel = dynamic(
   () => import("./panels/ProjectPanel").then((mod) => mod.ProjectPanel),
   { ssr: false, loading: windowChunkFallback },
@@ -84,10 +83,10 @@ const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mo
   ssr: false,
   loading: windowChunkFallback,
 });
-const EditorWidget = dynamic(() => import("./cards/EditorWidget").then((mod) => mod.EditorWidget), {
-  ssr: false,
-  loading: windowChunkFallback,
-});
+const EditorWindowSessionHost = dynamic(
+  () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.EditorWindowSessionHost),
+  { ssr: false, loading: windowChunkFallback },
+);
 const BrowserWidget = dynamic(
   () => import("./cards/BrowserWidget").then((mod) => mod.BrowserWidget),
   { ssr: false, loading: windowChunkFallback },
@@ -206,20 +205,6 @@ function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
 
-function num(cfg: Record<string, unknown>, key: string): number | undefined {
-  const v = cfg[key];
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
-}
-
-function stringArray(cfg: Record<string, unknown>, key: string): readonly string[] | undefined {
-  const raw = cfg[key];
-  if (!Array.isArray(raw)) return undefined;
-  const values = raw
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim());
-  return values.length > 0 ? values : undefined;
-}
-
 function stringArrayJson(cfg: Record<string, unknown>, key: string): readonly string[] {
   const raw = str(cfg, key);
   if (raw === undefined || raw.trim().length === 0) return [];
@@ -276,96 +261,6 @@ function toAgentCfg(cfg: Record<string, unknown>): AgentRunCfg {
   const access = agentAccess(cfg);
   if (access !== undefined) out.access = access;
   return out;
-}
-
-function ChatWindowSessionHost({
-  cfg,
-  ctx,
-}: {
-  readonly cfg: Record<string, unknown>;
-  readonly ctx: WindowRenderContext;
-}): ReactNode {
-  const session = useChatSessionContext();
-  const creatingRef = useRef(false);
-  const chatId = str(cfg, "chatId");
-  const title = str(cfg, "title");
-  const { updateCfg } = ctx;
-  const { activeChat, activeProject, chats, loading, openChat, openNewChat } = session;
-  const activeTarget =
-    activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
-
-  useEffect(() => {
-    if (loading) return;
-    if (chatId !== undefined) {
-      if (activeTarget?.id === chatId) return;
-      const target = chats.find((chat) => chat.id === chatId && chat.status !== "closed");
-      if (target !== undefined) void openChat(target);
-      return;
-    }
-    if (creatingRef.current) return;
-    creatingRef.current = true;
-    void openNewChat(undefined, title)
-      .then((created) => {
-        if (created !== undefined) updateCfg({ chatId: created.id, title: created.title });
-      })
-      .finally(() => {
-        creatingRef.current = false;
-      });
-  }, [chatId, activeTarget?.id, chats, loading, openChat, openNewChat, title, updateCfg]);
-
-  useEffect(() => {
-    if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
-    if (activeTarget.title !== title) updateCfg({ title: activeTarget.title });
-  }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
-
-  const targetMissing =
-    chatId !== undefined &&
-    !session.loading &&
-    activeTarget?.id !== chatId &&
-    !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
-  const waitingForTarget = session.loading || (chatId !== undefined && activeTarget?.id !== chatId);
-  const openRunResult = useCallback(
-    (message: ChatMessage): void => {
-      if (message.runId === undefined) return;
-      const cfg: Record<string, string | number | boolean> = { runId: message.runId };
-      const workflow = message.workflowId ?? message.taskType;
-      if (workflow !== undefined) cfg.workflow = workflow;
-      // Issue #446 — when a task workspace is active, a run opened from chat is scoped to its root, so
-      // the chat task-context stays consistent with the other bound surfaces.
-      const runRoot = ctx.activeRoot ?? activeProject?.path;
-      if (runRoot !== undefined) cfg.workspaceRoot = runRoot;
-      ctx.openWindow("agents", cfg);
-    },
-    [activeProject?.path, ctx],
-  );
-
-  return targetMissing ? (
-    <div className="lk-empty">
-      <p className="lk-empty-title">Chat not found</p>
-      <p className="lk-empty-body">This conversation was deleted or is no longer available.</p>
-    </div>
-  ) : waitingForTarget ? (
-    <div className="lk-loading">Opening chat...</div>
-  ) : (
-    <ChatWindow
-      windowId={ctx.windowId}
-      mini={ctx.mini === true}
-      minimalChat={ctx.minimalChat === true}
-      compact={ctx.compact === true}
-      controlsNarrow={ctx.controlsNarrow === true}
-      barCompact={ctx.barCompact === true}
-      workflowCompact={ctx.workflowCompact === true}
-      linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
-      linkedRoots={ctx.linkedRoots}
-      openEditorFile={ctx.openEditorFile}
-      previewWindows={{
-        add: ctx.openWindow,
-        focus: ctx.focusWindow,
-        update: ctx.updateWindow,
-      }}
-      onOpenRunResult={openRunResult}
-    />
-  );
 }
 
 registerWindowRender("chat", (cfg, ctx) => <ChatWindowSessionHost cfg={cfg} ctx={ctx} />);
@@ -522,55 +417,9 @@ registerWindowRender("files", (cfg, ctx) => {
 });
 registerWindowRender("editor", (cfg, ctx) => {
   const root = resolveBoundRoot(ctx, str(cfg, "root"));
-  const file = str(cfg, "file");
-  const openFiles = stringArray(cfg, "openFiles");
-  const layoutJson = str(cfg, "layoutJson");
-  const revealLineStart = num(cfg, "revealLineStart");
-  const revealLineEnd = num(cfg, "revealLineEnd");
-  const revealRequestId = str(cfg, "revealRequestId");
-  const props: {
-    root?: string;
-    file?: string;
-    openFiles?: readonly string[];
-    layoutJson?: string;
-    revealLineStart?: number;
-    revealLineEnd?: number;
-    revealRequestId?: string;
-    windowId?: string;
-    linkedRoot?: string | null;
-    linkedFilePath?: string | undefined;
-    linkedCapsuleIds?: readonly string[];
-    linkedCapsuleSetIds?: readonly string[];
-    onWorkspaceChange?:
-      | ((patch: {
-          root?: string | undefined;
-          file?: string | undefined;
-          openFiles?: readonly string[] | undefined;
-          layoutJson?: string | undefined;
-        }) => void)
-      | undefined;
-    openEditorFile?: typeof ctx.openEditorFile | undefined;
-  } = {};
-  if (root !== undefined) props.root = root;
-  if (file !== undefined) props.file = file;
-  if (openFiles !== undefined) props.openFiles = openFiles;
-  if (layoutJson !== undefined) props.layoutJson = layoutJson;
-  if (revealLineStart !== undefined) props.revealLineStart = revealLineStart;
-  if (revealLineEnd !== undefined) props.revealLineEnd = revealLineEnd;
-  if (revealRequestId !== undefined) props.revealRequestId = revealRequestId;
-  props.linkedRoot = ctx.linkedRoot;
-  props.linkedFilePath = ctx.linkedFilePath;
-  props.linkedCapsuleIds = ctx.linkedCapsuleIds;
-  props.linkedCapsuleSetIds = ctx.linkedCapsuleSetIds;
-  props.windowId = ctx.windowId;
-  props.onWorkspaceChange = (patch) => {
-    ctx.updateCfg(patch);
-  };
-  props.openEditorFile = ctx.openEditorFile;
-  // Issue #446 (AC4 / SC3) — remount on a workspace switch so no Monaco model or open document from
-  // the previous workspace root survives into the new one. The #1491 dirty-buffer/hot-exit save fires
-  // on unmount before the new tree mounts.
-  return <EditorWidget key={ctx.activeRoot ?? "unbound"} {...props} />;
+  return (
+    <EditorWindowSessionHost key={ctx.activeRoot ?? "unbound"} cfg={cfg} ctx={ctx} root={root} />
+  );
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");

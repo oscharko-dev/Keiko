@@ -50,6 +50,13 @@ import {
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
+import {
+  completeEditorAgentReconciliation,
+  enqueueEditorAgentReconciliation,
+  pruneEditorAgentReconciliation,
+  type EditorAgentReconciliationEntry,
+  type EditorAgentReconciliationQueues,
+} from "./editorAgentReconciliationQueue";
 import { FileIcon } from "../shared/projectTree";
 import {
   allDirtyFiles,
@@ -237,6 +244,7 @@ interface PaneBinding {
   readonly onDirtyChange: (path: string, dirty: boolean) => void;
   readonly onMoveTab: (fromPaneId: string, file: string, toPaneId: string) => void;
   readonly onSplitPane: (paneId: string, direction: "row" | "column") => void;
+  readonly onAgentChangesetCommitted: (entries: readonly EditorAgentReconciliationEntry[]) => void;
   readonly toolbarExtras: ReactNode;
   readonly renderTabHandle: NonNullable<EditorRuntimeWidgetProps["renderTabHandle"]>;
 }
@@ -294,7 +302,10 @@ export function EditorWidget({
   const [tabDropTargetPaneId, setTabDropTargetPaneId] = useState<string | null>(null);
   const [tabInsertTarget, setTabInsertTargetState] = useState<TabInsertTarget | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
+  const [agentReconciliationQueues, setAgentReconciliationQueues] =
+    useState<EditorAgentReconciliationQueues>({});
   const saveSeqRef = useRef(0);
+  const agentReconciliationSeqRef = useRef(0);
   const saveResolversRef = useRef(new Map<number, (ok: boolean) => void>());
   const lastPropRootRef = useRef(root?.trim() ?? "");
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -359,6 +370,7 @@ export function EditorWidget({
       setDirtyByPane({});
       setOutlineByPane({});
       setOutlineRevealByPane({});
+      setAgentReconciliationQueues({});
     }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
@@ -425,6 +437,36 @@ export function EditorWidget({
     },
     [markDirty],
   );
+
+  const queueAgentReconciliation = useCallback(
+    (sourcePaneId: string, entries: readonly EditorAgentReconciliationEntry[]): void => {
+      agentReconciliationSeqRef.current += 1;
+      const request = {
+        requestId: agentReconciliationSeqRef.current,
+        entries: entries.map((entry) => ({ file: entry.file, kind: entry.kind })),
+      };
+      setAgentReconciliationQueues((current) =>
+        enqueueEditorAgentReconciliation(
+          current,
+          Object.values(layoutRef.current.panes),
+          sourcePaneId,
+          request,
+        ),
+      );
+    },
+    [],
+  );
+
+  const completeAgentReconciliation = useCallback((requestId: number, paneId: string): void => {
+    setAgentReconciliationQueues((current) =>
+      completeEditorAgentReconciliation(current, paneId, requestId),
+    );
+  }, []);
+
+  useEffect(() => {
+    const paneIds = new Set(Object.keys(layout.panes));
+    setAgentReconciliationQueues((current) => pruneEditorAgentReconciliation(current, paneIds));
+  }, [layout.panes]);
 
   const requestDirtyClose = useCallback(
     (input: {
@@ -1337,6 +1379,7 @@ export function EditorWidget({
           moveTabAction(fromPaneId, toPaneId, file),
         onSplitPane: (targetPaneId: string, direction: "row" | "column") =>
           splitPane(targetPaneId, direction),
+        onAgentChangesetCommitted: (entries) => queueAgentReconciliation(paneId, entries),
         toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane),
         // GEN-PERF-EDITOR-003 — the full drag-capable tab handle lives HERE (in the
         // pane-memoized closure) instead of as a per-render inline closure in renderPane,
@@ -1382,6 +1425,7 @@ export function EditorWidget({
     markDirty,
     moveTabAction,
     splitPane,
+    queueAgentReconciliation,
     closePane,
     handleTabKeyDown,
     beginTabPointerDrag,
@@ -1416,6 +1460,9 @@ export function EditorWidget({
       externalSaveRequest:
         saveRequest !== null && saveRequest.paneId === pane.id ? saveRequest : undefined,
       onExternalSaveComplete,
+      agentReconciliationRequest: agentReconciliationQueues[pane.id]?.[0],
+      onAgentChangesetCommitted: binding.onAgentChangesetCommitted,
+      onAgentReconciliationComplete: completeAgentReconciliation,
       tabInsertTarget:
         tabInsertTarget?.paneId === pane.id
           ? { file: tabInsertTarget.file, edge: tabInsertTarget.edge }

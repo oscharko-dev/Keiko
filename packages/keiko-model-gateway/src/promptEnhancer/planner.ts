@@ -38,8 +38,8 @@ export interface PromptSafetyPosture {
   // The task is high-stakes (safety-critical profile or critical criticality): the prompt must carry a
   // professional-advice disclaimer and avoid definitive determinations.
   readonly safetyCritical: boolean;
-  // A side-effecting action (tool use, file write, network egress, irreversible change) must be gated
-  // behind explicit human approval; the prompt must never self-authorize it (AC4).
+  // A human must review risky prompt authority. Runtime side effects then follow the confirmed mode,
+  // Authority Envelope, and per-action policy; the prompt must never self-authorize or widen them.
   readonly requiresHumanApproval: boolean;
   // Invariant (ADR-0044 §4): an Enhanced Prompt is data, never a capability grant. Always true; the
   // generator always emits the no-authority safety rule. Surfaced so callers and tests can assert it.

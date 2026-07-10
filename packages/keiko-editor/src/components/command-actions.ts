@@ -7,14 +7,16 @@
  *    accessibility help) already ship with Monaco. Their built-in action ids are listed in
  *    {@link MONACO_BUILTIN_ACTION_IDS} so the UX spec, status bar, and tests reference one source of
  *    truth; the editor never re-implements them.
- * 2. **Host-owned** commands (Generate Tests) are registered into Monaco via `editor.addAction`, so
- *    they appear in Monaco's native command palette (F1) and context menu and carry a keybinding.
- *    The run handler is host-injected; the descriptor maths stay node-testable (the `monaco-editor`
- *    import is type-only, like {@link import("./keybindings.js").buildSaveActionDescriptor}).
+ * 2. **Host-owned** commands (Generate Tests, Ask Keiko) are registered into Monaco via
+ *    `editor.addAction`, so they appear in Monaco's native command palette (F1) and context menu and
+ *    carry a keybinding. Run handlers are host-injected; descriptor maths and selection capture stay
+ *    node-testable (`monaco-editor` remains a type-only import).
  */
 import type * as monaco from "monaco-editor";
 
 import type { EditorCommandId } from "../command-types.js";
+import { monacoSelectionToEditorRange } from "./selection-reporting.js";
+import type { AskKeikoAboutSelectionHandler } from "./types.js";
 
 /**
  * Monaco's built-in action ids backing the editor-intrinsic #1205 commands. These actions are
@@ -51,12 +53,19 @@ export const EDITOR_COMMAND_KEYBINDINGS: Readonly<
   "editor.acceptInlineCompletion": { mac: "Tab", pc: "Tab" },
   "editor.rejectInlineCompletion": { mac: "Esc", pc: "Esc" },
   "editor.generateTests": { mac: "⌘⌥T", pc: "Ctrl+Alt+T" },
+  "editor.askKeikoAboutSelection": { mac: "⌘⌥K", pc: "Ctrl+Alt+K" },
   "editor.renameSymbol": { mac: "F2", pc: "F2" },
 };
 
 /** Stable id and label for the host-owned Generate Tests action (palette + context-menu entry). */
 export const EDITOR_GENERATE_TESTS_ACTION_ID = "keiko.editor.generateTests";
 export const EDITOR_GENERATE_TESTS_ACTION_LABEL = "Generate Tests";
+
+/** Stable id and label for the selection-scoped Ask Keiko action. */
+export const EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_ID = "keiko.editor.askKeikoAboutSelection";
+export const EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_LABEL = "Ask Keiko about this selection";
+
+const EDITOR_HAS_SELECTION_CONTEXT_KEY = "editorHasSelection";
 
 /**
  * Structural view of the `KeyMod`/`KeyCode` members the Keiko-registered actions need (injectable so
@@ -65,6 +74,12 @@ export const EDITOR_GENERATE_TESTS_ACTION_LABEL = "Generate Tests";
 export interface CommandActionKeys {
   readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
   readonly KeyCode: { readonly KeyT: number };
+}
+
+/** Key constants for the Ask Keiko selection command, kept additive for existing consumers. */
+export interface AskKeikoAboutSelectionCommandActionKeys {
+  readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
+  readonly KeyCode: { readonly KeyK: number };
 }
 
 /**
@@ -101,5 +116,47 @@ export function buildGenerateTestsActionDescriptor(
     contextMenuGroupId: "1_modification",
     contextMenuOrder: 2,
     run: args.run,
+  };
+}
+
+/** `Cmd/Ctrl+Alt+K` packed as Monaco's keybinding integer. */
+export function buildAskKeikoAboutSelectionKeybinding(
+  keys: AskKeikoAboutSelectionCommandActionKeys,
+): number {
+  return keys.KeyMod.CtrlCmd | keys.KeyMod.Alt | keys.KeyCode.KeyK;
+}
+
+export interface AskKeikoAboutSelectionActionArgs {
+  readonly keys: AskKeikoAboutSelectionCommandActionKeys;
+  readonly run: (editor: monaco.editor.ICodeEditor) => void;
+}
+
+/** Build the selection-gated Ask Keiko action descriptor for Monaco's existing command surface. */
+export function buildAskKeikoAboutSelectionActionDescriptor(
+  args: AskKeikoAboutSelectionActionArgs,
+): monaco.editor.IActionDescriptor {
+  return {
+    id: EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_ID,
+    label: EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_LABEL,
+    precondition: EDITOR_HAS_SELECTION_CONTEXT_KEY,
+    keybindings: [buildAskKeikoAboutSelectionKeybinding(args.keys)],
+    contextMenuGroupId: "1_modification",
+    contextMenuOrder: 3,
+    run: args.run,
+  };
+}
+
+/** Capture the live non-empty selection without ever reading the full Monaco model. */
+export function buildAskKeikoAboutSelectionRunHandler(
+  onAsk: AskKeikoAboutSelectionHandler,
+): (editor: monaco.editor.ICodeEditor) => void {
+  return (editor): void => {
+    const selection = editor.getSelection();
+    if (selection === null) return;
+    const range = monacoSelectionToEditorRange(selection);
+    if (range === null) return;
+    const model = editor.getModel();
+    if (model === null) return;
+    onAsk({ textMode: "selection", range, text: model.getValueInRange(selection) });
   };
 }

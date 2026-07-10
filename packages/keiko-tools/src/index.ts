@@ -77,10 +77,14 @@ export {
 export {
   applyPatch,
   buildRestorePatch,
+  inspectPatch,
   invertPatch,
+  projectValidatedPatch,
   renderDryRun,
   validatePatch,
   type ApplyDeps,
+  type PatchInspection,
+  type PatchInspectionFile,
   type ValidateDeps,
 } from "./patch.js";
 export { normalizeUnifiedDiffHunks } from "./patch-normalize.js";
@@ -89,9 +93,24 @@ export { computeFileContent, type ApplyOutcome, type HunkConflict } from "./patc
 
 // ─── Tool definitions (model-facing JSON-Schema table) ──────────────────────────────
 export { TOOL_DEFINITIONS } from "./schemas.js";
+export { EDITOR_AGENT_TOOL_DEFINITIONS } from "./editor-agent-schemas.js";
 
 // ─── Tool host implementation ───────────────────────────────────────────────────────
 export { WorkspaceToolHost } from "./registry.js";
+export {
+  DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+  DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES,
+  EditorAgentHttpClient,
+  createFetchEditorAgentHttpTransport,
+  type EditorAgentClientError,
+  type EditorAgentClientErrorKind,
+  type EditorAgentClientResult,
+  type EditorAgentHttpTransport,
+  type EditorAgentHttpTransportRequest,
+  type EditorAgentHttpTransportResponse,
+  type EditorAgentTimeoutScheduler,
+} from "./editor-agent-client.js";
+export { EditorAgentToolHost, type EditorAgentToolOutput } from "./editor-agent-tool-host.js";
 
 // ─── Terminal-policy: command-allowlist gate used by the terminal BFF ───────────────
 // `terminal-policy.ts` re-exports the symbol surface src/ui/terminal.ts depends on. Surface

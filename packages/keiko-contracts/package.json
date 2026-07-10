@@ -55,6 +55,10 @@
       "types": "./dist/bff-wire.d.ts",
       "import": "./dist/bff-wire.js"
     },
+    "./editor-agent": {
+      "types": "./dist/editor-agent.d.ts",
+      "import": "./dist/editor-agent.js"
+    },
     "./memory": {
       "types": "./dist/memory-barrel.d.ts",
       "import": "./dist/memory-barrel.js"

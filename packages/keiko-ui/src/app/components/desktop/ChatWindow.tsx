@@ -42,7 +42,11 @@ import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
-import { SafeMarkdownBoundary } from "./SafeMarkdown";
+import {
+  SafeMarkdownBoundary,
+  type AssistantCodeBlockApply,
+  type AssistantCodeBlockApplyOutcome,
+} from "./SafeMarkdown";
 import {
   repositoryReferenceRoots,
   sanitizeRepositoryEvidenceText,
@@ -97,6 +101,7 @@ import {
 import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
+import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
@@ -447,6 +452,7 @@ function ChatBubbleImpl({
   regenerating = false,
   repositoryRoots,
   openRepositoryReference,
+  onApplyCodeBlock,
   previewWindows,
   windowId,
   streaming = false,
@@ -460,6 +466,7 @@ function ChatBubbleImpl({
   readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId?: string | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
@@ -556,9 +563,11 @@ function ChatBubbleImpl({
             // degrades this one bubble to plain text instead of crashing the view.
             <SafeMarkdownBoundary
               source={message.content}
+              applyScopeId={`${message.chatId}:${message.id}`}
               repositoryRoots={repositoryRoots}
               openRepositoryReference={openRepositoryReference}
               citationPreview={citationPreview}
+              onApplyCodeBlock={onApplyCodeBlock}
             />
           )}
           {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
@@ -664,6 +673,7 @@ interface ConversationThreadProps {
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
   readonly windowId?: string | undefined;
   readonly sending: boolean;
@@ -684,6 +694,7 @@ function ConversationThreadImpl({
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
+  onApplyCodeBlock,
   previewWindows,
   windowId,
   sending,
@@ -763,6 +774,7 @@ function ConversationThreadImpl({
                   onOpenRunResult={onOpenRunResult}
                   repositoryRoots={repositoryRoots}
                   openRepositoryReference={openRepositoryReference}
+                  onApplyCodeBlock={onApplyCodeBlock}
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
@@ -3611,6 +3623,13 @@ function MemoryPanelImpl({
 // across a token flush, so the memo skips the per-frame re-render.
 const MemoryPanel = memo(MemoryPanelImpl);
 
+function assistantCodeBlockApplyOutcome(
+  outcome: ChatEditorApplyOutcome,
+): AssistantCodeBlockApplyOutcome {
+  if (outcome.kind === "conflict") return { kind: "conflict", code: outcome.code };
+  return { kind: outcome.kind };
+}
+
 export function ChatWindow({
   windowId,
   mini = false,
@@ -3650,6 +3669,37 @@ export function ChatWindow({
     rejectMemoryCandidate,
     forgetMemoryAction,
   } = session;
+  const activeProjectRoot = activeProject?.path;
+  const activeChatRoot = activeChat?.projectPath;
+  const codeApplyWorkspaceRoot =
+    activeChatRoot !== undefined &&
+    activeChatRoot.trim().length > 0 &&
+    activeChatRoot === activeProjectRoot
+      ? activeChatRoot
+      : undefined;
+  const queueAssistantCodeBlockApply = useCallback<AssistantCodeBlockApply>(
+    async ({ codeBlockText, language }) => {
+      if (codeApplyWorkspaceRoot === undefined) {
+        return { kind: "rejected" };
+      }
+      const [{ queueChatEditorApply }, { queueLocalEditorAgentAction }] = await Promise.all([
+        import("@/lib/chat-editor-apply"),
+        import("./widgets/cards/editorAgentBridge"),
+      ]);
+      const outcome = await queueChatEditorApply(
+        {
+          codeBlockText,
+          language,
+          context: { workspaceRoot: codeApplyWorkspaceRoot },
+        },
+        { queueAction: queueLocalEditorAgentAction },
+      );
+      return assistantCodeBlockApplyOutcome(outcome);
+    },
+    [codeApplyWorkspaceRoot],
+  );
+  const onApplyCodeBlock =
+    codeApplyWorkspaceRoot === undefined ? undefined : queueAssistantCodeBlockApply;
   // AC #1: block ready when no model is available — do not allow submission.
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
   const visible = useMemo(() => visibleOnly(messages), [messages]);
@@ -3837,6 +3887,7 @@ export function ChatWindow({
                 onOpenRunResult={onOpenRunResult}
                 repositoryRoots={repositoryRoots}
                 openRepositoryReference={openRepositoryReference}
+                onApplyCodeBlock={onApplyCodeBlock}
                 previewWindows={previewWindows}
                 windowId={windowId}
                 sending={sending}
