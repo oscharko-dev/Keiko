@@ -966,7 +966,9 @@ describe("verify-portable-runtime-signing", () => {
     ]);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("unsupported verification input key: rawLog");
+    expect(result.stderr).toContain("verification input contains unsupported keys");
+    expect(result.stderr).not.toContain("rawLog");
+    expect(result.stderr).not.toContain("codesign output");
   });
 
   it("applies the same production notarization checks to both macOS architectures", () => {
@@ -1137,7 +1139,7 @@ describe("verify-portable-runtime-signing", () => {
         "--verification-input",
         duplicateInput,
       ]).stderr,
-    ).toContain("duplicate sidecar verification input: opencode-compatible");
+    ).toContain("sidecar verification input is duplicated");
     const unknownInput = writeVerificationInput(dir, {
       verificationChecks: windowsVerificationChecks(),
       sidecarRuntimes: [
@@ -1153,7 +1155,89 @@ describe("verify-portable-runtime-signing", () => {
         "--verification-input",
         unknownInput,
       ]).stderr,
-    ).toContain("unknown sidecar verification input: unknown-sidecar");
+    ).toContain("sidecar verification input is unknown");
+  });
+
+  it("redacts secret-shaped keys, values, malformed JSON excerpts, and private paths", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    const { manifestPath } = writeManifestFixture(candidate, dir);
+    const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    const privateDir = join(dir, `private-${secret}`);
+    mkdirSync(privateDir, { recursive: true });
+    const malformedPath = join(privateDir, "verification-input.json");
+    writeFileSync(malformedPath, `{"${secret}":`);
+
+    const malformed = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      malformedPath,
+    ]);
+    expect(malformed.status).not.toBe(0);
+    expect(malformed.stderr).toContain("verification input could not be read");
+    expect(malformed.stderr).not.toContain(secret);
+    expect(malformed.stderr).not.toContain(privateDir);
+
+    const nestedInput = writeVerificationInput(dir, {
+      verificationChecks: {
+        publisherChainVerified: true,
+        timestampVerified: true,
+        [secret]: false,
+      },
+    });
+    const nested = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      nestedInput,
+    ]);
+    expect(nested.stderr).toContain("verification checks contain unsupported keys");
+    expect(nested.stderr).not.toContain(secret);
+
+    const topLevelInput = writeVerificationInput(dir, {
+      [secret]: `value-${secret}`,
+      verificationChecks: windowsVerificationChecks(),
+    });
+    const topLevel = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      topLevelInput,
+    ]);
+    expect(topLevel.stderr).toContain("verification input contains unsupported keys");
+    expect(topLevel.stderr).not.toContain(secret);
+
+    const sidecarDir = tempDir();
+    const sidecarManifest = manifest();
+    addSidecarRuntime(sidecarManifest, "windows-x64");
+    const { manifestPath: sidecarManifestPath } = writeManifestFixture(sidecarManifest, sidecarDir);
+    const sidecarInput = writeVerificationInput(sidecarDir, {
+      verificationChecks: windowsVerificationChecks(),
+      sidecarRuntimes: [
+        {
+          name: "opencode-compatible",
+          [secret]: `value-${secret}`,
+          verificationChecks: windowsVerificationChecks(),
+        },
+      ],
+    });
+    const sidecarResult = runSigningVerify([
+      "--manifest",
+      sidecarManifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      sidecarInput,
+    ]);
+    expect(sidecarResult.stderr).toContain("sidecar verification input contains unsupported keys");
+    expect(sidecarResult.stderr).not.toContain(secret);
   });
 });
 
