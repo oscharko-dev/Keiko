@@ -183,6 +183,7 @@ function connectBridge(bridgeDecisionCapability: string): CapturedBridge {
   const req = { on: vi.fn() } as unknown as IncomingMessage;
   const query = new URLSearchParams({
     sessionId: SESSION_ID,
+    bridgeStreamId: "e".repeat(32),
     bridgeDecisionCapability,
   }).toString();
   const outcome = handleEditorAgentEvents({
