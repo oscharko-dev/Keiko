@@ -1850,6 +1850,44 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(actionResultStatus(result.body)).toBe("queued");
     });
 
+    // Issue #2115: the fail-closed unverifiable-precondition gate is shared across write action
+    // types. Mirror the "save" coverage above for "format" to guard against a future per-type
+    // divergence in this path.
+    it("requires a verifiable pin for a format asserting an unverifiable document version", async () => {
+      await registerSnapshotOnly({ documentVersion: undefined });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "format",
+            idempotencyKey: "ik-format-version-unavailable",
+            actionId: "a-format-version-unavailable",
+            expectedContentHash: undefined,
+            expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
+    it("requires a verifiable pin for a format asserting an unverifiable content hash", async () => {
+      await registerSnapshotOnly({ activeFileContentHash: undefined });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "format",
+            idempotencyKey: "ik-format-hash-unavailable",
+            actionId: "a-format-hash-unavailable",
+            expectedDocumentVersion: undefined,
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
     it("rejects a mismatching hash even when the asserted version matches", async () => {
       await registerSnapshot();
       const result = await handleEditorAgentActions(
@@ -1881,6 +1919,78 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       );
       expect(result.status).toBe(202);
       expect(actionResultStatus(result.body)).toBe("queued");
+    });
+  });
+
+  // Issue #2115: mirror the shared fail-closed unverifiable-precondition coverage above for
+  // "applyPatch", which additionally requires a real workspace file so the patch clears structural
+  // validation and the assertion actually exercises the precondition gate, not patch parsing.
+  describe("write precondition — PRECONDITION_REQUIRED for applyPatch (Issue #2115)", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = mkdtempSync(join(tmpdir(), "keiko-agent-2115-"));
+    });
+
+    afterEach(() => {
+      rmSync(tmpDir, { recursive: true, force: true });
+      _resetEditorAgentStateForTests();
+    });
+
+    const validPatch = [
+      "--- a/src/precond.ts",
+      "+++ b/src/precond.ts",
+      "@@ -1 +1 @@",
+      "-const x = 1;",
+      "+const x = 2;",
+    ].join("\n");
+
+    function registerPatchSnapshot(overrides: Partial<EditorAgentSessionSnapshot>): Promise<void> {
+      return registerSnapshotOnly({
+        workspaceRoot: tmpDir,
+        activeFile: "src/precond.ts",
+        panes: [{ paneId: "pane-1", activeFile: "src/precond.ts", openFiles: ["src/precond.ts"] }],
+        ...overrides,
+      });
+    }
+
+    it("requires a verifiable pin for applyPatch asserting an unverifiable document version", async () => {
+      writeWorkspaceFile(tmpDir, "src/precond.ts", "const x = 1;\n");
+      await registerPatchSnapshot({ documentVersion: undefined });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "applyPatch",
+            idempotencyKey: "ik-patch-version-unavailable",
+            actionId: "a-patch-version-unavailable",
+            expectedContentHash: undefined,
+            expectedDocumentVersion: { sizeBytes: 1, modifiedAt: 1, contentHash: HASH },
+            patch: validPatch,
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
+    });
+
+    it("requires a verifiable pin for applyPatch asserting an unverifiable content hash", async () => {
+      writeWorkspaceFile(tmpDir, "src/precond.ts", "const x = 1;\n");
+      await registerPatchSnapshot({ activeFileContentHash: undefined });
+      connectBridge("session-1");
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "applyPatch",
+            idempotencyKey: "ik-patch-hash-unavailable",
+            actionId: "a-patch-hash-unavailable",
+            expectedDocumentVersion: undefined,
+            patch: validPatch,
+          }),
+        ),
+      );
+      expect(result.status).toBe(409);
+      expect(actionConflictCode(result.body)).toBe("PRECONDITION_REQUIRED");
     });
   });
 });
@@ -2747,6 +2857,59 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
   });
 
+  // Issue #2117: ADR-0125 D3 requires whole-action validation before selectedFiles projection, not
+  // validation of only the selected subset. A hostile precondition on an unselected declared file
+  // must fail the entire changeset, including the otherwise-valid selected files.
+  it("fails the whole changeset when an unselected declared file carries a hostile precondition", async () => {
+    writeWorkspaceFile(workspaceRoot, "src/a.txt", "A0\n");
+    writeWorkspaceFile(workspaceRoot, "src/b.txt", "B0\n");
+    writeWorkspaceFile(workspaceRoot, "src/c.txt", "C0\n");
+    const patch = oneLineModifyPatch([
+      { file: "src/a.txt", before: "A0", after: "A1" },
+      { file: "src/b.txt", before: "B0", after: "B1" },
+      { file: "src/c.txt", before: "C0", after: "C1" },
+    ]);
+    const proposed = changesetActionFor(
+      workspaceRoot,
+      patch,
+      ["src/a.txt", "src/b.txt", "src/c.txt"],
+      ["src/a.txt", "src/b.txt"],
+    );
+    const changeset = proposed.changeset;
+    if (changeset === undefined) throw new Error("expected changeset");
+    const hostile: EditorAgentAction = {
+      ...proposed,
+      changeset: {
+        ...changeset,
+        files: changeset.files.map((file) =>
+          file.file === "src/c.txt" ? { ...file, expectedContentHash: "b".repeat(64) } : file,
+        ),
+      },
+    };
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", [
+      "src/a.txt",
+      "src/b.txt",
+      "src/c.txt",
+    ]);
+
+    const rejected = await handleEditorAgentActions(context(hostile));
+
+    expect(rejected.status).toBe(409);
+    expect(actionResultStatus(rejected.body)).toBe("conflict");
+    expect(actionConflictCode(rejected.body)).toBe("CONTENT_HASH_MISMATCH");
+    expect(actionResult(rejected.body).files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: "src/a.txt", status: "failed" }),
+        expect.objectContaining({ file: "src/b.txt", status: "failed" }),
+        expect.objectContaining({ file: "src/c.txt", status: "conflict" }),
+      ]),
+    );
+    expect(bridge.frames()).not.toContain("event: editor-agent:action");
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+    expect(readWorkspaceFile(workspaceRoot, "src/c.txt")).toBe("C0\n");
+  });
+
   it("rolls back earlier files when the injected writer fails on a later member", async () => {
     const arranged = arrangeTwoFiles();
     await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
@@ -2913,6 +3076,39 @@ describe("agent editor action policy (Issue #1395 AC2)", () => {
     expect((await handleEditorAgentActions(context(first))).status).toBe(202);
     const denied = await handleEditorAgentActions(context(second));
 
+    expect(denied.status).toBe(403);
+    expect(actionConflictCode(denied.body)).toBe("POLICY_DENIED");
+    expect(auditRecords().at(-1)?.denyReason).toBe("authority-budget-exceeded");
+  });
+
+  // Issue #2121: a replayed idempotency key must return the retained result without a second
+  // Authority Envelope budget reservation. A one-slot budget makes any accidental re-reservation on
+  // replay observable: the replay would itself be denied authority-budget-exceeded instead of
+  // returning the original queued outcome.
+  it("does not re-charge the Authority Envelope budget when a queued action is replayed", async () => {
+    await registerSnapshot();
+    const limited = authorityEnvelope("/repo");
+    const registered = editorAgentAuthorityRegistry.register(
+      { ...limited, budget: { ...limited.budget, maxToolCalls: 1 } },
+      "governed-assist",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("expected limited authority registration");
+    agentAuthorityRef = registered.authorityRef;
+    const first = action({ actionId: "budget-replay-first", idempotencyKey: "budget-replay-key" });
+    const second = action({
+      actionId: "budget-replay-second",
+      idempotencyKey: "budget-replay-second-key",
+    });
+
+    const queued = await handleEditorAgentActions(context(first));
+    const replay = await handleEditorAgentActions(context(first));
+    const denied = await handleEditorAgentActions(context(second));
+
+    expect(queued.status).toBe(202);
+    expect(actionResultStatus(queued.body)).toBe("queued");
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(queued.body);
     expect(denied.status).toBe(403);
     expect(actionConflictCode(denied.body)).toBe("POLICY_DENIED");
     expect(auditRecords().at(-1)?.denyReason).toBe("authority-budget-exceeded");

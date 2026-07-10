@@ -667,6 +667,22 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
     expect(typeof mod.isEditorAgentConflictCode).toBe("function");
     expect(typeof mod.isEditorAgentFailureCode).toBe("function");
+    // Issue #2114 (ADR-0125 D3): the applyChangeset public contract surface — caps, changeset/
+    // conflict/file-result guards, and the authority/approval reference guards — is re-exported
+    // through the barrel so downstream packages import named symbols instead of re-deriving them.
+    expect(mod.EDITOR_AGENT_CHANGESET_MAX_FILES).toBe(50);
+    expect(mod.EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES).toBe(65_536);
+    expect(mod.EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS).toBe(2_000);
+    expect(mod.EDITOR_AGENT_REFERENCE_ID_MAX_CHARS).toBe(128);
+    expect(typeof mod.isEditorAgentChangeset).toBe("function");
+    expect(typeof mod.isEditorAgentChangesetFile).toBe("function");
+    expect(typeof mod.isEditorAgentConflictDetail).toBe("function");
+    expect(typeof mod.isEditorAgentDiagnostic).toBe("function");
+    expect(typeof mod.isEditorAgentDiagnosticsDetail).toBe("function");
+    expect(typeof mod.isEditorAgentFileActionResult).toBe("function");
+    expect(typeof mod.isEditorAgentGovernedAuthorityReference).toBe("function");
+    expect(typeof mod.isEditorAgentOneUseApprovalReference).toBe("function");
+    expect(typeof mod.isEditorAgentPreparedChangeset).toBe("function");
   });
 
   it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
@@ -683,6 +699,16 @@ describe("keiko-contracts package surface", () => {
     type _DiagnosticsDetail = import("./index.js").EditorAgentDiagnosticsDetail;
     type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
     type _Request = import("./index.js").EditorAgentSnapshotRequest;
+    // Issue #2114 (ADR-0125 D3): changeset / prepared-changeset / conflict / file-result types.
+    type _Changeset = import("./index.js").EditorAgentChangeset;
+    type _ChangesetFile = import("./index.js").EditorAgentChangesetFile;
+    type _PreparedChangeset = import("./index.js").EditorAgentPreparedChangeset;
+    type _PreparedChangesetFile = import("./index.js").EditorAgentPreparedChangesetFile;
+    type _PreparedChangeKind = import("./index.js").EditorAgentPreparedChangeKind;
+    type _PreparedTextEdit = import("./index.js").EditorAgentPreparedTextEdit;
+    type _ConflictDetail = import("./index.js").EditorAgentConflictDetail;
+    type _FileActionResult = import("./index.js").EditorAgentFileActionResult;
+    type _FileActionStatus = import("./index.js").EditorAgentFileActionStatus;
     pin<_Code>();
     pin<_Action>();
     pin<_ActionOrigin>();
@@ -693,6 +719,15 @@ describe("keiko-contracts package surface", () => {
     pin<_DiagnosticsDetail>();
     pin<_Snapshot>();
     pin<_Request>();
+    pin<_Changeset>();
+    pin<_ChangesetFile>();
+    pin<_PreparedChangeset>();
+    pin<_PreparedChangesetFile>();
+    pin<_PreparedChangeKind>();
+    pin<_PreparedTextEdit>();
+    pin<_ConflictDetail>();
+    pin<_FileActionResult>();
+    pin<_FileActionStatus>();
     expect(true).toBe(true);
   });
 

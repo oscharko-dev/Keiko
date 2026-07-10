@@ -82,7 +82,8 @@ export const EN_MESSAGES = {
   "chat.copy.copied": "Copied",
   "chat.copy.message": "Copy answer",
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
-  // workspace shell does not preload editor-only translations.
+  // workspace shell does not preload editor-only translations. Issue #2120 added the localized
+  // agent-presence-indicator labels to that lazy namespace (EN/DE) rather than this shell catalog.
   "chat.regenerate.cancelled": "Regeneration cancelled",
   "chat.regenerate.running": "Regenerating response",
   "chat.regenerate.cancel": "Cancel regeneration",
