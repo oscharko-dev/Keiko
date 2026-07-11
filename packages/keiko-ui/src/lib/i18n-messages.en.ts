@@ -1078,6 +1078,11 @@ export const EN_MESSAGES = {
   "atlassianConnectors.denied.reason.generic": "This action was denied by policy.",
   // The voice-dialogue composer motion update adds no user-facing copy; this
   // catalog touch records the required English-copy review for ChatWindow.tsx.
+  // The SonarCloud cognitive-complexity refactor (S3776) reflows JSX in
+  // ChatWindow.tsx, GatewaySetupDialog.tsx, UpdateWindow.tsx, EditorDiffSurface.tsx,
+  // GitClientWindow.tsx, FigmaSnapshotWindow.tsx, QiRunCard.tsx, RunLauncher.tsx, and
+  // HealthScanFindings.tsx without changing any user-facing copy; this catalog touch
+  // records the required English-copy review.
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;
