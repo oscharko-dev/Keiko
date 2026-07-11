@@ -158,7 +158,8 @@ epic pull request rather than ten separate ones, so the reviewer sees the connec
 coherent change with all gates green together. Merge remains a human-approved delivery action per
 the human-control invariant; this ledger is finalized when the maintainer merges.
 
-- Delivery pull request: <!-- COORDINATOR_PR_LINK --> (targets `dev`; open for maintainer review).
+- Delivery pull request: [#2301](https://github.com/oscharko-dev/Keiko/pull/2301) (targets `dev`;
+  open for maintainer review).
 
 Open follow-ups (documented in the ADR and this ledger, not blockers for the epic):
 
