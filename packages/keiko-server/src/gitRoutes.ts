@@ -63,6 +63,7 @@ export interface GitRouteOptions {
   readonly maxDiffBytes?: number | undefined;
   readonly maxChanges?: number | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly abortSignal?: AbortSignal | undefined;
 }
 
 export interface NormalizedGitRouteOptions {
@@ -71,6 +72,7 @@ export interface NormalizedGitRouteOptions {
   readonly maxDiffBytes: number;
   readonly maxChanges: number;
   readonly timeoutMs: number;
+  readonly abortSignal?: AbortSignal | undefined;
 }
 
 export interface RepositoryContext {
@@ -139,6 +141,7 @@ export function optionsWithDefaults(
     maxDiffBytes: options?.maxDiffBytes ?? DEFAULT_DIFF_MAX_BYTES,
     maxChanges: options?.maxChanges ?? DEFAULT_MAX_CHANGES,
     timeoutMs: options?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    ...(options?.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
   };
 }
 
@@ -154,6 +157,7 @@ export async function resolveRepository(
   );
   const membership = await resolveGitMembership(selectedRoot.realRoot, options.runner, {
     timeoutMs: options.timeoutMs,
+    ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
   });
   if (!membership.ok) {
     const reason = classifyFailure(membership.result);
@@ -230,10 +234,12 @@ function parseStatus(
   selectedRootPrefix: string,
   maxChanges: number,
   processTruncated: boolean,
+  scopedPath?: string,
 ): GitRepositoryStatusResponse {
   const records = stdout.split("\0").filter((record) => record.length > 0);
   let branch: string | undefined;
   let detached = false;
+  let scopedChangeCount = 0;
   const changes: GitChangedFile[] = [];
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index] ?? "";
@@ -259,6 +265,8 @@ function parseStatus(
       worktreeStatus === "C";
     const oldRawPath = hasOldPath ? records[index + 1] : undefined;
     if (oldRawPath !== undefined) index += 1;
+    if (scopedPath !== undefined && path !== scopedPath) continue;
+    scopedChangeCount += 1;
     if (changes.length < maxChanges) {
       const oldPath =
         oldRawPath === undefined
@@ -302,7 +310,9 @@ function parseStatus(
     untrackedCount,
     conflictedCount,
     changes,
-    truncated: processTruncated || records.length - 1 > maxChanges,
+    truncated:
+      processTruncated ||
+      (scopedPath === undefined ? records.length - 1 > maxChanges : scopedChangeCount > maxChanges),
     maxChanges,
   };
 }
@@ -409,7 +419,12 @@ export async function handleGitBranches(
         "--format=%(refname:short)%00%(objectname)%00%(HEAD)%00",
         "refs/heads",
       ],
-      { cwd: repo.repositoryRoot, maxBytes: options.maxStatusBytes, timeoutMs: options.timeoutMs },
+      {
+        cwd: repo.repositoryRoot,
+        maxBytes: options.maxStatusBytes,
+        timeoutMs: options.timeoutMs,
+        ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+      },
     );
     if (result.exitCode !== 0) {
       return { status: 200, body: redacted(deps, branchListFailure(repo, result)) };
@@ -527,6 +542,7 @@ async function runDiff(
     cwd: repo.repositoryRoot,
     maxBytes,
     timeoutMs: options.timeoutMs,
+    ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
   });
 }
 
@@ -544,11 +560,14 @@ export async function handleGitStatus(
         ctx.url.searchParams.get("includeIgnored"),
         "includeIgnored",
       );
+      const path = validatePath(ctx.url.searchParams.get("path"));
       const repo = await resolveRepository(ctx, deps, options);
       if ("available" in repo) {
         const body = { ...repo, maxChanges: options.maxChanges };
         return { status: 200, body: redacted(deps, body) };
       }
+      if (path !== undefined) await assertContainedGitPath(repo, path);
+      const relativePath = gitPath(repo.selectedRootPrefix, path);
       const status = await options.runner(
         [
           "--no-pager",
@@ -562,14 +581,13 @@ export async function handleGitStatus(
           "--untracked-files=all",
           ...(includeIgnored ? ["--ignored=matching"] : []),
           "--",
-          ...(repo.selectedRootPrefix.length > 0 && repo.selectedRootPrefix !== "."
-            ? [literalGitPathspec(repo.selectedRootPrefix)]
-            : []),
+          ...(relativePath === undefined ? [] : [literalGitPathspec(relativePath)]),
         ],
         {
           cwd: repo.repositoryRoot,
           maxBytes: options.maxStatusBytes,
           timeoutMs: options.timeoutMs,
+          ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
         },
       );
       if (status.exitCode !== 0) {
@@ -590,6 +608,7 @@ export async function handleGitStatus(
         repo.selectedRootPrefix,
         options.maxChanges,
         status.truncated,
+        path,
       );
       return { status: 200, body: redacted(deps, body) };
     },
@@ -818,6 +837,7 @@ async function runBlame(
       cwd: repo.repositoryRoot,
       maxBytes: GIT_EDITOR_BLAME_MAX_BYTES,
       timeoutMs: options.timeoutMs,
+      ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
     },
   );
 }

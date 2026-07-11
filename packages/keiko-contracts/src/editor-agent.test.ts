@@ -14,6 +14,10 @@ import {
   EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES,
   EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS,
   EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS,
+  EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS,
+  EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS,
+  EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION,
+  EDITOR_AGENT_QUERY_GIT_TARGET_BASENAME_MAX_CHARS,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_SESSION_ID_MAX_BYTES,
   EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES,
@@ -46,6 +50,7 @@ import {
   isEditorAgentVerificationRequest,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
+  parseEditorAgentQueryGitData,
   parseEditorAgentSnapshotRequest,
   resolveEditorAgentActionOrigin,
   validateAgentTextEdits,
@@ -55,6 +60,7 @@ import {
   type EditorAgentActionType,
   type EditorAgentConflictCode,
   type EditorAgentEvent,
+  type EditorAgentQueryGitData,
   type EditorAgentSessionSnapshot,
 } from "./editor-agent.js";
 
@@ -787,6 +793,96 @@ function queryGitAction(): EditorAgentAction {
   });
 }
 
+function queryGitData(): EditorAgentQueryGitData {
+  return {
+    schemaVersion: EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION,
+    target: { basename: "a.ts", pathHash: HASH },
+    caps: { maxFiles: 8, maxHunks: 16, maxBlameLines: 32, maxResultBytes: 192 * 1024 },
+    aspects: {
+      status: {
+        state: "available",
+        available: true,
+        branch: "dev",
+        detached: false,
+        clean: false,
+        change: {
+          indexStatus: "M",
+          worktreeStatus: " ",
+          staged: true,
+          unstaged: false,
+          untracked: false,
+          conflicted: false,
+        },
+        truncated: false,
+      },
+      diff: {
+        staged: {
+          scope: "staged",
+          layer: "staged",
+          files: [
+            {
+              layer: "staged",
+              status: "modified",
+              binary: false,
+              hunks: [
+                {
+                  header: "@@ -1 +1 @@",
+                  oldStart: 1,
+                  oldCount: 1,
+                  newStart: 1,
+                  newCount: 1,
+                  lines: [
+                    { kind: "del", oldLine: 1, newLine: null, text: "before" },
+                    { kind: "add", oldLine: null, newLine: 1, text: "after" },
+                  ],
+                  truncated: false,
+                },
+              ],
+              addedLines: 1,
+              removedLines: 1,
+              truncated: false,
+            },
+          ],
+          truncated: false,
+          totalFiles: 1,
+          totalBytes: 128,
+        },
+        unstaged: {
+          scope: "unstaged",
+          layer: "worktree",
+          files: [],
+          truncated: false,
+          totalFiles: 0,
+          totalBytes: 0,
+        },
+      },
+      blame: {
+        startLine: 1,
+        lines: [
+          {
+            line: 1,
+            commitHash: "b".repeat(40),
+            author: "Keiko",
+            authorTime: "2026-07-11T10:00:00Z",
+            summary: "Harden agent git context",
+          },
+        ],
+        truncated: false,
+        totalLines: 1,
+        totalBytes: 96,
+      },
+    },
+    omissions: [
+      {
+        aspect: "diff",
+        scope: "unstaged",
+        reason: "out-of-budget",
+        machineReason: "git-error",
+      },
+    ],
+  };
+}
+
 function validActionForType(type: EditorAgentActionType): EditorAgentAction {
   if (type === "applyChangeset") return changesetAction();
   if (type === "navigateSymbol") return navigateSymbolAction();
@@ -848,6 +944,34 @@ describe("queryGit action validation (Issue #2298)", () => {
     ).toBe(false);
   });
 
+  it("requires a POSIX-canonical query path", () => {
+    for (const path of [
+      "src\\a.ts",
+      "src//a.ts",
+      "./src/a.ts",
+      "src/./a.ts",
+      "src/../a.ts",
+      "/src/a.ts",
+      "C:/src/a.ts",
+      "src/a.ts/",
+    ]) {
+      expect(
+        isEditorAgentAction(
+          baseAction({ type: "queryGit", queryGit: { path, aspects: ["status"] } }),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("rejects unknown query fields", () => {
+    expect(
+      isEditorAgentAction({
+        ...queryGitAction(),
+        queryGit: { path: "src/a.ts", aspects: ["status"], root: "/repo" },
+      }),
+    ).toBe(false);
+  });
+
   it("requires the queryGit payload exactly on the queryGit type", () => {
     expect(isEditorAgentAction(baseAction({ type: "queryGit" }))).toBe(false);
     expect(
@@ -855,6 +979,182 @@ describe("queryGit action validation (Issue #2298)", () => {
         baseAction({ type: "openFile", queryGit: { path: "src/a.ts", aspects: ["status"] } }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("queryGit result data parsing (Issue #2298 hardening)", () => {
+  it("accepts the strict schema-versioned basename/hash projection", () => {
+    expect(EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS).toEqual([
+      "unavailable",
+      "denied",
+      "out-of-budget",
+    ]);
+    expect(EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS).toEqual([
+      "not-repository",
+      "git-missing",
+      "unsafe-repository",
+      "git-error",
+      "malformed-response",
+    ]);
+    expect(parseEditorAgentQueryGitData(queryGitData())).toEqual({
+      ok: true,
+      value: queryGitData(),
+    });
+  });
+
+  it("rejects full paths at every projected layer", () => {
+    const valid = queryGitData();
+    const staged = valid.aspects.diff?.staged;
+    const blame = valid.aspects.blame;
+    expect(parseEditorAgentQueryGitData({ ...valid, path: "src/a.ts" })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      parseEditorAgentQueryGitData({ ...valid, target: { ...valid.target, path: "src/a.ts" } }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: {
+          ...valid.aspects,
+          status: { ...valid.aspects.status, root: "/repo" },
+        },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: {
+          ...valid.aspects,
+          diff: {
+            ...valid.aspects.diff,
+            staged: {
+              ...staged,
+              files: [{ ...staged?.files[0], path: "src/a.ts", oldPath: "src/old.ts" }],
+            },
+          },
+        },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: { ...valid.aspects, blame: { ...blame, path: "src/a.ts" } },
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("rejects malformed nested values, mismatched layers, and invalid omissions", () => {
+    const valid = queryGitData();
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        target: { basename: "src/a.ts", pathHash: HASH.toUpperCase() },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: {
+          ...valid.aspects,
+          diff: {
+            ...valid.aspects.diff,
+            staged: { ...valid.aspects.diff?.staged, layer: "worktree" },
+          },
+        },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        omissions: [{ aspect: "status", scope: "staged", reason: "unavailable" }],
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        omissions: [{ aspect: "blame", reason: "unavailable", machineReason: "timeout" }],
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("enforces agent-wide file, hunk, blame, basename, and byte caps", () => {
+    const valid = queryGitData();
+    const stagedFile = valid.aspects.diff?.staged?.files[0];
+    const stagedHunk = stagedFile?.hunks[0];
+    const blameLine = valid.aspects.blame?.lines[0];
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        target: {
+          ...valid.target,
+          basename: "x".repeat(EDITOR_AGENT_QUERY_GIT_TARGET_BASENAME_MAX_CHARS + 1),
+        },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: {
+          ...valid.aspects,
+          diff: {
+            staged: { ...valid.aspects.diff?.staged, files: Array(9).fill(stagedFile) },
+          },
+        },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: {
+          ...valid.aspects,
+          diff: {
+            staged: {
+              ...valid.aspects.diff?.staged,
+              files: [{ ...stagedFile, hunks: Array(17).fill(stagedHunk) }],
+            },
+          },
+        },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: {
+          ...valid.aspects,
+          blame: { ...valid.aspects.blame, lines: Array(33).fill(blameLine) },
+        },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseEditorAgentQueryGitData({
+        ...valid,
+        aspects: {
+          ...valid.aspects,
+          diff: {
+            staged: {
+              ...valid.aspects.diff?.staged,
+              files: [
+                {
+                  ...stagedFile,
+                  hunks: [
+                    {
+                      ...stagedHunk,
+                      lines: Array(20).fill({
+                        kind: "meta",
+                        oldLine: null,
+                        newLine: null,
+                        text: "x".repeat(12_000),
+                      }),
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ).toMatchObject({ ok: false });
   });
 });
 

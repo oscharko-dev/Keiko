@@ -16,6 +16,7 @@
 
 import type { ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
+import { basename, resolve } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import {
@@ -33,6 +34,7 @@ import {
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
+  isEditorAgentActionResult,
   isEditorAgentActiveBufferActionType,
   isEditorAgentBridgeDecisionCapability,
   isEditorAgentWriteActionType,
@@ -50,7 +52,27 @@ import {
   type EditorAgentConflictCode,
   type EditorAgentEvent,
   type EditorAgentGitAspect,
-  GIT_EDITOR_BLAME_MAX_LINES,
+  type EditorAgentQueryGitBlame,
+  type EditorAgentQueryGitData,
+  type EditorAgentQueryGitDiff,
+  type EditorAgentQueryGitDiffFile,
+  type EditorAgentQueryGitDiffLayer,
+  type EditorAgentQueryGitMachineReason,
+  type EditorAgentQueryGitOmission,
+  type EditorAgentQueryGitOmissionReason,
+  type EditorAgentQueryGitStatus,
+  type GitEditorDiffScope,
+  EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION,
+  parseEditorAgentQueryGitData,
+  GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+  GIT_AGENT_CONTEXT_MAX_FILES,
+  GIT_AGENT_CONTEXT_MAX_HUNKS,
+  GIT_AGENT_CONTEXT_MAX_RESULT_BYTES,
+  parseGitEditorBlameResponse,
+  parseGitEditorDiffResponse,
+  validateGitRepositoryStatusResponse,
+  type GitEditorDiffFile,
+  type GitRepositoryStatusResponse,
   type EditorAgentSessionSnapshot,
   type EditorAgentSnapshotTextMode,
   type CodingWorkbenchMode,
@@ -70,6 +92,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import {
   detectWorkspaceAt,
+  containedRealPathInfo,
   isDenied,
   readWorkspaceFile,
   type WorkspaceInfo,
@@ -1218,6 +1241,9 @@ function resolveActionTargetPaths(
   if (action.type === "searchWorkspace") {
     return optionalTargetPath(action.searchWorkspace?.scopePath);
   }
+  if (action.type === "queryGit") {
+    return optionalTargetPath(action.queryGit?.path);
+  }
   return resolveNonMutationTargetPath(action, snapshot);
 }
 
@@ -1245,14 +1271,39 @@ function serverResolvedPathIssue(path: string): EditorAgentActionDenyReason | nu
   return isDenied(path) ? "denied-sensitive-path" : null;
 }
 
-function serverResolvedPathIssues(action: EditorAgentAction): EditorAgentActionDenyReason | null {
+function queryGitPathIssue(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionDenyReason | null {
+  if (action.type !== "queryGit" || action.queryGit === undefined) return null;
+  const queryPath = normalizeWorkspaceRelativePath(action.queryGit.path);
+  const targetPath = action.target?.file;
+  if (targetPath !== undefined && normalizeWorkspaceRelativePath(targetPath) !== queryPath) {
+    return "workspace-boundary-escape";
+  }
+  try {
+    containedRealPathInfo(
+      nodeWorkspaceFs,
+      snapshot.workspaceRoot,
+      resolve(snapshot.workspaceRoot, queryPath),
+    );
+    return null;
+  } catch {
+    return "workspace-boundary-escape";
+  }
+}
+
+function serverResolvedPathIssues(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+): EditorAgentActionDenyReason | null {
   const paths = serverResolvedActionPaths(action);
   for (const path of paths) {
     if (path === undefined) continue;
     const issue = serverResolvedPathIssue(path);
     if (issue !== null) return issue;
   }
-  return null;
+  return queryGitPathIssue(action, snapshot);
 }
 
 function serverActionContext(body: unknown, path: string): RouteContext {
@@ -1388,7 +1439,12 @@ function auditAction(
   snapshot: EditorAgentSessionSnapshot | undefined,
   decision: EditorAgentActionPolicyDecision,
   result: EditorAgentActionResult,
+  metadataRedactor?: EditorAgentActionRouteDeps["redactor"],
 ): void {
+  const queryPath =
+    action.type === "queryGit" && action.queryGit !== undefined
+      ? normalizeWorkspaceRelativePath(action.queryGit.path)
+      : undefined;
   recordEditorAgentActionAudit({
     occurredAt: Date.now(),
     sessionId: action.sessionId,
@@ -1398,10 +1454,22 @@ function auditAction(
     outcome: result.status,
     conflictCode: result.conflict?.code,
     failureCode: result.failure?.code,
-    targetPath: governedActionTarget(action, snapshot).targetPath,
+    targetPath:
+      queryPath === undefined ? governedActionTarget(action, snapshot).targetPath : undefined,
+    targetBasename:
+      queryPath === undefined ? undefined : redactedQueryGitBasename(queryPath, metadataRedactor),
+    targetPathHash: queryPath === undefined ? undefined : hashRequest(queryPath),
     editCount: action.type === "applyTextEdits" ? action.textEdits?.length : undefined,
     patchByteLength: actionPatchByteLength(action),
   });
+}
+
+function redactedQueryGitBasename(
+  path: string,
+  redactor: EditorAgentActionRouteDeps["redactor"] | undefined,
+): string {
+  const candidate = redactor?.(basename(path)) ?? basename(path);
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : "redacted-target";
 }
 
 function actionPatchByteLength(action: EditorAgentAction): number | undefined {
@@ -1824,9 +1892,10 @@ function serverResolvedFailure(
   result: EditorAgentActionResult,
   requestHash: string,
   status: 200 | 403 | 409,
+  metadataRedactor?: EditorAgentActionRouteDeps["redactor"],
 ): RouteResult {
   rememberIdempotency(action.idempotencyKey, requestHash, result);
-  auditAction(action, snapshot, decision, result);
+  auditAction(action, snapshot, decision, result, metadataRedactor);
   editorAgentRegistry.reportResult(result);
   return { status, body: { result } };
 }
@@ -1914,60 +1983,521 @@ function gitReadContext(
   return { req, res, params: {}, url };
 }
 
-function runGitAspectResult(
-  aspect: EditorAgentGitAspect,
+function runGitStatusResult(
   root: string,
   path: string,
   deps: EditorAgentActionRouteDeps,
 ): Promise<RouteResult> {
-  if (aspect === "status") {
-    return handleGitStatus(gitReadContext("/api/git/status", [["root", root]]), deps);
-  }
-  if (aspect === "diff") {
-    // The unstaged working-tree diff vs HEAD is the change set an agent reasons about before
-    // proposing an edit; the structured-diff handler requires an explicit scope.
-    return handleGitStructuredDiff(
-      gitReadContext("/api/git/diff/structured", [
-        ["root", root],
-        ["path", path],
-        ["scope", "unstaged"],
-      ]),
-      deps,
-    );
-  }
-  // Blame the whole file from line 1, capped at the handler's own bounded maximum.
+  return handleGitStatus(
+    gitReadContext("/api/git/status", [
+      ["root", root],
+      ["path", path],
+    ]),
+    deps,
+  );
+}
+
+function runGitDiffResult(
+  root: string,
+  path: string,
+  scope: "staged" | "unstaged",
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
+  return handleGitStructuredDiff(
+    gitReadContext("/api/git/diff/structured", [
+      ["root", root],
+      ["path", path],
+      ["scope", scope],
+    ]),
+    deps,
+  );
+}
+
+function runGitBlameResult(
+  root: string,
+  path: string,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
   return handleGitBlame(
     gitReadContext("/api/git/blame", [
       ["root", root],
       ["path", path],
       ["startLine", "1"],
-      ["maxLines", String(GIT_EDITOR_BLAME_MAX_LINES)],
+      ["maxLines", String(GIT_AGENT_CONTEXT_MAX_BLAME_LINES + 1)],
     ]),
     deps,
   );
+}
+
+type QueryGitOmissionReason = EditorAgentQueryGitOmissionReason;
+type QueryGitOmission = EditorAgentQueryGitOmission;
+
+interface QueryGitProjection {
+  readonly value?: unknown;
+  readonly omission?: QueryGitOmissionReason;
+  readonly machineReason?: EditorAgentQueryGitMachineReason | undefined;
+}
+
+interface QueryGitPolicyDenial {
+  readonly kind: "query-git-policy-denial";
+  readonly reason: EditorAgentActionDenyReason;
+}
+
+interface QueryGitCancellation {
+  readonly kind: "query-git-cancelled";
+}
+
+function isQueryGitPolicyDenial(value: unknown): value is QueryGitPolicyDenial {
+  return isRecord(value) && value.kind === "query-git-policy-denial";
+}
+
+function isQueryGitCancellation(value: unknown): value is QueryGitCancellation {
+  return isRecord(value) && value.kind === "query-git-cancelled";
+}
+
+function queryGitWasCancelled(deps: EditorAgentActionRouteDeps): boolean {
+  return deps.gitRouteOptions?.abortSignal?.aborted === true;
+}
+
+function routeErrorCode(result: RouteResult): string | undefined {
+  if (!isRecord(result.body) || !isRecord(result.body.error)) return undefined;
+  return typeof result.body.error.code === "string" ? result.body.error.code : undefined;
+}
+
+function queryGitBoundaryDenial(results: readonly RouteResult[]): QueryGitPolicyDenial | undefined {
+  return results.some((result) => result.status === 400 && routeErrorCode(result) === "BAD_PATH")
+    ? { kind: "query-git-policy-denial", reason: "workspace-boundary-escape" }
+    : undefined;
+}
+
+function queryGitMachineReason(result: RouteResult): EditorAgentQueryGitMachineReason {
+  if (result.status !== 200 || !isRecord(result.body)) return "git-error";
+  switch (result.body.reason) {
+    case "not-a-repository":
+      return "not-repository";
+    case "git-missing":
+      return "git-missing";
+    case "unsafe-repository":
+      return "unsafe-repository";
+    case "git-error":
+    case "unknown":
+    case "repository-root-outside-root":
+      return "git-error";
+    default:
+      return "malformed-response";
+  }
+}
+
+function projectGitStatus(
+  result: RouteResult,
+  path: string,
+): QueryGitProjection & {
+  readonly repositoryAvailable: boolean;
+} {
+  const validation = validateGitRepositoryStatusResponse(result.body);
+  if (result.status !== 200 || !validation.ok) {
+    return {
+      repositoryAvailable: false,
+      omission: "unavailable",
+      machineReason: queryGitMachineReason(result),
+    };
+  }
+  const status = result.body as GitRepositoryStatusResponse;
+  const normalized = normalizeWorkspaceRelativePath(path);
+  const change = status.changes.find(
+    (entry) => normalizeWorkspaceRelativePath(entry.path) === normalized,
+  );
+  const projectedChange = change === undefined ? null : projectGitStatusChange(change);
+  const value: EditorAgentQueryGitStatus = {
+    available: status.available,
+    state: status.state,
+    ...(status.branch === undefined ? {} : { branch: status.branch }),
+    detached: status.detached,
+    clean: status.available && change === undefined && !status.truncated,
+    change: projectedChange,
+    truncated: status.truncated,
+  };
+  if (!status.available) {
+    return {
+      repositoryAvailable: false,
+      value,
+      omission: "unavailable",
+      machineReason: queryGitMachineReason(result),
+    };
+  }
+  return {
+    repositoryAvailable: true,
+    value,
+    ...(status.truncated ? { omission: "out-of-budget" as const } : {}),
+  };
+}
+
+function projectGitStatusChange(change: GitRepositoryStatusResponse["changes"][number]): {
+  readonly indexStatus: GitRepositoryStatusResponse["changes"][number]["indexStatus"];
+  readonly worktreeStatus: GitRepositoryStatusResponse["changes"][number]["worktreeStatus"];
+  readonly staged: boolean;
+  readonly unstaged: boolean;
+  readonly untracked: boolean;
+  readonly conflicted: boolean;
+} {
+  return {
+    indexStatus: change.indexStatus,
+    worktreeStatus: change.worktreeStatus,
+    staged: change.staged,
+    unstaged: change.unstaged,
+    untracked: change.untracked,
+    conflicted: change.conflicted,
+  };
+}
+
+function projectDiffFile(
+  file: GitEditorDiffFile,
+  remainingHunks: number,
+): {
+  readonly file: EditorAgentQueryGitDiffFile;
+  readonly consumed: number;
+  readonly truncated: boolean;
+} {
+  const hunks = file.hunks.slice(0, remainingHunks);
+  const truncated = file.truncated || hunks.length < file.hunks.length;
+  return {
+    file: {
+      layer: file.layer,
+      status: file.status,
+      binary: file.binary,
+      hunks,
+      addedLines: file.addedLines,
+      removedLines: file.removedLines,
+      truncated,
+    },
+    consumed: hunks.length,
+    truncated,
+  };
+}
+
+interface QueryGitDiffBudget {
+  remainingFiles: number;
+  remainingHunks: number;
+}
+
+function projectGitDiffLayer(
+  scope: "staged" | "unstaged",
+  result: RouteResult,
+  budget: QueryGitDiffBudget,
+): { readonly layer?: EditorAgentQueryGitDiffLayer; readonly omission?: QueryGitOmission } {
+  const parsed = parseGitEditorDiffResponse(result.body);
+  if (result.status !== 200 || !parsed.ok) {
+    return {
+      omission: {
+        aspect: "diff",
+        scope,
+        reason: "unavailable",
+        machineReason: queryGitMachineReason(result),
+      },
+    };
+  }
+  const files: EditorAgentQueryGitDiffFile[] = [];
+  let truncated = false;
+  for (const source of parsed.value.files.slice(0, budget.remainingFiles)) {
+    const next = projectDiffFile(source, budget.remainingHunks);
+    files.push(next.file);
+    budget.remainingHunks -= next.consumed;
+    truncated ||= next.truncated;
+  }
+  budget.remainingFiles -= files.length;
+  truncated ||= parsed.value.truncated || files.length < parsed.value.files.length;
+  return {
+    layer: {
+      scope,
+      layer: scope === "staged" ? "staged" : "worktree",
+      files,
+      truncated,
+      totalFiles: parsed.value.totalFiles,
+      totalBytes: parsed.value.totalBytes,
+    },
+    ...(truncated ? { omission: { aspect: "diff", scope, reason: "out-of-budget" } } : {}),
+  };
+}
+
+function projectGitDiff(results: readonly RouteResult[]): {
+  readonly value?: EditorAgentQueryGitDiff;
+  readonly omissions: readonly QueryGitOmission[];
+} {
+  const projected: Partial<Record<GitEditorDiffScope, EditorAgentQueryGitDiffLayer>> = {};
+  const omissions: QueryGitOmission[] = [];
+  const budget: QueryGitDiffBudget = {
+    remainingFiles: GIT_AGENT_CONTEXT_MAX_FILES,
+    remainingHunks: GIT_AGENT_CONTEXT_MAX_HUNKS,
+  };
+  for (const [index, result] of results.entries()) {
+    const scope = index === 0 ? "staged" : "unstaged";
+    const projection = projectGitDiffLayer(scope, result, budget);
+    if (projection.layer !== undefined) projected[scope] = projection.layer;
+    if (projection.omission !== undefined) omissions.push(projection.omission);
+  }
+  return {
+    ...(projected.staged === undefined && projected.unstaged === undefined
+      ? {}
+      : {
+          value: {
+            ...(projected.staged === undefined ? {} : { staged: projected.staged }),
+            ...(projected.unstaged === undefined ? {} : { unstaged: projected.unstaged }),
+          },
+        }),
+    omissions,
+  };
+}
+
+function projectGitBlame(result: RouteResult): QueryGitProjection {
+  const parsed = parseGitEditorBlameResponse(result.body);
+  if (result.status !== 200 || !parsed.ok) {
+    return {
+      omission: "unavailable",
+      machineReason: queryGitMachineReason(result),
+    };
+  }
+  const lines = parsed.value.lines.slice(0, GIT_AGENT_CONTEXT_MAX_BLAME_LINES);
+  const truncated = parsed.value.truncated || lines.length < parsed.value.lines.length;
+  const value: EditorAgentQueryGitBlame = {
+    startLine: parsed.value.startLine,
+    lines,
+    truncated,
+    totalLines: parsed.value.totalLines,
+    totalBytes: parsed.value.totalBytes,
+  };
+  return {
+    value,
+    ...(truncated ? { omission: "out-of-budget" } : {}),
+  };
+}
+
+function addGitOmission(
+  omissions: QueryGitOmission[],
+  aspect: EditorAgentGitAspect,
+  reason: QueryGitOmissionReason | undefined,
+  scope?: GitEditorDiffScope,
+  machineReason?: EditorAgentQueryGitMachineReason,
+): void {
+  if (reason === undefined) return;
+  const existing = omissions.find((entry) => entry.aspect === aspect && entry.scope === scope);
+  if (existing === undefined) {
+    omissions.push({
+      aspect,
+      reason,
+      ...(scope === undefined ? {} : { scope }),
+      ...(machineReason === undefined ? {} : { machineReason }),
+    });
+  }
+}
+
+function queryGitDataBytes(data: unknown): number {
+  return Buffer.byteLength(JSON.stringify(data), "utf8");
+}
+
+function enforceQueryGitResultBudget(
+  path: string,
+  inputAspects: Record<string, unknown>,
+  omissions: QueryGitOmission[],
+): EditorAgentQueryGitData {
+  let aspects = { ...inputAspects };
+  for (const aspect of ["blame", "diff", "status"] as const) {
+    const data = queryGitData(path, aspects, omissions);
+    if (queryGitDataBytes(data) <= GIT_AGENT_CONTEXT_MAX_RESULT_BYTES) return data;
+    if (Object.hasOwn(aspects, aspect)) {
+      aspects = Object.fromEntries(Object.entries(aspects).filter(([key]) => key !== aspect));
+      addGitOmission(omissions, aspect, "out-of-budget");
+    }
+  }
+  return queryGitData(path, aspects, omissions);
+}
+
+function queryGitData(
+  path: string,
+  aspects: Record<string, unknown>,
+  omissions: QueryGitOmission[],
+): EditorAgentQueryGitData {
+  return {
+    schemaVersion: EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION,
+    target: { basename: basename(path), pathHash: hashRequest(path) },
+    caps: {
+      maxFiles: GIT_AGENT_CONTEXT_MAX_FILES,
+      maxHunks: GIT_AGENT_CONTEXT_MAX_HUNKS,
+      maxBlameLines: GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+      maxResultBytes: GIT_AGENT_CONTEXT_MAX_RESULT_BYTES,
+    },
+    aspects,
+    omissions,
+  };
+}
+
+function queryGitSuccessResult(
+  action: EditorAgentAction,
+  path: string,
+  aspects: Record<string, unknown>,
+  omissions: QueryGitOmission[],
+  deps: EditorAgentActionRouteDeps,
+): RouteResult {
+  const redacted = deps.redactor(enforceQueryGitResultBudget(path, aspects, omissions));
+  const parsed = parseEditorAgentQueryGitData(redacted);
+  if (parsed.ok) return { status: 200, body: parsed.value };
+  reportQueryGitHandlerFailure(
+    action,
+    "status",
+    [{ status: 500, body: errorBody("QUERY_GIT_INVALID", "Git context is unavailable.") }],
+    deps,
+  );
+  return { status: 500, body: errorBody("QUERY_GIT_INVALID", "Git context is unavailable.") };
+}
+
+function queryGitDiffResults(
+  request: NonNullable<EditorAgentAction["queryGit"]>,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+): Promise<readonly RouteResult[]> | undefined {
+  if (!request.aspects.includes("diff")) return undefined;
+  return Promise.all(
+    (["staged", "unstaged"] as const).map((scope) =>
+      runGitDiffResult(snapshot.workspaceRoot, request.path, scope, deps),
+    ),
+  );
+}
+
+function queryGitBlameResult(
+  request: NonNullable<EditorAgentAction["queryGit"]>,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> | undefined {
+  return request.aspects.includes("blame")
+    ? runGitBlameResult(snapshot.workspaceRoot, request.path, deps)
+    : undefined;
+}
+
+async function collectQueryGitOptionalAspects(
+  action: EditorAgentAction,
+  request: NonNullable<EditorAgentAction["queryGit"]>,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+  aspects: Record<string, unknown>,
+  omissions: QueryGitOmission[],
+): Promise<QueryGitPolicyDenial | QueryGitCancellation | undefined> {
+  const [diffResults, blameResult] = await Promise.all([
+    queryGitDiffResults(request, snapshot, deps),
+    queryGitBlameResult(request, snapshot, deps),
+  ]);
+  if (queryGitWasCancelled(deps)) return { kind: "query-git-cancelled" };
+  const denial = queryGitBoundaryDenial([
+    ...(diffResults ?? []),
+    ...(blameResult === undefined ? [] : [blameResult]),
+  ]);
+  if (denial !== undefined) return denial;
+  if (diffResults !== undefined) {
+    reportQueryGitHandlerFailure(action, "diff", diffResults, deps);
+    const diff = projectGitDiff(diffResults);
+    if (diff.value !== undefined) aspects.diff = diff.value;
+    for (const omission of diff.omissions) {
+      addGitOmission(
+        omissions,
+        omission.aspect,
+        omission.reason,
+        omission.scope,
+        omission.machineReason,
+      );
+    }
+  }
+  if (blameResult !== undefined) {
+    reportQueryGitHandlerFailure(action, "blame", [blameResult], deps);
+    const blame = projectGitBlame(blameResult);
+    if (blame.value !== undefined) aspects.blame = blame.value;
+    addGitOmission(omissions, "blame", blame.omission, undefined, blame.machineReason);
+  }
+  return undefined;
+}
+
+function reportQueryGitHandlerFailure(
+  action: EditorAgentAction,
+  aspect: EditorAgentGitAspect,
+  results: readonly RouteResult[],
+  deps: EditorAgentActionRouteDeps,
+): void {
+  const operationalFailure = results.some((result) =>
+    queryGitResultNeedsDiagnostic(result, aspect),
+  );
+  if (!operationalFailure) return;
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: action.actionId,
+      operation: `editor.agent.queryGit.${aspect}`,
+      source: "editor.agent.queryGit",
+      error: new Error(`The bounded ${aspect} read was unavailable.`),
+      redact: () => `The bounded ${aspect} read was unavailable.`,
+    }),
+  );
+}
+
+function queryGitResultNeedsDiagnostic(result: RouteResult, aspect: EditorAgentGitAspect): boolean {
+  if (result.status !== 200) return true;
+  if (aspect === "status") {
+    const validation = validateGitRepositoryStatusResponse(result.body);
+    if (!validation.ok) return true;
+    const status = result.body as GitRepositoryStatusResponse;
+    return !status.available && status.reason !== "not-a-repository";
+  }
+  const parsed =
+    aspect === "diff"
+      ? parseGitEditorDiffResponse(result.body)
+      : parseGitEditorBlameResponse(result.body);
+  if (parsed.ok) return false;
+  if (!isRecord(result.body)) return true;
+  return result.body.reason !== "not-a-repository";
 }
 
 async function runQueryGitAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
-): Promise<RouteResult> {
+): Promise<RouteResult | QueryGitPolicyDenial | QueryGitCancellation> {
   const request = action.queryGit;
   if (request === undefined) throw new Error("queryGit payload is missing");
+  const statusResult = await runGitStatusResult(snapshot.workspaceRoot, request.path, deps);
+  if (queryGitWasCancelled(deps)) return { kind: "query-git-cancelled" };
+  const statusDenial = queryGitBoundaryDenial([statusResult]);
+  if (statusDenial !== undefined) return statusDenial;
+  reportQueryGitHandlerFailure(action, "status", [statusResult], deps);
+  const status = projectGitStatus(statusResult, request.path);
   const aspects: Record<string, unknown> = {};
-  for (const aspect of request.aspects) {
-    const result = await runGitAspectResult(aspect, snapshot.workspaceRoot, request.path, deps);
-    if (result.status !== 200) return result;
-    aspects[aspect] = isRecord(result.body) ? result.body : {};
+  const omissions: QueryGitOmission[] = [];
+  if (request.aspects.includes("status") && status.value !== undefined) {
+    aspects.status = status.value;
   }
-  return { status: 200, body: { path: request.path, aspects } };
+  if (!status.repositoryAvailable) {
+    for (const aspect of request.aspects) {
+      addGitOmission(omissions, aspect, "unavailable", undefined, status.machineReason);
+    }
+    return {
+      ...queryGitSuccessResult(action, request.path, aspects, omissions, deps),
+    };
+  }
+  if (request.aspects.includes("status")) {
+    addGitOmission(omissions, "status", status.omission, undefined, status.machineReason);
+  }
+  const optionalDenial = await collectQueryGitOptionalAspects(
+    action,
+    request,
+    snapshot,
+    deps,
+    aspects,
+    omissions,
+  );
+  if (optionalDenial !== undefined) return optionalDenial;
+  return queryGitSuccessResult(action, request.path, aspects, omissions, deps);
 }
 
 function serverResolvedActionRoute(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
-): Promise<RouteResult> {
+): Promise<RouteResult | QueryGitPolicyDenial | QueryGitCancellation> {
   if (action.type === "navigateSymbol") return runNavigateSymbolAction(action, snapshot, deps);
   if (action.type === "queryGit") return runQueryGitAction(action, snapshot, deps);
   return runSearchWorkspaceAction(action, snapshot, deps);
@@ -1977,12 +2507,12 @@ async function executeServerResolvedAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
-): Promise<RouteResult | EditorAgentActionResult> {
+): Promise<RouteResult | EditorAgentActionResult | QueryGitPolicyDenial | QueryGitCancellation> {
   try {
     return await serverResolvedActionRoute(action, snapshot, deps);
   } catch (error) {
     emitServerDiagnostic(
-      undefined,
+      deps.diagnostics,
       serverDiagnosticFromError({
         correlationId: action.actionId,
         operation: `editor.agent.${action.type}`,
@@ -1995,44 +2525,109 @@ async function executeServerResolvedAction(
   }
 }
 
+function finishServerResolvedSuccess(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  body: Readonly<Record<string, unknown>>,
+  deps: EditorAgentActionRouteDeps,
+): RouteResult {
+  const succeeded: EditorAgentActionResult = {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: action.actionId,
+    sessionId: action.sessionId,
+    status: "succeeded",
+    data: body,
+  };
+  const queryData = action.type === "queryGit" ? parseEditorAgentQueryGitData(body) : undefined;
+  const valid = isEditorAgentActionResult(succeeded) && (queryData === undefined || queryData.ok);
+  return serverResolvedFailure(
+    action,
+    snapshot,
+    decision,
+    valid ? succeeded : failedResult(action, "The bounded git context result was unavailable."),
+    requestHash,
+    200,
+    deps.redactor,
+  );
+}
+
+function finishServerResolvedRouteResult(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  outcome: RouteResult,
+  deps: EditorAgentActionRouteDeps,
+): RouteResult {
+  if (outcome.status === 200 && isRecord(outcome.body)) {
+    return finishServerResolvedSuccess(action, snapshot, decision, requestHash, outcome.body, deps);
+  }
+  const status = outcome.status === 403 ? 403 : 409;
+  const code = outcome.status === 403 ? "OUT_OF_SCOPE" : "INVALID_EDITS";
+  return serverResolvedFailure(
+    action,
+    snapshot,
+    decision,
+    conflict(action, code, "The editor operation was rejected."),
+    requestHash,
+    status,
+    deps.redactor,
+  );
+}
+
+function finishQueryGitCancellation(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  decision: EditorAgentActionPolicyDecision,
+  deps: EditorAgentActionRouteDeps,
+): RouteResult {
+  const result = failedResult(action, "The bounded Git context request was cancelled.");
+  auditAction(action, snapshot, decision, result, deps.redactor);
+  editorAgentRegistry.reportResult(result);
+  return { status: 200, body: { result } };
+}
+
 function finishServerResolvedAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   decision: EditorAgentActionPolicyDecision,
   requestHash: string,
-  outcome: RouteResult | EditorAgentActionResult,
+  outcome: RouteResult | EditorAgentActionResult | QueryGitPolicyDenial | QueryGitCancellation,
+  deps: EditorAgentActionRouteDeps,
 ): RouteResult {
-  if ("status" in outcome && typeof outcome.status === "number") {
-    if (outcome.status === 200 && isRecord(outcome.body)) {
-      return serverResolvedFailure(
-        action,
-        snapshot,
-        decision,
-        {
-          schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-          actionId: action.actionId,
-          sessionId: action.sessionId,
-          status: "succeeded",
-          data: outcome.body,
-        },
-        requestHash,
-        200,
-      );
-    }
+  if (isQueryGitCancellation(outcome)) {
+    return finishQueryGitCancellation(action, snapshot, decision, deps);
+  }
+  if (isQueryGitPolicyDenial(outcome)) {
+    const result = conflict(
+      action,
+      "OUT_OF_SCOPE",
+      "The requested Git path is outside the workspace scope.",
+    );
     return serverResolvedFailure(
       action,
       snapshot,
-      decision,
-      conflict(
-        action,
-        outcome.status === 403 ? "OUT_OF_SCOPE" : "INVALID_EDITS",
-        "The editor operation was rejected.",
-      ),
+      denyByAuthority(decision, outcome.reason),
+      result,
       requestHash,
-      outcome.status === 403 ? 403 : 409,
+      403,
+      deps.redactor,
     );
   }
-  return serverResolvedFailure(action, snapshot, decision, outcome, requestHash, 200);
+  if ("body" in outcome) {
+    return finishServerResolvedRouteResult(action, snapshot, decision, requestHash, outcome, deps);
+  }
+  return serverResolvedFailure(
+    action,
+    snapshot,
+    decision,
+    outcome,
+    requestHash,
+    200,
+    deps.redactor,
+  );
 }
 
 async function resolveServerAction(
@@ -2050,9 +2645,29 @@ async function resolveServerAction(
       conflict(action, "NO_ACTIVE_SESSION", "No editor session snapshot is registered."),
       requestHash,
       409,
+      deps.redactor,
     );
   }
-  const pathIssue = serverResolvedPathIssues(action);
+  const rejection = rejectServerResolvedPolicy(action, snapshot, baseline, requestHash, deps);
+  if (rejection !== null) return rejection;
+  return finishServerResolvedAction(
+    action,
+    snapshot,
+    baseline,
+    requestHash,
+    await executeServerResolvedAction(action, snapshot, deps),
+    deps,
+  );
+}
+
+function rejectServerResolvedPolicy(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  baseline: EditorAgentActionPolicyDecision,
+  requestHash: string,
+  deps: EditorAgentActionRouteDeps,
+): RouteResult | null {
+  const pathIssue = serverResolvedPathIssues(action, snapshot);
   if (pathIssue !== null) {
     return serverResolvedFailure(
       action,
@@ -2065,15 +2680,34 @@ async function resolveServerAction(
       ),
       requestHash,
       403,
+      deps.redactor,
     );
   }
-  return finishServerResolvedAction(
-    action,
-    snapshot,
-    baseline,
-    requestHash,
-    await executeServerResolvedAction(action, snapshot, deps),
-  );
+  const policyConflict = policyAdmissionConflict(action, baseline);
+  if (policyConflict !== null) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      baseline,
+      policyConflict,
+      requestHash,
+      403,
+      deps.redactor,
+    );
+  }
+  const reservationDenial = reserveActionAuthority(action, snapshot, baseline, deps);
+  if (reservationDenial !== null) {
+    return serverResolvedFailure(
+      action,
+      snapshot,
+      reservationDenial,
+      conflict(action, "POLICY_DENIED", "The action authority budget is exhausted."),
+      requestHash,
+      403,
+      deps.redactor,
+    );
+  }
+  return null;
 }
 
 async function admitEditorAction(
@@ -2139,7 +2773,47 @@ export async function handleEditorAgentActions(
     if (!authorization.ok) return authorization.response;
     action = authorization.action;
   }
-  return admitEditorAction(action, preparation.request.requestHash, deps);
+  const abortScope = queryGitAbortScope(action, deps, ctx);
+  try {
+    return await admitEditorAction(action, preparation.request.requestHash, abortScope.deps);
+  } finally {
+    abortScope.dispose();
+  }
+}
+
+interface QueryGitAbortScope {
+  readonly deps: EditorAgentActionRouteDeps | undefined;
+  readonly dispose: () => void;
+}
+
+function queryGitAbortScope(
+  action: EditorAgentAction,
+  deps: EditorAgentActionRouteDeps | undefined,
+  ctx: RouteContext,
+): QueryGitAbortScope {
+  if (action.type !== "queryGit" || deps === undefined) {
+    return { deps, dispose: () => undefined };
+  }
+  const controller = new AbortController();
+  const abort = (): void => {
+    controller.abort();
+  };
+  const responseClosed = (): void => {
+    if (!ctx.res.writableEnded) abort();
+  };
+  ctx.req.once("aborted", abort);
+  ctx.res.once("close", responseClosed);
+  if (ctx.req.destroyed && typeof ctx.req.complete === "boolean" && !ctx.req.complete) abort();
+  return {
+    deps: {
+      ...deps,
+      gitRouteOptions: { ...deps.gitRouteOptions, abortSignal: controller.signal },
+    },
+    dispose: (): void => {
+      ctx.req.off("aborted", abort);
+      ctx.res.off("close", responseClosed);
+    },
+  };
 }
 
 function failedResult(action: EditorAgentAction, message: string): EditorAgentActionResult {

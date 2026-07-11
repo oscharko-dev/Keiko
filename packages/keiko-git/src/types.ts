@@ -21,6 +21,8 @@ export interface GitProcessOptions {
   readonly cwd: string;
   readonly maxBytes: number;
   readonly timeoutMs: number;
+  /** Cancels an admitted process when the originating bounded request disconnects. */
+  readonly abortSignal?: AbortSignal | undefined;
 }
 
 export type GitProcessRunner = (

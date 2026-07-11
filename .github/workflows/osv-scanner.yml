@@ -1,0 +1,58 @@
+name: OSV dependency scan
+
+on:
+  pull_request:
+    branches:
+      - dev
+      - feat/keiko-editor
+      - feat/keiko-agent-native-editor-foundation-and-runtime
+      - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - epic/coding-workbench-opencode-codex
+      - "release/**"
+    paths:
+      - "**/package-lock.json"
+      - ".github/workflows/osv-scanner.yml"
+  push:
+    branches:
+      - dev
+      - feat/keiko-editor
+      - feat/keiko-agent-native-editor-foundation-and-runtime
+      - feat/prompt-enhancer-1307
+      - feat/keiko-establish-governed-end-to-end-git-delivery
+      - feat/keiko-voice-digital-twin
+      - feat/keiko-isolated-task-workspaces
+      - feat/keiko-colleague-like-voice-dialogue-mode
+      - feat/keiko-repository-centered-desktop-workflow
+      - epic/coding-workbench-opencode-codex
+      - "release/**"
+    paths:
+      - "**/package-lock.json"
+      - ".github/workflows/osv-scanner.yml"
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  scan:
+    name: Scan dependency lockfiles
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Scan dependency manifests with OSV Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --recursive
+            ./
