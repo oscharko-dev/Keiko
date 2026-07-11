@@ -75,7 +75,9 @@ export function recordEditorAgentActionAudit(
   input: EditorAgentAuditInput,
 ): EditorAgentActionAuditRecord | null {
   const serverResolved =
-    input.actionType === "navigateSymbol" || input.actionType === "searchWorkspace";
+    input.actionType === "navigateSymbol" ||
+    input.actionType === "searchWorkspace" ||
+    input.actionType === "queryGit";
   if (
     !isMutatingEditorAgentAction(input.actionType) &&
     input.decision.effectClass !== "execution" &&
