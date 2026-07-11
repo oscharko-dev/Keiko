@@ -29,9 +29,11 @@ function analysisFailures(analysis, headSha) {
 
 function findingFailures(issuesTotal, measures) {
   const failures = [];
-  if (issuesTotal !== 0)
+  if (issuesTotal === undefined) failures.push("SonarCloud issue total is missing.");
+  else if (issuesTotal !== 0)
     failures.push(`SonarCloud reports ${String(issuesTotal)} unresolved issue(s).`);
-  if (measures.new_violations !== 0)
+  if (measures.new_violations === undefined) failures.push("New-code violation metric is missing.");
+  else if (measures.new_violations !== 0)
     failures.push(`SonarCloud reports ${String(measures.new_violations)} new violation(s).`);
   if (measures.new_duplicated_lines_density === undefined)
     failures.push("New-code duplication metric is missing.");

@@ -51,7 +51,7 @@ export function parseChangedFiles(output) {
     .map((entry) => {
       const fields = entry.split("\t");
       if (/^[ACMR]/u.test(fields[0] ?? "") === false) return undefined;
-      return fields[0]?.startsWith("R") === true ? fields[2] : fields[1];
+      return /^[CR]/u.test(fields[0] ?? "") ? fields[2] : fields[1];
     })
     .filter((entry) => entry !== undefined);
 }

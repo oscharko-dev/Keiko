@@ -107,6 +107,14 @@ describe("SonarCloud PR quality gate", () => {
       },
     });
     expect(failures).toHaveLength(4);
+    expect(failures).toContain("New-code violation metric is missing.");
+    expect(failures).not.toContain(expect.stringContaining("undefined"));
+  });
+
+  it("reports a missing issue total explicitly", () => {
+    const failures = evaluate({ issuesTotal: undefined });
+    expect(failures).toContain("SonarCloud issue total is missing.");
+    expect(failures).not.toContain(expect.stringContaining("undefined"));
   });
 
   it("rejects violations, duplication, unreviewed hotspots, and a failed native gate", () => {

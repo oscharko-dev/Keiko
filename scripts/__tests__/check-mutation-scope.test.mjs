@@ -37,14 +37,19 @@ describe("mutation scope", () => {
     ]);
   });
 
-  it("uses the renamed destination and excludes deleted files", () => {
+  it("uses copied and renamed destinations and excludes deleted files", () => {
     expect(
       parseChangedFiles(
         "R100\tpackages/keiko-security/src/old.ts\tpackages/keiko-security/src/new.ts\n" +
+          "C100\tpackages/keiko-security/src/source.ts\tpackages/keiko-security/src/copy.ts\n" +
           "D\tpackages/keiko-security/src/deleted.ts\n" +
           "A\tpackages/keiko-security/src/added.ts\n",
       ),
-    ).toEqual(["packages/keiko-security/src/new.ts", "packages/keiko-security/src/added.ts"]);
+    ).toEqual([
+      "packages/keiko-security/src/new.ts",
+      "packages/keiko-security/src/copy.ts",
+      "packages/keiko-security/src/added.ts",
+    ]);
   });
 
   it("handles empty merge-base diffs without requesting mutation", () => {
