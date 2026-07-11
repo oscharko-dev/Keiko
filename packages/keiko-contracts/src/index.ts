@@ -1662,6 +1662,7 @@ export {
   EDITOR_AGENT_VERIFICATION_RUN_ID_MAX_CHARS,
   EDITOR_AGENT_VERIFICATION_ENVELOPE_DIGEST_MAX_CHARS,
   toRedactedVerificationReport,
+  parseEditorAgentVerificationResult,
   parseEditorAgentVerificationRunRequest,
   isEditorAgentVerificationResult,
 } from "./editor-agent-verification.js";

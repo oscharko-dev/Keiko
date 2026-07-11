@@ -8,7 +8,7 @@
  * `isAvailable` derives purely from a content-free host snapshot.
  */
 
-import type { VerificationKind } from "@oscharko-dev/keiko-contracts";
+import type { EditorVerificationCatalog, VerificationKind } from "@oscharko-dev/keiko-contracts";
 
 /** Content-free actions the host exposes to a command. Implemented in `EditorWidget`. */
 export interface EditorPaletteHost {
@@ -23,6 +23,7 @@ export interface EditorPaletteHost {
   // null). The actions dispatch into Issue #2211's governed route; the host owns the run identity.
   readonly verificationRunning: boolean;
   readonly verifiableTarget: string | null;
+  readonly verificationCatalog: EditorVerificationCatalog | null;
   splitActive(direction: "row" | "column"): void;
   closeActiveSplit(): void;
   closeActiveTab(): void;
@@ -33,6 +34,9 @@ export interface EditorPaletteHost {
   runFileTests(): void;
   runWorkspaceVerification(kind: VerificationKind): void;
   cancelVerification(): void;
+  trustWorkspaceScripts(): void;
+  revokeWorkspaceScriptTrust(): void;
+  openProblems(): void;
 }
 
 export interface EditorPaletteCommand {
@@ -101,31 +105,40 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
     run: (host) => host.saveAll(),
     isAvailable: (host) => host.dirtyCount > 0,
   },
+  {
+    id: "editor.openProblems",
+    title: "Open Problems",
+    run: (host) => host.openProblems(),
+    isAvailable: (host) => host.root.length > 0,
+  },
   // Issue #2212 (ADR-0126) — run affordances through the governed verification route. The four run
   // actions are available only while idle; cancel only while a run is active (mutually exclusive).
   {
     id: "run.fileTests",
     title: "Run Tests for File",
     run: (host) => host.runFileTests(),
-    isAvailable: (host) => !host.verificationRunning && host.verifiableTarget !== null,
+    isAvailable: (host) =>
+      !host.verificationRunning &&
+      host.verifiableTarget !== null &&
+      catalogAllows(host, "targeted-test"),
   },
   {
     id: "run.typecheck",
     title: "Run Typecheck",
     run: (host) => host.runWorkspaceVerification("typecheck"),
-    isAvailable: (host) => !host.verificationRunning,
+    isAvailable: (host) => !host.verificationRunning && catalogAllows(host, "typecheck"),
   },
   {
     id: "run.lint",
     title: "Run Lint",
     run: (host) => host.runWorkspaceVerification("lint"),
-    isAvailable: (host) => !host.verificationRunning,
+    isAvailable: (host) => !host.verificationRunning && catalogAllows(host, "lint"),
   },
   {
     id: "run.build",
     title: "Run Build",
     run: (host) => host.runWorkspaceVerification("build"),
-    isAvailable: (host) => !host.verificationRunning,
+    isAvailable: (host) => !host.verificationRunning && catalogAllows(host, "build"),
   },
   {
     id: "run.cancel",
@@ -133,7 +146,37 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
     run: (host) => host.cancelVerification(),
     isAvailable: (host) => host.verificationRunning,
   },
+  {
+    id: "verification.trustWorkspaceScripts",
+    title: "Trust Workspace Scripts",
+    run: (host) => host.trustWorkspaceScripts(),
+    isAvailable: (host) =>
+      !host.verificationRunning && hasScriptTrustState(host, "approval-required"),
+  },
+  {
+    id: "verification.revokeWorkspaceScriptTrust",
+    title: "Revoke Workspace Script Trust",
+    run: (host) => host.revokeWorkspaceScriptTrust(),
+    isAvailable: (host) => !host.verificationRunning && hasScriptTrustState(host, "trusted"),
+  },
 ];
+
+function catalogAllows(host: EditorPaletteHost, kind: VerificationKind): boolean {
+  const entry = host.verificationCatalog?.kinds.find((candidate) => candidate.kind === kind);
+  return entry?.available === true && entry.trustState === "trusted";
+}
+
+function hasScriptTrustState(
+  host: EditorPaletteHost,
+  trustState: "trusted" | "approval-required",
+): boolean {
+  return (
+    host.verificationCatalog?.kinds.some(
+      (entry) =>
+        entry.kind !== "targeted-test" && entry.available && entry.trustState === trustState,
+    ) === true
+  );
+}
 
 export function availablePaletteCommands(host: EditorPaletteHost): readonly EditorPaletteCommand[] {
   return EDITOR_PALETTE_COMMANDS.filter(

@@ -53,6 +53,7 @@ interface AuthorityRecord {
   readonly digest: string;
   readonly registeredAtMs: number;
   readonly usage: AuthorityUsage;
+  sessionId?: string | undefined;
   readonly localActionBinding?: LocalActionBinding | undefined;
 }
 
@@ -203,8 +204,19 @@ export class EditorAgentAuthorityRegistry {
   ): EditorAgentAuthorityResolution {
     const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
     if (!resolved.ok) return resolved;
-    const binding = this.records.get(recordKey(reference))?.localActionBinding;
-    return binding === undefined || localBindingMatches(binding, action)
+    const record = this.records.get(recordKey(reference));
+    if (record === undefined) return { ok: false, reason: "invalid" };
+    if (
+      record.localActionBinding !== undefined &&
+      !localBindingMatches(record.localActionBinding, action)
+    ) {
+      return { ok: false, reason: "invalid" };
+    }
+    if (record.sessionId === undefined) {
+      record.sessionId = action.sessionId;
+      return resolved;
+    }
+    return safeEqual(record.sessionId, action.sessionId)
       ? resolved
       : { ok: false, reason: "invalid" };
   }

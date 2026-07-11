@@ -49,14 +49,49 @@ function completed(overall: string): Record<string, unknown> {
   };
 }
 
+function response(body: unknown, ok = true): Response {
+  return { ok, status: ok ? 200 : 500, json: () => Promise.resolve(body) } as Response;
+}
+
+function catalog(projectId = "/ws"): Record<string, unknown> {
+  return {
+    schemaVersion: V,
+    projectId,
+    kinds: ["test", "targeted-test", "typecheck", "lint", "build"].map((kind) => ({
+      kind,
+      available: true,
+      trustState: "trusted",
+    })),
+  };
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   resetEditorVerificationRunStateForTests();
   FakeEventSource.instances = [];
-  fetchMock = vi.fn((_url: string, init?: RequestInit) => {
-    const body = init?.method === "DELETE" ? { ok: true } : { runId: "run-1" };
-    return Promise.resolve({ json: () => Promise.resolve(body) } as Response);
+  fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    if (url.startsWith("/api/editor/verification/catalog")) {
+      const projectId = decodeURIComponent(url.split("projectId=")[1] ?? "");
+      return Promise.resolve(response(catalog(projectId)));
+    }
+    if (url === "/api/editor/verification/trust") return Promise.resolve(response({ ok: true }));
+    if (init?.method === "DELETE") return Promise.resolve(response({ ok: true }));
+    const request = JSON.parse(String(init?.body)) as {
+      readonly projectId: string;
+      readonly kinds: readonly string[];
+      readonly targetPath?: string;
+    };
+    return Promise.resolve(
+      response({
+        runId: "run-1",
+        projectId: request.projectId,
+        kinds: request.kinds,
+        ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
+        state: "running",
+        startedAtMs: 1,
+      }),
+    );
   });
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("EventSource", FakeEventSource);
@@ -91,6 +126,7 @@ describe("useEditorVerificationRun", () => {
 
   it("starts a governed run, opens ONE shared stream, and reflects lifecycle then closes it", async () => {
     const { result } = render();
+    await tick();
     await act(async () => {
       result.current.runWorkspaceVerification("typecheck");
     });
@@ -98,7 +134,10 @@ describe("useEditorVerificationRun", () => {
     expect(result.current.verificationRunning).toBe(true);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/editor/verification/runs",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
     );
     expect(FakeEventSource.instances).toHaveLength(1);
     const source = FakeEventSource.instances[0];
@@ -119,10 +158,12 @@ describe("useEditorVerificationRun", () => {
 
   it("sends the resolved target path for a file-targeted run", async () => {
     const { result } = render("src/foo.ts");
+    await tick();
     await act(async () => {
       result.current.runFileTests();
     });
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    const startCall = fetchMock.mock.calls.find(([url]) => url === "/api/editor/verification/runs");
+    const init = startCall?.[1] as RequestInit;
     expect(JSON.parse(init.body as string)).toEqual({
       projectId: "/ws",
       kinds: ["targeted-test"],
@@ -132,6 +173,7 @@ describe("useEditorVerificationRun", () => {
 
   it("cancels the active run via DELETE using the adopted run id", async () => {
     const { result } = render();
+    await tick();
     await act(async () => {
       result.current.runWorkspaceVerification("lint");
     });
@@ -149,7 +191,10 @@ describe("useEditorVerificationRun", () => {
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/editor/verification/runs/run-1",
-      expect.objectContaining({ method: "DELETE" }),
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
     );
   });
 
@@ -159,6 +204,7 @@ describe("useEditorVerificationRun", () => {
       renders += 1;
       return useEditorVerificationRun({ root: "/ws", activeFile: "src/a.ts" });
     });
+    await tick();
     await act(async () => {
       result.current.runWorkspaceVerification("test");
     });
@@ -191,6 +237,10 @@ describe("useEditorVerificationRun", () => {
       const { result } = renderHook(() =>
         useEditorVerificationRun({ root: "/ws", activeFile: null }),
       );
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       act(() => {
         result.current.runWorkspaceVerification("typecheck");
       });
@@ -225,6 +275,10 @@ describe("useEditorVerificationRun", () => {
       const { result } = renderHook(() =>
         useEditorVerificationRun({ root: "/ws", activeFile: null }),
       );
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
       act(() => {
         result.current.runWorkspaceVerification("typecheck");
       });
@@ -278,6 +332,7 @@ describe("useEditorVerificationRun", () => {
     );
     expect(hookA.result.current.statusBarRun).toBeNull();
     expect(hookB.result.current.statusBarRun).toBeNull();
+    await tick();
 
     await act(async () => {
       hookA.result.current.runWorkspaceVerification("typecheck");
@@ -305,5 +360,134 @@ describe("useEditorVerificationRun", () => {
     });
     expect(hookA.result.current.statusBarRun?.label).toContain("passed");
     expect(hookB.result.current.statusBarRun).toBeNull();
+  });
+
+  it.each([
+    ["non-ok", () => Promise.resolve(response({ code: "DENIED" }, false))],
+    ["malformed", () => Promise.resolve(response({ runId: undefined }))],
+    ["network", () => Promise.reject(new Error("offline"))],
+  ])("settles and dismisses a %s start failure", async (_label, failedStart) => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/editor/verification/catalog")) {
+          return Promise.resolve(response(catalog()));
+        }
+        if (url === "/api/editor/verification/runs" && init?.method === "POST") {
+          return failedStart();
+        }
+        return Promise.resolve(response({ ok: true }));
+      });
+      const { result } = render();
+      await tick();
+      act(() => result.current.runWorkspaceVerification("typecheck"));
+      await tick();
+      expect(result.current.verificationRunning).toBe(false);
+      expect(result.current.statusBarRun?.label).toBe("Verification: failed to start");
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        await Promise.resolve();
+      });
+      expect(result.current.statusBarRun).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces double start and queues one cancel while the POST response is pending", async () => {
+    let resolveStart: ((value: Response) => void) | undefined;
+    const pendingStart = new Promise<Response>((resolve) => {
+      resolveStart = resolve;
+    });
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/editor/verification/catalog")) {
+        return Promise.resolve(response(catalog()));
+      }
+      if (url === "/api/editor/verification/runs" && init?.method === "POST") return pendingStart;
+      return Promise.resolve(response({ ok: true }));
+    });
+    const { result } = render();
+    await tick();
+    act(() => {
+      result.current.runWorkspaceVerification("lint");
+      result.current.runWorkspaceVerification("lint");
+      result.current.cancelVerification();
+      result.current.cancelVerification();
+    });
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          url === "/api/editor/verification/runs" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toHaveLength(1);
+
+    resolveStart?.(
+      response({
+        runId: "run-race",
+        projectId: "/ws",
+        kinds: ["lint"],
+        state: "running",
+        startedAtMs: 1,
+      }),
+    );
+    await tick();
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          url === "/api/editor/verification/runs/run-race" &&
+          (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("surfaces a rejected cancel and never treats malformed DELETE data as success", async () => {
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/editor/verification/catalog")) {
+        return Promise.resolve(response(catalog()));
+      }
+      if (init?.method === "DELETE") return Promise.resolve(response({ ok: false }));
+      return Promise.resolve(
+        response({
+          runId: "run-1",
+          projectId: "/ws",
+          kinds: ["lint"],
+          state: "running",
+          startedAtMs: 1,
+        }),
+      );
+    });
+    const { result } = render();
+    await tick();
+    act(() => result.current.runWorkspaceVerification("lint"));
+    await tick();
+    act(() => result.current.cancelVerification());
+    await tick();
+    expect(result.current.verificationRunning).toBe(true);
+    expect(result.current.statusBarRun?.label).toBe("Verification: cancel failed");
+  });
+
+  it("uses exact trust mutation requests and refreshes the guarded catalog", async () => {
+    const { result } = render();
+    await tick();
+    act(() => result.current.trustWorkspaceScripts());
+    await tick();
+    act(() => result.current.revokeWorkspaceScriptTrust());
+    await tick();
+    const trustCalls = fetchMock.mock.calls.filter(
+      ([url]) => url === "/api/editor/verification/trust",
+    );
+    expect(trustCalls.map(([, init]) => (init as RequestInit).method)).toEqual(["POST", "DELETE"]);
+    for (const [, init] of trustCalls) {
+      expect(JSON.parse(String((init as RequestInit).body))).toEqual({ projectId: "/ws" });
+      expect((init as RequestInit).headers).toEqual(
+        expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      );
+    }
+    expect(
+      fetchMock.mock.calls.filter(([url]) =>
+        String(url).startsWith("/api/editor/verification/catalog?projectId="),
+      ),
+    ).toHaveLength(3);
   });
 });

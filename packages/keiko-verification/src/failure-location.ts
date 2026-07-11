@@ -20,9 +20,16 @@ import {
   type VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
+import { posix as posixPath, win32 as win32Path } from "node:path";
 
 // A defensive per-line length ceiling: a pathological single line is skipped rather than matched.
 const MAX_LINE_LENGTH = 4_096;
+const MAX_PATH_BYTES = 4_096;
+const MAX_COORDINATE = 2_147_483_647;
+const MAX_RULE_ID_CHARS = 128;
+const TEXT_ENCODER = new TextEncoder();
+const WINDOWS_ROOT = /^(?:[A-Za-z]:[\\/]|\\{2}|\/{2})/u;
+const WINDOWS_QUALIFIED = /^(?:[A-Za-z]:|\\{2}|\/{2})/u;
 
 // tsc default: "src/a.ts(12,34): error TS2322: Type 'x' is not assignable to type 'y'."
 const TSC_DIAGNOSTIC =
@@ -41,10 +48,11 @@ function toInt(value: string): number {
   return Number.parseInt(value, 10);
 }
 
-function cap(text: string): string {
-  return text.length <= VERIFICATION_FAILURE_MESSAGE_MAX_CHARS
-    ? text
-    : text.slice(0, VERIFICATION_FAILURE_MESSAGE_MAX_CHARS);
+function cap(text: string, maxChars = VERIFICATION_FAILURE_MESSAGE_MAX_CHARS): string {
+  if (text.length <= maxChars) return text;
+  const capped = text.slice(0, maxChars);
+  const last = capped.charCodeAt(capped.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? capped.slice(0, -1) : capped;
 }
 
 function extractTsc(lines: readonly string[]): VerificationFailureLocation[] {
@@ -141,18 +149,99 @@ function extractByKind(
   }
 }
 
-// Deduplicate by file:line:column and clamp to the contract's per-result count cap. A location with a
-// non-positive or non-finite line is dropped (a fabricated coordinate must never surface).
+function hasTraversal(path: string): boolean {
+  return path.split(/[\\/]/u).includes("..");
+}
+
+function isEscapingRelative(path: string, absolute: boolean): boolean {
+  if (path.length === 0 || absolute) return true;
+  const first = path.split(/[\\/]/u)[0];
+  return first === "..";
+}
+
+function normalizeWindowsPath(file: string, workspaceRoot: string): string | undefined {
+  if (!WINDOWS_ROOT.test(workspaceRoot) || (file.startsWith("/") && !file.startsWith("//"))) {
+    return undefined;
+  }
+  if (WINDOWS_QUALIFIED.test(file) && !win32Path.isAbsolute(file)) return undefined;
+  const root = win32Path.resolve(workspaceRoot);
+  const absolute = win32Path.isAbsolute(file)
+    ? win32Path.resolve(file)
+    : win32Path.resolve(root, file);
+  const relative = win32Path.relative(root, absolute);
+  if (isEscapingRelative(relative, win32Path.isAbsolute(relative))) return undefined;
+  return relative.replaceAll("\\", "/");
+}
+
+function normalizePosixPath(file: string, workspaceRoot: string): string | undefined {
+  if (!posixPath.isAbsolute(workspaceRoot) || WINDOWS_QUALIFIED.test(file)) return undefined;
+  const normalizedFile = file.replaceAll("\\", "/");
+  const root = posixPath.resolve(workspaceRoot);
+  const absolute = posixPath.isAbsolute(normalizedFile)
+    ? posixPath.resolve(normalizedFile)
+    : posixPath.resolve(root, normalizedFile);
+  const relative = posixPath.relative(root, absolute);
+  return isEscapingRelative(relative, posixPath.isAbsolute(relative)) ? undefined : relative;
+}
+
+function normalizeFailurePath(file: string, workspaceRoot: string): string | undefined {
+  if (
+    file.length === 0 ||
+    workspaceRoot.length === 0 ||
+    file.includes("\u0000") ||
+    workspaceRoot.includes("\u0000") ||
+    TEXT_ENCODER.encode(file).length > MAX_PATH_BYTES ||
+    hasTraversal(file)
+  ) {
+    return undefined;
+  }
+  const normalized = WINDOWS_ROOT.test(workspaceRoot)
+    ? normalizeWindowsPath(file, workspaceRoot)
+    : normalizePosixPath(file, workspaceRoot);
+  if (normalized === undefined || TEXT_ENCODER.encode(normalized).length > MAX_PATH_BYTES) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function isValidCoordinate(value: number | undefined): boolean {
+  return value === undefined || (Number.isInteger(value) && value > 0 && value <= MAX_COORDINATE);
+}
+
+function normalizeLocation(
+  location: VerificationFailureLocation,
+  workspaceRoot: string,
+): VerificationFailureLocation | undefined {
+  const file = normalizeFailurePath(location.file, workspaceRoot);
+  if (
+    file === undefined ||
+    !isValidCoordinate(location.line) ||
+    !isValidCoordinate(location.column)
+  ) {
+    return undefined;
+  }
+  return {
+    file,
+    ...(location.line === undefined ? {} : { line: location.line }),
+    ...(location.column === undefined ? {} : { column: location.column }),
+    message: cap(location.message),
+    ...(location.ruleId === undefined ? {} : { ruleId: cap(location.ruleId, MAX_RULE_ID_CHARS) }),
+  };
+}
+
+// Normalize to a workspace-relative POSIX path, deduplicate by file:line:column, and clamp to the
+// contract's per-result count cap. Invalid coordinates and any path that is ambiguous or outside the
+// active workspace are dropped, so hostile output cannot become a host-path disclosure.
 function clamp(
   raw: readonly VerificationFailureLocation[],
+  workspaceRoot: string,
 ): readonly VerificationFailureLocation[] {
   const seen = new Set<string>();
   const out: VerificationFailureLocation[] = [];
-  for (const location of raw) {
+  for (const candidate of raw) {
     if (out.length >= VERIFICATION_MAX_FAILURE_LOCATIONS) break;
-    if (location.line !== undefined && (!Number.isInteger(location.line) || location.line <= 0)) {
-      continue;
-    }
+    const location = normalizeLocation(candidate, workspaceRoot);
+    if (location === undefined) continue;
     const key = `${location.file}:${String(location.line)}:${String(location.column)}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -166,10 +255,11 @@ function clamp(
 export function extractFailureLocations(
   kind: VerificationKind,
   result: CommandResult | undefined,
+  workspaceRoot: string,
 ): readonly VerificationFailureLocation[] {
   if (result === undefined) return [];
   const lines = `${result.stdout}\n${result.stderr}`
     .split(/\r?\n/u)
     .filter((line) => line.length <= MAX_LINE_LENGTH);
-  return clamp(extractByKind(kind, lines));
+  return clamp(extractByKind(kind, lines), workspaceRoot);
 }

@@ -7,6 +7,7 @@ import {
 } from "./quickAccessRegistry";
 import type { EditorPaletteHost } from "./widgets/cards/editorCommands";
 import { EDITOR_PALETTE_COMMANDS } from "./widgets/cards/editorCommands";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
 function appCommand(id: string): Command {
   return {
@@ -28,6 +29,11 @@ function host(): EditorPaletteHost {
     dirtyCount: 1,
     verificationRunning: false,
     verifiableTarget: "src/app.test.ts",
+    verificationCatalog: {
+      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+      projectId: "/repo",
+      kinds: [{ kind: "targeted-test", available: true, trustState: "trusted" }],
+    },
     splitActive: vi.fn(),
     closeActiveSplit: vi.fn(),
     closeActiveTab: vi.fn(),
@@ -38,6 +44,9 @@ function host(): EditorPaletteHost {
     runFileTests: vi.fn(),
     runWorkspaceVerification: vi.fn(),
     cancelVerification: vi.fn(),
+    trustWorkspaceScripts: vi.fn(),
+    revokeWorkspaceScriptTrust: vi.fn(),
+    openProblems: vi.fn(),
   };
 }
 

@@ -203,6 +203,37 @@ describe("EditorAgentAuthorityRegistry", () => {
     ).toEqual({ ok: false, reason: "budget-exceeded" });
   });
 
+  it("binds external editor authority to its first session and denies cross-session reuse", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const registered = registry.register(envelope(), "autonomous-delivery", NOW);
+    if (!registered.ok) throw new Error("expected registration");
+    const firstSession = action({ sessionId: "session-1" });
+    const secondSession = action({
+      sessionId: "session-2",
+      actionId: "action-2",
+      idempotencyKey: "key-2",
+    });
+
+    expect(
+      registry.resolveForAction(
+        registered.authorityRef,
+        firstSession,
+        ROOT,
+        "autonomous-delivery",
+        NOW,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(
+      registry.resolveForAction(
+        registered.authorityRef,
+        secondSession,
+        ROOT,
+        "autonomous-delivery",
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "invalid" });
+  });
+
   it("does not reset cumulative budgets when the same envelope is registered again", () => {
     const registry = new EditorAgentAuthorityRegistry();
     const limited = envelope({

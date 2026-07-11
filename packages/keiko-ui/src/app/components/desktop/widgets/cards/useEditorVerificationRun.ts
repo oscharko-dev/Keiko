@@ -14,12 +14,14 @@
 // connection stays shared and ref-counted across all projects (per the epic's shared-EventSource
 // invariant); only the STATE it feeds is partitioned.
 
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   EDITOR_VERIFICATION_EVENT_KINDS,
+  isEditorVerificationCatalog,
   isEditorVerificationEvent,
+  isEditorVerificationRun,
+  type EditorVerificationCatalog,
   type EditorVerificationEvent,
-  type EditorVerificationRun,
   type VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
 import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
@@ -28,6 +30,12 @@ import { setVerificationReport } from "./editorProblemsStore";
 
 const RUNS_URL = "/api/editor/verification/runs";
 const EVENTS_URL = "/api/editor/verification/events";
+const CATALOG_URL = "/api/editor/verification/catalog";
+const TRUST_URL = "/api/editor/verification/trust";
+const MUTATION_HEADERS = {
+  "content-type": "application/json",
+  "X-Keiko-CSRF": "1",
+} as const;
 
 export interface EditorVerificationStatusRun {
   readonly label: string;
@@ -38,10 +46,13 @@ export interface EditorVerificationRunControls {
   readonly verificationRunning: boolean;
   readonly verifiableTarget: string | null;
   readonly statusBarRun: EditorVerificationStatusRun | null;
+  readonly catalog: EditorVerificationCatalog | null;
   // `forFile` targets that file's tests instead of the active pane's file (Issue #2212 fix-up).
   readonly runFileTests: (forFile?: string) => void;
   readonly runWorkspaceVerification: (kind: VerificationKind) => void;
   readonly cancelVerification: () => void;
+  readonly trustWorkspaceScripts: () => void;
+  readonly revokeWorkspaceScriptTrust: () => void;
 }
 
 export interface UseEditorVerificationRunOptions {
@@ -67,6 +78,10 @@ interface ProjectRunState {
   pendingState: SharedRunState | null;
   flushScheduled: boolean;
   dismissTimer: ReturnType<typeof setTimeout> | null;
+  startToken: number | null;
+  startSequence: number;
+  cancelRequested: boolean;
+  cancelInFlightRunId: string | null;
   readonly listeners: Set<() => void>;
 }
 
@@ -87,6 +102,10 @@ function projectState(root: string): ProjectRunState {
       pendingState: null,
       flushScheduled: false,
       dismissTimer: null,
+      startToken: null,
+      startSequence: 0,
+      cancelRequested: false,
+      cancelInFlightRunId: null,
       listeners: new Set(),
     };
     projectStates.set(root, entry);
@@ -102,6 +121,7 @@ function pruneIfIdle(root: string): void {
     entry !== undefined &&
     entry.listeners.size === 0 &&
     entry.activeRunId === null &&
+    entry.startToken === null &&
     entry.dismissTimer === null
   ) {
     projectStates.delete(root);
@@ -188,7 +208,12 @@ function onEvent(event: EditorVerificationEvent): void {
     const entry = projectState(root);
     // A fresh run supersedes any pending dismiss from a PREVIOUS run's terminal label.
     clearDismissTimer(entry);
+    if (entry.activeRunId !== null && entry.activeRunId !== event.runId) {
+      projectIdByRunId.delete(entry.activeRunId);
+    }
     entry.activeRunId = event.runId;
+    entry.startToken = null;
+    if (entry.cancelRequested) void requestCancel(root, event.runId);
   } else {
     const knownRoot = projectIdByRunId.get(event.runId);
     if (knownRoot === undefined) return;
@@ -203,6 +228,9 @@ function onEvent(event: EditorVerificationEvent): void {
   const view = labelFor(event);
   if (view.terminal) {
     entry.activeRunId = null;
+    entry.startToken = null;
+    entry.cancelRequested = false;
+    entry.cancelInFlightRunId = null;
     projectIdByRunId.delete(event.runId);
     if (![...projectStates.values()].some((e) => e.activeRunId !== null)) closeSharedSource();
     // Issue #2212 fix-up: dismiss the terminal label after a short delay so it does not permanently
@@ -221,13 +249,18 @@ function onMessage(message: MessageEvent<string>): void {
   }
 }
 
-function openSharedSource(): void {
-  if (sharedSource !== null) return;
-  sharedSource = createSameOriginApiEventSource(EVENTS_URL);
-  if (sharedSource === null) return;
+function openSharedSource(): boolean {
+  if (sharedSource !== null) return true;
+  try {
+    sharedSource = createSameOriginApiEventSource(EVENTS_URL);
+  } catch {
+    sharedSource = null;
+  }
+  if (sharedSource === null) return false;
   for (const kind of EDITOR_VERIFICATION_EVENT_KINDS) {
     sharedSource.addEventListener(`verification:${kind}`, onMessage as EventListener);
   }
+  return true;
 }
 
 function closeSharedSource(): void {
@@ -235,39 +268,105 @@ function closeSharedSource(): void {
   sharedSource = null;
 }
 
+function hasActiveRun(): boolean {
+  return [...projectStates.values()].some(
+    (entry) => entry.activeRunId !== null || entry.startToken !== null,
+  );
+}
+
+function showTransientStatus(root: string, label: string): void {
+  const entry = projectState(root);
+  emit(root, entry, { running: false, label });
+  scheduleDismiss(root, entry);
+}
+
+function failStart(root: string, entry: ProjectRunState, token: number): void {
+  if (entry.startToken !== token) return;
+  entry.startToken = null;
+  entry.activeRunId = null;
+  entry.cancelRequested = false;
+  if (!hasActiveRun()) closeSharedSource();
+  showTransientStatus(root, "Verification: failed to start");
+}
+
+async function postRun(
+  root: string,
+  kinds: readonly VerificationKind[],
+  token: number,
+  targetPath?: string,
+): Promise<void> {
+  const entry = projectState(root);
+  try {
+    const response = await fetch(RUNS_URL, {
+      method: "POST",
+      headers: MUTATION_HEADERS,
+      body: JSON.stringify({
+        projectId: root,
+        kinds,
+        ...(targetPath === undefined ? {} : { targetPath }),
+      }),
+    });
+    if (!response.ok) throw new Error("verification start rejected");
+    const payload: unknown = await response.json();
+    if (!isEditorVerificationRun(payload) || payload.projectId !== root) {
+      throw new Error("malformed verification run");
+    }
+    if (entry.startToken !== token) return;
+    entry.startToken = null;
+    entry.activeRunId = payload.runId;
+    projectIdByRunId.set(payload.runId, root);
+    if (entry.cancelRequested) void requestCancel(root, payload.runId);
+  } catch {
+    failStart(root, entry, token);
+  }
+}
+
 function startRun(root: string, kinds: readonly VerificationKind[], targetPath?: string): void {
   if (root.length === 0) return;
   const entry = projectState(root);
+  if (entry.startToken !== null || entry.activeRunId !== null || entry.state.running) return;
+  clearDismissTimer(entry);
+  entry.startSequence += 1;
+  entry.startToken = entry.startSequence;
+  entry.cancelRequested = false;
   emit(root, entry, { running: true, label: "Verification: starting…" });
-  openSharedSource();
-  void fetch(RUNS_URL, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      projectId: root,
-      kinds,
-      ...(targetPath === undefined ? {} : { targetPath }),
-    }),
-  })
-    .then((response) => response.json())
-    .then((run: EditorVerificationRun) => {
-      entry.activeRunId = run.runId;
-      projectIdByRunId.set(run.runId, root);
-    })
-    .catch(() => {
-      entry.activeRunId = null;
-      if (![...projectStates.values()].some((e) => e.activeRunId !== null)) closeSharedSource();
-      emit(root, entry, { running: false, label: "Verification: failed to start" });
+  if (!openSharedSource()) {
+    failStart(root, entry, entry.startToken);
+    return;
+  }
+  void postRun(root, kinds, entry.startToken, targetPath);
+}
+
+function isDeleteAcknowledgement(value: unknown): value is { readonly ok: true } {
+  return typeof value === "object" && value !== null && "ok" in value && value.ok === true;
+}
+
+async function requestCancel(root: string, runId: string): Promise<void> {
+  const entry = projectStates.get(root);
+  if (entry === undefined || entry.cancelInFlightRunId === runId) return;
+  entry.cancelInFlightRunId = runId;
+  try {
+    const response = await fetch(`${RUNS_URL}/${encodeURIComponent(runId)}`, {
+      method: "DELETE",
+      headers: MUTATION_HEADERS,
     });
+    if (!response.ok) throw new Error("verification cancel rejected");
+    const payload: unknown = await response.json();
+    if (!isDeleteAcknowledgement(payload)) throw new Error("malformed cancel response");
+  } catch {
+    if (entry.activeRunId === runId) {
+      emit(root, entry, { running: true, label: "Verification: cancel failed" });
+    }
+  } finally {
+    if (entry.cancelInFlightRunId === runId) entry.cancelInFlightRunId = null;
+  }
 }
 
 function cancelRun(root: string): void {
   const entry = projectStates.get(root);
-  const runId = entry?.activeRunId;
-  if (runId === undefined || runId === null) return;
-  void fetch(`${RUNS_URL}/${encodeURIComponent(runId)}`, { method: "DELETE" }).catch(() => {
-    // The terminal SSE event settles the UI; a failed cancel leaves the run to finish on its own.
-  });
+  if (entry === undefined) return;
+  entry.cancelRequested = true;
+  if (entry.activeRunId !== null) void requestCancel(root, entry.activeRunId);
 }
 
 // Exposed for hermetic tests to reset the module singleton between cases.
@@ -279,6 +378,54 @@ export function resetEditorVerificationRunStateForTests(): void {
   totalListenerCount = 0;
 }
 
+async function fetchVerificationCatalog(
+  root: string,
+  signal?: AbortSignal,
+): Promise<EditorVerificationCatalog> {
+  const url = `${CATALOG_URL}?projectId=${encodeURIComponent(root)}`;
+  const response = await fetch(url, signal === undefined ? undefined : { signal });
+  if (!response.ok) throw new Error("verification catalog rejected");
+  const payload: unknown = await response.json();
+  if (!isEditorVerificationCatalog(payload) || payload.projectId !== root) {
+    throw new Error("malformed verification catalog");
+  }
+  return payload;
+}
+
+function catalogAllows(catalog: EditorVerificationCatalog | null, kind: VerificationKind): boolean {
+  const entry = catalog?.kinds.find((candidate) => candidate.kind === kind);
+  return entry?.available === true && entry.trustState === "trusted";
+}
+
+function explainUnavailable(
+  catalog: EditorVerificationCatalog | null,
+  kind: VerificationKind,
+): string {
+  const entry = catalog?.kinds.find((candidate) => candidate.kind === kind);
+  if (entry?.trustState === "approval-required") {
+    return "Verification: workspace script trust required";
+  }
+  return `Verification: ${kind} unavailable`;
+}
+
+async function updateWorkspaceTrust(
+  root: string,
+  method: "POST" | "DELETE",
+  onCatalog: (catalog: EditorVerificationCatalog) => void,
+): Promise<void> {
+  try {
+    const response = await fetch(TRUST_URL, {
+      method,
+      headers: MUTATION_HEADERS,
+      body: JSON.stringify({ projectId: root }),
+    });
+    if (!response.ok) throw new Error("workspace trust update rejected");
+    onCatalog(await fetchVerificationCatalog(root));
+  } catch {
+    showTransientStatus(root, "Verification: workspace trust update failed");
+  }
+}
+
 export function useEditorVerificationRun(
   options: UseEditorVerificationRunOptions,
 ): EditorVerificationRunControls {
@@ -287,12 +434,33 @@ export function useEditorVerificationRun(
   const rootGetSnapshot = useCallback(() => getSnapshot(root), [root]);
   const state = useSyncExternalStore(rootSubscribe, rootGetSnapshot, rootGetSnapshot);
   const verifiableTarget = useMemo(() => resolveVerificationTarget(activeFile), [activeFile]);
+  const [catalog, setCatalog] = useState<EditorVerificationCatalog | null>(null);
+
+  useEffect(() => {
+    setCatalog(null);
+    if (root.length === 0) return undefined;
+    const controller = new AbortController();
+    void fetchVerificationCatalog(root, controller.signal)
+      .then(setCatalog)
+      .catch(() => {
+        if (!controller.signal.aborted) setCatalog(null);
+      });
+    return () => controller.abort();
+  }, [root]);
+
+  const runKind = useCallback(
+    (kind: VerificationKind, targetPath?: string): void => {
+      if (catalogAllows(catalog, kind)) startRun(root, [kind], targetPath);
+      else showTransientStatus(root, explainUnavailable(catalog, kind));
+    },
+    [catalog, root],
+  );
 
   const runWorkspaceVerification = useCallback(
     (kind: VerificationKind): void => {
-      startRun(root, [kind]);
+      runKind(kind);
     },
-    [root],
+    [runKind],
   );
 
   // Issue #2212 fix-up: an optional `forFile` targets a SPECIFIC file (e.g. the file a diff-review
@@ -302,13 +470,21 @@ export function useEditorVerificationRun(
   const runFileTests = useCallback(
     (forFile?: string): void => {
       const target = forFile === undefined ? verifiableTarget : resolveVerificationTarget(forFile);
-      if (target !== null) startRun(root, ["targeted-test"], target);
+      if (target !== null) runKind("targeted-test", target);
     },
-    [root, verifiableTarget],
+    [runKind, verifiableTarget],
   );
 
   const cancelVerification = useCallback((): void => {
     cancelRun(root);
+  }, [root]);
+
+  const trustWorkspaceScripts = useCallback((): void => {
+    if (root.length > 0) void updateWorkspaceTrust(root, "POST", setCatalog);
+  }, [root]);
+
+  const revokeWorkspaceScriptTrust = useCallback((): void => {
+    if (root.length > 0) void updateWorkspaceTrust(root, "DELETE", setCatalog);
   }, [root]);
 
   const statusBarRun = useMemo<EditorVerificationStatusRun | null>(
@@ -320,8 +496,11 @@ export function useEditorVerificationRun(
     verificationRunning: state.running,
     verifiableTarget,
     statusBarRun,
+    catalog,
     runFileTests,
     runWorkspaceVerification,
     cancelVerification,
+    trustWorkspaceScripts,
+    revokeWorkspaceScriptTrust,
   };
 }

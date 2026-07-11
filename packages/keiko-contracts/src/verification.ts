@@ -121,6 +121,292 @@ export interface VerificationReport {
   readonly counts: Readonly<Record<VerificationStatus, number>>;
 }
 
+// ─── Deep wire guards ─────────────────────────────────────────────────────────────
+// These guards are the canonical trust-boundary validation used by the editor SSE contract. They
+// deliberately validate the complete nested report/result shape: a shallow terminal-event check
+// would let hostile enums, unbounded arrays/text, unredacted results, or absolute failure paths cross
+// the browser boundary under an otherwise plausible VerificationReport envelope.
+
+const VERIFICATION_KINDS: readonly VerificationKind[] = [
+  "test",
+  "targeted-test",
+  "typecheck",
+  "lint",
+  "build",
+];
+const VERIFICATION_STATUSES: readonly VerificationStatus[] = [
+  "passed",
+  "failed",
+  "skipped",
+  "denied",
+  "timed-out",
+  "cancelled",
+  "resource-exceeded",
+];
+const RESOURCE_DIMENSIONS: readonly ResourceDimension[] = [
+  "wall-time",
+  "output-size",
+  "memory",
+  "network",
+];
+const VERIFICATION_MAX_REPORT_RESULTS = VERIFICATION_KINDS.length;
+const VERIFICATION_MAX_ARGS = 64;
+const VERIFICATION_PATH_MAX_BYTES = 4_096;
+const VERIFICATION_COMMAND_MAX_CHARS = 256;
+const VERIFICATION_ARGUMENT_MAX_CHARS = 4_096;
+const VERIFICATION_OUTPUT_SUMMARY_MAX_CHARS = 1_024;
+const VERIFICATION_DETAIL_MAX_CHARS = 1_024;
+const VERIFICATION_NOTE_MAX_CHARS = 1_024;
+const VERIFICATION_RULE_ID_MAX_CHARS = 128;
+const VERIFICATION_SIGNAL_MAX_CHARS = 128;
+const VERIFICATION_COORDINATE_MAX = 2_147_483_647;
+const VERIFICATION_TEXT_ENCODER = new TextEncoder();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
+
+function isBoundedText(value: unknown, maxChars: number, allowEmpty = false): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= maxChars &&
+    (allowEmpty || value.length > 0) &&
+    !value.includes("\u0000")
+  );
+}
+
+function isBoundedWorkspacePath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !value.includes("\u0000") &&
+    VERIFICATION_TEXT_ENCODER.encode(value).length <= VERIFICATION_PATH_MAX_BYTES
+  );
+}
+
+function isDenseArray<T>(
+  value: unknown,
+  maxLength: number,
+  guard: (entry: unknown) => entry is T,
+): value is readonly T[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > maxLength ||
+    Object.keys(value).length !== value.length
+  ) {
+    return false;
+  }
+  return value.every(guard);
+}
+
+function isFiniteNonNegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isIntegerWithin(value: unknown, min: number, max: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+}
+
+function isVerificationKindValue(value: unknown): value is VerificationKind {
+  return typeof value === "string" && VERIFICATION_KINDS.includes(value as VerificationKind);
+}
+
+function isVerificationStatusValue(value: unknown): value is VerificationStatus {
+  return typeof value === "string" && VERIFICATION_STATUSES.includes(value as VerificationStatus);
+}
+
+function isResourceDimension(value: unknown): value is ResourceDimension {
+  return typeof value === "string" && RESOURCE_DIMENSIONS.includes(value as ResourceDimension);
+}
+
+function isCanonicalRelativePath(value: unknown): value is string {
+  if (typeof value !== "string" || value.includes("\\") || value.startsWith("/")) return false;
+  if (VERIFICATION_TEXT_ENCODER.encode(value).length > VERIFICATION_PATH_MAX_BYTES) return false;
+  const parts = value.split("/");
+  return (
+    parts.length > 0 &&
+    parts.every((part) => part.length > 0 && part !== "." && part !== "..") &&
+    !/^[A-Za-z]:/u.test(value) &&
+    !value.includes("\u0000")
+  );
+}
+
+function isOptionalCoordinate(value: unknown): boolean {
+  return value === undefined || isIntegerWithin(value, 1, VERIFICATION_COORDINATE_MAX);
+}
+
+function hasValidLocationCoordinates(value: Readonly<Record<string, unknown>>): boolean {
+  if (!isOptionalCoordinate(value.line) || !isOptionalCoordinate(value.column)) return false;
+  return value.column === undefined || value.line !== undefined;
+}
+
+function hasValidLocationText(value: Readonly<Record<string, unknown>>): boolean {
+  if (!isBoundedText(value.message, VERIFICATION_FAILURE_MESSAGE_MAX_CHARS, true)) return false;
+  return value.ruleId === undefined || isBoundedText(value.ruleId, VERIFICATION_RULE_ID_MAX_CHARS);
+}
+
+export function isVerificationFailureLocation(
+  value: unknown,
+): value is VerificationFailureLocation {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyKeys(value, ["file", "line", "column", "message", "ruleId"]) &&
+    isCanonicalRelativePath(value.file) &&
+    hasValidLocationCoordinates(value) &&
+    hasValidLocationText(value)
+  );
+}
+
+function limitMatchesDimension(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.dimension === "network") return value.limit === "none" || value.limit === "inherit";
+  return isFiniteNonNegative(value.limit);
+}
+
+function hasValidResourceOptionals(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.note !== undefined && !isBoundedText(value.note, VERIFICATION_NOTE_MAX_CHARS)) {
+    return false;
+  }
+  return value.breached === undefined || typeof value.breached === "boolean";
+}
+
+function isResourceLimit(value: unknown): value is ResourceLimitDecision {
+  if (!isRecord(value) || !isResourceDimension(value.dimension)) return false;
+  return (
+    hasOnlyKeys(value, ["dimension", "limit", "enforced", "note", "breached"]) &&
+    limitMatchesDimension(value) &&
+    typeof value.enforced === "boolean" &&
+    hasValidResourceOptionals(value)
+  );
+}
+
+function isCompleteAppliedLimits(value: unknown): value is readonly ResourceLimitDecision[] {
+  if (!isDenseArray(value, RESOURCE_DIMENSIONS.length, isResourceLimit)) return false;
+  const dimensions = new Set(value.map((entry) => entry.dimension));
+  const breached = value.filter((entry) => entry.breached === true).length;
+  return dimensions.size === RESOURCE_DIMENSIONS.length && breached <= 1;
+}
+
+function isStringArgument(value: unknown): value is string {
+  return isBoundedText(value, VERIFICATION_ARGUMENT_MAX_CHARS, true);
+}
+
+function isFailureLocations(value: unknown): value is readonly VerificationFailureLocation[] {
+  return isDenseArray(value, VERIFICATION_MAX_FAILURE_LOCATIONS, isVerificationFailureLocation);
+}
+
+function hasValidResultIdentity(value: Readonly<Record<string, unknown>>): boolean {
+  if (!isVerificationKindValue(value.kind) || !isVerificationStatusValue(value.status))
+    return false;
+  if (
+    value.scriptName !== undefined &&
+    !isBoundedText(value.scriptName, VERIFICATION_COMMAND_MAX_CHARS)
+  ) {
+    return false;
+  }
+  return (
+    isBoundedText(value.command, VERIFICATION_COMMAND_MAX_CHARS) &&
+    isDenseArray(value.args, VERIFICATION_MAX_ARGS, isStringArgument)
+  );
+}
+
+function hasValidResultExecution(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.exitCode !== null && !isIntegerWithin(value.exitCode, 0, 255)) return false;
+  if (value.signal !== null && !isBoundedText(value.signal, VERIFICATION_SIGNAL_MAX_CHARS)) {
+    return false;
+  }
+  return isFiniteNonNegative(value.durationMs) && typeof value.truncated === "boolean";
+}
+
+function hasValidResultEvidence(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.redacted !== true) return false;
+  if (!isBoundedText(value.outputSummary, VERIFICATION_OUTPUT_SUMMARY_MAX_CHARS, true))
+    return false;
+  if (!isCompleteAppliedLimits(value.appliedLimits)) return false;
+  if (value.detail !== undefined && !isBoundedText(value.detail, VERIFICATION_DETAIL_MAX_CHARS)) {
+    return false;
+  }
+  return value.locations === undefined || isFailureLocations(value.locations);
+}
+
+export function isVerificationResult(value: unknown): value is VerificationResult {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyKeys(value, [
+      "kind",
+      "scriptName",
+      "command",
+      "args",
+      "status",
+      "exitCode",
+      "signal",
+      "durationMs",
+      "truncated",
+      "redacted",
+      "outputSummary",
+      "appliedLimits",
+      "detail",
+      "locations",
+    ]) &&
+    hasValidResultIdentity(value) &&
+    hasValidResultExecution(value) &&
+    hasValidResultEvidence(value)
+  );
+}
+
+function isStatusCounts(
+  value: unknown,
+  results: readonly VerificationResult[],
+): value is Readonly<Record<VerificationStatus, number>> {
+  if (!isRecord(value) || !hasOnlyKeys(value, VERIFICATION_STATUSES)) return false;
+  for (const status of VERIFICATION_STATUSES) {
+    const count = value[status];
+    if (!isIntegerWithin(count, 0, VERIFICATION_MAX_REPORT_RESULTS)) return false;
+    if (count !== results.filter((result) => result.status === status).length) return false;
+  }
+  return true;
+}
+
+function matchesOverallStatus(
+  overallStatus: VerificationStatus,
+  results: readonly VerificationResult[],
+): boolean {
+  if (overallStatus === "cancelled") return true;
+  if (results.some((result) => result.status === "cancelled")) {
+    return false;
+  }
+  const allOk = results.every(
+    (result) => result.status === "passed" || result.status === "skipped",
+  );
+  return overallStatus === (allOk ? "passed" : "failed");
+}
+
+export function isVerificationReport(value: unknown): value is VerificationReport {
+  if (!isRecord(value)) return false;
+  if (!isDenseArray(value.results, VERIFICATION_MAX_REPORT_RESULTS, isVerificationResult)) {
+    return false;
+  }
+  return (
+    hasOnlyKeys(value, [
+      "workspaceRoot",
+      "results",
+      "overallStatus",
+      "startedAtMs",
+      "durationMs",
+      "counts",
+    ]) &&
+    isBoundedWorkspacePath(value.workspaceRoot) &&
+    isVerificationStatusValue(value.overallStatus) &&
+    matchesOverallStatus(value.overallStatus, value.results) &&
+    isFiniteNonNegative(value.startedAtMs) &&
+    isFiniteNonNegative(value.durationMs) &&
+    isStatusCounts(value.counts, value.results)
+  );
+}
+
 // ─── Detection ──────────────────────────────────────────────────────────────────────
 
 // The npm scripts detected in package.json, plus the kind→scriptName mapping the plan consumes.

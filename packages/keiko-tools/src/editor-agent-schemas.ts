@@ -140,17 +140,29 @@ const CHANGESET_PARAMETERS = objectSchema(
 // Issue #2214 — the closed VerificationKind set (test | targeted-test | typecheck | lint | build).
 // `targetPath` is the workspace-relative file for the `targeted-test` kind; the server re-checks
 // containment and the deny-list. No free-form argv or open-ended kind is ever accepted.
-const REQUEST_VERIFICATION_PARAMETERS = objectSchema(
-  {
-    sessionId: { type: "string", minLength: 1 },
-    kind: {
-      type: "string",
-      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+const REQUEST_VERIFICATION_PARAMETERS = {
+  ...objectSchema(
+    {
+      sessionId: { type: "string", minLength: 1, maxLength: 256 },
+      kind: {
+        type: "string",
+        enum: ["test", "targeted-test", "typecheck", "lint", "build"],
+      },
+      targetPath: { type: "string", minLength: 1, maxLength: 4_096 },
     },
-    targetPath: { type: "string", minLength: 1 },
-  },
-  ["sessionId", "kind"],
-);
+    ["sessionId", "kind"],
+  ),
+  oneOf: [
+    {
+      properties: { kind: { const: "targeted-test" } },
+      required: ["targetPath"],
+    },
+    {
+      properties: { kind: { enum: ["test", "typecheck", "lint", "build"] } },
+      not: { required: ["targetPath"] },
+    },
+  ],
+};
 
 const LANGUAGE_DIAGNOSTIC_SCHEMA = objectSchema(
   {

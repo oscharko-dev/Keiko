@@ -1,87 +1,88 @@
 # Epic #2092 run-verify-fix loop security review
 
-Security review for the editor verification surface (Epic #2092, child issues #2210–#2214). Subject:
-every verification run — human- or agent-triggered — stays inside the single governed `keiko-tools`
-spawn boundary with sandbox attestation honestly reported, carries no unredacted output into any
-persisted evidence record, and gives a docked agent no broader command surface than the human UI.
+Final security review for Epic #2092 and child issues #2210–#2215. The reviewed claim is narrow and
+testable: human and agent verification use the same governed execution boundary; untrusted inputs
+are bounded and projected before use; package-script and agent authority cannot be asserted by a
+run body; execution and failures remain observable without persisting raw command output.
 
 ## Policy baseline
 
-- ADR-0126 (this epic) defines the run/event envelope, the problems-aggregation model, the
-  failure→location shape, the `"execution"` effect class, and the `requestVerification` action.
-- ADR-0062 governs agent editor-action classification and content-free audit.
-- ADR-0043 D4 governs honest network-enforcement reporting; ADR-0019 pins package trust boundaries.
-- The executable surface is the closed `VerificationKind` set (`test | targeted-test | typecheck |
-lint | build`) and the command-runner's `package.json`-script catalog. No free-form argv is
-  accepted on any path.
+- ADR-0126 defines the editor run/event, Problems, failure-location, execution-effect, explicit
+  workspace trust, and pre-execution agent-admission decisions.
+- ADR-0007 owns deterministic verification planning, limits, classifications, and report semantics.
+- ADR-0043 owns fail-closed network isolation and honest `SandboxAttestation` reporting.
+- ADR-0062 and ADR-0125 own editor-agent classification, Authority Envelope composition, session
+  governance, human review, and content-free audit.
+- The executable request surface is the closed `VerificationKind` set. No route, tool schema, or UI
+  affordance accepts free-form command, argv, environment, endpoint, or working directory.
 
-## Trust boundaries reviewed
+## Boundary matrix
 
-| Boundary                                                                                                                 | Verified by                                                                              |
-| ------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| Agent run request parsed/narrowed at the route edge (schemaVersion, sessionId, kind, contained targetPath, authorityRef) | `editor-agent-verification.test.ts`, `agentVerificationRoute.test.ts` (400 on malformed) |
-| Escaping/sensitive `targetPath` denied before any run                                                                    | `agentVerificationRoute.test.ts` (classifier `denied-sensitive-path`, run not called)    |
-| Authority Envelope gate: composed disposition is stricter-of-two                                                         | `agentVerificationRoute.test.ts` (AC2 classifier-stricter, AC3 envelope-stricter)        |
-| Denied / review-required disposition prevents the sandboxed run from starting                                            | `agentVerificationRoute.test.ts` (mocked runner call-count `0`)                          |
-| Single governed spawn boundary — agent and human share one execution port                                                | `agentVerificationBoundary.test.ts` (both route through the injected port)               |
-| Fail-closed run reported honestly (denied, not upgraded to passed)                                                       | `agentVerificationBoundary.test.ts` (`overallStatus: "denied"` surfaced)                 |
-| Agent confined to the requested `VerificationKind` — no broader surface                                                  | `agentVerificationBoundary.test.ts`, `editor-agent-schemas.test.ts` (closed enum)        |
-| Content-free audit for every admitted-or-denied request                                                                  | `agentVerificationRoute.test.ts` (exactly one record; no `SECRET`/`outputSummary`)       |
-| Redacted tool result — no raw output/argv/command re-exposed                                                             | `editor-agent-verification.test.ts`, `agentVerificationRoute.test.ts`                    |
-| Loopback-only, redirect-rejecting, bounded HTTP transport for the tool                                                   | `editor-agent-client.test.ts` (existing hostile-URL + redirect suite)                    |
-| Verification call uses a wall-time-appropriate timeout, honors `signal`                                                  | `editor-agent-client.test.ts` (AC7: long timeout, already-aborted → cancelled)           |
-| SSE lifecycle events are content-free (no `outputSummary` on non-terminal frames)                                        | `verificationRoutes.test.ts`, `verificationRunner.test.ts`                               |
+| Boundary                   | Enforced behavior                                                                                                                                                                                                                    | Regression proof                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Human package-script trust | explicit same-origin CSRF-protected local action; BFF binds grant to registered canonical project + regular non-symlink `package.json` digest; change/revoke/missing state fails closed                                              | `workspace-script-trust.test.ts`, `verificationRoutes.test.ts`, `useEditorVerificationRun.test.ts`    |
+| Human run input            | closed unique kinds, contained target path, bounded request id; catalog controls availability; no client-supplied trust                                                                                                              | `editor-verification.test.ts`, `verificationRunner.test.ts`, E2E                                      |
+| Failure output → location  | parser reads only already-capped/redacted output; canonicalizes to workspace-relative POSIX; rejects escape, NUL, foreign drive/UNC, invalid coordinates, overlong path/line/rule/message; Unicode cap never leaves a lone surrogate | `failure-location.test.ts`, `verification.test.ts`                                                    |
+| SSE/report wire            | exact event variants; complete deep report/result/applied-limit/count validation; terminal report only, content-free intermediate events                                                                                             | `editor-verification.test.ts`, `verificationRoutes.test.ts`                                           |
+| Agent request              | exact schema; `targeted-test` requires one target and other kinds forbid it; target remains classifier/deny-list checked                                                                                                             | `editor-agent-verification.test.ts`, `editor-agent-schemas.test.ts`, `editor-agent-tool-host.test.ts` |
+| Agent authority            | reference resolves for canonical workspace and deployment ceiling, binds on first use to the live session, then reserves bounded budget                                                                                              | `agentAuthorityRegistry.test.ts`, `agentVerificationRoute.test.ts`                                    |
+| Agent admission visibility | classify → compose → reserve → mandatory admission audit; audit failure returns 503 and runner call count remains zero                                                                                                               | `agentVerificationRoute.test.ts`                                                                      |
+| Agent response             | closed reason enums; exact deep projection strips unknown nested fields; counts and overall status match steps; client requires exactly one step of the requested kind                                                               | `editor-agent-verification.test.ts`, `editor-agent-client.test.ts`                                    |
+| HTTP lifetime              | loopback origin only, redirects rejected, body/response/time bounded, CSRF on mutation, disconnect listener installed before parsing and cancellation reaches the shared run                                                         | `editor-agent-client.test.ts`, `agentVerificationRoute.test.ts`                                       |
+| Execution                  | human and agent share planner, registry, orchestrator, resource limits, enforced-network probe, sandboxed spawn, cancellation, terminal evidence, and diagnostics                                                                    | `agentVerificationBoundary.test.ts`, `verificationExecution.test.ts`, `verificationRunner.test.ts`    |
+| UI aggregation             | project-scoped store, producer ownership, deterministic caps/order, bounded messages, no cross-window/project eviction or disclosure                                                                                                 | `editorProblemsStore.test.ts`, `ProblemsPanel.test.tsx`, `useEditorVerificationRun.test.ts`           |
 
-No boundary is left "assumed safe" without a test.
+## Human-control and trust conclusions
 
-## Confirmed findings and fixes
+Script-backed `test | typecheck | lint | build` can execute repository-defined code only after a
+local human grants manifest-bound trust. `targeted-test` remains exempt from package-script trust
+because Keiko synthesizes the closed `npx vitest|jest` invocation, but it still executes only after
+an explicit human run action or an allowed agent Authority Envelope decision and still requires the
+same fail-closed network sandbox and limits.
 
-### Design: allowed (non-mutating) verification runs were invisible to the audit ledger
+The execution effect is intentionally classified as non-mutating product intent: the verification
+surface itself has no write API and returns only a report. This is not a false claim that arbitrary
+repository test/build code is filesystem-read-only; such code can have side effects permitted by the
+existing verification sandbox profile. The new explicit script trust and agent Authority Envelope
+are therefore load-bearing. This epic does not widen that inherited ADR-0007/ADR-0043 filesystem
+profile or create an alternate spawn path.
 
-The audit ledger recorded only mutating actions or denied actions, so an _admitted_ verification run
-(non-mutating, `mutating: false`) would produce no record — undermining the "trust through
-visibility" property for the new execution surface. Fix: the ledger's record predicate now also
-admits execution-class decisions (`decision.effectClass === "execution"`), so an allowed run is
-audited once with `mutating: false` preserved (verification does not mutate). Denied and
-review-required outcomes were already audited. Verified by `agentVerificationRoute.test.ts`.
+No agent run starts merely because the model supplied a plausible reference. Workspace, deployment
+ceiling, session binding, local-action binding when present, composed policy, budget, and admission
+audit must all succeed. Review-required is a terminal not-run outcome for this synchronous tool;
+there is no hidden auto-approval path.
 
-### Design: the redacted report cannot structurally carry raw output
+## Audit, diagnostics, and data minimization
 
-`RedactedVerificationReport` has no field for `outputSummary`, `command`, or `args`; the mapping
-`toRedactedVerificationReport` drops them by omission (content-free by construction), keeping only
-enums, counts, durations, and structured failure locations. A location message is a
-producer-redacted compiler diagnostic and is intentionally surfaced; the regression fixtures assert a
-secret placed in `outputSummary`/argv never reaches the wire.
+- The admission ledger contains identifiers, enums, bounded relative target metadata, policy
+  disposition, and outcome only. It never contains command output, argv, environment, manifest body,
+  source, secret, endpoint, or absolute path.
+- The verification evidence ledger records redacted statuses, counts, durations, and hashes; an
+  interrupted/cancelled execution receives a content-free terminal record. Evidence write failure
+  is a real terminal failure, not a swallowed promise rejection.
+- Unexpected execution failures emit a static, correlation-keyed operator diagnostic. The browser
+  receives only a bounded static failure reason; raw thrown messages are not put on SSE.
+- Agent results omit command, args, script names, `outputSummary`, workspace root, and unknown fields.
+  Structured diagnostic messages are deliberately user/model-visible only after producer redaction,
+  path canonicalization, and strict caps.
 
-## Adversarial verification matrix
+## Adversarial outcomes
 
-| Attack                                                                    | Outcome                                                 |
-| ------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Agent requests a run with a deny-listed `targetPath` (`.env`)             | Denied at classification; no spawn                      |
-| Agent presents an unknown/forged `authorityRef`                           | Authority resolution fails; denied; no spawn            |
-| Agent presents an envelope lacking the `verification` action class        | Composed denied (`mode-policy-denied`); no spawn        |
-| Agent requests a kind outside the closed set (`deploy`)                   | Rejected by schema/parser before any route call         |
-| Agent injects extra properties (e.g. its own `authorityRef` in tool args) | `INVALID_ARGUMENTS`; no route call                      |
-| Verification response oversized / redirected / malformed                  | Bounded transport rejects; typed error                  |
-| Budget exhausted at reservation                                           | Denied (`authority-budget-exceeded`); no spawn; audited |
-
-## Disk mutation and review
-
-A verification run performs no workspace write — it spawns a read-only run through the enforced
-sandbox boundary. The only disk mutations in the epic are the human editor's own edits (unchanged
-apply path). The agent verification tool cannot write files; its effect class is `execution`, not
-`content-mutation`.
-
-## Audit and data handling
-
-Every admitted-or-denied verification request emits exactly one content-free
-`EditorAgentActionAuditRecord` (enums, identifiers, workspace-relative path only), re-redacted at the
-server boundary as defense in depth. The verification's own pass/fail counts live in the returned
-report, never in the ledger. The audit panel (`EditorAgentActionsPanel`) renders and filters the new
-`requestVerification` action type so a human can recognize and isolate agent-triggered runs.
+| Attack/failure                                                      | Outcome                                                                |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| forged/expired/wrong-session authority reference                    | denied; no runner call                                                 |
+| review-required or exhausted budget                                 | audited not-run; no runner call                                        |
+| unavailable audit sink                                              | HTTP 503; no runner call                                               |
+| `.env`, traversal, absolute, foreign-drive/UNC, NUL target/location | rejected or dropped before dispatch/projection                         |
+| unknown kind, target on non-targeted kind, missing targeted path    | schema/parser rejection                                                |
+| hostile nested response fields or inconsistent counts/status/kind   | malformed-response; exact projection returns nothing hostile           |
+| no enforcing network backend                                        | denied report before spawn; attestation says not enforced              |
+| client disconnect before/during parsing or execution                | shared abort signal; no orphaned agent run                             |
+| evidence append or async execution failure                          | one static terminal failure plus redacted diagnostic/evidence handling |
 
 ## Disposition
 
-Approved. Every trust boundary is verified by a passing test; the agent path is provably as-or-more
-restricted than the human path, honestly attested, content-free in evidence, and confined to the
-closed verification kind set. No gate was weakened to reach this disposition.
+Approved for merge subject to the normal protected-branch CI checks. The audit found no remaining
+unmitigated Epic #2092 acceptance or trust-boundary defect. Human and agent paths are demonstrably on
+one governed execution seam, authority remains server-owned, evidence remains content-free, and no
+quality or security gate was weakened.
