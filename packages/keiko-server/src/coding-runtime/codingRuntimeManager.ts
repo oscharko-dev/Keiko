@@ -488,6 +488,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     active.tree.stdout.on("data", (chunk) => {
       this.handleStdout(active, String(chunk));
     });
+    active.tree.stderr.resume();
   }
 
   private handleExit(active: ActiveRuntime, code: number | null): void {

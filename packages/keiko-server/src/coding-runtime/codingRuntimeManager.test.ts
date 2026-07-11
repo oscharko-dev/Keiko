@@ -566,6 +566,40 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
   });
 
+  it("actively drains high-volume runtime stderr without emitting it or blocking reap", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const diagnostics = { record: vi.fn() };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      diagnostics,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const child = harness.children[0];
+    if (child === undefined) throw new Error("runtime-child-not-spawned");
+    const stderrPayload = "stderr-sentinel-2251\\n".repeat(4096);
+    for (let index = 0; index < 16; index += 1) child.stderr.write(stderrPayload);
+    await settle();
+
+    expect(child.stderr.readableLength).toBe(0);
+    expect(child.stderr.writableLength).toBe(0);
+    expect(events).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain("stderr-sentinel-2251");
+    expect(diagnostics.record).not.toHaveBeenCalled();
+
+    const stopped = manager.stop("run-1988");
+    child.exit(0);
+    await expect(stopped).resolves.toEqual({ ok: true, status: "stopped" });
+  });
+
   it("rejects non-loopback gateway URLs before spawn", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
