@@ -115,6 +115,10 @@ interface DiffFileSectionProps {
   readonly translate?: I18nTranslate | undefined;
 }
 
+function useTranslate(translate: I18nTranslate | undefined): string {
+  return translate?.("chat.repository.role.file") ?? "file";
+}
+
 export function DiffFileSection({
   file,
   index,
@@ -122,6 +126,7 @@ export function DiffFileSection({
   sectionRef,
   translate,
 }: DiffFileSectionProps): ReactNode {
+  const fileLabel = useTranslate(translate);
   const cf = changedFiles.find((c) => c.path === file.path);
   const ext = file.path.includes(".") ? (file.path.split(".").pop() ?? "code") : "code";
 
@@ -131,7 +136,7 @@ export function DiffFileSection({
         <span className="rv-path">{file.path}</span>
         {file.oldPath !== undefined && <span className="rv-oldpath"> (was {file.oldPath})</span>}
         <span className="rv-sr-only">
-          {file.status} {translate?.("chat.repository.role.file") ?? "file"}
+          {file.status} {fileLabel}
         </span>
         <span className="spacer" />
         <span className="rv-stat add">+{file.addedLines}</span>

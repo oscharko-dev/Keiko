@@ -22,8 +22,9 @@ Open the loopback URL printed by `dev:start` (normally `http://127.0.0.1:1983`).
 occupied, the command prints the next selected loopback port. Select the fixture directory created
 below as the active workspace.
 
-> Final preparation result: **PENDING — coordinator must run these commands from the final commit and
-> replace this slot with the exact command outcomes and selected loopback URL.**
+> Final preparation result: **PASS** — the clean build/package sequence and production UI build
+> completed on 2026-07-11. The hermetic automated walkthrough used the configured loopback test URL
+> `http://127.0.0.1:32183`; `dev:start` remains free to choose the next loopback port interactively.
 
 ### Create a hermetic source-control fixture
 
@@ -191,8 +192,7 @@ The v1 surface is intentionally marker-based. It is not a three-way merge editor
 - Full release-affecting coverage chain: `npm run test:coverage:quality`.
 - Linux-authoritative editor bundle evidence: `npm run check:editor-release-evidence` in Linux/CI.
 
-The focused Vitest commands above were executed during documentation authoring: the root command
-passed 5 files / 78 tests, and the keiko-ui command passed 1 file / 1 test. The final real-BFF E2E,
-performance, coverage, release-evidence, and full local gate outcomes are deliberately not claimed
-here; their pending result slots are maintained in
+The focused Vitest commands above passed 5 files / 78 tests and 1 UI file / 1 test. The final
+real-BFF E2E passed 5/5 Chromium scenarios; performance, coverage, Linux release evidence, package
+surface, security, and full local gate outcomes are recorded in
 `2093-source-control-regression-evidence.md`.
