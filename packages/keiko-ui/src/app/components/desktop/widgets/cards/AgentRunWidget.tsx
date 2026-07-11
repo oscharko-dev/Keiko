@@ -18,6 +18,7 @@ import {
   outcomeLabel,
   runStatusLabel,
 } from "../../../../../lib/format";
+import { useTranslate, type I18nTranslate } from "../../../../../lib/i18n";
 import { useSSE } from "../../../../../lib/useSSE";
 import type {
   AgentWorkflowId,
@@ -63,12 +64,18 @@ const TERMINAL_REPORT_STATUSES = new Set<RunReport["status"]>([
   "investigation-only",
 ]);
 
-const WORKFLOW_LABELS: Readonly<Record<AgentWorkflowId, string>> = {
-  verify: "Verify",
-  "explain-plan": "Explain plan",
-  "unit-test-generation": "Generate unit tests",
-  "bug-investigation": "Investigate bug",
-};
+function workflowLabel(workflow: AgentWorkflowId, t: I18nTranslate): string {
+  switch (workflow) {
+    case "verify":
+      return t("agentRunWidget.workflow.verify");
+    case "explain-plan":
+      return t("agentRunWidget.workflow.explainPlan");
+    case "unit-test-generation":
+      return t("agentRunWidget.workflow.unitTestGeneration");
+    case "bug-investigation":
+      return t("agentRunWidget.workflow.bugInvestigation");
+  }
+}
 
 function normalizeWorkflow(value: string | undefined): AgentWorkflowId | null {
   if (
@@ -128,52 +135,71 @@ function aggregateUsage(events: readonly HarnessEvent[], report: RunReport | nul
   return { promptTokens, completionTokens, latencyMs, requestCount };
 }
 
-function eventLabel(event: HarnessEvent): string {
+function eventLabel(event: HarnessEvent, t: I18nTranslate): string {
   switch (event.type) {
     case "ready":
-      return "SSE stream ready";
+      return t("agentRunWidget.event.ready");
     case "run:started":
-      return `Started ${event.taskType}`;
+      return t("agentRunWidget.event.runStarted", { taskType: event.taskType });
     case "run:completed":
-      return "Run completed";
+      return t("agentRunWidget.event.runCompleted");
     case "run:failed":
-      return `Run failed: ${event.failure.message}`;
+      return t("agentRunWidget.event.runFailed", { message: event.failure.message });
     case "run:cancelled":
-      return "Run cancelled";
-    case "state:transition":
-      return `${event.from} -> ${event.to}${event.reason === undefined ? "" : `: ${event.reason}`}`;
+      return t("agentRunWidget.event.runCancelled");
+    case "state:transition": {
+      const from = event.from;
+      const to = event.to;
+      return event.reason === undefined
+        ? t("agentRunWidget.event.stateTransition", { from, to })
+        : t("agentRunWidget.event.stateTransitionReason", { from, to, reason: event.reason });
+    }
     case "model:call:started":
-      return `Model call started (${formatBytes(event.contextBytes)})`;
+      return t("agentRunWidget.event.modelCallStarted", {
+        bytes: formatBytes(event.contextBytes),
+      });
     case "model:call:completed":
-      return `Model call completed (${formatTokens(event.usage.promptTokens + event.usage.completionTokens)} tokens)`;
+      return t("agentRunWidget.event.modelCallCompleted", {
+        tokens: formatTokens(event.usage.promptTokens + event.usage.completionTokens),
+      });
     case "model:call:failed":
-      return `Model call failed: ${event.message}`;
+      return t("agentRunWidget.event.modelCallFailed", { message: event.message });
     case "patch:proposed":
-      return `Patch proposed (${formatBytes(event.patchBytes)})`;
+      return t("agentRunWidget.event.patchProposed", { bytes: formatBytes(event.patchBytes) });
     case "verification:result":
-      return `Verification ${event.passed ? "passed" : "failed"}: ${event.detail}`;
+      return event.passed
+        ? t("agentRunWidget.event.verificationPassed", { detail: event.detail })
+        : t("agentRunWidget.event.verificationFailed", { detail: event.detail });
     case "workflow:started":
-      return "Unit-test workflow started";
+      return t("agentRunWidget.event.unitTestWorkflowStarted");
     case "workflow:model:call:completed":
-      return `Unit-test model call completed (${formatTokens(event.promptTokens + event.completionTokens)} tokens)`;
+      return t("agentRunWidget.event.unitTestModelCallCompleted", {
+        tokens: formatTokens(event.promptTokens + event.completionTokens),
+      });
     case "workflow:verification:result":
-      return `Unit-test verification ${event.overallStatus}`;
+      return t("agentRunWidget.event.unitTestVerificationResult", {
+        status: event.overallStatus,
+      });
     case "workflow:completed":
-      return `Unit-test workflow ${event.status}`;
+      return t("agentRunWidget.event.unitTestWorkflowCompleted", { status: event.status });
     case "workflow:failed":
-      return `Unit-test workflow failed: ${event.message}`;
+      return t("agentRunWidget.event.unitTestWorkflowFailed", { message: event.message });
     case "bug:started":
-      return "Bug investigation started";
+      return t("agentRunWidget.event.bugInvestigationStarted");
     case "bug:model:call:completed":
-      return `Bug model call completed (${formatTokens(event.promptTokens + event.completionTokens)} tokens)`;
+      return t("agentRunWidget.event.bugModelCallCompleted", {
+        tokens: formatTokens(event.promptTokens + event.completionTokens),
+      });
     case "bug:rootcause:proposed":
-      return `Root cause proposed${event.hasPatch ? " with patch" : ""}`;
+      return event.hasPatch
+        ? t("agentRunWidget.event.bugRootCauseProposedWithPatch")
+        : t("agentRunWidget.event.bugRootCauseProposed");
     case "bug:verification:result":
-      return `Bug verification ${event.overallStatus}`;
+      return t("agentRunWidget.event.bugVerificationResult", { status: event.overallStatus });
     case "bug:completed":
-      return `Bug investigation ${event.status}`;
+      return t("agentRunWidget.event.bugInvestigationCompleted", { status: event.status });
     case "bug:failed":
-      return `Bug investigation failed: ${event.message}`;
+      return t("agentRunWidget.event.bugInvestigationFailed", { message: event.message });
     default:
       return event.type;
   }
@@ -199,10 +225,14 @@ function reportStatus(report: RunReport | null, evidence: EvidenceManifest | nul
 // maps the same RunStatus values via the shared runStatusLabel presenter; raw
 // kebab-case enums ("dry-run", "fix-proposed") and the "loading" placeholder
 // must not surface verbatim.
-function reportStatusLabel(report: RunReport | null, evidence: EvidenceManifest | null): string {
+function reportStatusLabel(
+  report: RunReport | null,
+  evidence: EvidenceManifest | null,
+  t: I18nTranslate,
+): string {
   if (report !== null) return runStatusLabel(report.status);
   if (evidence !== null) return outcomeLabel(evidence.run.outcome);
-  return "Loading…";
+  return t("agentRunWidget.status.loading");
 }
 
 // uiux-fix F018 C258: count files in a unified diff so Apply can state its blast
@@ -219,21 +249,26 @@ function shortSummary(
   workflow: AgentWorkflowId | null,
   report: RunReport | null,
   evidence: EvidenceManifest | null,
+  t: I18nTranslate,
 ): string {
-  if (report === null && evidence === null) return "Loading run state…";
-  const label = workflow === null ? "Agent run" : WORKFLOW_LABELS[workflow];
-  if (report?.status === "running") return `${label} is running.`;
-  if (report?.status === "dry-run") return `${label} produced a reviewable dry-run.`;
-  if (report?.status === "fix-proposed") return `${label} proposed a fix.`;
-  if (report?.status === "fix-applied") return `${label} applied changes.`;
-  if (report?.status === "investigation-only") return `${label} completed without a patch.`;
-  if (report?.status === "failed" || report?.status === "rejected") return `${label} failed.`;
-  if (report?.status === "cancelled") return `${label} was cancelled.`;
-  if (report !== null) return `${label} completed.`;
+  if (report === null && evidence === null) return t("agentRunWidget.summary.loading");
+  const label =
+    workflow === null ? t("agentRunWidget.workflow.fallback") : workflowLabel(workflow, t);
+  if (report?.status === "running") return t("agentRunWidget.summary.running", { label });
+  if (report?.status === "dry-run") return t("agentRunWidget.summary.dryRun", { label });
+  if (report?.status === "fix-proposed") return t("agentRunWidget.summary.fixProposed", { label });
+  if (report?.status === "fix-applied") return t("agentRunWidget.summary.fixApplied", { label });
+  if (report?.status === "investigation-only")
+    return t("agentRunWidget.summary.investigationOnly", { label });
+  if (report?.status === "failed" || report?.status === "rejected")
+    return t("agentRunWidget.summary.failed", { label });
+  if (report?.status === "cancelled") return t("agentRunWidget.summary.cancelled", { label });
+  if (report !== null) return t("agentRunWidget.summary.completed", { label });
   if (evidence?.patch?.redactedDiff !== undefined) {
-    return `${label} evidence loaded with a reviewable diff.`;
+    return t("agentRunWidget.summary.evidenceWithDiff", { label });
   }
-  return `${label} evidence loaded: ${evidence?.run.outcome ?? "unknown"}.`;
+  const outcome = evidence?.run.outcome ?? t("agentRunWidget.summary.unknownOutcome");
+  return t("agentRunWidget.summary.evidenceOutcome", { label, outcome });
 }
 
 function parseInput(inputJson: string | undefined): Record<string, unknown> | null {
@@ -255,18 +290,18 @@ function canApply(workflow: AgentWorkflowId | null, report: RunReport | null): b
   );
 }
 
-function renderVerification(report: RunReport): ReactNode {
+function renderVerification(report: RunReport, t: I18nTranslate): ReactNode {
   const summary = report.verificationSummary;
   if (summary === undefined) return null;
   return (
     <div className="arun-result-card">
-      <div className="arun-result-title">Verification</div>
+      <div className="arun-result-title">{t("agentRunWidget.verification.title")}</div>
       <div className="arun-kv">
-        <span>Status</span>
+        <span>{t("agentRunWidget.field.status")}</span>
         <strong>{summary.overallStatus}</strong>
       </div>
       <div className="arun-kv">
-        <span>Duration</span>
+        <span>{t("agentRunWidget.field.duration")}</span>
         <strong>{formatMs(summary.durationMs)}</strong>
       </div>
       {summary.results.slice(0, 5).map((result) => (
@@ -279,16 +314,17 @@ function renderVerification(report: RunReport): ReactNode {
   );
 }
 
-function renderExplainReport(report: RunReport): ReactNode {
+function renderExplainReport(report: RunReport, t: I18nTranslate): ReactNode {
   if (report.report === undefined) return null;
+  const title = t("agentRunWidget.result.report");
   return (
     <div className="arun-result-card">
-      <div className="arun-result-title">Report</div>
+      <div className="arun-result-title">{title}</div>
       {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container (max-height 220px) exposed
           as a focusable named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
       <pre
         role="region"
-        aria-label="Report"
+        aria-label={title}
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
         tabIndex={0}
       >
@@ -298,13 +334,13 @@ function renderExplainReport(report: RunReport): ReactNode {
   );
 }
 
-function renderVerifyReport(report: RunReport): ReactNode {
+function renderVerifyReport(report: RunReport, t: I18nTranslate): ReactNode {
   if (report.overallStatus === undefined || report.results === undefined) return null;
   return (
     <div className="arun-result-card">
-      <div className="arun-result-title">Verification</div>
+      <div className="arun-result-title">{t("agentRunWidget.verification.title")}</div>
       <div className="arun-kv">
-        <span>Status</span>
+        <span>{t("agentRunWidget.field.status")}</span>
         <strong>{report.overallStatus}</strong>
       </div>
       {report.results.slice(0, 8).map((result) => (
@@ -355,37 +391,43 @@ function renderListCard(title: string, values: readonly string[] | undefined): R
 // alone. The track is decorative (aria-hidden); the word carries the meaning, so a
 // screen reader hears "Confidence High" / "Confidence Low — verify".
 type ConfidenceLevel = "low" | "medium" | "high";
-const CONFIDENCE_LABEL: Readonly<Record<ConfidenceLevel, string>> = {
-  high: "High",
-  medium: "Medium",
-  low: "Low — verify",
-};
+function confidenceLabel(level: ConfidenceLevel, t: I18nTranslate): string {
+  switch (level) {
+    case "high":
+      return t("agentRunWidget.confidence.high");
+    case "medium":
+      return t("agentRunWidget.confidence.medium");
+    case "low":
+      return t("agentRunWidget.confidence.low");
+  }
+}
 function isConfidenceLevel(value: string): value is ConfidenceLevel {
   return value === "low" || value === "medium" || value === "high";
 }
 function ConfidenceSignal({ level }: { readonly level: ConfidenceLevel }): ReactNode {
+  const t = useTranslate();
   return (
     <div className="arun-kv">
-      <span>Confidence</span>
+      <span>{t("agentRunWidget.field.confidence")}</span>
       <span className="ai-conf" data-level={level}>
         <span className="track" aria-hidden="true">
           <i />
           <i />
           <i />
         </span>
-        <span className="lbl">{CONFIDENCE_LABEL[level]}</span>
+        <span className="lbl">{confidenceLabel(level, t)}</span>
       </span>
     </div>
   );
 }
 
-function renderHypothesis(report: RunReport): ReactNode {
+function renderHypothesis(report: RunReport, t: I18nTranslate): ReactNode {
   const hypothesis = report.hypothesis;
   if (hypothesis === undefined) return null;
   const rows = [
-    ["Root cause", hypothesis.rootCause],
-    ["Regression test", hypothesis.regressionTestStrategy],
-    ["Uncertainty", hypothesis.uncertainty],
+    [t("agentRunWidget.hypothesis.rootCause"), hypothesis.rootCause],
+    [t("agentRunWidget.hypothesis.regressionTest"), hypothesis.regressionTestStrategy],
+    [t("agentRunWidget.hypothesis.uncertainty"), hypothesis.uncertainty],
   ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
   // A level (low/medium/high) upgrades to the DS confidence signal; any other
   // non-empty confidence string keeps the plain key/value row (behaviour-preserving).
@@ -398,7 +440,7 @@ function renderHypothesis(report: RunReport): ReactNode {
   }
   return (
     <div className="arun-result-card">
-      <div className="arun-result-title">Hypothesis</div>
+      <div className="arun-result-title">{t("agentRunWidget.hypothesis.title")}</div>
       {rows.map(([label, value]) => (
         <div className="arun-kv" key={label}>
           <span>{label}</span>
@@ -407,7 +449,7 @@ function renderHypothesis(report: RunReport): ReactNode {
       ))}
       {confidenceFallback !== undefined ? (
         <div className="arun-kv">
-          <span>Confidence</span>
+          <span>{t("agentRunWidget.field.confidence")}</span>
           <strong>{confidenceFallback}</strong>
         </div>
       ) : null}
@@ -421,6 +463,7 @@ export function AgentRunWidget({
   linkedRoot = null,
   linkedFilePath,
 }: AgentRunWidgetProps): ReactNode {
+  const t = useTranslate();
   const runId = cfg.runId ?? null;
   const workflow = normalizeWorkflow(cfg.workflow);
   const modelId = cfg.model ?? "";
@@ -453,14 +496,18 @@ export function AgentRunWidget({
           setReport(null);
         } catch (evidenceError: unknown) {
           setError(
-            evidenceError instanceof Error ? evidenceError.message : "Unable to load evidence.",
+            evidenceError instanceof Error
+              ? evidenceError.message
+              : t("agentRunWidget.error.loadEvidence"),
           );
         }
         return;
       }
-      setError(loadError instanceof Error ? loadError.message : "Unable to load run report.");
+      setError(
+        loadError instanceof Error ? loadError.message : t("agentRunWidget.error.loadReport"),
+      );
     }
-  }, [runId]);
+  }, [runId, t]);
 
   useEffect(() => {
     void loadReport();
@@ -498,7 +545,7 @@ export function AgentRunWidget({
       ? Math.max(0, Date.now() - Number(new Date(sse.events[0]?.ts ?? Date.now())))
       : 0);
   const status = reportStatus(report, evidence);
-  const statusLabel = reportStatusLabel(report, evidence);
+  const statusLabel = reportStatusLabel(report, evidence, t);
   const terminal = report !== null && TERMINAL_REPORT_STATUSES.has(report.status);
   const showApply = canApply(workflow, report);
   const showCancel = !terminal && report?.status === "running";
@@ -533,7 +580,9 @@ export function AgentRunWidget({
       await cancelRun(runId);
       await loadReport();
     } catch (cancelError: unknown) {
-      setError(cancelError instanceof Error ? cancelError.message : "Unable to cancel run.");
+      setError(
+        cancelError instanceof Error ? cancelError.message : t("agentRunWidget.error.cancelRun"),
+      );
     }
   };
 
@@ -546,7 +595,7 @@ export function AgentRunWidget({
       setReport(response.report);
     } catch (applyRunError: unknown) {
       setApplyError(
-        applyRunError instanceof Error ? applyRunError.message : "Unable to apply run.",
+        applyRunError instanceof Error ? applyRunError.message : t("agentRunWidget.error.applyRun"),
       );
     } finally {
       setApplying(false);
@@ -577,8 +626,8 @@ export function AgentRunWidget({
   if (runId === null || workflow === null) {
     return (
       <div className="arun arun-empty">
-        <div className="arun-result-title">Agent run is not configured.</div>
-        <p>Open a new Agent window from the launcher to start a workflow.</p>
+        <div className="arun-result-title">{t("agentRunWidget.empty.title")}</div>
+        <p>{t("agentRunWidget.empty.body")}</p>
       </div>
     );
   }
@@ -586,14 +635,14 @@ export function AgentRunWidget({
   return (
     <div className="arun arun-real" aria-busy={runBusy ? "true" : undefined}>
       <div className="arun-head">
-        <span className="arun-role">{WORKFLOW_LABELS[workflow]}</span>
+        <span className="arun-role">{workflowLabel(workflow, t)}</span>
         {/* uiux-fix F054 C385: cfg.model is optional — skip the pill entirely so no
             empty bordered artefact renders between the workflow label and status. */}
         {modelId.length > 0 ? <span className="ag-model mono">{modelId}</span> : null}
         {/* uiux-fix F054 C382: human-readable cost class ("Low cost") instead of the
             raw enum, plus a title explaining what the pill refers to. */}
         {costClass !== null ? (
-          <span className="arun-gov" title="Model cost class">
+          <span className="arun-gov" title={t("agentRunWidget.costClassTitle")}>
             {costClassLabel(costClass)}
           </span>
         ) : null}
@@ -609,27 +658,29 @@ export function AgentRunWidget({
       {/* uiux-fix F018 C109: announce run completion (shortSummary changes) to AT.
           title carries the full run id, which is otherwise unobtainable (C110). */}
       <div className="arun-summary" role="status" aria-live="polite">
-        <strong>{shortSummary(workflow, report, evidence)}</strong>
+        <strong>{shortSummary(workflow, report, evidence, t)}</strong>
         <span className="mono" title={runId}>
-          run {runId.slice(0, 8)}
+          {t("agentRunWidget.runIdLabel", { id: runId.slice(0, 8) })}
         </span>
       </div>
 
       <div className="arun-meters">
         <div className="arun-meter">
-          <span className="arun-mk">Elapsed</span>
+          <span className="arun-mk">{t("agentRunWidget.meter.elapsed")}</span>
           <span className="arun-mv mono">{formatMs(elapsedMs)}</span>
         </div>
         <div className="arun-meter">
-          <span className="arun-mk">Usage</span>
+          <span className="arun-mk">{t("agentRunWidget.meter.usage")}</span>
           <span className="arun-mv mono">
             {usage.requestCount === 0
-              ? "No model usage"
-              : `${formatTokens(usage.promptTokens + usage.completionTokens)} tok`}
+              ? t("agentRunWidget.meter.noUsage")
+              : t("agentRunWidget.meter.tokens", {
+                  tokens: formatTokens(usage.promptTokens + usage.completionTokens),
+                })}
           </span>
         </div>
         <div className="arun-meter">
-          <span className="arun-mk">Latency</span>
+          <span className="arun-mk">{t("agentRunWidget.meter.latency")}</span>
           <span className="arun-mv mono">
             {usage.requestCount === 0 ? "—" : formatMs(usage.latencyMs)}
           </span>
@@ -646,7 +697,9 @@ export function AgentRunWidget({
         >
           <Icons.files size={11} />
           <span className="arun-perm-path">
-            {linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? "no workspace")}
+            {linkedRoot !== null
+              ? linkedRoot
+              : (cfg.workspaceRoot ?? t("agentRunWidget.perm.noWorkspace"))}
           </span>
         </span>
         {linkedFilePath !== undefined ? (
@@ -659,12 +712,12 @@ export function AgentRunWidget({
 
       {input !== null ? (
         <details className="arun-input">
-          <summary>Run input</summary>
+          <summary>{t("agentRunWidget.runInput.summary")}</summary>
           {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container exposed as a focusable
               named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
           <pre
             role="region"
-            aria-label="Run input"
+            aria-label={t("agentRunWidget.runInput.summary")}
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
             tabIndex={0}
           >
@@ -680,7 +733,7 @@ export function AgentRunWidget({
         className="arun-log"
         role="log"
         aria-live="polite"
-        aria-label="Run events"
+        aria-label={t("agentRunWidget.log.ariaLabel")}
         aria-busy={runBusy ? "true" : undefined}
       >
         {sse.status === "error" && sse.error !== null ? (
@@ -701,8 +754,8 @@ export function AgentRunWidget({
               </span>
               <span className="arun-log-text">
                 {sse.status === "connecting"
-                  ? "Connecting to run events…"
-                  : "Waiting for run events…"}
+                  ? t("agentRunWidget.log.connecting")
+                  : t("agentRunWidget.log.waiting")}
               </span>
             </div>
           )
@@ -712,7 +765,7 @@ export function AgentRunWidget({
               <span className="arun-log-ico">
                 <Icons.spark size={12} />
               </span>
-              <span className="arun-log-text">{eventLabel(event)}</span>
+              <span className="arun-log-text">{eventLabel(event, t)}</span>
               <span className="arun-log-t mono">{eventTime(event)}</span>
             </div>
           ))
@@ -721,21 +774,24 @@ export function AgentRunWidget({
 
       {report !== null ? (
         <div className="arun-results">
-          {renderExplainReport(report)}
-          {renderVerifyReport(report)}
-          {renderTextCard("Failure", report.failureReason)}
-          {renderTextCard("Covered behavior", report.coveredBehavior)}
-          {renderTextCard("Known gaps", report.knownGaps)}
-          {renderTextCard("Verification note", report.verificationSkipReason)}
-          {renderHypothesis(report)}
-          {renderListCard("Next actions", report.nextActions)}
+          {renderExplainReport(report, t)}
+          {renderVerifyReport(report, t)}
+          {renderTextCard(t("agentRunWidget.result.failure"), report.failureReason)}
+          {renderTextCard(t("agentRunWidget.result.coveredBehavior"), report.coveredBehavior)}
+          {renderTextCard(t("agentRunWidget.result.knownGaps"), report.knownGaps)}
+          {renderTextCard(
+            t("agentRunWidget.result.verificationNote"),
+            report.verificationSkipReason,
+          )}
+          {renderHypothesis(report, t)}
+          {renderListCard(t("agentRunWidget.result.nextActions"), report.nextActions)}
           {report.dryRunPreview !== undefined ? (
             <div className="arun-result-card">
-              <div className="arun-result-title">Dry-run preview</div>
+              <div className="arun-result-title">{t("agentRunWidget.result.dryRunPreview")}</div>
               {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
               <pre
                 role="region"
-                aria-label="Dry-run preview"
+                aria-label={t("agentRunWidget.result.dryRunPreview")}
                 // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
                 tabIndex={0}
               >
@@ -745,11 +801,11 @@ export function AgentRunWidget({
           ) : null}
           {report.proposedDiff !== undefined ? (
             <div className="arun-result-card">
-              <div className="arun-result-title">Proposed diff</div>
+              <div className="arun-result-title">{t("agentRunWidget.result.proposedDiff")}</div>
               {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
               <pre
                 role="region"
-                aria-label="Proposed diff"
+                aria-label={t("agentRunWidget.result.proposedDiff")}
                 // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
                 tabIndex={0}
               >
@@ -757,14 +813,14 @@ export function AgentRunWidget({
               </pre>
             </div>
           ) : null}
-          {renderVerification(report)}
+          {renderVerification(report, t)}
           {report.applyReport !== undefined ? (
             <div className="arun-result-card arun-applied">
-              <div className="arun-result-title">Applied</div>
+              <div className="arun-result-title">{t("agentRunWidget.result.applied")}</div>
               {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
               <pre
                 role="region"
-                aria-label="Applied"
+                aria-label={t("agentRunWidget.result.applied")}
                 // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
                 tabIndex={0}
               >
@@ -776,23 +832,23 @@ export function AgentRunWidget({
       ) : evidence !== null ? (
         <div className="arun-results">
           <div className="arun-result-card">
-            <div className="arun-result-title">Evidence</div>
+            <div className="arun-result-title">{t("agentRunWidget.evidence.title")}</div>
             <div className="arun-kv">
-              <span>Outcome</span>
+              <span>{t("agentRunWidget.field.outcome")}</span>
               <strong>{evidence.run.outcome}</strong>
             </div>
             <div className="arun-kv">
-              <span>Duration</span>
+              <span>{t("agentRunWidget.field.duration")}</span>
               <strong>{formatMs(evidence.run.durationMs)}</strong>
             </div>
             {evidence.patch !== undefined ? (
               <>
                 <div className="arun-kv">
-                  <span>Changed files</span>
+                  <span>{t("agentRunWidget.field.changedFiles")}</span>
                   <strong>{evidence.patch.changedFiles.toString()}</strong>
                 </div>
                 <div className="arun-kv">
-                  <span>Patch size</span>
+                  <span>{t("agentRunWidget.field.patchSize")}</span>
                   <strong>{formatBytes(evidence.patch.patchBytes)}</strong>
                 </div>
               </>
@@ -800,11 +856,11 @@ export function AgentRunWidget({
           </div>
           {evidence.patch?.redactedDiff !== undefined ? (
             <div className="arun-result-card">
-              <div className="arun-result-title">Proposed diff</div>
+              <div className="arun-result-title">{t("agentRunWidget.result.proposedDiff")}</div>
               {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
               <pre
                 role="region"
-                aria-label="Proposed diff"
+                aria-label={t("agentRunWidget.result.proposedDiff")}
                 // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
                 tabIndex={0}
               >
@@ -835,7 +891,7 @@ export function AgentRunWidget({
           rel="noreferrer"
           ref={evidenceLinkRef}
         >
-          Evidence
+          {t("agentRunWidget.evidence.title")}
         </a>
         {showApply ? (
           // uiux-fix F018 C124: aria-disabled + click guard instead of HTML disabled
@@ -847,17 +903,22 @@ export function AgentRunWidget({
             onClick={onApplyClick}
           >
             {applying
-              ? "Applying…"
+              ? t("agentRunWidget.apply.applying")
               : confirmApply
-                ? `Confirm apply (${applyFileCount.toString()} file${applyFileCount === 1 ? "" : "s"})`
-                : "Apply"}
+                ? t(
+                    applyFileCount === 1
+                      ? "agentRunWidget.apply.confirmSingular"
+                      : "agentRunWidget.apply.confirmPlural",
+                    { count: applyFileCount },
+                  )
+                : t("agentRunWidget.apply.apply")}
           </button>
         ) : report?.appliedAt !== undefined ? (
-          <span className="arun-final mono">Applied</span>
+          <span className="arun-final mono">{t("agentRunWidget.result.applied")}</span>
         ) : null}
         {showCancel ? (
           <button type="button" className="arun-btn danger" onClick={() => void doCancel()}>
-            Cancel
+            {t("agentRunWidget.controls.cancel")}
           </button>
         ) : null}
       </div>

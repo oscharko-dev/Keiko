@@ -27,6 +27,7 @@ import type {
   GitRepositoryDiffResponse,
   GitRepositoryStatusResponse,
 } from "../../../../../lib/types";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
@@ -235,15 +236,15 @@ function nextCopyName(name: string, existing: ReadonlySet<string>): string {
 
 // A new entry's name must be a single, safe path segment. The BFF enforces this too; rejecting early
 // keeps the inline editor responsive and the error message specific.
-function invalidEntryName(name: string): string | null {
-  if (name.length === 0) return "Enter a name.";
-  if (name === "." || name === "..") return "That name is reserved.";
-  if (/[/\\]/u.test(name)) return "A name cannot contain a slash.";
+function invalidEntryName(name: string, t: I18nTranslate): string | null {
+  if (name.length === 0) return t("filesWidget.error.enterName");
+  if (name === "." || name === "..") return t("filesWidget.error.reservedName");
+  if (/[/\\]/u.test(name)) return t("filesWidget.error.nameContainsSlash");
   return null;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unable to read this folder.";
+function errorMessage(error: unknown, t: I18nTranslate): string {
+  return error instanceof Error ? error.message : t("filesWidget.error.unableToReadFolder");
 }
 
 // CSS.escape with a fallback for environments without the CSSOM utility (older jsdom):
@@ -349,16 +350,24 @@ function handleMenuNavKey(container: HTMLElement, event: ReactKeyboardEvent): vo
   else if (event.key === "End") items[items.length - 1]?.focus();
 }
 
-function gitStatusSummary(state: GitStatusState): string | null {
-  if (state.loading && state.status === null) return "Git status loading";
-  if (state.error !== null) return "Git status unavailable";
+function gitStatusSummary(state: GitStatusState, t: I18nTranslate): string | null {
+  if (state.loading && state.status === null) return t("filesWidget.gitStatus.loading");
+  if (state.error !== null) return t("filesWidget.gitStatus.unavailable");
   const status = state.status;
   if (status === null) return null;
-  if (!status.available) return status.state === "unsafe" ? "Git unsafe" : "Git unavailable";
-  const branch = status.detached ? "detached HEAD" : (status.branch ?? "unknown branch");
-  if (status.clean) return `Git ${branch} clean`;
+  if (!status.available) {
+    return status.state === "unsafe"
+      ? t("filesWidget.gitStatus.unsafe")
+      : t("filesWidget.gitStatus.repoUnavailable");
+  }
+  const branch = status.detached
+    ? t("filesWidget.gitStatus.detachedHead")
+    : (status.branch ?? t("filesWidget.gitStatus.unknownBranch"));
+  if (status.clean) return t("filesWidget.gitStatus.clean", { branch });
   const count = status.changes.length;
-  return `Git ${branch} ${String(count)} changed ${count === 1 ? "file" : "files"}`;
+  return count === 1
+    ? t("filesWidget.gitStatus.changedOne", { branch, count })
+    : t("filesWidget.gitStatus.changedMany", { branch, count });
 }
 
 function isIgnoredGitChange(change: GitChangedFile): boolean {
@@ -461,7 +470,8 @@ export function FilesWidget({
   onOpenGitDelivery,
   onFilesMutated,
 }: FilesWidgetProps): ReactNode {
-  const t = useFilesWidgetTranslate();
+  const t = useTranslate();
+  const tGit = useFilesWidgetTranslate();
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
   const [fallbackRoot, setFallbackRoot] = useState<string | null>(null);
@@ -678,13 +688,13 @@ export function FilesWidget({
             entries: current[path]?.entries ?? [],
             truncated: current[path]?.truncated ?? false,
             loading: false,
-            error: errorMessage(error),
+            error: errorMessage(error, t),
             notice: null,
           },
         }));
       }
     },
-    [apiRoot, touchDirectoryAccess],
+    [apiRoot, t, touchDirectoryAccess],
   );
 
   useEffect(() => {
@@ -730,14 +740,14 @@ export function FilesWidget({
           setGitStatusState({
             loading: false,
             status: null,
-            error: errorMessage(error),
+            error: errorMessage(error, t),
           });
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [gitStatusRevision, gitStatusTargetRoot]);
+  }, [gitStatusRevision, gitStatusTargetRoot, t]);
 
   useEffect(() => {
     const onFocus = (): void => invalidateGitStatus();
@@ -828,7 +838,7 @@ export function FilesWidget({
       cancelPendingEntry();
       return;
     }
-    const invalid = invalidEntryName(name);
+    const invalid = invalidEntryName(name, t);
     if (invalid !== null) {
       setOpError(invalid);
       return;
@@ -869,7 +879,7 @@ export function FilesWidget({
         onFilesMutatedRef.current?.({ op: "create", mutation: result });
       }
     } catch (error: unknown) {
-      setOpError(errorMessage(error));
+      setOpError(errorMessage(error, t));
     } finally {
       setOpBusy(false);
     }
@@ -883,6 +893,7 @@ export function FilesWidget({
     opBusy,
     pendingEntry,
     selectedPath,
+    t,
   ]);
 
   const performDelete = useCallback(
@@ -898,12 +909,12 @@ export function FilesWidget({
         invalidateGitStatus();
         onFilesMutatedRef.current?.({ op: "delete", mutation: result });
       } catch (error: unknown) {
-        setOpError(errorMessage(error));
+        setOpError(errorMessage(error, t));
       } finally {
         setOpBusy(false);
       }
     },
-    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, selectedPath],
+    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, selectedPath, t],
   );
 
   const duplicateEntry = useCallback(
@@ -926,12 +937,12 @@ export function FilesWidget({
         // A copy adds a new entry — the host treats it like a create (no open tab to re-home).
         onFilesMutatedRef.current?.({ op: "create", mutation: result });
       } catch (error: unknown) {
-        setOpError(errorMessage(error));
+        setOpError(errorMessage(error, t));
       } finally {
         setOpBusy(false);
       }
     },
-    [directories, invalidateGitStatus, loadDirectory, mutationRoot, opBusy],
+    [directories, invalidateGitStatus, loadDirectory, mutationRoot, opBusy, t],
   );
 
   // Drag-move: dropping an entry onto a folder renames it into that folder (move = rename).
@@ -952,12 +963,12 @@ export function FilesWidget({
         invalidateGitStatus();
         onFilesMutatedRef.current?.({ op: "rename", mutation: result });
       } catch (error: unknown) {
-        setOpError(errorMessage(error));
+        setOpError(errorMessage(error, t));
       } finally {
         setOpBusy(false);
       }
     },
-    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy],
+    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, t],
   );
 
   const openContextMenu = useCallback(
@@ -1090,10 +1101,10 @@ export function FilesWidget({
           setGitDiffState({ path, loading: false, response, error: null });
         })
         .catch((error: unknown) => {
-          setGitDiffState({ path, loading: false, response: null, error: errorMessage(error) });
+          setGitDiffState({ path, loading: false, response: null, error: errorMessage(error, t) });
         });
     },
-    [currentDirectoryPath, gitStatusTargetRoot],
+    [currentDirectoryPath, gitStatusTargetRoot, t],
   );
 
   // Locate a loaded tree entry by its root-relative path, across every fetched directory level.
@@ -1186,7 +1197,7 @@ export function FilesWidget({
       ]),
     );
   }, [currentDirectoryPath, gitChanges]);
-  const gitSummary = gitStatusSummary(gitStatusState);
+  const gitSummary = gitStatusSummary(gitStatusState, t);
   const gitDeliveryRoot =
     gitStatusState.status?.available === true
       ? (gitStatusState.status.repositoryRoot ?? gitStatusState.status.root)
@@ -1273,13 +1284,17 @@ export function FilesWidget({
         ) : (
           <FileIcon name={entryDraft.length > 0 ? entryDraft : entry.name} />
         );
-      return renderInlineEditor(depth, icon, `Rename ${entry.name}`);
+      return renderInlineEditor(
+        depth,
+        icon,
+        t("filesWidget.tree.renameAriaLabel", { name: entry.name }),
+      );
     }
     // Unreadable symlinks stay focusable via aria-disabled (instead of native disabled) so
     // keyboard/screen-reader users can reach the row and hear the reason (audit C196). The
     // neutral copy covers all server cases — outside root, deny-listed AND broken links
     // (audit C349). Clicks are guarded instead of blocked by the browser.
-    const unreadableTitle = "This link can't be opened from this folder.";
+    const unreadableTitle = t("filesWidget.tree.unreadableLinkReason");
     const entryTip = entry.readable ? entry.path : unreadableTitle;
     if (entry.kind === "directory") {
       const state = directories[entry.path];
@@ -1292,7 +1307,12 @@ export function FilesWidget({
               type="button"
               tabIndex={-1}
               disabled={!entry.readable}
-              aria-label={`${open ? "Collapse" : "Expand"} folder: ${entry.name}`}
+              aria-label={t(
+                open ? "filesWidget.tree.collapseFolder" : "filesWidget.tree.expandFolder",
+                {
+                  name: entry.name,
+                },
+              )}
               onClick={() => toggleDirectory(entry)}
             >
               <span className="tr-caret" data-open={open}>
@@ -1342,13 +1362,15 @@ export function FilesWidget({
                 <Icons.folder size={14} />
               </span>
               <span className="tr-name tr-folder">{entry.name}</span>
-              {entry.symlink ? <span className="tr-badge">link</span> : null}
+              {entry.symlink ? (
+                <span className="tr-badge">{t("filesWidget.tree.symlinkBadge")}</span>
+              ) : null}
               {gitAggregate !== undefined ? (
                 <span
                   className="tr-badge tr-git"
                   data-git-state={gitAggregate.conflicted ? "conflicted" : "aggregate"}
-                  aria-label={gitDirectoryLabel(gitAggregate, t)}
-                  title={gitDirectoryLabel(gitAggregate, t)}
+                  aria-label={gitDirectoryLabel(gitAggregate, tGit)}
+                  title={gitDirectoryLabel(gitAggregate, tGit)}
                   style={
                     gitAggregate.conflicted
                       ? { outline: "1px solid currentColor", fontWeight: 700 }
@@ -1381,7 +1403,7 @@ export function FilesWidget({
           role="treeitem"
           aria-level={depth + 1}
           aria-selected={activeTreePath === entry.path}
-          aria-label={ignored ? `${entry.name}, ${t("git.ignored")}` : undefined}
+          aria-label={ignored ? `${entry.name}, ${tGit("git.ignored")}` : undefined}
           data-active={activeTreePath === entry.path}
           data-readable={entry.readable}
           data-path={entry.path}
@@ -1418,13 +1440,15 @@ export function FilesWidget({
           </span>
           <FileIcon name={entry.name} />
           <span className="tr-name">{entry.name}</span>
-          {entry.symlink ? <span className="tr-badge">link</span> : null}
+          {entry.symlink ? (
+            <span className="tr-badge">{t("filesWidget.tree.symlinkBadge")}</span>
+          ) : null}
           {decoration !== null ? (
             <span
               className="tr-badge tr-git"
               data-git-state={decoration.state}
-              aria-label={t(decoration.labelKey, { path: entry.path })}
-              title={t(decoration.labelKey, { path: entry.path })}
+              aria-label={tGit(decoration.labelKey, { path: entry.path })}
+              title={tGit(decoration.labelKey, { path: entry.path })}
               style={
                 decoration.state === "conflicted"
                   ? { outline: "1px solid currentColor", fontWeight: 700 }
@@ -1441,7 +1465,7 @@ export function FilesWidget({
             className="tr-git-diff"
             type="button"
             onClick={() => openDiff(entry.path)}
-            aria-label={`View Git diff for ${entry.path}`}
+            aria-label={t("filesWidget.tree.viewGitDiff", { path: entry.path })}
           >
             <Icons.diff size={13} />
           </button>
@@ -1461,21 +1485,21 @@ export function FilesWidget({
       <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
         {state?.loading === true ? (
           <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
-            Loading…
+            {t("filesWidget.directory.loading")}
           </div>
         ) : null}
         {state?.notice === "no-root" ? (
           <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
             {onRootChange !== undefined
-              ? "No folder is open yet. Enter a folder path above and press Open."
-              : "No registered project is available."}
+              ? t("filesWidget.directory.noRootPrompt")
+              : t("filesWidget.directory.noProjectAvailable")}
           </div>
         ) : null}
         {state?.error !== null && state?.error !== undefined ? (
           <div className="files-error" role="alert" style={{ marginLeft: treeIndent(depth) }}>
             <span>{state.error}</span>
             <button type="button" className="files-retry" onClick={() => retryDirectory(path)}>
-              Retry
+              {t("filesWidget.directory.retry")}
             </button>
           </div>
         ) : null}
@@ -1489,7 +1513,7 @@ export function FilesWidget({
             role="status"
             style={{ paddingLeft: treeIndent(depth) + 18 }}
           >
-            Showing only the first {state.entries.length} entries — this folder contains more.
+            {t("filesWidget.directory.truncated", { count: state.entries.length })}
           </div>
         ) : null}
         {pendingEntry !== null &&
@@ -1504,7 +1528,9 @@ export function FilesWidget({
               ) : (
                 <FileIcon name={entryDraft.length > 0 ? entryDraft : "new-file"} />
               ),
-              pendingEntry.kind === "new-folder" ? "New folder name" : "New file name",
+              pendingEntry.kind === "new-folder"
+                ? t("filesWidget.tree.newFolderName")
+                : t("filesWidget.tree.newFileName"),
             )
           : null}
         {visibleEntries.map((entry) => renderEntry(entry, depth))}
@@ -1515,7 +1541,9 @@ export function FilesWidget({
             style={{ marginLeft: treeIndent(depth) + 18 }}
             onClick={() => showMoreDirectoryEntries(path, entries.length)}
           >
-            Show {Math.min(DIRECTORY_RENDER_BATCH_SIZE, hiddenCount)} more entries
+            {t("filesWidget.directory.showMore", {
+              count: Math.min(DIRECTORY_RENDER_BATCH_SIZE, hiddenCount),
+            })}
           </button>
         ) : null}
         {state !== undefined &&
@@ -1524,7 +1552,7 @@ export function FilesWidget({
         state.notice === null &&
         state.entries.length === 0 ? (
           <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
-            Empty folder.
+            {t("filesWidget.directory.empty")}
           </div>
         ) : null}
       </div>
@@ -1543,8 +1571,8 @@ export function FilesWidget({
               restoreFocusPathRef.current = gitDiffState.path;
               setGitDiffState(null);
             }}
-            title="Back to files"
-            aria-label="Back to files"
+            title={t("filesWidget.diff.backToFiles")}
+            aria-label={t("filesWidget.diff.backToFiles")}
           >
             <Icons.back size={15} />
           </button>
@@ -1552,7 +1580,7 @@ export function FilesWidget({
           <span className="fpv-name" title={gitDiffState.path}>
             {gitDiffState.path}
           </span>
-          <span className="fpv-lang mono">git diff</span>
+          <span className="fpv-lang mono">{t("filesWidget.diff.langLabel")}</span>
           <span className="spacer" />
           <button
             className="fpv-back"
@@ -1561,15 +1589,15 @@ export function FilesWidget({
               restoreFocusPathRef.current = gitDiffState.path;
               setGitDiffState(null);
             }}
-            title="Close diff"
-            aria-label="Close diff"
+            title={t("filesWidget.diff.close")}
+            aria-label={t("filesWidget.diff.close")}
           >
             <Icons.close size={15} />
           </button>
         </div>
         {gitDiffState.loading ? (
           <div className="fpv-state" role="status">
-            Loading diff…
+            {t("filesWidget.diff.loading")}
           </div>
         ) : null}
         {gitDiffState.error !== null ? (
@@ -1579,7 +1607,9 @@ export function FilesWidget({
         ) : null}
         {gitDiffState.response?.truncated === true ? (
           <div className="fpv-banner">
-            Diff truncated at {formatBytes(gitDiffState.response.maxBytes)}.
+            {t("filesWidget.diff.truncated", {
+              size: formatBytes(gitDiffState.response.maxBytes),
+            })}
           </div>
         ) : null}
         {gitDiffState.response !== null ? (
@@ -1589,7 +1619,7 @@ export function FilesWidget({
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
             tabIndex={0}
             role="region"
-            aria-label={`Git diff: ${gitDiffState.path}`}
+            aria-label={t("filesWidget.diff.regionLabel", { path: gitDiffState.path })}
           >
             {diff.length > 0 ? (
               diff.split("\n").map((line: string, index: number) => (
@@ -1599,7 +1629,7 @@ export function FilesWidget({
               ))
             ) : (
               <div className="fpv-line">
-                <span className="fpv-src">No diff available.</span>
+                <span className="fpv-src">{t("filesWidget.diff.empty")}</span>
               </div>
             )}
           </div>
@@ -1631,7 +1661,7 @@ export function FilesWidget({
         <form
           className="files-root-bar"
           role="group"
-          aria-label="Folder root"
+          aria-label={t("filesWidget.rootBar.label")}
           onSubmit={(event) => {
             event.preventDefault();
             openRoot(rootDraft);
@@ -1642,22 +1672,26 @@ export function FilesWidget({
             className="files-root-up"
             onClick={goUp}
             disabled={currentDirectoryPath === null && parentDir(resolvedRoot ?? apiRoot) === null}
-            title="Open parent folder"
-            aria-label="Open parent folder"
+            title={t("filesWidget.rootBar.openParent")}
+            aria-label={t("filesWidget.rootBar.openParent")}
           >
             <Icons.arrowUp size={13} />
           </button>
           <input
             type="text"
             className="files-root-input mono"
-            aria-label="Folder path — open any folder on this machine"
-            placeholder="/path/to/any/folder"
+            aria-label={t("filesWidget.rootBar.pathLabel")}
+            placeholder={t("filesWidget.rootBar.pathPlaceholder")}
             spellCheck={false}
             value={rootDraft}
             onChange={(event) => setRootDraft(event.target.value)}
           />
-          <button type="submit" className="files-root-open" title="Open this folder">
-            Open
+          <button
+            type="submit"
+            className="files-root-open"
+            title={t("filesWidget.rootBar.openFolderTitle")}
+          >
+            {t("filesWidget.rootBar.open")}
           </button>
         </form>
       ) : null}
@@ -1677,8 +1711,8 @@ export function FilesWidget({
               style={{ width: 24, height: 24, marginLeft: "auto" }}
               type="button"
               onClick={() => onOpenGitDelivery(gitDeliveryRoot)}
-              title="Open Git"
-              aria-label="Open Git"
+              title={t("filesWidget.gitDelivery.open")}
+              aria-label={t("filesWidget.gitDelivery.open")}
             >
               <Icons.branch size={13} />
             </button>
@@ -1687,15 +1721,15 @@ export function FilesWidget({
       ) : null}
       {gitStatusState.status?.available === true && gitStatusState.status.truncated ? (
         <div className="files-note files-warning" role="status">
-          {t("git.decorationsIncomplete", { count: gitStatusState.status.maxChanges })}
+          {tGit("git.decorationsIncomplete", { count: gitStatusState.status.maxChanges })}
         </div>
       ) : null}
       <button
         className="files-refresh"
         type="button"
         onClick={refreshCurrentDirectory}
-        title="Refresh folder"
-        aria-label="Refresh folder"
+        title={t("filesWidget.refresh")}
+        aria-label={t("filesWidget.refresh")}
       >
         <Icons.reset size={13} />
       </button>
@@ -1708,8 +1742,8 @@ export function FilesWidget({
             style={{ right: 62 }}
             type="button"
             onClick={() => startNewEntry("new-file", currentDirectoryPath)}
-            title="New file"
-            aria-label="New file"
+            title={t("filesWidget.newFile")}
+            aria-label={t("filesWidget.newFile")}
           >
             <Icons.file size={13} />
           </button>
@@ -1718,22 +1752,22 @@ export function FilesWidget({
             style={{ right: 34 }}
             type="button"
             onClick={() => startNewEntry("new-folder", currentDirectoryPath)}
-            title="New folder"
-            aria-label="New folder"
+            title={t("filesWidget.newFolder")}
+            aria-label={t("filesWidget.newFolder")}
           >
             <Icons.folder size={13} />
           </button>
         </>
       ) : null}
       <span id={unreadableReasonId} className="visually-hidden">
-        This link can&apos;t be opened from this folder.
+        {t("filesWidget.tree.unreadableLinkReason")}
       </span>
       {/* tabIndex -1: the tree container only receives programmatic focus; rows stay native
           buttons (Tab fallback) while onTreeKeyDown adds the arrow-key traversal (C215). */}
       <div
         className="tr files-tree"
         role="tree"
-        aria-label="Files"
+        aria-label={t("filesWidget.tree.label")}
         tabIndex={-1}
         onKeyDown={onTreeKeyDown}
       >
@@ -1743,7 +1777,7 @@ export function FilesWidget({
         <div
           ref={menuRef}
           role="menu"
-          aria-label="File actions"
+          aria-label={t("filesWidget.menu.label")}
           // tabIndex -1: the menu is a programmatic focus container; the menuitems are the tab
           // stops. Satisfies role="menu" focusability without adding a Tab stop.
           tabIndex={-1}
@@ -1789,7 +1823,7 @@ export function FilesWidget({
                       onClick={() => startRename(target)}
                     >
                       <Icons.edit size={14} />
-                      <span>Rename…</span>
+                      <span>{t("filesWidget.menu.rename")}</span>
                     </button>
                     <button
                       type="button"
@@ -1798,7 +1832,7 @@ export function FilesWidget({
                       onClick={() => void duplicateEntry(target)}
                     >
                       <Icons.copy size={14} />
-                      <span>Duplicate</span>
+                      <span>{t("filesWidget.menu.duplicate")}</span>
                     </button>
                     <button
                       type="button"
@@ -1814,7 +1848,7 @@ export function FilesWidget({
                       }}
                     >
                       <Icons.trash size={14} />
-                      <span>Delete…</span>
+                      <span>{t("filesWidget.menu.delete")}</span>
                     </button>
                   </>
                 ) : null}
@@ -1825,7 +1859,7 @@ export function FilesWidget({
                   onClick={() => startNewEntry("new-file", parent)}
                 >
                   <Icons.file size={14} />
-                  <span>New File…</span>
+                  <span>{t("filesWidget.menu.newFile")}</span>
                 </button>
                 <button
                   type="button"
@@ -1834,7 +1868,7 @@ export function FilesWidget({
                   onClick={() => startNewEntry("new-folder", parent)}
                 >
                   <Icons.folder size={14} />
-                  <span>New Folder…</span>
+                  <span>{t("filesWidget.menu.newFolder")}</span>
                 </button>
               </>
             );
@@ -1867,12 +1901,14 @@ export function FilesWidget({
             }}
           >
             <h2 id="files-delete-title">
-              Delete {confirmDelete.kind === "directory" ? "folder" : "file"}?
+              {confirmDelete.kind === "directory"
+                ? t("filesWidget.deleteDialog.titleFolder")
+                : t("filesWidget.deleteDialog.titleFile")}
             </h2>
             <p id="files-delete-body">
-              "{confirmDelete.name}" will be permanently deleted
-              {confirmDelete.kind === "directory" ? ", including everything inside it" : ""}. This
-              cannot be undone.
+              {confirmDelete.kind === "directory"
+                ? t("filesWidget.deleteDialog.bodyFolder", { name: confirmDelete.name })
+                : t("filesWidget.deleteDialog.bodyFile", { name: confirmDelete.name })}
             </p>
             {opError !== null ? <p role="alert">{opError}</p> : null}
             <div className="ed-dialog-actions">
@@ -1882,7 +1918,9 @@ export function FilesWidget({
                 onClick={() => void performDelete(confirmDelete)}
                 disabled={opBusy}
               >
-                {opBusy ? "Deleting..." : "Delete"}
+                {opBusy
+                  ? t("filesWidget.deleteDialog.deleting")
+                  : t("filesWidget.deleteDialog.delete")}
               </button>
               <button
                 type="button"
@@ -1893,7 +1931,7 @@ export function FilesWidget({
                 }}
                 disabled={opBusy}
               >
-                Cancel
+                {t("filesWidget.deleteDialog.cancel")}
               </button>
             </div>
           </div>

@@ -5,6 +5,7 @@ import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
@@ -19,8 +20,9 @@ interface FilePreviewProps {
 // Server-defined deny is a safety invariant the user must not be able to probe.
 // The UI renders a generic message that names common deny patterns by class but
 // never reveals the requested path or the specific matched pattern.
-const DENIED_PREVIEW_MESSAGE =
-  "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).";
+function deniedPreviewMessage(t: I18nTranslate): string {
+  return t("filePreview.deniedMessage");
+}
 const MAX_HIGHLIGHT_BYTES = 200_000;
 // GEN-PERF-WIDGET-005 — the server caps a text preview at ~1 MB (~25k lines). Rendering every
 // line eagerly produced ~75k–100k DOM nodes in one synchronous commit. Window the initial
@@ -36,8 +38,8 @@ const SEARCHABLE_DOCUMENT_LABELS: Readonly<Record<string, string>> = {
   pdf: "PDF",
 };
 
-function searchableDocumentMessage(label: string): string {
-  return `${label} files up to 2 MB are searchable in Repository Search via bounded text extraction when explicitly connected to a chat. Encrypted, scanned, or larger documents are not extracted — use Local Knowledge for those. No inline preview is available for this format here.`;
+function searchableDocumentMessage(label: string, t: I18nTranslate): string {
+  return t("filePreview.searchableDocument", { format: label });
 }
 
 interface PreviewError {
@@ -47,20 +49,21 @@ interface PreviewError {
 
 type PreviewRefreshStatus = "idle" | "refreshing" | "refreshed" | "failed";
 type MetadataCopyTarget = "name" | "path";
+type CopyStatusKind = "nameCopied" | "pathCopied" | "clipboardFailed";
 
-function classifyError(error: unknown): PreviewError {
+function classifyError(error: unknown, t: I18nTranslate): PreviewError {
   if (error instanceof ApiError && error.code === "DENIED") {
-    return { message: DENIED_PREVIEW_MESSAGE, denied: true };
+    return { message: deniedPreviewMessage(t), denied: true };
   }
   if (error instanceof Error) {
     // fetchJson falls back to a bare "HTTP <status>" when the BFF error envelope is
     // unparseable — not a user-facing sentence (audit F044 C348).
     const message = /^HTTP \d+$/.test(error.message)
-      ? "The file could not be loaded. Try again."
+      ? t("filePreview.error.loadFailed")
       : error.message;
     return { message, denied: false };
   }
-  return { message: "Unable to read this file.", denied: false };
+  return { message: t("filePreview.error.unreadable"), denied: false };
 }
 
 function formatDate(timestamp: number): string {
@@ -106,14 +109,14 @@ async function writeTextWithFallback(text: string): Promise<void> {
   }
 }
 
-function previewKindLabel(preview: FilesPreviewResponse): string {
+function previewKindLabel(preview: FilesPreviewResponse, t: I18nTranslate): string {
   // The chip shows the real file type (server-derived extension), not the internal
   // tokenizer bucket from langOf() — that bucket folds .rb into "py", build.gradle
   // into "js" and unknowns into "code", which reads as a wrong type label in the UI
   // (audit F044 C200). langOf stays highlight-only.
-  if (preview.kind === "text") return preview.extension ?? "text";
+  if (preview.kind === "text") return preview.extension ?? t("filePreview.lang.text");
   if (preview.kind === "image") return preview.mime;
-  return preview.extension ?? "binary";
+  return preview.extension ?? t("filePreview.lang.binary");
 }
 
 function extensionForPreview(preview: FilesPreviewResponse): string {
@@ -130,15 +133,16 @@ function extensionForPreview(preview: FilesPreviewResponse): string {
 
 function binaryPreviewMessage(
   preview: Extract<FilesPreviewResponse, { readonly kind: "binary" }>,
+  t: I18nTranslate,
 ): string {
   if (preview.reason === "too_large") {
-    return `Preview disabled because this file exceeds ${formatBytes(preview.maxBytes ?? 0)}.`;
+    return t("filePreview.binary.tooLarge", { maxBytes: formatBytes(preview.maxBytes ?? 0) });
   }
   const documentLabel = SEARCHABLE_DOCUMENT_LABELS[extensionForPreview(preview)];
   if (documentLabel !== undefined) {
-    return searchableDocumentMessage(documentLabel);
+    return searchableDocumentMessage(documentLabel, t);
   }
-  return "No safe text or image preview is available for this file type.";
+  return t("filePreview.binary.unsupported");
 }
 
 function MetadataRow({
@@ -157,12 +161,13 @@ function MetadataRow({
 }
 
 export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreviewProps): ReactNode {
+  const t = useTranslate();
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PreviewError | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [refreshStatus, setRefreshStatus] = useState<PreviewRefreshStatus>("idle");
-  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<CopyStatusKind | null>(null);
   const backRef = useRef<HTMLButtonElement | null>(null);
   const loadTargetRef = useRef<{ readonly root: string; readonly path: string } | null>(null);
 
@@ -204,7 +209,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       })
       .catch((err: unknown) => {
         if (!cancelled) {
-          setError(classifyError(err));
+          setError(classifyError(err, t));
           if (isManualRefresh) setRefreshStatus("failed");
         }
       })
@@ -214,7 +219,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     return () => {
       cancelled = true;
     };
-  }, [path, root, refreshKey]);
+  }, [path, root, refreshKey, t]);
 
   useEffect(() => {
     if (refreshStatus !== "refreshed") return undefined;
@@ -228,34 +233,43 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     const value = target === "name" ? preview.name : fullPreviewPath(preview.root, preview.path);
     setCopyStatus(null);
     void writeTextWithFallback(value).then(
-      () => setCopyStatus(target === "name" ? "File name copied" : "File path copied"),
-      () => setCopyStatus("Clipboard access failed."),
+      () => setCopyStatus(target === "name" ? "nameCopied" : "pathCopied"),
+      () => setCopyStatus("clipboardFailed"),
     );
   };
+  const copyStatusText =
+    copyStatus === "nameCopied"
+      ? t("filePreview.copyStatus.nameCopied")
+      : copyStatus === "pathCopied"
+        ? t("filePreview.copyStatus.pathCopied")
+        : copyStatus === "clipboardFailed"
+          ? t("filePreview.copyStatus.clipboardFailed")
+          : null;
 
   const denied = error?.denied === true;
   const lang =
     preview !== null
-      ? previewKindLabel(preview)
+      ? previewKindLabel(preview, t)
       : denied
-        ? "denied"
+        ? t("filePreview.lang.denied")
         : error !== null
-          ? "error"
-          : "loading";
+          ? t("filePreview.lang.error")
+          : t("filePreview.lang.loading");
   const headerName = denied
-    ? "Hidden file"
-    : (preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview"));
+    ? t("filePreview.hiddenFile")
+    : (preview?.name ??
+      (error !== null ? t("filePreview.previewUnavailable") : t("filePreview.headerLoading")));
   const headerTitle = headerName;
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
   const canOpenInEditor =
     onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
   const refreshStatusText =
     refreshStatus === "refreshing"
-      ? "Refreshing..."
+      ? t("filePreview.refreshStatus.refreshing")
       : refreshStatus === "refreshed"
-        ? "Reloaded"
+        ? t("filePreview.refreshStatus.reloaded")
         : refreshStatus === "failed"
-          ? "Refresh failed"
+          ? t("filePreview.refreshStatus.failed")
           : "";
   const lines: readonly (readonly Token[])[] = useMemo(
     () =>
@@ -290,8 +304,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           type="button"
           ref={backRef}
           onClick={onClose}
-          title="Back to files"
-          aria-label="Back to files"
+          title={t("filePreview.backToFiles")}
+          aria-label={t("filePreview.backToFiles")}
         >
           <Icons.back size={15} />
         </button>
@@ -305,8 +319,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
               className="fpv-back fpv-copy"
               type="button"
               onClick={() => copyMetadata("name")}
-              title="Copy file name"
-              aria-label="Copy file name"
+              title={t("filePreview.copyFileName")}
+              aria-label={t("filePreview.copyFileName")}
             >
               <Icons.copy size={13} />
             </button>
@@ -314,8 +328,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
               className="fpv-back fpv-copy"
               type="button"
               onClick={() => copyMetadata("path")}
-              title="Copy file path"
-              aria-label="Copy file path"
+              title={t("filePreview.copyFilePath")}
+              aria-label={t("filePreview.copyFilePath")}
             >
               <Icons.copy size={13} />
             </button>
@@ -326,10 +340,10 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         {copyStatus !== null ? (
           <span
             className="fpv-status fpv-copy-status"
-            role={copyStatus === "Clipboard access failed." ? "alert" : "status"}
+            role={copyStatus === "clipboardFailed" ? "alert" : "status"}
             aria-live="polite"
           >
-            {copyStatus}
+            {copyStatusText}
           </span>
         ) : null}
         <button
@@ -338,8 +352,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           onClick={refreshPreview}
           disabled={loading}
           data-state={refreshStatus}
-          title={loading ? "Refreshing preview" : "Refresh preview"}
-          aria-label={loading ? "Refreshing preview" : "Refresh preview"}
+          title={loading ? t("filePreview.refreshing") : t("filePreview.refresh")}
+          aria-label={loading ? t("filePreview.refreshing") : t("filePreview.refresh")}
         >
           <Icons.reset size={14} />
         </button>
@@ -358,8 +372,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
             className="fpv-back"
             type="button"
             onClick={() => onOpenInEditor(root, path)}
-            title="Open in editor"
-            aria-label="Open in editor"
+            title={t("filePreview.openInEditor")}
+            aria-label={t("filePreview.openInEditor")}
           >
             <Icons.editor size={15} />
           </button>
@@ -368,8 +382,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           className="fpv-back"
           type="button"
           onClick={onClose}
-          title="Close preview"
-          aria-label="Close preview"
+          title={t("filePreview.closePreview")}
+          aria-label={t("filePreview.closePreview")}
         >
           <Icons.close size={15} />
         </button>
@@ -377,7 +391,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
 
       {loading && preview === null ? (
         <div className="fpv-state" role="status">
-          Loading preview…
+          {t("filePreview.loadingState")}
         </div>
       ) : null}
       {error !== null ? (
@@ -386,7 +400,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
           {!error.denied ? (
             <button type="button" className="fpv-retry" onClick={refreshPreview}>
-              Retry
+              {t("filePreview.retry")}
             </button>
           ) : null}
         </div>
@@ -396,12 +410,11 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         <>
           {preview.truncated ? (
             <div className="fpv-banner">
-              Preview truncated at {formatBytes(preview.maxBytes)}. Larger files can&apos;t be shown
-              in full here.
+              {t("filePreview.truncatedBanner", { maxBytes: formatBytes(preview.maxBytes) })}
             </div>
           ) : null}
           {!shouldHighlight ? (
-            <div className="fpv-banner">Syntax highlighting disabled for large previews.</div>
+            <div className="fpv-banner">{t("filePreview.syntaxHighlightDisabled")}</div>
           ) : null}
           <div
             className="fpv-code mono"
@@ -410,7 +423,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
             // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
             tabIndex={0}
             role="region"
-            aria-label={`File preview: ${preview.name}`}
+            aria-label={t("filePreview.previewRegionLabel", { name: preview.name })}
             // The 44px default gutter fits 4 digits; previews under MAX_HIGHLIGHT_BYTES can
             // exceed 9,999 lines, so the gutter grows with the widest line number instead of
             // overflowing its fixed box (audit F044 C351). 16px = the gutter's padding-right.
@@ -424,9 +437,9 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
               <div className="fpv-line" key={i}>
                 <span className="fpv-num">{i + 1}</span>
                 <span className="fpv-src">
-                  {toks.map((t, j) => (
-                    <span key={j} className={`hl-${t[0]}`}>
-                      {t[1]}
+                  {toks.map((tok, j) => (
+                    <span key={j} className={`hl-${tok[0]}`}>
+                      {tok[1]}
                     </span>
                   ))}
                 </span>
@@ -440,7 +453,9 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
                   setVisibleLineCount((count) => Math.min(lines.length, count + PREVIEW_LINE_BATCH))
                 }
               >
-                Show {Math.min(PREVIEW_LINE_BATCH, hiddenLineCount)} more lines
+                {t("filePreview.showMoreLines", {
+                  count: Math.min(PREVIEW_LINE_BATCH, hiddenLineCount),
+                })}
               </button>
             ) : null}
           </div>
@@ -454,9 +469,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
             <img className="fpv-image" src={preview.url} alt={preview.name} />
           </div>
           <div className="fpv-meta">
-            <MetadataRow label="Type" value={preview.mime} />
-            <MetadataRow label="Size" value={formatBytes(preview.sizeBytes)} />
-            <MetadataRow label="Modified" value={formatDate(preview.modifiedAt)} />
+            <MetadataRow label={t("filePreview.metadata.type")} value={preview.mime} />
+            <MetadataRow
+              label={t("filePreview.metadata.size")}
+              value={formatBytes(preview.sizeBytes)}
+            />
+            <MetadataRow
+              label={t("filePreview.metadata.modified")}
+              value={formatDate(preview.modifiedAt)}
+            />
           </div>
         </div>
       ) : null}
@@ -466,12 +487,21 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
           <div className="fpv-meta-card">
             <FileIcon name={preview.name} />
             <h3>{preview.name}</h3>
-            <p>{binaryPreviewMessage(preview)}</p>
+            <p>{binaryPreviewMessage(preview, t)}</p>
             <div className="fpv-meta">
-              <MetadataRow label="Type" value={preview.mime} />
-              <MetadataRow label="Extension" value={preview.extension ?? "none"} />
-              <MetadataRow label="Size" value={formatBytes(preview.sizeBytes)} />
-              <MetadataRow label="Modified" value={formatDate(preview.modifiedAt)} />
+              <MetadataRow label={t("filePreview.metadata.type")} value={preview.mime} />
+              <MetadataRow
+                label={t("filePreview.metadata.extension")}
+                value={preview.extension ?? t("filePreview.metadata.extensionNone")}
+              />
+              <MetadataRow
+                label={t("filePreview.metadata.size")}
+                value={formatBytes(preview.sizeBytes)}
+              />
+              <MetadataRow
+                label={t("filePreview.metadata.modified")}
+                value={formatDate(preview.modifiedAt)}
+              />
             </div>
           </div>
         </div>
