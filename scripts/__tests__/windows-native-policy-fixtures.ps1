@@ -63,3 +63,4 @@ Assert-Policy "missing-rfc3161" @{ a = Observation @{ Timestamp = $false } } $tr
 Assert-Policy "legacy-rfc3161" @{ a = Observation @{ Timestamp = $false } } $true $false
 Assert-Policy "invalid-rfc3161" @{ a = Observation @{ Timestamp = $false } } $true $false
 Assert-Policy "bounded-native-exception" @{ a = Observation @{ Throws = $true } } $false $false
+Assert-Policy "empty-entries" @{} $false $false

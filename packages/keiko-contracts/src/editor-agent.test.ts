@@ -724,6 +724,7 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "applyChangeset",
   "navigateSymbol",
   "searchWorkspace",
+  "queryGit",
 ];
 
 const NON_WRITE_ACTION_TYPES = [
@@ -778,12 +779,84 @@ function searchWorkspaceAction(): EditorAgentAction {
   });
 }
 
+function queryGitAction(): EditorAgentAction {
+  return baseAction({
+    type: "queryGit",
+    target: { file: "src/a.ts" },
+    queryGit: { path: "src/a.ts", aspects: ["status", "diff", "blame"] },
+  });
+}
+
 function validActionForType(type: EditorAgentActionType): EditorAgentAction {
   if (type === "applyChangeset") return changesetAction();
   if (type === "navigateSymbol") return navigateSymbolAction();
   if (type === "searchWorkspace") return searchWorkspaceAction();
+  if (type === "queryGit") return queryGitAction();
   return baseAction({ type });
 }
+
+describe("queryGit action validation (Issue #2298)", () => {
+  it("accepts a well-formed read-only git query", () => {
+    expect(isEditorAgentAction(queryGitAction())).toBe(true);
+    expect(
+      isEditorAgentAction(
+        baseAction({ type: "queryGit", queryGit: { path: "src/a.ts", aspects: ["status"] } }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects an empty aspect list", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({ type: "queryGit", queryGit: { path: "src/a.ts", aspects: [] } }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects duplicate aspects", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "queryGit",
+          queryGit: { path: "src/a.ts", aspects: ["status", "status"] },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects an unknown aspect", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({
+          type: "queryGit",
+          queryGit: { path: "src/a.ts", aspects: ["history"] as never },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects a missing or empty path (workspace containment is enforced server-side)", () => {
+    expect(
+      isEditorAgentAction(
+        baseAction({ type: "queryGit", queryGit: { path: "", aspects: ["status"] } as never }),
+      ),
+    ).toBe(false);
+    expect(
+      isEditorAgentAction(
+        baseAction({ type: "queryGit", queryGit: { aspects: ["status"] } as never }),
+      ),
+    ).toBe(false);
+  });
+
+  it("requires the queryGit payload exactly on the queryGit type", () => {
+    expect(isEditorAgentAction(baseAction({ type: "queryGit" }))).toBe(false);
+    expect(
+      isEditorAgentAction(
+        baseAction({ type: "openFile", queryGit: { path: "src/a.ts", aspects: ["status"] } }),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("schema version compatibility (Issue #1391)", () => {
   it("pins EDITOR_AGENT_SCHEMA_VERSION to the literal '1'", () => {

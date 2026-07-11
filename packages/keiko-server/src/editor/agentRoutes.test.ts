@@ -605,6 +605,153 @@ describe("server-resolved navigation and search actions (#2218)", () => {
   });
 });
 
+describe("server-resolved git query action (#2298)", () => {
+  const gitOk = (
+    stdout: string,
+  ): { exitCode: 0; signal: null; stdout: string; stderr: ""; truncated: false } => ({
+    exitCode: 0,
+    signal: null,
+    stdout,
+    stderr: "",
+    truncated: false,
+  });
+
+  function gitResponseFor(root: string, args: readonly string[]): ReturnType<typeof gitOk> {
+    if (args.includes("rev-parse")) return gitOk(`${root}\n`);
+    if (args.includes("status")) return gitOk("## main\0 M src/a.ts\0");
+    if (args.includes("blame")) {
+      return gitOk(
+        "0000000000000000000000000000000000000000 1 1 1\nauthor Alice\nauthor-time 1700000000\nauthor-tz +0000\nsummary wip\n\tconst a = 1;\n",
+      );
+    }
+    return gitOk("");
+  }
+
+  function dispatchingGitRunner(root: string): ReturnType<typeof vi.fn> {
+    return vi.fn((args: readonly string[]) => Promise.resolve(gitResponseFor(root, args)));
+  }
+
+  function gitDeps(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    runner: unknown,
+  ): UiHandlerDeps {
+    return {
+      store,
+      redactor: buildRedactor({}),
+      env: {},
+      gitRouteOptions: { runner, maxDiffBytes: 4096, maxStatusBytes: 4096, maxChanges: 50 },
+    } as unknown as UiHandlerDeps;
+  }
+
+  it("aggregates bounded, redacted status, diff, and blame for one workspace file (AC2)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "a.ts"), "const a = 1;\n", "utf8");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = dispatchingGitRunner(root);
+    const deps = gitDeps(store, runner);
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["status", "diff", "blame"] },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(200);
+      const result = actionResult(response.body);
+      expect(result.status).toBe("succeeded");
+      const data = result.data as {
+        readonly path: string;
+        readonly aspects: {
+          readonly status?: { readonly state?: string };
+          readonly diff?: unknown;
+          readonly blame?: unknown;
+        };
+      };
+      expect(data.path).toBe("src/a.ts");
+      expect(data.aspects.status).toMatchObject({ state: "available", branch: "main" });
+      expect(data.aspects.diff).toBeTypeOf("object");
+      expect(data.aspects.blame).toBeTypeOf("object");
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({ actionType: "queryGit", mutating: false }),
+      ]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a sensitive git-query target before invoking any git read (AC3)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-deny-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = dispatchingGitRunner(root);
+    const deps = gitDeps(store, runner);
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: ".env" },
+            queryGit: { path: ".env", aspects: ["status", "diff", "blame"] },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("OUT_OF_SCOPE");
+      expect(runner).not.toHaveBeenCalled();
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({
+          actionType: "queryGit",
+          disposition: "denied",
+          denyReason: "denied-sensitive-path",
+        }),
+      ]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a workspace-escaping git-query target before invoking any git read (AC3)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-escape-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = dispatchingGitRunner(root);
+    const deps = gitDeps(store, runner);
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "../escape.ts" },
+            queryGit: { path: "../escape.ts", aspects: ["status"] },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("OUT_OF_SCOPE");
+      expect(runner).not.toHaveBeenCalled();
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 // ─── Original tests (unchanged) ────────────────────────────────────────────────────────────────
 
 describe("editor agent routes", () => {
