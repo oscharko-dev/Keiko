@@ -199,7 +199,9 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -245,12 +247,27 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cdx.json
           retention-days: 90
+      # Build-provenance (not SBOM-predicate) attestation: this job has no single packed artifact
+      # to bind an SBOM-attestation subject to (no `npm pack` runs here), so this proves the SBOM
+      # document itself was produced by this exact workflow run/commit, not tampered or fabricated.
+      # Scoped to `push` only (dev/release branches) so PR and workflow_dispatch runs stay
+      # unverified-staging and do not add attestation noise for commits that never ship.
+      - name: Attest build provenance for root SBOM
+        if: github.event_name == 'push'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: sbom.cdx.json
       - name: Upload workspace SBOMs (Issue #169 AC4)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: workspace-sboms-cyclonedx
           path: sbom/
           retention-days: 90
+      - name: Attest build provenance for workspace SBOMs
+        if: github.event_name == 'push'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: sbom/workspace-*.cdx.json
 
   cross-platform-smoke:
     name: Cross-platform smoke (${{ matrix.os }})
@@ -299,7 +316,9 @@ jobs:
     name: ui
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -372,3 +391,11 @@ jobs:
           name: ui-sbom-cyclonedx
           path: ui-sbom.cdx.json
           retention-days: 90
+      # Same build-provenance-of-the-document rationale as the root/workspace SBOM attestations in
+      # the build-scan-sbom-smoke job: no single packed UI artifact exists to bind an SBOM-predicate
+      # attestation subject to at this point, so this attests the SBOM document's own provenance.
+      - name: Attest build provenance for UI SBOM
+        if: github.event_name == 'push'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ui-sbom.cdx.json
