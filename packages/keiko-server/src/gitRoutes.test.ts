@@ -1,7 +1,12 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  parseGitEditorBlameResponse,
+  parseGitEditorDiffResponse,
+} from "@oscharko-dev/keiko-contracts";
+import { defaultGitProcessRunner } from "@oscharko-dev/keiko-git";
 import {
   buildRedactor,
   createInMemoryUiStore,
@@ -13,7 +18,9 @@ import type { UiStore } from "./store/index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import {
   handleGitBranches,
+  handleGitBlame,
   handleGitDiff,
+  handleGitStructuredDiff,
   handleGitStatus,
   type GitProcessRunner,
 } from "./gitRoutes.js";
@@ -35,12 +42,13 @@ function deps(runner: GitProcessRunner, redactor = buildRedactor({})): UiHandler
   };
 }
 
-function ctx(path: string): RouteContext {
+function ctx(path: string, correlationId?: string): RouteContext {
   return {
     req: mockRequest(),
     res: mockResponse().res,
     params: {},
     url: new URL(`http://localhost${path}`),
+    ...(correlationId === undefined ? {} : { correlationId }),
   };
 }
 
@@ -59,6 +67,15 @@ const fail = (stderr: string, exitCode = 128): Awaited<ReturnType<GitProcessRunn
   stderr,
   truncated: false,
 });
+
+async function runRealGit(args: readonly string[]): Promise<void> {
+  const result = await defaultGitProcessRunner(args, {
+    cwd: root,
+    maxBytes: 4096,
+    timeoutMs: 5_000,
+  });
+  expect(result.exitCode, result.stderr).toBe(0);
+}
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "keiko-git-route-"));
@@ -281,8 +298,8 @@ describe("GET /api/git/status", () => {
           path: "build/cache.bin",
           indexStatus: "!",
           worktreeStatus: "!",
-          staged: true,
-          unstaged: true,
+          staged: false,
+          unstaged: false,
         },
         {
           path: "src/unknown.ts",
@@ -299,6 +316,49 @@ describe("GET /api/git/status", () => {
         },
       ],
     });
+  });
+
+  it("opts into ignored entries without counting ignored-only paths as dirty", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok("## main\0!! build/cache.bin\0"));
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}&includeIgnored=true`),
+      deps(runner),
+    );
+
+    expect(result.body).toMatchObject({
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [{ path: "build/cache.bin", indexStatus: "!", worktreeStatus: "!" }],
+    });
+    expect(runner.mock.calls[1]?.[0]).toEqual(expect.arrayContaining(["--ignored=matching"]));
+  });
+
+  it("preserves the default status invocation and rejects invalid ignored options", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok("## main\0"));
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`),
+      deps(runner),
+    );
+
+    expect(result.body).toMatchObject({ clean: true, changes: [] });
+    expect(runner.mock.calls[1]?.[0]).not.toContain("--ignored=matching");
+
+    const invalid = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}&includeIgnored=yes`),
+      deps(vi.fn<GitProcessRunner>()),
+    );
+    expect(invalid).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
   });
 
   it("surfaces non-repositories as a clean unavailable state", async () => {
@@ -609,5 +669,229 @@ describe("GET /api/git/diff", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ truncated: true, diff: "staged-outpu" });
+  });
+});
+
+describe("GET /api/git/diff/structured", () => {
+  it("returns contract-valid staged hunks and fixed hardened diff arguments", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(
+        ok(
+          [
+            "diff --git a/src/app.ts b/src/app.ts",
+            "--- a/src/app.ts",
+            "+++ b/src/app.ts",
+            "@@ -1 +1,2 @@",
+            "-old",
+            "+new",
+            "+more",
+            "",
+          ].join("\n"),
+        ),
+      );
+
+    const result = await handleGitStructuredDiff(
+      ctx(
+        `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=staged&path=src%2Fapp.ts`,
+      ),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(parseGitEditorDiffResponse(result.body)).toMatchObject({ ok: true });
+    expect(result.body).toMatchObject({
+      schemaVersion: "1",
+      scope: "staged",
+      files: [
+        {
+          path: "src/app.ts",
+          layer: "staged",
+          hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 2 }],
+        },
+      ],
+    });
+    expect(runner.mock.calls[1]?.[0]).toEqual(
+      expect.arrayContaining([
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--cached",
+        "--",
+        ":(literal)src/app.ts",
+      ]),
+    );
+  });
+
+  it("reports process truncation and drops the incomplete final hunk", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce({
+        ...ok("diff --git a/src/app.ts b/src/app.ts\n@@ -1,2 +1,2 @@\n line\n-old\n+new"),
+        truncated: true,
+      });
+
+    const result = await handleGitStructuredDiff(
+      ctx(`/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged`),
+      deps(runner),
+    );
+
+    expect(parseGitEditorDiffResponse(result.body)).toMatchObject({ ok: true });
+    expect(result.body).toMatchObject({
+      truncated: true,
+      files: [{ path: "src/app.ts", hunks: [], truncated: true }],
+    });
+  });
+
+  it("rejects hostile paths and returns content-free correlated failures", async () => {
+    const traversalRunner = vi.fn<GitProcessRunner>();
+    const traversal = await handleGitStructuredDiff(
+      ctx(`/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=staged&path=..%2Fx`),
+      deps(traversalRunner),
+    );
+    expect(traversal.status).toBe(400);
+    expect(traversalRunner).not.toHaveBeenCalled();
+
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(fail("fatal: leaked diff /private/repo"));
+    const failed = await handleGitStructuredDiff(
+      ctx(
+        `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=staged`,
+        "cid-diff-2228",
+      ),
+      deps(runner),
+    );
+    expect(failed).toMatchObject({
+      status: 500,
+      body: { error: { code: "GIT_DIFF_FAILED", correlationId: "cid-diff-2228" } },
+    });
+    expect(JSON.stringify(failed.body)).not.toContain("private/repo");
+  });
+});
+
+describe("GET /api/git/blame", () => {
+  it("returns bounded contract-valid metadata with no email or source text", async () => {
+    const hash = "a".repeat(40);
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(
+        ok(
+          [
+            `${hash} 3 3 1`,
+            "author Ada Lovelace",
+            "author-mail <private@example.test>",
+            "author-time 1752172800",
+            "author-tz +0000",
+            "summary Add route",
+            "filename src/app.ts",
+            "\tconst privateSource = true;",
+            "",
+          ].join("\n"),
+        ),
+      );
+
+    const result = await handleGitBlame(
+      ctx(
+        `/api/git/blame?root=${encodeURIComponent(root)}&path=src%2Fapp.ts&startLine=3&maxLines=20`,
+      ),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(parseGitEditorBlameResponse(result.body)).toMatchObject({ ok: true });
+    expect(result.body).toMatchObject({
+      path: "src/app.ts",
+      startLine: 3,
+      lines: [{ line: 3, commitHash: hash, author: "Ada Lovelace", summary: "Add route" }],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("private@example.test");
+    expect(JSON.stringify(result.body)).not.toContain("privateSource");
+    expect(runner.mock.calls[1]?.[0]).toEqual(
+      expect.arrayContaining([
+        "blame",
+        "--line-porcelain",
+        "--no-textconv",
+        "-L",
+        "3,22",
+        "--",
+        "src/app.ts",
+      ]),
+    );
+  });
+
+  it("executes real blame for a leading-dash filename and redacts an email author name", async () => {
+    await runRealGit(["init", "-q"]);
+    await runRealGit(["config", "user.email", "private@example.invalid"]);
+    await runRealGit(["config", "user.name", "private@example.invalid"]);
+    await runRealGit(["config", "commit.gpgsign", "false"]);
+    await writeFile(join(root, "-leading.ts"), "export const value = 1;\n", "utf8");
+    await runRealGit(["add", "--", "-leading.ts"]);
+    await runRealGit(["commit", "-q", "-m", "Add leading filename"]);
+
+    const result = await handleGitBlame(
+      ctx(
+        `/api/git/blame?root=${encodeURIComponent(root)}&path=-leading.ts&startLine=1&maxLines=1`,
+      ),
+      deps(defaultGitProcessRunner),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        path: "-leading.ts",
+        lines: [{ line: 1, author: "Private author", summary: "Add leading filename" }],
+      },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("private@example.invalid");
+  });
+
+  it("rejects traversal and symlink escapes before blame execution", async () => {
+    const traversalRunner = vi.fn<GitProcessRunner>();
+    const traversal = await handleGitBlame(
+      ctx(`/api/git/blame?root=${encodeURIComponent(root)}&path=..%2Fx&startLine=1&maxLines=1`),
+      deps(traversalRunner),
+    );
+    expect(traversal.status).toBe(400);
+    expect(traversalRunner).not.toHaveBeenCalled();
+
+    const outside = await mkdtemp(join(tmpdir(), "keiko-git-route-outside-"));
+    await symlink(outside, join(root, "escape"));
+    const symlinkRunner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(ok(`${root}\n`));
+    const escaped = await handleGitBlame(
+      ctx(
+        `/api/git/blame?root=${encodeURIComponent(root)}&path=escape%2Fsecret.ts&startLine=1&maxLines=1`,
+      ),
+      deps(symlinkRunner),
+    );
+    await rm(outside, { recursive: true, force: true });
+    expect(escaped.status).toBe(400);
+    expect(symlinkRunner).toHaveBeenCalledTimes(1);
+  });
+
+  it("maps ordinary blame failures to content-free correlated 500s", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(fail("author-mail <secret@example.test> source /private/repo"));
+    const result = await handleGitBlame(
+      ctx(
+        `/api/git/blame?root=${encodeURIComponent(root)}&path=src%2Fapp.ts&startLine=1&maxLines=1`,
+        "cid-blame-2228",
+      ),
+      deps(runner),
+    );
+
+    expect(result).toMatchObject({
+      status: 500,
+      body: { error: { code: "GIT_BLAME_FAILED", correlationId: "cid-blame-2228" } },
+    });
+    expect(JSON.stringify(result.body)).not.toContain("secret@example.test");
+    expect(JSON.stringify(result.body)).not.toContain("private/repo");
   });
 });

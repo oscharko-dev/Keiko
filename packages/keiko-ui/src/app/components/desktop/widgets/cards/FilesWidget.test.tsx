@@ -16,11 +16,12 @@ import {
   renameFilesEntry,
   updateChatConnectedScopes,
 } from "../../../../../lib/api";
-import type { Chat } from "../../../../../lib/types";
+import type { Chat, GitChangedFile, GitRepositoryStatusResponse } from "../../../../../lib/types";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
 import { FilesWidget, filesWidgetTestInternals } from "./FilesWidget";
+import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -47,6 +48,47 @@ const treeEntryBase = {
   symlink: false,
   readable: true,
 };
+
+function availableGitStatus(
+  changes: readonly GitChangedFile[],
+  overrides: Partial<GitRepositoryStatusResponse> = {},
+): GitRepositoryStatusResponse {
+  return {
+    schemaVersion: "1",
+    root: "/repo",
+    repositoryRoot: "/repo",
+    state: "available",
+    available: true,
+    branch: "main",
+    detached: false,
+    clean: changes.length === 0,
+    stagedCount: changes.filter((change) => change.staged).length,
+    unstagedCount: changes.filter((change) => change.unstaged).length,
+    untrackedCount: changes.filter((change) => change.untracked).length,
+    conflictedCount: changes.filter((change) => change.conflicted).length,
+    changes,
+    truncated: false,
+    maxChanges: 500,
+    ...overrides,
+  };
+}
+
+function gitChange(
+  path: string,
+  worktreeStatus: GitChangedFile["worktreeStatus"],
+  overrides: Partial<GitChangedFile> = {},
+): GitChangedFile {
+  return {
+    path,
+    indexStatus: " ",
+    worktreeStatus,
+    staged: false,
+    unstaged: worktreeStatus !== "?" && worktreeStatus !== "!",
+    untracked: worktreeStatus === "?",
+    conflicted: false,
+    ...overrides,
+  };
+}
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -286,7 +328,19 @@ describe("FilesWidget", () => {
     expect(fetchFilesTree).toHaveBeenCalledTimes(1);
     expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
     expect(fetchGitStatus).toHaveBeenCalledTimes(1);
-    expect(fetchGitStatus).toHaveBeenCalledWith("/repo");
+    expect(fetchGitStatus).toHaveBeenCalledWith("/repo", { includeIgnored: true });
+
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
+    expect(fetchGitStatus).toHaveBeenLastCalledWith("/repo", { includeIgnored: true });
+
+    notifyWorkspaceFileMutated("/other-repo");
+    expect(fetchGitStatus).toHaveBeenCalledTimes(2);
+    notifyWorkspaceFileMutated("/repo");
+
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(3));
+    expect(fetchGitStatus).toHaveBeenLastCalledWith("/repo", { includeIgnored: true });
   });
 
   it("settles Git status after the root tree resolves to the same root", async () => {
@@ -424,7 +478,7 @@ describe("FilesWidget", () => {
     await userEvent.click(await screen.findByRole("treeitem", { name: "SpringAI Showcase" }));
 
     expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
-    expect(fetchGitStatus).toHaveBeenCalledWith(nestedRoot);
+    expect(fetchGitStatus).toHaveBeenCalledWith(nestedRoot, { includeIgnored: true });
     expect(screen.getByText("M")).toBeInTheDocument();
 
     await userEvent.click(
@@ -540,6 +594,122 @@ describe("FilesWidget", () => {
     expect(await screen.findByRole("region", { name: "Git diff: package.json" })).toHaveTextContent(
       "+new",
     );
+  });
+
+  it("renders complete file badges and collapsed descendant folder aggregates", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([
+        gitChange("modified.ts", "M"),
+        gitChange("added.ts", " ", { indexStatus: "A", staged: true, unstaged: false }),
+        gitChange("untracked.ts", "?"),
+        gitChange("renamed.ts", " ", {
+          oldPath: "old-name.ts",
+          indexStatus: "R",
+          staged: true,
+          unstaged: false,
+        }),
+        gitChange("conflicted.ts", "U", { conflicted: true }),
+        gitChange("src/deep.ts", "M"),
+        gitChange("removed/gone.ts", "D"),
+      ]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        { ...treeEntryBase, name: "removed", path: "removed", kind: "directory" },
+        { ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" },
+        { ...treeEntryBase, name: "added.ts", path: "added.ts", kind: "file" },
+        { ...treeEntryBase, name: "untracked.ts", path: "untracked.ts", kind: "file" },
+        { ...treeEntryBase, name: "renamed.ts", path: "renamed.ts", kind: "file" },
+        { ...treeEntryBase, name: "conflicted.ts", path: "conflicted.ts", kind: "file" },
+      ],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByLabelText("Git modified: modified.ts")).toHaveTextContent("M");
+    expect(screen.getByLabelText("Git added: added.ts")).toHaveTextContent("A");
+    expect(screen.getByLabelText("Git untracked: untracked.ts")).toHaveTextContent("?");
+    expect(screen.getByLabelText("Git renamed: renamed.ts")).toHaveTextContent("R");
+    const conflict = screen.getByLabelText("Git conflict: conflicted.ts");
+    expect(conflict).toHaveTextContent("U");
+    expect(conflict).toHaveAttribute("data-git-state", "conflicted");
+    expect(screen.getByLabelText("Folder contains 1 Git changes")).toHaveTextContent("Δ");
+    expect(
+      screen.getByLabelText("Folder contains 1 Git changes, including deleted files"),
+    ).toHaveTextContent("Δ");
+    expect(screen.getByText("src").closest("button")).toHaveAttribute("aria-expanded", "false");
+    expect(fetchGitStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("dims ignored files semantically without removing their interaction", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([gitChange("ignored.log", "!")]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "ignored.log",
+          path: "ignored.log",
+          kind: "file",
+          extension: "log",
+        },
+      ],
+    });
+    const onOpenFile = vi.fn();
+
+    render(<FilesWidget root="/repo" openFilesDirectly onOpenFile={onOpenFile} />);
+
+    const row = await screen.findByRole("treeitem", { name: "ignored.log, Ignored by Git" });
+    expect(row.closest("[data-git-ignored='true']")).toHaveStyle({ opacity: "0.55" });
+    expect(screen.queryByLabelText(/Git changed: ignored\.log/iu)).toBeNull();
+    await userEvent.click(row);
+    expect(onOpenFile).toHaveBeenCalledWith("/repo", "ignored.log");
+  });
+
+  it("leaves ordinary rows undecorated when ignored entries are not requested by the response", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(availableGitStatus([]));
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "ordinary.ts", path: "ordinary.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    const row = await screen.findByRole("treeitem", { name: /ordinary\.ts/iu });
+    expect(row).not.toHaveAttribute("aria-label");
+    expect(row.closest(".tr-file-wrap")).not.toHaveAttribute("data-git-ignored");
+    expect(row.closest(".tr-file-wrap")).not.toHaveAttribute("style");
+  });
+
+  it("renders an honest incomplete affordance for truncated Git status", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([gitChange("visible.ts", "M")], {
+        truncated: true,
+        maxChanges: 500,
+      }),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "visible.ts", path: "visible.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(
+      await screen.findByText("Git decorations incomplete: showing only the first 500 changes."),
+    ).toBeInTheDocument();
   });
 
   it("opens the previewed file in the editor on demand", async () => {
@@ -754,6 +924,7 @@ describe("FilesWidget", () => {
     expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
     expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
     onActiveFileChange.mockClear();
+    const gitStatusCallsBeforeRefresh = vi.mocked(fetchGitStatus).mock.calls.length;
 
     await userEvent.click(screen.getByRole("button", { name: "Refresh folder" }));
 
@@ -766,6 +937,9 @@ describe("FilesWidget", () => {
       "/resolved-repo/src",
     );
     expect(onActiveFileChange).not.toHaveBeenCalledWith(null, "/resolved-repo", null);
+    await waitFor(() =>
+      expect(fetchGitStatus).toHaveBeenCalledTimes(gitStatusCallsBeforeRefresh + 1),
+    );
   });
 
   it("expands a folder from the caret without changing the chat-visible folder scope", async () => {
@@ -1504,6 +1678,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     fireEvent.contextMenu(await screen.findByText("app.ts"));
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
     const input = await screen.findByLabelText("Rename app.ts");
@@ -1521,6 +1696,7 @@ describe("FilesWidget file operations", () => {
       op: "rename",
       mutation: expect.objectContaining({ path: "renamed.ts", previousPath: "app.ts" }),
     });
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   it("deletes a file from the context menu after confirmation", async () => {

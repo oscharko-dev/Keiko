@@ -889,6 +889,7 @@ export const EN_MESSAGES = {
   "relationships.health.show": "Graph health",
   "relationships.create.aria": "Create new relationship",
   "relationships.create.button": "+ New relationship",
+  // Epic #2093 source-control copy is intentionally feature-local so the editor remains lazy.
   // Issue #2150: Workspace.tsx/WindowFrame.tsx changed but added no new
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to

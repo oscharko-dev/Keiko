@@ -20,6 +20,8 @@ import {
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
   fetchGitDiff,
+  fetchGitStructuredDiff,
+  fetchGitBlame,
   fetchGitHistory,
   fetchGitRemotes,
   fetchGitSummary,
@@ -1425,6 +1427,75 @@ describe("files API helpers", () => {
       code: "CONTRACT_VALIDATION_FAILED",
       status: 502,
     });
+  });
+
+  it("encodes structured diff, blame, and optional ignored-status reads", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          scope: "staged",
+          files: [],
+          truncated: false,
+          totalFiles: 0,
+          totalBytes: 0,
+          maxBytes: 524288,
+          maxFiles: 400,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          path: "src/a.ts",
+          startLine: 1,
+          lines: [],
+          truncated: false,
+          totalLines: 0,
+          totalBytes: 0,
+          maxBytes: 262144,
+          maxLines: 2000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          clean: true,
+          stagedCount: 0,
+          unstagedCount: 0,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          changes: [],
+          truncated: false,
+          maxChanges: 500,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitStructuredDiff({ root: "/repo space", path: "src/a.ts", scope: "staged" });
+    await fetchGitBlame({ root: "/repo space", path: "src/a.ts", startLine: 1, maxLines: 20 });
+    await fetchGitStatus("/repo space", { includeIgnored: true });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git/diff/structured?root=%2Frepo+space&scope=staged&path=src%2Fa.ts",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git/blame?root=%2Frepo+space&path=src%2Fa.ts&startLine=1&maxLines=20",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/git/status?root=%2Frepo+space&includeIgnored=true",
+      expect.any(Object),
+    );
   });
 
   it("encodes Git summary, history, and remotes requests", async () => {

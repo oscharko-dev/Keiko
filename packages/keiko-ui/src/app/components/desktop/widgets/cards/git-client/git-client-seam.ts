@@ -32,6 +32,7 @@ import {
   fetchGitDeliveryStage,
   fetchGitDeliveryUnstage,
   fetchGitDiff,
+  fetchGitStructuredDiff,
   fetchGitHistory,
   fetchGitRemotes,
   fetchGitSummary,
@@ -62,6 +63,7 @@ export interface GitClientSeam {
   readonly getRemotes: typeof fetchGitRemotes;
   readonly getStatus: typeof fetchGitStatus;
   readonly getDiff: typeof fetchGitDiff;
+  readonly getStructuredDiff: typeof fetchGitStructuredDiff;
   // Carry-forward mutation refs (consumed by #1575/#1576/#1577, not by the shell).
   readonly branchCreate: typeof fetchGitDeliveryLocalBranchCreate;
   readonly branchSwitch: typeof fetchGitDeliveryLocalBranchSwitch;
@@ -89,6 +91,7 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   getRemotes: fetchGitRemotes,
   getStatus: fetchGitStatus,
   getDiff: fetchGitDiff,
+  getStructuredDiff: fetchGitStructuredDiff,
   branchCreate: fetchGitDeliveryLocalBranchCreate,
   branchSwitch: fetchGitDeliveryLocalBranchSwitch,
   stage: fetchGitDeliveryStage,
