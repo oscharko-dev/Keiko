@@ -90,6 +90,10 @@ export const DE_MESSAGES = {
   "codingWorkbench.runtime.gatewayApiKeyDetail": "API-Schlüssel über Keiko Gateway geroutet",
   "codingWorkbench.runtime.codexDetail":
     "Das Subscription-Profil läuft über den Codex-Runtime-Adapter",
+  "codingWorkbench.runtime.codexUnavailableDetail":
+    "Codex-Abonnements werden in dieser Version nicht unterstützt.",
+  "codingWorkbench.runtime.codexUnavailableAnnouncement":
+    "ChatGPT/Codex-Abonnementprofil ist in dieser Version nicht verfügbar",
   "newWindow.chat.title": "Neues Chatfenster",
   "newWindow.chat.description": "Mit Keiko sprechen",
   "newWindow.chat.fieldTitle": "Titel",

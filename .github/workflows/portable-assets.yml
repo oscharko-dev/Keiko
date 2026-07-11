@@ -91,21 +91,25 @@ jobs:
         with:
           node-version: "22.x"
           package-manager-cache: false
-      - name: Ensure zip/unzip are available for staging
+      - name: Verify preinstalled 7z capability for staging
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # The stage script extracts the Node .zip runtime with `unzip` and builds the portable
-          # archive with `zip` (Info-ZIP). Neither is on the Windows runner by default; Chocolatey
-          # is preinstalled, so install both before staging.
-          if (-not (Get-Command unzip -ErrorAction SilentlyContinue)) {
-            choco install unzip --no-progress -y
+          # Official Windows runners provide 7-Zip. Staging must use that preinstalled tool and
+          # must never install, download, or globally mutate archive tooling.
+          $command = Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue
+          if ($null -eq $command) {
+            throw "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling."
           }
-          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
-            choco install zip --no-progress -y
+
+          $versionOutput = @(& $command.Path i 2>&1)
+          $versionExitCode = $LASTEXITCODE
+          $versionEvidence = @($versionOutput | Select-Object -First 6)
+          if ($versionExitCode -ne 0 -or $versionEvidence.Count -eq 0) {
+            throw "Required preinstalled Windows staging tool '7z' did not provide version evidence."
           }
-          unzip -v | Select-Object -First 1
-          zip -v | Select-Object -First 2
+
+          $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
       - name: Configure MSVC environment for the native launcher
         if: runner.os == 'Windows'
         shell: cmd
@@ -155,17 +159,24 @@ jobs:
         with:
           node-version: "22.x"
           package-manager-cache: false
-      - name: Ensure zip/unzip are available for staging
+      - name: Verify preinstalled 7z capability for staging
         shell: pwsh
         run: |
-          if (-not (Get-Command unzip -ErrorAction SilentlyContinue)) {
-            choco install unzip --no-progress -y
+          # Production signing must use the preinstalled runner tools. A missing archive tool
+          # blocks the job before dependencies, staging, OIDC login, or signing can proceed.
+          $command = Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue
+          if ($null -eq $command) {
+            throw "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling."
           }
-          if (-not (Get-Command zip -ErrorAction SilentlyContinue)) {
-            choco install zip --no-progress -y
+
+          $versionOutput = @(& $command.Path i 2>&1)
+          $versionExitCode = $LASTEXITCODE
+          $versionEvidence = @($versionOutput | Select-Object -First 6)
+          if ($versionExitCode -ne 0 -or $versionEvidence.Count -eq 0) {
+            throw "Required preinstalled Windows staging tool '7z' did not provide version evidence."
           }
-          unzip -v | Select-Object -First 1
-          zip -v | Select-Object -First 2
+
+          $versionEvidence | ForEach-Object { Write-Host "Windows staging capability: $_" }
       - name: Configure MSVC environment for the native launcher
         shell: cmd
         run: |

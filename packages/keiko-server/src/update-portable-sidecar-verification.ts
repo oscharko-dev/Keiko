@@ -15,11 +15,56 @@ export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
   readonly payloadRootPath: string;
   readonly executablePath: string;
+  readonly shippedExecutableSha256: string;
+  readonly executableTreeSha256: string;
   readonly licenseEvidencePath: string;
   readonly licenseEvidenceSha256: string;
   readonly sbomEvidencePath: string;
   readonly sbomEvidenceSha256: string;
+  /**
+   * Server-owned provenance facts. This projection is intentionally content-free and is the
+   * only portable-runtime evidence a launch path may consume.
+   */
+  readonly availability: PortableSidecarAvailabilityEvidence;
 }
+
+export type PortableSidecarAvailabilityReason =
+  | "platform-unsupported"
+  | "redistribution-unapproved"
+  | "payload-missing"
+  | "archive-digest-mismatch"
+  | "executable-tree-digest-mismatch"
+  | "runtime-version-mismatch"
+  | "protocol-schema-mismatch"
+  | "signature-unverified"
+  | "qualification-missing";
+
+export interface PortableSidecarAvailabilityEvidence {
+  readonly redistributionApproved: boolean;
+  readonly payloadPresent: boolean;
+  readonly archiveDigestVerified: boolean;
+  readonly executableTreeDigestVerified: boolean;
+  readonly runtimeVersionVerified: boolean;
+  readonly protocolSchemaVerified: boolean;
+  readonly signatureVerified: boolean;
+  readonly qualificationVerified: boolean;
+}
+
+export interface PortableSidecarAvailabilityInput {
+  readonly target: UpdatePortableTarget;
+  readonly redistributionApproved?: boolean | undefined;
+  readonly payloadPresent?: boolean | undefined;
+  readonly archiveDigestVerified?: boolean | undefined;
+  readonly executableTreeDigestVerified?: boolean | undefined;
+  readonly runtimeVersionVerified?: boolean | undefined;
+  readonly protocolSchemaVerified?: boolean | undefined;
+  readonly signatureVerified?: boolean | undefined;
+  readonly qualificationVerified?: boolean | undefined;
+}
+
+export type PortableSidecarAvailability =
+  | { readonly available: true }
+  | { readonly available: false; readonly reason: PortableSidecarAvailabilityReason };
 
 export interface PortableSidecarManifestVerification {
   readonly sidecars: readonly PortableSidecarRuntimeVerification[];
@@ -48,6 +93,90 @@ export class PortableSidecarVerificationError extends Error {
 
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
+const OPENCODE_VERSION = "1.17.17";
+const OPENCODE_COMMIT = "474abdd7ee60f4b67476cfcef7e5311beff4a824";
+const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const SIGNING_KEYS = [
+  "notarizationRequired",
+  "notarizationVerified",
+  "shippedExecutableSha256",
+  "shippedExecutableTreeAlgorithm",
+  "shippedExecutableTreeSha256",
+  "signatureKind",
+  "signatureVerified",
+  "verificationChecks",
+  "verificationPolicy",
+  "verificationReasonCodes",
+  "verificationStatus",
+] as const;
+
+/**
+ * Evaluates the closed pre-spawn order from #2253. Missing evidence is always false: callers
+ * cannot convert an absent portable proof into a global-install fallback.
+ */
+export function evaluatePortableSidecarAvailability(
+  sidecar: PortableSidecarRuntimeVerification,
+  input: PortableSidecarAvailabilityInput,
+): PortableSidecarAvailability {
+  const evidence = sidecar.availability;
+  if (sidecar.summary.platformTarget !== input.target) return unavailable("platform-unsupported");
+  const failed = availabilityChecks(evidence, input).find((check) => !check.verified);
+  return failed === undefined ? { available: true } : unavailable(failed.reason);
+}
+
+function availabilityChecks(
+  evidence: PortableSidecarAvailabilityEvidence,
+  input: PortableSidecarAvailabilityInput,
+): readonly {
+  readonly reason: Exclude<PortableSidecarAvailabilityReason, "platform-unsupported">;
+  readonly verified: boolean;
+}[] {
+  return [
+    {
+      reason: "redistribution-unapproved",
+      verified: remainsVerified(evidence.redistributionApproved, input.redistributionApproved),
+    },
+    {
+      reason: "payload-missing",
+      verified: remainsVerified(evidence.payloadPresent, input.payloadPresent),
+    },
+    {
+      reason: "archive-digest-mismatch",
+      verified: remainsVerified(evidence.archiveDigestVerified, input.archiveDigestVerified),
+    },
+    {
+      reason: "executable-tree-digest-mismatch",
+      verified: remainsVerified(
+        evidence.executableTreeDigestVerified,
+        input.executableTreeDigestVerified,
+      ),
+    },
+    {
+      reason: "runtime-version-mismatch",
+      verified: remainsVerified(evidence.runtimeVersionVerified, input.runtimeVersionVerified),
+    },
+    {
+      reason: "protocol-schema-mismatch",
+      verified: remainsVerified(evidence.protocolSchemaVerified, input.protocolSchemaVerified),
+    },
+    {
+      reason: "signature-unverified",
+      verified: remainsVerified(evidence.signatureVerified, input.signatureVerified),
+    },
+    {
+      reason: "qualification-missing",
+      verified: remainsVerified(evidence.qualificationVerified, input.qualificationVerified),
+    },
+  ];
+}
+
+function remainsVerified(stored: boolean, requested: boolean | undefined): boolean {
+  return stored && requested !== false;
+}
+
+function unavailable(reason: PortableSidecarAvailabilityReason): PortableSidecarAvailability {
+  return { available: false, reason };
+}
 
 function fail(
   code: UpdatePortableSidecarFailureCode,
@@ -124,6 +253,8 @@ function signingVerified(
   signing: Record<string, unknown> | undefined,
   target: UpdatePortableTarget,
 ): boolean {
+  if (signing === undefined) return false;
+  if (!signingKeysExact(signing)) return false;
   const checks = recordAt(signing, "verificationChecks");
   const macos = target !== "windows-x64";
   return (
@@ -133,8 +264,59 @@ function signingVerified(
     fieldEquals(signing, "signatureVerified", true) &&
     fieldEquals(signing, "notarizationRequired", macos) &&
     fieldEquals(signing, "notarizationVerified", macos) &&
+    shippedExecutableEvidenceVerified(signing) &&
     targetChecksVerified(target, checks)
   );
+}
+
+function signingKeysExact(signing: Record<string, unknown> | undefined): boolean {
+  return (
+    signing !== undefined &&
+    JSON.stringify(Object.keys(signing).sort()) === JSON.stringify(SIGNING_KEYS)
+  );
+}
+
+function shippedExecutableEvidenceVerified(signing: Record<string, unknown>): boolean {
+  return (
+    digestFieldRequired(signing, "shippedExecutableSha256") !== undefined &&
+    fieldEquals(signing, "shippedExecutableTreeAlgorithm", "keiko-directory-tree-sha256-v1") &&
+    digestFieldRequired(signing, "shippedExecutableTreeSha256") !== undefined
+  );
+}
+
+function portableProvenanceVerified(
+  runtime: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): boolean {
+  const upstream = recordAt(runtime, "upstream");
+  const adapter = recordAt(runtime, "adapterCompatibility");
+  const schema = recordAt(runtime, "protocolSchema");
+  const approval = recordAt(recordAt(runtime, "releaseApproval"), "redistribution");
+  const archive = recordAt(runtime, "archive");
+  return [
+    runtime.approvalSchemaVersion === 2,
+    runtime.kind === "coding-runtime",
+    fieldEquals(upstream, "owner", "anomalyco"),
+    fieldEquals(upstream, "repository", "opencode"),
+    fieldEquals(upstream, "name", "opencode"),
+    fieldEquals(upstream, "version", OPENCODE_VERSION),
+    fieldEquals(upstream, "tag", `v${OPENCODE_VERSION}`),
+    fieldEquals(upstream, "commit", OPENCODE_COMMIT),
+    fieldEquals(adapter, "adapterName", "keiko-coding-sidecar"),
+    fieldEquals(adapter, "adapterVersion", "1"),
+    fieldEquals(adapter, "transport", "http-sse"),
+    fieldEquals(schema, "path", "packages/sdk/openapi.json"),
+    fieldEquals(schema, "sha256", OPENCODE_SCHEMA_SHA256),
+    fieldEquals(schema, "hashAlgorithm", "sha256"),
+    fieldEquals(schema, "hashEncoding", "lowercase-hex"),
+    fieldEquals(schema, "digestInput", "upstream-raw-bytes"),
+    fieldEquals(schema, "transport", "http-sse"),
+    fieldEquals(approval, "status", "approved"),
+    fieldEquals(runtime, "executableTreeAlgorithm", "keiko-directory-tree-sha256-v1"),
+    digestField(runtime, "executableTreeSha256") !== undefined,
+    fieldEquals(archive, "platformTarget", target),
+    digestField(archive, "sha256") !== undefined,
+  ].every(Boolean);
 }
 
 function parseEvidence(
@@ -162,7 +344,7 @@ function baseSummary(
   const upstreamVersion = stringField(upstream, "version");
   const adapterName = stringField(adapter, "adapterName");
   const adapterVersion = stringField(adapter, "adapterVersion");
-  const protocolVersion = stringField(adapter, "protocolVersion");
+  const protocolVersion = stringField(adapter, "transport");
   if (
     name === undefined ||
     kind === undefined ||
@@ -222,6 +404,22 @@ function parsePayload(runtime: Record<string, unknown>, name: string): ParsedSid
   return { payloadRootPath, payloadSha256, sizeBytes, executablePath };
 }
 
+function requiredShippedExecutableDigests(
+  runtime: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): { readonly sha256: string; readonly treeSha256: string } {
+  const signing = recordAt(runtime, "signing");
+  if (signing === undefined || !signingVerified(signing, target)) {
+    fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
+  }
+  const sha256 = digestFieldRequired(signing, "shippedExecutableSha256");
+  const treeSha256 = digestFieldRequired(signing, "shippedExecutableTreeSha256");
+  if (sha256 === undefined || treeSha256 === undefined) {
+    fail("sidecar-metadata-malformed", "sidecar shipped executable tree digest is invalid");
+  }
+  return { sha256, treeSha256 };
+}
+
 function requiredEvidence(
   runtime: Record<string, unknown>,
   key: "licenseEvidence" | "sbomEvidence",
@@ -242,33 +440,62 @@ function parseNamedRuntime(
   if (runtime.platformTarget !== target)
     fail("sidecar-platform-mismatch", "sidecar target mismatch");
   const payload = parsePayload(runtime, name);
-  const license = requiredEvidence(
-    runtime,
-    "licenseEvidence",
-    payload.payloadRootPath,
-    "sidecar-license-evidence-incomplete",
-    "sidecar license evidence is incomplete",
-  );
-  const sbom = requiredEvidence(
-    runtime,
-    "sbomEvidence",
-    payload.payloadRootPath,
-    "sidecar-sbom-evidence-incomplete",
-    "sidecar SBOM is incomplete",
-  );
-  if (!signingVerified(recordAt(runtime, "signing"), target)) {
-    fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
+  if (!portableProvenanceVerified(runtime, target)) {
+    fail("sidecar-metadata-malformed", "sidecar portable provenance is incomplete");
   }
+  const executableTreeSha256 = digestField(runtime, "executableTreeSha256");
+  if (executableTreeSha256 === undefined) {
+    fail("sidecar-metadata-malformed", "sidecar executable tree digest is invalid");
+  }
+  const evidence = requiredRuntimeEvidence(runtime, payload.payloadRootPath);
+  const shipped = requiredShippedExecutableDigests(runtime, target);
   const summary = baseSummary(runtime, target, payload.payloadSha256, payload.sizeBytes);
   if (summary === undefined) fail("sidecar-metadata-malformed", "sidecar metadata is incomplete");
   return {
     summary,
     payloadRootPath: payload.payloadRootPath,
     executablePath: payload.executablePath,
-    licenseEvidencePath: license.path,
-    licenseEvidenceSha256: license.sha256,
-    sbomEvidencePath: sbom.path,
-    sbomEvidenceSha256: sbom.sha256,
+    shippedExecutableSha256: shipped.sha256,
+    executableTreeSha256: shipped.treeSha256,
+    licenseEvidencePath: evidence.license.path,
+    licenseEvidenceSha256: evidence.license.sha256,
+    sbomEvidencePath: evidence.sbom.path,
+    sbomEvidenceSha256: evidence.sbom.sha256,
+    availability: {
+      redistributionApproved: true,
+      payloadPresent: true,
+      archiveDigestVerified: true,
+      executableTreeDigestVerified: true,
+      runtimeVersionVerified: true,
+      protocolSchemaVerified: true,
+      signatureVerified: true,
+      qualificationVerified: true,
+    },
+  };
+}
+
+function requiredRuntimeEvidence(
+  runtime: Record<string, unknown>,
+  payloadRootPath: string,
+): {
+  readonly license: { readonly path: string; readonly sha256: string };
+  readonly sbom: { readonly path: string; readonly sha256: string };
+} {
+  return {
+    license: requiredEvidence(
+      runtime,
+      "licenseEvidence",
+      payloadRootPath,
+      "sidecar-license-evidence-incomplete",
+      "sidecar license evidence is incomplete",
+    ),
+    sbom: requiredEvidence(
+      runtime,
+      "sbomEvidence",
+      payloadRootPath,
+      "sidecar-sbom-evidence-incomplete",
+      "sidecar SBOM is incomplete",
+    ),
   };
 }
 

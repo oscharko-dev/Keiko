@@ -712,7 +712,7 @@ describe("CodingRuntimeAuthorityService", () => {
     authority.revoke(minted.authorityRef.runId, NOW);
     expect(resolve(authority, minted.authorityRef)).toEqual({
       ok: false,
-      reason: "authority-resolution-failed",
+      reason: "revoked",
     });
     expect(mint(authority, { ...intent, requestId: "request-2" })).toMatchObject({ ok: false });
     expect(authority.transition("run-1", "idle", NOW)).toBe(false);
@@ -742,7 +742,7 @@ describe("CodingRuntimeAuthorityService", () => {
 
   it("revokes authority, run capabilities, and run approvals before terminal lifecycle confirmation", () => {
     const approvals = createInMemorySupervisedCodingApprovalStore();
-    const capabilities = createInMemoryRuntimeCapabilityStore();
+    const capabilities = createInMemoryRuntimeCapabilityStore({ nowMs: () => 1 });
     const authority = new CodingRuntimeAuthorityService(
       new EditorAgentAuthorityRegistry(),
       () => "run-1",

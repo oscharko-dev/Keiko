@@ -23,7 +23,8 @@ export type CodingWorkbenchCodexAuthStatus =
   | "revoked"
   | "disabled-by-deployment"
   | "unsupported-headless"
-  | "failed-login";
+  | "failed-login"
+  | "redistribution-unapproved";
 
 export const CODING_WORKBENCH_CODEX_AUTH_STATUSES: readonly CodingWorkbenchCodexAuthStatus[] =
   Object.freeze([
@@ -34,6 +35,7 @@ export const CODING_WORKBENCH_CODEX_AUTH_STATUSES: readonly CodingWorkbenchCodex
     "disabled-by-deployment",
     "unsupported-headless",
     "failed-login",
+    "redistribution-unapproved",
   ] as const satisfies readonly CodingWorkbenchCodexAuthStatus[]);
 
 export type CodingWorkbenchCodexCredentialStore = "file" | "keyring" | "auto";
@@ -51,13 +53,11 @@ export type CodingWorkbenchCodexAuthStateRoot = "keiko-codex-runtime-state" | "o
 export const CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS: readonly CodingWorkbenchCodexAuthStateRoot[] =
   Object.freeze(["keiko-codex-runtime-state", "os-credential-store"] as const);
 
-export type CodingWorkbenchCodexRuntimeBinarySource =
-  "managed-sidecar-runtime" | "policy-allowed-local-install";
+export type CodingWorkbenchCodexRuntimeBinarySource = "managed-sidecar-runtime";
 
 export const CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES: readonly CodingWorkbenchCodexRuntimeBinarySource[] =
   Object.freeze([
     "managed-sidecar-runtime",
-    "policy-allowed-local-install",
   ] as const satisfies readonly CodingWorkbenchCodexRuntimeBinarySource[]);
 
 export type CodingWorkbenchCodexAuthCommandLabel =
@@ -223,7 +223,7 @@ function validateProfileSafeFields(record: Record<string, unknown>, errors: stri
     CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
     "profile.runtimeBinarySources",
     errors,
-    true,
+    false,
   );
 }
 
@@ -237,6 +237,18 @@ function validateProfileBooleans(record: Record<string, unknown>, errors: string
     "headless",
   ].forEach((key) => {
     validateBooleanField(record, key, "profile", errors);
+  });
+}
+
+function validateUnapprovedProfile(record: Record<string, unknown>, errors: string[]): void {
+  if (record.status !== "redistribution-unapproved") return;
+  if (Array.isArray(record.runtimeBinarySources) && record.runtimeBinarySources.length > 0) {
+    errors.push("profile.runtimeBinarySources must be empty when redistribution is unapproved");
+  }
+  ["supportsBrowserLogin", "supportsDeviceCode", "supportsAccessToken"].forEach((key) => {
+    if (record[key] !== false) {
+      errors.push(`${key} must be false when redistribution is unapproved`);
+    }
   });
 }
 
@@ -270,6 +282,7 @@ export function validateCodingWorkbenchCodexSubscriptionProfile(
   validateProfileEnums(value, errors);
   validateProfileSafeFields(value, errors);
   validateProfileBooleans(value, errors);
+  validateUnapprovedProfile(value, errors);
   return errors.length > 0
     ? { ok: false, errors }
     : { ok: true, value: value as unknown as CodingWorkbenchCodexSubscriptionProfile };
@@ -371,7 +384,7 @@ export function selectCodingWorkbenchRuntimeProfile(
     runtimeSource: codex ? "codex-cli-adapter" : "keiko-sidecar",
     adapterKind: codex ? "codex-cli-adapter" : "model-gateway-sidecar",
     sidecarGatewayAllowed: !codex,
-    codexSubscriptionAllowed: codex,
-    runtimeBinarySources: codex ? CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES : [],
+    codexSubscriptionAllowed: false,
+    runtimeBinarySources: [],
   };
 }

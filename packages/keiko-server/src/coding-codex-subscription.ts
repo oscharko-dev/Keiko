@@ -89,9 +89,10 @@ function stateRootForStore(
 
 export function codexSubscriptionProfileForEnv(
   env: EnvSource,
+  runtimeApprovedVerified = false,
 ): CodingWorkbenchCodexSubscriptionProfile {
   const credentialStore = credentialStoreForEnv(env);
-  const status = authStatusForEnv(env);
+  const status = runtimeApprovedVerified ? authStatusForEnv(env) : "redistribution-unapproved";
   const headless = isHeadless(env);
   const authMethod = authMethodForStatus(status, env);
   return {
@@ -105,10 +106,10 @@ export function codexSubscriptionProfileForEnv(
     stateScope: stateScopeForStore(credentialStore),
     stateRoot: stateRootForStore(credentialStore),
     usesGlobalCodexHome: false,
-    runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
-    supportsBrowserLogin: !headless,
-    supportsDeviceCode: true,
-    supportsAccessToken: true,
+    runtimeBinarySources: runtimeApprovedVerified ? ["managed-sidecar-runtime"] : [],
+    supportsBrowserLogin: runtimeApprovedVerified && !headless,
+    supportsDeviceCode: runtimeApprovedVerified,
+    supportsAccessToken: runtimeApprovedVerified,
     deploymentPolicyDisabled: status === "disabled-by-deployment",
     headless,
   };
@@ -186,11 +187,28 @@ function blockedSetup(message: string): RouteResult {
   };
 }
 
+function redistributionUnapproved(): RouteResult {
+  return {
+    status: 409,
+    body: {
+      ...errorBody("CODEX_SUBSCRIPTION_UNAVAILABLE", "Codex runtime is unavailable."),
+      status: "redistribution-unapproved",
+      reasonCode: "redistribution-unapproved",
+      codexSubscriptionAllowed: false,
+      runtimeBinarySources: [],
+      setupMethods: [],
+    },
+  };
+}
+
 export function handleCodingCodexSubscriptionProfile(
   _ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
-  const profile = codexSubscriptionProfileForEnv(deps.env);
+  const profile = codexSubscriptionProfileForEnv(
+    deps.env,
+    deps.codexRuntimeAvailability?.isApprovedVerified() === true,
+  );
   const parsed = validateCodingWorkbenchCodexSubscriptionProfile(profile);
   return {
     status: parsed.ok ? 200 : 500,
@@ -207,6 +225,9 @@ export async function handleCodingCodexSubscriptionSetup(
   try {
     const parsed = validateCodingWorkbenchCodexAuthSetupRequest(await readJson(ctx.req));
     if (!parsed.ok) return invalidSetupRequest();
+    if (deps.codexRuntimeAvailability?.isApprovedVerified() !== true) {
+      return redistributionUnapproved();
+    }
     if (envFlagEnabled(deps.env, SUBSCRIPTION_DISABLED_ENV)) {
       return blockedSetup("Codex subscription login is disabled by deployment policy.");
     }

@@ -115,6 +115,7 @@ export function codexStatusLabel(status: string): string {
   if (status === "connected") return "Connected";
   if (status === "loading") return "Checking";
   if (status === "unavailable") return "Profile unavailable";
+  if (status === "redistribution-unapproved") return "Unavailable in this release";
   if (status === "disabled-by-deployment") return "Disabled by deployment";
   if (status === "unsupported-headless") return "Unavailable headless";
   return "Needs setup";

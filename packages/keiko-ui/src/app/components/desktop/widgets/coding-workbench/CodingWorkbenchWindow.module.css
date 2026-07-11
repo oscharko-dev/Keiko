@@ -1,9 +1,11 @@
 .shell {
   display: flex;
   min-height: 100%;
+  min-width: 0;
   flex-direction: column;
   gap: var(--space-6);
   padding: var(--space-7);
+  container-type: inline-size;
   color: var(--text-primary);
   background:
     radial-gradient(
@@ -328,7 +330,7 @@
   font-weight: var(--weight-semibold);
 }
 
-@media (max-width: 820px) {
+@container (max-width: 820px) {
   .header,
   .grid,
   .modeGrid,

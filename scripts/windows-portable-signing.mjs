@@ -24,7 +24,8 @@ import {
   portablePayloadRelativePath as portablePath,
   validatePortableCandidateManifest,
 } from "./portable-runtime.mjs";
-import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
+import { rebindExistingSignedArchive, rebindSignedPayload } from "./portable-signed-archive.mjs";
+import { createPortableZipAdapter } from "./stage-portable-runtime.mjs";
 import {
   assertWindowsProductionVerificationInput,
   WindowsVerificationInputError,
@@ -272,12 +273,26 @@ function run(command, args, cwd, { surfaceOutputOnFailure = false } = {}) {
   }
 }
 
-export async function rebindPortableSignedArchive(stageRoot, manifest) {
+function windowsZipAdapter() {
+  return createPortableZipAdapter("win32", (command, args, options = {}) => {
+    run(command, args, options.cwd);
+    return { stdout: "" };
+  });
+}
+
+export async function rebindPortableSignedArchive(
+  stageRoot,
+  manifest,
+  archiveAdapter = windowsZipAdapter(),
+) {
   const payloadContainer = join(stageRoot, "payload");
   const archivePath = join(stageRoot, manifest.artifact.assetName);
+  rebindSignedPayload(stageRoot, manifest, WINDOWS_TARGET);
   rmSync(archivePath, { force: true });
-  run("zip", ["-qr", archivePath, "Keiko"], payloadContainer);
-  await rebindExistingSignedArchive(stageRoot, manifest, archivePath, WINDOWS_TARGET);
+  archiveAdapter.create(payloadContainer, "Keiko", archivePath);
+  await rebindExistingSignedArchive(stageRoot, manifest, archivePath, WINDOWS_TARGET, {
+    payloadAlreadyRebound: true,
+  });
 }
 
 async function finalizeCommand(options) {

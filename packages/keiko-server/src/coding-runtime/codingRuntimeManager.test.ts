@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,11 +59,17 @@ type TestCodingRuntimeManagerDeps = Omit<
   >;
 
 function createTestCodingRuntimeManager(deps: TestCodingRuntimeManagerDeps): CodingRuntimeManager {
+  const portable = createPortableRuntimeFixture();
   return createProductionCodingRuntimeManager({
     revokeRuntime: (): true => true,
     abortInFlightActions: (): true => true,
     markRuntimeRecoveryRequired: (): true => true,
     releaseRuntimeAfterReap: (): true => true,
+    portableRuntimeResolver: () => ({
+      verification: portable.verification,
+      resourceRoot: portable.resourceRoot,
+      target: "windows-x64",
+    }),
     ...deps,
   });
 }
@@ -319,6 +326,68 @@ function createManagedFixture(): {
   return { workspaceRoot, managedRoot, executablePath: executable(managedRoot) };
 }
 
+function digest(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function createPortableRuntimeFixture(): {
+  readonly resourceRoot: string;
+  readonly executablePath: string;
+  readonly verification: PortableSidecarRuntimeVerification;
+} {
+  const resourceRoot = tempDir("keiko-runtime-resource-");
+  const payloadRootPath = "runtime/sidecars/opencode-compatible";
+  const payloadRoot = join(resourceRoot, payloadRootPath);
+  const executablePath = executable(payloadRoot, "opencode-sidecar");
+  writeFileSync(join(payloadRoot, "LICENSE"), "approved license\n");
+  writeFileSync(join(payloadRoot, "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
+  const executableDigest = digest("#!/bin/sh\n");
+  const licenseDigest = digest("approved license\n");
+  const sbomDigest = digest('{"bomFormat":"CycloneDX"}\n');
+  const executableTreeSha256 = digest(`opencode-sidecar\0${executableDigest}\0`);
+  const payloadSha256 = digest(
+    `LICENSE\0${licenseDigest}\0opencode-sidecar\0${executableDigest}\0sbom.cdx.json\0${sbomDigest}\0`,
+  );
+  return {
+    resourceRoot,
+    executablePath,
+    verification: {
+      payloadRootPath,
+      executablePath: `${payloadRootPath}/opencode-sidecar`,
+      shippedExecutableSha256: executableDigest,
+      executableTreeSha256,
+      licenseEvidencePath: `${payloadRootPath}/LICENSE`,
+      licenseEvidenceSha256: licenseDigest,
+      sbomEvidencePath: `${payloadRootPath}/sbom.cdx.json`,
+      sbomEvidenceSha256: sbomDigest,
+      availability: {
+        redistributionApproved: true,
+        payloadPresent: true,
+        archiveDigestVerified: true,
+        executableTreeDigestVerified: true,
+        runtimeVersionVerified: true,
+        protocolSchemaVerified: true,
+        signatureVerified: true,
+        qualificationVerified: true,
+      },
+      summary: {
+        name: "opencode-compatible",
+        kind: "coding-runtime",
+        upstreamName: "opencode",
+        upstreamVersion: "1.17.17",
+        adapterName: "keiko-coding-sidecar",
+        adapterVersion: "1",
+        protocolVersion: "http-sse",
+        platformTarget: "windows-x64",
+        payloadSha256,
+        payloadSha256Prefix: payloadSha256.slice(0, 12),
+        sizeBytes: 1,
+        status: "verified",
+      },
+    },
+  };
+}
+
 function createSpawnHarness(): {
   readonly spawn: CodingRuntimeSpawnFn;
   readonly children: FakeChild[];
@@ -416,10 +485,22 @@ describe("coding runtime manager", () => {
     const sidecar: PortableSidecarRuntimeVerification = {
       payloadRootPath: "runtime/sidecars/opencode-adapter",
       executablePath: "runtime/sidecars/opencode-adapter/opencode-sidecar",
+      shippedExecutableSha256: "e".repeat(64),
+      executableTreeSha256: "d".repeat(64),
       licenseEvidencePath: "runtime/sidecars/opencode-adapter/LICENSE.evidence.json",
       licenseEvidenceSha256: "a".repeat(64),
       sbomEvidencePath: "runtime/sidecars/opencode-adapter/sbom.evidence.json",
       sbomEvidenceSha256: "b".repeat(64),
+      availability: {
+        redistributionApproved: true,
+        payloadPresent: true,
+        archiveDigestVerified: true,
+        executableTreeDigestVerified: true,
+        runtimeVersionVerified: true,
+        protocolSchemaVerified: true,
+        signatureVerified: true,
+        qualificationVerified: true,
+      },
       summary: {
         name: "opencode-adapter",
         kind: "opencode-compatible",
@@ -436,7 +517,10 @@ describe("coding runtime manager", () => {
       },
     };
 
-    const result = resolveCodingRuntimeSidecarLaunchTarget(managedInstallRoot, sidecar);
+    const result = resolveCodingRuntimeSidecarLaunchTarget(managedInstallRoot, sidecar, {
+      target: "macos-arm64",
+      qualificationVerified: true,
+    });
 
     expect(result).toEqual({
       ok: true,
@@ -449,7 +533,23 @@ describe("coding runtime manager", () => {
     });
   });
 
-  it("refuses an executable that is not inside the managed sidecar root", () => {
+  it("blocks every sidecar request before supervisor spawn until #2256 provides server-owned provenance", () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      portableRuntimeResolver: undefined,
+    });
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({ ok: false, failureCode: "qualification-missing", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("launches only the resolver-owned executable when the request supplies another path", () => {
     const fixture = createManagedFixture();
     const unmanaged = executable(tempDir("keiko-runtime-unmanaged-"));
     const harness = createSpawnHarness();
@@ -462,12 +562,9 @@ describe("coding runtime manager", () => {
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, unmanaged),
     );
 
-    expect(result).toEqual({
-      ok: false,
-      failureCode: "sidecar-unmanaged",
-      retryable: false,
-    });
-    expect(harness.children).toHaveLength(0);
+    expect(result).toMatchObject({ ok: true });
+    expect(harness.children).toHaveLength(1);
+    expect(harness.captures[0]?.executable).not.toBe(unmanaged);
     expect(JSON.stringify(result)).not.toContain(fixture.managedRoot);
     expect(JSON.stringify(result)).not.toContain(unmanaged);
   });
@@ -491,6 +588,107 @@ describe("coding runtime manager", () => {
       failureCode: "adapter-profile-mismatch",
       retryable: false,
     });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("keeps Codex unavailable without a reviewed bundled payload and never falls back globally", () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
+
+    expect(
+      manager.start({
+        ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+        adapterKind: "codex-cli",
+        runtimeSource: "codex-cli-adapter",
+        modelSource: "chatgpt-codex-subscription-profile",
+      }),
+    ).toEqual({ ok: false, failureCode: "redistribution-unapproved", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("rejects a tampered resolver-owned executable immediately before spawn", () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+    writeFileSync(portable.executablePath, "tampered executable\n");
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({
+      ok: false,
+      failureCode: "archive-digest-mismatch",
+      retryable: false,
+    });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("rejects a stale shipped executable digest immediately before spawn", () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      portableRuntimeResolver: () => ({
+        verification: {
+          ...portable.verification,
+          shippedExecutableSha256: "9".repeat(64),
+        },
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({
+      ok: false,
+      failureCode: "executable-tree-digest-mismatch",
+      retryable: false,
+    });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("rejects a tampered resolver-owned payload immediately before spawn", () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+    writeFileSync(
+      join(portable.resourceRoot, portable.verification.licenseEvidencePath),
+      "tampered\n",
+    );
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({ ok: false, failureCode: "archive-digest-mismatch", retryable: false });
     expect(harness.children).toHaveLength(0);
   });
 
@@ -636,6 +834,7 @@ describe("coding runtime manager", () => {
 
   it("fails closed before signalling when the mandatory revocation barrier denies", async () => {
     const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
     const harness = createSpawnHarness();
     const manager = createProductionCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
@@ -644,6 +843,11 @@ describe("coding runtime manager", () => {
       abortInFlightActions: (): true => true,
       markRuntimeRecoveryRequired: (): true => true,
       releaseRuntimeAfterReap: (): true => true,
+      portableRuntimeResolver: () => ({
+        verification: portable.verification,
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
     });
 
     expect(

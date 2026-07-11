@@ -8,21 +8,30 @@ export const PORTABLE_RUNTIME_APPROVALS_FILE = "portable-runtime-approvals.json"
 export const APPROVED_NODE_ARCHIVE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
 export const APPROVED_SIDECAR_ARCHIVE_HOSTS = Object.freeze([
   "github.com",
-  // GitHub release-asset downloads (github.com/<o>/<r>/releases/download/...) 302-redirect to
-  // these content hosts. release-assets.githubusercontent.com is the current asset host;
-  // objects.githubusercontent.com is retained for older assets; raw.githubusercontent.com serves
-  // the license text. The download follows redirects and validates the FINAL response host, so all
-  // must be on the allowlist.
   "release-assets.githubusercontent.com",
   "objects.githubusercontent.com",
   "raw.githubusercontent.com",
 ]);
+export const EXECUTABLE_TREE_ALGORITHM = "keiko-directory-tree-sha256-v1";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u;
+const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SIDECAR_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
 const EXECUTABLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const REVIEW_REFERENCE_PATTERN =
+  /^https:\/\/github\.com\/oscharko-dev\/Keiko\/(?:issues|pull)\/\d+$/u;
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const OPENCODE_PIN = Object.freeze({
+  owner: "anomalyco",
+  repository: "opencode",
+  name: "opencode",
+  version: "1.17.17",
+  tag: "v1.17.17",
+  commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+  schemaPath: "packages/sdk/openapi.json",
+  schemaSha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+});
 
 class ApprovalsError extends Error {}
 
@@ -34,6 +43,17 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function exactKeys(record, expected, context) {
+  if (!isRecord(record)) fail(`${context} must be an object`);
+  const allowed = new Set(expected);
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) fail(`${context} has unknown key ${key}`);
+  }
+  for (const key of expected) {
+    if (!(key in record)) fail(`${context} is missing key ${key}`);
+  }
+}
+
 function requiredString(record, key, context) {
   const value = record[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -42,19 +62,13 @@ function requiredString(record, key, context) {
   return value;
 }
 
-function requiredRecord(record, key, context) {
-  const value = record[key];
-  if (!isRecord(value)) fail(`${context}.${key} must be an object`);
+function validateLiteral(value, expected, context) {
+  if (value !== expected) fail(`${context} must be ${expected}`);
   return value;
 }
 
 function validateSha256(value, context) {
-  if (!SHA256_PATTERN.test(value)) fail(`${context} must be a 64-hex sha256 digest`);
-  return value;
-}
-
-function validateVersion(value, context) {
-  if (!VERSION_PATTERN.test(value)) fail(`${context} must be a semantic version`);
+  if (!SHA256_PATTERN.test(value)) fail(`${context} must be a lowercase 64-hex sha256 digest`);
   return value;
 }
 
@@ -66,40 +80,22 @@ function validateApprovedUrl(rawUrl, allowedHosts, context) {
     fail(`${context} must be a valid URL`);
   }
   if (url.protocol !== "https:") fail(`${context} must use https`);
-  if (!allowedHosts.includes(url.hostname)) {
-    fail(`${context} host ${url.hostname} is not an approved host`);
-  }
+  if (!allowedHosts.includes(url.hostname)) fail(`${context} host is not approved`);
   if (url.username !== "" || url.password !== "") fail(`${context} must not embed credentials`);
+  if (url.search !== "" || url.hash !== "") fail(`${context} must not contain query or fragment`);
   return url.toString();
 }
 
-function validateArchiveEntry(entry, allowedHosts, context) {
-  if (!isRecord(entry)) fail(`${context} must be an object`);
-  return {
+function validateArchiveEntry(entry, allowedHosts, context, sidecar) {
+  const keys = sidecar
+    ? ["url", "sha256", "sizeBytes", "executableName", "executableTreeSha256"]
+    : ["url", "sha256"];
+  exactKeys(entry, keys, context);
+  const result = {
     url: validateApprovedUrl(requiredString(entry, "url", context), allowedHosts, `${context}.url`),
     sha256: validateSha256(requiredString(entry, "sha256", context), `${context}.sha256`),
   };
-}
-
-function validateArchivesByTarget(record, key, allowedHosts, context, extra) {
-  const archives = requiredRecord(record, key, context);
-  const known = new Set(PORTABLE_TARGET_NAMES);
-  for (const target of Object.keys(archives)) {
-    if (!known.has(target)) fail(`${context}.${key} has unknown target ${target}`);
-  }
-  const result = {};
-  for (const target of PORTABLE_TARGET_NAMES) {
-    const entry = archives[target];
-    if (entry === undefined) fail(`${context}.${key} is missing target ${target}`);
-    result[target] = {
-      ...validateArchiveEntry(entry, allowedHosts, `${context}.${key}.${target}`),
-      ...(extra === undefined ? {} : extra(entry, `${context}.${key}.${target}`)),
-    };
-  }
-  return result;
-}
-
-function validateSidecarArchiveExtras(entry, context) {
+  if (!sidecar) return result;
   const sizeBytes = entry.sizeBytes;
   if (
     typeof sizeBytes !== "number" ||
@@ -113,97 +109,245 @@ function validateSidecarArchiveExtras(entry, context) {
   if (!EXECUTABLE_NAME_PATTERN.test(executableName) || executableName.includes("..")) {
     fail(`${context}.executableName must be a plain file name`);
   }
-  return { sizeBytes, executableName };
+  return {
+    ...result,
+    sizeBytes,
+    executableName,
+    executableTreeSha256: validateSha256(
+      requiredString(entry, "executableTreeSha256", context),
+      `${context}.executableTreeSha256`,
+    ),
+  };
 }
 
-function validateNodeSection(approvals) {
-  const node = requiredRecord(approvals, "node", "approvals");
-  const version = validateVersion(
-    requiredString(node, "version", "approvals.node"),
-    "approvals.node.version",
-  );
-  const archives = validateArchivesByTarget(
-    node,
-    "archives",
+function validateArchives(record, allowedHosts, context, sidecar = false) {
+  exactKeys(record, PORTABLE_TARGET_NAMES, context);
+  const result = {};
+  for (const target of PORTABLE_TARGET_NAMES) {
+    result[target] = validateArchiveEntry(
+      record[target],
+      allowedHosts,
+      `${context}.${target}`,
+      sidecar,
+    );
+  }
+  return result;
+}
+
+function validateNodeSection(node) {
+  const context = "approvals.node";
+  exactKeys(node, ["version", "archives"], context);
+  const version = requiredString(node, "version", context);
+  if (!VERSION_PATTERN.test(version)) fail(`${context}.version must be a semantic version`);
+  const archives = validateArchives(
+    node.archives,
     APPROVED_NODE_ARCHIVE_HOSTS,
-    "approvals.node",
+    `${context}.archives`,
   );
   for (const target of PORTABLE_TARGET_NAMES) {
-    const url = archives[target].url;
-    if (!url.includes(`v${version}`)) {
-      fail(`approvals.node.archives.${target}.url must reference version v${version}`);
-    }
+    const expectedName =
+      target === "windows-x64"
+        ? "win-x64.zip"
+        : `${target === "macos-arm64" ? "darwin-arm64" : "darwin-x64"}.tar.gz`;
+    const expectedUrl = `https://nodejs.org/dist/v${version}/node-v${version}-${expectedName}`;
+    validateLiteral(archives[target].url, expectedUrl, `${context}.archives.${target}.url`);
   }
   return { version, archives };
 }
 
-function validateSidecarLicense(runtime, context) {
-  const license = requiredRecord(runtime, "license", context);
+function validateUpstream(upstream, context) {
+  exactKeys(upstream, ["owner", "repository", "name", "version", "tag", "commit"], context);
+  const result = {};
+  for (const key of ["owner", "repository", "name", "version", "tag", "commit"]) {
+    result[key] = validateLiteral(
+      requiredString(upstream, key, context),
+      OPENCODE_PIN[key],
+      `${context}.${key}`,
+    );
+  }
+  if (!COMMIT_PATTERN.test(result.commit)) fail(`${context}.commit must be a full commit sha`);
+  return result;
+}
+
+function validateProtocolSchema(schema, context) {
+  const keys = [
+    "path",
+    "url",
+    "sha256",
+    "hashAlgorithm",
+    "hashEncoding",
+    "digestInput",
+    "transport",
+  ];
+  exactKeys(schema, keys, context);
+  const expectedUrl = `https://raw.githubusercontent.com/${OPENCODE_PIN.owner}/${OPENCODE_PIN.repository}/${OPENCODE_PIN.commit}/${OPENCODE_PIN.schemaPath}`;
   return {
-    spdxId: requiredString(license, "spdxId", `${context}.license`),
-    url: validateApprovedUrl(
-      requiredString(license, "url", `${context}.license`),
-      APPROVED_SIDECAR_ARCHIVE_HOSTS,
-      `${context}.license.url`,
+    path: validateLiteral(
+      requiredString(schema, "path", context),
+      OPENCODE_PIN.schemaPath,
+      `${context}.path`,
     ),
-    sha256: validateSha256(
-      requiredString(license, "sha256", `${context}.license`),
-      `${context}.license.sha256`,
+    url: validateLiteral(
+      validateApprovedUrl(
+        requiredString(schema, "url", context),
+        APPROVED_SIDECAR_ARCHIVE_HOSTS,
+        `${context}.url`,
+      ),
+      expectedUrl,
+      `${context}.url`,
+    ),
+    sha256: validateLiteral(
+      validateSha256(requiredString(schema, "sha256", context), `${context}.sha256`),
+      OPENCODE_PIN.schemaSha256,
+      `${context}.sha256`,
+    ),
+    hashAlgorithm: validateLiteral(schema.hashAlgorithm, "sha256", `${context}.hashAlgorithm`),
+    hashEncoding: validateLiteral(schema.hashEncoding, "lowercase-hex", `${context}.hashEncoding`),
+    digestInput: validateLiteral(
+      schema.digestInput,
+      "upstream-raw-bytes",
+      `${context}.digestInput`,
+    ),
+    transport: validateLiteral(schema.transport, "http-sse", `${context}.transport`),
+  };
+}
+
+function validateReleaseApproval(approval, context, expectedStatus) {
+  exactKeys(approval, ["status", "reviewReference"], context);
+  const status = validateLiteral(approval.status, expectedStatus, `${context}.status`);
+  const reviewReference = requiredString(approval, "reviewReference", context);
+  if (!REVIEW_REFERENCE_PATTERN.test(reviewReference)) {
+    fail(`${context}.reviewReference must reference an oscharko-dev/Keiko issue or pull request`);
+  }
+  return { status, reviewReference };
+}
+
+function validateAdapter(adapter, context) {
+  exactKeys(adapter, ["adapterName", "adapterVersion", "transport"], context);
+  return {
+    adapterName: validateLiteral(
+      adapter.adapterName,
+      "keiko-coding-sidecar",
+      `${context}.adapterName`,
+    ),
+    adapterVersion: validateLiteral(adapter.adapterVersion, "1", `${context}.adapterVersion`),
+    transport: validateLiteral(adapter.transport, "http-sse", `${context}.transport`),
+  };
+}
+
+function validateReleaseApprovals(approval, context) {
+  exactKeys(approval, ["redistribution", "subscriptionAuth"], context);
+  return {
+    redistribution: validateReleaseApproval(
+      approval.redistribution,
+      `${context}.redistribution`,
+      "approved",
+    ),
+    subscriptionAuth: validateReleaseApproval(
+      approval.subscriptionAuth,
+      `${context}.subscriptionAuth`,
+      "not-applicable",
     ),
   };
 }
 
-function validateSidecarRuntime(runtime, index, names) {
+function validateLicense(license, context) {
+  exactKeys(license, ["spdxId", "url", "sha256"], context);
+  const expectedUrl = `https://raw.githubusercontent.com/anomalyco/opencode/${OPENCODE_PIN.commit}/LICENSE`;
+  return {
+    spdxId: validateLiteral(license.spdxId, "MIT", `${context}.spdxId`),
+    url: validateLiteral(
+      validateApprovedUrl(
+        requiredString(license, "url", context),
+        APPROVED_SIDECAR_ARCHIVE_HOSTS,
+        `${context}.url`,
+      ),
+      expectedUrl,
+      `${context}.url`,
+    ),
+    sha256: validateSha256(requiredString(license, "sha256", context), `${context}.sha256`),
+  };
+}
+
+function validateSidecarArchives(rawArchives, context) {
+  const archives = validateArchives(rawArchives, APPROVED_SIDECAR_ARCHIVE_HOSTS, context, true);
+  for (const target of PORTABLE_TARGET_NAMES) {
+    const asset =
+      target === "windows-x64"
+        ? "opencode-windows-x64.zip"
+        : `opencode-${target === "macos-arm64" ? "darwin-arm64" : "darwin-x64"}.zip`;
+    validateLiteral(
+      archives[target].url,
+      `https://github.com/anomalyco/opencode/releases/download/${OPENCODE_PIN.tag}/${asset}`,
+      `${context}.${target}.url`,
+    );
+  }
+  return archives;
+}
+
+function validateSidecarRuntime(runtime, index) {
   const context = `approvals.sidecarRuntimes[${String(index)}]`;
-  if (!isRecord(runtime)) fail(`${context} must be an object`);
-  const name = requiredString(runtime, "name", context);
+  exactKeys(
+    runtime,
+    [
+      "name",
+      "kind",
+      "upstream",
+      "adapterCompatibility",
+      "protocolSchema",
+      "releaseApproval",
+      "license",
+      "executableTreeAlgorithm",
+      "archives",
+    ],
+    context,
+  );
+  const name = validateLiteral(
+    requiredString(runtime, "name", context),
+    "opencode-compatible",
+    `${context}.name`,
+  );
   if (!SIDECAR_NAME_PATTERN.test(name)) fail(`${context}.name must be kebab-case`);
-  if (names.has(name)) fail(`${context}.name must be unique`);
-  names.add(name);
-  const upstream = requiredRecord(runtime, "upstream", context);
-  const adapter = requiredRecord(runtime, "adapterCompatibility", context);
   return {
     name,
-    kind: requiredString(runtime, "kind", context),
-    upstream: {
-      name: requiredString(upstream, "name", `${context}.upstream`),
-      version: validateVersion(
-        requiredString(upstream, "version", `${context}.upstream`),
-        `${context}.upstream.version`,
-      ),
-    },
-    adapterCompatibility: {
-      adapterName: requiredString(adapter, "adapterName", `${context}.adapterCompatibility`),
-      adapterVersion: requiredString(adapter, "adapterVersion", `${context}.adapterCompatibility`),
-      protocolVersion: requiredString(
-        adapter,
-        "protocolVersion",
-        `${context}.adapterCompatibility`,
-      ),
-    },
-    license: validateSidecarLicense(runtime, context),
-    archives: validateArchivesByTarget(
-      runtime,
-      "archives",
-      APPROVED_SIDECAR_ARCHIVE_HOSTS,
-      context,
-      validateSidecarArchiveExtras,
+    kind: validateLiteral(runtime.kind, "coding-runtime", `${context}.kind`),
+    upstream: validateUpstream(runtime.upstream, `${context}.upstream`),
+    adapterCompatibility: validateAdapter(
+      runtime.adapterCompatibility,
+      `${context}.adapterCompatibility`,
     ),
+    protocolSchema: validateProtocolSchema(runtime.protocolSchema, `${context}.protocolSchema`),
+    releaseApproval: validateReleaseApprovals(
+      runtime.releaseApproval,
+      `${context}.releaseApproval`,
+    ),
+    license: validateLicense(runtime.license, `${context}.license`),
+    executableTreeAlgorithm: validateLiteral(
+      runtime.executableTreeAlgorithm,
+      EXECUTABLE_TREE_ALGORITHM,
+      `${context}.executableTreeAlgorithm`,
+    ),
+    archives: validateSidecarArchives(runtime.archives, `${context}.archives`),
   };
 }
 
 export function validatePortableRuntimeApprovals(approvals) {
-  if (!isRecord(approvals)) fail("approvals document must be an object");
-  if (approvals.schemaVersion !== 1) fail("approvals.schemaVersion must be 1");
-  const rawSidecars = approvals.sidecarRuntimes;
-  if (!Array.isArray(rawSidecars)) fail("approvals.sidecarRuntimes must be an array");
-  const names = new Set();
+  exactKeys(approvals, ["schemaVersion", "description", "node", "sidecarRuntimes"], "approvals");
+  validateLiteral(approvals.schemaVersion, 2, "approvals.schemaVersion");
+  if (typeof approvals.description !== "string" || approvals.description.length === 0) {
+    fail("approvals.description must be a non-empty string");
+  }
+  if (!Array.isArray(approvals.sidecarRuntimes)) fail("approvals.sidecarRuntimes must be an array");
+  if (approvals.sidecarRuntimes.length !== 1) {
+    fail(
+      "approvals.sidecarRuntimes must contain exactly the approved OpenCode runtime; Codex is absent pending approval",
+    );
+  }
   return {
-    schemaVersion: 1,
-    node: validateNodeSection(approvals),
-    sidecarRuntimes: rawSidecars.map((runtime, index) =>
-      validateSidecarRuntime(runtime, index, names),
-    ),
+    schemaVersion: 2,
+    description: approvals.description,
+    node: validateNodeSection(approvals.node),
+    sidecarRuntimes: approvals.sidecarRuntimes.map(validateSidecarRuntime),
   };
 }
 

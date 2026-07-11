@@ -23,6 +23,10 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   };
 }
 
+function approvedRuntime(): Pick<UiHandlerDeps, "codexRuntimeAvailability"> {
+  return { codexRuntimeAvailability: { isApprovedVerified: () => true } };
+}
+
 function req(body: unknown): RouteContext["req"] {
   const emitter = new EventEmitter() as RouteContext["req"];
   queueMicrotask(() => {
@@ -42,19 +46,22 @@ function ctx(body: unknown = {}): RouteContext {
 }
 
 describe("coding Codex subscription profile routes", () => {
-  it("reports a missing subscription profile without leaking CODEX_HOME or auth paths", () => {
+  it("reports explicit unapproved redistribution without claiming runtime or setup support", () => {
     const result = handleCodingCodexSubscriptionProfile(ctx(), deps());
 
     expect(result).toMatchObject({
       status: 200,
       body: {
-        status: "missing",
+        status: "redistribution-unapproved",
         modelSource: "chatgpt-codex-subscription-profile",
         runtimeSource: "codex-cli-adapter",
         stateScope: "keiko-owned-state",
         stateRoot: "keiko-codex-runtime-state",
         usesGlobalCodexHome: false,
-        runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
+        runtimeBinarySources: [],
+        supportsBrowserLogin: false,
+        supportsDeviceCode: false,
+        supportsAccessToken: false,
       },
     });
     expect(JSON.stringify(result)).not.toContain("auth.json");
@@ -70,7 +77,7 @@ describe("coding Codex subscription profile routes", () => {
     ["unsupported-headless", { KEIKO_CODEX_AUTH_STATUS: "unsupported-headless" }],
     ["failed-login", { KEIKO_CODEX_AUTH_STATUS: "failed-login" }],
   ] as const)("projects %s status without leaking credential material", (status, env) => {
-    const result = handleCodingCodexSubscriptionProfile(ctx(), deps({ env }));
+    const result = handleCodingCodexSubscriptionProfile(ctx(), deps({ env, ...approvedRuntime() }));
 
     expect(result).toMatchObject({ status: 200, body: { status } });
     expect(JSON.stringify(result)).not.toContain("secret-token");
@@ -81,7 +88,7 @@ describe("coding Codex subscription profile routes", () => {
   it("fails closed when deployment policy disables subscription login", () => {
     const result = handleCodingCodexSubscriptionProfile(
       ctx(),
-      deps({ env: { KEIKO_CODEX_SUBSCRIPTION_DISABLED: "1" } }),
+      deps({ env: { KEIKO_CODEX_SUBSCRIPTION_DISABLED: "1" }, ...approvedRuntime() }),
     );
 
     expect(result).toMatchObject({
@@ -96,7 +103,7 @@ describe("coding Codex subscription profile routes", () => {
   it("returns a device-code setup plan without executing Codex or exposing paths", async () => {
     const result = await handleCodingCodexSubscriptionSetup(
       ctx({ method: "chatgpt-device-code" }),
-      deps(),
+      deps(approvedRuntime()),
     );
 
     expect(result).toMatchObject({
@@ -137,7 +144,7 @@ describe("coding Codex subscription profile routes", () => {
   it("blocks browser-login setup in unsupported headless environments", async () => {
     const result = await handleCodingCodexSubscriptionSetup(
       ctx({ method: "chatgpt-browser-login" }),
-      deps({ env: { KEIKO_CODEX_HEADLESS: "1" } }),
+      deps({ env: { KEIKO_CODEX_HEADLESS: "1" }, ...approvedRuntime() }),
     );
 
     expect(result).toMatchObject({
@@ -150,4 +157,41 @@ describe("coding Codex subscription profile routes", () => {
       },
     });
   });
+
+  it("does not report connected from an access token without approved runtime provenance", () => {
+    const result = handleCodingCodexSubscriptionProfile(
+      ctx(),
+      deps({ env: { CODEX_ACCESS_TOKEN: "secret-token" } }),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        status: "redistribution-unapproved",
+        runtimeBinarySources: [],
+        supportsBrowserLogin: false,
+        supportsDeviceCode: false,
+        supportsAccessToken: false,
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain("secret-token");
+  });
+
+  it.each(["chatgpt-browser-login", "chatgpt-device-code", "codex-access-token"] as const)(
+    "blocks %s setup until Codex redistribution is approved",
+    async (method) => {
+      const result = await handleCodingCodexSubscriptionSetup(ctx({ method }), deps());
+
+      expect(result).toMatchObject({
+        status: 409,
+        body: {
+          status: "redistribution-unapproved",
+          reasonCode: "redistribution-unapproved",
+          codexSubscriptionAllowed: false,
+          runtimeBinarySources: [],
+          setupMethods: [],
+        },
+      });
+    },
+  );
 });

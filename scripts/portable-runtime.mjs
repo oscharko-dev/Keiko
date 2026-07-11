@@ -97,7 +97,33 @@ const PRIVATE_PATH_PATTERN =
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 const PLACEHOLDER_DIGEST_PATTERN = /^64-hex-[a-z0-9-]+$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$|^40-hex-[a-z0-9-]+$/u;
+const STRICT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SIDECAR_RUNTIME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{1,63}$/u;
+const EXECUTABLE_TREE_ALGORITHM = "keiko-directory-tree-sha256-v1";
+const GITHUB_REVIEW_REFERENCE_PATTERN =
+  /^https:\/\/github\.com\/oscharko-dev\/Keiko\/(?:issues|pull)\/\d+$/u;
+const SIDECAR_RUNTIME_KEYS = Object.freeze([
+  "approvalSchemaVersion",
+  "name",
+  "kind",
+  "upstream",
+  "adapterCompatibility",
+  "protocolSchema",
+  "releaseApproval",
+  "license",
+  "archive",
+  "executableTreeAlgorithm",
+  "executableTreeSha256",
+  "executableSha256",
+  "platformTarget",
+  "payloadRootPath",
+  "executablePath",
+  "payloadSha256",
+  "sizeBytes",
+  "licenseEvidence",
+  "sbomEvidence",
+  "signing",
+]);
 const FORBIDDEN_KEY_PARTS = [
   "absolutePath",
   "credentialValue",
@@ -225,6 +251,18 @@ function stringArrayAt(record, key, path, failures) {
     push(failures, `${path}.${key}`, "must be a string array");
     return [];
   }
+  return value;
+}
+
+function exactKeysAt(record, allowedKeys, path, failures) {
+  for (const key of Object.keys(record)) {
+    if (!allowedKeys.includes(key)) push(failures, `${path}.${key}`, "is not allowed");
+  }
+}
+
+function literalAt(record, key, expected, path, failures) {
+  const value = at(record, key, path, failures);
+  if (value !== expected) push(failures, `${path}.${key}`, `must be ${String(expected)}`);
   return value;
 }
 
@@ -390,18 +428,55 @@ function validateSidecarRuntime(manifest, runtime, index, names, failures, optio
     push(failures, path, "must be an object");
     return;
   }
+  const name = validateSidecarProvenance(runtime, path, names, failures, options);
+  const target = validateSidecarPayload(manifest, runtime, name, path, failures, options);
+  validateSidecarSigning(runtime, target, path, failures, options);
+}
+
+function validateSidecarProvenance(runtime, path, names, failures, options) {
+  exactKeysAt(runtime, SIDECAR_RUNTIME_KEYS, path, failures);
+  literalAt(runtime, "approvalSchemaVersion", 2, path, failures);
   const name = validateSidecarName(runtime, path, names, failures);
-  stringAt(runtime, "kind", path, failures);
+  if (stringAt(runtime, "kind", path, failures) !== "coding-runtime") {
+    push(failures, `${path}.kind`, "must be coding-runtime");
+  }
   validateSidecarUpstream(runtime, path, failures);
   validateSidecarAdapter(runtime, path, failures);
+  validateSidecarProtocolSchema(runtime, path, failures, options);
+  validateSidecarReleaseApproval(runtime, path, failures);
+  validateSidecarLicense(runtime, path, failures, options);
+  validateSidecarArchive(runtime, path, failures, options);
+  validateSidecarExecutableProvenance(runtime, path, failures, options);
+  return name;
+}
+
+function validateSidecarExecutableProvenance(runtime, path, failures, options) {
+  if (stringAt(runtime, "executableTreeAlgorithm", path, failures) !== EXECUTABLE_TREE_ALGORITHM) {
+    push(failures, `${path}.executableTreeAlgorithm`, `must be ${EXECUTABLE_TREE_ALGORITHM}`);
+  }
+  digestAt(runtime, "executableTreeSha256", path, failures, options);
+  digestAt(runtime, "executableSha256", path, failures, options);
+}
+
+function validateSidecarPayload(manifest, runtime, name, path, failures, options) {
   const target = validateSidecarTarget(manifest, runtime, path, failures);
   const payloadRootPath = validateSidecarPayloadRoot(runtime, name, path, failures);
   validateSidecarPath(runtime, "executablePath", payloadRootPath, path, failures);
   digestAt(runtime, "payloadSha256", path, failures, options);
   positiveNumberAt(runtime, "sizeBytes", path, failures);
-  validateSidecarEvidence(runtime, "licenseEvidence", payloadRootPath, path, failures, options);
+  const licenseEvidence = validateSidecarEvidence(
+    runtime,
+    "licenseEvidence",
+    payloadRootPath,
+    path,
+    failures,
+    options,
+  );
+  if (licenseEvidence.sha256 !== runtime.license?.sha256) {
+    push(failures, `${path}.licenseEvidence.sha256`, "must match approved license digest");
+  }
   validateSidecarEvidence(runtime, "sbomEvidence", payloadRootPath, path, failures, options);
-  validateSidecarSigning(runtime, target, path, failures, options);
+  return target;
 }
 
 function validateSidecarName(runtime, path, names, failures) {
@@ -416,15 +491,121 @@ function validateSidecarName(runtime, path, names, failures) {
 
 function validateSidecarUpstream(runtime, path, failures) {
   const upstream = recordAt(runtime, "upstream", path, failures);
+  exactKeysAt(
+    upstream,
+    ["owner", "repository", "name", "version", "tag", "commit"],
+    `${path}.upstream`,
+    failures,
+  );
+  stringAt(upstream, "owner", `${path}.upstream`, failures);
+  stringAt(upstream, "repository", `${path}.upstream`, failures);
   stringAt(upstream, "name", `${path}.upstream`, failures);
   stringAt(upstream, "version", `${path}.upstream`, failures);
+  stringAt(upstream, "tag", `${path}.upstream`, failures);
+  const commit = stringAt(upstream, "commit", `${path}.upstream`, failures);
+  if (!STRICT_COMMIT_PATTERN.test(commit)) {
+    push(failures, `${path}.upstream.commit`, "must be a 40-hex commit SHA");
+  }
 }
 
 function validateSidecarAdapter(runtime, path, failures) {
   const adapter = recordAt(runtime, "adapterCompatibility", path, failures);
-  stringAt(adapter, "adapterName", `${path}.adapterCompatibility`, failures);
-  stringAt(adapter, "adapterVersion", `${path}.adapterCompatibility`, failures);
-  stringAt(adapter, "protocolVersion", `${path}.adapterCompatibility`, failures);
+  exactKeysAt(
+    adapter,
+    ["adapterName", "adapterVersion", "transport"],
+    `${path}.adapterCompatibility`,
+    failures,
+  );
+  literalAt(
+    adapter,
+    "adapterName",
+    "keiko-coding-sidecar",
+    `${path}.adapterCompatibility`,
+    failures,
+  );
+  literalAt(adapter, "adapterVersion", "1", `${path}.adapterCompatibility`, failures);
+  literalAt(adapter, "transport", "http-sse", `${path}.adapterCompatibility`, failures);
+}
+
+function validateSidecarProtocolSchema(runtime, path, failures, options) {
+  const schemaPath = `${path}.protocolSchema`;
+  const schema = recordAt(runtime, "protocolSchema", path, failures);
+  exactKeysAt(
+    schema,
+    ["path", "url", "sha256", "hashAlgorithm", "hashEncoding", "digestInput", "transport"],
+    schemaPath,
+    failures,
+  );
+  const upstream = runtime.upstream ?? {};
+  const rawPath = relativePathAt(schema, "path", schemaPath, failures);
+  const expectedUrl = `https://raw.githubusercontent.com/${upstream.owner}/${upstream.repository}/${upstream.commit}/${rawPath}`;
+  if (stringAt(schema, "url", schemaPath, failures) !== expectedUrl) {
+    push(failures, `${schemaPath}.url`, "must bind the upstream commit and raw schema path");
+  }
+  digestAt(schema, "sha256", schemaPath, failures, options);
+  literalAt(schema, "hashAlgorithm", "sha256", schemaPath, failures);
+  literalAt(schema, "hashEncoding", "lowercase-hex", schemaPath, failures);
+  literalAt(schema, "digestInput", "upstream-raw-bytes", schemaPath, failures);
+  literalAt(schema, "transport", "http-sse", schemaPath, failures);
+  if (schema.transport !== runtime.adapterCompatibility?.transport) {
+    push(failures, `${schemaPath}.transport`, "must match adapterCompatibility.transport");
+  }
+}
+
+function validateSidecarReleaseApproval(runtime, path, failures) {
+  const approvalPath = `${path}.releaseApproval`;
+  const approval = recordAt(runtime, "releaseApproval", path, failures);
+  exactKeysAt(approval, ["redistribution", "subscriptionAuth"], approvalPath, failures);
+  validateSidecarApprovalGate(approval, "redistribution", "approved", approvalPath, failures);
+  validateSidecarApprovalGate(
+    approval,
+    "subscriptionAuth",
+    "not-applicable",
+    approvalPath,
+    failures,
+  );
+}
+
+function validateSidecarApprovalGate(approval, key, expectedStatus, path, failures) {
+  const gatePath = `${path}.${key}`;
+  const gate = recordAt(approval, key, path, failures);
+  exactKeysAt(gate, ["status", "reviewReference"], gatePath, failures);
+  literalAt(gate, "status", expectedStatus, gatePath, failures);
+  const reference = stringAt(gate, "reviewReference", gatePath, failures);
+  if (!GITHUB_REVIEW_REFERENCE_PATTERN.test(reference)) {
+    push(failures, `${gatePath}.reviewReference`, "must reference a Keiko issue or pull request");
+  }
+}
+
+function validateSidecarLicense(runtime, path, failures, options) {
+  const licensePath = `${path}.license`;
+  const license = recordAt(runtime, "license", path, failures);
+  exactKeysAt(license, ["spdxId", "url", "sha256"], licensePath, failures);
+  stringAt(license, "spdxId", licensePath, failures);
+  const url = stringAt(license, "url", licensePath, failures);
+  const upstream = runtime.upstream ?? {};
+  const expectedPrefix = `https://raw.githubusercontent.com/${upstream.owner}/${upstream.repository}/${upstream.commit}/`;
+  if (!url.startsWith(expectedPrefix)) {
+    push(failures, `${licensePath}.url`, "must bind the upstream commit");
+  }
+  digestAt(license, "sha256", licensePath, failures, options);
+}
+
+function validateSidecarArchive(runtime, path, failures, options) {
+  const archivePath = `${path}.archive`;
+  const archive = recordAt(runtime, "archive", path, failures);
+  exactKeysAt(archive, ["platformTarget", "url", "sizeBytes", "sha256"], archivePath, failures);
+  if (stringAt(archive, "platformTarget", archivePath, failures) !== runtime.platformTarget) {
+    push(failures, `${archivePath}.platformTarget`, "must match sidecar platformTarget");
+  }
+  const url = stringAt(archive, "url", archivePath, failures);
+  const upstream = runtime.upstream ?? {};
+  const expectedPrefix = `https://github.com/${upstream.owner}/${upstream.repository}/releases/download/${upstream.tag}/`;
+  if (!url.startsWith(expectedPrefix)) {
+    push(failures, `${archivePath}.url`, "must bind the upstream repository and tag");
+  }
+  positiveNumberAt(archive, "sizeBytes", archivePath, failures);
+  digestAt(archive, "sha256", archivePath, failures, options);
 }
 
 function validateSidecarTarget(manifest, runtime, path, failures) {
@@ -460,6 +641,7 @@ function validateSidecarEvidence(runtime, key, payloadRootPath, path, failures, 
     push(failures, `${path}.${key}.path`, "must stay inside payloadRootPath");
   }
   digestAt(evidence, "sha256", `${path}.${key}`, failures, options);
+  return evidence;
 }
 
 function portablePathInside(root, candidate) {
@@ -633,6 +815,7 @@ function validateVerificationCheckConsistency(
 function validateSidecarSigning(runtime, target, path, failures, options) {
   const signing = recordAt(runtime, "signing", path, failures);
   const signingPath = `${path}.signing`;
+  validateSidecarSigningKeys(signing, signingPath, failures);
   const policy = stringAt(signing, "verificationPolicy", signingPath, failures);
   const status = stringAt(signing, "verificationStatus", signingPath, failures);
   const reasonCodes = stringArrayAt(signing, "verificationReasonCodes", signingPath, failures);
@@ -649,6 +832,7 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     push(failures, `${signingPath}.signatureVerified`, "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures, signingPath);
+  validateShippedExecutableEvidence(signing, policy, signingPath, failures, options);
   validateLifecycleVerificationContext(policy, status, signingPath, options, failures);
   validateVerificationCheckConsistency(
     target,
@@ -667,6 +851,34 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     options,
     path,
   );
+}
+
+function validateSidecarSigningKeys(signing, signingPath, failures) {
+  exactKeysAt(
+    signing,
+    [
+      "verificationPolicy",
+      "verificationStatus",
+      "verificationReasonCodes",
+      "signatureKind",
+      "signatureVerified",
+      "notarizationRequired",
+      "notarizationVerified",
+      "verificationChecks",
+      "shippedExecutableSha256",
+      "shippedExecutableTreeAlgorithm",
+      "shippedExecutableTreeSha256",
+    ],
+    signingPath,
+    failures,
+  );
+}
+
+function validateShippedExecutableEvidence(signing, policy, path, failures, options) {
+  if (policy !== "production") return;
+  digestAt(signing, "shippedExecutableSha256", path, failures, options);
+  literalAt(signing, "shippedExecutableTreeAlgorithm", EXECUTABLE_TREE_ALGORITHM, path, failures);
+  digestAt(signing, "shippedExecutableTreeSha256", path, failures, options);
 }
 
 function validateLifecycleVerificationContext(policy, status, path, options, failures) {

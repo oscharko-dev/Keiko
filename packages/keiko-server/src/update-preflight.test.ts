@@ -277,14 +277,42 @@ function portableRelease(target: UpdatePortableTarget): Record<string, unknown> 
 
 function sidecarRuntime(target: UpdatePortableTarget): Record<string, unknown> {
   return {
+    approvalSchemaVersion: 2,
     name: "opencode-compatible",
     kind: "coding-runtime",
-    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    upstream: {
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.17.17",
+      tag: "v1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "1",
-      protocolVersion: "coding-sidecar-v1",
+      transport: "http-sse",
     },
+    protocolSchema: {
+      path: "packages/sdk/openapi.json",
+      sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+      hashAlgorithm: "sha256",
+      hashEncoding: "lowercase-hex",
+      digestInput: "upstream-raw-bytes",
+      transport: "http-sse",
+    },
+    releaseApproval: { redistribution: { status: "approved" } },
+    archive: {
+      platformTarget: target,
+      sha256:
+        target === "windows-x64"
+          ? "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85"
+          : target === "macos-arm64"
+            ? "cec03cf8b1119053d583e9afa14a987ca4ffa9dcd76cb79a7cd66774de6411f7"
+            : "e621f1ac6c78aae10caf69d7a1cc15d8adf32b9d68ad124506e9f4e4fe04d7ba",
+    },
+    executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    executableTreeSha256: "c".repeat(64),
     platformTarget: target,
     payloadRootPath: "runtime/sidecars/opencode-compatible",
     executablePath: "runtime/sidecars/opencode-compatible/opencode.cmd",
@@ -313,6 +341,9 @@ function signingEvidence(target: UpdatePortableTarget): Record<string, unknown> 
     signatureVerified: true,
     notarizationRequired: target !== "windows-x64",
     notarizationVerified: target !== "windows-x64",
+    shippedExecutableSha256: "b".repeat(64),
+    shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    shippedExecutableTreeSha256: "c".repeat(64),
     verificationChecks:
       target === "windows-x64"
         ? { publisherChainVerified: true, timestampVerified: true }
@@ -650,7 +681,7 @@ describe("update preflight service", () => {
     expect(report.oneClickEligible).toBe(true);
     expect(report.portableAsset?.asset?.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "1.0.0",
+      upstreamVersion: "1.17.17",
       platformTarget: target,
       payloadSha256: "f".repeat(64),
       payloadSha256Prefix: "f".repeat(12),
@@ -730,6 +761,34 @@ describe("update preflight service", () => {
             ...(sidecar.signing as Record<string, unknown>),
             verificationStatus: "verification-failed",
           };
+        }),
+    ],
+    [
+      "missing signing evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          delete sidecar.signing;
+        }),
+    ],
+    [
+      "missing shipped executable evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          delete (sidecar.signing as Record<string, unknown>).shippedExecutableTreeSha256;
+        }),
+    ],
+    [
+      "malformed shipped executable evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          (sidecar.signing as Record<string, unknown>).shippedExecutableSha256 = "A".repeat(64);
+        }),
+    ],
+    [
+      "unexpected signing evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          (sidecar.signing as Record<string, unknown>).nativeProof = true;
         }),
     ],
   ])("blocks portable one-click readiness for sidecar %s", async (_label, makeSidecar) => {
