@@ -119,6 +119,7 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   {
     id: "run.fileTests",
     title: "Run Tests for File",
+    titleKey: "editor.command.runFileTests",
     run: (host) => host.runFileTests(),
     isAvailable: (host) =>
       !host.verificationRunning &&
@@ -128,24 +129,28 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   {
     id: "run.typecheck",
     title: "Run Typecheck",
+    titleKey: "editor.command.runTypecheck",
     run: (host) => host.runWorkspaceVerification("typecheck"),
     isAvailable: (host) => !host.verificationRunning && catalogAllows(host, "typecheck"),
   },
   {
     id: "run.lint",
     title: "Run Lint",
+    titleKey: "editor.command.runLint",
     run: (host) => host.runWorkspaceVerification("lint"),
     isAvailable: (host) => !host.verificationRunning && catalogAllows(host, "lint"),
   },
   {
     id: "run.build",
     title: "Run Build",
+    titleKey: "editor.command.runBuild",
     run: (host) => host.runWorkspaceVerification("build"),
     isAvailable: (host) => !host.verificationRunning && catalogAllows(host, "build"),
   },
   {
     id: "run.cancel",
     title: "Cancel Verification",
+    titleKey: "editor.command.cancelVerification",
     run: (host) => host.cancelVerification(),
     isAvailable: (host) => host.verificationRunning,
   },

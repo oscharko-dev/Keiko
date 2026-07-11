@@ -80,7 +80,7 @@ The detailed threat assessment is in
 | `npm test`                                            | PASS — 1,151 files passed, 5 skipped; 19,880 tests passed, 7 skipped                                                                        |
 | `npm run arch:check`                                  | PASS — 3,053 modules / 8,543 dependencies, no violations                                                                                    |
 | `npm run arch:check:negative`                         | PASS — all 50 hostile fixtures rejected                                                                                                     |
-| `npm run test:coverage:quality`                       | PASS — 1,159 package files / 19,970 tests and 310 UI files / 4,913 tests; all package, file, release-target, and branch-ratchet floors held |
+| `npm run test:coverage:quality`                       | PASS — 1,159 package files / 19,972 tests and 310 UI files / 4,913 tests; all package, file, release-target, and branch-ratchet floors held |
 | `npm run build`                                       | PASS                                                                                                                                        |
 | prepack-equivalent `npm run check:package-surface`    | PASS — 4,753 files, static UI present                                                                                                       |
 | `npm run check:error-observability`                   | PASS                                                                                                                                        |

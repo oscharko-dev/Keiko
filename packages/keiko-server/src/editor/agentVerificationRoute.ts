@@ -165,6 +165,10 @@ function reserveVerification(
   ).ok;
 }
 
+function rollbackVerificationReservation(request: EditorAgentVerificationRunRequest): boolean {
+  return editorAgentAuthorityRegistry.rollbackActionReservation(request.authorityRef, 0);
+}
+
 // One content-free audit record per request (AC5). The ledger records execution-class actions when
 // admitted and any action when denied; the record carries only enums, identifiers, and the
 // workspace-relative targetPath — never the verification's own pass/fail counts (those live in the
@@ -278,7 +282,10 @@ async function admitAndRun(
       ? notRunResult(denied)
       : auditFailure();
   }
-  if (!auditVerification(request, decision, "queued", audit)) return auditFailure();
+  if (!auditVerification(request, decision, "queued", audit)) {
+    rollbackVerificationReservation(request);
+    return auditFailure();
+  }
   return runAndRespond(runner, request, snapshot, lifecycle.signal);
 }
 

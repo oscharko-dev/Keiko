@@ -471,6 +471,28 @@ describe("handleEditorAgentVerificationRun audit (AC5)", () => {
     expect(manager.calls).toBe(0);
   });
 
+  it("rolls back the authority charge when the admission audit fails", async () => {
+    const manager = new FakeManager();
+    const authorityRef = registerAuthority(undefined, {
+      budget: {
+        maxRuntimeMs: 3_600_000,
+        maxToolCalls: 1,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 65_536,
+      },
+    });
+    const request = { schemaVersion: "1", sessionId: SESSION_ID, kind: "typecheck", authorityRef };
+
+    const failedAudit = await handleEditorAgentVerificationRun(ctx(request), deps(manager), {
+      audit: () => null,
+    });
+    const retry = await handleEditorAgentVerificationRun(ctx(request), deps(manager));
+
+    expect(failedAudit).toMatchObject({ status: 503 });
+    expect(retry).toMatchObject({ status: 200 });
+    expect(manager.calls).toBe(1);
+  });
+
   it("retains the admission audit when the runner fails", async () => {
     const manager = new FakeManager();
     manager.failWith = new Error("runner failed");

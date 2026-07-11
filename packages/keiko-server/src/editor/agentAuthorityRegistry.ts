@@ -255,6 +255,28 @@ export class EditorAgentAuthorityRegistry {
     return resolved;
   }
 
+  // Roll back the synchronous pre-dispatch reservation when a mandatory admission side effect
+  // (currently the append-only audit write) fails. This is deliberately narrower than `revoke`:
+  // the envelope and its prior usage remain valid, and underflow fails closed. Callers must invoke
+  // this before yielding control so one failed admission cannot release another request's budget.
+  public rollbackActionReservation(
+    reference: EditorAgentGovernedAuthorityReference,
+    patchBytes: number,
+  ): boolean {
+    if (!Number.isSafeInteger(patchBytes) || patchBytes < 0) return false;
+    const record = this.records.get(recordKey(reference));
+    if (
+      record === undefined ||
+      record.usage.toolCalls < 1 ||
+      record.usage.patchBytes < patchBytes
+    ) {
+      return false;
+    }
+    record.usage.toolCalls -= 1;
+    record.usage.patchBytes -= patchBytes;
+    return true;
+  }
+
   // Issue #2244 (ADR-0128 D4): budget reservation for one governed CONNECTOR action. Charges
   // exactly one toolCall (connector actions carry no patch) against the same envelope budget the
   // editor lane charges, after the same resolve-time revalidation. An envelope bound to a
