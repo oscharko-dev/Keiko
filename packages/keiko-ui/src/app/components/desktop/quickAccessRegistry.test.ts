@@ -63,6 +63,14 @@ describe("quick access registry", () => {
     expect(commandIdsForEvidence(appCommands, EDITOR_PALETTE_COMMANDS)).toContain("tab.close");
   });
 
+  it("localizes editor commands that expose a central message key", () => {
+    const commands = buildUnifiedQuickAccessCommands([], host(), (key) => `translated:${key}`);
+
+    expect(commands.find((command) => command.id === "editor.openProblems")?.label).toBe(
+      "translated:editor.command.openProblems",
+    );
+  });
+
   it("collapses an app command that collides with an editor command id, keeping the app definition", () => {
     const commands = buildUnifiedQuickAccessCommands([appCommand("tab.close")], host());
     const matches = commands.filter((command) => command.id === "tab.close");

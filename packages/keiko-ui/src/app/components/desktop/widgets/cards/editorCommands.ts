@@ -9,6 +9,7 @@
  */
 
 import type { EditorVerificationCatalog, VerificationKind } from "@oscharko-dev/keiko-contracts";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 
 /** Content-free actions the host exposes to a command. Implemented in `EditorWidget`. */
 export interface EditorPaletteHost {
@@ -42,6 +43,7 @@ export interface EditorPaletteHost {
 export interface EditorPaletteCommand {
   readonly id: string;
   readonly title: string;
+  readonly titleKey?: MessageKey;
   /** Display-only chord hint shown in the palette row. */
   readonly keybinding?: string;
   readonly run: (host: EditorPaletteHost) => void;
@@ -108,6 +110,7 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   {
     id: "editor.openProblems",
     title: "Open Problems",
+    titleKey: "editor.command.openProblems",
     run: (host) => host.openProblems(),
     isAvailable: (host) => host.root.length > 0,
   },
@@ -149,6 +152,7 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   {
     id: "verification.trustWorkspaceScripts",
     title: "Trust Workspace Scripts",
+    titleKey: "editor.command.trustWorkspaceScripts",
     run: (host) => host.trustWorkspaceScripts(),
     isAvailable: (host) =>
       !host.verificationRunning && hasScriptTrustState(host, "approval-required"),
@@ -156,6 +160,7 @@ export const EDITOR_PALETTE_COMMANDS: readonly EditorPaletteCommand[] = [
   {
     id: "verification.revokeWorkspaceScriptTrust",
     title: "Revoke Workspace Script Trust",
+    titleKey: "editor.command.revokeWorkspaceScriptTrust",
     run: (host) => host.revokeWorkspaceScriptTrust(),
     isAvailable: (host) => !host.verificationRunning && hasScriptTrustState(host, "trusted"),
   },
