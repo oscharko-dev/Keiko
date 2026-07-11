@@ -652,7 +652,14 @@ describe("keiko-contracts package surface", () => {
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
-    expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual(["QUEUE_FULL", "TIMED_OUT"]);
+    expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual([
+      "CANCELLED",
+      "LIMIT_EXCEEDED",
+      "PROVIDER_UNAVAILABLE",
+      "QUEUE_FULL",
+      "TIMED_OUT",
+      "UNSUPPORTED_OPERATION",
+    ]);
     // AC2: the write-action classification is exported as a single source of truth.
     expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
       ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),

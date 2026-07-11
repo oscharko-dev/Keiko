@@ -28,10 +28,12 @@ import {
   fetchGitStatus,
   fetchConfig,
   fetchModels,
+  fetchManagedLspSettings,
   fetchNativeFileDialogCapability,
   fetchPdfCitationPreviewDocument,
   fetchProjects,
   openNativeFileDialog,
+  mutateManagedLspSettings,
   regenerateDesktopChat,
   fetchStartupUpdatePreflight,
   fetchUpdateRemediationStatus,
@@ -57,6 +59,7 @@ import {
   requestEditorImplementation,
   requestEditorCallHierarchy,
   requestEditorInlayHints,
+  requestEditorSemanticTokens,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -74,6 +77,64 @@ import {
   ApiError,
   type StreamHandlers,
 } from "./api";
+
+describe("managed language settings API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("encodes the workspace root and forwards abortable no-store reads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ languages: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchManagedLspSettings("/workspace/a b", controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/lsp/settings?root=%2Fworkspace%2Fa%20b",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    controller.abort();
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it("sends revision, CSRF, ETag, idempotency, and cancellation on mutations", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ kind: "ok", revision: 4, etag: '"lspcfg-4-abcdefghijklmnop"' }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await mutateManagedLspSettings(
+      { root: "/workspace/a", language: "python", action: "restart", expectedRevision: 3 },
+      '"lspcfg-3-abcdefghijklmnop"',
+      "request-1",
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/lsp/settings",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          root: "/workspace/a",
+          language: "python",
+          action: "restart",
+          expectedRevision: 3,
+        }),
+        headers: expect.objectContaining({
+          "X-Keiko-CSRF": "1",
+          "If-Match": '"lspcfg-3-abcdefghijklmnop"',
+          "Idempotency-Key": "request-1",
+        }),
+        signal: controller.signal,
+      }),
+    );
+  });
+});
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -755,6 +816,36 @@ describe("language-intelligence helpers (Issue #1201)", () => {
 
     expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).operation)).toEqual(
       ["typeDefinition", "implementation", "callHierarchy", "inlayHints"],
+    );
+  });
+
+  it("posts a versioned Rust full-document semantic-token request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ schemaVersion: "1", supported: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorSemanticTokens({
+      root: "/repo",
+      path: "src/lib.rs",
+      text: "fn main() {}\n",
+      version: 9,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language/semantic-tokens",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          root: "/repo",
+          document: {
+            path: "src/lib.rs",
+            languageId: "rust",
+            text: "fn main() {}\n",
+            version: 9,
+          },
+        }),
+      }),
     );
   });
 

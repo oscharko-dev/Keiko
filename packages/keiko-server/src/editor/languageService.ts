@@ -178,7 +178,7 @@ type CoreLanguageServiceRequest = Extract<
 >;
 
 type ExtendedLanguageServiceRequest = Exclude<LanguageServiceRequest, CoreLanguageServiceRequest>;
-type TypescriptOnlyLanguageServiceRequest = Extract<
+type ExtendedNavigationLanguageServiceRequest = Extract<
   LanguageServiceRequest,
   { operation: "typeDefinition" | "implementation" | "callHierarchy" | "inlayHints" }
 >;
@@ -377,8 +377,8 @@ function runExtendedOperation(
   ctx: LanguageProviderContext,
   limits: LanguageServiceLimits,
 ): LanguageServiceOutcome {
-  if (isTypescriptOnlyRequest(request)) {
-    return runTypescriptOnlyOperation(request, provider, ctx, limits);
+  if (isExtendedNavigationRequest(request)) {
+    return runExtendedNavigationOperation(request, provider, ctx, limits);
   }
   switch (request.operation) {
     case "definition":
@@ -396,16 +396,16 @@ function runExtendedOperation(
   }
 }
 
-function isTypescriptOnlyRequest(
+function isExtendedNavigationRequest(
   request: ExtendedLanguageServiceRequest,
-): request is TypescriptOnlyLanguageServiceRequest {
+): request is ExtendedNavigationLanguageServiceRequest {
   return new Set(["typeDefinition", "implementation", "callHierarchy", "inlayHints"]).has(
     request.operation,
   );
 }
 
-function runTypescriptOnlyOperation(
-  request: TypescriptOnlyLanguageServiceRequest,
+function runExtendedNavigationOperation(
+  request: ExtendedNavigationLanguageServiceRequest,
   provider: LanguageProvider,
   ctx: LanguageProviderContext,
   limits: LanguageServiceLimits,

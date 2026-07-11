@@ -54,7 +54,7 @@ describe("schema + frozen tables", () => {
     }).toThrow();
   });
 
-  it("exposes exactly the eleven error codes", () => {
+  it("exposes exactly the governed error codes", () => {
     expect([...LSP_PROCESS_ERROR_CODES]).toStrictEqual([
       "EXECUTABLE_NOT_FOUND",
       "SPAWN_FAILED",
@@ -62,6 +62,8 @@ describe("schema + frozen tables", () => {
       "INITIALIZE_TIMEOUT",
       "REQUEST_TIMED_OUT",
       "RESPONSE_TOO_LARGE",
+      "RESOURCE_BUDGET_EXCEEDED",
+      "RUNTIME_STATE_CLEANUP_FAILED",
       "CRASHED",
       "RESTART_THROTTLED",
       "SHUTDOWN_TIMEOUT",

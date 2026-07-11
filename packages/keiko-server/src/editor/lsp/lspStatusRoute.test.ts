@@ -22,6 +22,7 @@ function event(overrides: Partial<LspLifecycleEvent> = {}): LspLifecycleEvent {
 
 interface StatusBody {
   readonly events: readonly LspLifecycleEvent[];
+  readonly health: readonly unknown[];
 }
 
 describe("handleEditorLspStatus", () => {
@@ -59,6 +60,7 @@ describe("handleEditorLspStatus", () => {
     expect(result.status).toBe(200);
     const body = result.body as StatusBody;
     expect(body.events.map((entry) => entry.status)).toEqual(["STARTING", "READY"]);
+    expect(body.health).toEqual([]);
   });
 
   it('returns 200 when enabled with "true"', () => {
@@ -67,7 +69,7 @@ describe("handleEditorLspStatus", () => {
     });
 
     expect(result.status).toBe(200);
-    expect((result.body as StatusBody).events).toEqual([]);
+    expect(result.body).toEqual({ events: [], health: [] });
   });
 
   it("returns 200 with an empty list (not 404) when enabled and the ledger is empty", () => {
@@ -76,7 +78,7 @@ describe("handleEditorLspStatus", () => {
     });
 
     expect(result.status).toBe(200);
-    expect((result.body as StatusBody).events).toEqual([]);
+    expect(result.body).toEqual({ events: [], health: [] });
   });
 
   it("serves already-redacted events (no raw secret in the body)", () => {

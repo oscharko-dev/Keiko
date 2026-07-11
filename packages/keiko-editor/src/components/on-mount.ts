@@ -48,6 +48,7 @@ import {
   COMPLETION_ELIGIBLE_LANGUAGES,
   registerKeikoCompletionProvider,
   type MonacoDisposable,
+  type MonacoCancellationToken,
   type MonacoLanguagesRegistrar,
   type MonacoRange,
 } from "./completion-bridge.js";
@@ -275,6 +276,47 @@ export interface WireEditorInlayHints {
   readonly languages?: readonly EditorLanguageId[] | undefined;
 }
 
+export interface WireEditorSemanticTokens {
+  readonly languages: readonly EditorLanguageId[];
+  readonly provider: MonacoDocumentSemanticTokensProvider;
+  readonly legendVersion: number;
+  readonly dispose: () => void;
+}
+
+export interface MonacoSemanticTokensModel {
+  getValue(): string;
+  getVersionId(): number;
+  getLineCount(): number;
+  getLineMaxColumn(lineNumber: number): number;
+  readonly uri: MonacoUriLike;
+}
+
+export interface MonacoSemanticTokensLegend {
+  readonly tokenTypes: readonly string[];
+  readonly tokenModifiers: readonly string[];
+}
+
+export interface MonacoSemanticTokens {
+  readonly data: Uint32Array;
+}
+
+export interface MonacoDocumentSemanticTokensProvider {
+  getLegend(): MonacoSemanticTokensLegend;
+  provideDocumentSemanticTokens(
+    model: MonacoSemanticTokensModel,
+    lastResultId: string | null,
+    token: MonacoCancellationToken,
+  ): Promise<MonacoSemanticTokens | null>;
+  releaseDocumentSemanticTokens(resultId: string): void;
+}
+
+export interface MonacoSemanticTokensRegistrar {
+  registerDocumentSemanticTokensProvider(
+    languageSelector: string,
+    provider: MonacoDocumentSemanticTokensProvider,
+  ): MonacoDisposable;
+}
+
 export interface WireEditorCallHierarchy {
   readonly resolve: EditorCallHierarchyResolver;
   readonly isCurrentDocument: (documentUri: string) => boolean;
@@ -420,6 +462,7 @@ export interface WireEditorOnMountArgs {
   readonly implementation?: WireEditorDefinition | undefined;
   readonly callHierarchy?: WireEditorCallHierarchy | undefined;
   readonly inlayHints?: WireEditorInlayHints | undefined;
+  readonly semanticTokens?: WireEditorSemanticTokens | undefined;
   /** Find-references wiring (Epic #2089); absent when the host supplies no resolver. */
   readonly references?: WireEditorReferences | undefined;
   /** Code-action wiring (Epic #2089); absent when the host supplies no resolver. */
@@ -705,6 +748,23 @@ function installInlayHintsProvider(args: WireEditorOnMountArgs): MonacoDisposabl
     streamId: wiring.streamId,
     newRequestId: wiring.newRequestId,
   });
+}
+
+function installSemanticTokensProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.semanticTokens;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoSemanticTokensRegistrar;
+  if (typeof registrar.registerDocumentSemanticTokensProvider !== "function") return null;
+  const registrations = wiring.languages.map((language) =>
+    registrar.registerDocumentSemanticTokensProvider(language, wiring.provider),
+  );
+  return {
+    dispose(): void {
+      for (const registration of registrations) registration.dispose();
+      wiring.dispose();
+    },
+  };
 }
 
 function installCallHierarchyAction(args: WireEditorOnMountArgs): MonacoDisposable | null {
@@ -1042,6 +1102,7 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     implementationSub,
     callHierarchySub,
     inlayHintsSub,
+    installSemanticTokensProvider(args),
     referencesSub,
     codeActionsSub,
     signatureHelpSub,

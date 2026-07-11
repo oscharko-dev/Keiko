@@ -6,6 +6,7 @@ import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
 import { LOCALE_LABELS, useLocale, useSetLocale } from "@/lib/i18n";
 import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
 import type {
   ConversationIneligibilityReason,
   GatewayReadinessProbeResult,
@@ -896,7 +897,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
   );
 }
 
-type Tab = "models" | "general" | "security";
+type Tab = "models" | "general" | "languages" | "security";
 
 // uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
 // codes, not explanations — map them to a human-readable message. Messages
@@ -919,8 +920,10 @@ function describeSettingsLoadError(error: unknown, t: I18nTranslate): string {
 
 export function SettingsPanel({
   openUpdatesWindow,
+  root,
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
+  readonly root?: string | undefined;
 } = {}): ReactNode {
   const t = useTranslate();
   const [tab, setTab] = useState<Tab>("models");
@@ -1034,7 +1037,7 @@ export function SettingsPanel({
   return (
     <div className="set">
       <div className="set-tabs">
-        {(["models", "general", "security"] as readonly Tab[]).map((id) => (
+        {(["models", "general", "languages", "security"] as readonly Tab[]).map((id) => (
           <button
             type="button"
             key={id}
@@ -1050,11 +1053,7 @@ export function SettingsPanel({
             onClick={() => setTab(id)}
           >
             {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}
-            {id === "models"
-              ? t("settings.tabs.models")
-              : id === "general"
-                ? t("settings.tabs.general")
-                : t("settings.tabs.security")}
+            {settingsTabLabel(id, t)}
           </button>
         ))}
       </div>
@@ -1165,10 +1164,18 @@ export function SettingsPanel({
         {tab === "general" && (
           <GeneralPrefs voicePersonas={voicePersonas} openUpdatesWindow={openUpdatesWindow} />
         )}
+        {tab === "languages" && <ManagedLanguageSettings root={root} />}
         {tab === "security" && (
           <div className="set-placeholder">{t("settings.security.placeholder")}</div>
         )}
       </div>
     </div>
   );
+}
+
+function settingsTabLabel(tab: Tab, t: I18nTranslate): string {
+  if (tab === "models") return t("settings.tabs.models");
+  if (tab === "general") return t("settings.tabs.general");
+  if (tab === "languages") return t("settings.tabs.languages");
+  return t("settings.tabs.security");
 }

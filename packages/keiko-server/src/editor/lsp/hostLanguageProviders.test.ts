@@ -78,7 +78,7 @@ describe("detectHostLanguageProviderDescriptors", () => {
       languages: ["python"],
       availability: "available",
     });
-    expect(descriptor.operations).toEqual(["diagnostics", "completion", "hover", "symbols"]);
+    expect(descriptor.operations).toEqual(spec.operations);
     expect(descriptor.unavailableReason).toBeUndefined();
   });
 
