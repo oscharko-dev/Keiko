@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 const checkName = "Banking Quality Gate";
 const gitarAppId = 827041;
 const gitarGraceMs = 90_000;
+const socketAppId = 156372;
 
 export const bankingRequiredChecks = [
   { appId: 15368, name: "ci" },
@@ -36,9 +37,10 @@ function matchingCheck(checks, requirement, headSha) {
 export function evaluateBankingEvidence(input) {
   const checks = evaluateRequiredChecks(input);
   const gitar = evaluateGitar(input);
+  const socket = evaluateSocket(input);
   return {
-    failures: [...checks.failures, ...gitar.failures],
-    pending: [...checks.pending, ...gitar.pending],
+    failures: [...checks.failures, ...gitar.failures, ...socket.failures],
+    pending: [...checks.pending, ...gitar.pending, ...socket.pending],
   };
 }
 
@@ -91,6 +93,27 @@ function gitarCommentHasFindings(input, gitar) {
   return (comment?.findingCount ?? 0) > 0;
 }
 
+function evaluateSocket(input) {
+  const socket = matchingCheck(
+    input.checks,
+    { appId: input.socketAppId ?? socketAppId, name: "Socket Security: Pull Request Alerts" },
+    input.headSha,
+  );
+  if (socket?.startedAt === undefined) return { failures: [], pending: [] };
+  const comment = (input.comments ?? []).find(
+    (candidate) =>
+      candidate.appId === (input.socketAppId ?? socketAppId) &&
+      Date.parse(candidate.updatedAt) >= Date.parse(socket.startedAt),
+  );
+  return {
+    failures:
+      (comment?.alertCount ?? 0) > 0
+        ? [`Socket reports ${String(comment.alertCount)} unresolved dependency alert(s).`]
+        : [],
+    pending: [],
+  };
+}
+
 function githubHeaders(token) {
   return {
     Accept: "application/vnd.github+json",
@@ -121,14 +144,26 @@ function normalizeChecks(payload) {
 }
 
 export function normalizeComments(payload) {
-  return payload
-    .filter((comment) => comment.user?.login === "gitar-bot[bot]")
-    .map((comment) => ({
-      appId: gitarAppId,
-      findingCount: Number(comment.body?.match(/\b(\d+) findings?\b/u)?.[1] ?? 0),
-      updatedAt: comment.updated_at,
-    }))
-    .reverse();
+  return payload.flatMap((comment) => normalizeBotComment(comment)).reverse();
+}
+
+function normalizeBotComment(comment) {
+  if (comment.user?.login === "gitar-bot[bot]") return [normalizeGitarComment(comment)];
+  if (comment.user?.login !== "socket-security[bot]") return [];
+  return [normalizeSocketComment(comment)];
+}
+
+function normalizeGitarComment(comment) {
+  return {
+    appId: gitarAppId,
+    findingCount: Number(comment.body?.match(/\b(\d+) findings?\b/u)?.[1] ?? 0),
+    updatedAt: comment.updated_at,
+  };
+}
+
+function normalizeSocketComment(comment) {
+  const alertCount = comment.body?.match(/<td[^>]*>\s*(?:Error|Warn)\s*<\/td>/gu)?.length ?? 0;
+  return { alertCount, appId: socketAppId, updatedAt: comment.updated_at };
 }
 
 function normalizeReviews(payload) {
@@ -201,6 +236,7 @@ async function awaitBankingEvidence(config) {
       headSha: config.headSha,
       now: Date.now(),
       requiredChecks: bankingRequiredChecks,
+      socketAppId,
     });
     if (result.failures.length > 0) throw new Error(result.failures.join(" "));
     if (result.pending.length === 0) return;

@@ -38,6 +38,9 @@ The aggregate requires app-bound success from:
 Gitar's processing check can be green while findings exist. The aggregator therefore also rejects
 a current-head Gitar `CHANGES_REQUESTED` review and a current dashboard comment with unresolved
 findings. A stabilization window prevents the check from racing ahead of Gitar's review output.
+Socket can likewise report dependency alerts in its PR dashboard while its processing checks are
+green. A current-run Socket alert comment containing any `Warn` or `Error` entry fails the aggregate
+until the alert is removed or explicitly triaged by repository policy.
 
 Missing, pending, stale, cancelled, skipped, neutral, timed-out, or app-mismatched evidence never
 passes. A new commit receives a new head-bound check and invalidates all prior evidence.

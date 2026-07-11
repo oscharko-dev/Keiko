@@ -117,6 +117,41 @@ describe("Banking Quality Gate", () => {
     expect(comments.map((comment) => comment.findingCount)).toEqual([2, 1]);
   });
 
+  it("fails when Socket reports alerts despite a green processing check", () => {
+    const result = evaluateBankingEvidence({
+      checks: [
+        check("ci", 15368),
+        check("Gitar", 827041),
+        check("Socket Security: Pull Request Alerts", 156372),
+      ],
+      comments: [{ alertCount: 2, appId: 156372, updatedAt: "2026-07-11T16:00:30.000Z" }],
+      gitarAppId: 827041,
+      gitarGraceMs: 60_000,
+      headSha,
+      now: Date.parse("2026-07-11T16:02:00.000Z"),
+      requiredChecks,
+      reviews: [],
+      socketAppId: 156372,
+    });
+    expect(result.failures).toContain("Socket reports 2 unresolved dependency alert(s).");
+  });
+
+  it("extracts blocking Socket Warn and Error rows", () => {
+    const comments = normalizeComments([
+      {
+        body: '<td valign="top">Warn</td><td>Error text</td>',
+        updated_at: "2026-07-11T16:00:00.000Z",
+        user: { login: "socket-security[bot]" },
+      },
+      {
+        body: '<td valign="top">Error</td>',
+        updated_at: "2026-07-11T16:01:00.000Z",
+        user: { login: "socket-security[bot]" },
+      },
+    ]);
+    expect(comments.map((comment) => comment.alertCount)).toEqual([1, 1]);
+  });
+
   it("accepts only an exact-head CI workflow run for a dev pull request", async () => {
     const event = {
       workflow_run: {
