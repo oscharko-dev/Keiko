@@ -226,6 +226,29 @@ async function stubCapability(page: Page, body: unknown): Promise<void> {
   );
 }
 
+async function expectActiveComposerSettled(page: Page): Promise<void> {
+  const composer = page.locator(".cmp-box");
+  const normalLayer = composer.locator('[data-composer-layer="normal"]');
+  const voiceLayer = composer.locator('[data-composer-layer="voice"]');
+  await expect(normalLayer).toHaveCSS("opacity", "0");
+  await expect(voiceLayer).toHaveCSS("opacity", "1");
+  await expect(normalLayer).toHaveAttribute("aria-hidden", "true");
+  await expect(normalLayer).toHaveAttribute("inert", "");
+
+  const centreOffset = await composer.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const cluster = element.querySelector(".cmp-bar-main-voice-dialog")?.getBoundingClientRect();
+    if (cluster === undefined) return undefined;
+    return {
+      x: cluster.x + cluster.width / 2 - (box.x + box.width / 2),
+      y: cluster.y + cluster.height / 2 - (box.y + box.height / 2),
+    };
+  });
+  expect(centreOffset).toBeDefined();
+  expect(Math.abs(centreOffset?.x ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
+  expect(Math.abs(centreOffset?.y ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
+}
+
 interface CapturedVoiceTurnBody {
   readonly chatId?: string;
   readonly projectPath?: string;
@@ -306,20 +329,22 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
+  await expectActiveComposerSettled(page);
 
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/1560-dialogue-session.png"),
     fullPage: true,
   });
 
-  const composer = page.getByRole("textbox", { name: "Chat message" }).first();
+  const composer = page.locator(".cmp-input");
+  await expect(composer).toHaveCount(1);
+  await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
   await expect.poll(() => voiceTurns.turns().length).toBeGreaterThanOrEqual(2);
   expect(voiceTurns.turns()).toEqual(
     expect.arrayContaining([
@@ -334,7 +359,7 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toHaveCount(0);
-  await expect(composer).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
 }
 
 test("voice dialogue @smoke — no-voice deployment offers no dialogue switch (AC4)", async ({
@@ -360,7 +385,7 @@ async function micLifecycleFlow(page: Page): Promise<void> {
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
   await expect.poll(() => micStat(page, "getUserMedia")).toBe(1);
-  await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
+  await expectActiveComposerSettled(page);
 
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/1562-dialogue-mic-lifecycle.png"),
@@ -411,12 +436,18 @@ async function activeComposerControlsFlow(page: Page): Promise<void> {
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Attach file" })).toHaveCount(0);
+  await expect(page.getByRole("combobox", { name: "Models" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Dictate a message" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mute assistant voice" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+  await expectActiveComposerSettled(page);
 
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/1563-dialogue-evaluation.png"),
@@ -454,6 +485,45 @@ test("voice dialogue @smoke — active composer keeps only switch and mic mute v
   await activeComposerControlsFlow(page);
 });
 
+async function reducedMotionComposerFlow(page: Page): Promise<void> {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.addInitScript(fakeRealtimeInit());
+  await stubCapability(page, FULL_REALTIME_WEBRTC_CAPABILITY);
+  await openComposer(page);
+
+  const composer = page.locator(".cmp-box");
+  const normalLayer = composer.locator('[data-composer-layer="normal"]');
+  const voiceLayer = composer.locator('[data-composer-layer="voice"]');
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+
+  await dialogSwitch.click();
+  await expectActiveComposerSettled(page);
+  await expect(normalLayer).toHaveCSS("transition-duration", "0s");
+  await expect(normalLayer).toHaveCSS("transform", "none");
+  await expect(normalLayer).toHaveCSS("filter", "none");
+  await expect(voiceLayer).toHaveCSS("transition-duration", "0s");
+  await expect(voiceLayer).toHaveCSS("transform", "none");
+  await expect(voiceLayer).toHaveCSS("filter", "none");
+
+  await page.screenshot({
+    path: evidenceScreenshotPath("docs/voice/evidence/1563-dialogue-reduced-motion.png"),
+    fullPage: true,
+  });
+
+  await dialogSwitch.click();
+  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
+  await expect(normalLayer).toHaveCSS("opacity", "1");
+  await expect(normalLayer).toHaveCSS("transform", "none");
+  await expect(voiceLayer).toHaveCSS("opacity", "0");
+  await expect(voiceLayer).toHaveCSS("transform", "none");
+}
+
+test("voice dialogue @smoke — reduced motion uses a static accessible state change", async ({
+  page,
+}) => {
+  await reducedMotionComposerFlow(page);
+});
+
 async function enterDialogue(page: Page): Promise<void> {
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await expect(dialogSwitch).toBeVisible();
@@ -475,6 +545,7 @@ async function personaStorageFlow(page: Page): Promise<void> {
   );
   await enterDialogue(page);
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
+  await expectActiveComposerSettled(page);
 
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/1564-persona-storage.png"),

@@ -10,11 +10,15 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { join, posix, relative, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
+
+import {
+  PORTABLE_PAYLOAD_MAX_DEPTH as MAX_DEPTH,
+  PORTABLE_PAYLOAD_MAX_FILES as MAX_FILES,
+  portablePayloadRelativePath as portablePath,
+} from "./portable-runtime.mjs";
 
 const TARGETS = new Set(["macos-arm64", "macos-x64"]);
-const MAX_FILES = 50_000;
-const MAX_DEPTH = 32;
 const MAX_CODE_OBJECTS = 4_096;
 const MACH_O_MAGICS = new Set([
   0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca,
@@ -27,7 +31,7 @@ export function boundedMacSigningFail(message) {
   throw new BoundedMacSigningError(`macos-portable-signing: ${message}`);
 }
 
-function hasUnsafeText(value) {
+export function hasUnsafeText(value) {
   return Array.from(value).some((character) => {
     const code = character.charCodeAt(0);
     return character === "\\" || code < 32 || code === 127;
@@ -41,10 +45,6 @@ function isSafePortablePath(path) {
     !hasUnsafeText(path) &&
     !path.split("/").some((part) => part === "." || part === "..")
   );
-}
-
-function portablePath(root, path) {
-  return relative(root, path).replaceAll("\\", "/");
 }
 
 function sha256(path) {

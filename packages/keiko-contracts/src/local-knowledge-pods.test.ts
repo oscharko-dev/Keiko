@@ -632,3 +632,77 @@ describe("validateKnowledgePodSummary", () => {
     );
   });
 });
+
+// Connector-backed pods project their redacted source metadata through the same optional-field
+// pattern the HTML-manual refresh summary uses (Issue #2240, Epic #2238, ADR-0128 D5/D6).
+function validConnectorSource(): Record<string, unknown> {
+  return {
+    provider: "confluence",
+    connectorId: "conn-confluence-prod",
+    scopeLabels: ["ENG", "DOCS"],
+    lastSyncAt: 1_700_000_000_000,
+    lastChangeSummary: {
+      schemaVersion: "1",
+      outcome: "succeeded",
+      counts: {
+        addedItems: 3,
+        changedItems: 1,
+        removedItems: 0,
+        unchangedItems: 20,
+        failedItems: 0,
+        deniedItems: 0,
+      },
+      fingerprintSetDigest: "a".repeat(64),
+      completedAt: 1_700_000_000_500,
+    },
+  };
+}
+
+describe("KnowledgePodSummary connectorSource projection (Issue #2240)", () => {
+  it("accepts a summary carrying valid Atlassian connector source metadata", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      connectorSource: validConnectorSource(),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps connectorSource optional for every non-connector pod", () => {
+    expect(validateKnowledgePodSummary(happySummary()).ok).toBe(true);
+  });
+
+  it("rejects an unexpected field on the connector source", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      connectorSource: { ...validConnectorSource(), pageBodies: ["raw"] },
+    });
+    expect(invalidErrors(result)).toContain("summary.connectorSource must not include pageBodies");
+  });
+
+  it("rejects hostile scope labels on the connector source", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      connectorSource: { ...validConnectorSource(), scopeLabels: ["https://evil.example"] },
+    });
+    expect(invalidErrors(result)).toContain(
+      "summary.connectorSource.scopeLabels entries must be valid keys",
+    );
+  });
+
+  it("rejects a connector source whose nested change summary is malformed", () => {
+    const source = validConnectorSource();
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      connectorSource: {
+        ...source,
+        lastChangeSummary: {
+          ...(source.lastChangeSummary as Record<string, unknown>),
+          fingerprintSetDigest: "not-a-digest",
+        },
+      },
+    });
+    expect(invalidErrors(result)).toContain(
+      "summary.connectorSource.changeSummary.fingerprintSetDigest must be a 64-character lowercase hex digest",
+    );
+  });
+});

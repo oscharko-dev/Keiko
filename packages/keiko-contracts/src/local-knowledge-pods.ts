@@ -45,6 +45,8 @@ import {
   validateManualRefreshChangeSummary,
   type ManualRefreshChangeSummary,
 } from "./html-manual-refresh.js";
+import type { AtlassianConnectorPodSource } from "./atlassian-connectors.js";
+import { validateAtlassianConnectorPodSource } from "./atlassian-connectors-validation.js";
 
 export const KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION = "1" as const;
 
@@ -201,6 +203,11 @@ export interface KnowledgePodSummary {
   // #1856). Counts + reason codes + an opaque crawl-run fingerprint only — never a raw path or body.
   // Absent until the pod has been refreshed at least once, and for every non-manual pod.
   readonly manualRefresh?: ManualRefreshChangeSummary;
+  // Optional redacted source metadata for a pod synced from an Atlassian connector (Issue #2240,
+  // Epic #2238, ADR-0128). Provider, connector id, scope labels (space/project keys — identifiers,
+  // never paths or bodies), last sync time, and the last run's body-free change summary. Absent for
+  // every pod not backed by a connector source.
+  readonly connectorSource?: AtlassianConnectorPodSource;
 }
 
 export interface LocalKnowledgeCapsuleListEntry {
@@ -249,6 +256,7 @@ const SUMMARY_KEYS = [
   "degradationReasons",
   "manualSourceFingerprint",
   "manualRefresh",
+  "connectorSource",
 ] as const;
 
 const COUNT_KEYS = ["capsuleCount", "sourceCount", "documentCount", "chunkCount", "vectorCount"];
@@ -1101,6 +1109,18 @@ function validateSummaryScalars(input: Record<string, unknown>, errors: string[]
     errors,
   );
   validateOptionalManualRefresh(input.manualRefresh, errors);
+  validateOptionalConnectorSource(input.connectorSource, errors);
+}
+
+// Mirrors validateOptionalManualRefresh for connector-backed pods. Unlike the manual-refresh leaf
+// validator, validateAtlassianConnectorPodSource already rejects unknown/extra keys itself, so no
+// second onlyKeys pass is needed at this layer.
+function validateOptionalConnectorSource(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const result = validateAtlassianConnectorPodSource(value);
+  if (!result.ok) {
+    errors.push(...result.errors.map((error) => `summary.${error}`));
+  }
 }
 
 function validateOptionalManualRefresh(value: unknown, errors: string[]): void {

@@ -73,6 +73,11 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   requestVerification: "execution",
   navigateSymbol: "navigation",
   searchWorkspace: "navigation",
+  // Issue #2298: read-only on-demand git query. Navigation-class like search/symbol lookup — it
+  // reads bounded, redacted source-control state and never mutates, so it inherits the deliberate
+  // Authority-Envelope exemption and is unconditionally `allowed` by the classifier, gated only by
+  // the structural workspace-containment / sensitive-path check on its file argument.
+  queryGit: "navigation",
 };
 
 // Pure editor navigation and layout do not consume workspace or delivery authority. Mutating and
@@ -120,6 +125,7 @@ export const EDITOR_AGENT_ACTION_APPROVAL_RISK: Readonly<
   requestVerification: "low",
   navigateSymbol: "low",
   searchWorkspace: "low",
+  queryGit: "low",
 };
 
 // The mutating action set — the classes that change buffer/file content or have an external effect.

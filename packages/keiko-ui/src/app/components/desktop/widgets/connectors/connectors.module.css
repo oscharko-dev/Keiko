@@ -1,0 +1,297 @@
+/* Issue #2245 (Epic #2238) — component-scoped styles for the Atlassian connector surfaces.
+   Never globals.css (SHA-pinned visual-proof gate #1300). Follows the ConnectorPickerWidget module
+   pattern: a hashed scope class carries the marker, and every real rule is a `:global(.acx-*)`
+   selector nested UNDER that scope class, so the plain class names cannot leak outside this subtree.
+   Colours come exclusively from existing design tokens; badges/buttons reuse global lk-* classes. */
+
+.scope {
+  --connectors-scope: 1;
+}
+
+.scope:global(.acx-panel) {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  padding: 16px 18px;
+  overflow-y: auto;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+}
+
+.scope :global(.acx-title) {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.scope :global(.acx-subtitle) {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.scope :global(.acx-section) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.scope :global(.acx-section-title) {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.scope :global(.acx-list) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scope :global(.acx-card) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-primary);
+}
+
+.scope :global(.acx-card-head) {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.scope :global(.acx-card-title) {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.scope :global(.acx-meta) {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.scope :global(.acx-actions) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scope :global(.acx-form) {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset, var(--surface-primary));
+}
+
+.scope :global(.acx-field) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scope :global(.acx-label) {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.scope :global(.acx-input),
+.scope :global(.acx-select) {
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--combobox-surface, var(--surface-primary));
+  color: var(--input-text, var(--text-primary));
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.scope :global(.acx-input):focus-visible,
+.scope :global(.acx-select):focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.scope :global(.acx-input[aria-invalid="true"]) {
+  border-color: var(--feedback-danger);
+}
+
+.scope :global(.acx-hint) {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-tertiary, var(--text-secondary));
+  line-height: 1.4;
+}
+
+.scope :global(.acx-error) {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--feedback-danger);
+  line-height: 1.4;
+}
+
+.scope :global(.acx-notice) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-primary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.scope :global(.acx-notice-label) {
+  font-weight: 700;
+}
+
+.scope :global(.acx-notice[data-tone="ok"]) {
+  border-color: color-mix(
+    in oklch,
+    var(--feedback-success, var(--accent)) 45%,
+    var(--border-strong)
+  );
+  background: color-mix(
+    in oklch,
+    var(--feedback-success, var(--accent)) 12%,
+    var(--surface-primary)
+  );
+  color: var(--text-primary);
+}
+
+.scope :global(.acx-notice[data-tone="warning"]) {
+  border-color: color-mix(in oklch, var(--feedback-warning) 45%, var(--border-strong));
+  background: color-mix(in oklch, var(--feedback-warning) 12%, var(--surface-primary));
+}
+
+.scope :global(.acx-notice[data-tone="danger"]) {
+  border-color: color-mix(in oklch, var(--feedback-danger) 45%, var(--border-strong));
+  background: color-mix(in oklch, var(--feedback-danger) 12%, var(--surface-primary));
+}
+
+.scope :global(.acx-chips) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scope :global(.acx-chip) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-primary);
+  font-size: 12px;
+}
+
+.scope :global(.acx-chip-remove) {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.scope :global(.acx-chip-remove):hover {
+  color: var(--feedback-danger);
+}
+
+.scope :global(.acx-chip-remove):focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.scope :global(.acx-counts) {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 2px 14px;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.scope :global(.acx-counts) dt {
+  display: inline;
+  color: var(--text-secondary);
+}
+
+.scope :global(.acx-counts) dt::after {
+  content: ": ";
+}
+
+.scope :global(.acx-counts) dd {
+  display: inline;
+  margin: 0;
+  font-weight: 600;
+}
+
+.scope :global(.acx-degraded) {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.scope :global(.acx-badge-row) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scope :global(.acx-empty),
+.scope :global(.acx-muted) {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.scope :global(.acx-status) {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}

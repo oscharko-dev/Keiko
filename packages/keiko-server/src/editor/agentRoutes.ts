@@ -49,6 +49,8 @@ import {
   type EditorAgentBridgeSnapshotRequest,
   type EditorAgentConflictCode,
   type EditorAgentEvent,
+  type EditorAgentGitAspect,
+  GIT_EDITOR_BLAME_MAX_LINES,
   type EditorAgentSessionSnapshot,
   type EditorAgentSnapshotTextMode,
   type CodingWorkbenchMode,
@@ -83,6 +85,7 @@ import {
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
+import { handleGitStatus, handleGitStructuredDiff, handleGitBlame } from "../gitRoutes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { handleEditorLanguage } from "./languageRoutes.js";
 import {
@@ -121,7 +124,11 @@ type ChangesetFileResult = NonNullable<EditorAgentActionResult["files"]>[number]
 type DocumentVersion = NonNullable<ChangesetFile["expectedDocumentVersion"]>;
 
 function isServerResolvedAction(action: EditorAgentAction): boolean {
-  return action.type === "navigateSymbol" || action.type === "searchWorkspace";
+  return (
+    action.type === "navigateSymbol" ||
+    action.type === "searchWorkspace" ||
+    action.type === "queryGit"
+  );
 }
 
 let editorAgentPatchWriterForTests: WorkspaceWriter | undefined;
@@ -1214,16 +1221,23 @@ function resolveActionTargetPaths(
   return resolveNonMutationTargetPath(action, snapshot);
 }
 
-function serverResolvedActionPaths(action: EditorAgentAction): readonly (string | undefined)[] {
-  if (action.type === "navigateSymbol") {
-    return [action.navigateSymbol?.document.path, action.target?.file];
-  }
+function searchWorkspaceResolvedPaths(action: EditorAgentAction): readonly (string | undefined)[] {
   return [
     action.searchWorkspace?.scopePath,
     action.target?.file,
     ...(action.searchWorkspace?.includeGlobs ?? []),
     ...(action.searchWorkspace?.excludeGlobs ?? []),
   ];
+}
+
+function serverResolvedActionPaths(action: EditorAgentAction): readonly (string | undefined)[] {
+  if (action.type === "navigateSymbol") {
+    return [action.navigateSymbol?.document.path, action.target?.file];
+  }
+  if (action.type === "queryGit") {
+    return [action.queryGit?.path, action.target?.file];
+  }
+  return searchWorkspaceResolvedPaths(action);
 }
 
 function serverResolvedPathIssue(path: string): EditorAgentActionDenyReason | null {
@@ -1882,14 +1896,81 @@ async function runSearchWorkspaceAction(
   );
 }
 
+// Issue #2298: a GET-style synthesized route context so the read-only git handlers (which read
+// `root`/`path` from the query string) can run in-process — mirroring the gitDelivery agent-ops
+// in-process read path, never a second HTTP hop.
+function gitReadContext(
+  path: string,
+  entries: readonly (readonly [string, string])[],
+): RouteContext {
+  const url = new URL(`http://127.0.0.1${path}`);
+  for (const [key, value] of entries) url.searchParams.set(key, value);
+  const req = Readable.from([]) as unknown as IncomingMessage;
+  (req as { method?: string }).method = "GET";
+  const res = {
+    writableEnded: false,
+    on: (): typeof res => res,
+  } as unknown as ServerResponse;
+  return { req, res, params: {}, url };
+}
+
+function runGitAspectResult(
+  aspect: EditorAgentGitAspect,
+  root: string,
+  path: string,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
+  if (aspect === "status") {
+    return handleGitStatus(gitReadContext("/api/git/status", [["root", root]]), deps);
+  }
+  if (aspect === "diff") {
+    // The unstaged working-tree diff vs HEAD is the change set an agent reasons about before
+    // proposing an edit; the structured-diff handler requires an explicit scope.
+    return handleGitStructuredDiff(
+      gitReadContext("/api/git/diff/structured", [
+        ["root", root],
+        ["path", path],
+        ["scope", "unstaged"],
+      ]),
+      deps,
+    );
+  }
+  // Blame the whole file from line 1, capped at the handler's own bounded maximum.
+  return handleGitBlame(
+    gitReadContext("/api/git/blame", [
+      ["root", root],
+      ["path", path],
+      ["startLine", "1"],
+      ["maxLines", String(GIT_EDITOR_BLAME_MAX_LINES)],
+    ]),
+    deps,
+  );
+}
+
+async function runQueryGitAction(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps,
+): Promise<RouteResult> {
+  const request = action.queryGit;
+  if (request === undefined) throw new Error("queryGit payload is missing");
+  const aspects: Record<string, unknown> = {};
+  for (const aspect of request.aspects) {
+    const result = await runGitAspectResult(aspect, snapshot.workspaceRoot, request.path, deps);
+    if (result.status !== 200) return result;
+    aspects[aspect] = isRecord(result.body) ? result.body : {};
+  }
+  return { status: 200, body: { path: request.path, aspects } };
+}
+
 function serverResolvedActionRoute(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
 ): Promise<RouteResult> {
-  return action.type === "navigateSymbol"
-    ? runNavigateSymbolAction(action, snapshot, deps)
-    : runSearchWorkspaceAction(action, snapshot, deps);
+  if (action.type === "navigateSymbol") return runNavigateSymbolAction(action, snapshot, deps);
+  if (action.type === "queryGit") return runQueryGitAction(action, snapshot, deps);
+  return runSearchWorkspaceAction(action, snapshot, deps);
 }
 
 async function executeServerResolvedAction(

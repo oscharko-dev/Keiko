@@ -196,6 +196,22 @@ const SEARCH_WORKSPACE_PARAMETERS = objectSchema(
   ["sessionId", "idempotencyKey", "query", "mode"],
 );
 
+const GIT_CONTEXT_PARAMETERS = objectSchema(
+  {
+    sessionId: { type: "string", minLength: 1 },
+    idempotencyKey: IDEMPOTENCY_KEY_SCHEMA,
+    path: { type: "string", minLength: 1 },
+    aspects: {
+      type: "array",
+      items: { type: "string", enum: ["status", "diff", "blame"] },
+      minItems: 1,
+      maxItems: 3,
+      uniqueItems: true,
+    },
+  },
+  ["sessionId", "idempotencyKey", "path", "aspects"],
+);
+
 export const EDITOR_AGENT_TOOL_DEFINITIONS: readonly ToolDefinition[] = deepFreeze([
   {
     name: "editor_list_sessions",
@@ -224,6 +240,12 @@ export const EDITOR_AGENT_TOOL_DEFINITIONS: readonly ToolDefinition[] = deepFree
     description:
       "Search workspace text or symbols through the governed editor action queue with bounded ranked results.",
     parameters: SEARCH_WORKSPACE_PARAMETERS,
+  },
+  {
+    name: "editor_git_context",
+    description:
+      "Read bounded, redacted source-control status, diff-vs-HEAD, and blame for one workspace file through the governed editor action queue. Read-only; never mutates git state.",
+    parameters: GIT_CONTEXT_PARAMETERS,
   },
   {
     name: "editor_propose_edit",

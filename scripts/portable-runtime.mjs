@@ -4,6 +4,15 @@ import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
 
+// Shared bounds for the platform-specific bounded payload-tree walkers (Windows PE and macOS
+// Mach-O inventory). Kept in one place so the two walkers cannot drift to different limits.
+export const PORTABLE_PAYLOAD_MAX_FILES = 50_000;
+export const PORTABLE_PAYLOAD_MAX_DEPTH = 32;
+
+export function portablePayloadRelativePath(root, path) {
+  return relative(root, path).replaceAll("\\", "/");
+}
+
 export const PORTABLE_TARGETS = Object.freeze([
   Object.freeze({
     assetName: "keiko-windows-x64.zip",

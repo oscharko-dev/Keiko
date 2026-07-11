@@ -288,7 +288,10 @@ function configuredEmbeddingProvider(
   return isConfiguredEmbeddingModel(config, provider.modelId) ? provider : undefined;
 }
 
-function configuredProviderForCapsule(
+// Exported for the Atlassian connector sync service (Issue #2242), which drives the SAME
+// indexing composition (provider resolution + embedding adapter) for connector pods instead of
+// growing a second one.
+export function configuredProviderForCapsule(
   deps: UiHandlerDeps,
   capsule: KnowledgeCapsule,
 ): ModelProviderConfig | undefined {
@@ -1298,6 +1301,20 @@ function requestEmbeddingImpl(
   return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
 }
 
+// Exported for the Atlassian connector sync service (Issue #2242): the identical indexing-time
+// embedding adapter composition every capsule indexing run already uses.
+export function localKnowledgeEmbeddingAdapterForProvider(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+): OpenAIEmbeddingAdapter {
+  return createEmbeddingAdapter(
+    provider,
+    requestEmbeddingImpl(deps),
+    requestEmbeddingBatchImpl(deps),
+    currentGatewayEgressConfig(deps),
+  );
+}
+
 // #189 GRD-004: returns the array-batch impl, or undefined to fall back to per-chunk scalar
 // embedding. A test that stubs only the scalar request (localKnowledgeEmbeddingRequest) gets
 // no batch port unless it also stubs the batch request — keeping existing call-count tests valid.
@@ -1576,7 +1593,9 @@ async function verifiedNewCapsuleEmbeddingIdentity(
   }
 }
 
-async function resolveNewCapsuleEmbeddingIdentity(
+// Exported for the Atlassian connector sync service (Issue #2242): connector pods pin their
+// embedding identity through the same preflight-verified resolution as every other new capsule.
+export async function resolveNewCapsuleEmbeddingIdentity(
   deps: UiHandlerDeps,
 ): Promise<
   | { readonly ok: true; readonly identity: KnowledgeCapsule["embeddingModelIdentity"] }
