@@ -267,5 +267,29 @@ describe("Coding Workbench runtime contracts", () => {
     expect(validateCodingWorkbenchRuntimeState({ ...active, state: "idle" })).toMatchObject({
       ok: false,
     });
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        schemaVersion: "1",
+        state: "recovery-required",
+        revision: 1,
+        updatedAt: "2026-07-11T12:00:00.000Z",
+        failureCode: "recovery-required",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        ...active,
+        state: "recovery-required",
+        failureCode: "recovery-required",
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeState({
+        ...active,
+        state: "recovery-required",
+        taskId: undefined,
+        failureCode: "recovery-required",
+      }),
+    ).toMatchObject({ ok: false });
   });
 });

@@ -5,6 +5,7 @@ import {
   resolveEffectiveCodingWorkbenchMode,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
   validateCodingWorkbenchRuntimeMintConfirmation,
+  validateCodingWorkbenchRuntimeState,
   type CodingWorkbenchActionClass,
   type CodingWorkbenchAuthorityEnvelope,
   type CodingWorkbenchBranchConstraints,
@@ -186,10 +187,11 @@ export class CodingRuntimeAuthorityService {
     nowIso: string,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
   ): boolean {
-    if (Number.isNaN(Date.parse(nowIso))) return false;
     if (!isLegalCodingWorkbenchRuntimeTransition(this.runtimeState.state, target)) return false;
     if (this.runtimeState.runId !== undefined && this.runtimeState.runId !== runId) return false;
-    this.runtimeState = transitionedState(this.runtimeState, target, nowIso, failureCode);
+    const candidate = transitionedState(this.runtimeState, target, nowIso, failureCode);
+    if (!validateCodingWorkbenchRuntimeState(candidate).ok) return false;
+    this.runtimeState = candidate;
     if (isTerminalRuntimeState(target)) {
       if (this.activeAuthorityRef !== undefined) this.registry.revoke(this.activeAuthorityRef);
       this.activeAuthorityRef = undefined;

@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeIntent,
+  CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
-import { validateCodingWorkbenchRuntimeAuthorityFacts } from "@oscharko-dev/keiko-contracts";
+import {
+  validateCodingWorkbenchRuntimeAuthorityFacts,
+  validateCodingWorkbenchRuntimeState,
+} from "@oscharko-dev/keiko-contracts";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import {
   CodingRuntimeAuthorityService,
@@ -25,6 +29,66 @@ const intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" 
   taskIntent: "Implement issue",
   requestedMode: "supervised-coding",
   modelSource: "keiko-model-gateway",
+};
+
+const LEGAL_TRANSITION_PAIRS: readonly (readonly [
+  CodingWorkbenchRuntimeStateName,
+  CodingWorkbenchRuntimeStateName,
+])[] = [
+  ["unavailable", "idle"],
+  ["unavailable", "recovery-required"],
+  ["idle", "starting"],
+  ["idle", "unavailable"],
+  ["idle", "recovery-required"],
+  ["starting", "ready"],
+  ["starting", "failed"],
+  ["starting", "cancelled"],
+  ["starting", "taken-over"],
+  ["starting", "recovery-required"],
+  ["ready", "running"],
+  ["ready", "stopping"],
+  ["ready", "failed"],
+  ["ready", "taken-over"],
+  ["ready", "recovery-required"],
+  ["running", "awaiting-approval"],
+  ["running", "stopping"],
+  ["running", "succeeded"],
+  ["running", "failed"],
+  ["running", "taken-over"],
+  ["running", "recovery-required"],
+  ["awaiting-approval", "running"],
+  ["awaiting-approval", "stopping"],
+  ["awaiting-approval", "failed"],
+  ["awaiting-approval", "taken-over"],
+  ["awaiting-approval", "recovery-required"],
+  ["stopping", "cancelled"],
+  ["stopping", "succeeded"],
+  ["stopping", "failed"],
+  ["stopping", "recovery-required"],
+  ["succeeded", "idle"],
+  ["succeeded", "recovery-required"],
+  ["failed", "idle"],
+  ["failed", "recovery-required"],
+  ["cancelled", "idle"],
+  ["cancelled", "recovery-required"],
+  ["taken-over", "idle"],
+  ["taken-over", "recovery-required"],
+  ["recovery-required", "idle"],
+  ["recovery-required", "unavailable"],
+];
+
+const STATE_PATHS: Partial<
+  Readonly<Record<CodingWorkbenchRuntimeStateName, readonly CodingWorkbenchRuntimeStateName[]>>
+> = {
+  starting: [],
+  ready: ["ready"],
+  running: ["ready", "running"],
+  "awaiting-approval": ["ready", "running", "awaiting-approval"],
+  stopping: ["ready", "stopping"],
+  succeeded: ["ready", "running", "succeeded"],
+  failed: ["failed"],
+  cancelled: ["cancelled"],
+  "taken-over": ["taken-over"],
 };
 
 function context(): CodingRuntimeTrustedContext {
@@ -141,6 +205,30 @@ function resolve(
     "autonomous-delivery",
     NOW,
   );
+}
+
+function serviceInState(state: CodingWorkbenchRuntimeStateName): {
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly runId: string | undefined;
+} {
+  const authority = service();
+  if (state === "idle") return { authority, runId: undefined };
+  if (state === "unavailable") {
+    authority.transition(undefined, "unavailable", NOW, "runtime-unavailable");
+    return { authority, runId: undefined };
+  }
+  if (state === "recovery-required") {
+    authority.transition(undefined, "recovery-required", NOW, "recovery-required");
+    return { authority, runId: undefined };
+  }
+  const minted = mint(authority, intent, false);
+  if (!minted.ok) throw new Error("mint");
+  for (const target of STATE_PATHS[state] ?? []) {
+    const failure = target === "failed" ? "runtime-failed" : undefined;
+    if (!authority.transition(minted.authorityRef.runId, target, NOW, failure))
+      throw new Error(`transition to ${target}`);
+  }
+  return { authority, runId: minted.authorityRef.runId };
 }
 
 describe("CodingRuntimeAuthorityService", () => {
@@ -308,7 +396,36 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.transition(undefined, "recovery-required", NOW, "recovery-required")).toBe(
       true,
     );
+    expect(validateCodingWorkbenchRuntimeState(authority.state())).toMatchObject({ ok: true });
   });
+
+  it("rejects an invalid transition candidate atomically", () => {
+    const authority = service();
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("mint");
+    const before = authority.state();
+    expect(authority.transition("run-1", "ready", "2026-02-30T12:00:00.000Z")).toBe(false);
+    expect(authority.state()).toEqual(before);
+  });
+
+  it.each(LEGAL_TRANSITION_PAIRS)(
+    "emits a valid state for legal transition %s -> %s",
+    (from, to) => {
+      const { authority, runId } = serviceInState(from);
+      if (from === "idle" && to === "starting") {
+        expect(mint(authority, intent, false)).toMatchObject({ ok: true });
+      } else {
+        const failure =
+          to === "failed"
+            ? "runtime-failed"
+            : to === "recovery-required"
+              ? "recovery-required"
+              : undefined;
+        expect(authority.transition(runId, to, NOW, failure)).toBe(true);
+      }
+      expect(validateCodingWorkbenchRuntimeState(authority.state())).toMatchObject({ ok: true });
+    },
+  );
 
   it.each([
     ["starting", []],
@@ -327,7 +444,7 @@ describe("CodingRuntimeAuthorityService", () => {
     const authority = service();
     const minted = mint(authority, intent, false);
     if (!minted.ok) throw new Error("mint");
-    for (const target of path)
+    for (const target of path) {
       expect(
         authority.transition(
           authority.state().runId,
@@ -336,6 +453,9 @@ describe("CodingRuntimeAuthorityService", () => {
           target === "failed" || target === "recovery-required" ? "runtime-failed" : undefined,
         ),
       ).toBe(true);
+      expect(validateCodingWorkbenchRuntimeState(authority.state())).toMatchObject({ ok: true });
+    }
+    expect(validateCodingWorkbenchRuntimeState(authority.state())).toMatchObject({ ok: true });
     const result = resolve(authority, minted.authorityRef);
     expect(result.ok).toBe(state === "running");
   });
