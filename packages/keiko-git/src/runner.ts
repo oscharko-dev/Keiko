@@ -6,7 +6,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { gitEnv, networkGitEnv } from "./env.js";
-import type { GitProcessResult, GitProcessRunner } from "./types.js";
+import type { GitProcessOptions, GitProcessResult, GitProcessRunner } from "./types.js";
 
 // Grace period between SIGTERM and SIGKILL: a git process that ignores SIGTERM (stuck on a dead
 // filesystem, wedged hook) must never wedge the caller for longer than the timeout plus this.
@@ -118,6 +118,50 @@ function refusedOptionResult(forbidden: string): GitProcessResult {
   };
 }
 
+function abortedProcessResult(): GitProcessResult {
+  return {
+    exitCode: null,
+    signal: "SIGTERM",
+    stdout: "",
+    stderr: "",
+    truncated: true,
+    timedOut: false,
+  };
+}
+
+function signalIsAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+function gitSpawnPreflight(
+  args: readonly string[],
+  options: GitProcessOptions,
+): GitProcessResult | undefined {
+  const forbidden = forbiddenGitOption(args);
+  if (forbidden !== undefined) return refusedOptionResult(forbidden);
+  return signalIsAborted(options.abortSignal) ? abortedProcessResult() : undefined;
+}
+
+function wireGitProcessEvents(
+  child: ChildProcess,
+  state: RunState,
+  maxBytes: number,
+  settle: (result: GitProcessResult) => void,
+): void {
+  child.stdout?.on("data", (chunk: Buffer) => {
+    captureChunk(state, child, state.stdout, chunk, maxBytes);
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    captureChunk(state, child, state.stderr, chunk, maxBytes);
+  });
+  child.on("error", () => {
+    settle({ ...SPAWN_ERROR_RESULT, truncated: state.truncated, timedOut: state.timedOut });
+  });
+  child.on("close", (exitCode, signal) => {
+    settle(runResult(state, exitCode, signal));
+  });
+}
+
 function createGitProcessRunnerWithFixedArgs(
   buildEnv: () => NodeJS.ProcessEnv,
   fixedArgs: readonly string[],
@@ -127,9 +171,9 @@ function createGitProcessRunnerWithFixedArgs(
       // Fail closed before the spawn: a remote-command option (`--upload-pack`/`--receive-pack`/
       // `--exec`) in the args — however it got there — is refused, so git can never be steered
       // into executing an arbitrary local command via a hostile URL argument.
-      const forbidden = forbiddenGitOption(args);
-      if (forbidden !== undefined) {
-        resolveResult(refusedOptionResult(forbidden));
+      const preflight = gitSpawnPreflight(args, options);
+      if (preflight !== undefined) {
+        resolveResult(preflight);
         return;
       }
       const child = spawn("git", [...fixedArgs, ...args], {
@@ -140,6 +184,12 @@ function createGitProcessRunnerWithFixedArgs(
         stdio: ["ignore", "pipe", "pipe"],
       });
       const state = newRunState();
+      const onAbort = (): void => {
+        state.truncated = true;
+        terminateWithEscalation(state, child);
+      };
+      options.abortSignal?.addEventListener("abort", onAbort, { once: true });
+      if (signalIsAborted(options.abortSignal)) onAbort();
       const timer = setTimeout(() => {
         state.truncated = true;
         state.timedOut = true;
@@ -150,20 +200,10 @@ function createGitProcessRunnerWithFixedArgs(
         state.settled = true;
         clearTimeout(timer);
         if (state.killTimer !== undefined) clearTimeout(state.killTimer);
+        options.abortSignal?.removeEventListener("abort", onAbort);
         resolveResult(result);
       };
-      child.stdout.on("data", (chunk: Buffer) => {
-        captureChunk(state, child, state.stdout, chunk, options.maxBytes);
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        captureChunk(state, child, state.stderr, chunk, options.maxBytes);
-      });
-      child.on("error", () => {
-        settle({ ...SPAWN_ERROR_RESULT, truncated: state.truncated, timedOut: state.timedOut });
-      });
-      child.on("close", (exitCode, signal) => {
-        settle(runResult(state, exitCode, signal));
-      });
+      wireGitProcessEvents(child, state, options.maxBytes, settle);
     });
 }
 

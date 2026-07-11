@@ -11,6 +11,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   GIT_EDITOR_BLAME_MAX_LINES,
+  GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+  GIT_AGENT_CONTEXT_MAX_FILES,
+  GIT_AGENT_CONTEXT_MAX_HUNKS,
   parseGitEditorBlameResponse,
   parseGitEditorDiffResponse,
   stripUnsafeFormatChars,
@@ -103,9 +106,6 @@ const MAX_CITATION_REF_CHARS = 160;
 const EDITOR_STATE_MAX_DIRTY_FILES = 32;
 const EDITOR_STATE_MAX_DIAGNOSTICS = 32;
 const EDITOR_STATE_EXCERPT_ID = "editor-state-current";
-const GIT_CONTEXT_MAX_FILES = 8;
-const GIT_CONTEXT_MAX_HUNK_EXCERPTS = 16;
-const GIT_CONTEXT_MAX_BLAME_LINES = 32;
 const GIT_CONTEXT_SUMMARY_EXCERPT_ID = "git-context-summary";
 
 function basename(scopePath: string): string {
@@ -372,7 +372,7 @@ async function readBlame(
     root: realRoot,
     path: activeFile,
     startLine: String(startLine),
-    maxLines: String(Math.min(GIT_CONTEXT_MAX_BLAME_LINES, GIT_EDITOR_BLAME_MAX_LINES)),
+    maxLines: String(Math.min(GIT_AGENT_CONTEXT_MAX_BLAME_LINES, GIT_EDITOR_BLAME_MAX_LINES)),
   });
   const result = await handleGitBlame(
     gitRouteContext(`/api/git/blame?${query.toString()}`),
@@ -407,7 +407,7 @@ const defaultGitContextReader: GitContextReader = async (input) => {
 };
 
 function gitSummaryText(result: GitContextReadResult): { text: string; truncated: boolean } {
-  const changedFiles = result.status.changes.slice(0, GIT_CONTEXT_MAX_FILES);
+  const changedFiles = result.status.changes.slice(0, GIT_AGENT_CONTEXT_MAX_FILES);
   const conflictedFiles = changedFiles.filter((change) => change.conflicted);
   return {
     text: JSON.stringify({
@@ -422,7 +422,8 @@ function gitSummaryText(result: GitContextReadResult): { text: string; truncated
         conflicted: change.conflicted,
       })),
     }),
-    truncated: result.status.truncated || result.status.changes.length > GIT_CONTEXT_MAX_FILES,
+    truncated:
+      result.status.truncated || result.status.changes.length > GIT_AGENT_CONTEXT_MAX_FILES,
   };
 }
 
@@ -451,9 +452,9 @@ function prepareGitHunks(
     diff.files.map((file) => ({ scope: diff.scope, file })),
   );
   const hunks = files
-    .slice(0, GIT_CONTEXT_MAX_FILES)
+    .slice(0, GIT_AGENT_CONTEXT_MAX_FILES)
     .flatMap(({ scope, file }) => file.hunks.map((hunk) => ({ scope, file, hunk })));
-  const excerpts = hunks.slice(0, GIT_CONTEXT_MAX_HUNK_EXCERPTS).flatMap((entry, index) => {
+  const excerpts = hunks.slice(0, GIT_AGENT_CONTEXT_MAX_HUNKS).flatMap((entry, index) => {
     const prepared = prepareExcerpt(ctx, {
       sourceKind: "git-context",
       id: `git-context-hunk-${String(index)}`,
@@ -472,9 +473,11 @@ function prepareGitHunks(
   return {
     excerpts,
     truncated:
-      hunks.length > GIT_CONTEXT_MAX_HUNK_EXCERPTS ||
-      files.length > GIT_CONTEXT_MAX_FILES ||
-      result.diffs.some((diff) => diff.truncated || diff.files.length > GIT_CONTEXT_MAX_FILES),
+      hunks.length > GIT_AGENT_CONTEXT_MAX_HUNKS ||
+      files.length > GIT_AGENT_CONTEXT_MAX_FILES ||
+      result.diffs.some(
+        (diff) => diff.truncated || diff.files.length > GIT_AGENT_CONTEXT_MAX_FILES,
+      ),
   };
 }
 
@@ -484,7 +487,7 @@ function prepareGitBlame(
   blame: GitEditorBlameResponse | undefined,
 ): { excerpt: RawExcerpt | undefined; truncated: boolean } {
   if (blame === undefined) return { excerpt: undefined, truncated: false };
-  const lines = blame.lines.slice(0, GIT_CONTEXT_MAX_BLAME_LINES);
+  const lines = blame.lines.slice(0, GIT_AGENT_CONTEXT_MAX_BLAME_LINES);
   return {
     excerpt: prepareExcerpt(ctx, {
       sourceKind: "git-context",
@@ -499,9 +502,9 @@ function prepareGitBlame(
           summary,
         })),
       }),
-      truncated: blame.truncated || blame.lines.length > GIT_CONTEXT_MAX_BLAME_LINES,
+      truncated: blame.truncated || blame.lines.length > GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
     }),
-    truncated: blame.truncated || blame.lines.length > GIT_CONTEXT_MAX_BLAME_LINES,
+    truncated: blame.truncated || blame.lines.length > GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
   };
 }
 
