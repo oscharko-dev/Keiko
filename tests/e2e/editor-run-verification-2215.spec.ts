@@ -150,10 +150,10 @@ async function trustWorkspaceScripts(page: Page): Promise<void> {
 
 async function awaitRunCompletion(pane: Locator): Promise<void> {
   const runField = pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="run"]`);
-  await expect(runField).toContainText("Verification: starting");
   // Terminal labels intentionally remain visible for four seconds so the result is perceivable.
-  // Waiting for one of the closed terminal states proves completion without coupling this test to
-  // that UX dismissal timer or reading the SSE wire directly.
+  // Wait for one of the closed terminal states without requiring the transient "starting" label:
+  // a healthy stream may advance to step-started before Playwright's first locator poll. The
+  // terminal state still proves that the subscriber observed the complete run lifecycle.
   await expect(runField).toHaveText(/^Verification: (?:passed|failed|cancelled)$/u, {
     timeout: 30_000,
   });

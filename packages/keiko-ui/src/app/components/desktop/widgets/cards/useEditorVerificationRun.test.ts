@@ -10,16 +10,23 @@ const V = EDITOR_VERIFICATION_SCHEMA_VERSION;
 
 class FakeEventSource {
   public static instances: FakeEventSource[] = [];
+  public static autoOpen = true;
   public readonly listeners = new Map<string, EventListener>();
   public closed = false;
   public constructor(public readonly url: string) {
     FakeEventSource.instances.push(this);
+    queueMicrotask(() => {
+      if (FakeEventSource.autoOpen) this.emitOpen();
+    });
   }
   public addEventListener(type: string, listener: EventListener): void {
     this.listeners.set(type, listener);
   }
   public close(): void {
     this.closed = true;
+  }
+  public emitOpen(): void {
+    this.listeners.get("open")?.(new Event("open"));
   }
   public emit(kind: string, payload: Record<string, unknown>): void {
     this.listeners.get(`verification:${kind}`)?.({
@@ -70,6 +77,7 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   resetEditorVerificationRunStateForTests();
   FakeEventSource.instances = [];
+  FakeEventSource.autoOpen = true;
   fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (url.startsWith("/api/editor/verification/catalog")) {
       const projectId = decodeURIComponent(url.split("projectId=")[1] ?? "");
@@ -154,6 +162,61 @@ describe("useEditorVerificationRun", () => {
     expect(result.current.verificationRunning).toBe(false);
     expect(result.current.statusBarRun?.label).toContain("passed");
     expect(source?.closed).toBe(true);
+  });
+
+  it("waits for the SSE subscriber handshake before starting a run", async () => {
+    FakeEventSource.autoOpen = false;
+    const { result } = render();
+    await tick();
+    act(() => result.current.runWorkspaceVerification("typecheck"));
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          url === "/api/editor/verification/runs" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      FakeEventSource.instances[0]?.emitOpen();
+      await Promise.resolve();
+    });
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          url === "/api/editor/verification/runs" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("fails closed without posting when the SSE handshake never opens", async () => {
+    vi.useFakeTimers();
+    FakeEventSource.autoOpen = false;
+    try {
+      const { result } = render();
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      act(() => result.current.runWorkspaceVerification("typecheck"));
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+        await Promise.resolve();
+      });
+
+      expect(result.current.verificationRunning).toBe(false);
+      expect(result.current.statusBarRun?.label).toBe("Verification: failed to start");
+      expect(FakeEventSource.instances[0]?.closed).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => url === "/api/editor/verification/runs")).toBe(
+        false,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("sends the resolved target path for a file-targeted run", async () => {
@@ -414,6 +477,7 @@ describe("useEditorVerificationRun", () => {
       result.current.cancelVerification();
       result.current.cancelVerification();
     });
+    await tick();
     expect(
       fetchMock.mock.calls.filter(
         ([url, init]) =>

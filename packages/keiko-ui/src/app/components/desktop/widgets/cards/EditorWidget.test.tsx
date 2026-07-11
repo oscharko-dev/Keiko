@@ -197,6 +197,13 @@ class FakeEventSource {
   constructor(url: string) {
     this.url = url;
     FakeEventSource.instances.push(this);
+    queueMicrotask(() => {
+      const event = new Event("open");
+      for (const listener of this.listeners.get("open") ?? []) {
+        if (typeof listener === "function") listener(event);
+        else listener.handleEvent(event);
+      }
+    });
   }
 
   addEventListener(type: string, listener: AgentEventListener): void {

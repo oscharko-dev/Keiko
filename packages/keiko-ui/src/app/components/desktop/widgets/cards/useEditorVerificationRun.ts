@@ -70,6 +70,7 @@ interface SharedRunState {
 // (or any other consumer) again. Without this, the label from a single finished run would otherwise
 // mask every later status update for the rest of the session.
 const VERIFICATION_STATUS_DISMISS_DELAY_MS = 4_000;
+const EVENT_SOURCE_READY_TIMEOUT_MS = 10_000;
 const IDLE: SharedRunState = { running: false, label: "" };
 
 interface ProjectRunState {
@@ -91,6 +92,10 @@ const projectStates = new Map<string, ProjectRunState>();
 // events — which only carry runId — still route to the correct project's state.
 const projectIdByRunId = new Map<string, string>();
 let sharedSource: EventSource | null = null;
+let sharedSourceOpen = false;
+let sharedSourceReadyPromise: Promise<boolean> | null = null;
+let resolveSharedSourceReady: ((ready: boolean) => void) | null = null;
+let sharedSourceReadyTimer: ReturnType<typeof setTimeout> | null = null;
 let totalListenerCount = 0;
 
 function projectState(root: string): ProjectRunState {
@@ -232,7 +237,7 @@ function onEvent(event: EditorVerificationEvent): void {
     entry.cancelRequested = false;
     entry.cancelInFlightRunId = null;
     projectIdByRunId.delete(event.runId);
-    if (![...projectStates.values()].some((e) => e.activeRunId !== null)) closeSharedSource();
+    if (!hasActiveRun()) closeSharedSource();
     // Issue #2212 fix-up: dismiss the terminal label after a short delay so it does not permanently
     // mask a later status update (e.g. test-generation) in the project's shared status-bar `run` slot.
     scheduleDismiss(root, entry);
@@ -249,23 +254,58 @@ function onMessage(message: MessageEvent<string>): void {
   }
 }
 
-function openSharedSource(): boolean {
-  if (sharedSource !== null) return true;
+function settleSharedSourceReady(ready: boolean): void {
+  if (sharedSourceReadyTimer !== null) clearTimeout(sharedSourceReadyTimer);
+  sharedSourceReadyTimer = null;
+  const resolve = resolveSharedSourceReady;
+  resolveSharedSourceReady = null;
+  sharedSourceReadyPromise = null;
+  resolve?.(ready);
+}
+
+function waitForSharedSource(source: EventSource): Promise<boolean> {
+  if (sharedSourceOpen) return Promise.resolve(true);
+  if (sharedSourceReadyPromise !== null) return sharedSourceReadyPromise;
+  sharedSourceReadyPromise = new Promise<boolean>((resolve) => {
+    resolveSharedSourceReady = resolve;
+  });
+  sharedSourceReadyTimer = setTimeout(() => {
+    if (sharedSource === source && !sharedSourceOpen) closeSharedSource();
+  }, EVENT_SOURCE_READY_TIMEOUT_MS);
+  return sharedSourceReadyPromise;
+}
+
+function openSharedSource(): Promise<boolean> {
+  if (sharedSource !== null) return waitForSharedSource(sharedSource);
+  let source: EventSource | null;
   try {
-    sharedSource = createSameOriginApiEventSource(EVENTS_URL);
+    source = createSameOriginApiEventSource(EVENTS_URL);
   } catch {
-    sharedSource = null;
+    source = null;
   }
-  if (sharedSource === null) return false;
+  if (source === null) return Promise.resolve(false);
+  sharedSource = source;
+  sharedSourceOpen = false;
+  source.addEventListener("open", () => {
+    if (sharedSource !== source) return;
+    sharedSourceOpen = true;
+    settleSharedSourceReady(true);
+  });
+  source.addEventListener("error", () => {
+    if (sharedSource === source) sharedSourceOpen = false;
+  });
   for (const kind of EDITOR_VERIFICATION_EVENT_KINDS) {
-    sharedSource.addEventListener(`verification:${kind}`, onMessage as EventListener);
+    source.addEventListener(`verification:${kind}`, onMessage as EventListener);
   }
-  return true;
+  return waitForSharedSource(source);
 }
 
 function closeSharedSource(): void {
-  sharedSource?.close();
+  const source = sharedSource;
   sharedSource = null;
+  sharedSourceOpen = false;
+  source?.close();
+  settleSharedSourceReady(false);
 }
 
 function hasActiveRun(): boolean {
@@ -321,6 +361,21 @@ async function postRun(
   }
 }
 
+async function startAfterStreamReady(
+  root: string,
+  kinds: readonly VerificationKind[],
+  entry: ProjectRunState,
+  token: number,
+  targetPath?: string,
+): Promise<void> {
+  if (!(await openSharedSource())) {
+    failStart(root, entry, token);
+    return;
+  }
+  if (entry.startToken !== token) return;
+  await postRun(root, kinds, token, targetPath);
+}
+
 function startRun(root: string, kinds: readonly VerificationKind[], targetPath?: string): void {
   if (root.length === 0) return;
   const entry = projectState(root);
@@ -330,11 +385,7 @@ function startRun(root: string, kinds: readonly VerificationKind[], targetPath?:
   entry.startToken = entry.startSequence;
   entry.cancelRequested = false;
   emit(root, entry, { running: true, label: "Verification: starting…" });
-  if (!openSharedSource()) {
-    failStart(root, entry, entry.startToken);
-    return;
-  }
-  void postRun(root, kinds, entry.startToken, targetPath);
+  void startAfterStreamReady(root, kinds, entry, entry.startToken, targetPath);
 }
 
 function isDeleteAcknowledgement(value: unknown): value is { readonly ok: true } {
