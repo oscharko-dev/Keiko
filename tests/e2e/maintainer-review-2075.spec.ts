@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { installAxe, runAxe, seriousOrCritical } from "./support/axe.js";
+import { captureDeterministically, settleNativeValidation } from "./support/deterministic-screenshot.js";
 
 const evidence = resolve("docs/design-system/evidence/2075");
 const assetRoot = resolve("packages/keiko-feedback-intake/assets");
@@ -31,7 +32,6 @@ const item = {
   featureArea: "review",
   impact: "blocking",
 };
-
 const session = {
   permissions: ["feedback.review", "feedback.security", "feedback.legal-hold", "feedback.audit"],
   csrfToken: "csrf-token",
@@ -53,7 +53,7 @@ async function capture(page: Page, name: string): Promise<{ name: string; axeVio
     (window as unknown as { __cspViolations?: string[] }).__cspViolations = [];
   });
   expect(seriousOrCritical(violations), name).toEqual([]);
-  await page.screenshot({ path: resolve(evidence, `${name}.png`), animations: "disabled" });
+  await captureDeterministically(page, resolve(evidence, `${name}.png`), name);
   const proof = { name, axeViolations: violations.length };
   axeProofs.push(proof);
   return proof;
@@ -237,7 +237,7 @@ test("maintainer queue uses production assets, inert payload rendering, keyboard
   await capture(page, "01-dark-desktop-detail-xss");
   await page.getByRole("button", { name: "Mark duplicate" }).click();
   await expect(page.getByText("Validation error: complete the required fields.")).toBeVisible();
-  await page.keyboard.press("Escape");
+  await settleNativeValidation(page.getByLabel("Target item identifier"));
   await capture(page, "16-native-validation-error");
   await submitDuplicate(page, actions);
   await captureCanonicalModes(page);
