@@ -24,6 +24,7 @@ import {
   ApiError,
   fetchEditorLanguageCapabilities,
   fetchFilesContent,
+  fetchGitStatus,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
   saveFilesContent,
@@ -44,6 +45,7 @@ vi.mock("../../../../../lib/api", async () => {
     ...actual,
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchFilesContent: vi.fn(),
+    fetchGitStatus: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
@@ -232,6 +234,21 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
 beforeEach(() => {
   _resetEditorAgentBridgeStateForTests();
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
+  vi.mocked(fetchGitStatus).mockResolvedValue({
+    schemaVersion: "1",
+    root: "/repo",
+    state: "available",
+    available: true,
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  });
   vi.mocked(postEditorAgentSessionSnapshot).mockImplementation((_snapshot, currentCapability) =>
     Promise.resolve({
       snapshot: null,
