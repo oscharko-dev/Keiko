@@ -8,14 +8,14 @@
 rules:
   cache-poisoning:
     ignore:
-      # ci.yml only builds, tests, and lints; it never publishes, signs, or releases
-      # artifacts. The actual release path (release.yml, portable-assets.yml) disables
-      # actions/setup-node's package-manager cache entirely, so there is no privileged
-      # workflow that could ever consume a cache entry poisoned here.
+      # Neither job publishes, signs, or attests anything: `ci` is build/lint/test only, and
+      # `cross-platform-smoke` is a read-only smoke matrix with no attestations/id-token
+      # permission. Every ci.yml job that DOES hold signing-relevant permissions (currently
+      # build-scan-sbom-smoke and ui, both attestations: write / id-token: write for artifact
+      # attestations) has package-manager-cache: false instead, same as release.yml and
+      # portable-assets.yml - so there is no privileged consumer for a cache poisoned here.
       - ci.yml:61
-      - ci.yml:228
-      - ci.yml:300
-      - ci.yml:332
+      - ci.yml:317
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
