@@ -209,6 +209,17 @@ selects the rate-limit identity. Rate-limit buckets store only the rotating HMAC
 This mechanism is abuse resistance, not user identity, authentication, deduplication, or an audit
 principal.
 
+The service-readable abuse-key mount contains exactly the current key and its immediately previous
+key; it never contains staged or future material. The external secret provider/operator atomically
+activates the next key at the UTC boundary. Until that replacement is visible, intake remains
+unready and fails closed. Removal of the superseded previous key remains conditional on repository
+proof that no live bucket references its non-secret key id.
+
+Each abuse admission obtains one bounded, copied custody-ring snapshot at one captured time and
+derives both the active and predecessor candidates exclusively from it. Separate provider reads for
+the active key and predecessors are forbidden because an atomic external replacement could otherwise
+mix two custody generations within one request.
+
 ### D7 - Dedupe with a separately keyed HMAC over the sanitized semantic projection
 
 The dedupe identifier is
@@ -224,6 +235,14 @@ The active dedupe key rotates every 90 days and has the versioned, non-secret UT
 so reports can match unexpired digests created before rotation. A predecessor is retained only until
 the last digest created with it reaches the 180-day expiry, then its key material is destroyed. At no
 time may the service keep more than one active plus two retained dedupe keys.
+The readable dedupe-key mount likewise contains only the active key and zero to two predecessor keys;
+future or staged material is not readable by the service. Boundary activation is an external atomic
+secret-provider operation, and missing activation leaves intake unready rather than widening the
+custody ring. A predecessor is destroyed only after repository lookup proves no live dedupe entry
+references its key id.
+Each dedupe admission follows the same snapshot rule: it obtains the active key and up to two
+predecessors from one bounded, copied provider snapshot at one captured time, never from separate
+reads that can straddle a rotation.
 A duplicate may increment a bounded group count without creating a second review payload, but it
 does not refresh the matched digest's creation time or 180-day expiry. Every accepted duplicate still
 receives and retains its own immutable receipt record under D5. The submitter is not told whether
@@ -297,6 +316,37 @@ holds must be explicit, scoped, actor-attributed, and auditable. A legal hold ca
 begin retaining any zero-retention class, extend receipt-secret-hash expiry, or retain retired abuse
 or semantic-dedupe keys after their defined horizon. Expiry deletes payloads and related
 capabilities from primary storage; backup replay must not restore expired data.
+
+Retired-key destruction uses a durable, idempotent deletion ledger with only the closed key class,
+non-secret key id, event timestamp, and closed result. A `pending` row is recovery intent, not proof
+of destruction. The service records `destroyed` only after unlinking the key and fsyncing its
+directory, or after replay has re-established and fsynced the key's durable absence. A database
+failure after destruction therefore remains pending and makes intake unready until replay completes;
+a completed row is never downgraded. Key bytes, filesystem paths, exceptions, and arbitrary strings
+never enter this evidence.
+
+Exact-ring rotation uses a fail-closed handoff, in this order:
+
+1. The application proves that the retiring predecessor has no live repository reference and records
+   `pending` deletion evidence.
+2. The application unlinks that predecessor, fsyncs the key directory, proves the key is absent, and
+   records `destroyed`. Intake remains unready; this temporary short ring is not an intake-capable
+   state.
+3. Only then does the external secret provider atomically publish the next key file. That replacement
+   must retain every still-required predecessor and cannot substitute for or bypass deletion evidence.
+4. The application reloads and validates the exact active-plus-predecessor ring. Readiness may return
+   only after both that validation and the ordinary dependency checks succeed while the service is
+   running.
+
+For that readiness decision, the service takes one bounded custody snapshot per key class and
+compares both against one repository operation that reads both live key-id sets in a single database
+transaction snapshot. The abuse and dedupe queries are capped at their maximum mounted cardinality
+plus one so overflow is observed and fails readiness closed instead of being truncated into a
+plausible ring.
+
+The application does not expose a staging route, accept future readable key material, or receive key
+bytes through an API. A crash or failure at any step leaves intake unready and resumes through the
+existing deletion ledger plus external atomic file publication.
 
 ### D11 - Child issues implement one obligation each in dependency order
 

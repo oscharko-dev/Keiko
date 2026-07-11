@@ -261,6 +261,9 @@ For each request the limiter computes and looks up the current and immediately p
 raw address is retained by either lookup. The previous secret is destroyed only after its last bucket
 reaches that 48-hours-from-start expiry. Stored buckets contain the keyed digest, key id, UTC bucket
 start, and counts only.
+One limiter operation obtains the active and immediately previous key from one bounded, copied
+custody snapshot at one captured time. It never performs separate provider reads that could straddle
+an external atomic replacement and combine different generations.
 
 ### Semantic dedupe identity
 
@@ -280,6 +283,26 @@ that ring. A retired key remains only until the last 180-day digest created unde
 destroyed. A duplicate may link its own receipt to the existing review payload, but it never refreshes
 a digest expiry or creates an unbounded key alias. Dedupe HMACs are server-confined pseudonymous
 metadata, not authorization or proof that content is safe.
+One dedupe operation likewise obtains its active-plus-predecessor candidates from one bounded,
+copied custody snapshot at one captured time.
+
+### Operational key handoff
+
+The exact abuse and dedupe rings intentionally rotate through a fail-closed handoff; there is no
+application route or secret-bearing staging channel. The application first verifies that the
+retiring predecessor has no live repository reference, records content-free `pending` evidence,
+unlinks it, fsyncs the directory, proves durable absence, and records `destroyed`. Intake remains
+unready throughout the resulting short-ring gap. Only after that evidence-backed retirement may the
+external secret provider atomically publish the next key file. External replacement must preserve
+every predecessor still required by a live bucket or digest and cannot delete retained material or
+bypass the deletion ledger. The running service may become ready again only after it reloads and
+validates the exact ring and all ordinary dependencies are healthy. Any interrupted step remains
+fail-closed and resumes from the deletion ledger or the provider's atomic file operation.
+
+Readiness compares one custody snapshot per key class with one transactional repository snapshot
+containing both live key-id sets. Each database class is read with `LIMIT maximum + 1` (three abuse
+ids and four dedupe ids), so excess cardinality, missing custody, or either snapshot failure keeps
+intake unready.
 
 ### Maintainer identity, queue, and issue creation
 

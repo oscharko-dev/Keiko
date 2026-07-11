@@ -1,0 +1,56 @@
+{
+  "name": "@oscharko-dev/keiko-feedback-intake",
+  "version": "0.2.14",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Private operator-hosted governed feedback intake service.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "keiko-feedback-intake": "./dist/main.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist/config.*",
+    "dist/crypto.*",
+    "dist/file-secret-provider.*",
+    "dist/http.*",
+    "dist/index.*",
+    "dist/main.*",
+    "dist/postgres-client.*",
+    "dist/postgres-live-key-snapshot.*",
+    "dist/postgres-retention.*",
+    "dist/postgres-types.*",
+    "dist/postgres.*",
+    "dist/production-service.*",
+    "dist/proxy.*",
+    "dist/runtime-config.*",
+    "dist/runtime-key-custody.*",
+    "dist/runtime.*",
+    "dist/types.*",
+    "migrations"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "0.2.14",
+    "@oscharko-dev/keiko-security": "0.2.14",
+    "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.15.6"
+  },
+  "private": true
+}

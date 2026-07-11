@@ -115,6 +115,26 @@ describe("findForbiddenPaths — build metadata and compiled tests", () => {
   });
 });
 
+describe("findForbiddenPaths — hosted feedback test-only modules", () => {
+  it("flags every compiled form of the four non-production modules", () => {
+    const modules = ["intake", "keys", "memory-store", "postgres-integration-helpers"];
+    const paths = modules.flatMap((name) =>
+      ["js", "d.ts", "d.ts.map", "js.map"].map(
+        (extension) => `node_modules/@oscharko-dev/keiko-feedback-intake/dist/${name}.${extension}`,
+      ),
+    );
+    const hits = findForbiddenPaths(paths).filter(
+      (hit) => hit.label === "a feedback-intake test or in-memory-only module",
+    );
+    expect(hits.map((hit) => hit.path)).toEqual(paths);
+  });
+
+  it("does not flag a production module in the hosted package", () => {
+    const path = "node_modules/@oscharko-dev/keiko-feedback-intake/dist/runtime.js";
+    expect(findForbiddenPaths([path])).toEqual([]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Environment file rule
 // ---------------------------------------------------------------------------

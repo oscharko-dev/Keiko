@@ -16,17 +16,24 @@ import {
   type UiHandlerDeps,
 } from "./index.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import type { FeedbackSubmissionPortOutcome } from "./feedback-submission.js";
 
 const CONFIGURED_SECRET = "internal.corp.example";
 
 interface SubmissionPortDouble {
-  submit(prepared: unknown): Promise<"accepted" | "rejected">;
+  submit(prepared: unknown): Promise<FeedbackSubmissionPortOutcome>;
 }
 
 interface PreviewResponse {
   readonly canonicalJson: string;
   readonly exactBodySha256: string;
 }
+
+const ACCEPTED_RECEIPT = {
+  receiptId: "A".repeat(22),
+  receiptSecret: "A".repeat(43),
+  expiresAt: "2026-08-10T00:00:00.000Z",
+};
 
 function handlerDeps(
   feedbackSubmission?: SubmissionPortDouble,
@@ -162,7 +169,7 @@ describe("POST /api/feedback/submit", () => {
     const port: SubmissionPortDouble = {
       submit: () => {
         portCalls += 1;
-        return Promise.resolve("accepted");
+        return Promise.resolve({ outcome: "accepted", receipt: ACCEPTED_RECEIPT });
       },
     };
     await withFeedbackServer(
@@ -218,9 +225,42 @@ describe("POST /api/feedback/submit", () => {
     });
   });
 
+  it("returns a content-free rate-limited outcome without converting it to a gateway error", async () => {
+    const port: SubmissionPortDouble = {
+      submit: () => Promise.resolve("rate-limited"),
+    };
+    await withFeedbackServer(port, async (baseUrl) => {
+      const prepared = await preview(baseUrl);
+      const response = await submit(baseUrl, prepared);
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: "rate-limited" });
+    });
+  });
+
+  it("fails closed when the injected port accepts without a receipt", async () => {
+    const port: SubmissionPortDouble = {
+      submit: () => Promise.resolve("accepted" as never),
+    };
+    await withFeedbackServer(port, async (baseUrl) => {
+      const response = await submit(baseUrl, await preview(baseUrl));
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "FEEDBACK_SUBMIT_FAILED",
+          message: "Feedback submission could not be confirmed.",
+        },
+      });
+    });
+  });
+
   it("passes only the independently verified immutable body to the injected port", async () => {
     const captured: unknown[] = [];
-    let portOutcome: "accepted" | "rejected" = "accepted";
+    let portOutcome: FeedbackSubmissionPortOutcome = {
+      outcome: "accepted",
+      receipt: ACCEPTED_RECEIPT,
+    };
     const port: SubmissionPortDouble = {
       submit: (prepared) => {
         captured.push(prepared);
@@ -235,7 +275,7 @@ describe("POST /api/feedback/submit", () => {
 
       expect(accepted.status).toBe(200);
       expect(rejected.status).toBe(200);
-      expect(await accepted.json()).toEqual({ outcome: "accepted" });
+      expect(await accepted.json()).toEqual({ outcome: "accepted", receipt: ACCEPTED_RECEIPT });
       expect(await rejected.json()).toEqual({ outcome: "rejected" });
       expect(captured).toHaveLength(2);
       for (const value of captured) {
@@ -277,7 +317,7 @@ describe("POST /api/feedback/submit", () => {
 
   it("fails closed on an unknown injected-port outcome", async () => {
     const port: SubmissionPortDouble = {
-      submit: () => Promise.resolve("unknown" as "accepted"),
+      submit: () => Promise.resolve("unknown" as never),
     };
     await withFeedbackServer(port, async (baseUrl) => {
       const prepared = await preview(baseUrl);
@@ -293,12 +333,90 @@ describe("POST /api/feedback/submit", () => {
     });
   });
 
+  it("rejects extra accepted-result fields instead of forwarding them to the browser", async () => {
+    const sentinel = "must-not-cross-the-bff";
+    const port: SubmissionPortDouble = {
+      submit: () =>
+        Promise.resolve({
+          outcome: "accepted",
+          receipt: {
+            receiptId: "A".repeat(22),
+            receiptSecret: "A".repeat(43),
+            expiresAt: "2026-08-10T00:00:00.000Z",
+          },
+          extra: sentinel,
+        } as never),
+    };
+    await withFeedbackServer(port, async (baseUrl) => {
+      const response = await submit(baseUrl, await preview(baseUrl));
+      const serialized = await response.text();
+
+      expect(response.status).toBe(502);
+      expect(serialized).not.toContain(sentinel);
+      expect(serialized).not.toContain("receiptSecret");
+    });
+  });
+
+  it("fails closed on extra accepted receipt fields", async () => {
+    const port: SubmissionPortDouble = {
+      submit: () =>
+        Promise.resolve({
+          outcome: "accepted",
+          receipt: { ...ACCEPTED_RECEIPT, extra: "must-not-cross-the-bff" },
+        } as never),
+    };
+    await withFeedbackServer(port, async (baseUrl) => {
+      const response = await submit(baseUrl, await preview(baseUrl));
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "FEEDBACK_SUBMIT_FAILED",
+          message: "Feedback submission could not be confirmed.",
+        },
+      });
+    });
+  });
+
+  it("fails closed on malformed accepted receipts", async () => {
+    const port: SubmissionPortDouble = {
+      submit: () =>
+        Promise.resolve({
+          outcome: "accepted",
+          receipt: { ...ACCEPTED_RECEIPT, expiresAt: "not-an-expiry" },
+        } as never),
+    };
+    await withFeedbackServer(port, async (baseUrl) => {
+      const response = await submit(baseUrl, await preview(baseUrl));
+
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        error: {
+          code: "FEEDBACK_SUBMIT_FAILED",
+          message: "Feedback submission could not be confirmed.",
+        },
+      });
+    });
+  });
+
+  it("reconstructs only the validated accepted receipt contract", async () => {
+    const port: SubmissionPortDouble = {
+      submit: () => Promise.resolve({ outcome: "accepted", receipt: ACCEPTED_RECEIPT }),
+    };
+    await withFeedbackServer(port, async (baseUrl) => {
+      const response = await submit(baseUrl, await preview(baseUrl));
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ outcome: "accepted", receipt: ACCEPTED_RECEIPT });
+    });
+  });
+
   it("rejects digest drift, unsafe recomputation, and extra fields before the port", async () => {
     let calls = 0;
     const port: SubmissionPortDouble = {
       submit: () => {
         calls += 1;
-        return Promise.resolve("accepted");
+        return Promise.resolve({ outcome: "accepted", receipt: ACCEPTED_RECEIPT });
       },
     };
     await withFeedbackServer(port, async (baseUrl) => {

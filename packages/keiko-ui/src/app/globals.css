@@ -1364,6 +1364,17 @@ button {
    container selectors are the product's real surfaces (.window/.dlg) in place of
    the reference site's .kx-win/.card. Inert outside forced-colors mode. */
 @media (forced-colors: active) {
+  :root {
+    --button-primary-surface: ButtonFace;
+    --button-primary-surface-hover: Highlight;
+    --button-primary-text: ButtonText;
+    --button-secondary-surface: ButtonFace;
+    --button-secondary-surface-hover: Highlight;
+    --button-secondary-border: ButtonText;
+    --button-secondary-text: ButtonText;
+    --feedback-warning: ButtonText;
+    --feedback-warning-surface: Canvas;
+  }
   :focus-visible {
     outline: 3px solid Highlight;
     outline-offset: 2px;
@@ -23367,6 +23378,26 @@ textarea.feedback-control {
 .feedback-submission-result[data-outcome="unavailable"] {
   border-color: var(--feedback-warning);
   background: var(--feedback-warning-surface);
+}
+
+.feedback-submission-result[data-outcome="rate-limited"] {
+  border-color: var(--feedback-warning);
+  background: var(--feedback-warning-surface);
+}
+
+.feedback-submission-outcome {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--feedback-warning);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-normal);
+}
+
+.feedback-submission-outcome svg {
+  flex: none;
 }
 
 .feedback-submission-result[data-outcome="rejected"],

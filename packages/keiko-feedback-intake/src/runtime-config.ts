@@ -1,0 +1,104 @@
+import { validateIntakeLimits } from "./config.js";
+import { DAY_MS, type IntakeLimits } from "./types.js";
+import { canonicalTrustedCidrs } from "./proxy.js";
+
+export interface HostedRuntimeConfig {
+  readonly host: string;
+  readonly port: number;
+  readonly databaseUrl: string;
+  readonly limits: IntakeLimits;
+  readonly proxyFamily: "forwarded" | "x-forwarded-for";
+  readonly trustedProxyCidrs: readonly string[];
+  readonly secretDirectory: string;
+  readonly managementHost: "127.0.0.1" | "::1";
+  readonly managementPort: number;
+  readonly drainDeadlineMs: number;
+  readonly retentionIntervalMs: number;
+}
+
+type Environment = Readonly<Record<string, string | undefined>>;
+
+const LIMIT_NAMES = {
+  perIdentity: "KEIKO_FEEDBACK_PER_IDENTITY_LIMIT",
+  global: "KEIKO_FEEDBACK_GLOBAL_LIMIT",
+  concurrency: "KEIKO_FEEDBACK_CONCURRENCY_LIMIT",
+  receiptConcurrency: "KEIKO_FEEDBACK_RECEIPT_CONCURRENCY_LIMIT",
+  openPayloadCount: "KEIKO_FEEDBACK_OPEN_COUNT_LIMIT",
+  openPayloadBytes: "KEIKO_FEEDBACK_OPEN_BYTES_LIMIT",
+  proxyHops: "KEIKO_FEEDBACK_PROXY_HOPS_LIMIT",
+  bodyBytes: "KEIKO_FEEDBACK_BODY_BYTES_LIMIT",
+  headerBytes: "KEIKO_FEEDBACK_HEADER_BYTES_LIMIT",
+  bodyDeadlineMs: "KEIKO_FEEDBACK_BODY_DEADLINE_MS",
+  storageDeadlineMs: "KEIKO_FEEDBACK_STORAGE_DEADLINE_MS",
+} as const;
+
+function required(env: Environment, name: string): string {
+  const value = env[name];
+  if (value === undefined || value.trim() === "") throw new Error(`Missing ${name}`);
+  return value;
+}
+
+function finite(env: Environment, name: string): number {
+  const value = Number(required(env, name));
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`Invalid ${name}`);
+  return value;
+}
+
+function bounded(env: Environment, name: string, minimum: number, maximum: number): number {
+  const value = finite(env, name);
+  if (value < minimum || value > maximum) throw new Error(`Invalid ${name}`);
+  return value;
+}
+
+function proxyFamily(env: Environment): HostedRuntimeConfig["proxyFamily"] {
+  const family = required(env, "KEIKO_FEEDBACK_PROXY_FAMILY");
+  if (family !== "forwarded" && family !== "x-forwarded-for") {
+    throw new Error("Invalid proxy family");
+  }
+  return family;
+}
+
+function managementHost(env: Environment): HostedRuntimeConfig["managementHost"] {
+  const host = required(env, "KEIKO_FEEDBACK_MANAGEMENT_HOST");
+  if (host !== "127.0.0.1" && host !== "::1") throw new Error("Invalid management host");
+  return host;
+}
+
+function databaseUrl(env: Environment): string {
+  const value = required(env, "DATABASE_URL");
+  if (!/^postgres(?:ql)?:\/\//u.test(value)) throw new Error("Invalid DATABASE_URL");
+  return value;
+}
+
+function cidrs(env: Environment): readonly string[] {
+  const value = env.KEIKO_FEEDBACK_TRUSTED_PROXY_CIDRS;
+  if (value === undefined || value === "") return [];
+  const result = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  if (result.length > 32) throw new Error("Invalid KEIKO_FEEDBACK_TRUSTED_PROXY_CIDRS");
+  return canonicalTrustedCidrs(result);
+}
+
+export function loadHostedRuntimeConfig(env: Environment): HostedRuntimeConfig {
+  const limits = Object.fromEntries(
+    Object.entries(LIMIT_NAMES).map(([key, name]) => [key, finite(env, name)]),
+  ) as unknown as IntakeLimits;
+  const port = bounded(env, "KEIKO_FEEDBACK_PORT", 1, 65_535);
+  const managementPort = bounded(env, "KEIKO_FEEDBACK_MANAGEMENT_PORT", 1, 65_535);
+  if (managementPort === port) throw new Error("Invalid management port");
+  return Object.freeze({
+    host: required(env, "KEIKO_FEEDBACK_HOST"),
+    port,
+    databaseUrl: databaseUrl(env),
+    limits: validateIntakeLimits(limits),
+    proxyFamily: proxyFamily(env),
+    trustedProxyCidrs: cidrs(env),
+    secretDirectory: required(env, "KEIKO_FEEDBACK_SECRET_DIR"),
+    managementHost: managementHost(env),
+    managementPort,
+    drainDeadlineMs: bounded(env, "KEIKO_FEEDBACK_DRAIN_DEADLINE_MS", 100, 30_000),
+    retentionIntervalMs: bounded(env, "KEIKO_FEEDBACK_RETENTION_INTERVAL_MS", 1_000, DAY_MS),
+  });
+}

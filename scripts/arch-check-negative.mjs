@@ -42,6 +42,7 @@ const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|package
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-1-contracts-leaf": 1,
   "adr-0019-direction-2-security-only-contracts": 1,
+  "adr-0125-feedback-intake-hosted-boundary": 1,
   "adr-0019-direction-3a-model-gateway-only-contracts-security": 1,
   "adr-0019-direction-3b-workspace-only-contracts-security": 1,
   "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,

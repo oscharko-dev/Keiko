@@ -1,0 +1,99 @@
+{
+  "issue": 2074,
+  "verdict": "PASS",
+  "globalsCssSha256": "e499ef56bec6dc2619bd7fe7ce9c2ab5b855d2b9e9004f36144255e867163ec6",
+  "gate": "zero serious or critical axe violations across accepted-copy and rate-limited states",
+  "captures": [
+    {
+      "mode": "dark",
+      "locale": "en",
+      "state": "accepted-copied",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "dark",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "light",
+      "locale": "en",
+      "state": "accepted-copied",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "light",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "dark-high-contrast",
+      "locale": "en",
+      "state": "accepted-copied",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "dark-high-contrast",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "light-high-contrast",
+      "locale": "en",
+      "state": "accepted-copied",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "light-high-contrast",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "prefers-contrast",
+      "locale": "en",
+      "state": "accepted-copied",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "prefers-contrast",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "forced-colors",
+      "locale": "en",
+      "state": "accepted-copied",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "forced-colors",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "reduced-motion",
+      "locale": "en",
+      "state": "accepted-copied",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "reduced-motion",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    },
+    {
+      "mode": "responsive-500",
+      "locale": "en",
+      "state": "rate-limited",
+      "seriousOrCritical": []
+    }
+  ],
+  "seriousOrCriticalViolationCount": 0
+}
