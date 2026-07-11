@@ -182,7 +182,7 @@ jobs:
           STEPS_SONAR_VERSION_OUTPUTS_VERSION: ${{ steps.sonar-version.outputs.version }}
         run: |
           ./sonar-scanner-8.1.0.6389-linux-x64/bin/sonar-scanner \
-            -Dsonar.projectVersion=${STEPS_SONAR_VERSION_OUTPUTS_VERSION} \
+            -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
             -Dsonar.qualitygate.wait=true
 
   actionlint:
