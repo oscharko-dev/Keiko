@@ -9,9 +9,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
@@ -23,6 +25,7 @@ import {
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentAction,
+  parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchAuthorityEnvelope,
@@ -35,9 +38,11 @@ import {
   type EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+import type { GitProcessOptions, GitProcessResult } from "@oscharko-dev/keiko-git";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { STREAMING, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { createAutonomousDeliveryApprovalStore } from "../coding-runtime/autonomousDeliveryApprovalStore.js";
 import * as workspaceSearchRoutes from "./workspaceSearchRoutes.js";
 import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
@@ -215,7 +220,7 @@ function context(body: unknown = {}, path = "/api/editor/agent/actions"): RouteC
   (req as { method?: string }).method = "POST";
   return {
     req,
-    res: {} as unknown as ServerResponse,
+    res: Object.assign(new EventEmitter(), { writableEnded: false }) as unknown as ServerResponse,
     params: {},
     url: new URL(`http://localhost${path}`),
   };
@@ -616,12 +621,43 @@ describe("server-resolved git query action (#2298)", () => {
     truncated: false,
   });
 
+  const gitFailure = (): {
+    exitCode: 1;
+    signal: null;
+    stdout: "";
+    stderr: string;
+    truncated: false;
+  } => ({
+    exitCode: 1,
+    signal: null,
+    stdout: "",
+    stderr: "bounded fixture failure",
+    truncated: false,
+  });
+
   function gitResponseFor(root: string, args: readonly string[]): ReturnType<typeof gitOk> {
     if (args.includes("rev-parse")) return gitOk(`${root}\n`);
-    if (args.includes("status")) return gitOk("## main\0 M src/a.ts\0");
+    if (args.includes("status")) return gitOk("## main\0 M src/a.ts\0?? .env\0");
+    if (args.includes("diff")) {
+      const marker = args.includes("--cached") ? "staged value" : "unstaged value";
+      return gitOk(
+        [
+          "diff --git a/src/a.ts b/src/a.ts",
+          "--- a/src/a.ts",
+          "+++ b/src/a.ts",
+          "@@ -1 +1 @@",
+          "-const a = 1;",
+          `+const a = "${marker}";`,
+          "",
+        ].join("\n"),
+      );
+    }
     if (args.includes("blame")) {
       return gitOk(
-        "0000000000000000000000000000000000000000 1 1 1\nauthor Alice\nauthor-time 1700000000\nauthor-tz +0000\nsummary wip\n\tconst a = 1;\n",
+        Array.from({ length: 33 }, (_unused, index) => {
+          const line = index + 1;
+          return `0000000000000000000000000000000000000000 ${String(line)} ${String(line)} 1\nauthor Alice\nauthor-time 1700000000\nauthor-tz +0000\nsummary blame ${String(line)}\n\tconst line${String(line)} = true;\n`;
+        }).join(""),
       );
     }
     return gitOk("");
@@ -667,21 +703,562 @@ describe("server-resolved git query action (#2298)", () => {
       expect(response.status).toBe(200);
       const result = actionResult(response.body);
       expect(result.status).toBe("succeeded");
-      const data = result.data as {
-        readonly path: string;
-        readonly aspects: {
-          readonly status?: { readonly state?: string };
-          readonly diff?: unknown;
-          readonly blame?: unknown;
-        };
-      };
-      expect(data.path).toBe("src/a.ts");
+      const parsed = parseEditorAgentQueryGitData(result.data);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error(parsed.errors.join("; "));
+      const data = parsed.value;
+      expect(data.target).toEqual({ basename: "a.ts", pathHash: sha256("src/a.ts") });
       expect(data.aspects.status).toMatchObject({ state: "available", branch: "main" });
-      expect(data.aspects.diff).toBeTypeOf("object");
-      expect(data.aspects.blame).toBeTypeOf("object");
+      expect(JSON.stringify(data.aspects.status)).not.toContain(".env");
+      expect(data.aspects.diff?.staged?.scope).toBe("staged");
+      expect(data.aspects.diff?.unstaged?.scope).toBe("unstaged");
+      expect(JSON.stringify(data.aspects.diff)).toContain("staged value");
+      expect(JSON.stringify(data.aspects.diff)).toContain("unstaged value");
+      expect(data.aspects.blame?.lines).toHaveLength(32);
+      expect(data.caps.maxBlameLines).toBe(32);
+      expect(data.omissions).toContainEqual({ aspect: "blame", reason: "out-of-budget" });
+      const diffCommands = runner.mock.calls
+        .map((call) => call[0] as readonly string[])
+        .filter((args) => args.includes("diff"));
+      expect(diffCommands).toHaveLength(2);
+      expect(diffCommands.some((args) => args.includes("--cached"))).toBe(true);
+      expect(diffCommands.some((args) => !args.includes("--cached"))).toBe(true);
+      const statusCommand = runner.mock.calls
+        .map((call) => call[0] as readonly string[])
+        .find((args) => args.includes("status"));
+      expect(statusCommand?.at(-1)).toBe(":(literal)src/a.ts");
+      const blameCommand = runner.mock.calls
+        .map((call) => call[0] as readonly string[])
+        .find((args) => args.includes("blame"));
+      expect(blameCommand).toContain("1,33");
+      const records = auditRecords();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        actionType: "queryGit",
+        effectClass: "workspace-read",
+        mutating: false,
+        targetBasename: "a.ts",
+        targetPathHash: sha256("src/a.ts"),
+      });
+      expect(records[0]).not.toHaveProperty("targetPath");
+      const serializedAudit = JSON.stringify(records[0]);
+      expect(serializedAudit).not.toContain("staged value");
+      expect(serializedAudit).not.toContain("unstaged value");
+      expect(serializedAudit).not.toContain("const line");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requires and reserves workspace-read authority before any git read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-authority-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = dispatchingGitRunner(root);
+    const deps = gitDeps(store, runner);
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            authorityRef: undefined,
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["status"] },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("POLICY_DENIED");
+      expect(runner).not.toHaveBeenCalled();
       expect(auditRecords()).toMatchObject([
-        expect.objectContaining({ actionType: "queryGit", mutating: false }),
+        expect.objectContaining({
+          actionType: "queryGit",
+          effectClass: "workspace-read",
+          denyReason: "authority-missing",
+        }),
       ]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a mismatched audit target before invoking any git read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-target-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = dispatchingGitRunner(root);
+    const deps = gitDeps(store, runner);
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "README.md" },
+            queryGit: { path: "src/a.ts", aspects: ["status"] },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("OUT_OF_SCOPE");
+      expect(runner).not.toHaveBeenCalled();
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns real staged and unstaged file context from a hermetic fixture repository", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-fixture-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    const runGit = (args: readonly string[]): void => {
+      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    };
+    try {
+      runGit(["init", "-q", "-b", "main"]);
+      runGit(["config", "user.name", "Keiko Fixture"]);
+      runGit(["config", "user.email", "fixture@invalid.example"]);
+      runGit(["config", "commit.gpgsign", "false"]);
+      const baseline = Array.from(
+        { length: 40 },
+        (_unused, index) => `export const line${String(index + 1)} = ${String(index + 1)};`,
+      );
+      writeWorkspaceFile(root, "src/a.ts", `${baseline.join("\n")}\n`);
+      writeWorkspaceFile(root, "src/unrelated.ts", "export const unrelated = false;\n");
+      runGit(["add", "src/a.ts", "src/unrelated.ts"]);
+      runGit(["commit", "-q", "-m", "fixture baseline"]);
+      const staged = [...baseline];
+      staged[0] = "export const line1 = 100;";
+      writeWorkspaceFile(root, "src/a.ts", `${staged.join("\n")}\n`);
+      runGit(["add", "src/a.ts"]);
+      const mixed = [...staged];
+      mixed[10] = "export const line11 = 1100;";
+      writeWorkspaceFile(root, "src/a.ts", `${mixed.join("\n")}\n`);
+      writeWorkspaceFile(root, "src/unrelated.ts", "export const unrelated = true;\n");
+      writeWorkspaceFile(root, ".env", "FIXTURE_SECRET=not-returned\n");
+      await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+      const deps = {
+        store,
+        redactor: buildRedactor({}),
+        env: {},
+        gitRouteOptions: { timeoutMs: 5_000 },
+      } as unknown as UiHandlerDeps;
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["status", "diff", "blame"] },
+          }),
+        ),
+        deps,
+      );
+      const result = actionResult(response.body);
+      expect(response.status).toBe(200);
+      expect(result.status).toBe("succeeded");
+      const serialized = JSON.stringify(result.data);
+      expect(serialized).toContain("line1 = 100");
+      expect(serialized).toContain("line11 = 1100");
+      expect(serialized).not.toContain("unrelated.ts");
+      expect(serialized).not.toContain(".env");
+      expect(serialized).not.toContain(root);
+      const data = result.data as {
+        readonly aspects?: { readonly blame?: { readonly lines?: readonly unknown[] } };
+        readonly omissions?: readonly { readonly aspect: string; readonly reason: string }[];
+      };
+      expect(data.aspects?.blame?.lines).toHaveLength(32);
+      expect(data.omissions).toContainEqual({ aspect: "blame", reason: "out-of-budget" });
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a symlink escape before repository resolution or any git read", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-symlink-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-agent-git-outside-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(outside, "secret.ts", "export const secret = true;\n");
+    symlinkSync(outside, join(root, "linked-outside"), "dir");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = dispatchingGitRunner(root);
+    const deps = gitDeps(store, runner);
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "linked-outside/secret.ts" },
+            queryGit: {
+              path: "linked-outside/secret.ts",
+              aspects: ["status", "diff", "blame"],
+            },
+          }),
+        ),
+        deps,
+      );
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("OUT_OF_SCOPE");
+      expect(runner).not.toHaveBeenCalled();
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("audits a symlink swapped after admission as a denied boundary action", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-race-"));
+    const outside = mkdtempSync(join(tmpdir(), "keiko-agent-git-race-outside-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(root, "src/a.ts", "export const inside = true;\n");
+    writeWorkspaceFile(outside, "secret.ts", "export const secret = true;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = vi.fn((args: readonly string[]) => {
+      if (args.includes("rev-parse")) {
+        rmSync(join(root, "src", "a.ts"));
+        symlinkSync(join(outside, "secret.ts"), join(root, "src", "a.ts"), "file");
+        return Promise.resolve(gitOk(`${root}\n`));
+      }
+      return Promise.resolve(gitResponseFor(root, args));
+    });
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["status", "diff", "blame"] },
+          }),
+        ),
+        gitDeps(store, runner),
+      );
+      expect(response.status).toBe(403);
+      expect(actionConflictCode(response.body)).toBe("OUT_OF_SCOPE");
+      expect(runner.mock.calls.flatMap((call) => call[0])).not.toContain("status");
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({
+          actionType: "queryGit",
+          disposition: "denied",
+          denyReason: "workspace-boundary-escape",
+        }),
+      ]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates request aborts to an in-flight git read and starts no later aspects", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-abort-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(root, "src/a.ts", "export const value = true;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    let markStatusStarted: (() => void) | undefined;
+    const statusStarted = new Promise<void>((resolveStarted) => {
+      markStatusStarted = resolveStarted;
+    });
+    let observedAbort = false;
+    let statusCalls = 0;
+    const runner = vi.fn((args: readonly string[], options: GitProcessOptions) => {
+      if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
+      if (!args.includes("status")) return Promise.resolve(gitResponseFor(root, args));
+      statusCalls += 1;
+      if (statusCalls > 1) return Promise.resolve(gitResponseFor(root, args));
+      markStatusStarted?.();
+      return new Promise<GitProcessResult>((resolveResult) => {
+        options.abortSignal?.addEventListener(
+          "abort",
+          () => {
+            observedAbort = true;
+            resolveResult(gitFailure());
+          },
+          { once: true },
+        );
+      });
+    });
+    const requestAction = action({
+      type: "queryGit",
+      expectedContentHash: undefined,
+      target: { file: "src/a.ts" },
+      queryGit: { path: "src/a.ts", aspects: ["status", "diff", "blame"] },
+    });
+    const baseContext = context(requestAction);
+    const responseEvents = Object.assign(new EventEmitter(), { writableEnded: false });
+    const requestContext = {
+      ...baseContext,
+      res: responseEvents as unknown as ServerResponse,
+    };
+    try {
+      const firstResponse = handleEditorAgentActions(requestContext, gitDeps(store, runner));
+      await statusStarted;
+      responseEvents.emit("close");
+      const cancelled = await firstResponse;
+      expect(observedAbort).toBe(true);
+      expect(actionResult(cancelled.body).status).toBe("failed");
+      expect(auditRecords()).toMatchObject([
+        expect.objectContaining({ actionType: "queryGit", outcome: "failed" }),
+      ]);
+      const invoked = runner.mock.calls.flatMap((call) => call[0]);
+      expect(invoked).not.toContain("diff");
+      expect(invoked).not.toContain("blame");
+      const retry = await handleEditorAgentActions(context(requestAction), gitDeps(store, runner));
+      expect(actionResult(retry.body).status).toBe("succeeded");
+      expect(statusCalls).toBe(2);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps successful aspects when a diff layer is unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-partial-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = vi.fn((args: readonly string[]) => {
+      if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
+      if (args.includes("status")) return Promise.resolve(gitOk("## main\0 M src/a.ts\0"));
+      if (args.includes("diff") && args.includes("--cached")) {
+        return Promise.resolve(gitFailure());
+      }
+      return Promise.resolve(gitResponseFor(root, args));
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = {
+      ...gitDeps(store, runner),
+      diagnostics: {
+        record: (record: ServerDiagnosticRecord): void => void diagnostics.push(record),
+      },
+    } as UiHandlerDeps;
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["diff", "blame"] },
+          }),
+        ),
+        deps,
+      );
+      const result = actionResult(response.body);
+      expect(result.status).toBe("succeeded");
+      const data = result.data as {
+        readonly aspects?: Readonly<Record<string, unknown>>;
+        readonly omissions?: readonly { readonly aspect: string; readonly reason: string }[];
+      };
+      expect(isRecord(data.aspects?.blame)).toBe(true);
+      expect(data.omissions).toContainEqual({
+        aspect: "diff",
+        scope: "staged",
+        reason: "unavailable",
+        machineReason: "git-error",
+      });
+      expect(JSON.stringify(data.aspects?.diff)).toContain("unstaged value");
+      expect(diagnostics).toMatchObject([
+        expect.objectContaining({
+          correlationId: "action-1",
+          operation: "editor.agent.queryGit.diff",
+        }),
+      ]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains the staged diff when the unstaged layer is unavailable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-partial-unstaged-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const runner = vi.fn((args: readonly string[]) => {
+      if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
+      if (args.includes("status")) return Promise.resolve(gitOk("## main\0 M src/a.ts\0"));
+      if (args.includes("diff") && !args.includes("--cached")) {
+        return Promise.resolve(gitFailure());
+      }
+      return Promise.resolve(gitResponseFor(root, args));
+    });
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["diff"] },
+          }),
+        ),
+        gitDeps(store, runner),
+      );
+      const parsed = parseEditorAgentQueryGitData(actionResult(response.body).data);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error(parsed.errors.join("; "));
+      expect(JSON.stringify(parsed.value.aspects.diff?.staged)).toContain("staged value");
+      expect(parsed.value.aspects.diff?.unstaged).toBeUndefined();
+      expect(parsed.value.omissions).toContainEqual({
+        aspect: "diff",
+        scope: "unstaged",
+        reason: "unavailable",
+        machineReason: "git-error",
+      });
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops an oversized aspect with explicit omission before retaining the result", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-budget-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const largeLines = Array.from(
+      { length: 300 },
+      (_unused, index) => `+${String(index).padStart(4, "0")}${"x".repeat(1_000)}`,
+    );
+    const largeDiff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,0 +1,300 @@",
+      ...largeLines,
+      "",
+    ].join("\n");
+    const runner = vi.fn((args: readonly string[]) => {
+      if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
+      if (args.includes("status")) return Promise.resolve(gitOk("## main\0 M src/a.ts\0"));
+      if (args.includes("diff")) return Promise.resolve(gitOk(largeDiff));
+      return Promise.resolve(gitResponseFor(root, args));
+    });
+    const deps = gitDeps(store, runner);
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["status", "diff"] },
+          }),
+        ),
+        deps,
+      );
+      const result = actionResult(response.body);
+      expect(Buffer.byteLength(JSON.stringify(result.data), "utf8")).toBeLessThanOrEqual(
+        192 * 1024,
+      );
+      const data = result.data as {
+        readonly aspects?: Readonly<Record<string, unknown>>;
+        readonly omissions?: readonly { readonly aspect: string; readonly reason: string }[];
+      };
+      expect(isRecord(data.aspects?.status)).toBe(true);
+      expect(data.omissions).toContainEqual({ aspect: "diff", reason: "out-of-budget" });
+      expect(data.aspects).not.toHaveProperty("diff");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts diff and blame content before returning agent data", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-redaction-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    writeWorkspaceFile(root, "src/a.ts", "const a = 1;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
+    const secret = "sk-git-query-redaction-1234567890abcdef";
+    const runner = vi.fn((args: readonly string[]) => {
+      if (args.includes("rev-parse")) return Promise.resolve(gitOk(`${root}\n`));
+      if (args.includes("status")) return Promise.resolve(gitOk("## main\0 M src/a.ts\0"));
+      if (args.includes("diff")) {
+        return Promise.resolve(
+          gitOk(
+            `diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+${secret}\n`,
+          ),
+        );
+      }
+      if (args.includes("blame")) {
+        return Promise.resolve(
+          gitOk(
+            `0000000000000000000000000000000000000000 1 1 1\nauthor Alice\nauthor-time 1700000000\nauthor-tz +0000\nsummary ${secret}\n\t${secret}\n`,
+          ),
+        );
+      }
+      return Promise.resolve(gitOk(""));
+    });
+    const deps = {
+      ...gitDeps(store, runner),
+      redactor: buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+    } as UiHandlerDeps;
+    try {
+      const response = await handleEditorAgentActions(
+        context(
+          action({
+            type: "queryGit",
+            expectedContentHash: undefined,
+            target: { file: "src/a.ts" },
+            queryGit: { path: "src/a.ts", aspects: ["diff", "blame"] },
+          }),
+        ),
+        deps,
+      );
+      const serialized = JSON.stringify(actionResult(response.body).data);
+      expect(serialized).not.toContain(secret);
+      expect(serialized).toContain("[REDACTED]");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts a secret-shaped target basename from results, replay state, and audit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-agent-git-target-redaction-"));
+    const store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
+    const secret = "sk-query-target-1234567890abcdef";
+    const path = `src/${secret}.ts`;
+    writeWorkspaceFile(root, path, "export const value = true;\n");
+    await registerSnapshotOnly({ workspaceRoot: root, activeFile: path });
+    const runner = dispatchingGitRunner(root);
+    const deps = {
+      ...gitDeps(store, runner),
+      redactor: buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
+    } as UiHandlerDeps;
+    const request = action({
+      type: "queryGit",
+      expectedContentHash: undefined,
+      target: { file: path },
+      queryGit: { path, aspects: ["status"] },
+    });
+    try {
+      const first = await handleEditorAgentActions(context(request), deps);
+      const replay = await handleEditorAgentActions(context(request), deps);
+      expect(JSON.stringify(first.body)).not.toContain(secret);
+      expect(JSON.stringify(replay.body)).not.toContain(secret);
+      expect(JSON.stringify(auditRecords())).not.toContain(secret);
+      expect(actionResult(replay.body).data).toEqual(actionResult(first.body).data);
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
@@ -742,8 +1319,8 @@ describe("server-resolved git query action (#2298)", () => {
         ),
         deps,
       );
-      expect(response.status).toBe(403);
-      expect(actionConflictCode(response.body)).toBe("OUT_OF_SCOPE");
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
       expect(runner).not.toHaveBeenCalled();
     } finally {
       store.close();

@@ -59,11 +59,16 @@ export function isSafeGitPositional(value: string): boolean {
 export async function resolveGitMembership(
   directory: string,
   runner: GitProcessRunner,
-  options: { readonly timeoutMs: number },
+  options: { readonly timeoutMs: number; readonly abortSignal?: AbortSignal | undefined },
 ): Promise<GitMembershipResolution> {
   const result = await runner(
     [...GIT_BASE_ARGS, "-C", directory, "rev-parse", "--show-toplevel", "--show-prefix"],
-    { cwd: directory, maxBytes: RESOLVE_MAX_BYTES, timeoutMs: options.timeoutMs },
+    {
+      cwd: directory,
+      maxBytes: RESOLVE_MAX_BYTES,
+      timeoutMs: options.timeoutMs,
+      ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
+    },
   );
   if (result.exitCode !== 0) {
     return { ok: false, result };
