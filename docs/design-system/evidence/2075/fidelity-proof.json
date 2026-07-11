@@ -3,13 +3,13 @@
   "assets": {
     "keiko-tokens.css": {
       "identityBytes": 20112,
-      "gzipBytes": 5096,
+      "gzipBytes": 5098,
       "brotliBytes": 4223,
       "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76"
     },
     "keiko-semantic-tokens.css": {
       "identityBytes": 16141,
-      "gzipBytes": 4302,
+      "gzipBytes": 4278,
       "brotliBytes": 3556,
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
     },
@@ -27,19 +27,19 @@
     },
     "maintainer-ui.js": {
       "identityBytes": 12672,
-      "gzipBytes": 3736,
+      "gzipBytes": 3722,
       "brotliBytes": 3227,
       "sha256": "9ef8dfb858ac2653d26969a8d069072670a5c48889278cfc3d39c0c3ed3d2fb4"
     },
     "maintainer-ui-copy.js": {
       "identityBytes": 6718,
-      "gzipBytes": 2275,
+      "gzipBytes": 2259,
       "brotliBytes": 1964,
       "sha256": "09ea41a53db52f3ae303fc7b2217af4176600e260319b4c357e0a55c4f4c4374"
     },
     "maintainer-ui-dom.js": {
       "identityBytes": 3966,
-      "gzipBytes": 1408,
+      "gzipBytes": 1402,
       "brotliBytes": 1177,
       "sha256": "1809fcd17b6b3b8bfeb5a170626231822644e975052ebd5712192c09cabb4bb7"
     }
