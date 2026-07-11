@@ -1,0 +1,28 @@
+# zizmor configuration for this repo's GitHub Actions workflows.
+# https://docs.zizmor.sh/configuration/
+#
+# Every ignore below is a reviewed, documented risk acceptance, not a blanket suppression -
+# each is scoped to specific lines with a reason. If the referenced file changes near those
+# lines, re-run `zizmor .` locally: a shifted line either drops the ignore (the gate fails
+# loudly) or, rarely, points at different code (re-verify the reasoning still applies).
+rules:
+  cache-poisoning:
+    ignore:
+      # ci.yml only builds, tests, and lints; it never publishes, signs, or releases
+      # artifacts. The actual release path (release.yml, portable-assets.yml) disables
+      # actions/setup-node's package-manager cache entirely, so there is no privileged
+      # workflow that could ever consume a cache entry poisoned here.
+      - ci.yml:61
+      - ci.yml:228
+      - ci.yml:300
+      - ci.yml:332
+  misfeature:
+    ignore:
+      # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
+      # native CMD batch tooling; the step deliberately persists only the single-line
+      # variables the rc/cl compiler needs to GITHUB_ENV (see the inline comment at the
+      # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
+      # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
+      # build and cannot be verified on this platform.
+      - portable-assets.yml:111
+      - portable-assets.yml:170
