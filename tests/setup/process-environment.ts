@@ -1,4 +1,4 @@
-import { afterEach } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 
 const ORIGINAL_PATH = Symbol.for("keiko.tests.original-windows-path");
 
@@ -17,10 +17,22 @@ export function canonicalizeWindowsPath(
   if (pathValue !== undefined) environment.PATH = pathValue;
 }
 
+export function restoreWindowsPath(
+  environment: NodeJS.ProcessEnv,
+  originalPath: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === "win32" && originalPath !== undefined) environment.PATH = originalPath;
+}
+
 canonicalizeWindowsPath(process.env);
 const state = globalThis as ProcessEnvironmentState;
 state[ORIGINAL_PATH] ??= process.env.PATH;
 
+beforeEach(() => {
+  restoreWindowsPath(process.env, state[ORIGINAL_PATH]);
+});
+
 afterEach(() => {
-  canonicalizeWindowsPath(process.env, process.platform, state[ORIGINAL_PATH]);
+  restoreWindowsPath(process.env, state[ORIGINAL_PATH]);
 });

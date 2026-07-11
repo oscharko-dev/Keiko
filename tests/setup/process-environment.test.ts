@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalizeWindowsPath } from "./process-environment.js";
+import { canonicalizeWindowsPath, restoreWindowsPath } from "./process-environment.js";
 
 describe("canonicalizeWindowsPath", () => {
   it("copies the case-insensitive Windows Path key for worker-thread consumers", () => {
@@ -31,6 +31,14 @@ describe("canonicalizeWindowsPath", () => {
     const environment: NodeJS.ProcessEnv = {};
 
     canonicalizeWindowsPath(environment, "win32", "C:\\node;C:\\npm");
+
+    expect(environment.PATH).toBe("C:\\node;C:\\npm");
+  });
+
+  it("replaces a stale stub path with the captured Windows worker path", () => {
+    const environment: NodeJS.ProcessEnv = { PATH: "C:\\temporary-fake-bin" };
+
+    restoreWindowsPath(environment, "C:\\node;C:\\npm", "win32");
 
     expect(environment.PATH).toBe("C:\\node;C:\\npm");
   });
