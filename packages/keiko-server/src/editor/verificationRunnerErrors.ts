@@ -18,6 +18,10 @@ export const VERIFICATION_RUNNER_ERROR_CODES = {
   BAD_REQUEST: "BAD_REQUEST",
   PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
   VERIFICATION_RUNNER_UNAVAILABLE: "VERIFICATION_RUNNER_UNAVAILABLE",
+  // Issue #2211 fix-up (Epic #2092): the audit-evidence trail could not be written. Mirrors
+  // command-runner-errors.ts's EVIDENCE_WRITE_FAILED — a governed execution surface must not run
+  // silently unaudited.
+  EVIDENCE_WRITE_FAILED: "EVIDENCE_WRITE_FAILED",
   INTERNAL: "INTERNAL",
 } as const;
 
@@ -35,6 +39,7 @@ const STATUS_MAP: Readonly<Record<VerificationRunnerErrorCode, number>> = {
   BAD_REQUEST: 400,
   PAYLOAD_TOO_LARGE: 413,
   VERIFICATION_RUNNER_UNAVAILABLE: 503,
+  EVIDENCE_WRITE_FAILED: 500,
   INTERNAL: 500,
 };
 

@@ -82,6 +82,9 @@ import {
   type EditorHotExitSnapshotV1,
   type EditorFormattingResolver,
   type EditorFormattingQuery,
+  type EditorGitGutterHost,
+  type EditorGitGutterPeek,
+  type EditorBlameHost,
   type EditorHostEditRequest,
   type EditorHoverResolver,
   type EditorHoverQuery,
@@ -115,6 +118,10 @@ import {
 } from "@oscharko-dev/keiko-editor";
 import {
   editorBuiltinDocumentFormatting,
+  type GitEditorDiffResponse,
+  type GitEditorDiffHunk,
+  type GitEditorBlameLine,
+  GIT_EDITOR_BLAME_MAX_LINES,
   type WorkspaceReplaceApplyFile,
   type WorkspaceReplacePreviewTextRange,
 } from "@oscharko-dev/keiko-contracts";
@@ -122,11 +129,15 @@ import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentActiveBufferActionType,
 } from "@oscharko-dev/keiko-contracts/editor-agent";
+import conflictStyles from "./EditorConflicts.module.css";
 import {
   ApiError,
   fetchEditorLanguageCapabilities,
   postEditorAgentSessionSnapshot,
   fetchFilesContent,
+  fetchGitStatus,
+  fetchGitStructuredDiff,
+  fetchGitBlame,
   reportEditorInlineCompletionTelemetry,
   requestEditorCompletion,
   requestEditorCodeActions,
@@ -147,7 +158,7 @@ import {
   requestEditorTestGeneration,
   saveFilesContent,
 } from "../../../../../lib/api";
-import { useTranslate } from "../../../../../lib/i18n";
+import { useLocale, useTranslate } from "../../../../../lib/i18n";
 import { mapWireToEditorCompletionResponse } from "../../../../../lib/editor-completion";
 import { mapWireToEditorInlineCompletionResponse } from "../../../../../lib/editor-inline-completion";
 import { mapWireToEditorTestGenerationOutcome } from "../../../../../lib/editor-test-generation";
@@ -201,6 +212,9 @@ import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
+import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
+import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
+import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 import {
   buildEditorOutlineTree,
   findContainingOutlinePath,
@@ -257,6 +271,26 @@ const EDITOR_REVIEW_DIFF_GROUP_STYLE: CSSProperties = {
   minWidth: 0,
   minHeight: 0,
 };
+
+function hunksForPath(response: GitEditorDiffResponse, path: string): readonly GitEditorDiffHunk[] {
+  return response.files.find((candidate) => candidate.path === path)?.hunks ?? [];
+}
+
+function relativeAge(locale: string, authorTime: string): string {
+  const seconds = (Date.parse(authorTime) - Date.now()) / 1_000;
+  const units = [
+    [31_536_000, "year"],
+    [2_592_000, "month"],
+    [86_400, "day"],
+    [3_600, "hour"],
+    [60, "minute"],
+  ] as const;
+  const unit = units.find(([size]) => Math.abs(seconds) >= size) ?? ([1, "second"] as const);
+  return new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(
+    Math.round(seconds / unit[0]),
+    unit[1],
+  );
+}
 
 const EDITOR_REVIEW_ACTIONS_STYLE: CSSProperties = {
   flex: "0 0 auto",
@@ -472,10 +506,12 @@ type EditorTabHandleProps = Pick<
   readonly "data-tab-file"?: string | undefined;
   readonly "data-tab-draggable"?: "true" | "false" | undefined;
   readonly "data-tab-held"?: "true" | "false" | undefined;
+  readonly "data-merge-conflicts"?: string | undefined;
 };
 
 interface EditorTabHandleContext {
   readonly onDragModeStart?: (() => void) | undefined;
+  readonly mergeConflicts?: number | undefined;
 }
 
 interface EditorTabInsertTarget {
@@ -502,6 +538,8 @@ export interface EditorRuntimeWidgetProps {
   readonly onCloseOpenFile?: ((file: string) => Promise<boolean> | boolean | void) | undefined;
   readonly onDirtyChange?: ((file: string, dirty: boolean) => void) | undefined;
   readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
+  readonly onOpenGitCommit?: ((root: string, commit: string) => void) | undefined;
+  readonly onOpenGitDiff?: ((root: string, path: string) => void) | undefined;
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
   readonly onExternalSaveComplete?:
     ((requestId: number, paneId: string, file: string, ok: boolean) => void) | undefined;
@@ -1229,6 +1267,8 @@ function EditorRuntimeWidget({
   onCloseOpenFile,
   onDirtyChange,
   openEditorFile,
+  onOpenGitCommit,
+  onOpenGitDiff,
   externalSaveRequest,
   onExternalSaveComplete,
   agentReconciliationRequest,
@@ -1245,6 +1285,8 @@ function EditorRuntimeWidget({
   outlineRevealRequest,
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
+  const sourceControlT = useEditorSourceControlTranslate();
+  const locale = useLocale();
   const t = useEditorAgentTranslate();
   // Issue #2212 (ADR-0126) — verification run state for the status bar + diff-review affordances,
   // derived from the same governed route/stream the palette uses (server-authoritative via SSE).
@@ -1252,34 +1294,41 @@ function EditorRuntimeWidget({
     root: root ?? "",
     activeFile: file !== undefined && file.length > 0 ? file : null,
   });
-  const {
-    runFileTests: runVerificationFileTests,
-    runWorkspaceVerification,
-    verifiableTarget,
-  } = verification;
-  // Issue #2212 — the diff-review "Run Verification" intent: verify the reviewed file's tests when a
-  // counterpart resolves, else fall back to a workspace typecheck. Available only when idle.
-  const runDiffVerification = useCallback((): void => {
-    if (verifiableTarget !== null) {
-      runVerificationFileTests();
-    } else {
-      runWorkspaceVerification("typecheck");
-    }
-  }, [runVerificationFileTests, runWorkspaceVerification, verifiableTarget]);
+  const { runFileTests: runVerificationFileTests, runWorkspaceVerification } = verification;
+  // Issue #2212 fix-up — the diff-review "Run Verification" intent is scoped to the file(s) the
+  // active review surface is actually reviewing, never to the pane's currently active file. This
+  // matters most for `agentChangesetPending`/rename review: both can legitimately touch a file other
+  // than the one open in the pane (`runtimeAgentTargetMatches` deliberately bypasses the active-file
+  // match for `applyChangeset`), so resolving from the pane's active file would silently verify the
+  // wrong file. `applyPatch` review's target always equals the active file by construction
+  // (`runtimeAgentTargetMatches` requires it for admission), so it is scoped explicitly here too for
+  // consistency and to stay correct if that invariant ever changes. `reviewedFiles` singular resolves
+  // to that file's test counterpart; a multi-file review (or none) falls back to a workspace typecheck
+  // rather than guessing which single file represents "the reviewed change".
+  const runScopedVerification = useCallback(
+    (reviewedFiles: readonly string[]): void => {
+      if (reviewedFiles.length === 1 && reviewedFiles[0] !== undefined) {
+        runVerificationFileTests(reviewedFiles[0]);
+      } else {
+        runWorkspaceVerification("typecheck");
+      }
+    },
+    [runVerificationFileTests, runWorkspaceVerification],
+  );
   // Issue #2213 (ADR-0126) — feed this pane's diagnostics (keyed by path) into the workspace Problems
-  // panel store, and remove them when the pane closes or switches file. Language diagnostics are
-  // inherently bounded to currently-open buffers; the panel copy must not imply full-workspace coverage.
+  // panel store, and remove them only once a file is truly no longer open (closed, or the pane
+  // unmounts) — never merely because the user switched to a different already-open tab. Language
+  // diagnostics are inherently bounded to currently-open buffers; the panel copy must not imply
+  // full-workspace coverage, but it must also not silently drop a background tab's diagnostics the
+  // instant the user looks away from it (Issue #2213 fix-up).
   const onPaneDiagnostics = useCallback(
     (diagnostics: readonly EditorDiagnostic[]): void => {
-      if (file !== undefined && file.length > 0) setPaneDiagnostics(file, diagnostics);
+      if (root !== undefined && root.length > 0 && file !== undefined && file.length > 0) {
+        setPaneDiagnostics(root, file, diagnostics);
+      }
     },
-    [file],
+    [root, file],
   );
-  useEffect(() => {
-    return (): void => {
-      if (file !== undefined && file.length > 0) removePaneDiagnostics(file);
-    };
-  }, [file]);
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
   const editorModelScope = useMemo(
@@ -1300,6 +1349,24 @@ function EditorRuntimeWidget({
     }
     return deduped;
   }, [file, openFiles]);
+  // Issue #2213 fix-up — evict a path's Problems-panel diagnostics only when it leaves documentTabs
+  // (a genuine close), never on a mere active-tab switch between still-open tabs. Cleans up every
+  // remaining open path on unmount (the whole pane closing).
+  const documentTabsRef = useRef<readonly string[]>(documentTabs);
+  useEffect(() => {
+    const previousTabs = documentTabsRef.current;
+    documentTabsRef.current = documentTabs;
+    if (root === undefined || root.length === 0) return;
+    for (const previousPath of previousTabs) {
+      if (!documentTabs.includes(previousPath)) removePaneDiagnostics(root, previousPath);
+    }
+  }, [documentTabs, root]);
+  useEffect(() => {
+    return (): void => {
+      if (root === undefined || root.length === 0) return;
+      for (const openPath of documentTabsRef.current) removePaneDiagnostics(root, openPath);
+    };
+  }, [root]);
   const [tablistWidth, setTablistWidth] = useState(0);
 
   useLayoutEffect(() => {
@@ -1386,11 +1453,44 @@ function EditorRuntimeWidget({
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [formatRequestNonce, setFormatRequestNonce] = useState(0);
+  const [gitGutterRefreshNonce, setGitGutterRefreshNonce] = useState(0);
+  const [gitGutterPeek, setGitGutterPeek] = useState<EditorGitGutterPeek | null>(null);
   // GEN-UI-INTERACTION-003: the Tests/Format/Save toolbar buttons stay in the tab order with
   // aria-disabled (not native disabled) and guard their onClick internally, so activating one while
   // unavailable is a silent no-op. This holds a brief spoken reason surfaced in the polite live region
   // below so keyboard/screen-reader users learn why nothing happened.
   const [toolbarNotice, setToolbarNotice] = useState("");
+  const [mergeConflicts, setMergeConflicts] = useState({ count: 0, truncated: false });
+  useEffect(() => setMergeConflicts({ count: 0, truncated: false }), [file]);
+  // Issue #2234 (ADR-0127): content-free workspace change-count backing the agent snapshot's
+  // gitContextSummary. Event-driven only (root change, save, explicit refresh) — mirrors the
+  // gutter's own refresh triggers so this never becomes a polling loop.
+  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<{
+    readonly changedFileCount: number;
+    readonly truncated: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (root === undefined) {
+      setWorkspaceGitSummary(null);
+      return;
+    }
+    let cancelled = false;
+    fetchGitStatus(root)
+      .then((status) => {
+        if (!cancelled) {
+          setWorkspaceGitSummary({
+            changedFileCount: status.changes.length,
+            truncated: status.truncated,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceGitSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [root, gitGutterRefreshNonce]);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
@@ -1463,6 +1563,20 @@ function EditorRuntimeWidget({
     // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
     readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
   } | null>(null);
+  // Issue #2212 fix-up — one scoped "Run Verification" callback per review surface, each resolving its
+  // OWN reviewed file(s) rather than the pane's active file (see runScopedVerification above).
+  const runChangesetVerification = useCallback((): void => {
+    const files = agentChangesetPending?.action.changeset?.files.map((f) => f.file) ?? [];
+    runScopedVerification(files);
+  }, [agentChangesetPending, runScopedVerification]);
+  const runPatchVerification = useCallback((): void => {
+    const targetFile = agentPatchPending?.action.target?.file;
+    runScopedVerification(targetFile === undefined ? [] : [targetFile]);
+  }, [agentPatchPending, runScopedVerification]);
+  const runRenameVerification = useCallback((): void => {
+    const files = renameReview?.changeset.files.map((f) => f.path) ?? [];
+    runScopedVerification(files);
+  }, [renameReview, runScopedVerification]);
   const [activeHostEditRequest, setActiveHostEditRequest] = useState<
     EditorHostEditRequest | undefined
   >(undefined);
@@ -1831,6 +1945,7 @@ function EditorRuntimeWidget({
           // Version-aware token (Issue #1197); supersedes the coarser mtime-only check.
           baseVersion: versionRef.current ?? undefined,
         });
+        notifyWorkspaceFileMutated(root);
         if (activeSessionKeyRef.current !== saveSessionKey) {
           const cached = sessionCacheRef.current.get(saveSessionKey);
           const cachedContent = cached?.content ?? text;
@@ -1878,6 +1993,7 @@ function EditorRuntimeWidget({
           );
         }
         await deleteHotExitSnapshotBestEffort(root, file);
+        setGitGutterRefreshNonce((value) => value + 1);
         return true;
       } catch (err: unknown) {
         if (activeSessionKeyRef.current !== saveSessionKey) {
@@ -2541,6 +2657,86 @@ function EditorRuntimeWidget({
     [content, contentSizeBytes],
   );
   const largeFileDegraded = largeFileMode === "degraded";
+  const editorConflicts = useMemo<NonNullable<EditorSurfaceProps["editorConflicts"]>>(
+    () => ({
+      labels: {
+        next: sourceControlT("conflicts.next"),
+        previous: sourceControlT("conflicts.previous"),
+        ours: sourceControlT("conflicts.ours"),
+        theirs: sourceControlT("conflicts.theirs"),
+        both: sourceControlT("conflicts.both"),
+      },
+      onChange: (count, truncated) => setMergeConflicts({ count, truncated }),
+      onStale: () => setToolbarNotice(sourceControlT("conflicts.stale")),
+    }),
+    [sourceControlT],
+  );
+  const editorGitGutter = useMemo<EditorGitGutterHost | undefined>(() => {
+    if (root === undefined || file === undefined || largeFileDegraded) return undefined;
+    return {
+      labels: {
+        staged: sourceControlT("gitGutter.staged"),
+        unstaged: sourceControlT("gitGutter.unstaged"),
+        added: sourceControlT("gitGutter.added"),
+        modified: sourceControlT("gitGutter.modified"),
+        deleted: sourceControlT("gitGutter.deleted"),
+        openHunk: sourceControlT("gitGutter.openHunk"),
+      },
+      resolve: async () => {
+        const [staged, unstaged] = await Promise.all([
+          fetchGitStructuredDiff({ root, path: file, scope: "staged" }),
+          fetchGitStructuredDiff({ root, path: file, scope: "unstaged" }),
+        ]);
+        return {
+          staged: hunksForPath(staged, file),
+          unstaged: hunksForPath(unstaged, file),
+        };
+      },
+      onPeek: setGitGutterPeek,
+    };
+  }, [file, largeFileDegraded, root, sourceControlT]);
+  const editorBlame = useMemo<EditorBlameHost | undefined>(() => {
+    if (
+      root === undefined ||
+      file === undefined ||
+      largeFileDegraded ||
+      onOpenGitCommit === undefined
+    ) {
+      return undefined;
+    }
+    const sessionKey = documentSessionKey(root, file);
+    return {
+      labels: {
+        toggle: sourceControlT("blame.toggle"),
+        openCommit: sourceControlT("blame.openCommit"),
+        dirtyNotice: sourceControlT("blame.dirtyNotice"),
+        truncated: sourceControlT("blame.truncated"),
+      },
+      describe: (line: GitEditorBlameLine, age: string) =>
+        sourceControlT("blame.line", {
+          author: line.author,
+          age,
+          commit: line.commitHash.slice(0, 8),
+        }),
+      formatAge: (authorTime: string) => relativeAge(locale, authorTime),
+      resolve: async () => {
+        const response = await fetchGitBlame({
+          root,
+          path: file,
+          startLine: 1,
+          maxLines: GIT_EDITOR_BLAME_MAX_LINES,
+        });
+        return activeSessionKeyRef.current === sessionKey && response.path === file
+          ? response
+          : null;
+      },
+      onCommit: (commitHash: string) => onOpenGitCommit(root, commitHash),
+    };
+  }, [file, largeFileDegraded, locale, onOpenGitCommit, root, sourceControlT]);
+
+  useEffect(() => {
+    setGitGutterPeek(null);
+  }, [file, root]);
   const applyWorkspaceReplaceBuffer = useCallback(
     (request: WorkspaceReplaceApplyFile): WorkspaceReplaceOpenBufferResult => {
       if (file === undefined || request.path !== file || !fileModelMatchesTarget) {
@@ -3016,6 +3212,17 @@ function EditorRuntimeWidget({
           completionsEnabled: completionEnabled,
           largeFileMode,
           diagnostics: diagnosticsEnabled ? diagnosticsSummary : null,
+          ...(mergeConflicts.count === 0
+            ? {}
+            : {
+                mergeConflicts: {
+                  ...mergeConflicts,
+                  label: sourceControlT("conflicts.status", { count: mergeConflicts.count }),
+                  ariaLabel: sourceControlT("conflicts.statusAria", {
+                    count: mergeConflicts.count,
+                  }),
+                },
+              }),
           // Issue #1379 (ADR-0067 D4): after the exhaustive registry, providerForLanguage returns a
           // descriptor for every KNOWN language; we read its id/availability/reason directly. The
           // null guard is retained ONLY for the genuinely-unknown plaintext/unknown case (plaintext
@@ -3157,6 +3364,15 @@ function EditorRuntimeWidget({
                   ? { unavailableReason: languageProvider.unavailableReason }
                   : {}),
               },
+        // Issue #2234 (ADR-0127): content-free Git awareness. hasConflictMarkers reflects the
+        // active file's live merge-conflict count (already tracked for the status bar/tab badge);
+        // changedFileCount/truncated come from the same workspace status read the file tree and
+        // Git window use. root is already guaranteed defined by the early return above.
+        gitContextSummary: {
+          hasConflictMarkers: mergeConflicts.count > 0,
+          changedFileCount: workspaceGitSummary?.changedFileCount ?? 0,
+          truncated: mergeConflicts.truncated || (workspaceGitSummary?.truncated ?? false),
+        },
         ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
         activeFileContentHash: activeContentHash,
         textMode: "none" as const,
@@ -3192,9 +3408,11 @@ function EditorRuntimeWidget({
       hasTarget,
       languageProvider,
       layoutPanes,
+      mergeConflicts,
       paneId,
       root,
       windowId,
+      workspaceGitSummary,
     ],
   );
 
@@ -4302,7 +4520,7 @@ function EditorRuntimeWidget({
             }}
             onApply={handleAgentChangesetAccept}
             onReject={handleAgentChangesetReject}
-            onRunVerification={runDiffVerification}
+            onRunVerification={runChangesetVerification}
           />
         </div>
       </div>
@@ -4367,7 +4585,7 @@ function EditorRuntimeWidget({
             data-testid="agent-patch-run-verification"
             aria-label={commonT("editor.verification.runReviewedChangeLabel")}
             disabled={agentPatchPending.applying || verification.verificationRunning}
-            onClick={runDiffVerification}
+            onClick={runPatchVerification}
           >
             {commonT("editor.verification.run")}
           </button>
@@ -4387,7 +4605,7 @@ function EditorRuntimeWidget({
         }}
         onApply={handleRenameAccept}
         onReject={handleRenameReject}
-        onRunVerification={runDiffVerification}
+        onRunVerification={runRenameVerification}
       />
     );
   } else if (testGenerationPreview !== null) {
@@ -4413,59 +4631,84 @@ function EditorRuntimeWidget({
     );
   } else if (hasTarget && buffer !== null && fileModel !== null) {
     panel = (
-      <EditorSurface
-        key={editorSurfaceKey}
-        buffer={buffer}
-        fileModel={fileModel}
-        fileLoadState={loadState}
-        saveStatus={saveStatus}
-        saveError={saveError}
-        modifiedAt={modifiedAt ?? undefined}
-        maxSizeBytes={maxBytes ?? undefined}
-        themeVariant={themeVariant}
-        ariaLabel={
-          root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
-        }
-        onContentChange={onContentChange}
-        onSaveRequested={onSaveRequested}
-        onRuntimeError={onRuntimeError}
-        provideCompletions={completionEnabled ? provideCompletions : undefined}
-        completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
-        provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
-        onInlineCompletionTelemetry={completionEnabled ? onInlineCompletionTelemetry : undefined}
-        provideDiagnostics={diagnosticsEnabled ? provideDiagnostics : undefined}
-        provideHover={hoverEnabled ? provideHover : undefined}
-        provideSymbols={symbolsEnabled ? provideSymbols : undefined}
-        provideFormatting={formattingEnabled ? provideFormatting : undefined}
-        provideDefinition={definitionEnabled ? provideDefinition : undefined}
-        provideTypeDefinition={typeDefinitionEnabled ? provideTypeDefinition : undefined}
-        provideImplementation={implementationEnabled ? provideImplementation : undefined}
-        provideCallHierarchy={callHierarchyEnabled ? provideCallHierarchy : undefined}
-        callHierarchyLabels={callHierarchyEnabled ? callHierarchyLabels : undefined}
-        onRevealCallHierarchyLocation={
-          callHierarchyEnabled ? revealCallHierarchyLocation : undefined
-        }
-        provideInlayHints={inlayHintsEnabled ? provideInlayHints : undefined}
-        uriForPath={
-          definitionEnabled || typeDefinitionEnabled || implementationEnabled || referencesEnabled
-            ? uriForPath
-            : undefined
-        }
-        provideReferences={referencesEnabled ? provideReferences : undefined}
-        provideCodeActions={codeActionsEnabled ? provideCodeActions : undefined}
-        provideSignatureHelp={signatureHelpEnabled ? provideSignatureHelp : undefined}
-        formatRequestNonce={formatRequestNonce}
-        onSelectionChange={setCurrentSelection}
-        onCursorChange={setCursor}
-        revealRequest={surfaceRevealRequest}
-        hostEditRequest={activeHostEditRequest}
-        onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
-        onDiagnostics={diagnosticsEnabled ? onPaneDiagnostics : undefined}
-        onGenerateTests={completionEnabled ? runTestGeneration : undefined}
-        onAskKeikoAboutSelection={onAskSelection === undefined ? undefined : handleAskSelection}
-        onRenameSymbol={canRename ? runRename : undefined}
-        showStatusFooter={false}
-      />
+      <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, height: "100%" }}>
+        <EditorSurface
+          key={editorSurfaceKey}
+          buffer={buffer}
+          fileModel={fileModel}
+          fileLoadState={loadState}
+          saveStatus={saveStatus}
+          saveError={saveError}
+          modifiedAt={modifiedAt ?? undefined}
+          maxSizeBytes={maxBytes ?? undefined}
+          themeVariant={themeVariant}
+          ariaLabel={
+            root !== undefined && file !== undefined ? editorAriaLabel(root, file) : undefined
+          }
+          onContentChange={onContentChange}
+          onSaveRequested={onSaveRequested}
+          onRuntimeError={onRuntimeError}
+          provideCompletions={completionEnabled ? provideCompletions : undefined}
+          completionTriggerCharacters={DEFAULT_COMPLETION_TRIGGER_CHARACTERS}
+          provideInlineCompletions={completionEnabled ? provideInlineCompletions : undefined}
+          onInlineCompletionTelemetry={completionEnabled ? onInlineCompletionTelemetry : undefined}
+          provideDiagnostics={diagnosticsEnabled ? provideDiagnostics : undefined}
+          provideHover={hoverEnabled ? provideHover : undefined}
+          provideSymbols={symbolsEnabled ? provideSymbols : undefined}
+          provideFormatting={formattingEnabled ? provideFormatting : undefined}
+          provideDefinition={definitionEnabled ? provideDefinition : undefined}
+          provideTypeDefinition={typeDefinitionEnabled ? provideTypeDefinition : undefined}
+          provideImplementation={implementationEnabled ? provideImplementation : undefined}
+          provideCallHierarchy={callHierarchyEnabled ? provideCallHierarchy : undefined}
+          callHierarchyLabels={callHierarchyEnabled ? callHierarchyLabels : undefined}
+          onRevealCallHierarchyLocation={
+            callHierarchyEnabled ? revealCallHierarchyLocation : undefined
+          }
+          provideInlayHints={inlayHintsEnabled ? provideInlayHints : undefined}
+          uriForPath={
+            definitionEnabled || typeDefinitionEnabled || implementationEnabled || referencesEnabled
+              ? uriForPath
+              : undefined
+          }
+          provideReferences={referencesEnabled ? provideReferences : undefined}
+          provideCodeActions={codeActionsEnabled ? provideCodeActions : undefined}
+          provideSignatureHelp={signatureHelpEnabled ? provideSignatureHelp : undefined}
+          formatRequestNonce={formatRequestNonce}
+          onSelectionChange={setCurrentSelection}
+          onCursorChange={setCursor}
+          revealRequest={surfaceRevealRequest}
+          hostEditRequest={activeHostEditRequest}
+          onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
+          onDiagnostics={diagnosticsEnabled ? onPaneDiagnostics : undefined}
+          onGenerateTests={completionEnabled ? runTestGeneration : undefined}
+          onAskKeikoAboutSelection={onAskSelection === undefined ? undefined : handleAskSelection}
+          onRenameSymbol={canRename ? runRename : undefined}
+          showStatusFooter={false}
+          editorGitGutter={editorGitGutter}
+          editorBlame={editorBlame}
+          gitGutterRefreshNonce={gitGutterRefreshNonce}
+          editorConflicts={editorConflicts}
+        />
+        {gitGutterPeek !== null && file !== undefined ? (
+          <EditorGitHunkPeek
+            path={file}
+            peek={gitGutterPeek}
+            labels={{
+              close: sourceControlT("gitGutter.closePeek"),
+              staged: sourceControlT("gitGutter.staged"),
+              unstaged: sourceControlT("gitGutter.unstaged"),
+              title: sourceControlT("gitGutter.peekTitle"),
+              truncated: sourceControlT("gitGutter.truncated"),
+              hunkHeader: sourceControlT("gitGutter.hunkHeader"),
+              addedLine: sourceControlT("gitGutter.addedLine"),
+              deletedLine: sourceControlT("gitGutter.deletedLine"),
+              contextLine: sourceControlT("gitGutter.contextLine"),
+              metadataLine: sourceControlT("gitGutter.metadataLine"),
+            }}
+            onClose={() => setGitGutterPeek(null)}
+          />
+        ) : null}
+      </div>
     );
   } else if (hasTarget) {
     panel = (
@@ -4492,7 +4735,10 @@ function EditorRuntimeWidget({
                 ? tabId
                 : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
               const tabDirty = effectiveDirtyFiles.has(path);
-              const tabHandle = renderTabHandle?.(path, active, tabDirty);
+              const tabConflictCount = active ? mergeConflicts.count : 0;
+              const tabHandle = renderTabHandle?.(path, active, tabDirty, {
+                mergeConflicts: tabConflictCount,
+              });
               const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
               return (
                 <span
@@ -4502,6 +4748,9 @@ function EditorRuntimeWidget({
                   data-tab-file={path}
                   data-tab-draggable={tabHandle?.["data-tab-draggable"]}
                   data-tab-held={tabHandle?.["data-tab-held"]}
+                  data-merge-conflicts={
+                    tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
+                  }
                   data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
                   data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
                   key={path}
@@ -4520,6 +4769,14 @@ function EditorRuntimeWidget({
                     data-tab-file={path}
                     data-tab-draggable={tabHandle?.["data-tab-draggable"]}
                     data-tab-held={tabHandle?.["data-tab-held"]}
+                    data-merge-conflicts={
+                      tabHandle?.["data-merge-conflicts"] ?? String(tabConflictCount)
+                    }
+                    aria-label={
+                      tabConflictCount > 0
+                        ? `${path}, ${sourceControlT("conflicts.statusAria", { count: tabConflictCount })}`
+                        : path
+                    }
                     onClickCapture={tabHandle?.onClickCapture}
                     onDragStart={tabHandle?.onDragStart}
                     onDragEnd={tabHandle?.onDragEnd}
@@ -4537,6 +4794,11 @@ function EditorRuntimeWidget({
                   >
                     <FileIcon name={path} />
                     <span className="ed-tab-label">{path}</span>
+                    {tabConflictCount > 0 ? (
+                      <span className={conflictStyles.badge} aria-hidden="true">
+                        {tabConflictCount}
+                      </span>
+                    ) : null}
                     {tabDirty ? (
                       <span className="ed-dirty" aria-hidden="true">
                         ●
@@ -4630,6 +4892,29 @@ function EditorRuntimeWidget({
         </div>
         <div className="ed-toolbar-actions">
           {toolbarExtras}
+          {hasTarget && root !== undefined && file !== undefined && onOpenGitDiff !== undefined ? (
+            <button
+              type="button"
+              className="ed-reload"
+              onClick={() => onOpenGitDiff(root, file)}
+              aria-label={sourceControlT("gitDiff.openLabel")}
+            >
+              {sourceControlT("gitDiff.open")}
+            </button>
+          ) : null}
+          {hasTarget ? (
+            <button
+              type="button"
+              className="ed-reload"
+              onClick={() => {
+                setGitGutterPeek(null);
+                setGitGutterRefreshNonce((value) => value + 1);
+              }}
+              aria-label={sourceControlT("gitGutter.refreshLabel")}
+            >
+              {sourceControlT("gitGutter.refresh")}
+            </button>
+          ) : null}
           {hasTarget ? (
             <button
               type="button"

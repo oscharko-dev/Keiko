@@ -30,7 +30,7 @@ describe("ProblemsPanel", () => {
   });
 
   it("aggregates open-file diagnostics into a sorted list", () => {
-    setPaneDiagnostics("src/a.ts", [diagnostic("warning", 4), diagnostic("error", 1)]);
+    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("warning", 4), diagnostic("error", 1)]);
     render(<ProblemsPanel root="/ws" />);
     const rows = screen.getAllByTestId("problems-row");
     expect(rows).toHaveLength(2);
@@ -40,7 +40,7 @@ describe("ProblemsPanel", () => {
 
   it("filters by severity and shows a distinct zero-match message", async () => {
     const user = userEvent.setup();
-    setPaneDiagnostics("src/a.ts", [diagnostic("warning", 1)]);
+    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("warning", 1)]);
     render(<ProblemsPanel root="/ws" />);
     await user.selectOptions(screen.getByTestId("problems-filter-severity"), "error");
     expect(screen.queryByTestId("problems-list")).not.toBeInTheDocument();
@@ -50,14 +50,14 @@ describe("ProblemsPanel", () => {
 
   it("flags truncation when the per-file cap is exceeded", () => {
     const many = Array.from({ length: 120 }, (_unused, index) => diagnostic("error", index));
-    setPaneDiagnostics("src/a.ts", many);
+    setPaneDiagnostics("/ws", "src/a.ts", many);
     render(<ProblemsPanel root="/ws" />);
     expect(screen.getByTestId("problems-truncated")).toBeInTheDocument();
   });
 
   it("jumps to the exact line on click and on Enter for a located row", () => {
     const openEditorFile = vi.fn(() => ({ ok: true }) as never);
-    setPaneDiagnostics("src/a.ts", [diagnostic("error", 11)]);
+    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("error", 11)]);
     render(<ProblemsPanel root="/ws" openEditorFile={openEditorFile} />);
     fireEvent.click(screen.getByTestId("problems-row"));
     expect(openEditorFile).toHaveBeenCalledWith({
@@ -70,13 +70,36 @@ describe("ProblemsPanel", () => {
     expect(openEditorFile).toHaveBeenCalledTimes(2);
   });
 
-  it("has no axe violations in the default and filtered/focused states", async () => {
-    setPaneDiagnostics("src/a.ts", [diagnostic("error", 1), diagnostic("warning", 2)]);
+  it("has no axe violations in the default state and the zero-match filtered state", async () => {
+    setPaneDiagnostics("/ws", "src/a.ts", [diagnostic("error", 1), diagnostic("warning", 2)]);
     const { container } = render(<ProblemsPanel root="/ws" openEditorFile={vi.fn()} />);
     expect(await axe(container)).toHaveNoViolations();
     fireEvent.change(screen.getByTestId("problems-filter-source"), {
       target: { value: "verification" },
     });
+    expect(screen.getByTestId("problems-no-match")).toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations with a multi-row listbox and a non-first row focused (Issue #2213 fix-up)", async () => {
+    setPaneDiagnostics("/ws", "src/a.ts", [
+      diagnostic("error", 1),
+      diagnostic("warning", 2),
+      diagnostic("error", 3),
+    ]);
+    const { container } = render(<ProblemsPanel root="/ws" openEditorFile={vi.fn()} />);
+    const rows = screen.getAllByTestId("problems-row");
+    expect(rows).toHaveLength(3);
+    // The roving-tabindex listbox starts with the first row focused.
+    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+    expect(rows[0]).toHaveAttribute("tabindex", "0");
+    // Move focus to a NON-FIRST row via the real keyboard-navigation path (ArrowDown on the listbox).
+    fireEvent.keyDown(screen.getByTestId("problems-list"), { key: "ArrowDown" });
+    const focusedRows = screen.getAllByTestId("problems-row");
+    expect(focusedRows[0]).toHaveAttribute("aria-selected", "false");
+    expect(focusedRows[0]).toHaveAttribute("tabindex", "-1");
+    expect(focusedRows[1]).toHaveAttribute("aria-selected", "true");
+    expect(focusedRows[1]).toHaveAttribute("tabindex", "0");
     expect(await axe(container)).toHaveNoViolations();
   });
 });

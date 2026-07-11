@@ -44,6 +44,42 @@ export const EN_MESSAGES = {
   "common.working": "Working…",
   "common.tryAgain": "Try again",
   "common.dismiss": "Dismiss",
+  "common.on": "on",
+  "common.off": "off",
+  "common.advanced": "advanced",
+  "gatewaySetup.voice.title": "Audio & Digital Voice",
+  "gatewaySetup.voice.description":
+    "Optional models for dictation, live conversation, and spoken answers.",
+  "gatewaySetup.voice.guidance":
+    "Configure only what you need: Dictate requires a speech-to-text deployment. Digital Voice requires a separate Realtime deployment. The same audio connection and credential are used for the selected deployments below. Use the exact deployment names shown by your provider.",
+  "gatewaySetup.voice.selectedCapabilities":
+    "Selected capabilities: Dictate {dictate} · Digital Voice {digitalVoice} · Read aloud {readAloud}.",
+  "gatewaySetup.voice.dictateDeployment": "Dictate · speech-to-text deployment",
+  "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime deployment",
+  "gatewaySetup.voice.speechOutputDeployment": "Read aloud · speech-output deployment",
+  "gatewaySetup.voice.outputVoice": "Output voice",
+  "gatewaySetup.voice.outputVoiceHint": "optional; default alloy",
+  "gatewaySetup.voice.endpointUrl": "Audio endpoint URL",
+  "gatewaySetup.voice.endpointReplacePlaceholder":
+    "Only enter a value to replace the stored audio URL",
+  "gatewaySetup.voice.credential": "Audio credential",
+  "gatewaySetup.voice.credentialReplacePlaceholder":
+    "Only enter a value to replace the stored audio credential",
+  "gatewaySetup.voice.credentialPlaceholder": "Paste your audio credential",
+  "gatewaySetup.voice.authHeader": "Audio auth header",
+  "gatewaySetup.voice.timeout": "Audio timeout (ms)",
+  "gatewaySetup.voice.storedAria": "Stored audio credentials",
+  "gatewaySetup.voice.audioModels": "Audio models",
+  "gatewaySetup.voice.updateSettings": "Update audio and Digital Voice settings",
+  "gatewaySetup.voice.success.audioAndFigma":
+    "Updated audio and Digital Voice settings and verified Figma access token. Reloading Keiko…",
+  "gatewaySetup.voice.success.gatewayAudioAndFigma":
+    "Updated model gateway, audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…",
+  "gatewaySetup.voice.success.audio": "Updated audio and Digital Voice settings. Reloading Keiko…",
+  "gatewaySetup.voice.success.verifiedAudioAndFigma":
+    "{verified}, updated audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…{skipped}",
+  "gatewaySetup.voice.success.verifiedAudio":
+    "{verified} and updated audio and Digital Voice settings. Reloading Keiko…{skipped}",
   "codingWorkbench.status.checking": "Checking",
   "codingWorkbench.status.available": "Available",
   "codingWorkbench.status.unavailable": "Unavailable",
@@ -93,6 +129,13 @@ export const EN_MESSAGES = {
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized
   // agent-presence-indicator labels to that lazy namespace (EN/DE) rather than this shell catalog.
+  // The Epic #2092 audit follow-up (verification-target scoping in EditorRuntimeWidget.tsx, tab-
+  // eviction correctness in ProblemsPanel.tsx) is purely behavioral and introduces no new strings;
+  // Problems-panel text lives in the lazy `problems-i18n.ts` namespace, also unaffected.
+  // The Epic #2093 audit follow-up (unavailable-repository contract-shape fix in gitRoutes.ts,
+  // wiring the previously-dead EditorAgentSessionSnapshot.gitContextSummary producer in
+  // EditorRuntimeWidget.tsx) is likewise purely behavioral and introduces no new strings; the
+  // source-control labels it touches live in the lazy `editor-source-control-i18n.ts` namespace.
   "chat.regenerate.cancelled": "Regeneration cancelled",
   "chat.regenerate.running": "Regenerating response",
   "chat.regenerate.cancel": "Cancel regeneration",
@@ -850,6 +893,7 @@ export const EN_MESSAGES = {
   "relationships.health.show": "Graph health",
   "relationships.create.aria": "Create new relationship",
   "relationships.create.button": "+ New relationship",
+  // Epic #2093 source-control copy is intentionally feature-local so the editor remains lazy.
   // Issue #2150: Workspace.tsx/WindowFrame.tsx changed but added no new
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to

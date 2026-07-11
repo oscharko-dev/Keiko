@@ -152,6 +152,9 @@ describe("keiko-tools public surface", () => {
     expect(typeof tools.EditorAgentToolHost).toBe("function");
     expect(tools.DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS).toBeGreaterThan(0);
     expect(tools.DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES).toBeGreaterThan(0);
+    expect(tools.DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS).toBeGreaterThan(
+      tools.DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+    );
     // Terminal policy:
     expect(tools.TERMINAL_COMMAND_RULES).toBeDefined();
     expect(tools.TERMINAL_NO_FLAGS).toBeDefined();

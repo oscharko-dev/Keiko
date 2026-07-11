@@ -946,6 +946,57 @@ export {
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
 
+// ─── Editor Git read surface (Issue #2227, Epic #2093, ADR-0127) ────────────────
+// Bounded structured staged/worktree diff and privacy-minimized blame contracts shared by the
+// server route, editor decorations/peek, Git Client, and later read-only agent context.
+export type {
+  GitEditorDiffScope,
+  GitEditorDiffLayer,
+  GitEditorDiffLineKind,
+  GitEditorDiffFileStatus,
+  GitEditorDiffLine,
+  GitEditorDiffHunk,
+  GitEditorDiffFile,
+  GitEditorDiffRequest,
+  GitEditorDiffResponse,
+  GitEditorBlameRequest,
+  GitEditorBlameLine,
+  GitEditorBlameResponse,
+  GitEditorParseOk,
+  GitEditorParseFail,
+  GitEditorParseResult,
+} from "./git-editor.js";
+export {
+  GIT_EDITOR_SCHEMA_VERSION,
+  GIT_EDITOR_DIFF_MAX_BYTES,
+  GIT_EDITOR_DIFF_MAX_FILES,
+  GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE,
+  GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK,
+  GIT_EDITOR_DIFF_MAX_HEADER_CHARS,
+  GIT_EDITOR_DIFF_MAX_LINE_CHARS,
+  GIT_EDITOR_PATH_MAX_BYTES,
+  GIT_EDITOR_BLAME_MAX_BYTES,
+  GIT_EDITOR_BLAME_MAX_LINES,
+  GIT_EDITOR_BLAME_AUTHOR_MAX_CHARS,
+  GIT_EDITOR_BLAME_SUMMARY_MAX_CHARS,
+  GIT_EDITOR_DIFF_SCOPES,
+  GIT_EDITOR_DIFF_LAYERS,
+  GIT_EDITOR_DIFF_LINE_KINDS,
+  GIT_EDITOR_DIFF_FILE_STATUSES,
+  isGitEditorDiffScope,
+  isGitEditorDiffLayer,
+  isGitEditorDiffLineKind,
+  isGitEditorDiffFileStatus,
+  isGitEditorDiffLine,
+  isGitEditorDiffHunk,
+  isGitEditorDiffFile,
+  isGitEditorBlameLine,
+  parseGitEditorDiffRequest,
+  parseGitEditorDiffResponse,
+  parseGitEditorBlameRequest,
+  parseGitEditorBlameResponse,
+} from "./git-editor.js";
+
 // ─── Git repository summary + remotes BFF (Issue #1573, Epic #1572) ───────────────
 // Read-only repository summary (branch/upstream/ahead-behind/counts/remotes/last-sync) and a
 // dedicated remotes response. The browser receives bounded, redacted metadata only; all Git

@@ -19,6 +19,7 @@ const SOURCE_LABEL: Readonly<Record<CodingContextSourceKind, string>> = {
   "quality-intelligence": "Quality evidence",
   "workflow-context": "Workflow context",
   "editor-state": "Editor state",
+  "git-context": "Git context",
 };
 
 const HEADER =

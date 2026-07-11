@@ -1430,6 +1430,7 @@ export function EditorWidget({
             heldTabRef.current?.paneId === paneId && heldTabRef.current.file === path
               ? "true"
               : "false",
+          "data-merge-conflicts": String(context?.mergeConflicts ?? 0),
         }),
       });
     }

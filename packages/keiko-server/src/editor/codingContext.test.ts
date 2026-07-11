@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODING_CONTEXT_BUDGETS,
   CODING_CONTEXT_PURPOSES,
@@ -147,6 +147,18 @@ describe("assembleCodingContext", () => {
       );
       expect(pack.omissions.some((entry) => entry.sourceKind === "editor-state")).toBe(false);
     }
+  });
+
+  it("does not invoke Git context reads without the editor-session opt-in", async () => {
+    const gitContextReader = vi.fn();
+    const pack = await assembleCodingContext(
+      request(),
+      ctx(new AbortController().signal, { gitContextReader }),
+    );
+
+    expect(gitContextReader).not.toHaveBeenCalled();
+    expect(pack.excerpts.some((entry) => entry.citation.sourceKind === "git-context")).toBe(false);
+    expect(pack.omissions.some((entry) => entry.sourceKind === "git-context")).toBe(false);
   });
 
   it("packs opted-in editor state with first-party provenance inside both budgets", async () => {

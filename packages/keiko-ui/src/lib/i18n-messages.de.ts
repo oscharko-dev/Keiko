@@ -46,6 +46,43 @@ export const DE_MESSAGES = {
   "common.working": "Wird ausgeführt…",
   "common.tryAgain": "Erneut versuchen",
   "common.dismiss": "Ausblenden",
+  "common.on": "an",
+  "common.off": "aus",
+  "common.advanced": "erweitert",
+  "gatewaySetup.voice.title": "Audio & Digital Voice",
+  "gatewaySetup.voice.description":
+    "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",
+  "gatewaySetup.voice.guidance":
+    "Konfiguriere nur, was du brauchst: Diktieren benötigt ein Speech-to-Text-Deployment. Digital Voice benötigt ein separates Realtime-Deployment. Für die unten ausgewählten Deployments werden dieselbe Audio-Verbindung und dieselben Zugangsdaten verwendet. Verwende die exakten Deployment-Namen deines Anbieters.",
+  "gatewaySetup.voice.selectedCapabilities":
+    "Ausgewählte Funktionen: Diktieren {dictate} · Digital Voice {digitalVoice} · Vorlesen {readAloud}.",
+  "gatewaySetup.voice.dictateDeployment": "Diktieren · Speech-to-Text-Deployment",
+  "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime-Deployment",
+  "gatewaySetup.voice.speechOutputDeployment": "Vorlesen · Speech-Output-Deployment",
+  "gatewaySetup.voice.outputVoice": "Ausgabestimme",
+  "gatewaySetup.voice.outputVoiceHint": "optional; Standard: alloy",
+  "gatewaySetup.voice.endpointUrl": "Audio-Endpunkt-URL",
+  "gatewaySetup.voice.endpointReplacePlaceholder":
+    "Nur ausfüllen, um die gespeicherte Audio-URL zu ersetzen",
+  "gatewaySetup.voice.credential": "Audio-Zugangsdaten",
+  "gatewaySetup.voice.credentialReplacePlaceholder":
+    "Nur ausfüllen, um die gespeicherten Audio-Zugangsdaten zu ersetzen",
+  "gatewaySetup.voice.credentialPlaceholder": "Audio-Zugangsdaten einfügen",
+  "gatewaySetup.voice.authHeader": "Audio-Authentifizierungs-Header",
+  "gatewaySetup.voice.timeout": "Audio-Zeitlimit (ms)",
+  "gatewaySetup.voice.storedAria": "Gespeicherte Audio-Zugangsdaten",
+  "gatewaySetup.voice.audioModels": "Audio-Modelle",
+  "gatewaySetup.voice.updateSettings": "Audio- und Digital-Voice-Einstellungen aktualisieren",
+  "gatewaySetup.voice.success.audioAndFigma":
+    "Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.gatewayAudioAndFigma":
+    "Modell-Gateway-, Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.audio":
+    "Audio- und Digital-Voice-Einstellungen aktualisiert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.verifiedAudioAndFigma":
+    "{verified}, Audio- und Digital-Voice-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…{skipped}",
+  "gatewaySetup.voice.success.verifiedAudio":
+    "{verified} und Audio- sowie Digital-Voice-Einstellungen aktualisiert. Keiko wird neu geladen…{skipped}",
   "codingWorkbench.status.checking": "Prüfe",
   "codingWorkbench.status.available": "Verfügbar",
   "codingWorkbench.status.unavailable": "Nicht verfügbar",
@@ -97,6 +134,13 @@ export const DE_MESSAGES = {
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized
   // agent-presence-indicator labels to that lazy namespace (EN/DE) rather than this shell catalog.
+  // The Epic #2092 audit follow-up (verification-target scoping in EditorRuntimeWidget.tsx, tab-
+  // eviction correctness in ProblemsPanel.tsx) is purely behavioral and introduces no new strings;
+  // Problems-panel text lives in the lazy `problems-i18n.ts` namespace, also unaffected.
+  // The Epic #2093 audit follow-up (unavailable-repository contract-shape fix in gitRoutes.ts,
+  // wiring the previously-dead EditorAgentSessionSnapshot.gitContextSummary producer in
+  // EditorRuntimeWidget.tsx) is likewise purely behavioral and introduces no new strings; the
+  // source-control labels it touches live in the lazy `editor-source-control-i18n.ts` namespace.
   "chat.regenerate.cancelled": "Regenerierung abgebrochen",
   "chat.regenerate.running": "Antwort wird neu generiert",
   "chat.regenerate.cancel": "Regenerierung abbrechen",
@@ -868,6 +912,7 @@ export const DE_MESSAGES = {
   "relationships.health.show": "Graph Health",
   "relationships.create.aria": "Neue Relationship erstellen",
   "relationships.create.button": "+ Neue Relationship",
+  // Epic #2093 source-control copy is intentionally feature-local so the editor remains lazy.
   // Issue #2150: Workspace.tsx/WindowFrame.tsx changed but added no new
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to

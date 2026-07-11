@@ -45,6 +45,7 @@ function renderComposer(props: Partial<Parameters<typeof CommitComposer>[0]> = {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -124,6 +125,15 @@ describe("CommitComposer — commit gate", () => {
 });
 
 describe("CommitComposer — preview and outcomes", () => {
+  it("does not request a commit preview for an empty draft", async () => {
+    vi.useFakeTimers();
+    const { onPreview } = renderComposer();
+
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(onPreview).not.toHaveBeenCalled();
+  });
+
   it("debounces a policy preview for the composed draft when changes are staged", async () => {
     const user = userEvent.setup();
     const { onPreview } = renderComposer();

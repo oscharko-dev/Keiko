@@ -111,6 +111,14 @@ export interface EditorAgentSessionSnapshot {
     readonly available: boolean;
     readonly unavailableReason?: string | undefined;
   } | null;
+  // Issue #2234 (ADR-0127): content-free, additive Git awareness. Content-bearing diff, conflict,
+  // and blame excerpts remain server-internal coding context. Old snapshots without this field
+  // continue to validate.
+  readonly gitContextSummary?: {
+    readonly hasConflictMarkers: boolean;
+    readonly changedFileCount: number;
+    readonly truncated: boolean;
+  } | null;
   readonly documentVersion?: EditorDocumentVersion | undefined;
   readonly activeFileContentHash?: string | undefined;
   readonly textMode: EditorAgentSnapshotTextMode;
@@ -708,6 +716,18 @@ function isLanguageCapability(value: unknown): boolean {
   );
 }
 
+function isGitContextSummary(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) =>
+      ["hasConflictMarkers", "changedFileCount", "truncated"].includes(key),
+    ) &&
+    typeof value.hasConflictMarkers === "boolean" &&
+    isNonNegativeInteger(value.changedFileCount) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
 function isPaneSnapshot(value: unknown): value is EditorAgentPaneSnapshot {
   return (
     isRecord(value) &&
@@ -763,6 +783,9 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isNullOr(value.diagnosticsSummary, isDiagnosticsSummary),
     isUndefinedOr(value.diagnosticsDetail, isEditorAgentDiagnosticsDetail),
     isUndefinedOr(value.languageCapability, (c) => c === null || isLanguageCapability(c)),
+    isUndefinedOr(value.gitContextSummary, (summary) =>
+      summary === null ? true : isGitContextSummary(summary),
+    ),
     isUndefinedOr(value.documentVersion, isDocumentVersion),
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
     isSnapshotTextMode(value.textMode),

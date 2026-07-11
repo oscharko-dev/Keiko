@@ -135,7 +135,9 @@ export type EvidenceTaskType =
   | "terminal-execution"
   | "command-run"
   | "container-run"
-  | "connected-context";
+  | "connected-context"
+  // Issue #2211 fix-up (Epic #2092): the editor verification runner's own audit-evidence trail.
+  | "editor-verification-run";
 
 export interface EvidenceBrowserViewportPx {
   readonly width: number;

@@ -27,7 +27,8 @@ export type EditorHostCapability =
   // typecheck/lint/build — always available when capable, unrelated to a pending patch. Kept DISTINCT
   // from the patch-review-scoped `runVerification` so neither wrongly gates the other. Maps 1:1 to the
   // `runWorkspaceVerification` host method.
-  | "runWorkspaceVerification";
+  | "runWorkspaceVerification"
+  | "fetchGitBlame";
 
 export type EditorCommandId =
   | "editor.save"
@@ -58,7 +59,13 @@ export type EditorCommandId =
   | "editor.format"
   // Issue #1205: open the in-editor find/search widget. Editor-intrinsic (Monaco's `actions.find`).
   | "editor.find"
-  | "editor.requestContext";
+  | "editor.requestContext"
+  | "editor.toggleBlame"
+  | "editor.nextConflict"
+  | "editor.previousConflict"
+  | "editor.acceptConflictOurs"
+  | "editor.acceptConflictTheirs"
+  | "editor.acceptConflictBoth";
 
 export interface EditorCommand {
   readonly id: EditorCommandId;
@@ -82,5 +89,6 @@ export interface EditorCommandContext {
   // Issue #2212: host-resolved — true when the active file, or its resolved test counterpart, can be
   // targeted by `editor.runFileTests` (so the editor needs no test-file-naming knowledge itself).
   readonly activeFileVerifiable: boolean;
+  readonly mergeConflictCount?: number | undefined;
   readonly availableCapabilities: readonly EditorHostCapability[];
 }

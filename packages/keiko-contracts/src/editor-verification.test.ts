@@ -5,6 +5,7 @@ import {
   EDITOR_VERIFICATION_MAX_KINDS,
   EDITOR_VERIFICATION_RUN_STATES,
   EDITOR_VERIFICATION_SCHEMA_VERSION,
+  isEditorVerificationCatalog,
   isEditorVerificationEvent,
   isEditorVerificationEventKind,
   isEditorVerificationRun,
@@ -12,7 +13,7 @@ import {
   isVerificationKind,
   parseEditorVerificationRunRequest,
 } from "./editor-verification.js";
-import type { EditorVerificationEvent } from "./editor-verification.js";
+import type { EditorVerificationCatalog, EditorVerificationEvent } from "./editor-verification.js";
 import type { VerificationReport } from "./verification.js";
 
 const V = EDITOR_VERIFICATION_SCHEMA_VERSION;
@@ -97,20 +98,59 @@ describe("editor-verification enum guards", () => {
 });
 
 describe("isEditorVerificationRun", () => {
-  it("accepts a valid run and rejects a bad state or missing runId", () => {
+  it("accepts a valid run and rejects a bad state, missing runId, or missing projectId", () => {
     expect(
       isEditorVerificationRun({
         runId: "r1",
+        projectId: "proj-1",
         kinds: ["test"],
         state: "running",
         startedAtMs: 10,
       }),
     ).toBe(true);
     expect(
-      isEditorVerificationRun({ runId: "", kinds: ["test"], state: "running", startedAtMs: 10 }),
+      isEditorVerificationRun({
+        runId: "",
+        projectId: "proj-1",
+        kinds: ["test"],
+        state: "running",
+        startedAtMs: 10,
+      }),
     ).toBe(false);
     expect(
-      isEditorVerificationRun({ runId: "r", kinds: ["test"], state: "boom", startedAtMs: 10 }),
+      isEditorVerificationRun({
+        runId: "r",
+        projectId: "proj-1",
+        kinds: ["test"],
+        state: "boom",
+        startedAtMs: 10,
+      }),
+    ).toBe(false);
+    expect(
+      isEditorVerificationRun({ runId: "r", kinds: ["test"], state: "running", startedAtMs: 10 }),
+    ).toBe(false);
+  });
+
+  it("accepts an echoed requestId and rejects an invalid one", () => {
+    expect(
+      isEditorVerificationRun({
+        runId: "r1",
+        projectId: "proj-1",
+        kinds: ["test"],
+        state: "running",
+        startedAtMs: 10,
+        requestId: "corr-1",
+      }),
+    ).toBe(true);
+    expect(
+      isEditorVerificationRun({
+        runId: "r1",
+        projectId: "proj-1",
+        kinds: ["test"],
+        state: "running",
+        startedAtMs: 10,
+        requestId: "",
+      }),
     ).toBe(false);
   });
 });
@@ -118,7 +158,14 @@ describe("isEditorVerificationRun", () => {
 describe("isEditorVerificationEvent", () => {
   it("accepts every lifecycle event variant", () => {
     const events: EditorVerificationEvent[] = [
-      { schemaVersion: V, kind: "run-started", runId: "r", kinds: ["test"], startedAtMs: 1 },
+      {
+        schemaVersion: V,
+        kind: "run-started",
+        runId: "r",
+        projectId: "proj-1",
+        kinds: ["test"],
+        startedAtMs: 1,
+      },
       { schemaVersion: V, kind: "step-started", runId: "r", stepKind: "test" },
       {
         schemaVersion: V,
@@ -133,6 +180,43 @@ describe("isEditorVerificationEvent", () => {
       { schemaVersion: V, kind: "run-failed", runId: "r", reason: "backend-unavailable" },
     ];
     for (const event of events) expect(isEditorVerificationEvent(event)).toBe(true);
+  });
+
+  it("accepts a run-started event with an echoed requestId and rejects an invalid one", () => {
+    expect(
+      isEditorVerificationEvent({
+        schemaVersion: V,
+        kind: "run-started",
+        runId: "r",
+        projectId: "proj-1",
+        kinds: ["test"],
+        startedAtMs: 1,
+        requestId: "corr-1",
+      }),
+    ).toBe(true);
+    expect(
+      isEditorVerificationEvent({
+        schemaVersion: V,
+        kind: "run-started",
+        runId: "r",
+        projectId: "proj-1",
+        kinds: ["test"],
+        startedAtMs: 1,
+        requestId: "",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a run-started event with a missing projectId", () => {
+    expect(
+      isEditorVerificationEvent({
+        schemaVersion: V,
+        kind: "run-started",
+        runId: "r",
+        kinds: ["test"],
+        startedAtMs: 1,
+      }),
+    ).toBe(false);
   });
 
   it("rejects a wrong schema version, unknown kind, or malformed payload", () => {
@@ -175,5 +259,58 @@ describe("isEditorVerificationEvent", () => {
     ]);
     expect("outputSummary" in stepCompleted).toBe(false);
     expect("report" in stepCompleted).toBe(false);
+  });
+});
+
+describe("isEditorVerificationCatalog", () => {
+  function catalog(): EditorVerificationCatalog {
+    return {
+      schemaVersion: V,
+      projectId: "proj-1",
+      kinds: [
+        { kind: "test", available: true, trustState: "trusted" },
+        { kind: "build", available: false, trustState: "approval-required" },
+      ],
+    };
+  }
+
+  it("accepts a valid catalog with trusted and approval-required entries", () => {
+    expect(isEditorVerificationCatalog(catalog())).toBe(true);
+  });
+
+  it("accepts an empty kinds list", () => {
+    expect(isEditorVerificationCatalog({ ...catalog(), kinds: [] })).toBe(true);
+  });
+
+  it("rejects a wrong schema version, missing projectId, or non-array kinds", () => {
+    expect(isEditorVerificationCatalog({ ...catalog(), schemaVersion: "2" })).toBe(false);
+    expect(isEditorVerificationCatalog({ ...catalog(), projectId: "" })).toBe(false);
+    expect(isEditorVerificationCatalog({ ...catalog(), kinds: "not-an-array" })).toBe(false);
+  });
+
+  it("rejects an entry with an unknown kind, a non-boolean available, or an invalid trustState", () => {
+    expect(
+      isEditorVerificationCatalog({
+        ...catalog(),
+        kinds: [{ kind: "not-a-kind", available: true, trustState: "trusted" }],
+      }),
+    ).toBe(false);
+    expect(
+      isEditorVerificationCatalog({
+        ...catalog(),
+        kinds: [{ kind: "test", available: "yes", trustState: "trusted" }],
+      }),
+    ).toBe(false);
+    expect(
+      isEditorVerificationCatalog({
+        ...catalog(),
+        kinds: [{ kind: "test", available: true, trustState: "always-allowed" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a non-object value", () => {
+    expect(isEditorVerificationCatalog(null)).toBe(false);
+    expect(isEditorVerificationCatalog("catalog")).toBe(false);
   });
 });

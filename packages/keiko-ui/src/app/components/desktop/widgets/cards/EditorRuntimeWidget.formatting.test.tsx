@@ -18,6 +18,7 @@ import type { FilesContentResponse, LanguageServiceCapabilities } from "../../..
 import {
   fetchEditorLanguageCapabilities,
   fetchFilesContent,
+  fetchGitStatus,
   postEditorAgentSessionSnapshot,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
@@ -31,6 +32,7 @@ vi.mock("../../../../../lib/api", async () => {
     ...actual,
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchFilesContent: vi.fn(),
+    fetchGitStatus: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
@@ -130,6 +132,21 @@ async function renderFile(file: string, over?: Partial<FilesContentResponse>): P
 
 beforeEach(() => {
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
+  vi.mocked(fetchGitStatus).mockResolvedValue({
+    schemaVersion: "1",
+    root: "/repo",
+    state: "available",
+    available: true,
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  });
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
 });
 

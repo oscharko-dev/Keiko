@@ -380,14 +380,14 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await userEvent.click(screen.getByText("Update voice dictation credentials"));
+    await userEvent.click(screen.getByText("Update audio and Digital Voice settings"));
     await userEvent.type(
-      screen.getByLabelText(/stt endpoint url/i),
+      screen.getByLabelText(/audio endpoint url/i),
       "https://voice-gateway.example.com/openai/v1",
     );
-    await userEvent.type(screen.getByLabelText(/stt credential/i), "voice-token");
-    await userEvent.type(screen.getByLabelText(/stt model optional/i), "keiko-stt");
-    await userEvent.type(screen.getByLabelText(/stt auth header optional/i), "api-key");
+    await userEvent.type(screen.getByLabelText(/^audio credential/i), "voice-token");
+    await userEvent.type(screen.getByLabelText(/dictate.*speech-to-text deployment/i), "keiko-stt");
+    await userEvent.type(screen.getByLabelText(/audio auth header advanced/i), "api-key");
     await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
 
     expect(setupGateway).toHaveBeenCalledWith({
@@ -399,11 +399,57 @@ describe("GatewaySetupDialog", () => {
       voiceBaseUrl: "https://voice-gateway.example.com/openai/v1",
       voiceApiKey: "voice-token",
       voiceApiKeyHeaderName: "api-key",
-      voiceModelId: "keiko-stt",
+      voiceOutputVoiceId: "alloy",
+      voiceSpeechToTextModelId: "keiko-stt",
       voiceProviderLocality: "azure-foundry",
     });
     expect(await screen.findByRole("status")).toHaveTextContent(
-      /updated voice dictation credentials/i,
+      /updated audio and digital voice settings/i,
+    );
+  });
+
+  it("explains and submits separate Dictate, Digital Voice, and read-aloud deployments", async () => {
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "internal-chat",
+      testedModelIds: ["internal-chat"],
+      providerCount: 4,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    expect(screen.getByText(/dictate requires a speech-to-text deployment/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/digital voice requires a separate realtime deployment/i),
+    ).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://models.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "model-token");
+    await userEvent.type(
+      screen.getByLabelText(/audio endpoint url/i),
+      "https://audio.example.com/v1",
+    );
+    await userEvent.type(screen.getByLabelText(/audio credential/i), "audio-token");
+    await userEvent.type(
+      screen.getByLabelText(/dictate.*speech-to-text deployment/i),
+      "transcribe",
+    );
+    await userEvent.type(screen.getByLabelText(/digital voice.*realtime deployment/i), "realtime");
+    await userEvent.type(screen.getByLabelText(/read aloud.*speech-output deployment/i), "tts");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    expect(setupGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "transcribe",
+        voiceRealtimeModelId: "realtime",
+        voiceSpeechOutputModelId: "tts",
+        voiceOutputVoiceId: "alloy",
+      }),
     );
   });
 
@@ -417,7 +463,7 @@ describe("GatewaySetupDialog", () => {
       />,
     );
 
-    await user.click(screen.getByText("Update voice dictation credentials"));
+    await user.click(screen.getByText("Update audio and Digital Voice settings"));
     const locality = screen.getByRole("combobox", { name: /provider locality/i });
 
     expect(locality.tagName).toBe("BUTTON");

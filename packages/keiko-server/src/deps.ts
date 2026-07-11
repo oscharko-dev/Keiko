@@ -1043,10 +1043,25 @@ function buildCommandRunner(options: {
 // Issue #2211 — the editor verification runner reuses the same project store as the command runner.
 // The workspace-trust decider is intentionally left at its fail-closed `() => false` default, matching
 // buildCommandRunner's current production wiring, until a future issue wires a real trust source for
-// BOTH surfaces. SSE-event redaction is applied at the route boundary (deps.redactor), so the manager
-// needs no redactor of its own.
-function buildVerificationRunner(options: { readonly store: UiStore }): VerificationRunnerManager {
-  return createVerificationRunnerManager({ store: options.store });
+// BOTH surfaces. SSE-event redaction is applied at the route boundary (deps.redactor); the manager's
+// OWN redactor (below) only guards the persisted evidence entry, mirroring buildCommandRunner.
+//
+// Issue #2211 fix-up (Epic #2092): also wires the SAME evidenceStore + live-redactor construction
+// pattern buildCommandRunner uses, so every finished verification run writes a content-free audit
+// entry instead of running silently unaudited.
+function buildVerificationRunner(options: {
+  readonly store: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly liveRedactor: Redactor;
+}): VerificationRunnerManager {
+  return createVerificationRunnerManager({
+    store: options.store,
+    evidenceStore: options.evidenceStore,
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
 }
 
 function buildUpdateSession(options: {
@@ -1529,7 +1544,11 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       env: args.options.env,
       liveRedactor: args.liveRedactor,
     }),
-    verificationRunner: buildVerificationRunner({ store: args.uiStore }),
+    verificationRunner: buildVerificationRunner({
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      liveRedactor: args.liveRedactor,
+    }),
     updateSession: buildUpdateSession({
       injected: args.options.updateSession,
       env: args.options.env,

@@ -98,6 +98,25 @@ describe("createGitProcessRunner", () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "neutralizes a repository-local executable fsmonitor for local reads",
+    async () => {
+      const marker = join(root, "fsmonitor-executed.marker");
+      const hook = join(root, "hostile-fsmonitor.sh");
+      writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      execFileSync("chmod", ["+x", hook]);
+      execFileSync("git", ["config", "core.fsmonitor", hook], { cwd: root });
+
+      const result = await defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "-C", root, "status", "--porcelain=v1"],
+        { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "kills a wedged process at the timeout and flags timedOut",
     async () => {
       const fifo = join(root, "wedge.fifo");

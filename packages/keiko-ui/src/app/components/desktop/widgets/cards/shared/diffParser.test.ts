@@ -40,6 +40,19 @@ describe("parseUnifiedDiff", () => {
     expect(file.hunks).toHaveLength(1);
 
     const hunk = assertDefined(file.hunks[0], "hunk");
+    expect(file).toMatchObject({
+      layer: "worktree",
+      status: "modified",
+      binary: false,
+      truncated: false,
+    });
+    expect(hunk).toMatchObject({
+      oldStart: 10,
+      oldCount: 4,
+      newStart: 10,
+      newCount: 5,
+      truncated: false,
+    });
     expect(hunk.lines).toHaveLength(5);
 
     // context line: both sides advance
@@ -163,6 +176,20 @@ describe("parseUnifiedDiff", () => {
     expect(metaLine?.oldLine).toBeNull();
     expect(metaLine?.newLine).toBeNull();
     expect(metaLine?.text).toBe("\\ No newline at end of file");
+  });
+
+  it("preserves binary state in the shared contract without fabricating hunks", () => {
+    const result = parseUnifiedDiff(
+      "diff --git a/image.png b/image.png\nBinary files a/image.png and b/image.png differ\n",
+    );
+
+    expect(result.files[0]).toMatchObject({
+      path: "image.png",
+      binary: true,
+      hunks: [],
+      addedLines: 0,
+      removedLines: 0,
+    });
   });
 
   it("preserves hunk body text that resembles file headers", () => {
