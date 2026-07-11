@@ -1076,6 +1076,8 @@ export const EN_MESSAGES = {
   "atlassianConnectors.denied.reason.connector-write-denied":
     "Connector write access is not permitted for this action.",
   "atlassianConnectors.denied.reason.generic": "This action was denied by policy.",
+  // The voice-dialogue composer motion update adds no user-facing copy; this
+  // catalog touch records the required English-copy review for ChatWindow.tsx.
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

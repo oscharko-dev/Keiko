@@ -192,7 +192,7 @@ function renderWindow(session: ChatSessionApi): void {
 }
 
 function getComposerBox(): HTMLElement {
-  const box = screen.getByRole("textbox", { name: "Chat message" }).closest(".cmp-box");
+  const box = document.querySelector(".cmp-box");
   expect(box).toBeInstanceOf(HTMLElement);
   return box as HTMLElement;
 }
@@ -651,7 +651,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(box.querySelector('[role="status"][aria-atomic="true"]')).toBeNull();
   });
 
-  it("entering dialogue mode keeps context controls while hiding send-only actions", async () => {
+  it("entering dialogue mode exposes only the centred dialogue controls", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
@@ -665,18 +665,28 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
 
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
-    expect(box).toHaveClass("cmp-box-voice-dialog");
-    expect(within(box).getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
-    expect(within(box).getByRole("button", { name: "Attach file" })).toBeInTheDocument();
+    expect(within(box).queryByRole("textbox", { name: "Chat message" })).toBeNull();
+    expect(within(box).queryByRole("button", { name: "Attach file" })).toBeNull();
+    expect(within(box).queryByRole("combobox")).toBeNull();
     expect(within(box).getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     expect(
       within(box).getByRole("button", { name: "Mute voice dialogue microphone" }),
     ).toBeInTheDocument();
+    expect(within(box).getAllByRole("button")).toHaveLength(1);
+    expect(within(box).getAllByRole("switch")).toHaveLength(1);
     expect(within(box).queryByRole("button", { name: "Dictate a message" })).toBeNull();
     expect(within(box).queryByRole("button", { name: "Mute assistant voice" })).toBeNull();
     expect(within(box).queryByRole("button", { name: "Send message" })).toBeNull();
+    expect(within(box).queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
     expect(within(box).queryByRole("button", { name: "Clear history" })).toBeNull();
     expect(within(box).queryByText(/Approximate context/iu)).toBeNull();
+
+    const normalLayer = box.querySelector('[data-composer-layer="normal"]');
+    const voiceLayer = box.querySelector('[data-composer-layer="voice"]');
+    expect(normalLayer).toHaveAttribute("aria-hidden", "true");
+    expect(normalLayer).toHaveAttribute("inert");
+    expect(voiceLayer).not.toHaveAttribute("aria-hidden");
+    expect(voiceLayer).not.toHaveAttribute("inert");
   });
 
   it("entering dialogue mode sets aria-checked=true on the switch without opening a control panel", async () => {
@@ -699,10 +709,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(screen.queryByRole("button", { name: "Stop voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
 
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
@@ -717,15 +724,15 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
   });
 
   it("returns keyboard focus to the dialogue switch across enter and leave (WCAG 2.4.3)", async () => {
-    // Toggling the mode swaps the composer footer, remounting the switch under a new parent. Without
-    // focus restoration the click would drop a keyboard user onto <body>; the switch must keep focus.
+    // Toggling the mode makes the current layer inert. Without focus restoration the click would
+    // drop a keyboard user onto <body>; the switch in the newly active layer must receive focus.
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
     stubRealtimeBrowser(async () => ({ getTracks: () => [] }) as unknown as MediaStream);
     renderWindow(makeSession());
 
     const enterSwitch = await screen.findByRole("switch", { name: "Voice dialogue mode" });
     await userEvent.click(enterSwitch);
-    // The remounted (active) switch holds focus, not the document body.
+    // The active-layer switch holds focus, not the document body.
     expect(document.activeElement).toBe(
       screen.getByRole("switch", { name: "Voice dialogue mode" }),
     );
@@ -797,10 +804,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     expect(screen.queryByRole("button", { name: "Stop voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
     expect(within(box).getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
@@ -915,10 +919,7 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
       "true",
     );
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
     // The conversation is now shown and the composer stays in the clean voice-control layout.
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");

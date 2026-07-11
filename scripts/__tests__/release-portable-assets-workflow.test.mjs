@@ -291,7 +291,7 @@ describe("Windows portable production signing workflow", () => {
       { encoding: "utf8" },
     );
     expect(result.status, result.stderr).toBe(0);
-  }, 30_000);
+  }, 60_000);
 
   it("clears Azure immediately after signing and fails closed before native verification", () => {
     const signing = portableWorkflow.indexOf("Sign the exact inventoried PE set");

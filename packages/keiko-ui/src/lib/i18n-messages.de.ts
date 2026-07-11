@@ -1102,4 +1102,6 @@ export const DE_MESSAGES = {
     "Connector-Schreibzugriff ist für diese Aktion nicht zulässig.",
   "atlassianConnectors.denied.reason.generic":
     "Diese Aktion wurde durch die Richtlinie verweigert.",
+  // The voice-dialogue composer motion update adds no user-facing copy; this
+  // catalog touch records the required German-copy review for ChatWindow.tsx.
 } satisfies MessageCatalog;
