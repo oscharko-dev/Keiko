@@ -183,6 +183,7 @@ describe("Coding Workbench runtime contracts", () => {
       approvalId: "approval",
       approvalToken: "token",
       taskId: "task-1",
+      operatorId: "operator-1",
       intentDigest: DIGEST,
       expiresAt: "2026-07-11T13:00:00.000Z",
     };
@@ -221,5 +222,50 @@ describe("Coding Workbench runtime contracts", () => {
     expect(
       validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts, response: "content" }),
     ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts, actionClasses: ["shell-root"] }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts, connectorScopes: ["secrets.read"] }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("enforces state-dependent binding and closed optional fields", () => {
+    const active = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 1,
+      updatedAt: "2026-07-11T12:00:00.000Z",
+      runId: "run-1",
+      taskId: "task-1",
+      workspaceId: "workspace-1",
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+    };
+    expect(validateCodingWorkbenchRuntimeState(active)).toMatchObject({ ok: true });
+    expect(validateCodingWorkbenchRuntimeState({ ...active, runId: undefined })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      validateCodingWorkbenchRuntimeState({ ...active, runtimeSource: "unknown" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({ ...active, failureCode: "raw-error" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({ ...active, failureCode: "runtime-failed" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({ ...active, updatedAt: "2026-07-11 12:00:00" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({ ...active, updatedAt: "2026-02-30T12:00:00.000Z" }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeState({ ...active, state: "failed", failureCode: undefined }),
+    ).toMatchObject({ ok: false });
+    expect(validateCodingWorkbenchRuntimeState({ ...active, state: "idle" })).toMatchObject({
+      ok: false,
+    });
   });
 });

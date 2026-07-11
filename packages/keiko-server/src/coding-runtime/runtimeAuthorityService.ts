@@ -87,12 +87,13 @@ export class CodingRuntimeAuthorityService {
   public confirmStart(
     intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
     taskId: string,
+    operatorId: string,
     nowIso: string,
   ): CodingWorkbenchRuntimeMintConfirmation {
-    const binding = mintApprovalBinding(intent, taskId);
+    const binding = mintApprovalBinding(intent, taskId, operatorId);
     const issued = this.approvals.issue({
       binding,
-      approvedByUserId: taskId,
+      approvedByUserId: operatorId,
       nowMs: Date.parse(nowIso),
       ttlMs: 60_000,
     });
@@ -100,6 +101,7 @@ export class CodingRuntimeAuthorityService {
       approvalId: issued.approval.approvalId,
       approvalToken: issued.approval.approvalToken,
       taskId,
+      operatorId,
       intentDigest: startIntentDigest(intent),
       expiresAt: new Date(issued.expiresAtMs).toISOString(),
     };
@@ -115,7 +117,13 @@ export class CodingRuntimeAuthorityService {
     if (intent.modelSource !== context.modelProfile.source) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    const approvalDigest = this.consumeConfirmation(intent, context.taskId, confirmation, nowIso);
+    const approvalDigest = this.consumeConfirmation(
+      intent,
+      context.taskId,
+      context.operatorId,
+      confirmation,
+      nowIso,
+    );
     if (approvalDigest === undefined) return { ok: false, reason: "authority-resolution-failed" };
     const envelope = buildRuntimeAuthority(
       intent,
@@ -139,15 +147,20 @@ export class CodingRuntimeAuthorityService {
     reference: CodingRuntimeAuthorityRef,
     liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
     delegationId: string,
+    idempotencyKey: string,
     usage: CodingWorkbenchRuntimeDelegationUsage,
     workspaceRoot: string,
     deploymentCeiling: CodingWorkbenchMode,
     nowIso: string,
   ): CodingRuntimeResolution {
+    if (this.runtimeState.state !== "running" || this.runtimeState.runId !== reference.runId) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
     return this.registry.resolveRuntime(
       reference,
       liveFacts,
       delegationId,
+      idempotencyKey,
       usage,
       workspaceRoot,
       deploymentCeiling,
@@ -187,15 +200,20 @@ export class CodingRuntimeAuthorityService {
   private consumeConfirmation(
     intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
     taskId: string,
+    operatorId: string,
     supplied: CodingWorkbenchRuntimeMintConfirmation,
     nowIso: string,
   ): string | undefined {
     if (!validateCodingWorkbenchRuntimeMintConfirmation(supplied).ok) return undefined;
-    if (supplied.taskId !== taskId || supplied.intentDigest !== startIntentDigest(intent))
+    if (
+      supplied.taskId !== taskId ||
+      supplied.operatorId !== operatorId ||
+      supplied.intentDigest !== startIntentDigest(intent)
+    )
       return undefined;
     return this.approvals.consume({
       approval: { approvalId: supplied.approvalId, approvalToken: supplied.approvalToken },
-      binding: mintApprovalBinding(intent, taskId),
+      binding: mintApprovalBinding(intent, taskId, operatorId),
       nowMs: Date.parse(nowIso),
     })?.approvalDigest;
   }
@@ -234,12 +252,13 @@ function transitionedState(
 function mintApprovalBinding(
   intent: Extract<CodingWorkbenchRuntimeIntent, { readonly command: "start" }>,
   taskId: string,
+  operatorId: string,
 ): SupervisedCodingApprovalBinding {
   return {
     runId: "coding-runtime-mint",
     requestId: intent.requestId,
     actionKind: "system-mutation",
-    scopeDigest: digest(canonicalJson({ taskId, startIntent: intent })),
+    scopeDigest: digest(canonicalJson({ taskId, operatorId, startIntent: intent })),
     connectorScopes: [],
   };
 }

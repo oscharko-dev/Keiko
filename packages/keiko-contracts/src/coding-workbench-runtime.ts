@@ -7,6 +7,12 @@ import type {
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchValidationResult,
 } from "./coding-workbench.js";
+import {
+  CODING_WORKBENCH_ACTION_CLASSES,
+  CODING_WORKBENCH_CONNECTOR_SCOPES,
+  CODING_WORKBENCH_MODEL_SOURCES,
+  CODING_WORKBENCH_RUNTIME_SOURCES,
+} from "./coding-workbench.js";
 import { validateCodingWorkbenchAuthorityEnvelope } from "./coding-workbench-validation.js";
 
 export const CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION = "1" as const;
@@ -139,6 +145,7 @@ export interface CodingWorkbenchRuntimeMintConfirmation {
   readonly approvalId: string;
   readonly approvalToken: string;
   readonly taskId: string;
+  readonly operatorId: string;
   readonly intentDigest: string;
   readonly expiresAt: string;
 }
@@ -306,7 +313,9 @@ export function validateCodingWorkbenchRuntimeState(
   if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
   if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0)
     errors.push("revision must be non-negative");
-  validateIso(value.updatedAt, "updatedAt", errors);
+  validateStrictIso(value.updatedAt, "updatedAt", errors);
+  validateOptionalStateFields(value, errors);
+  validateStateShape(value, errors);
   return result(value, errors);
 }
 
@@ -316,13 +325,13 @@ export function validateCodingWorkbenchRuntimeMintConfirmation(
   if (!isRecord(value)) return { ok: false, errors: ["mint confirmation must be an object"] };
   const errors = unknownKeys(
     value,
-    ["approvalId", "approvalToken", "taskId", "intentDigest", "expiresAt"],
+    ["approvalId", "approvalToken", "taskId", "operatorId", "intentDigest", "expiresAt"],
     "mintConfirmation",
   );
-  for (const key of ["approvalId", "approvalToken", "taskId"] as const)
+  for (const key of ["approvalId", "approvalToken", "taskId", "operatorId"] as const)
     if (!isNonEmpty(value[key])) errors.push(`${key} is required`);
   validateDigest(value.intentDigest, "intentDigest", errors);
-  validateIso(value.expiresAt, "expiresAt", errors);
+  validateStrictIso(value.expiresAt, "expiresAt", errors);
   return result(value, errors);
 }
 
@@ -349,15 +358,15 @@ export function validateCodingWorkbenchRuntimeAuthorityFacts(
     validateDigest(value[key], key, errors);
   if (!Array.isArray(value.actionClasses) || !Array.isArray(value.connectorScopes))
     errors.push("authority scopes must be arrays");
-  if (!isOneOf(value.runtimeSource, ["keiko-sidecar", "codex-cli-adapter", "delivery-runner"]))
+  else {
+    if (!value.actionClasses.every((entry) => isOneOf(entry, CODING_WORKBENCH_ACTION_CLASSES)))
+      errors.push("actionClasses contains an invalid member");
+    if (!value.connectorScopes.every((entry) => isOneOf(entry, CODING_WORKBENCH_CONNECTOR_SCOPES)))
+      errors.push("connectorScopes contains an invalid member");
+  }
+  if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
     errors.push("runtimeSource is invalid");
-  if (
-    !isOneOf(value.modelSource, [
-      "keiko-model-gateway",
-      "openai-api-key-through-gateway",
-      "chatgpt-codex-subscription-profile",
-    ])
-  )
+  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
     errors.push("modelSource is invalid");
   return result(value, errors);
 }
@@ -380,15 +389,9 @@ export function validateCodingWorkbenchRuntimeAdapterStartRequest(
   }
   for (const key of ["delegationId", "idempotencyKey"] as const)
     if (!isNonEmpty(value[key])) errors.push(`${key} is required`);
-  if (!isOneOf(value.runtimeSource, ["keiko-sidecar", "codex-cli-adapter", "delivery-runner"]))
+  if (!isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES))
     errors.push("runtimeSource is invalid");
-  if (
-    !isOneOf(value.modelSource, [
-      "keiko-model-gateway",
-      "openai-api-key-through-gateway",
-      "chatgpt-codex-subscription-profile",
-    ])
-  )
+  if (!isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES))
     errors.push("modelSource is invalid");
   return result(value, errors);
 }
@@ -470,6 +473,75 @@ function validateIso(value: unknown, path: string, errors: string[]): void {
   if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
     errors.push(`${path} must be an ISO instant`);
   }
+}
+
+function validateStrictIso(value: unknown, path: string, errors: string[]): void {
+  const pattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
+  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
+  const normalized =
+    typeof value === "string" && !value.includes(".") ? `${value.slice(0, -1)}.000Z` : value;
+  if (
+    typeof value !== "string" ||
+    !pattern.test(value) ||
+    Number.isNaN(parsed) ||
+    new Date(parsed).toISOString() !== normalized
+  ) {
+    errors.push(`${path} must be a strict UTC instant`);
+  }
+}
+
+function validateOptionalStateFields(value: Record<string, unknown>, errors: string[]): void {
+  for (const key of ["runId", "taskId", "workspaceId"] as const) {
+    if (value[key] !== undefined && !isNonEmpty(value[key]))
+      errors.push(`${key} must be a non-empty string`);
+  }
+  if (
+    value.runtimeSource !== undefined &&
+    !isOneOf(value.runtimeSource, CODING_WORKBENCH_RUNTIME_SOURCES)
+  )
+    errors.push("runtimeSource is invalid");
+  if (
+    value.modelSource !== undefined &&
+    !isOneOf(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES)
+  )
+    errors.push("modelSource is invalid");
+  if (
+    value.failureCode !== undefined &&
+    !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES)
+  )
+    errors.push("failureCode is invalid");
+}
+
+function validateStateShape(value: Record<string, unknown>, errors: string[]): void {
+  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) return;
+  const unbound = value.state === "idle" || value.state === "unavailable";
+  const bindings = [
+    value.runId,
+    value.taskId,
+    value.workspaceId,
+    value.runtimeSource,
+    value.modelSource,
+  ];
+  if (unbound && bindings.some((entry) => entry !== undefined))
+    errors.push("unbound state must not carry run binding");
+  if (!unbound && bindings.some((entry) => !isNonEmpty(entry)))
+    errors.push("run-bound state requires complete binding");
+  validateStateFailureShape(value, errors);
+}
+
+function validateStateFailureShape(value: Record<string, unknown>, errors: string[]): void {
+  const requiresFailure = value.state === "failed" || value.state === "recovery-required";
+  if (requiresFailure && value.failureCode === undefined)
+    errors.push("failure state requires failureCode");
+  const permitsFailure = [
+    "unavailable",
+    "failed",
+    "cancelled",
+    "taken-over",
+    "recovery-required",
+  ].includes(String(value.state));
+  if (!permitsFailure && value.failureCode !== undefined)
+    errors.push("state must not carry failureCode");
 }
 
 function validateStartIntent(value: Record<string, unknown>, errors: string[]): void {

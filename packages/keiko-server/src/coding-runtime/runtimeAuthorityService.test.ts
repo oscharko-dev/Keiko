@@ -4,6 +4,7 @@ import type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeIntent,
 } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeAuthorityFacts } from "@oscharko-dev/keiko-contracts";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import {
   CodingRuntimeAuthorityService,
@@ -110,10 +111,16 @@ function service(): CodingRuntimeAuthorityService {
 function mint(
   authority: CodingRuntimeAuthorityService,
   startIntent = intent,
+  makeRunning = true,
 ): CodingRuntimeMintResult {
   const trusted = context();
-  const confirmation = authority.confirmStart(startIntent, trusted.taskId, NOW);
-  return authority.mintStart(startIntent, trusted, confirmation, NOW);
+  const confirmation = authority.confirmStart(startIntent, trusted.taskId, trusted.operatorId, NOW);
+  const minted = authority.mintStart(startIntent, trusted, confirmation, NOW);
+  if (minted.ok && makeRunning) {
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+    authority.transition(minted.authorityRef.runId, "running", NOW);
+  }
+  return minted;
 }
 
 function resolve(
@@ -122,11 +129,13 @@ function resolve(
   live = facts(),
   delegationId = "delegation-1",
   usage = { toolCalls: 1, patchBytes: 1, promptTokens: 1 },
+  idempotencyKey = `key-${delegationId}`,
 ): CodingRuntimeResolution {
   return authority.resolveForDelegation(
     reference,
     live,
     delegationId,
+    idempotencyKey,
     usage,
     ROOT,
     "autonomous-delivery",
@@ -138,7 +147,7 @@ describe("CodingRuntimeAuthorityService", () => {
   it("uses a one-use confirmation to mint retained server authority", () => {
     const authority = service();
     const trusted = context();
-    const confirmation = authority.confirmStart(intent, trusted.taskId, NOW);
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
     const minted = authority.mintStart(intent, trusted, confirmation, NOW);
     expect(minted).toMatchObject({ ok: true, authorityRef: { runId: "run-1" } });
     expect(authority.mintStart(intent, trusted, confirmation, NOW)).toEqual({
@@ -146,6 +155,8 @@ describe("CodingRuntimeAuthorityService", () => {
       reason: "active-run-conflict",
     });
     if (!minted.ok) throw new Error("expected mint");
+    authority.transition(minted.authorityRef.runId, "ready", NOW);
+    authority.transition(minted.authorityRef.runId, "running", NOW);
     expect(resolve(authority, minted.authorityRef)).toMatchObject({
       ok: true,
       envelope: { authority: { localUser: "operator-1" } },
@@ -163,7 +174,46 @@ describe("CodingRuntimeAuthorityService", () => {
     const minted = mint(authority);
     if (!minted.ok) throw new Error("expected mint");
     expect(resolve(authority, minted.authorityRef)).toMatchObject({ ok: true });
-    expect(resolve(authority, minted.authorityRef)).toMatchObject({ ok: true });
+    expect(resolve(authority, minted.authorityRef)).toEqual({
+      ok: false,
+      reason: "authority-replayed",
+    });
+  });
+
+  it("rejects reuse of either delegation identity and binds the original usage", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("mint");
+    expect(
+      resolve(
+        authority,
+        minted.authorityRef,
+        facts(),
+        "d-1",
+        { toolCalls: 1, patchBytes: 2, promptTokens: 3 },
+        "key-1",
+      ),
+    ).toMatchObject({ ok: true });
+    expect(
+      resolve(
+        authority,
+        minted.authorityRef,
+        facts(),
+        "d-1",
+        { toolCalls: 9, patchBytes: 9, promptTokens: 9 },
+        "key-2",
+      ),
+    ).toEqual({ ok: false, reason: "authority-replayed" });
+    expect(
+      resolve(
+        authority,
+        minted.authorityRef,
+        facts(),
+        "d-2",
+        { toolCalls: 1, patchBytes: 2, promptTokens: 3 },
+        "key-1",
+      ),
+    ).toEqual({ ok: false, reason: "authority-replayed" });
   });
 
   it("returns a deterministic concurrent-start conflict", () => {
@@ -202,10 +252,24 @@ describe("CodingRuntimeAuthorityService", () => {
     { modelSource: "chatgpt-codex-subscription-profile" as const },
   ])("rejects a start-intent swap: $requestId$taskIntent$requestedMode$modelSource", (swap) => {
     const authority = service();
-    const confirmation = authority.confirmStart(intent, context().taskId, NOW);
+    const confirmation = authority.confirmStart(
+      intent,
+      context().taskId,
+      context().operatorId,
+      NOW,
+    );
     expect(authority.mintStart({ ...intent, ...swap }, context(), confirmation, NOW)).toMatchObject(
       { ok: false },
     );
+  });
+
+  it("rejects confirmation consumption by another authenticated operator", () => {
+    const authority = service();
+    const trusted = context();
+    const confirmation = authority.confirmStart(intent, trusted.taskId, trusted.operatorId, NOW);
+    expect(
+      authority.mintStart(intent, { ...trusted, operatorId: "operator-2" }, confirmation, NOW),
+    ).toEqual({ ok: false, reason: "authority-resolution-failed" });
   });
 
   it("reserves all delegation budgets once per id", () => {
@@ -213,11 +277,13 @@ describe("CodingRuntimeAuthorityService", () => {
     const minted = mint(authority);
     if (!minted.ok) throw new Error("mint");
     const usage = { toolCalls: 10, patchBytes: 65_536, promptTokens: 10_000 };
+    expect(validateCodingWorkbenchRuntimeAuthorityFacts(facts())).toMatchObject({ ok: true });
     expect(resolve(authority, minted.authorityRef, facts(), "budgeted", usage)).toMatchObject({
       ok: true,
     });
-    expect(resolve(authority, minted.authorityRef, facts(), "budgeted", usage)).toMatchObject({
-      ok: true,
+    expect(resolve(authority, minted.authorityRef, facts(), "budgeted", usage)).toEqual({
+      ok: false,
+      reason: "authority-replayed",
     });
     expect(
       resolve(authority, minted.authorityRef, facts(), "fresh", {
@@ -230,7 +296,7 @@ describe("CodingRuntimeAuthorityService", () => {
 
   it("owns legal lifecycle transitions and rejects illegal or wrong-run transitions", () => {
     const authority = service();
-    const minted = mint(authority);
+    const minted = mint(authority, intent, false);
     if (!minted.ok) throw new Error("mint");
     expect(authority.state()).toMatchObject({ state: "starting", runId: "run-1", revision: 1 });
     expect(authority.transition("run-1", "running", NOW)).toBe(false);
@@ -242,6 +308,36 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.transition(undefined, "recovery-required", NOW, "recovery-required")).toBe(
       true,
     );
+  });
+
+  it.each([
+    ["starting", []],
+    ["ready", ["ready"]],
+    ["running", ["ready", "running"]],
+    ["awaiting-approval", ["ready", "running", "awaiting-approval"]],
+    ["stopping", ["ready", "stopping"]],
+    ["succeeded", ["ready", "running", "succeeded"]],
+    ["failed", ["failed"]],
+    ["cancelled", ["cancelled"]],
+    ["taken-over", ["taken-over"]],
+    ["recovery-required", ["recovery-required"]],
+    ["idle", ["cancelled", "idle"]],
+    ["unavailable", ["recovery-required", "unavailable"]],
+  ] as const)("permits productive delegation only in %s state", (state, path) => {
+    const authority = service();
+    const minted = mint(authority, intent, false);
+    if (!minted.ok) throw new Error("mint");
+    for (const target of path)
+      expect(
+        authority.transition(
+          authority.state().runId,
+          target,
+          NOW,
+          target === "failed" || target === "recovery-required" ? "runtime-failed" : undefined,
+        ),
+      ).toBe(true);
+    const result = resolve(authority, minted.authorityRef);
+    expect(result.ok).toBe(state === "running");
   });
 
   it("revokes stop/takeover authority and releases the active-run slot", () => {
