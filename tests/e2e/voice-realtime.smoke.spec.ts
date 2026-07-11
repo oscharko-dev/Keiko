@@ -205,7 +205,11 @@ async function realtimeConnectFlow(page: Page): Promise<void> {
     fullPage: true,
   });
 
-  // The composer remains fully text-capable while a voice session is live.
+  // Active dialogue deliberately exposes only the voice switch and local microphone mute. Leaving
+  // through the same Keiko switch restores the unchanged text-capable composer.
+  await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("typing while connected");
   await expect(composer).toHaveValue("typing while connected");
@@ -216,8 +220,12 @@ async function deniedPermissionFlow(page: Page): Promise<void> {
   await stubCapability(page, FULL_REALTIME_CAPABILITY);
   await openComposer(page);
 
-  await page.getByRole("switch", { name: "Voice dialogue mode" }).click();
+  const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
+  await dialogSwitch.click();
   await expect(page.getByText(/Voice dialogue could not continue/u)).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Chat message" })).toHaveCount(0);
+  await dialogSwitch.click();
+  await expect(dialogSwitch).toHaveAttribute("aria-checked", "false");
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("still typing fine");
   await expect(composer).toHaveValue("still typing fine");
