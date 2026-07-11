@@ -1473,16 +1473,31 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
 }
 
 function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
-  const currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
+  let currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
   if (currentTag === pkg.version) {
     console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
     return;
   }
-  // npm Trusted Publishing (OIDC) authorizes `npm publish` only, not `npm dist-tag add`.
-  // A fresh `npm publish --tag` already sets the tag atomically, so this path is only
-  // reached on an idempotent re-run over a partially-completed prior attempt; fail with a
-  // recovery hint instead of letting an unauthenticated `npm dist-tag add` 401 confusingly.
+  // npm Trusted Publishing (OIDC) authorizes `npm publish` only, not `npm dist-tag add`. A
+  // fresh `npm publish --tag` already sets the tag atomically at the source, but the very
+  // next `npm view` can still race the registry's own read replicas/CDN, so a mismatch here
+  // is usually transient propagation lag rather than a real problem — the same reality
+  // verifyPackage() below already retries for. Only after that same retry budget is
+  // exhausted do we treat it as a genuine idempotent-re-run repair and fail with a recovery
+  // hint, instead of letting an unauthenticated `npm dist-tag add` 401 confusingly.
   if (!hasToken) {
+    for (let attempt = 2; attempt <= verifyAttempts && currentTag !== pkg.version; attempt += 1) {
+      console.log(
+        `release-publish: TAG pending ${pkg.name}@${options.tag} ` +
+          `(attempt ${String(attempt)}/${String(verifyAttempts)}; observed ${currentTag || "no published version"}).`,
+      );
+      waitForRegistryPropagation();
+      currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
+    }
+    if (currentTag === pkg.version) {
+      console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
+      return;
+    }
     fail(
       `${pkg.name}@${options.tag} points to ${currentTag || "no published version"}, expected ` +
         `${pkg.version}, and no registry credential is configured to correct it. npm Trusted ` +

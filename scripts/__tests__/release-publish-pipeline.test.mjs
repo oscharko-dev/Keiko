@@ -32,7 +32,8 @@
 //      Red-on-defect: if the dist-tag comparison were dropped, the release would
 //      falsely report PASS.
 //   D. No npm registry token configured (the OIDC trusted-publishing CI shape) — a fresh
-//      publish must still succeed end-to-end on `npm publish` alone, and a dist-tag repair
+//      publish must still succeed end-to-end on `npm publish` alone even through transient
+//      dist-tag read propagation lag (retried, not failed), and a dist-tag repair genuinely
 //      needed on an idempotent re-run must fail with an actionable error rather than a bare
 //      npm 401, because npm Trusted Publishing does not authorize `npm dist-tag add`.
 
@@ -1251,6 +1252,48 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
       // The whole point of this scenario: no dist-tag WRITE was needed or attempted.
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("retries a transiently stale dist-tag read before failing when no token is configured, so registry propagation lag does not fail an otherwise-successful publish", () => {
+      // Same CDN/read-replica propagation lag verifyPackage() already retries for below,
+      // but exercised on ensurePackageDistTag()'s tokenless path: `npm view dist-tags.<tag>`
+      // reports stale for the first two reads after a fresh, fully successful publish, then
+      // resolves. This must NOT fail() — a transient lag is not a real dist-tag problem and
+      // must not tell the operator to supply a token for nothing.
+      const npmBody = [
+        'log("npm");',
+        "const sub = argv[0];",
+        'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
+        'if (sub === "run") { process.exit(0); }',
+        'if (sub === "view") {',
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
+        '    process.stdout.write(VERSION + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+        "    const attempts = s.distTagViewAttempts ?? 0;",
+        "    setState({ distTagViewAttempts: attempts + 1 });",
+        '    process.stdout.write((attempts >= 2 ? VERSION : "0.0.0-stale") + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        "}",
+        'if (sub === "publish") { setState({ published: true }); process.exit(0); }',
+        'process.stderr.write("stub npm: unhandled " + JSON.stringify(argv) + "\\n");',
+        "process.exit(3);",
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody,
+        initState: { published: false },
+        qualificationEnv: { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: undefined },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.stdout).toContain("TAG pending");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 

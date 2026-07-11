@@ -272,12 +272,14 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   rights on the package must do it by hand.
 - **Scope limitation**: trusted publishing authorizes `npm publish` only, not `npm dist-tag add`.
   A fresh publish is unaffected, because `npm publish --tag <tag>` sets the dist-tag atomically as
-  part of that same authenticated call. The only path that still needs a registry-write credential
-  is repairing a stale dist-tag on an idempotent re-run over a partially completed prior attempt
-  (`ensurePackageDistTag` in `scripts/release-publish.mjs`). If that repair is ever needed, export
-  `NODE_AUTH_TOKEN` (or `NPM_TOKEN`) for that one-off manual run; the script fails with an
-  explicit, actionable error when a dist-tag fix is needed and no token is configured, rather than
-  an opaque npm 401.
+  part of that same authenticated call; `ensurePackageDistTag` in `scripts/release-publish.mjs`
+  retries the follow-up `npm view` read (reusing the same attempt/delay settings as the post-publish
+  registry verification) before concluding anything is actually wrong, so ordinary registry CDN
+  propagation lag on a successful publish never fails the release. The only path that still needs a
+  registry-write credential is repairing a _genuinely_ stale dist-tag on an idempotent re-run over a
+  partially completed prior attempt. If that repair is ever needed, export `NODE_AUTH_TOKEN` (or
+  `NPM_TOKEN`) for that one-off manual run; the script fails with an explicit, actionable error once
+  its retry budget is exhausted and no token is configured, rather than an opaque npm 401.
 
 The `prepack` and `prepublishOnly` gates also run `npm run check:workspace-supply-chain` and
 `npm run check:release-impact`, so a publish cannot bypass SBOM/license verification or missing,

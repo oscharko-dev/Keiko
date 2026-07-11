@@ -74,8 +74,12 @@ needs the newer CLI, and only for the duration of that job.
 ### D3 — The classic-token fallback is kept, narrowly, for dist-tag repair only
 
 `createNpmEnvironment()` now also returns whether a token was configured (`hasToken`), threaded
-through `publishPackage()` into `ensurePackageDistTag()`. When the resolved dist-tag does not
-match the published version and no token is configured, the script fails immediately with an
+through `publishPackage()` into `ensurePackageDistTag()`. A dist-tag mismatch right after a fresh
+publish is usually the registry's own read replicas/CDN lagging the write, not a real problem — the
+same reality `verifyPackage()` already retries for — so on the tokenless path
+`ensurePackageDistTag()` retries the `npm view` read against the same `verifyAttempts`/
+`waitForRegistryPropagation()` budget before drawing any conclusion. Only once that budget is
+exhausted and the dist-tag still does not match the published version does the script fail, with an
 explicit message naming the mismatch, stating that trusted publishing does not cover
 `npm dist-tag add`, and telling the operator to supply `NODE_AUTH_TOKEN`/`NPM_TOKEN` for a one-off
 manual correction — instead of letting an unauthenticated `npm dist-tag add` fail deep inside a
