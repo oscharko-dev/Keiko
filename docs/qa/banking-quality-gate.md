@@ -10,6 +10,12 @@ rejects triggers that are not bound to the exact head of a pull request targetin
 a custom `Banking Quality Gate` check on that untrusted head SHA and reads only GitHub check/review
 metadata. This prevents a pull request from weakening the aggregator that evaluates it.
 
+zizmor classifies every `workflow_run` trigger as dangerous without inspecting whether untrusted
+data reaches execution. The trigger has a narrow inline `dangerous-triggers` disposition because
+this workflow does not consume triggering-run artifacts, caches, environment files, command-line
+values, repository content, or executable input. The only untrusted values are a GitHub-issued PR
+number and commit SHA used in authenticated API paths after base-ref and exact-head validation.
+
 The aggregate requires app-bound success from:
 
 - the repository `ci` job, including typecheck, lint, tests, coverage ratchets, architecture gates,

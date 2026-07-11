@@ -9,7 +9,8 @@ const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
 
 describe("Banking Grade workflows", () => {
   it("runs the trusted aggregator only after the protected CI workflow", () => {
-    expect(banking).toMatch(/workflow_run:\n\s+workflows:\n\s+- CI/u);
+    expect(banking).toMatch(/workflow_run:[^\n]*\n\s+workflows:\n\s+- CI/u);
+    expect(banking).toContain("zizmor: ignore[dangerous-triggers]");
     expect(banking).toContain("ref: ${{ github.event.repository.default_branch }}");
     expect(banking).not.toContain("pull_request_target");
     expect(banking).toMatch(/checks: write/u);

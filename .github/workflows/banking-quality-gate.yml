@@ -1,7 +1,7 @@
 name: Banking Quality Gate
 
 on:
-  workflow_run:
+  workflow_run: # zizmor: ignore[dangerous-triggers] Base-controlled metadata-only gate; no PR checkout, cache, artifact, environment, or command input.
     workflows:
       - CI
     types:
