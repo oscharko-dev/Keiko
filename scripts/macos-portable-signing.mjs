@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import {
   boundedMacSigningFail as fail,
   BoundedMacSigningError,
+  hasUnsafeText,
   inventoryMacPortableCode,
   macPortableInventoriesMatch as inventoriesMatch,
   readMacPortableInventory as readInventory,
@@ -20,13 +21,6 @@ import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
 
 const TEAM_PATTERN = /^[A-Z0-9]{10}$/u;
 const UUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
-
-function hasUnsafeText(value) {
-  return Array.from(value).some((character) => {
-    const code = character.charCodeAt(0);
-    return character === "\\" || code < 32 || code === 127;
-  });
-}
 
 export { inventoryMacPortableCode } from "./macos-portable-inventory.mjs";
 
@@ -213,9 +207,16 @@ async function finalize(options) {
       "--verification-input",
       inputPath,
     ],
-    { cwd: resolve(import.meta.dirname, ".."), stdio: "ignore" },
+    { cwd: resolve(import.meta.dirname, ".."), encoding: "utf8" },
   );
-  if (result.status !== 0) fail("production verifier rejected the macOS artifact");
+  if (result.error !== undefined || result.status !== 0) {
+    const output = [result.stdout, result.stderr]
+      .filter((text) => typeof text === "string" && text.trim().length > 0)
+      .join("\n")
+      .trim();
+    if (output.length > 0) console.error(output);
+    fail("production verifier rejected the macOS artifact");
+  }
   const verified = JSON.parse(readFileSync(manifestPath, "utf8"));
   if (verified.security?.verificationStatus !== "verified-production")
     fail("macOS manifest did not reach verified production");
