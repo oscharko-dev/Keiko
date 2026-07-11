@@ -18,6 +18,11 @@ resource/risk matrix, separately approved delivery, and editor-agent compatibili
 corrects only the missing runtime ownership and delegation boundary. It does not activate a process,
 implement an adapter, execute a connector, or add a browser route.
 
+Production route and orchestrator migration is explicitly deferred to Issue #2256. The existing
+client-envelope runtime routes are not validated by this decision, are not claimed safe or migrated,
+and must not activate productive runtime traffic. Epic #1982 remains blocked until #2256 removes
+that caller-authored authority path and wires these contracts through the production orchestrator.
+
 ## Decision
 
 ### D1 — Browser input is intent, never authority
@@ -101,6 +106,8 @@ or earlier start confirmation pre-approves those delivery actions.
 - The initial authority service is intentionally in-memory and single-run. Recovery persistence,
   process-tree revocation, transport/backpressure, and real-binary execution belong to ordered
   corrective children and cannot be inferred from these contracts.
+- No production traffic is migrated by Issue #2252. Issue #2256 owns route replacement and
+  orchestrator wiring because this issue expressly forbids browser-route implementation.
 
 ## Alternatives considered
 
