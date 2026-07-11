@@ -26,3 +26,11 @@ rules:
       # build and cannot be verified on this platform.
       - portable-assets.yml:111
       - portable-assets.yml:170
+  adhoc-packages:
+    ignore:
+      # npm Trusted Publishing requires npm CLI >= 11.5.1, which Node 22.x does not bundle;
+      # bootstrapping a newer npm is inherently outside the lockfile since it changes the
+      # very binary that later reads that lockfile - there is no lockfile-verified way to
+      # upgrade npm itself. The version is pinned exactly (not @latest), which is the
+      # practical mitigation for this specific operation (see the inline comment there).
+      - release.yml:123

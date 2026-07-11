@@ -41,4 +41,8 @@ describe("zizmor workflow job", () => {
       /misfeature:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- portable-assets\.yml:\d+/u,
     );
   });
+
+  it("documents the adhoc-packages ignore with the npm Trusted Publishing bootstrap constraint", () => {
+    expect(config).toMatch(/adhoc-packages:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- release\.yml:\d+/u);
+  });
 });
