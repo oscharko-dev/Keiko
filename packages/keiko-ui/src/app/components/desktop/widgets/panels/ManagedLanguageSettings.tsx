@@ -11,12 +11,10 @@ import type {
   ManagedLspRuntimeConfiguration,
 } from "@oscharko-dev/keiko-contracts";
 import type { ManagedLspConfigurationSummary, ManagedLspSettingsAction } from "@/lib/api";
+import { useTranslate } from "@/lib/i18n";
 
 import styles from "./ManagedLanguageSettings.module.css";
-import {
-  useManagedLanguageTranslate,
-  type ManagedLanguageTranslate,
-} from "./managed-language-i18n";
+import { managedLanguageTranslate, type ManagedLanguageTranslate } from "./managed-language-i18n";
 import { useManagedLanguageSettings } from "./useManagedLanguageSettings";
 
 const MAX_CAPABILITIES = 12;
@@ -32,7 +30,7 @@ export function ManagedLanguageSettings({
 }: {
   readonly root?: string | undefined;
 }): ReactNode {
-  const t = useManagedLanguageTranslate();
+  const t = managedLanguageTranslate(useTranslate());
   const view = useManagedLanguageSettings(root);
   const [confirmation, setConfirmation] = useState<Confirmation | undefined>();
   const cancelRef = useRef<HTMLButtonElement>(null);
