@@ -1,0 +1,91 @@
+{
+  "issue": 2075,
+  "modes": [
+    {
+      "name": "01-dark-desktop-detail-xss",
+      "axeViolations": 0
+    },
+    {
+      "name": "16-native-validation-error",
+      "axeViolations": 0
+    },
+    {
+      "name": "17-submitting-busy",
+      "axeViolations": 0
+    },
+    {
+      "name": "02-light-desktop-success",
+      "axeViolations": 0
+    },
+    {
+      "name": "03-dark-high-contrast",
+      "axeViolations": 0
+    },
+    {
+      "name": "04-light-high-contrast",
+      "axeViolations": 0
+    },
+    {
+      "name": "05-forced-colors",
+      "axeViolations": 0
+    },
+    {
+      "name": "06-reduced-motion",
+      "axeViolations": 0
+    },
+    {
+      "name": "07-de-mobile-empty-forced-colors",
+      "axeViolations": 0
+    },
+    {
+      "name": "08-de-unauthenticated",
+      "axeViolations": 0
+    },
+    {
+      "name": "18-loading",
+      "axeViolations": 0
+    },
+    {
+      "name": "19-filtered-empty",
+      "axeViolations": 0
+    },
+    {
+      "name": "20-stale-detail-not-found",
+      "axeViolations": 0
+    },
+    {
+      "name": "21-private-security-item",
+      "axeViolations": 0
+    },
+    {
+      "name": "09-forbidden-error",
+      "axeViolations": 0
+    },
+    {
+      "name": "10-cas-conflict-warning",
+      "axeViolations": 0
+    },
+    {
+      "name": "11-rate-limited",
+      "axeViolations": 0
+    },
+    {
+      "name": "12-dependency-unavailable",
+      "axeViolations": 0
+    },
+    {
+      "name": "13-audit",
+      "axeViolations": 0
+    },
+    {
+      "name": "14-private-security-active-hold",
+      "axeViolations": 0
+    },
+    {
+      "name": "15-expired-hold-cleanup",
+      "axeViolations": 0
+    }
+  ],
+  "seriousOrCritical": 0,
+  "result": "PASS"
+}

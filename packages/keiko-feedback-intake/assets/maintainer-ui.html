@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Keiko maintainer review</title>
+    <link rel="stylesheet" href="/maintainer/app.css" />
+    <script type="module" src="/maintainer/app.js"></script>
+  </head>
+  <body>
+    <a id="mq-skip" class="mq-skip" href="#mq-main"
+      >Skip to review queue / <span lang="de">Zur Prüfwarteschlange</span></a
+    >
+    <header class="mq-header">
+      <p class="mq-product">Keiko</p>
+      <h1 id="mq-title">Maintainer review / <span lang="de">Maintainer-Prüfung</span></h1>
+    </header>
+    <main id="mq-main" class="mq-main" tabindex="-1">
+      <noscript
+        ><section class="mq-notice" aria-labelledby="mq-no-js">
+          <h2 id="mq-no-js">
+            JavaScript required / <span lang="de">JavaScript erforderlich</span>
+          </h2>
+          <p>
+            Sign in to use the maintainer review queue. JavaScript is required to inspect immutable
+            payloads and submit protected review actions.
+            <span lang="de"
+              >Anmelden, um die Prüfwarteschlange zu verwenden. JavaScript ist für die Prüfung
+              unveränderlicher Inhalte und geschützte Prüfaktionen erforderlich.</span
+            >
+          </p>
+          <a class="mq-button mq-button--primary" href="/v1/maintainer/auth/login"
+            >Sign in / <span lang="de">Anmelden</span></a
+          >
+        </section></noscript
+      >
+      <div id="mq-app" aria-live="polite" aria-busy="true"></div>
+    </main>
+  </body>
+</html>

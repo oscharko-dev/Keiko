@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import type { Page } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
 
 // GEN-TEST-E2E-004 — shared real-browser axe-core runner. The a11y estate before this was one
 // coordinator-only axe suite (update-ui-1696, wired into no CI job) plus jsdom-only component axe.
@@ -23,10 +23,15 @@ export interface AxeViolation {
   readonly nodes: readonly { readonly target: readonly string[] }[];
 }
 
+export async function installAxe(context: BrowserContext): Promise<void> {
+  await context.addInitScript({ content: AXE_SOURCE });
+}
+
 // Runs axe over the element matched by `selector` and returns every violation. Callers decide which
 // impact levels are gating (the smoke gate fails on serious/critical, matching the W10 criterion).
 export async function runAxe(page: Page, selector: string): Promise<readonly AxeViolation[]> {
-  await page.addScriptTag({ content: AXE_SOURCE });
+  const installed = await page.evaluate(() => "axe" in window);
+  if (!installed) await page.addScriptTag({ content: AXE_SOURCE });
   return page.evaluate(
     async ({ rootSelector, tags }) => {
       const root = document.querySelector(rootSelector);

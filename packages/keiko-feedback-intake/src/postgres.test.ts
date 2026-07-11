@@ -118,12 +118,12 @@ describe("PostgreSQL intake repository", () => {
       connect: (): Promise<PgClientLike> => Promise.resolve(client),
     });
 
-    await expect(repository.purge(now)).resolves.toEqual([0, 0, 0, 0, 0, 1]);
+    await expect(repository.purge(now)).resolves.toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
     const evidencePurge = observed.find((item) =>
       item.text.startsWith("DELETE FROM feedback_key_deletion_evidence"),
     );
     expect(evidencePurge).toEqual({
-      text: "DELETE FROM feedback_key_deletion_evidence WHERE result = 'destroyed' AND event_at <= $1 - interval '365 days'",
+      text: "DELETE FROM feedback_key_deletion_evidence WHERE result = 'destroyed' AND event_at <= $1::timestamptz - interval '365 days'",
       values: [now],
     });
     expect(

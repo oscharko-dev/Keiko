@@ -5,29 +5,29 @@ import { Pool } from "pg";
 import { FEEDBACK_INTAKE_REPORT_PATH_V1 } from "@oscharko-dev/keiko-contracts/feedback-intake";
 import { FileSecretProvider } from "./file-secret-provider.js";
 import { createFeedbackIntakeHttpHandler } from "./http.js";
+import type { MaintainerRuntimeConfig } from "./maintainer-config.js";
+import type { MaintainerHttpOptions } from "./maintainer-http.js";
+import type { MaintainerOidcClient } from "./maintainer-oidc.js";
+import {
+  createMaintainerRuntimeServer,
+  loadFeedbackRuntimeConfigs,
+  type MaintainerRuntimeServer,
+} from "./maintainer-runtime.js";
+import { applyFeedbackMigrations, type FeedbackMigration } from "./migrations.js";
 import { PostgresIntakeRepository, type PgClientLike, type PgPoolLike } from "./postgres.js";
 import { createPostgresFeedbackIntake } from "./production-service.js";
-import { loadHostedRuntimeConfig, type HostedRuntimeConfig } from "./runtime-config.js";
+import type { HostedRuntimeConfig } from "./runtime-config.js";
 import {
   assertRepositoryKeyCustody,
   snapshotIndependentKeyCustody,
 } from "./runtime-key-custody.js";
+import { defaultRuntimeTimer, type RuntimeTimer } from "./runtime-timer.js";
 import type { ContentFreeLogger, ContentFreeMetrics } from "./types.js";
 
 interface RuntimePool extends PgPoolLike {
   end(): Promise<void>;
 }
-interface RuntimeServer {
-  listen(port: number, host: string, callback: () => void): void;
-  close(callback: (error?: Error) => void): void;
-  closeAllConnections?(): void;
-  once?(event: "error", listener: (error: Error) => void): void;
-  removeListener?(event: "error", listener: (error: Error) => void): void;
-}
-interface RuntimeTimer {
-  setInterval(callback: () => void, intervalMs: number): unknown;
-  clearInterval(handle: unknown): void;
-}
+type RuntimeServer = MaintainerRuntimeServer;
 interface RuntimeHealth {
   dependenciesHealthy: boolean;
   running: boolean;
@@ -50,6 +50,9 @@ export interface HostedRuntimeOptions {
     ((handler: (req: IncomingMessage, res: ServerResponse) => void) => RuntimeServer) | undefined;
   readonly timer?: RuntimeTimer | undefined;
   readonly migrationSource?: (() => Promise<string>) | undefined;
+  readonly migrationSources?: (() => Promise<readonly FeedbackMigration[]>) | undefined;
+  readonly maintainerOidcClient?: MaintainerOidcClient | undefined;
+  readonly maintainerDiagnostics?: MaintainerHttpOptions["diagnostics"];
 }
 
 function defaultPool(
@@ -83,48 +86,26 @@ function defaultServer(
   return createServer(handler);
 }
 
-function defaultTimer(): RuntimeTimer {
-  return {
-    setInterval: (callback, intervalMs) => setInterval(callback, intervalMs),
-    clearInterval: (handle): void => {
-      clearInterval(handle as NodeJS.Timeout);
-    },
-  };
-}
-
-async function applyMigration(pool: RuntimePool, source: string): Promise<void> {
-  const client = await pool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query("SELECT pg_advisory_xact_lock($1)", [2_074_001]);
-    const exists = await client.query<{ readonly name: string | null }>(
-      "SELECT to_regclass('feedback_schema_migrations')::text AS name",
-    );
-    if (exists.rows[0]?.name === null) {
-      await client.query(source);
-    } else {
-      const versions = await client.query<{ readonly version: number }>(
-        "SELECT version FROM feedback_schema_migrations ORDER BY version",
-      );
-      if (versions.rows.length !== 1 || versions.rows[0]?.version !== 1) {
-        throw new Error("Unsupported feedback schema version");
-      }
-    }
-    await client.query("COMMIT");
-  } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
-    throw error;
-  } finally {
-    client.release();
+function migrationSources(
+  options: HostedRuntimeOptions,
+): () => Promise<readonly FeedbackMigration[]> {
+  if (options.migrationSources !== undefined) return options.migrationSources;
+  if (options.migrationSource !== undefined) {
+    return async () => [{ version: 1, source: (await options.migrationSource?.()) ?? "" }];
   }
-}
-
-function migrationSource(options: HostedRuntimeOptions): () => Promise<string> {
-  return (
-    options.migrationSource ??
-    ((): Promise<string> =>
-      readFile(new URL("../migrations/001_feedback_intake.sql", import.meta.url), "utf8"))
-  );
+  return async () =>
+    Promise.all(
+      [1, 2].map(async (version) => ({
+        version,
+        source: await readFile(
+          new URL(
+            `../migrations/${String(version).padStart(3, "0")}_${version === 1 ? "feedback_intake" : "feedback_review"}.sql`,
+            import.meta.url,
+          ),
+          "utf8",
+        ),
+      })),
+    );
 }
 
 function listen(server: RuntimeServer, port: number, host: string): Promise<void> {
@@ -223,6 +204,7 @@ function rejectUnavailablePost(req: IncomingMessage, res: ServerResponse): void 
 interface RuntimeSurface {
   readonly intake: RuntimeServer;
   readonly management: RuntimeServer;
+  readonly maintainer?: RuntimeServer | undefined;
   readonly repository: PostgresIntakeRepository;
   readonly abuseKeys: FileSecretProvider;
   readonly dedupeKeys: FileSecretProvider;
@@ -309,10 +291,14 @@ async function retention(surface: RuntimeSurface, health: RuntimeHealth, now: Da
 }
 
 async function stopServers(surface: RuntimeSurface, config: HostedRuntimeConfig): Promise<void> {
-  await Promise.all([
+  const servers = [
     closeBounded(surface.intake, config.drainDeadlineMs),
     closeBounded(surface.management, config.drainDeadlineMs),
-  ]);
+  ];
+  if (surface.maintainer !== undefined) {
+    servers.push(closeBounded(surface.maintainer, config.drainDeadlineMs));
+  }
+  await Promise.all(servers);
 }
 
 async function initializeSurface(
@@ -321,14 +307,30 @@ async function initializeSurface(
   pool: RuntimePool,
   health: RuntimeHealth,
   now: () => Date,
+  maintainerConfig: MaintainerRuntimeConfig,
 ): Promise<RuntimeSurface> {
   let surface: RuntimeSurface | undefined;
   try {
-    await applyMigration(pool, await migrationSource(options)());
+    await applyFeedbackMigrations(pool, await migrationSources(options)());
     surface = composeSurface(options, config, pool, health, now);
+    const maintainer = maintainerConfig.enabled
+      ? await createMaintainerRuntimeServer({
+          config: maintainerConfig,
+          runtimeConfig: config,
+          pool,
+          now,
+          oidc: options.maintainerOidcClient,
+          diagnostics: options.maintainerDiagnostics,
+          serverFactory: options.serverFactory,
+        })
+      : undefined;
+    surface = { ...surface, maintainer };
     await retention(surface, health, now());
     await listen(surface.management, config.managementPort, config.managementHost);
     await listen(surface.intake, config.port, config.host);
+    if (surface.maintainer !== undefined && maintainerConfig.enabled) {
+      await listen(surface.maintainer, maintainerConfig.port, maintainerConfig.host);
+    }
     health.running = true;
     return surface;
   } catch (error) {
@@ -341,7 +343,7 @@ async function initializeSurface(
 export async function startHostedFeedbackIntake(
   options: HostedRuntimeOptions,
 ): Promise<HostedFeedbackIntakeRuntime> {
-  const config = loadHostedRuntimeConfig(options.env);
+  const { config, maintainerConfig } = loadFeedbackRuntimeConfigs(options.env, options);
   const now = options.now ?? ((): Date => new Date());
   const health: RuntimeHealth = { dependenciesHealthy: false, running: false };
   const pool = (options.poolFactory ?? defaultPool)(
@@ -349,8 +351,15 @@ export async function startHostedFeedbackIntake(
     config.limits.concurrency + config.limits.receiptConcurrency,
     config.limits.storageDeadlineMs,
   );
-  const activeSurface = await initializeSurface(options, config, pool, health, now);
-  const timer = options.timer ?? defaultTimer();
+  const activeSurface = await initializeSurface(
+    options,
+    config,
+    pool,
+    health,
+    now,
+    maintainerConfig,
+  );
+  const timer = options.timer ?? defaultRuntimeTimer();
   let activeRetention = Promise.resolve();
   const runRetention = (): Promise<void> => {
     const next = activeRetention

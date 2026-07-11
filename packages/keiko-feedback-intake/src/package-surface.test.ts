@@ -17,9 +17,27 @@ const productionModules = [
   "config",
   "crypto",
   "file-secret-provider",
+  "feedback-review-command",
+  "feedback-review-persistence",
+  "feedback-review-store",
+  "feedback-review-types",
+  "feedback-review-query",
   "http",
   "index",
   "main",
+  "maintainer-action",
+  "maintainer-auth",
+  "maintainer-config",
+  "maintainer-http",
+  "maintainer-http-body",
+  "maintainer-http-error",
+  "maintainer-http-response",
+  "maintainer-login-limiter",
+  "maintainer-oidc",
+  "maintainer-runtime",
+  "maintainer-store",
+  "maintainer-ui",
+  "migrations",
   "postgres-client",
   "postgres-live-key-snapshot",
   "postgres-retention",
@@ -29,6 +47,7 @@ const productionModules = [
   "proxy",
   "runtime-config",
   "runtime-key-custody",
+  "runtime-timer",
   "runtime",
   "types",
 ] as const;
@@ -52,7 +71,19 @@ function expectedPaths(): readonly string[] {
     `dist/${module}.d.ts.map`,
     `dist/${module}.js`,
   ]);
-  return ["migrations/001_feedback_intake.sql", "package.json", ...compiled].sort();
+  return [
+    "assets/keiko-semantic-tokens.css",
+    "assets/keiko-tokens.css",
+    "assets/maintainer-ui.css",
+    "assets/maintainer-ui-copy.js",
+    "assets/maintainer-ui-dom.js",
+    "assets/maintainer-ui.html",
+    "assets/maintainer-ui.js",
+    "migrations/001_feedback_intake.sql",
+    "migrations/002_feedback_review.sql",
+    "package.json",
+    ...compiled,
+  ].sort();
 }
 
 function relativeRuntimeImports(path: string): readonly string[] {

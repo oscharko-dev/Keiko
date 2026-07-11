@@ -43,6 +43,14 @@
       "types": "./dist/feedback-intake.d.ts",
       "import": "./dist/feedback-intake.js"
     },
+    "./feedback-review": {
+      "types": "./dist/feedback-review.d.ts",
+      "import": "./dist/feedback-review.js"
+    },
+    "./feedback-maintainer": {
+      "types": "./dist/feedback-maintainer.d.ts",
+      "import": "./dist/feedback-maintainer.js"
+    },
     "./line-offsets": {
       "types": "./dist/line-offsets.d.ts",
       "import": "./dist/line-offsets.js"
