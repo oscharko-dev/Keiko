@@ -3,6 +3,7 @@ import {
   FEEDBACK_REJECTION_REASONS_V1,
   type FeedbackReviewActorV1,
 } from "@oscharko-dev/keiko-contracts/feedback-review";
+import { isCanonicalFeedbackReviewId } from "./feedback-review-identifier.js";
 import type { FeedbackReviewCommand } from "./feedback-review-types.js";
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -22,6 +23,7 @@ function common(
   actor: FeedbackReviewActorV1,
 ): Omit<FeedbackReviewCommand, "action"> | undefined {
   if (
+    !isCanonicalFeedbackReviewId(itemId) ||
     !Number.isSafeInteger(value.expectedVersion) ||
     typeof value.expectedPayloadDigest !== "string" ||
     !/^[0-9a-f]{64}$/u.test(value.expectedPayloadDigest) ||
@@ -78,7 +80,8 @@ function duplicate(
   shared: Shared,
   base: readonly string[],
 ): FeedbackReviewCommand | undefined {
-  return exactKeys(value, [...base, "targetItemId"]) && typeof value.targetItemId === "string"
+  return exactKeys(value, [...base, "targetItemId"]) &&
+    isCanonicalFeedbackReviewId(value.targetItemId)
     ? { ...shared, action: "mark-duplicate" as const, targetItemId: value.targetItemId }
     : undefined;
 }

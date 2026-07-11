@@ -8,6 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/feedback-maintainer";
 import { parseFeedbackReportV1 } from "@oscharko-dev/keiko-contracts/feedback-report";
 import type { FeedbackReviewStateV1 } from "@oscharko-dev/keiko-contracts/feedback-review";
+import { isCanonicalFeedbackReviewId } from "./feedback-review-identifier.js";
 import { FeedbackReviewError } from "./feedback-review-types.js";
 import { acquirePostgresClient } from "./postgres-client.js";
 import type { PgPoolLike } from "./postgres-types.js";
@@ -46,8 +47,6 @@ interface AuditRow {
   readonly policy_key: string | null;
 }
 
-const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-
 export interface ReviewListInput {
   readonly state?: FeedbackReviewStateV1 | undefined;
   readonly cursor?: string | undefined;
@@ -62,7 +61,7 @@ function cursor(value: string | undefined): readonly [Date, string] | undefined 
     if (!Array.isArray(decoded) || decoded.length !== 2) return undefined;
     const time: unknown = decoded[0];
     const id: unknown = decoded[1];
-    if (typeof time !== "string" || typeof id !== "string" || !CANONICAL_UUID.test(id)) {
+    if (typeof time !== "string" || !isCanonicalFeedbackReviewId(id)) {
       return undefined;
     }
     const at = new Date(time);
@@ -158,6 +157,7 @@ export class PostgresFeedbackReviewQuery {
     itemId: string,
     includePrivate: boolean,
   ): Promise<FeedbackReviewDetailV1 | undefined> {
+    if (!isCanonicalFeedbackReviewId(itemId)) throw new FeedbackReviewError("invalid-request");
     const client = await acquirePostgresClient(this.pool, this.deadlineMs);
     try {
       const result = await client.query<ReviewQueryRow>(
@@ -177,6 +177,7 @@ export class PostgresFeedbackReviewQuery {
     itemId: string,
     includePrivate: boolean,
   ): Promise<FeedbackReviewHoldGovernanceV1 | undefined> {
+    if (!isCanonicalFeedbackReviewId(itemId)) throw new FeedbackReviewError("invalid-request");
     const client = await acquirePostgresClient(this.pool, this.deadlineMs);
     try {
       const result = await client.query<ReviewQueryRow>(

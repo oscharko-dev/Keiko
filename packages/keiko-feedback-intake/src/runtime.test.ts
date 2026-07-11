@@ -182,20 +182,27 @@ function result<Row extends object>(rows: readonly Row[]): Promise<PgQueryResult
 
 describe("hosted production runtime composition", () => {
   it("starts and stops three isolated listeners when the maintainer plane is enabled", async () => {
-    const client = new RuntimeClient();
+    const clients = [new RuntimeClient(), new RuntimeClient()] as const;
     const origins = new Map<number, string>();
     let closed = 0;
-    let ended = 0;
+    const ended = [0, 0];
+    const poolMaximums: number[] = [];
     const runtime = await startHostedFeedbackIntake({
       env: maintainerEnv(),
       now: () => new Date("2026-07-11T12:00:00Z"),
-      poolFactory: () => ({
-        connect: (): Promise<PgClientLike> => Promise.resolve(client),
-        end: (): Promise<void> => {
-          ended += 1;
-          return Promise.resolve();
-        },
-      }),
+      poolFactory: (_databaseUrl, maximum) => {
+        const index = poolMaximums.length;
+        const client = clients[index];
+        if (client === undefined) throw new Error("Unexpected extra pool");
+        poolMaximums.push(maximum);
+        return {
+          connect: (): Promise<PgClientLike> => Promise.resolve(client),
+          end: (): Promise<void> => {
+            ended[index] = (ended[index] ?? 0) + 1;
+            return Promise.resolve();
+          },
+        };
+      },
       migrationSources: () =>
         Promise.resolve([
           { version: 1, source: "MIGRATION-1" },
@@ -254,7 +261,7 @@ describe("hosted production runtime composition", () => {
       diagnosticLines.push(String(chunk));
       return true;
     });
-    client.failMaintainer = true;
+    clients[1].failMaintainer = true;
     const unavailable = await fetch(`${maintainer}/v1/maintainer/auth/login`, {
       redirect: "manual",
     });
@@ -272,7 +279,77 @@ describe("hosted production runtime composition", () => {
     stderr.mockRestore();
     await runtime.stop();
     expect(closed).toBe(3);
+    expect(poolMaximums).toEqual([6, 4]);
+    expect(ended).toEqual([1, 1]);
+  });
+
+  it("closes the intake pool when dedicated maintainer pool creation fails", async () => {
+    let pools = 0;
+    let intakeEnds = 0;
+    await expect(
+      startHostedFeedbackIntake({
+        env: maintainerEnv(),
+        poolFactory: () => {
+          pools += 1;
+          if (pools === 2) throw new Error("maintainer pool failed");
+          return {
+            connect: (): Promise<PgClientLike> => Promise.resolve(new RuntimeClient()),
+            end: (): Promise<void> => {
+              intakeEnds += 1;
+              return Promise.resolve();
+            },
+          };
+        },
+        migrationSources: () => Promise.resolve([]),
+      }),
+    ).rejects.toThrow("maintainer pool failed");
+    expect(pools).toBe(2);
+    expect(intakeEnds).toBe(1);
+  });
+
+  it("fails closed when a pool factory attempts to share intake with maintainer", async () => {
+    let ended = 0;
+    const pool = {
+      connect: (): Promise<PgClientLike> => Promise.resolve(new RuntimeClient()),
+      end: (): Promise<void> => {
+        ended += 1;
+        return Promise.resolve();
+      },
+    };
+    await expect(
+      startHostedFeedbackIntake({
+        env: maintainerEnv(),
+        poolFactory: () => pool,
+        migrationSources: () => Promise.resolve([]),
+      }),
+    ).rejects.toThrow("must be isolated");
     expect(ended).toBe(1);
+  });
+
+  it("closes both isolated pools when ordered migrations fail", async () => {
+    const ended = [0, 0];
+    let pools = 0;
+    const client: PgClientLike = {
+      query: () => Promise.reject(new Error("migration failed")),
+      release: () => undefined,
+    };
+    await expect(
+      startHostedFeedbackIntake({
+        env: maintainerEnv(),
+        poolFactory: () => {
+          const index = pools++;
+          return {
+            connect: (): Promise<PgClientLike> => Promise.resolve(client),
+            end: (): Promise<void> => {
+              ended[index] = (ended[index] ?? 0) + 1;
+              return Promise.resolve();
+            },
+          };
+        },
+        migrationSources: () => Promise.resolve([{ version: 1, source: "MIGRATION" }]),
+      }),
+    ).rejects.toThrow("migration failed");
+    expect(ended).toEqual([1, 1]);
   });
 
   it("rejects a maintainer listener port collision before creating the pool", async () => {

@@ -534,6 +534,39 @@ describe("maintainer HTTP boundary", () => {
     expect(diagnostics[1]?.category).toBe("conflict");
   });
 
+  it("rejects malformed review UUIDs without querying PostgreSQL or emitting diagnostics", async () => {
+    const base = harness(["feedback.review"]);
+    const diagnostics = vi.fn();
+    const origin = await listen({
+      ...base.options,
+      diagnostics: { event: diagnostics },
+    });
+    const malformedPath = await fetch(`${origin}/v1/maintainer/reviews/not-a-uuid`, {
+      headers: sessionHeaders(),
+    });
+    expect(malformedPath.status).toBe(404);
+    expect(base.query.detail).not.toHaveBeenCalled();
+
+    const malformedTarget = await fetch(`${origin}/v1/maintainer/reviews/${ITEM}/actions`, {
+      method: "POST",
+      headers: sessionHeaders({
+        "Content-Type": "application/json",
+        Origin: "https://maintainer.example",
+        "keiko-feedback-csrf": maintainerCsrfToken(CAPABILITY),
+      }),
+      body: JSON.stringify({
+        action: "mark-duplicate",
+        targetItemId: "not-a-uuid",
+        expectedVersion: 1,
+        expectedPayloadDigest: "a".repeat(64),
+        idempotencyKey: "malformed-target-key",
+      }),
+    });
+    expect(malformedTarget.status).toBe(400);
+    expect(base.review.execute).not.toHaveBeenCalled();
+    expect(diagnostics).not.toHaveBeenCalled();
+  });
+
   it("throttles OIDC initiation before transaction creation and recovers by source/window", async () => {
     const base = harness(["feedback.review"]);
     let now = 1;

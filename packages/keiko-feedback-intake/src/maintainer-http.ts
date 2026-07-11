@@ -10,6 +10,7 @@ import {
   type FeedbackReviewStateV1,
 } from "@oscharko-dev/keiko-contracts/feedback-review";
 import { parseMaintainerAction, permissionForAction } from "./maintainer-action.js";
+import { isCanonicalFeedbackReviewId } from "./feedback-review-identifier.js";
 import type { PostgresFeedbackReviewQuery } from "./feedback-review-query.js";
 import type { PostgresFeedbackReviewRepository } from "./feedback-review-store.js";
 import type { MaintainerAuthService } from "./maintainer-auth.js";
@@ -260,10 +261,10 @@ async function handleReviewItem(
   options: MaintainerHttpOptions,
   identity: Session,
 ): Promise<void> {
-  const match = /^\/v1\/maintainer\/reviews\/([0-9a-f-]+)(?:\/(actions|hold))?$/u.exec(
+  const match = /^\/v1\/maintainer\/reviews\/([^/]+)(?:\/(actions|hold))?$/u.exec(
     url.pathname,
   );
-  if (match?.[1] === undefined) {
+  if (match?.[1] === undefined || !isCanonicalFeedbackReviewId(match[1])) {
     fail(res, 404);
     return;
   }

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isFeedbackReviewActorV1 } from "@oscharko-dev/keiko-contracts/feedback-review";
+import { isCanonicalFeedbackReviewId } from "./feedback-review-identifier.js";
 import { FeedbackReviewError, type FeedbackReviewCommand } from "./feedback-review-types.js";
 import type { FeedbackReviewMutationResult } from "./feedback-review-types.js";
 import type { FeedbackReviewStateV1 } from "@oscharko-dev/keiko-contracts/feedback-review";
@@ -54,6 +55,13 @@ export function feedbackReviewCommandDigest(command: FeedbackReviewCommand): str
 
 export function assertFeedbackReviewCommand(command: FeedbackReviewCommand): void {
   if (!isFeedbackReviewActorV1(command.actor)) throw new FeedbackReviewError("invalid-actor");
+  if (
+    !isCanonicalFeedbackReviewId(command.itemId) ||
+    (command.action === "mark-duplicate" &&
+      !isCanonicalFeedbackReviewId(command.targetItemId))
+  ) {
+    throw new FeedbackReviewError("invalid-request");
+  }
   if (
     command.action === "place-legal-hold" &&
     (!Number.isFinite(command.reviewAt.getTime()) || !Number.isFinite(command.expiresAt.getTime()))
