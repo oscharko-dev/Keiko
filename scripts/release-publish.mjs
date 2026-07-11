@@ -601,6 +601,8 @@ function portableQualificationFailures(qualification, rootManifest, head) {
   return checks.flatMap(([valid, message]) => (valid ? [] : [`qualified portable ${message}`]));
 }
 
+// Deliberate defense-in-depth: assemble-portable-release-assets.mjs (validatePortableReleaseSet)
+// enforces this same exact-three/qualification-binding invariant at assembly; keep in sync.
 function portableAssetsFromManifest(inputPath, rootManifest, qualification) {
   const manifest = readJsonFile(inputPath);
   const baseDir = dirname(inputPath);

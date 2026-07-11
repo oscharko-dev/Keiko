@@ -746,6 +746,81 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
     });
 
+    // portableAssetsFromManifest/normalizePortableAssets (release-publish.mjs) is the
+    // publish-time twin of validatePortableReleaseSet: the last check before npm publish,
+    // dist-tag mutation, or GitHub release promotion. Each case below shrinks/grows/
+    // duplicates `bundle.artifacts` while keeping every remaining entry well-formed, so the
+    // only thing that can make the run fail is the specific count/duplicate/missing guard
+    // under test — never a same-shape neighbor.
+    it("rejects a portable assets manifest missing a target before npm publish or dist-tag mutation", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          // Drop the third (macos-x64) target: only two of the three required artifacts remain.
+          mutateBundle: (bundle) => {
+            bundle.artifacts = bundle.artifacts.slice(0, 2);
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable assets manifest must list exactly three artifacts.",
+      );
+      expect(lastRun.stderr).toContain("missing portable asset entry for macos-x64.");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("rejects a portable assets manifest with an extra target before npm publish or dist-tag mutation", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          // Append a fourth artifact: the three real targets remain untouched and well-formed.
+          mutateBundle: (bundle) => {
+            bundle.artifacts.push({ platformTarget: "linux-x64" });
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable assets manifest must list exactly three artifacts.",
+      );
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("rejects a portable assets manifest with a duplicate platformTarget before npm publish or dist-tag mutation", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          // Replace the macos-arm64 entry with a second copy of windows-x64: the artifact
+          // count stays at three, so only the duplicate-target guard can catch this.
+          mutateBundle: (bundle) => {
+            bundle.artifacts[1] = { ...bundle.artifacts[0] };
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("duplicate portable platformTarget windows-x64.");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
     it.each([
       ["SBOM", "evidence/sbom.cdx.json", '{"bomFormat":"CycloneDX","tokenValue":"secret"}\n'],
       [

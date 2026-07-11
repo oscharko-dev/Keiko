@@ -219,6 +219,8 @@ function validateRequiredTargets(byTarget, expected, failures) {
   }
 }
 
+// Deliberate defense-in-depth: release-publish.mjs (portableAssetsFromManifest) re-enforces this
+// same exact-three/qualification-binding invariant at the publish trust boundary; keep in sync.
 export function validatePortableReleaseSet(manifests, expected) {
   const failures = [];
   const byTarget = collectTargetManifests(manifests, failures);
