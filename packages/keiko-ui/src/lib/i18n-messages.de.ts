@@ -137,6 +137,10 @@ export const DE_MESSAGES = {
   // The Epic #2092 audit follow-up (verification-target scoping in EditorRuntimeWidget.tsx, tab-
   // eviction correctness in ProblemsPanel.tsx) is purely behavioral and introduces no new strings;
   // Problems-panel text lives in the lazy `problems-i18n.ts` namespace, also unaffected.
+  // The Epic #2093 audit follow-up (unavailable-repository contract-shape fix in gitRoutes.ts,
+  // wiring the previously-dead EditorAgentSessionSnapshot.gitContextSummary producer in
+  // EditorRuntimeWidget.tsx) is likewise purely behavioral and introduces no new strings; the
+  // source-control labels it touches live in the lazy `editor-source-control-i18n.ts` namespace.
   "chat.regenerate.cancelled": "Regenerierung abgebrochen",
   "chat.regenerate.running": "Antwort wird neu generiert",
   "chat.regenerate.cancel": "Regenerierung abbrechen",

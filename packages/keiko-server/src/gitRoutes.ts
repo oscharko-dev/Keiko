@@ -324,6 +324,39 @@ function unavailableBranchList(repo: GitRepositoryStatusResponse): GitBranchList
   };
 }
 
+// Issue #2228 defect fix (Epic #2093 audit): GitEditorDiffResponse/GitEditorBlameResponse (unlike
+// GitRepositoryStatusResponse/GitBranchListResponse) carry no "unavailable" state fields at all —
+// they are pure success shapes. When the folder is not a repository, has unsafe ownership, or its
+// repository root falls outside the selected root, the correct representation is a schema-valid,
+// zero-value response (no changes to show), mirroring unavailableBranchList's role for the other
+// git-editor routes rather than leaking the raw GitRepositoryStatusResponse shape.
+function unavailableStructuredDiff(scope: GitEditorDiffScope): GitEditorDiffResponse {
+  return {
+    schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+    scope,
+    files: [],
+    truncated: false,
+    totalFiles: 0,
+    totalBytes: 0,
+    maxBytes: GIT_EDITOR_DIFF_MAX_BYTES,
+    maxFiles: GIT_EDITOR_DIFF_MAX_FILES,
+  };
+}
+
+function unavailableBlame(request: GitEditorBlameRequest): GitEditorBlameResponse {
+  return {
+    schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+    path: request.path,
+    startLine: request.startLine,
+    lines: [],
+    truncated: false,
+    totalLines: 0,
+    totalBytes: 0,
+    maxBytes: GIT_EDITOR_BLAME_MAX_BYTES,
+    maxLines: GIT_EDITOR_BLAME_MAX_LINES,
+  };
+}
+
 function parseBranches(stdout: string): readonly GitBranchListEntry[] {
   const fields = stdout.split("\0");
   const branches: GitBranchListEntry[] = [];
@@ -722,7 +755,9 @@ export async function handleGitStructuredDiff(
     const scope = parseStructuredScope(ctx.url.searchParams.get("scope"));
     const path = validatePath(ctx.url.searchParams.get("path"));
     const repo = await resolveRepository(ctx, deps, options);
-    if ("available" in repo) return { status: 200, body: redacted(deps, repo) };
+    if ("available" in repo) {
+      return { status: 200, body: redacted(deps, unavailableStructuredDiff(scope)) };
+    }
     if (path !== undefined) await assertContainedGitPath(repo, path);
     const result = await runDiff(
       repo,
@@ -818,7 +853,9 @@ export async function handleGitBlame(
     const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
     const request = parseBlameRequest(ctx);
     const repo = await resolveRepository(ctx, deps, options);
-    if ("available" in repo) return { status: 200, body: redacted(deps, repo) };
+    if ("available" in repo) {
+      return { status: 200, body: redacted(deps, unavailableBlame(request)) };
+    }
     await assertContainedGitPath(repo, request.path);
     const result = await runBlame(repo, options, request);
     if (result.exitCode !== 0) {

@@ -9,6 +9,7 @@ import {
   fetchEditorAgentAudit,
   fetchEditorLanguageCapabilities,
   fetchFilesContent,
+  fetchGitStatus,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
   requestEditorSymbols,
@@ -33,6 +34,7 @@ vi.mock("../../../../../lib/api", async () => {
     fetchEditorAgentAudit: vi.fn(),
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchFilesContent: vi.fn(),
+    fetchGitStatus: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
     requestEditorSymbols: vi.fn(),
@@ -342,6 +344,21 @@ beforeEach(() => {
   diffSurface.props = null;
   vi.mocked(fetchEditorAgentAudit).mockResolvedValue({ records: [] });
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
+  vi.mocked(fetchGitStatus).mockResolvedValue({
+    schemaVersion: "1",
+    root: "/repo",
+    state: "available",
+    available: true,
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  });
   vi.mocked(requestEditorSymbols).mockResolvedValue({ symbols: [], truncated: false });
   vi.mocked(postEditorAgentSessionSnapshot).mockReset();
   vi.mocked(postEditorAgentSessionSnapshot).mockImplementation(

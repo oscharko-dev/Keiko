@@ -772,6 +772,41 @@ describe("GET /api/git/diff/structured", () => {
     });
     expect(JSON.stringify(failed.body)).not.toContain("private/repo");
   });
+
+  it("returns a schema-valid empty response when the repository is unavailable", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(fail("fatal: not a git repository"));
+
+    const result = await handleGitStructuredDiff(
+      ctx(`/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=staged`),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(parseGitEditorDiffResponse(result.body)).toMatchObject({ ok: true });
+    expect(result.body).toMatchObject({
+      scope: "staged",
+      files: [],
+      totalFiles: 0,
+      truncated: false,
+    });
+  });
+
+  it("rejects a symlink escape through the diff route's path parameter before diffing", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "keiko-git-route-outside-"));
+    await symlink(outside, join(root, "escape"));
+    const symlinkRunner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(ok(`${root}\n`));
+    const escaped = await handleGitStructuredDiff(
+      ctx(
+        `/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=staged&path=escape%2Fsecret.ts`,
+      ),
+      deps(symlinkRunner),
+    );
+    await rm(outside, { recursive: true, force: true });
+    expect(escaped.status).toBe(400);
+    expect(symlinkRunner).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("GET /api/git/blame", () => {
@@ -893,5 +928,28 @@ describe("GET /api/git/blame", () => {
     });
     expect(JSON.stringify(result.body)).not.toContain("secret@example.test");
     expect(JSON.stringify(result.body)).not.toContain("private/repo");
+  });
+
+  it("returns a schema-valid empty response when the repository is unavailable", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(fail("fatal: not a git repository"));
+
+    const result = await handleGitBlame(
+      ctx(
+        `/api/git/blame?root=${encodeURIComponent(root)}&path=src%2Fapp.ts&startLine=1&maxLines=10`,
+      ),
+      deps(runner),
+    );
+
+    expect(result.status).toBe(200);
+    expect(parseGitEditorBlameResponse(result.body)).toMatchObject({ ok: true });
+    expect(result.body).toMatchObject({
+      path: "src/app.ts",
+      startLine: 1,
+      lines: [],
+      totalLines: 0,
+      truncated: false,
+    });
   });
 });
