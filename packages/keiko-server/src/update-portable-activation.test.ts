@@ -17,6 +17,7 @@ import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   activationIdFor,
   capturePortableRegistration,
+  readPortableActivationRecovery,
 } from "./update-portable-activation-files.js";
 
 const TARGET_VERSION = "0.2.12";
@@ -99,6 +100,63 @@ afterEach(async () => {
 });
 
 describe("portable update activation", () => {
+  it.each([
+    "",
+    ".",
+    "..",
+    "nested/stage",
+    "nested\\stage",
+    "/absolute",
+    "C:\\stage",
+    "bad\u0000id",
+  ])("rejects unsafe stage id %j before install or registration mutation", async (stageId) => {
+    const install = await makeInstall();
+    const registrationPath = join(install.stateDir, "portable-install-state.json");
+    mkdirSync(install.stateDir, { recursive: true });
+    writeFileSync(registrationPath, "old-registration\n", "utf8");
+    const activator = createPortableUpdateActivator({
+      env: { KEIKO_STATE_DIR: install.stateDir },
+      homedir: () => install.home,
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(true),
+    });
+
+    await expect(
+      activator.activate({
+        sessionId: "unsafe-stage",
+        targetVersion: TARGET_VERSION,
+        stage: { ...stageSummary(), stageId },
+        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-activation-failed" });
+    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
+    expect(readFileSync(registrationPath, "utf8")).toBe("old-registration\n");
+  });
+
+  it.each([
+    "",
+    ".",
+    "..",
+    "nested/stage",
+    "nested\\stage",
+    "/absolute",
+    "C:\\stage",
+    "bad\u0000id",
+  ])("rejects unsafe recovery stage id %j", async (stageId) => {
+    const install = await makeInstall();
+    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
+    writeFileSync(
+      join(install.stateDir, "updates", "portable-activation-recovery.json"),
+      JSON.stringify({ activationId: "a".repeat(32), stageId, target: TARGET, phase: "prepared" }),
+      "utf8",
+    );
+
+    expect(() => readPortableActivationRecovery(install.stateDir)).toThrow(
+      "portable activation recovery metadata is malformed",
+    );
+    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
+  });
+
   it("promotes the staged install, refreshes registration, relaunches, and records redacted state", async () => {
     const install = await makeInstall();
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });

@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   linkSync,
   mkdirSync,
@@ -86,7 +87,11 @@ function contractManifest() {
   return JSON.parse(match[1]);
 }
 
-function macManifest() {
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function macManifest(executableBytes, licenseBytes) {
   const manifest = contractManifest();
   const sidecar = manifest.sidecarRuntimes[0];
   const binding = manifest.releaseImpact.reviewedBinding;
@@ -101,8 +106,23 @@ function macManifest() {
   manifest.runtime.nodeArchiveSha256 = "a".repeat(64);
   manifest.provenance.rootPackageTarballSha256 = "b".repeat(64);
   sidecar.platformTarget = "macos-arm64";
+  sidecar.archive = {
+    platformTarget: "macos-arm64",
+    url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-darwin-arm64.zip",
+    sizeBytes: 55159915,
+    sha256: "cec03cf8b1119053d583e9afa14a987ca4ffa9dcd76cb79a7cd66774de6411f7",
+  };
   sidecar.executablePath = "runtime/sidecars/opencode-compatible/bin/opencode";
-  sidecar.licenseEvidence.sha256 = "c".repeat(64);
+  sidecar.executableSha256 = sha256(executableBytes);
+  sidecar.executableTreeSha256 = createHash("sha256")
+    .update(`bin/opencode\0${sidecar.executableSha256}\0`)
+    .digest("hex");
+  sidecar.license = {
+    spdxId: "MIT",
+    url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+    sha256: sha256(licenseBytes),
+  };
+  sidecar.licenseEvidence.sha256 = sidecar.license.sha256;
   sidecar.sbomEvidence.sha256 = "d".repeat(64);
   manifest.entrypoints.primaryLauncher = "Keiko.app";
   manifest.entrypoints.supportLaunchers = ["support/keiko-support.sh"];
@@ -149,11 +169,16 @@ function macFinalizeStage() {
   const resources = join(payloadRoot, "Keiko.app", "Contents", "Resources");
   write(join(payloadRoot, "Keiko.app", "Contents", "MacOS", "Keiko"), macho());
   write(join(resources, "runtime", "node", "bin", "node"), macho(0xfeedfacf, 1));
+  const sidecarExecutable = macho(0xfeedfacf, 2);
+  const sidecarLicense = Buffer.from("license", "utf8");
   write(
     join(resources, "runtime", "sidecars", "opencode-compatible", "bin", "opencode"),
-    macho(0xfeedfacf, 2),
+    sidecarExecutable,
   );
-  write(join(resources, "runtime", "sidecars", "opencode-compatible", "LICENSE.txt"), "license");
+  write(
+    join(resources, "runtime", "sidecars", "opencode-compatible", "LICENSE.txt"),
+    sidecarLicense,
+  );
   write(join(resources, "app", "index.js"), "signed app");
   write(join(resources, "app", "package.json"), '{"name":"@oscharko-dev/keiko"}\n');
   write(
@@ -167,7 +192,7 @@ function macFinalizeStage() {
     })}\n`,
   );
   write(join(payloadRoot, "support", "keiko-support.sh"), "#!/bin/sh\n");
-  const manifest = macManifest();
+  const manifest = macManifest(sidecarExecutable, sidecarLicense);
   const manifestPath = join(stage, "manifest", "portable-manifest.json");
   const provenancePath = join(stage, "evidence", "provenance.intoto.jsonl");
   const checksumPath = join(stage, "evidence", "SHA256SUMS.txt");

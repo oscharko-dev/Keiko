@@ -224,6 +224,9 @@ function activationPathsFor(
   stageId: string,
   activationId: string,
 ): PortableActivationPaths {
+  if (!isSafeStageId(stageId)) {
+    throw activationFailed("portable activation stage id is invalid");
+  }
   const managedRoot = managedRootFromPackageRoot(target, runtimeFacts?.packageRoot);
   if (
     managedRoot === undefined ||
@@ -418,6 +421,16 @@ function isRecoveryPhase(value: unknown): value is PortableActivationRecovery["p
   );
 }
 
+function isSafeStageId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
+  );
+}
+
 function hasExactRecoveryKeys(record: Record<string, unknown>): boolean {
   const keys = Object.keys(record);
   return (
@@ -433,8 +446,7 @@ function isPortableActivationRecovery(value: unknown): value is PortableActivati
     ? false
     : typeof record.activationId === "string" &&
         /^[a-f0-9]{32}$/u.test(record.activationId) &&
-        typeof record.stageId === "string" &&
-        record.stageId.length > 0 &&
+        isSafeStageId(record.stageId) &&
         isRecoveryTarget(record.target) &&
         isRecoveryPhase(record.phase);
 }

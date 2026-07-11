@@ -201,6 +201,12 @@ export class CodingRuntimeAuthorityService {
     nowIso: string,
   ): CodingRuntimeResolution {
     if (
+      this.reapPending?.runId === reference.runId &&
+      this.activeAuthorityRef?.runId === reference.runId
+    ) {
+      return { ok: false, reason: "revoked" };
+    }
+    if (
       this.activeTreeBindingId === undefined ||
       this.runtimeState.state !== "running" ||
       this.runtimeState.runId !== reference.runId

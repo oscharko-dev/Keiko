@@ -258,6 +258,8 @@ export interface UiHandlerDeps {
   // the runtime gateway config changes after first-run setup instead of freezing a test-only value.
   readonly codingSidecarGatewayModelSourceResolver?:
     CodingSidecarGatewayModelSourceResolver | undefined;
+  // Server-owned runtime availability gate. #2256 wires verified activated Codex provenance.
+  readonly codexRuntimeAvailability?: { readonly isApprovedVerified: () => boolean } | undefined;
   // Optional dedicated evidence store for coding-workbench records. When absent, coding-sidecar
   // routes keep the root evidence store clean and fall back to diagnostics-only observability.
   readonly codingWorkbenchEvidenceStore?: EvidenceStore | undefined;
