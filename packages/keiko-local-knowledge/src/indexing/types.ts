@@ -110,6 +110,12 @@ export interface IndexingOptions {
   // When true, large-document jobs continue from durable extraction checkpoints where compatible
   // (the `resume` reindex mode); incompatible checkpoints restart cleanly.
   readonly resume?: boolean;
+  // When true, documents persisted for a source but NOT discovered by this run's scope walk are
+  // retained instead of pruned. For an incremental connector re-sync (#2243) the mounted scope
+  // deliberately covers only re-fetched items; removal detection is owned by the connector sink's
+  // enumeration diff, so the orchestrator's discovery-based prune must stand down. Default false —
+  // every existing caller keeps the prune.
+  readonly retainUndiscoveredDocuments?: boolean;
 }
 
 // ─── Event stream ────────────────────────────────────────────────────────────

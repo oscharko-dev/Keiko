@@ -198,6 +198,8 @@ Primary docs:
 - [connected-context-privacy.md](connected-context-privacy.md)
 - [connected-context-document-extraction.md](connected-context-document-extraction.md)
 - [local-knowledge/runtime-state-protection.md](local-knowledge/runtime-state-protection.md)
+- [local-knowledge/knowledge-pods.md](local-knowledge/knowledge-pods.md)
+- [local-knowledge/atlassian-connector-guide.md](local-knowledge/atlassian-connector-guide.md)
 - [local-runtime-state-contract.md](local-runtime-state-contract.md)
 - [memory-verification-matrix.md](memory-verification-matrix.md)
 - [conversation-center-privacy.md](conversation-center-privacy.md)

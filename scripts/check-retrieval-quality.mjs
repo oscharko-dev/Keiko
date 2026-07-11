@@ -662,6 +662,11 @@ export const REGRESSION_PROBE_FIXTURE_IDS = [
   "html-manual-denied-link",
   "html-manual-index-page",
   "html-manual-multilingual",
+  // #2242/#2243 connector-pod goldsets (Epic #2238): the synced-Confluence and synced-Jira
+  // retrieval axes must be non-tautological the same way — repointed expectations must drop
+  // below the floors.
+  "confluence-connector-pod",
+  "jira-connector-pod",
 ];
 
 const ABSENT_CHUNK_SENTINEL = "__keiko_regression_absent_chunk__";

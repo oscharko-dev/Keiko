@@ -872,4 +872,189 @@ export const DE_MESSAGES = {
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to
   // satisfy that fail-closed gate with no new keys.
+
+  // Issue #2245 (Epic #2238) — Atlassian-Connector-Oberflächen (Einrichtung, Sync, Freigaben).
+  "atlassianConnectors.title": "Atlassian-Connectoren",
+  "atlassianConnectors.subtitle":
+    "Confluence- und Jira-Connectoren registrieren, Bereiche synchronisieren und gesteuerte Schreibaktionen prüfen.",
+  "atlassianConnectors.section.connectors": "Connectoren",
+  "atlassianConnectors.loading": "Connectoren werden geladen…",
+  "atlassianConnectors.retry": "Erneut versuchen",
+  "atlassianConnectors.empty":
+    "Noch keine Connectoren. Fügen Sie einen hinzu, um Confluence-Bereiche oder Jira-Projekte zu synchronisieren.",
+  "atlassianConnectors.provider.confluence": "Confluence",
+  "atlassianConnectors.provider.jira": "Jira",
+  "atlassianConnectors.list.added": "Hinzugefügt",
+  "atlassianConnectors.list.health": "Status",
+  "atlassianConnectors.list.healthUnknown": "Noch nicht geprüft",
+  "atlassianConnectors.list.manage": "Verwalten",
+  "atlassianConnectors.list.delete": "Löschen",
+  "atlassianConnectors.delete.confirm":
+    "Diesen Connector löschen? Die gespeicherte Anmeldeinformation wird entfernt.",
+  "atlassianConnectors.delete.cancel": "Connector behalten",
+  "atlassianConnectors.delete.confirmButton": "Connector löschen",
+  "atlassianConnectors.add.open": "Connector hinzufügen",
+  "atlassianConnectors.add.title": "Connector hinzufügen",
+  "atlassianConnectors.add.provider": "Anbieter",
+  "atlassianConnectors.add.displayName": "Bezeichnung",
+  "atlassianConnectors.add.displayNamePlaceholder": "z. B. Engineering Confluence",
+  "atlassianConnectors.add.baseUrl": "Basis-URL",
+  "atlassianConnectors.add.baseUrlPlaceholder": "https://ihre-domain.atlassian.net",
+  "atlassianConnectors.add.email": "Konto-E-Mail",
+  "atlassianConnectors.add.emailPlaceholder": "sie@example.com",
+  "atlassianConnectors.add.token": "API-Token",
+  "atlassianConnectors.add.tokenPlaceholder": "API-Token einfügen",
+  "atlassianConnectors.add.tokenHint":
+    "Das API-Token wird sicher gespeichert und nach dem Speichern nie wieder angezeigt.",
+  "atlassianConnectors.add.submit": "Connector speichern",
+  "atlassianConnectors.add.saving": "Wird gespeichert…",
+  "atlassianConnectors.add.cancel": "Abbrechen",
+  "atlassianConnectors.validation.displayName":
+    "Geben Sie eine Bezeichnung für diesen Connector ein.",
+  "atlassianConnectors.validation.baseUrl":
+    "Geben Sie eine HTTPS-URL ohne eingebettete Anmeldedaten, Query oder Fragment ein.",
+  "atlassianConnectors.validation.email": "Geben Sie die Konto-E-Mail für das API-Token ein.",
+  "atlassianConnectors.validation.token": "Fügen Sie das API-Token ein.",
+  "atlassianConnectors.verify.button": "Verbindung prüfen",
+  "atlassianConnectors.verify.verifying": "Wird geprüft…",
+  "atlassianConnectors.verify.ok.label": "Verbindung geprüft",
+  "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
+  "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
+  "atlassianConnectors.verify.auth-failed.copy":
+    "Prüfen Sie Konto-E-Mail und API-Token und versuchen Sie es erneut.",
+  "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
+  "atlassianConnectors.verify.forbidden.copy":
+    "Das Konto wurde authentifiziert, hat aber keine Berechtigung. Erteilen Sie den Zugriff in Atlassian und prüfen Sie erneut.",
+  "atlassianConnectors.verify.unreachable.label": "Website nicht erreichbar",
+  "atlassianConnectors.verify.unreachable.copy":
+    "Die Basis-URL konnte nicht erreicht werden. Prüfen Sie URL und Netzwerk und versuchen Sie es erneut.",
+  "atlassianConnectors.verify.timeout.label": "Zeitüberschreitung der Verbindung",
+  "atlassianConnectors.verify.timeout.copy":
+    "Die Website hat nicht rechtzeitig geantwortet. Versuchen Sie es gleich erneut.",
+  "atlassianConnectors.scope.title": "Bereich",
+  "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
+  "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
+  "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",
+  "atlassianConnectors.scope.jiraPlaceholder": "z. B. PROJ",
+  "atlassianConnectors.scope.addKey": "Schlüssel hinzufügen",
+  "atlassianConnectors.scope.removeKey": "Schlüssel {key} entfernen",
+  "atlassianConnectors.scope.keyHint": "Fügen Sie einzeln Schlüssel hinzu; bis zu {max} Schlüssel.",
+  "atlassianConnectors.scope.jqlLabel": "JQL-Filter (optional)",
+  "atlassianConnectors.scope.jqlPlaceholder": "z. B. updated >= -30d",
+  "atlassianConnectors.scope.jqlHint":
+    "JQL läuft mit Ihren eigenen Atlassian-Berechtigungen und liefert nur für Sie sichtbare Vorgänge.",
+  "atlassianConnectors.scope.bounds": "Jeder Lauf synchronisiert höchstens {maxItems} Elemente.",
+  "atlassianConnectors.scope.empty":
+    "Fügen Sie vor dem Synchronisieren mindestens einen Schlüssel hinzu.",
+  "atlassianConnectors.scope.invalidKey": "Dieser Schlüssel ist für diesen Anbieter ungültig.",
+  "atlassianConnectors.scope.maxKeys": "Sie können bis zu {max} Schlüssel hinzufügen.",
+  "atlassianConnectors.scope.duplicateKey": "Dieser Schlüssel ist bereits hinzugefügt.",
+  "atlassianConnectors.sync.title": "Sync",
+  "atlassianConnectors.sync.start": "Sync starten",
+  "atlassianConnectors.sync.starting": "Wird gestartet…",
+  "atlassianConnectors.sync.cancel": "Sync abbrechen",
+  "atlassianConnectors.sync.cancelling": "Wird abgebrochen…",
+  "atlassianConnectors.sync.progressTitle": "Fortschritt",
+  "atlassianConnectors.sync.progress.enumerated": "Erfasst",
+  "atlassianConnectors.sync.progress.fetched": "Abgerufen",
+  "atlassianConnectors.sync.progress.indexed": "Indiziert",
+  "atlassianConnectors.sync.progress.skipped": "Übersprungen",
+  "atlassianConnectors.sync.progress.failed": "Fehlgeschlagen",
+  "atlassianConnectors.sync.statusLabel": "Status",
+  "atlassianConnectors.sync.status.pending": "Ausstehend",
+  "atlassianConnectors.sync.status.running": "Läuft",
+  "atlassianConnectors.sync.status.succeeded": "Erfolgreich",
+  "atlassianConnectors.sync.status.partial": "Mit Problemen abgeschlossen",
+  "atlassianConnectors.sync.status.failed": "Fehlgeschlagen",
+  "atlassianConnectors.sync.status.cancelled": "Abgebrochen",
+  "atlassianConnectors.sync.changesTitle": "Letzte Änderungsübersicht",
+  "atlassianConnectors.sync.change.addedItems": "Hinzugefügt",
+  "atlassianConnectors.sync.change.changedItems": "Geändert",
+  "atlassianConnectors.sync.change.removedItems": "Entfernt",
+  "atlassianConnectors.sync.change.unchangedItems": "Unverändert",
+  "atlassianConnectors.sync.change.failedItems": "Fehlgeschlagen",
+  "atlassianConnectors.sync.change.deniedItems": "Verweigert",
+  "atlassianConnectors.sync.degradedTitle": "Einige Elemente konnten nicht synchronisiert werden",
+  "atlassianConnectors.sync.reason.auth-failed":
+    "Authentifizierung fehlgeschlagen. Prüfen Sie die Connector-Anmeldeinformation erneut.",
+  "atlassianConnectors.sync.reason.permission-denied":
+    "Dem Konto fehlt die Berechtigung für einige Elemente. Erteilen Sie den Zugriff in Atlassian.",
+  "atlassianConnectors.sync.reason.rate-limited":
+    "Atlassian hat den Sync gedrosselt. Versuchen Sie es in Kürze erneut.",
+  "atlassianConnectors.sync.reason.timeout":
+    "Zeitüberschreitung beim Sync. Versuchen Sie es erneut oder grenzen Sie den Bereich ein.",
+  "atlassianConnectors.sync.reason.unavailable":
+    "Atlassian war vorübergehend nicht verfügbar. Versuchen Sie es später erneut.",
+  "atlassianConnectors.sync.reason.scope-exceeded":
+    "Der Bereich hat sein Limit überschritten. Reduzieren Sie die ausgewählten Schlüssel.",
+  "atlassianConnectors.sync.reason.bounds-exceeded":
+    "Der Lauf hat sein Größen- oder Zeitlimit erreicht. Grenzen Sie den Bereich ein und synchronisieren Sie erneut.",
+  "atlassianConnectors.sync.reason.cancelled": "Der Sync wurde vor dem Abschluss abgebrochen.",
+  "atlassianConnectors.sync.reason.malformed-payload":
+    "Einige Elemente lieferten unerwartete Daten und wurden übersprungen.",
+  "atlassianConnectors.approvals.title": "Freigaben für Schreibaktionen",
+  "atlassianConnectors.approvals.empty": "Keine Schreibaktionen warten auf Prüfung.",
+  "atlassianConnectors.approvals.target": "Ziel",
+  "atlassianConnectors.approvals.risk": "Risiko",
+  "atlassianConnectors.approvals.disposition": "Einstufung",
+  "atlassianConnectors.approvals.reason": "Grund",
+  "atlassianConnectors.approvals.approve": "Freigeben",
+  "atlassianConnectors.approvals.approving": "Wird freigegeben…",
+  "atlassianConnectors.approvals.reject": "Ablehnen",
+  "atlassianConnectors.approvals.rejecting": "Wird abgelehnt…",
+  "atlassianConnectors.approvals.rejected": "Abgelehnt. Die Aktion wurde nicht ausgeführt.",
+  "atlassianConnectors.action.sync-space": "Confluence-Bereich synchronisieren",
+  "atlassianConnectors.action.sync-project": "Jira-Projekt synchronisieren",
+  "atlassianConnectors.action.search-issues-live": "Jira-Livesuche",
+  "atlassianConnectors.action.create-issue": "Jira-Vorgang erstellen",
+  "atlassianConnectors.action.update-issue-fields": "Jira-Vorgangsfelder aktualisieren",
+  "atlassianConnectors.action.transition-issue": "Jira-Vorgang überführen",
+  "atlassianConnectors.action.add-issue-comment": "Jira-Kommentar hinzufügen",
+  "atlassianConnectors.action.create-page": "Confluence-Seite erstellen",
+  "atlassianConnectors.action.update-page": "Confluence-Seite aktualisieren",
+  "atlassianConnectors.action.add-page-comment": "Confluence-Kommentar hinzufügen",
+  "atlassianConnectors.risk.low": "Niedrig",
+  "atlassianConnectors.risk.medium": "Mittel",
+  "atlassianConnectors.risk.high": "Hoch",
+  "atlassianConnectors.risk.critical": "Kritisch",
+  "atlassianConnectors.disposition.allowed": "Erlaubt",
+  "atlassianConnectors.disposition.review-required": "Prüfung erforderlich",
+  "atlassianConnectors.disposition.denied": "Verweigert",
+  "atlassianConnectors.reviewReason.mode-approval-required":
+    "Dieser Modus erfordert eine Freigabe, bevor die Aktion ausgeführt wird.",
+  "atlassianConnectors.reviewReason.deterministic-risk-approval-required":
+    "Diese risikoreiche Aktion erfordert immer eine Freigabe.",
+  "atlassianConnectors.result.succeededTitle": "Abgeschlossen",
+  "atlassianConnectors.result.succeeded": "Die Aktion wurde erfolgreich abgeschlossen.",
+  "atlassianConnectors.result.succeededTarget": "Ergebnis: {target}",
+  "atlassianConnectors.result.failedTitle": "Aktion fehlgeschlagen",
+  "atlassianConnectors.result.reason.auth-failed": "Authentifizierung fehlgeschlagen.",
+  "atlassianConnectors.result.reason.permission-denied": "Berechtigung verweigert.",
+  "atlassianConnectors.result.reason.not-found": "Das Ziel existiert nicht mehr.",
+  "atlassianConnectors.result.reason.rate-limited": "Atlassian hat die Anfrage gedrosselt.",
+  "atlassianConnectors.result.reason.timeout": "Zeitüberschreitung der Anfrage.",
+  "atlassianConnectors.result.reason.unavailable": "Atlassian war vorübergehend nicht verfügbar.",
+  "atlassianConnectors.result.reason.malformed-payload":
+    "Die Anfrage konnte nicht verarbeitet werden.",
+  "atlassianConnectors.result.reason.bounds-exceeded":
+    "Die Anfrage hat ihr Größenlimit überschritten.",
+  "atlassianConnectors.result.reason.conflict":
+    "Das Ziel hat sich seit dem Lesen geändert. Neu laden und erneut versuchen.",
+  "atlassianConnectors.result.reason.invalid-transition":
+    "Diese Überführung ist für diesen Vorgang nicht verfügbar.",
+  "atlassianConnectors.result.reason.field-validation":
+    "Atlassian hat einen oder mehrere Feldwerte abgelehnt.",
+  "atlassianConnectors.denied.title": "Aktion verweigert",
+  "atlassianConnectors.denied.reason.authority-invalid":
+    "Die Autorisierung für diese Aktion ist nicht mehr gültig.",
+  "atlassianConnectors.denied.reason.authority-expired":
+    "Die Autorisierung für diese Aktion ist abgelaufen.",
+  "atlassianConnectors.denied.reason.authority-budget-exceeded":
+    "Das Autorisierungsbudget für diese Aktion ist aufgebraucht.",
+  "atlassianConnectors.denied.reason.connector-access-denied":
+    "Connector-Zugriff ist für diese Aktion nicht zulässig.",
+  "atlassianConnectors.denied.reason.connector-write-denied":
+    "Connector-Schreibzugriff ist für diese Aktion nicht zulässig.",
+  "atlassianConnectors.denied.reason.generic":
+    "Diese Aktion wurde durch die Richtlinie verweigert.",
 } satisfies MessageCatalog;

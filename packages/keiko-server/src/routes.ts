@@ -288,6 +288,25 @@ import {
   handlePromptEnhancement,
   handlePromptEnhancementEvidence,
 } from "./promptEnhancer/index.js";
+import {
+  handleCreateAtlassianConnectorCredential,
+  handleDeleteAtlassianConnectorCredential,
+  handleListAtlassianConnectorCredentials,
+  handleVerifyAtlassianConnectorCredential,
+} from "./atlassian/credentialRoutes.js";
+import {
+  handleCancelAtlassianConnectorSyncJob,
+  handleGetAtlassianConnectorSyncJob,
+  handleListAtlassianConnectorActivity,
+  handleStartAtlassianConnectorSync,
+} from "./atlassian/syncRoutes.js";
+import {
+  handleApproveAtlassianConnectorActionApproval,
+  handleExecuteAtlassianConnectorAction,
+  handleGetAtlassianConnectorActionApproval,
+  handleListAtlassianConnectorActionApprovals,
+  handleRejectAtlassianConnectorActionApproval,
+} from "./atlassian/writeActionRoutes.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
@@ -1018,6 +1037,86 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/docs-browser/navigate", handler: handleDocsBrowserNavigate },
   { method: "POST", pattern: "/api/docs-browser/propose", handler: handleDocsBrowserPropose },
   { method: "POST", pattern: "/api/docs-browser/approve", handler: handleDocsBrowserApprove },
+  // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody. Write-only
+  // after creation: create answers authRef + metadata (never the secret), list is metadata-only,
+  // delete removes ciphertext + metadata and invalidates the authRef, and verify runs one bounded
+  // probe against the configured base URL returning the closed status union. POST/DELETE inherit
+  // the server CSRF + JSON content-type gate.
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/credentials",
+    handler: handleListAtlassianConnectorCredentials,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials",
+    handler: handleCreateAtlassianConnectorCredential,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/atlassian-connectors/credentials/:authRef",
+    handler: handleDeleteAtlassianConnectorCredential,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/verify",
+    handler: handleVerifyAtlassianConnectorCredential,
+  },
+  // Issue #2242 (Epic #2238, ADR-0128 D5/D6) — explicit Confluence space sync into local
+  // Knowledge Pods: start (initial sync creates the connector pod; re-sync reuses the persisted
+  // approved scope), poll status/progress, cancel, and the content-free connector activity trail.
+  // Poll-with-cancel job model mirrors the memory-consolidation routes.
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/sync-jobs",
+    handler: handleStartAtlassianConnectorSync,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/sync-jobs/:jobId",
+    handler: handleGetAtlassianConnectorSyncJob,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/sync-jobs/:jobId/cancel",
+    handler: handleCancelAtlassianConnectorSyncJob,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/activity",
+    handler: handleListAtlassianConnectorActivity,
+  },
+  // Issue #2244 (Epic #2238, ADR-0128 D4/D6) — governed Confluence/Jira write actions under the
+  // three-mode authority model. Every action request resolves the validated Authority Envelope
+  // (ADR-0125 registry: opaque run id + envelope digest) and is dispositioned by the shared D4
+  // matrix; review-required parks a bounded pending approval (approve executes, reject records —
+  // rendered by the #2245 UI), denied answers exactly one content-free reason, and every attempt
+  // emits one content-free activity record. POST inherits the server CSRF + JSON gate.
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/actions",
+    handler: handleExecuteAtlassianConnectorAction,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/action-approvals",
+    handler: handleListAtlassianConnectorActionApprovals,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId",
+    handler: handleGetAtlassianConnectorActionApproval,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/approve",
+    handler: handleApproveAtlassianConnectorActionApproval,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/reject",
+    handler: handleRejectAtlassianConnectorActionApproval,
+  },
   // Issue #278 (Epic #270) — Quality Intelligence connector routes (additive).
   // Authorisation defaults to FALSE; only flips on explicit gateway-config flags.
   // No outbound network call; no provider SDK import.

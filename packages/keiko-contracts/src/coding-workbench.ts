@@ -48,8 +48,16 @@ export const CODING_WORKBENCH_ACTION_CLASSES: readonly CodingWorkbenchActionClas
   ] as const satisfies readonly CodingWorkbenchActionClass[],
 );
 
+// `knowledge-base.*` is the wiki/knowledge-base scope pair decided by ADR-0128 D4 for the
+// Atlassian Confluence connector lane (Epic #2238). It is provider-neutral by design so a future
+// wiki-like connector reuses the same pair instead of inventing its own.
 export type CodingWorkbenchConnectorScope =
-  "source-control.read" | "source-control.write" | "issue-tracker.read" | "issue-tracker.write";
+  | "source-control.read"
+  | "source-control.write"
+  | "issue-tracker.read"
+  | "issue-tracker.write"
+  | "knowledge-base.read"
+  | "knowledge-base.write";
 
 export const CODING_WORKBENCH_CONNECTOR_SCOPES: readonly CodingWorkbenchConnectorScope[] =
   Object.freeze([
@@ -57,6 +65,8 @@ export const CODING_WORKBENCH_CONNECTOR_SCOPES: readonly CodingWorkbenchConnecto
     "source-control.write",
     "issue-tracker.read",
     "issue-tracker.write",
+    "knowledge-base.read",
+    "knowledge-base.write",
   ] as const satisfies readonly CodingWorkbenchConnectorScope[]);
 
 export type CodingWorkbenchNetworkMode = "deny-all" | "governed-egress" | "connector-scoped-egress";
@@ -255,6 +265,18 @@ export type CodingWorkbenchPolicyDenialReason =
   | "connector-write-denied"
   | "network-denied"
   | "delivery-denied";
+
+export const CODING_WORKBENCH_POLICY_DENIAL_REASONS: readonly CodingWorkbenchPolicyDenialReason[] =
+  Object.freeze([
+    "workspace-read-denied",
+    "workspace-write-denied",
+    "command-execution-denied",
+    "verification-denied",
+    "connector-access-denied",
+    "connector-write-denied",
+    "network-denied",
+    "delivery-denied",
+  ] as const satisfies readonly CodingWorkbenchPolicyDenialReason[]);
 
 export type CodingWorkbenchActionPolicyDecision =
   | { readonly allowed: true }

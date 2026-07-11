@@ -15,6 +15,15 @@ const LOCAL_KNOWLEDGE_EGRESS_PATTERN =
   /^(fetch$|node:(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|undici($|\/)|node-fetch($|\/)|axios($|\/)|got($|\/)|tesseract\.js($|\/)|@google-cloud\/vision($|\/)|@aws-sdk\/client-textract($|\/)|libreoffice-convert($|\/)|pdf-poppler($|\/)|sharp($|\/))/;
 const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
   /^packages\/keiko-tools\/src\/(_support|exec|writer)\.[cm]?tsx?$/;
+// ADR-0128 D1 (Epic #2238): keiko-connectors has no concrete network OR filesystem capability —
+// egress arrives through the injected AtlassianHttpPort that keiko-server implements with
+// gatewayFetch, and persistence (vault + metadata) through injected ports keiko-server builds.
+// Forbidden here: bare fetch, every Node network module, node:fs (incl. fs/promises), the usual
+// HTTP client packages, and @oscharko-dev/keiko-model-gateway in EVERY import form (a type-only
+// gateway import would still couple the leaf to the gateway surface ADR-0128 D1 rules out).
+// Mirrors adr-0019-trust-9-local-knowledge-no-egress.
+const CONNECTORS_FORBIDDEN_CAPABILITY_PATTERN =
+  /^(fetch$|node:(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|node:fs($|\/)|fs($|\/)|undici($|\/)|node-fetch($|\/)|axios($|\/)|got($|\/)|@oscharko-dev\/keiko-model-gateway($|\/))/;
 
 // GEN-PERF-CLI-001 — the CLI barrel is evaluated on every `keiko` invocation (the
 // root bin imports it), so keiko-cli modules must not STATICALLY value-import the
@@ -79,6 +88,14 @@ const IMPORT_POLICY_RULES = [
         ? path.startsWith(`${FIXTURE_ROOT}/local-knowledge-no-egress/`)
         : path.startsWith("packages/keiko-local-knowledge/src/"),
     matchesSpecifier: (specifier) => LOCAL_KNOWLEDGE_EGRESS_PATTERN.test(specifier),
+  },
+  {
+    name: "adr-0128-connectors-no-direct-egress",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/connectors-no-egress/`)
+        : path.startsWith("packages/keiko-connectors/src/"),
+    matchesSpecifier: (specifier) => CONNECTORS_FORBIDDEN_CAPABILITY_PATTERN.test(specifier),
   },
   {
     name: "adr-0112-provider-runtime-no-internal-bypass",
