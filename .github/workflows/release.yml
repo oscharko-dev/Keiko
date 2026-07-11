@@ -114,6 +114,10 @@ jobs:
           node-version: "22.x"
           cache: "npm"
           registry-url: "https://registry.npmjs.org"
+      - name: Ensure npm supports OIDC trusted publishing
+        # npm Trusted Publishing requires npm CLI >= 11.5.1; Node 22.x does not bundle a new
+        # enough npm. Pinned exactly, like the action SHAs below, rather than `@latest`.
+        run: npm install --global npm@11.18.0
       - name: Install dependencies
         run: npm ci
       - name: Validate required-check workflow names
@@ -176,6 +180,11 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: node scripts/resolve-release-portable-assets.mjs
       - name: Publish package
+        # No NODE_AUTH_TOKEN/NPM_TOKEN here by design: this job authenticates to the npm
+        # registry via OIDC trusted publishing (id-token: write above), scoped to this exact
+        # repository + workflow file on npmjs.com. release-publish.mjs falls back to a
+        # NODE_AUTH_TOKEN/NPM_TOKEN env var only for the narrow dist-tag-repair path that
+        # trusted publishing does not cover (see docs/release/release-publish-workflow.md).
         env:
           GITHUB_TOKEN: ${{ github.token }}
           KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
@@ -186,7 +195,6 @@ jobs:
           KEIKO_PORTABLE_ASSETS_SOURCE_SHA: ${{ github.sha }}
           KEIKO_PORTABLE_ASSETS_TAG: ${{ github.ref_name }}
           KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: .github/workflows/portable-assets.yml
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"

@@ -1,4 +1,4 @@
-# ADR-0130: CI-based SonarCloud analysis and the Keiko Banking Grade quality gate
+# ADR-0131: CI-based SonarCloud analysis and the Keiko Banking Grade quality gate
 
 ## Status
 

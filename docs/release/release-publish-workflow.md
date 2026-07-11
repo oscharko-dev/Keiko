@@ -198,8 +198,10 @@ Publish is intentionally off by default. To publish, a maintainer must:
   asset bundle when publishing the stable `latest` release,
 - provide the exact `portable_assets_run_attempt` recorded by that successful tag-push run,
 - optionally set `portable_assets_manifest` to the manifest path inside that bundle; otherwise it
-  defaults to `portable-assets.json`,
-- provide `NPM_TOKEN` in repository secrets.
+  defaults to `portable-assets.json`.
+
+No `NPM_TOKEN` is required for a normal publish — see [npm authentication](#npm-authentication-trusted-publishing)
+below. The npm Trusted Publisher must already be configured for this package on npmjs.com.
 
 For the first stable handoff, the release owner records only the reviewed tag/SHA, portable-assets
 run id/attempt, canonical artifact name, three target statuses, and manifest/archive digests. Do not
@@ -248,6 +250,36 @@ The script:
 
 Prerelease package versions are blocked from publishing with the `latest` dist-tag, and the
 selected tag must exactly match `v<package.json version>`.
+
+## npm authentication (Trusted Publishing)
+
+The `publish` job authenticates to the npm registry with [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)
+(OIDC) instead of a long-lived `NPM_TOKEN` secret ([ADR-0130](../adr/ADR-0130-npm-trusted-publishing-for-release-pipeline.md)):
+
+- The job's `id-token: write` permission lets the npm CLI exchange a short-lived, workflow-scoped
+  GitHub Actions OIDC token for registry access. The "Publish package" step deliberately sets no
+  `NODE_AUTH_TOKEN` / `NPM_TOKEN`; `scripts/release-publish.mjs` only writes a registry auth line
+  into its temporary `.npmrc` when one of those env vars (or a local `.env`) is actually present,
+  so leaving them unset in CI is what lets the npm CLI attempt the OIDC exchange.
+- npm CLI `>= 11.5.1` is required. The workflow pins an exact npm version with
+  `npm install --global npm@<pinned>` right after `actions/setup-node`, because Node 22.x does not
+  bundle a new-enough npm.
+- **One-time setup on npmjs.com is required before the first trusted publish**, and is outside
+  this repository: on the package's Settings → Trusted Publishers page, add a GitHub Actions
+  publisher naming this exact repository and the exact workflow filename
+  `.github/workflows/release.yml` (case-sensitive, extension included, no `workflow_call`
+  indirection). Nothing in CI can perform or verify this step; a maintainer with npm publish
+  rights on the package must do it by hand.
+- **Scope limitation**: trusted publishing authorizes `npm publish` only, not `npm dist-tag add`.
+  A fresh publish is unaffected, because `npm publish --tag <tag>` sets the dist-tag atomically as
+  part of that same authenticated call; `ensurePackageDistTag` in `scripts/release-publish.mjs`
+  retries the follow-up `npm view` read (reusing the same attempt/delay settings as the post-publish
+  registry verification) before concluding anything is actually wrong, so ordinary registry CDN
+  propagation lag on a successful publish never fails the release. The only path that still needs a
+  registry-write credential is repairing a _genuinely_ stale dist-tag on an idempotent re-run over a
+  partially completed prior attempt. If that repair is ever needed, export `NODE_AUTH_TOKEN` (or
+  `NPM_TOKEN`) for that one-off manual run; the script fails with an explicit, actionable error once
+  its retry budget is exhausted and no token is configured, rather than an opaque npm 401.
 
 The `prepack` and `prepublishOnly` gates also run `npm run check:workspace-supply-chain` and
 `npm run check:release-impact`, so a publish cannot bypass SBOM/license verification or missing,

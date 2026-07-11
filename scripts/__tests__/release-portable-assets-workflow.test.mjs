@@ -241,8 +241,16 @@ describe("Windows portable production signing workflow", () => {
   });
 
   it("confines OIDC to the protected job and pins the official Azure actions", () => {
+    const windowsJob = portableWorkflow.slice(
+      portableWorkflow.indexOf("  stage-windows-production:"),
+      portableWorkflow.indexOf("\n  stage-macos-production:"),
+    );
     expect(portableWorkflow).toContain("permissions: {}");
-    expect(portableWorkflow.match(/id-token: write/gu)).toHaveLength(1);
+    // Exactly two jobs request an OIDC token, each for a distinct, minimal, reviewed reason: the
+    // Windows job for Azure Artifact Signing federation, and `assemble` for Sigstore-backed GitHub
+    // Artifact Attestations (ADR-0121 D8) - never for a job that does not need one.
+    expect(portableWorkflow.match(/id-token: write/gu)).toHaveLength(2);
+    expect(windowsJob).toContain("id-token: write");
     expect(portableWorkflow).toContain("Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43");
     expect(portableWorkflow).toContain(
       "Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82",
@@ -250,6 +258,22 @@ describe("Windows portable production signing workflow", () => {
     expect(portableWorkflow).toContain("audience: api://AzureADTokenExchange");
     expect(portableWorkflow).toContain("exclude-azure-cli-credential: false");
     expect(portableWorkflow).toContain("exclude-environment-credential: true");
+  });
+
+  it("confines the attestation OIDC grant to the assemble job alone", () => {
+    const assembleJob = portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"));
+    const betweenWindowsAndAssemble = portableWorkflow.slice(
+      portableWorkflow.indexOf("\n  stage-macos-production:"),
+      portableWorkflow.indexOf("  assemble:"),
+    );
+    expect(assembleJob).toContain("attestations: write");
+    expect(assembleJob).toContain("id-token: write");
+    expect(assembleJob).toContain("actions/attest@a1948c3f048ba23858d222213b7c278aabede763");
+    // Together with the total-count and windowsJob assertions above, this proves the two
+    // `id-token: write` occurrences are exactly stage-windows-production and assemble - no job
+    // in between (macOS staging/signing, Windows/macOS qualification) carries either grant.
+    expect(betweenWindowsAndAssemble).not.toContain("id-token: write");
+    expect(betweenWindowsAndAssemble).not.toContain("attestations: write");
   });
 
   it("signs the exact catalog and verifies before rebuilding and uploading", () => {
