@@ -130,6 +130,29 @@ describe("findPortableMetadataRedactionFailures", () => {
       ),
     ).not.toEqual([]);
   });
+
+  it("detects terminal credential labels and inline authorization syntax without rejecting qualified metadata", () => {
+    for (const value of [
+      "request header Authorization: Bearer opaque-value",
+      "request Proxy-Authorization: Basic c2Vuc2l0aXZlOnZhbHVl",
+      { apitoken: "opaque" },
+      { authtoken: "opaque" },
+      { refreshtoken: "opaque" },
+      { clientPassword: "opaque" },
+      { proxyAuthorization: "opaque" },
+    ]) {
+      expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+    }
+
+    for (const value of [
+      { tokenCount: 123 },
+      { authorizationPolicy: "release-owner-reviewed" },
+      { authenticationMode: "mTLS" },
+      { bearerDescription: "documents bearer semantics" },
+    ]) {
+      expect(findPortableMetadataRedactionFailures(value)).toEqual([]);
+    }
+  });
 });
 
 const BASE_MANIFEST = {

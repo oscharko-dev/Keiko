@@ -773,6 +773,12 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "evidence/sbom.cdx.json",
         '{"bomFormat":"CycloneDX","properties":[{"name":"api_token","value":"opaque"}]}\n',
       ],
+      [
+        "SBOM inline authorization",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","description":"request header Authorization: Bearer opaque"}\n',
+      ],
+      ["SBOM terminal credential", "evidence/sbom.cdx.json", '{"apitoken":"opaque"}\n'],
       ["license", "evidence/third-party-notices.txt", "https://user:pass@example.com/private\n"],
       ["signing", "evidence/signing-verification.json", '{"rawOutput":"secret"}\n'],
       ["provenance", "evidence/provenance.intoto.jsonl", '{"privatePath":"/Users/customer"}\n'],
@@ -802,6 +808,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       '{"Authorization":"Basic c2Vuc2l0aXZlOnZhbHVl"}\n',
       '{"authToken":"opaque"}\n',
       '{"refresh_token":"opaque"}\n',
+      '{"authtoken":"opaque"}\n',
       '{"description":"mirror https://user:password@example.invalid/npm/"}\n',
     ])("rejects credential-bearing optional evidence before publication", (content) => {
       const viewBody =
@@ -847,6 +854,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
     it.each([
       "Authorization: Bearer sensitive-value\n",
+      "request header Proxy-Authorization: Basic c2Vuc2l0aXZlOnZhbHVl\n",
       '{"proxy-authorization":"opaque"}\n',
       '{"client-password":"opaque"}\n',
     ])("rejects credential-bearing sidecar evidence before publication", (content) => {

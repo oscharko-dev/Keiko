@@ -81,7 +81,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 const SECRET_PATTERN =
   /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
 const CREDENTIAL_VALUE_PATTERN =
-  /(?:(?:^|[\r\n])\s*(?:proxy[-_ ]authorization|authorization)\s*:|(?:^|[\s"'`])(?:proxy[-_ ]authorization|authorization|auth)\s*=)\s*(?:bearer|basic)\s+\S+/iu;
+  /(?:(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization)\s*:\s*|(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization|auth)\s*=\s*)(?:bearer|basic)\s+\S+/iu;
 const CREDENTIAL_URL_PATTERN = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
@@ -127,6 +127,8 @@ const CREDENTIAL_METADATA_WORDS = new Set([
   "authorization",
   "credential",
 ]);
+const NORMALIZED_COMPOUND_CREDENTIAL_KEY_PATTERN =
+  /^(?:api|auth|refresh|access|client|proxy|private)(?:token|password|passwd|secret|authorization|credential|key)$/u;
 const FORBIDDEN_PATH_PARTS = [
   ".env",
   ".keiko",
@@ -1083,11 +1085,13 @@ function credentialMetadataWords(key) {
 
 function isCompoundCredentialMetadataKey(key) {
   const words = credentialMetadataWords(key);
-  if (words.some((word) => CREDENTIAL_METADATA_WORDS.has(word))) return true;
-  return words.some(
-    (word, index) =>
-      word === "key" && (words[index - 1] === "api" || words[index - 1] === "private"),
-  );
+  const terminalWord = words.at(-1);
+  if (terminalWord === undefined) return false;
+  if (CREDENTIAL_METADATA_WORDS.has(terminalWord)) return true;
+  if (terminalWord === "key" && (words.at(-2) === "api" || words.at(-2) === "private")) {
+    return true;
+  }
+  return NORMALIZED_COMPOUND_CREDENTIAL_KEY_PATTERN.test(normalizeCredentialMetadataKey(key));
 }
 
 function scanSemanticCredentialProperty(value, path, failures) {
