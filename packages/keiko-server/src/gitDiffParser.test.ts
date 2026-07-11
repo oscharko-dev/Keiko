@@ -1,3 +1,7 @@
+import {
+  GIT_EDITOR_DIFF_MAX_FILES,
+  GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE,
+} from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 
@@ -139,5 +143,45 @@ describe("parseGitEditorUnifiedDiff", () => {
     );
     expect(capped.files).toMatchObject([{ hunks: [], truncated: true }]);
     expect(capped.truncated).toBe(true);
+  });
+
+  it("drops hunks beyond the per-file cap and marks the file truncated", () => {
+    const hunkCount = GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE + 1;
+    const hunkLines = Array.from({ length: hunkCount }, (_, index) => {
+      const line = index + 1;
+      return [`@@ -${String(line)},1 +${String(line)},1 @@`, ` line${String(line)}`];
+    }).flat();
+    const parsed = parseGitEditorUnifiedDiff(
+      [
+        "diff --git a/src/many-hunks.ts b/src/many-hunks.ts",
+        "--- a/src/many-hunks.ts",
+        "+++ b/src/many-hunks.ts",
+        ...hunkLines,
+        "",
+      ].join("\n"),
+      { scope: "unstaged", selectedRootPrefix: "", processTruncated: false },
+    );
+
+    expect(parsed.files).toHaveLength(1);
+    expect(parsed.files[0]?.hunks).toHaveLength(GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE);
+    expect(parsed.files[0]?.truncated).toBe(true);
+    expect(parsed.truncated).toBe(true);
+  });
+
+  it("drops files beyond the total-files cap but reports the true pre-cap total", () => {
+    const fileCount = GIT_EDITOR_DIFF_MAX_FILES + 1;
+    const sections = Array.from(
+      { length: fileCount },
+      (_, index) => `diff --git a/file${String(index)}.ts b/file${String(index)}.ts`,
+    );
+    const parsed = parseGitEditorUnifiedDiff(sections.join("\n"), {
+      scope: "unstaged",
+      selectedRootPrefix: "",
+      processTruncated: false,
+    });
+
+    expect(parsed.files).toHaveLength(GIT_EDITOR_DIFF_MAX_FILES);
+    expect(parsed.totalFiles).toBe(fileCount);
+    expect(parsed.truncated).toBe(true);
   });
 });

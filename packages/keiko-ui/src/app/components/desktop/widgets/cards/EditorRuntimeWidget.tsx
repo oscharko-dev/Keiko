@@ -135,6 +135,7 @@ import {
   fetchEditorLanguageCapabilities,
   postEditorAgentSessionSnapshot,
   fetchFilesContent,
+  fetchGitStatus,
   fetchGitStructuredDiff,
   fetchGitBlame,
   reportEditorInlineCompletionTelemetry,
@@ -1461,6 +1462,35 @@ function EditorRuntimeWidget({
   const [toolbarNotice, setToolbarNotice] = useState("");
   const [mergeConflicts, setMergeConflicts] = useState({ count: 0, truncated: false });
   useEffect(() => setMergeConflicts({ count: 0, truncated: false }), [file]);
+  // Issue #2234 (ADR-0127): content-free workspace change-count backing the agent snapshot's
+  // gitContextSummary. Event-driven only (root change, save, explicit refresh) — mirrors the
+  // gutter's own refresh triggers so this never becomes a polling loop.
+  const [workspaceGitSummary, setWorkspaceGitSummary] = useState<{
+    readonly changedFileCount: number;
+    readonly truncated: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (root === undefined) {
+      setWorkspaceGitSummary(null);
+      return;
+    }
+    let cancelled = false;
+    fetchGitStatus(root)
+      .then((status) => {
+        if (!cancelled) {
+          setWorkspaceGitSummary({
+            changedFileCount: status.changes.length,
+            truncated: status.truncated,
+          });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspaceGitSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [root, gitGutterRefreshNonce]);
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
@@ -3334,6 +3364,15 @@ function EditorRuntimeWidget({
                   ? { unavailableReason: languageProvider.unavailableReason }
                   : {}),
               },
+        // Issue #2234 (ADR-0127): content-free Git awareness. hasConflictMarkers reflects the
+        // active file's live merge-conflict count (already tracked for the status bar/tab badge);
+        // changedFileCount/truncated come from the same workspace status read the file tree and
+        // Git window use. root is already guaranteed defined by the early return above.
+        gitContextSummary: {
+          hasConflictMarkers: mergeConflicts.count > 0,
+          changedFileCount: workspaceGitSummary?.changedFileCount ?? 0,
+          truncated: mergeConflicts.truncated || (workspaceGitSummary?.truncated ?? false),
+        },
         ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
         activeFileContentHash: activeContentHash,
         textMode: "none" as const,
@@ -3369,9 +3408,11 @@ function EditorRuntimeWidget({
       hasTarget,
       languageProvider,
       layoutPanes,
+      mergeConflicts,
       paneId,
       root,
       windowId,
+      workspaceGitSummary,
     ],
   );
 
