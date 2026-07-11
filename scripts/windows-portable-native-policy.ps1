@@ -12,6 +12,15 @@ function Invoke-WindowsPortableNativePolicy {
     [Parameter(Mandatory = $true)][scriptblock]$VerifyTimestamp
   )
 
+  if ($Entries.Count -eq 0) {
+    return [pscustomobject]@{
+      PublisherChainVerified = $false
+      TimestampVerified = $false
+      ResultCount = 0
+      Results = @()
+    }
+  }
+
   $publisherVerified = $true
   $timestampVerified = $true
   $results = @()

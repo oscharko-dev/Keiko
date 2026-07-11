@@ -15,18 +15,21 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, posix, relative, resolve } from "node:path";
+import { join, posix, resolve } from "node:path";
 import { URL } from "node:url";
 
-import { validatePortableCandidateManifest } from "./portable-runtime.mjs";
+import {
+  PORTABLE_PAYLOAD_MAX_DEPTH as MAX_DEPTH,
+  PORTABLE_PAYLOAD_MAX_FILES as MAX_FILES,
+  portablePayloadRelativePath as portablePath,
+  validatePortableCandidateManifest,
+} from "./portable-runtime.mjs";
 import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
 import {
   assertWindowsProductionVerificationInput,
   WindowsVerificationInputError,
 } from "./windows-portable-verification-input.mjs";
 
-const MAX_FILES = 50_000;
-const MAX_DEPTH = 32;
 const MAX_PE_FILES = 4_096;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const GUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
@@ -87,10 +90,6 @@ export function validateAzureArtifactSigningConfig(env) {
 
 function sha256Bytes(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
-}
-
-function portablePath(root, path) {
-  return relative(root, path).replaceAll("\\", "/");
 }
 
 function isPortableExecutable(path) {
@@ -259,9 +258,18 @@ function comparePathsCommand(options) {
   if (!inventoryPathsMatch(expected, actual)) fail("PE inventory changed during signing");
 }
 
-function run(command, args, cwd) {
+function run(command, args, cwd, { surfaceOutputOnFailure = false } = {}) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8" });
-  if (result.error !== undefined || result.status !== 0) fail("archive finalization failed");
+  if (result.error !== undefined || result.status !== 0) {
+    if (surfaceOutputOnFailure) {
+      const output = [result.stdout, result.stderr]
+        .filter((text) => typeof text === "string" && text.trim().length > 0)
+        .join("\n")
+        .trim();
+      if (output.length > 0) console.error(output);
+    }
+    fail("archive finalization failed");
+  }
 }
 
 export async function rebindPortableSignedArchive(stageRoot, manifest) {
@@ -295,6 +303,7 @@ async function finalizeCommand(options) {
       verificationInputPath,
     ],
     resolve(import.meta.dirname, ".."),
+    { surfaceOutputOnFailure: true },
   );
   const finalManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   const failures = validatePortableCandidateManifest(finalManifest);
