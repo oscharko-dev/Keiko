@@ -34,13 +34,20 @@ found:
 
 ### D1 — CI-based analysis, embedded in the existing required `ci` job
 
-Automatic Analysis is replaced by CI-based analysis using
-`SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e` (v8.2.0, SHA verified
-against the upstream repository tags at authoring time). The scan step is added **inside the
-existing required `ci` job** in `.github/workflows/ci.yml`, not as a new job or a new required
-check — following the precedent already recorded in
-[ADR-0020](ADR-0020-workspace-tooling-and-architecture-gate.md) Alternative 4 (embedding a gate in
-an existing required job avoids a branch-protection admin change). The scan step runs after
+Automatic Analysis is replaced by CI-based analysis using the Sonar Scanner CLI, downloaded and
+SHA-256-verified directly from `binaries.sonarsource.com` rather than via
+`SonarSource/sonarqube-scan-action`: that action's repository is licensed LGPL-3.0, which trips the
+`Review dependency diff (dev/main)` required check's license denylist (`GPL-2.0, GPL-3.0, AGPL-3.0,
+LGPL-2.1, LGPL-3.0`) — discovered when the first version of this PR failed that check. Rather than
+weakening the denylist (a repository-wide supply-chain gate, not a per-dependency exception), the
+scan step avoids the Action dependency entirely, mirroring the existing `actionlint` job in the same
+workflow, which already downloads and checksum-verifies a binary directly instead of using a
+marketplace action. The scanner CLI zip ships its own bundled JRE, so this introduces no other
+toolchain dependency. The scan step is added **inside the existing required `ci` job** in
+`.github/workflows/ci.yml`, not as a new job or a new required check — following the precedent
+already recorded in [ADR-0020](ADR-0020-workspace-tooling-and-architecture-gate.md) Alternative 4
+(embedding a gate in an existing required job avoids a branch-protection admin change). The scan
+step runs after
 "Coverage quality gates" so the lcov reports it consumes already exist, and is skipped under the
 same condition as that step (PRs targeting `feat/keiko-editor`).
 
