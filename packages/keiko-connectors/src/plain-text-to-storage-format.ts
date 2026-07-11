@@ -34,11 +34,11 @@ export type PlainTextToStorageFormatResult =
 // embeds it in an attribute position.
 export function escapeStorageFormatText(text: string): string {
   return text
-    .replaceAll(/&/gu, "&amp;")
-    .replaceAll(/</gu, "&lt;")
-    .replaceAll(/>/gu, "&gt;")
-    .replaceAll(/"/gu, "&quot;")
-    .replaceAll(/'/gu, "&#39;");
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function paragraphXhtml(lines: readonly string[]): string {
