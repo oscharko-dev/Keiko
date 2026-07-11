@@ -28,6 +28,7 @@ function githubPortWith(spawn: SpawnFn): ReturnType<typeof createGitHubCodeConte
     workspace: WORKSPACE,
     processEnv: { PATH: process.env.PATH },
     spawn,
+    resolveExecutable: () => "/test-bin/gh",
     timeoutMs: 1_000,
   });
 }

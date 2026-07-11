@@ -12,8 +12,8 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-4EBA87.svg"></a>
-  <a href="package.json"><img alt="Node.js" src="https://img.shields.io/badge/node-%3E%3D22-4EBA87.svg?logo=node.js&logoColor=white"></a>
-  <a href="package.json"><img alt="npm" src="https://img.shields.io/badge/npm-%3E%3D10.9-4EBA87.svg?logo=npm&logoColor=white"></a>
+  <a href="package.json"><img alt="Node.js" src="https://img.shields.io/badge/node-24.18_LTS-4EBA87.svg?logo=node.js&logoColor=white"></a>
+  <a href="package.json"><img alt="npm" src="https://img.shields.io/badge/npm-11.16.0-4EBA87.svg?logo=npm&logoColor=white"></a>
   <a href="https://github.com/oscharko-dev/Keiko/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/oscharko-dev/Keiko/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
   <a href="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml/badge.svg?branch=dev"></a>
   <img alt="TypeScript" src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?logo=typescript&logoColor=white">
@@ -79,8 +79,8 @@ Use this path when you want to work on Keiko itself rather than install it into 
 
 ### Prerequisites
 
-- Node.js 22 or newer
-- npm 10.9 or newer
+- Node.js 24.18.x LTS
+- npm 11.16.0 (bundled with the governed Node.js runtime)
 - A local clone of this repository
 
 ### Install dependencies
@@ -191,8 +191,8 @@ Chat now streams tokens over SSE (first token in well under a second on TLS-inte
 
 ### Requirements
 
-- Node.js 22 or newer
-- npm 10 or newer
+- Node.js 24.18.x LTS
+- npm 11.16.0
 - An OpenAI-compatible chat-completions gateway and an API token for model-backed work
 
 ### Install and start

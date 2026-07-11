@@ -367,11 +367,12 @@ const mergeCandidateTags = (
   return Object.freeze(out);
 };
 
+// eslint-disable-next-line max-lines-per-function
 const buildCandidate = (
   raw: Record<string, unknown>,
   input: ParseGeneratedCandidatesInput,
   profile: PolicyProfile,
-  // eslint-disable-next-line max-lines-per-function, complexity
+  // eslint-disable-next-line complexity
 ): Candidate | undefined => {
   const title = toBoundedText(raw.title, GENERATED_CANDIDATE_TITLE_MAX_CHARS);
   const steps = stepList(raw.steps);

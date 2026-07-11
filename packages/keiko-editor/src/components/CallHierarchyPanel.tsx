@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
-  type MutableRefObject,
+  type RefObject,
   type ReactElement,
 } from "react";
 import type { EditorLocation } from "../types.js";
@@ -76,7 +76,7 @@ function treeRows(
 
 function useTreeNavigation(rows: readonly TreeRow[]): {
   readonly focusId: string;
-  readonly refs: MutableRefObject<Map<string, HTMLButtonElement>>;
+  readonly refs: RefObject<Map<string, HTMLButtonElement>>;
   readonly onFocus: (id: string) => void;
   readonly onKeyDown: (event: KeyboardEvent<HTMLButtonElement>, index: number) => void;
 } {

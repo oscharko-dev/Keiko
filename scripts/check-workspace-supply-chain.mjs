@@ -11,6 +11,7 @@
 // SBOM step so the per-workspace artifacts can be uploaded alongside the root SBOM.
 
 import { spawnSync } from "node:child_process";
+import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,8 +77,17 @@ function generateRootSbom(outPath) {
   const sbomJson = existsSync(ciRootSbomPath)
     ? readFileSync(ciRootSbomPath, "utf8")
     : runRootSbom();
-  writeFileSync(outPath, sbomJson);
-  return JSON.parse(sbomJson);
+  const lockfile = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf8"));
+  const sbom = addTypeScriptRuntimeToSbom(
+    JSON.parse(sbomJson),
+    lockfile.packages?.["node_modules/typescript"],
+  );
+  const renderedSbom = `${JSON.stringify(sbom, null, 2)}\n`;
+  writeFileSync(outPath, renderedSbom);
+  if (existsSync(ciRootSbomPath)) {
+    writeFileSync(ciRootSbomPath, renderedSbom);
+  }
+  return sbom;
 }
 
 function runRootSbom() {
@@ -192,6 +202,127 @@ function collectLicenseOffenders(sbom) {
   return components.flatMap(offendersForComponent);
 }
 
+function integrityHash(integrity) {
+  if (typeof integrity !== "string" || !integrity.startsWith("sha512-")) return null;
+  const encoded = integrity.slice("sha512-".length);
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) return null;
+  try {
+    const digest = Buffer.from(encoded, "base64");
+    return digest.length === 64 ? digest.toString("hex") : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasCompleteTypeScriptLockMetadata(lockEntry, version, resolved, hash) {
+  return (
+    lockEntry !== null &&
+    typeof lockEntry === "object" &&
+    version !== "" &&
+    resolved !== "" &&
+    hash !== null &&
+    lockEntry.license === "Apache-2.0"
+  );
+}
+
+function typescriptRuntimeComponent(lockEntry) {
+  const version = typeof lockEntry?.version === "string" ? lockEntry.version : "";
+  const resolved = typeof lockEntry?.resolved === "string" ? lockEntry.resolved : "";
+  const hash = integrityHash(lockEntry?.integrity);
+  if (!hasCompleteTypeScriptLockMetadata(lockEntry, version, resolved, hash)) {
+    return null;
+  }
+  return {
+    "bom-ref": `typescript@${version}`,
+    type: "library",
+    name: "typescript",
+    version,
+    scope: "required",
+    purl: `pkg:npm/typescript@${version}`,
+    properties: [{ name: "cdx:npm:package:path", value: "node_modules/typescript" }],
+    externalReferences: [{ type: "distribution", url: resolved }],
+    hashes: [{ alg: "SHA-512", content: hash }],
+    licenses: [{ license: { id: "Apache-2.0" } }],
+  };
+}
+
+function addDependencyReference(sbom, componentRef) {
+  const rootRef = sbom.metadata?.component?.["bom-ref"];
+  const dependencies = Array.isArray(sbom.dependencies) ? sbom.dependencies : [];
+  const rootDependency = dependencies.find(({ ref }) => ref === rootRef);
+  if (rootDependency !== undefined) {
+    const dependsOn = Array.isArray(rootDependency.dependsOn) ? rootDependency.dependsOn : [];
+    rootDependency.dependsOn = [...new Set([...dependsOn, componentRef])].sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }
+  if (!dependencies.some(({ ref }) => ref === componentRef)) {
+    dependencies.push({ ref: componentRef, dependsOn: [] });
+  }
+  sbom.dependencies = dependencies;
+}
+
+export function addTypeScriptRuntimeToSbom(sbom, lockEntry) {
+  const component = typescriptRuntimeComponent(lockEntry);
+  if (component === null) {
+    throw new Error("TypeScript runtime lock metadata is incomplete.");
+  }
+  const components = Array.isArray(sbom.components) ? sbom.components : [];
+  if (
+    !components.some(({ name, version }) => name === "typescript" && version === component.version)
+  ) {
+    components.push(component);
+    components.sort((left, right) =>
+      String(left["bom-ref"]).localeCompare(String(right["bom-ref"])),
+    );
+  }
+  sbom.components = components;
+  addDependencyReference(sbom, component["bom-ref"]);
+  return sbom;
+}
+
+function componentIdentity(component) {
+  const group = typeof component?.group === "string" ? component.group : "";
+  const name = typeof component?.name === "string" ? component.name : "";
+  const version = typeof component?.version === "string" ? component.version : "";
+  return { group, name, version };
+}
+
+function isNativeTypeScriptComponent(component) {
+  const { group, name } = componentIdentity(component);
+  return (
+    group === "@typescript" ||
+    name === "@typescript/native" ||
+    name.startsWith("@typescript/typescript-") ||
+    (group === "@typescript" && name.startsWith("typescript-"))
+  );
+}
+
+export function typescriptToolchainSbomFailures(sbom, expectedApiVersion) {
+  const components = Array.isArray(sbom?.components) ? sbom.components : [];
+  const identities = components.map(componentIdentity);
+  const apiMatches = identities.filter(
+    ({ group, name, version }) =>
+      group === "" && name === "typescript" && version === expectedApiVersion,
+  );
+  const nativeCount = components.filter(isNativeTypeScriptComponent).length;
+  const unexpectedApiCount = identities.filter(
+    ({ group, name, version }) =>
+      group === "" && name === "typescript" && version !== expectedApiVersion,
+  ).length;
+  const failures = [];
+  if (apiMatches.length !== 1) {
+    failures.push("root SBOM must contain exactly one productive TypeScript API component.");
+  }
+  if (nativeCount > 0) {
+    failures.push("root SBOM contains a development-only native TypeScript component.");
+  }
+  if (unexpectedApiCount > 0) {
+    failures.push("root SBOM contains an unexpected TypeScript API version.");
+  }
+  return failures;
+}
+
 function assertWorkspaceManifestLicense(packages) {
   for (const { shortName, manifest } of packages) {
     if (manifest.license !== REQUIRED_WORKSPACE_LICENSE) {
@@ -211,6 +342,13 @@ function main() {
   const allOffenders = [];
   const rootSbomPath = join(sbomDir, "root.cdx.json");
   const rootSbom = generateRootSbom(rootSbomPath);
+  const apiManifest = JSON.parse(
+    readFileSync(join(repoRoot, "node_modules", "typescript", "package.json"), "utf8"),
+  );
+  const toolchainFailures = typescriptToolchainSbomFailures(rootSbom, apiManifest.version);
+  if (toolchainFailures.length > 0) {
+    fail(toolchainFailures.join(" "));
+  }
   allOffenders.push(
     ...collectLicenseOffenders(rootSbom).map((entry) => ({ ...entry, source: "root" })),
   );

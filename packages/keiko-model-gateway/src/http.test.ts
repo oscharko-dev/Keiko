@@ -983,10 +983,10 @@ describe("mapProxyError (via OutboundHttpEgressError code assignment)", () => {
 // ---------------------------------------------------------------------------
 
 describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
-  // Uses a real listener (rather than stubbing globalThis.fetch) so the request genuinely
-  // resolves and connects to `host` -- required since AUDIT-SEC-001's DNS pinning means the
-  // direct path no longer necessarily goes through globalThis.fetch, so a stubbed fetch would
-  // silently never be hit and this would stop proving the noProxy subdomain match at all.
+  // Uses a real listener and a controlled DNS answer so the request genuinely connects to `host`.
+  // The reserved hostname keeps the test hermetic across libc/Node combinations that disagree on
+  // whether wildcard localhost names resolve, while the pinned direct path still proves that the
+  // noProxy subdomain match bypassed the configured proxy (AUDIT-SEC-001).
   async function assertBypassesToRealOrigin(noProxy: string[], host: string): Promise<void> {
     let originHits = 0;
     let proxyHits = 0;
@@ -1003,7 +1003,12 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
     });
     const proxyPort = await listen(proxy);
     try {
-      const response = await gatewayFetch(`http://${host}:${String(originPort)}/models`, {
+      vi.resetModules();
+      vi.doMock("node:dns/promises", () => ({
+        lookup: vi.fn(() => Promise.resolve([{ address: "127.0.0.1", family: 4 }])),
+      }));
+      const { gatewayFetch: pinnedGatewayFetch } = await import("./http.js");
+      const response = await pinnedGatewayFetch(`http://${host}:${String(originPort)}/models`, {
         egress: {
           httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
           noProxy,
@@ -1013,6 +1018,8 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
       expect(proxyHits).toBe(0);
       expect(originHits).toBe(1);
     } finally {
+      vi.doUnmock("node:dns/promises");
+      vi.resetModules();
       await close(proxy);
       await close(origin);
     }
@@ -1064,11 +1071,11 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
   });
 
   it("bare domain rule bypasses subdomains", async () => {
-    await assertBypassesToRealOrigin(["localhost"], "api.localhost");
+    await assertBypassesToRealOrigin(["keiko-no-proxy.invalid"], "api.keiko-no-proxy.invalid");
   });
 
   it("leading-dot domain rule bypasses subdomains", async () => {
-    await assertBypassesToRealOrigin([".localhost"], "api.localhost");
+    await assertBypassesToRealOrigin([".keiko-no-proxy.invalid"], "api.keiko-no-proxy.invalid");
   });
 
   it("host:port form bypasses only the specific port", async () => {

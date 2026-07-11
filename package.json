@@ -9,10 +9,10 @@
     "url": "https://github.com/oscharko-dev/Keiko"
   },
   "engines": {
-    "node": ">=22",
-    "npm": ">=10.9.0"
+    "node": ">=24.18.0 <25",
+    "npm": "11.16.0"
   },
-  "packageManager": "npm@10.9.8",
+  "packageManager": "npm@11.16.0",
   "workspaces": [
     "packages/*"
   ],
@@ -35,12 +35,12 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build:packages": "tsc -b tsconfig.packages.json",
-    "build": "npm run build:packages && tsc -p tsconfig.build.json",
+    "build:packages": "npm run check:typescript-toolchain && node node_modules/@typescript/native/bin/tsc -b tsconfig.packages.json",
+    "build": "npm run build:packages && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
     "keiko:start": "node dist/cli/index.js start",
     "keiko:stop": "node dist/cli/index.js stop",
     "keiko:status": "node dist/cli/index.js status",
-    "typecheck": "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run build:packages && npm run check:package-graph && node node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0 && npm --workspace @oscharko-dev/keiko-ui run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -107,6 +107,8 @@
     "check:context-quality": "node scripts/check-context-quality.mjs",
     "check:error-observability": "node scripts/check-error-observability.mjs",
     "check:dependency-hygiene": "node scripts/check-dependency-hygiene.mjs",
+    "check:runtime-toolchain": "node scripts/check-runtime-toolchain.mjs",
+    "check:typescript-toolchain": "node scripts/check-typescript-toolchain.mjs",
     "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",
     "check:git-client-evidence": "node scripts/check-git-client-evidence.mjs",
     "check:ui-i18n": "node scripts/check-ui-i18n-guard.mjs",
@@ -147,9 +149,9 @@
     "check:coverage:branches:strict": "node scripts/check-package-coverage.mjs --baseline docs/qa/package-coverage-baseline.json --metric branches --strict",
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages && node scripts/check-import-policy.mjs && node scripts/check-contract-boundaries.mjs",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
-    "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && tsc -p tsconfig.build.json && node dist/cli/index.js --version",
-    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:editor-release-evidence && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:shell-spawn-guardrails && npm run check:security-regression-matrix && npm run arch:check && npm run arch:check:negative && npm run check:workspace-supply-chain && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:portable-manifest && npm run check:release-impact && npm run check:qi-supply-chain",
-    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:editor-release-evidence && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:shell-spawn-guardrails && npm run check:security-regression-matrix && npm run arch:check && npm run arch:check:negative && npm run check:workspace-supply-chain && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:portable-manifest && npm run check:release-impact:publish && npm run check:qi-supply-chain",
+    "conversation:release-check": "npm run check:runtime-toolchain && npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json && node dist/cli/index.js --version",
+    "prepack": "npm run check:runtime-toolchain && npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:editor-release-evidence && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:shell-spawn-guardrails && npm run check:security-regression-matrix && npm run arch:check && npm run arch:check:negative && npm run check:workspace-supply-chain && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:portable-manifest && npm run check:release-impact && npm run check:qi-supply-chain",
+    "prepublishOnly": "npm run check:runtime-toolchain && npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:editor-release-evidence && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:shell-spawn-guardrails && npm run check:security-regression-matrix && npm run arch:check && npm run arch:check:negative && npm run check:workspace-supply-chain && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:portable-manifest && npm run check:release-impact:publish && npm run check:qi-supply-chain",
     "clean": "node scripts/clean.mjs",
     "test:mutation:security:run": "stryker run stryker.security.conf.json",
     "check:mutation:baseline": "node scripts/check-mutation-quality.mjs",
@@ -170,21 +172,22 @@
     "@babel/core": "^8.0.1",
     "@babel/preset-env": "^8.0.2",
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.61.0",
+    "@playwright/test": "^1.61.1",
     "@stryker-mutator/core": "9.6.1",
     "@stryker-mutator/vitest-runner": "9.6.1",
-    "@types/node": "^26.0.1",
+    "@types/node": "^26.1.1",
     "@types/ws": "^8.18.1",
     "@types/yauzl": "^3.4.0",
+    "@typescript/native": "npm:typescript@~7.0.2",
     "@vitejs/plugin-react": "6.0.3",
-    "@vitest/coverage-v8": "^4.1.7",
+    "@vitest/coverage-v8": "^4.1.10",
     "acorn": "^8.16.0",
     "dependency-cruiser": "^18.0.0",
     "eslint": "^10.5.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.0.0",
-    "typescript-eslint": "^8.0.0",
-    "vitest": "^4.1.7"
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@oscharko-dev/keiko-cli": "0.2.15",
@@ -211,7 +214,7 @@
     "@oscharko-dev/keiko-workflows": "0.2.15",
     "@oscharko-dev/keiko-workspace": "0.2.15",
     "pdfjs-dist": "^6.0.227",
-    "typescript": "^6.0.3",
+    "typescript": "~6.0.3",
     "ws": "^8.21.0",
     "yauzl": "^3.4.0"
   },

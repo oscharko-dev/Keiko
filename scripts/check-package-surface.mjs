@@ -209,6 +209,15 @@ function assertServerRuntimeSurface(paths) {
   }
 }
 
+function assertTypeScriptRuntimeSurface(paths) {
+  if (!paths.includes("node_modules/typescript/package.json")) {
+    fail(
+      "the tarball does not include the productive TypeScript API runtime " +
+        "(the native compiler must remain development-only).",
+    );
+  }
+}
+
 function assertRootPackageExports(packageExports, contract) {
   if (!WRITE_CONTRACT && stableJson(packageExports) !== stableJson(contract.packageExports ?? {})) {
     fail(
@@ -526,6 +535,7 @@ for (const hit of findForbiddenPaths(paths)) {
 
 assertCspHashesMatchStaticHtml();
 assertServerRuntimeSurface(paths);
+assertTypeScriptRuntimeSurface(paths);
 await assertRootPublicApiContract(paths);
 assertRootWorkspaceContract();
 assertBundledPayload(paths);

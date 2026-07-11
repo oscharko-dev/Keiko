@@ -55,7 +55,10 @@ function expectPruneBeforePackageSurface(jobBlock: string): void {
 // "exact" against the live `package.json`; it does not lock the chain to a particular historical
 // length. The security remediation audit adds generated build artifact pruning, shell-spawn
 // guardrails, and the 42-finding regression matrix before package surface checks.
+// Issue #2294 puts the governed Node.js/npm runtime check first so packaging cannot execute on an
+// unreviewed toolchain before the rest of the release chain has a chance to run.
 const PACKAGE_SURFACE_CHAIN = [
+  "npm run check:runtime-toolchain",
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",

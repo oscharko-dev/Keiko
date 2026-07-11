@@ -40,6 +40,7 @@ import {
   assemblePortableReleaseAssets,
   validatePortableReleaseSet,
 } from "../assemble-portable-release-assets.mjs";
+import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -362,11 +363,10 @@ function writeFixtureNodeLauncher(target, sourceRoot) {
 
 function packNodeFixtureArchive(target, archivePath, sourceParent, rootName, options) {
   if (target.nodeArchiveExtension === "zip") {
-    runFixtureCommand(
-      "zip",
-      [options.preserveSymlinks ? "-yqr" : "-qr", archivePath, rootName],
-      sourceParent,
-    );
+    writeZipArchiveFromDirectory(join(sourceParent, rootName), archivePath, {
+      rootName,
+      preserveSymlinks: options.preserveSymlinks === true,
+    });
     return;
   }
   runFixtureCommand("tar", ["-czf", archivePath, "-C", sourceParent, rootName], sourceParent);
@@ -1783,9 +1783,9 @@ describe("stage-portable-runtime prerelease guard", () => {
       "--target",
       "macos-arm64",
       "--node-version",
-      "22.23.1",
+      "24.18.0",
       "--node-archive-url",
-      "https://nodejs.org/dist/v22.23.1/node-v22.23.1-darwin-arm64.tar.gz",
+      "https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-arm64.tar.gz",
       "--node-sha256",
       "0".repeat(64),
       "--release-tag",

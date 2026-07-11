@@ -23,7 +23,7 @@ export const SEATBELT_DENY_EGRESS_PROFILE: string =
 // Default OCI image for the container fallback. node is needed to run the unit-test toolchain; a
 // pinned, widely cached slim image keeps the fallback deterministic. Egress is removed by
 // --network=none regardless of image contents.
-export const DEFAULT_CONTAINER_IMAGE = "node:22-slim";
+export const DEFAULT_CONTAINER_IMAGE = "node:24.18.0-slim";
 export const EXECUTION_ROOT_MOUNT = "/keiko-execution-root";
 export const EXECUTION_ROOT_TMP = `${EXECUTION_ROOT_MOUNT}/.keiko-sandbox-tmp`;
 const EXECUTION_ROOT_READONLY_BINDS: readonly string[] = Object.freeze([

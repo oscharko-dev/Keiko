@@ -27,6 +27,12 @@ async function loadTestTimeout(relativePath) {
   return config?.test?.testTimeout;
 }
 
+async function loadSetupFiles(relativePath) {
+  const mod = await import(resolve(repoRoot, relativePath));
+  const config = typeof mod.default === "function" ? await mod.default({}) : mod.default;
+  return config?.test?.setupFiles;
+}
+
 describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
   for (const { name, path } of CONFIGS) {
     it(`${name} (${path}) declares the hardened 15s testTimeout`, async () => {
@@ -41,4 +47,12 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
     const timeouts = await Promise.all(CONFIGS.map(({ path }) => loadTestTimeout(path)));
     expect(new Set(timeouts)).toEqual(new Set([EXPECTED_TIMEOUT_MS]));
   });
+});
+
+describe("Vitest process environment parity", () => {
+  for (const path of ["vitest.config.ts", "vitest.coverage.packages.config.ts"]) {
+    it(`${path} canonicalizes PATH inside Windows worker threads`, async () => {
+      await expect(loadSetupFiles(path)).resolves.toContain("./tests/setup/process-environment.ts");
+    });
+  }
 });

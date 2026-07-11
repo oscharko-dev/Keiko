@@ -15,7 +15,15 @@ const repoRoot = resolve(here, "..", "..");
 
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 const rootVitestConfig = readFileSync(resolve(repoRoot, "vitest.config.ts"), "utf8");
+const uiManifest = JSON.parse(
+  readFileSync(resolve(repoRoot, "packages/keiko-ui/package.json"), "utf8"),
+);
 const extendedE2e = readFileSync(resolve(repoRoot, ".github/workflows/e2e-extended.yml"), "utf8");
+const releaseWorkflow = readFileSync(resolve(repoRoot, ".github/workflows/release.yml"), "utf8");
+const portableAssetsWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/portable-assets.yml"),
+  "utf8",
+);
 const htmlManualReleaseEvidence = readFileSync(
   resolve(repoRoot, "docs/qa/html-manual-retrieval-evaluation-evidence.md"),
   "utf8",
@@ -91,6 +99,23 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("pins every Node workflow lane to the governed Node.js and npm toolchain", () => {
+    const runtimeWorkflows = [ci, extendedE2e, releaseWorkflow, portableAssetsWorkflow].join("\n");
+    const nodeSetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
+    const verificationCount =
+      runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
+    expect(nodeSetupCount).toBe(14);
+    expect(verificationCount).toBe(nodeSetupCount);
+    expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
+  });
+
+  it("executes install, typecheck, tests, and optional-native smoke on every desktop OS", () => {
+    expect(ci).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(ci).toContain("Typecheck the complete package graph");
+    expect(ci).toContain("Test the complete package graph");
+    expect(ci).toContain("Installable-package smoke with native optional dependencies");
+  });
+
   for (const command of REQUIRED_CI_COMMANDS) {
     it(`ci.yml wires \`${command}\``, () => {
       expect(ci.includes(command), `\`${command}\` is not run by any ci.yml job`).toBe(true);
@@ -107,6 +132,15 @@ describe("CI test/gate wiring guard", () => {
   it("runs the excluded UI suite in its own required CI job with a coverage ratchet", () => {
     expect(ci).toContain("npm run test:coverage:ui");
     expect(ci).toContain("npm run check:coverage:ui");
+  });
+
+  it("keeps the supported UI compiler and TypeScript 7 compatibility check separate", () => {
+    expect(uiManifest.devDependencies.typescript).toBe("5.7.3");
+    expect(uiManifest.scripts.typecheck).toBe("tsc --noEmit");
+    expect(uiManifest.scripts["typecheck:native"]).toContain(
+      "node ../../node_modules/@typescript/native/bin/tsc",
+    );
+    expect(ci).toContain("npm run typecheck:native --workspace @oscharko-dev/keiko-ui");
   });
 
   it("machine-pins the HTML manual release evidence gate matrix (AUDIT-E1858-002)", () => {

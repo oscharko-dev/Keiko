@@ -30,7 +30,7 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=22"
+    "node": ">=24.18.0 <25"
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.2.15",

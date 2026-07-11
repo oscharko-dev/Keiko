@@ -424,7 +424,7 @@ function SummaryCard({
   readonly session: UpdateSessionStatus;
   readonly remediation: UpdateRemediationStatusReport;
   readonly manualInstallVerified: boolean;
-  readonly titleRef: RefObject<HTMLHeadingElement>;
+  readonly titleRef: RefObject<HTMLHeadingElement | null>;
 }): ReactNode {
   const t = useTranslate();
   const visibleSession = sessionForDisplay(session, report);

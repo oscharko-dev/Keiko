@@ -8,7 +8,11 @@ function writeAll(fd: number, data: Buffer): void {
   }
 }
 
-export function fsyncDirectoryContaining(path: string): void {
+export function fsyncDirectoryContaining(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform === "win32") return;
   let fd: number | undefined;
   try {
     fd = openSync(dirname(path), "r");

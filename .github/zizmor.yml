@@ -24,13 +24,12 @@ rules:
       # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
       # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
       # build and cannot be verified on this platform.
-      - portable-assets.yml:111
-      - portable-assets.yml:170
+      - portable-assets.yml:97
+      - portable-assets.yml:148
   adhoc-packages:
     ignore:
-      # npm Trusted Publishing requires npm CLI >= 11.5.1, which Node 22.x does not bundle;
-      # bootstrapping a newer npm is inherently outside the lockfile since it changes the
-      # very binary that later reads that lockfile - there is no lockfile-verified way to
-      # upgrade npm itself. The version is pinned exactly (not @latest), which is the
+      # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;
+      # bootstrapping npm is inherently outside the lockfile since it changes the binary that
+      # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
-      - release.yml:123
+      - release.yml:126

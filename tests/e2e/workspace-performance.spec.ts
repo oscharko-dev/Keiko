@@ -528,9 +528,9 @@ test.describe("workspace scale + low-end tier", () => {
     "set KEIKO_PERF_SCALE_WINDOWS>=20 to run the declared-capacity scale tier",
   );
 
+  // eslint-disable-next-line max-lines-per-function -- one end-to-end scale-tier gesture measurement: seed windows, mount, record pan/drag, attach evidence, then assert every budget in sequence.
   test("keeps gestures bounded at declared-capacity window counts @release-evidence-scale", async ({
     page,
-    // eslint-disable-next-line max-lines-per-function -- one end-to-end scale-tier gesture measurement: seed windows, mount, record pan/drag, attach evidence, then assert every budget in sequence.
   }, testInfo) => {
     test.setTimeout(240_000);
     await page.setViewportSize({ width: 1400, height: 900 });

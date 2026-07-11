@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import yauzl from "yauzl";
@@ -96,7 +96,7 @@ describe("portable manual review harness", () => {
     expect(readFileSync(cmdPath, "utf8")).toContain(
       "--target windows-x64 --scenario bad-checksum --open",
     );
-    expect(statSync(shellPath).mode & 0o111).not.toBe(0);
+    if (process.platform !== "win32") expect(statSync(shellPath).mode & 0o111).not.toBe(0);
 
     const evidence = jsonAt(join(outDir, "prepare-evidence.json"));
     expect(findPortableMetadataRedactionFailures(evidence, "prepareEvidence")).toEqual([]);
@@ -106,7 +106,7 @@ describe("portable manual review harness", () => {
     const outDir = tmpReviewRoot();
     const root = targetRoot(outDir, "macos-arm64", "current-release");
 
-    expect(root.startsWith(`${realpathSync(tmpdir())}/`)).toBe(true);
+    expect(root.startsWith(`${realpathSync(tmpdir())}${sep}`)).toBe(true);
   });
 
   it("creates an artifact slot for each required release target", () => {
