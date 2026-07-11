@@ -277,7 +277,9 @@ describe("hosted production runtime composition", () => {
 
   it("rejects a maintainer listener port collision before creating the pool", async () => {
     const runtimeEnv = maintainerEnv();
-    runtimeEnv.KEIKO_FEEDBACK_MAINTAINER_PORT = runtimeEnv.KEIKO_FEEDBACK_PORT;
+    const intakePort = runtimeEnv.KEIKO_FEEDBACK_PORT;
+    if (intakePort === undefined) throw new Error("Expected intake port fixture");
+    runtimeEnv.KEIKO_FEEDBACK_MAINTAINER_PORT = intakePort;
     let pools = 0;
     await expect(
       startHostedFeedbackIntake({

@@ -16,6 +16,7 @@ interface StoredReplay {
   readonly result_version: number;
   readonly result_at: Date;
   readonly restricted_review_group_id: string | null;
+  readonly active_private_group_id: string | null;
 }
 
 class ReviewClient implements PgClientLike {
@@ -195,10 +196,12 @@ describe("Postgres feedback review repository", () => {
     await store.execute(archive());
     await expect(
       store.execute({ ...archive(), action: "route-private-security" }),
-    ).rejects.toMatchObject<Partial<FeedbackReviewError>>({ code: "idempotency-mismatch" });
-    await expect(store.execute(archive("closed-key-000002"))).rejects.toMatchObject<
-      Partial<FeedbackReviewError>
-    >({ code: "cas-mismatch" });
+    ).rejects.toMatchObject({
+      code: "idempotency-mismatch",
+    } satisfies Partial<FeedbackReviewError>);
+    await expect(store.execute(archive("closed-key-000002"))).rejects.toMatchObject({
+      code: "cas-mismatch",
+    } satisfies Partial<FeedbackReviewError>);
   });
 
   it("never copies an extra payload sentinel into SQL values", async (): Promise<void> => {
@@ -260,7 +263,8 @@ describe("Postgres feedback review repository", () => {
       const client = new ReviewClient();
       client.failOnceCode = code;
       const future = new Date("2099-01-01T00:00:00.000Z");
-      const result = await repository(client).execute({ ...archive(), at: future });
+      const command = { ...archive(), at: future };
+      const result = await repository(client).execute(command);
       expect(result.at).toEqual(AT);
       expect(client.calls.flatMap(({ values }) => values).map(String)).not.toContain(
         String(future),
