@@ -154,6 +154,24 @@ jobs:
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:coverage:quality
+      - name: Resolve project version for SonarCloud
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        id: sonar-version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: SonarCloud CI-based analysis (ADR-0128)
+        # Embedded in the existing required "ci" job rather than a new job/check, per the
+        # ADR-0020 precedent (Alternative 4): avoids a branch-protection admin change while still
+        # making the Quality Gate merge-blocking. sonar.qualitygate.wait=true fails this step (and
+        # therefore the required "ci" check) when the gate is red. Runs after "Coverage quality
+        # gates" so the lcov reports it reads already exist.
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        uses: SonarSource/sonarqube-scan-action@713881670b6b3676cda39549040e2d88c70d582e # v8.2.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectVersion=${{ steps.sonar-version.outputs.version }}
+            -Dsonar.qualitygate.wait=true
 
   actionlint:
     name: actionlint

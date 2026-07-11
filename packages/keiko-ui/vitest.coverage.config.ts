@@ -33,7 +33,9 @@ export default defineConfig({
     exclude: ["node_modules/**", "packages/keiko-ui/out/**", "packages/keiko-ui/.next/**"],
     coverage: {
       provider: "v8",
-      reporter: ["text", "json", "json-summary"],
+      // "lcov" feeds SonarCloud CI-based analysis (ADR-0128, sonar.javascript.lcov.reportPaths);
+      // the other reporters are unchanged and keep serving the local coverage-baseline ratchet.
+      reporter: ["text", "json", "json-summary", "lcov"],
       // Emit the coverage summary even on test failure so the ratchet gate stays computable.
       reportOnFailure: true,
       reportsDirectory: resolve(repoRoot, "packages", "keiko-ui", "coverage"),
