@@ -7,6 +7,7 @@ const TOOL_NAMES = [
   "editor_navigate",
   "editor_navigate_symbol",
   "editor_search_workspace",
+  "editor_git_context",
   "editor_propose_edit",
   "editor_propose_changeset",
   "editor_request_verification",
@@ -73,6 +74,26 @@ describe("EDITOR_AGENT_TOOL_DEFINITIONS", () => {
       required: ["sessionId", "idempotencyKey", "query", "mode"],
       additionalProperties: false,
       properties: { mode: { enum: ["text", "symbol"] } },
+    });
+  });
+
+  // Issue #2298 — the read-only git-query tool exposes a bounded, strict, aspect-enum schema.
+  it("exposes editor_git_context with a bounded read-only git-aspect schema", () => {
+    expect(
+      EDITOR_AGENT_TOOL_DEFINITIONS.find((tool) => tool.name === "editor_git_context")?.parameters,
+    ).toMatchObject({
+      required: ["sessionId", "idempotencyKey", "path", "aspects"],
+      additionalProperties: false,
+      properties: {
+        path: { type: "string", minLength: 1 },
+        aspects: {
+          type: "array",
+          items: { type: "string", enum: ["status", "diff", "blame"] },
+          minItems: 1,
+          maxItems: 3,
+          uniqueItems: true,
+        },
+      },
     });
   });
 

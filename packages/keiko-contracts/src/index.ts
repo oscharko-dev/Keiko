@@ -369,6 +369,8 @@ export type {
   EditorAgentNavigateSymbolRequest,
   EditorAgentSearchWorkspaceMode,
   EditorAgentSearchWorkspaceRequest,
+  EditorAgentGitAspect,
+  EditorAgentQueryGitRequest,
   EditorAgentActionsPostBody,
   EditorAgentBridgeActionRequest,
   EditorAgentBridgeDecisionCapability,
