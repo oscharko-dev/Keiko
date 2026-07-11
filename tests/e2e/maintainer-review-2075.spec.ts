@@ -183,10 +183,16 @@ test.afterAll(() => {
     .filter((name) => name.endsWith(".png"))
     .sort();
   const declaredStates = screenshots.map((name) => name.replace(/\.png$/u, ""));
+  const screenshotSha256 = Object.fromEntries(
+    screenshots.map((name) => {
+      const bytes = readFileSync(resolve(evidence, name));
+      return [name, createHash("sha256").update(bytes).digest("hex")];
+    }),
+  );
   writeFileSync(
     resolve(evidence, "fidelity-results.json"),
     JSON.stringify(
-      { issue: 2075, assets, screenshots, declaredStates, cspBypassed: false },
+      { issue: 2075, assets, screenshots, screenshotSha256, declaredStates, cspBypassed: false },
       null,
       2,
     ),
@@ -231,6 +237,7 @@ test("maintainer queue uses production assets, inert payload rendering, keyboard
   await capture(page, "01-dark-desktop-detail-xss");
   await page.getByRole("button", { name: "Mark duplicate" }).click();
   await expect(page.getByText("Validation error: complete the required fields.")).toBeVisible();
+  await page.keyboard.press("Escape");
   await capture(page, "16-native-validation-error");
   await submitDuplicate(page, actions);
   await captureCanonicalModes(page);
