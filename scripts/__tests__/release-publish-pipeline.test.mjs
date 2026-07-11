@@ -49,7 +49,11 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PORTABLE_TARGETS } from "../portable-runtime.mjs";
+import {
+  hashDirectoryTree,
+  portableVerificationSummaryForManifest,
+  PORTABLE_TARGETS,
+} from "../portable-runtime.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -97,7 +101,15 @@ function portableManifest(target, archivePath, assetId) {
   const archiveBytes = readFileSync(archivePath);
   const archiveSha256 = digestFor(archiveBytes);
   const archiveSize = statSync(archivePath).size;
-  const provenanceText = `${target.platformTarget} provenance\n`;
+  const provenanceText = `${JSON.stringify({
+    artifact: target.assetName,
+    buildWorkflowAttempt: 1,
+    buildWorkflowRunId: 123456789,
+    packageVersion: RELEASE_VERSION,
+    sourceCommitSha: HEAD_SHA,
+    subjectDigest: archiveSha256,
+    target: target.platformTarget,
+  })}\n`;
   const provenanceSha256 = digestFor(provenanceText);
   const notarizationRequired = target.nodePlatform === "darwin";
   const verificationChecks = targetVerificationChecks(target);
@@ -129,7 +141,7 @@ function portableManifestObject(
   return {
     schemaVersion: 1,
     product: portableProduct(),
-    release: { releaseId: 123456789, releaseTag, stable: true, commitSha: HEAD_SHA },
+    release: { releaseId: 0, releaseTag, stable: true, commitSha: HEAD_SHA },
     artifact: portableArtifact(target, assetId, archiveSize, archiveSha256),
     provenance: portableProvenance(provenanceSha256),
     runtime: portableRuntime(target),
@@ -276,7 +288,7 @@ function portableReviewedBinding(
   security,
 ) {
   return {
-    releaseId: 123456789,
+    releaseId: 0,
     releaseTag: `v${RELEASE_VERSION}`,
     assetId,
     assetName: target.assetName,
@@ -370,7 +382,8 @@ function ghStubBody() {
     "  const byName = new Map((current.uploadedAssets || []).map((asset) => [asset.name, asset]));",
     "  function nextId() { return 100000 + byName.size; }",
     "  for (const path of files) {",
-    "    const name = path.split(/[\\\\/]/u).at(-1);",
+    "    let name = path.split(/[\\\\/]/u).at(-1);",
+    "    if (current.wrongRemoteAssetName && name === 'keiko-windows-x64.zip') name = 'keiko-windows-renamed.zip';",
     "    const previous = byName.get(name);",
     "    const id = previous?.id || nextId();",
     "    if (name.endsWith('-portable-manifest.json')) {",
@@ -382,6 +395,7 @@ function ghStubBody() {
     "      }",
     "    }",
     "    byName.set(name, {",
+    "      content: readFileSync(path).toString('base64'),",
     "      id,",
     "      name,",
     "      size: readFileSync(path).byteLength,",
@@ -417,7 +431,18 @@ function makeStub(binDir, name, body, logFile, stateFile) {
 }
 
 function curlStubBody() {
-  return ['log("curl");', "process.exit(0);"].join("\n");
+  return [
+    'log("curl");',
+    'const outputIndex = argv.indexOf("--output");',
+    'const output = outputIndex >= 0 ? argv[outputIndex + 1] : "";',
+    'const name = argv.at(-1).split("/").at(-1);',
+    "const asset = (state().uploadedAssets || []).find((entry) => entry.name === name);",
+    "if (!asset || output.length === 0) process.exit(2);",
+    'const bytes = Buffer.from(asset.content, "base64");',
+    'if (state().tamperRemoteDownloads && name.endsWith(".zip") && bytes.length > 0) bytes[0] ^= 0xff;',
+    "writeFileSync(output, bytes);",
+    "process.exit(0);",
+  ].join("\n");
 }
 
 function writePortableAssetsFixture(root, options = {}) {
@@ -430,8 +455,13 @@ function writePortableAssetsFixture(root, options = {}) {
     mkdirSync(join(targetRoot, "evidence"), { recursive: true });
     mkdirSync(dirname(manifestPath), { recursive: true });
     writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
-    const { manifest, provenanceText } = portableManifest(target, archivePath, 1000 + index);
+    const { manifest, provenanceText } = portableManifest(target, archivePath, 0);
+    if (options.sidecarEvidenceKind !== undefined && index === 0) {
+      addPortableSidecarFixture(targetRoot, manifest, target, options.sidecarEvidenceKind);
+    }
     writePortableEvidence(targetRoot, manifest, provenanceText);
+    options.mutateManifest?.(manifest, target, index, targetRoot);
+    options.mutateEvidence?.(targetRoot, manifest, target, index);
     if (options.symlinkEvidenceOutsideRoot === true && index === 0) {
       const sbomPath = join(targetRoot, "evidence", "sbom.cdx.json");
       rmSync(sbomPath, { force: true });
@@ -441,8 +471,61 @@ function writePortableAssetsFixture(root, options = {}) {
     return { archivePath, manifestPath, platformTarget: target.platformTarget };
   });
   const manifestPath = join(root, "portable-assets.json");
-  writeFileSync(manifestPath, JSON.stringify({ schemaVersion: 1, artifacts }, null, 2) + "\n");
+  const bundle = { schemaVersion: 1, artifacts };
+  options.mutateBundle?.(bundle);
+  writeFileSync(manifestPath, JSON.stringify(bundle, null, 2) + "\n");
   return manifestPath;
+}
+
+function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
+  const name = "opencode-compatible";
+  const payloadRootPath = `runtime/sidecars/${name}`;
+  const resourceRoot = join(targetRoot, "payload", "Keiko");
+  const sidecarRoot = join(resourceRoot, payloadRootPath);
+  mkdirSync(join(sidecarRoot, "evidence"), { recursive: true });
+  const executablePath = `${payloadRootPath}/opencode.cmd`;
+  writeFileSync(join(resourceRoot, executablePath), "sidecar executable\n");
+  const licensePath = join(sidecarRoot, "LICENSE.txt");
+  const sbomPath = join(sidecarRoot, "evidence", "sbom.cdx.json");
+  writeFileSync(
+    licensePath,
+    unsafeKind === "license" ? "token=forbidden-secret\n" : "Sidecar license.\n",
+  );
+  writeFileSync(
+    sbomPath,
+    unsafeKind === "sbom"
+      ? '{"bomFormat":"CycloneDX","rawOutput":"secret"}\n'
+      : '{"bomFormat":"CycloneDX"}\n',
+  );
+  const sidecar = {
+    name,
+    kind: "coding-runtime",
+    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    adapterCompatibility: {
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "1",
+      protocolVersion: "coding-sidecar-v1",
+    },
+    platformTarget: target.platformTarget,
+    payloadRootPath,
+    executablePath,
+    payloadSha256: hashDirectoryTree(sidecarRoot),
+    sizeBytes:
+      statSync(join(resourceRoot, executablePath)).size +
+      statSync(licensePath).size +
+      statSync(sbomPath).size,
+    licenseEvidence: {
+      path: `${payloadRootPath}/LICENSE.txt`,
+      sha256: digestFor(readFileSync(licensePath)),
+    },
+    sbomEvidence: {
+      path: `${payloadRootPath}/evidence/sbom.cdx.json`,
+      sha256: digestFor(readFileSync(sbomPath)),
+    },
+    signing: portableSecurity(target, false, targetVerificationChecks(target)),
+  };
+  manifest.sidecarRuntimes = [sidecar];
+  manifest.releaseImpact.reviewedBinding.sidecarRuntimes = JSON.parse(JSON.stringify([sidecar]));
 }
 
 function writePortableEvidence(targetRoot, manifest, provenanceText) {
@@ -457,7 +540,7 @@ function writePortableEvidence(targetRoot, manifest, provenanceText) {
   );
   writeFileSync(
     join(targetRoot, "evidence", "signing-verification.json"),
-    JSON.stringify({ status: "verified-production" }) + "\n",
+    JSON.stringify(portableVerificationSummaryForManifest(manifest)) + "\n",
   );
   writeFileSync(join(targetRoot, "evidence", "provenance.intoto.jsonl"), provenanceText);
 }
@@ -482,7 +565,13 @@ function releaseImpactCatalogForPublishTest() {
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.
 // `npmBody` is the stub-`npm` behaviour under test; `initState` seeds the publish state.
 // Returns the exit status, stdout/stderr, and the ordered list of intercepted calls.
-function runPublish({ npmBody, initState, portableAssets = true, portableFixtureOptions = {} }) {
+function runPublish({
+  npmBody,
+  initState,
+  portableAssets = true,
+  portableFixtureOptions = {},
+  qualificationEnv = {},
+}) {
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
   const logFile = join(binDir, "calls.log");
@@ -503,6 +592,13 @@ function runPublish({ npmBody, initState, portableAssets = true, portableFixture
     // Satisfy the release-owner approval gate offline: the repository must match the
     // approval references in the live catalog, and the reviewer login must be allowed.
     GITHUB_REPOSITORY: "oscharko-dev/Keiko",
+    KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: "portable-release-assets",
+    KEIKO_PORTABLE_ASSETS_REPOSITORY: "oscharko-dev/Keiko",
+    KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: "1",
+    KEIKO_PORTABLE_ASSETS_RUN_ID: "123456789",
+    KEIKO_PORTABLE_ASSETS_SOURCE_SHA: HEAD_SHA,
+    KEIKO_PORTABLE_ASSETS_TAG: `v${RELEASE_VERSION}`,
+    KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: ".github/workflows/portable-assets.yml",
     KEIKO_RELEASE_IMPACT_CATALOG_PATH: catalogFile,
     KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "release-owner",
     // Deterministic npmrc generation; the stub npm never uses this token.
@@ -510,7 +606,11 @@ function runPublish({ npmBody, initState, portableAssets = true, portableFixture
     NODE_AUTH_TOKEN: "stub-token-never-sent",
     KEIKO_RELEASE_VERIFY_ATTEMPTS: "3",
     KEIKO_RELEASE_VERIFY_DELAY_MS: "0",
+    ...qualificationEnv,
   };
+  for (const [key, value] of Object.entries(qualificationEnv)) {
+    if (value === undefined) Reflect.deleteProperty(env, key);
+  }
   // GH_TOKEN would be forwarded to the stub gh; drop it so nothing real is carried.
   Reflect.deleteProperty(env, "GH_TOKEN");
   if (portableAssets) {
@@ -601,6 +701,300 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
     });
 
+    it.each([
+      "KEIKO_PORTABLE_ASSETS_SOURCE_SHA",
+      "KEIKO_PORTABLE_ASSETS_TAG",
+      "KEIKO_PORTABLE_ASSETS_RUN_ID",
+      "KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT",
+      "KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME",
+      "KEIKO_PORTABLE_ASSETS_REPOSITORY",
+      "KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH",
+    ])("rejects missing qualified-run provenance %s before publication", (field) => {
+      const viewBody = [
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        'if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        qualificationEnv: { [field]: undefined },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("qualified portable run provenance is invalid");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("rejects an inner target relabelled against its outer bundle entry", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateManifest: (candidate, _target, index) => {
+            if (index === 1) candidate.artifact.platformTarget = "windows-x64";
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("must match the outer bundle target");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    // portableAssetsFromManifest/normalizePortableAssets (release-publish.mjs) is the
+    // publish-time twin of validatePortableReleaseSet: the last check before npm publish,
+    // dist-tag mutation, or GitHub release promotion. Each case below shrinks/grows/
+    // duplicates `bundle.artifacts` while keeping every remaining entry well-formed, so the
+    // only thing that can make the run fail is the specific count/duplicate/missing guard
+    // under test — never a same-shape neighbor.
+    it("rejects a portable assets manifest missing a target before npm publish or dist-tag mutation", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          // Drop the third (macos-x64) target: only two of the three required artifacts remain.
+          mutateBundle: (bundle) => {
+            bundle.artifacts = bundle.artifacts.slice(0, 2);
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable assets manifest must list exactly three artifacts.",
+      );
+      expect(lastRun.stderr).toContain("missing portable asset entry for macos-x64.");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("rejects a portable assets manifest with an extra target before npm publish or dist-tag mutation", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          // Append a fourth artifact: the three real targets remain untouched and well-formed.
+          mutateBundle: (bundle) => {
+            bundle.artifacts.push({ platformTarget: "linux-x64" });
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable assets manifest must list exactly three artifacts.",
+      );
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("rejects a portable assets manifest with a duplicate platformTarget before npm publish or dist-tag mutation", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          // Replace the macos-arm64 entry with a second copy of windows-x64: the artifact
+          // count stays at three, so only the duplicate-target guard can catch this.
+          mutateBundle: (bundle) => {
+            bundle.artifacts[1] = { ...bundle.artifacts[0] };
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("duplicate portable platformTarget windows-x64.");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it.each([
+      ["SBOM", "evidence/sbom.cdx.json", '{"bomFormat":"CycloneDX","tokenValue":"secret"}\n'],
+      [
+        "SBOM password",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","password":"correct-horse-battery-staple"}\n',
+      ],
+      [
+        "SBOM token",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","token":"sensitive-but-not-prefix-shaped"}\n',
+      ],
+      [
+        "SBOM authorization",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","Authorization":"Bearer sensitive-value"}\n',
+      ],
+      [
+        "SBOM compound token",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","api_token":"opaque"}\n',
+      ],
+      [
+        "SBOM semantic credential property",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","properties":[{"name":"api_token","value":"opaque"}]}\n',
+      ],
+      [
+        "SBOM inline authorization",
+        "evidence/sbom.cdx.json",
+        '{"bomFormat":"CycloneDX","description":"request header Authorization: Bearer opaque"}\n',
+      ],
+      ["SBOM terminal credential", "evidence/sbom.cdx.json", '{"apitoken":"opaque"}\n'],
+      [
+        "SBOM GitHub PAT",
+        "evidence/sbom.cdx.json",
+        `{"component":"github_pat_${"x".repeat(82)}"}\n`,
+      ],
+      ["license", "evidence/third-party-notices.txt", "https://user:pass@example.com/private\n"],
+      ["signing", "evidence/signing-verification.json", '{"rawOutput":"secret"}\n'],
+      ["provenance", "evidence/provenance.intoto.jsonl", '{"privatePath":"/Users/customer"}\n'],
+      ["checksum", "evidence/SHA256SUMS.txt", "token=forbidden-secret\n"],
+      ["malformed SBOM", "evidence/sbom.cdx.json", '{"bomFormat":'],
+    ])("rejects unsafe or malformed %s evidence before publication", (_class, path, content) => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateEvidence: (root, _manifest, _target, index) => {
+            if (index === 0) writeFileSync(join(root, path), content);
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it.each([
+      '{"password":"correct-horse-battery-staple"}\n',
+      '{"Authorization":"Basic c2Vuc2l0aXZlOnZhbHVl"}\n',
+      '{"authToken":"opaque"}\n',
+      '{"refresh_token":"opaque"}\n',
+      '{"authtoken":"opaque"}\n',
+      `{"package":"npm_${"a".repeat(36)}"}\n`,
+      '{"description":"mirror https://user:password@example.invalid/npm/"}\n',
+    ])("rejects credential-bearing optional evidence before publication", (content) => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateBundle: (bundle) => {
+            bundle.artifacts[0].evidencePaths = ["evidence/optional.json"];
+          },
+          mutateEvidence: (root, _manifest, _target, index) => {
+            if (index === 0) writeFileSync(join(root, "evidence", "optional.json"), content);
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("is not redacted");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it.each(["license", "sbom"])(
+      "rejects unsafe sidecar %s evidence before publication",
+      (sidecarEvidenceKind) => {
+        const viewBody =
+          'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+        lastRun = runPublish({
+          npmBody: npmStub(viewBody, { failOnPublish: true }),
+          initState: { published: true, tagged: true },
+          portableFixtureOptions: { sidecarEvidenceKind },
+        });
+
+        expect(lastRun.status).toBe(1);
+        expect(lastRun.stderr).toContain("sidecar evidence is not redacted");
+        expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+        expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+        expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+      },
+    );
+
+    it.each([
+      "Authorization: Bearer sensitive-value\n",
+      "request header Proxy-Authorization: Basic c2Vuc2l0aXZlOnZhbHVl\n",
+      '{"proxy-authorization":"opaque"}\n',
+      '{"client-password":"opaque"}\n',
+      `npm_${"a".repeat(36)}\n`,
+    ])("rejects credential-bearing sidecar evidence before publication", (content) => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          sidecarEvidenceKind: "safe",
+          mutateEvidence: (root, _manifest, _target, index) => {
+            if (index === 0) {
+              writeFileSync(
+                join(
+                  root,
+                  "payload",
+                  "Keiko",
+                  "runtime",
+                  "sidecars",
+                  "opencode-compatible",
+                  "LICENSE.txt",
+                ),
+                content,
+              );
+            }
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("sidecar evidence is not redacted");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("allows benign authentication prose in release evidence", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateEvidence: (root, _manifest, _target, index) => {
+            if (index === 0) {
+              writeFileSync(
+                join(root, "evidence", "third-party-notices.txt"),
+                "Basic authentication utilities for local testing.\nThe bearer must retain this notice.\n",
+              );
+            }
+          },
+        },
+      });
+
+      expect(lastRun.stderr).not.toContain("license evidence is not redacted");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(true);
+    });
+
     it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {
       // `npm view <spec> version` fails with E404 until a publish has happened; the
       // dist-tag view reports the wrong version until `npm dist-tag add` runs.
@@ -684,6 +1078,37 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("portable upload failed");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("rejects same-size remote tampering before npm publish or dist-tag mutation", () => {
+      const viewBody = [
+        'if (argv.includes("version")) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
+        'if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { published: false, tamperRemoteDownloads: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("downloaded portable asset bytes do not match");
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("rejects a wrong remote GitHub asset name before npm publication", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true, wrongRemoteAssetName: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("exactly the three first-class ZIP assets");
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 
     it("rejects symlinked portable evidence before upload or npm publish", () => {

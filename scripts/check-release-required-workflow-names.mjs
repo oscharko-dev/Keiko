@@ -6,14 +6,14 @@ import { join, resolve } from "node:path";
 const repoRoot = resolve(import.meta.dirname, "..");
 const workflowsDir = join(repoRoot, ".github", "workflows");
 const releaseWorkflowPath = join(workflowsDir, "release.yml");
+const portableWorkflowPath = join(workflowsDir, "portable-assets.yml");
 
 function fail(message) {
   console.error(`release-required-workflow-names: FAIL - ${message}`);
   process.exit(1);
 }
 
-function releaseRequiredChecks() {
-  const source = readFileSync(releaseWorkflowPath, "utf8");
+export function releaseRequiredChecks(source = readFileSync(releaseWorkflowPath, "utf8")) {
   const match = source.match(/^\s*RELEASE_REQUIRED_CHECKS:\s*'([^']+)'/m);
   if (match === null) {
     fail("release.yml does not declare env.RELEASE_REQUIRED_CHECKS as a single-quoted JSON list.");
@@ -54,7 +54,7 @@ function expandMatrixName(name, source) {
   return values.map((value) => name.replace(matrixExpression, value));
 }
 
-function workflowJobNames(source) {
+export function workflowJobNames(source) {
   const names = [];
   const lines = source.split(/\r?\n/u);
   let inJobs = false;
@@ -101,14 +101,41 @@ function allWorkflowJobNames() {
   return names;
 }
 
-const required = releaseRequiredChecks();
-const emitted = allWorkflowJobNames();
-const missing = required.filter((name) => !emitted.has(name));
-
-if (missing.length > 0) {
-  fail(`required check names are not emitted by any workflow job: ${missing.join(", ")}`);
+function envValue(source, name) {
+  const match = source.match(new RegExp(`^\\s*${name}:\\s*(.+)$`, "m"));
+  return match === null ? undefined : unquoteYamlScalar(match[1]);
 }
 
-console.log(
-  `release-required-workflow-names: PASS - ${String(required.length)} release checks match workflow job names.`,
-);
+export function portableReleaseAuthorityFailures(releaseSource, portableSource) {
+  const failures = [];
+  for (const name of ["RELEASE_BASE_BRANCH", "RELEASE_REQUIRED_CHECKS"]) {
+    const expected = envValue(releaseSource, name);
+    const actual = envValue(portableSource, name);
+    if (expected === undefined || actual !== expected) failures.push(name);
+  }
+  return failures;
+}
+
+function main() {
+  const releaseSource = readFileSync(releaseWorkflowPath, "utf8");
+  const portableSource = readFileSync(portableWorkflowPath, "utf8");
+  const authorityFailures = portableReleaseAuthorityFailures(releaseSource, portableSource);
+  if (authorityFailures.length > 0) {
+    fail(`portable-assets.yml release authority drifted: ${authorityFailures.join(", ")}`);
+  }
+
+  const required = releaseRequiredChecks(releaseSource);
+  const emitted = allWorkflowJobNames();
+  const missing = required.filter((name) => !emitted.has(name));
+
+  if (missing.length > 0) {
+    fail(`required check names are not emitted by any workflow job: ${missing.join(", ")}`);
+  }
+
+  console.log(
+    `release-required-workflow-names: PASS - ${String(required.length)} release checks match workflow job names and portable authority.`,
+  );
+}
+
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename))
+  main();
