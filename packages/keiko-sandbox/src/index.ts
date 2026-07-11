@@ -14,6 +14,19 @@ export type { WrappedCommand } from "./backends.js";
 export { selectEnforcingBackend } from "./select.js";
 export { planIsolatedRun } from "./plan.js";
 export { probeBackends, currentPlatform, isExecutableOnPath } from "./probe.js";
+export {
+  CLOSED_RUNTIME_LAUNCH_PROFILE,
+  PRODUCTION_RUNTIME_QUALIFICATIONS,
+  qualifyLongLivedRuntime,
+} from "./runtime.js";
+export type {
+  ClosedRuntimeLaunchProfile,
+  LongLivedRuntimeArchitecture,
+  LongLivedRuntimeBackend,
+  LongLivedRuntimePlatform,
+  LongLivedRuntimeQualification,
+  LongLivedRuntimeQualificationResult,
+} from "./runtime.js";
 export type {
   BackendAvailability,
   IsolatedRunDecision,

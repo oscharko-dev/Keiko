@@ -44,7 +44,8 @@ const LOCAL_BRIDGE_NETWORK_POLICY = {
   connectorScopes: [],
 } as const;
 
-export type EditorAgentAuthorityFailureReason = "invalid" | "expired" | "budget-exceeded";
+export type EditorAgentAuthorityFailureReason =
+  "invalid" | "expired" | "budget-exceeded" | "revoked";
 
 export type EditorAgentAuthorityRegistration =
   | { readonly ok: true; readonly authorityRef: EditorAgentGovernedAuthorityReference }
@@ -63,6 +64,7 @@ interface AuthorityRecord {
   readonly runtimeEnvelope?: CodingWorkbenchRuntimeAuthorityEnvelope | undefined;
   readonly runtimeDelegations?: Map<string, RuntimeDelegationReservation> | undefined;
   readonly runtimeIdempotencyKeys?: Set<string> | undefined;
+  revoked: boolean;
 }
 
 interface AuthorityUsage {
@@ -148,7 +150,9 @@ export class EditorAgentAuthorityRegistry {
     const authorityRef = { runId: parsed.value.runId, envelopeDigest: digest };
     const key = recordKey(authorityRef);
     const existing = this.records.get(key);
-    if (existing !== undefined) return { ok: true, authorityRef };
+    if (existing !== undefined) {
+      return existing.revoked ? { ok: false, reason: "revoked" } : { ok: true, authorityRef };
+    }
     this.evictInactive(nowIso);
     if (this.records.size >= EDITOR_AGENT_AUTHORITY_MAX_RECORDS) {
       return { ok: false, reason: "invalid" };
@@ -158,6 +162,7 @@ export class EditorAgentAuthorityRegistry {
       digest,
       registeredAtMs: Date.parse(nowIso),
       usage: { toolCalls: 0, patchBytes: 0, promptTokens: 0 },
+      revoked: false,
     });
     return { ok: true, authorityRef };
   }
@@ -210,6 +215,27 @@ export class EditorAgentAuthorityRegistry {
       : resolved;
   }
 
+  /** Revalidates live authority without reserving budget or replay identity a second time. */
+  public revalidateRuntime(
+    reference: EditorAgentGovernedAuthorityReference,
+    liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ):
+    | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
+    | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+    if (!validateCodingWorkbenchRuntimeAuthorityFacts(liveFacts).ok) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const resolved = this.resolveRuntimeRecord(reference, workspaceRoot, deploymentCeiling, nowIso);
+    if (!resolved.ok) return resolved;
+    const envelope = resolved.record.runtimeEnvelope;
+    if (envelope === undefined) return { ok: false, reason: "authority-resolution-failed" };
+    const drift = runtimeDrift(runtimeFacts(envelope), liveFacts);
+    return drift === undefined ? { ok: true, envelope } : { ok: false, reason: drift };
+  }
+
   private resolveRuntimeRecord(
     reference: EditorAgentGovernedAuthorityReference,
     workspaceRoot: string,
@@ -220,7 +246,12 @@ export class EditorAgentAuthorityRegistry {
     if (!resolved.ok)
       return {
         ok: false,
-        reason: resolved.reason === "expired" ? "authority-expired" : "authority-resolution-failed",
+        reason:
+          resolved.reason === "expired"
+            ? "authority-expired"
+            : resolved.reason === "revoked"
+              ? "revoked"
+              : "authority-resolution-failed",
       };
     const record = this.records.get(recordKey(reference));
     return record?.runtimeEnvelope !== undefined &&
@@ -270,6 +301,7 @@ export class EditorAgentAuthorityRegistry {
     const key = recordKey(reference);
     const record = this.records.get(key);
     if (record === undefined) return { ok: false, reason: "invalid" };
+    if (record.revoked) return { ok: false, reason: "revoked" };
     if (expired(nowIso, record.envelope.expiresAt)) {
       this.records.delete(key);
       return { ok: false, reason: "expired" };
@@ -325,7 +357,8 @@ export class EditorAgentAuthorityRegistry {
   }
 
   public revoke(reference: EditorAgentGovernedAuthorityReference): void {
-    this.records.delete(recordKey(reference));
+    const record = this.records.get(recordKey(reference));
+    if (record !== undefined) record.revoked = true;
   }
 
   public reset(): void {

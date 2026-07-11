@@ -17,6 +17,7 @@ import {
   type CodingWorkbenchModelProfile,
   type CodingWorkbenchNetworkPolicy,
   type CodingWorkbenchRuntimeAuthorityEnvelope,
+  type CodingWorkbenchRuntimeAdapterKind,
   type CodingWorkbenchRuntimeAuthorityFacts,
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeDelegationUsage,
@@ -29,12 +30,18 @@ import {
 import {
   EditorAgentAuthorityRegistry,
   editorAgentAuthorityEnvelopeDigest,
+  editorAgentWorkspaceRootDigest,
 } from "../editor/agentAuthorityRegistry.js";
 import {
   createInMemorySupervisedCodingApprovalStore,
   type SupervisedCodingApprovalBinding,
   type SupervisedCodingApprovalStore,
 } from "./supervisedCodingApprovalStore.js";
+import {
+  createInMemoryRuntimeCapabilityStore,
+  type RuntimeCapabilityStore,
+} from "./runtimeCapabilityStore.js";
+import { verifyRuntimeReapReceipt, type RuntimeReapReceipt } from "./runtimeProcessSupervisor.js";
 
 export interface CodingRuntimeTrustedContext {
   readonly operatorId: string;
@@ -63,14 +70,40 @@ export interface CodingRuntimeAuthorityRef {
   readonly envelopeDigest: string;
 }
 export type CodingRuntimeMintResult =
-  | { readonly ok: true; readonly authorityRef: CodingRuntimeAuthorityRef }
+  | {
+      readonly ok: true;
+      readonly authorityRef: CodingRuntimeAuthorityRef;
+      /** Server-private runtime-to-BFF secret; never forward to browser-safe contracts or evidence. */
+      readonly runtimeCapability: string;
+      /** Server-private per-launch supervisor binding; never project to browser or evidence. */
+      readonly treeBindingId: string;
+    }
   | { readonly ok: false; readonly reason: "active-run-conflict" | "authority-resolution-failed" };
 export type CodingRuntimeResolution =
   | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
   | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode };
 
+export interface CodingRuntimeCapabilityDelegationInput {
+  readonly capability: string;
+  readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
+  readonly liveFacts: CodingWorkbenchRuntimeAuthorityFacts;
+  readonly delegationId: string;
+  readonly idempotencyKey: string;
+  readonly usage: CodingWorkbenchRuntimeDelegationUsage;
+  readonly workspaceRoot: string;
+  readonly deploymentCeiling: CodingWorkbenchMode;
+  readonly nowIso: string;
+}
+
+export type CodingRuntimeCapabilityRecheckInput = Omit<
+  CodingRuntimeCapabilityDelegationInput,
+  "delegationId" | "idempotencyKey" | "usage"
+>;
+
 export class CodingRuntimeAuthorityService {
   private activeAuthorityRef: CodingRuntimeAuthorityRef | undefined;
+  private activeTreeBindingId: string | undefined;
+  private reapPending: { readonly runId: string; readonly treeBindingId: string } | undefined;
   private runtimeState: CodingWorkbenchRuntimeState = {
     schemaVersion: "1",
     state: "idle",
@@ -83,6 +116,7 @@ export class CodingRuntimeAuthorityService {
     private readonly newRunId: () => string = () => randomBytes(16).toString("hex"),
     private readonly newNonce: () => string = () => randomBytes(32).toString("hex"),
     private readonly approvals: SupervisedCodingApprovalStore = createInMemorySupervisedCodingApprovalStore(),
+    private readonly capabilities: RuntimeCapabilityStore = createInMemoryRuntimeCapabilityStore(),
   ) {}
 
   public confirmStart(
@@ -139,9 +173,21 @@ export class CodingRuntimeAuthorityService {
     }
     const registered = this.registry.registerRuntime(envelope, context.deploymentCeiling, nowIso);
     if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
+    const capability = this.issueCapability(envelope, registered.authorityRef);
+    if (!capability.ok) {
+      this.registry.revoke(registered.authorityRef);
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    const treeBindingId = randomBytes(32).toString("hex");
     this.activeAuthorityRef = registered.authorityRef;
+    this.activeTreeBindingId = treeBindingId;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
-    return { ok: true, authorityRef: registered.authorityRef };
+    return {
+      ok: true,
+      authorityRef: registered.authorityRef,
+      runtimeCapability: capability.capability,
+      treeBindingId,
+    };
   }
 
   public resolveForDelegation(
@@ -154,7 +200,11 @@ export class CodingRuntimeAuthorityService {
     deploymentCeiling: CodingWorkbenchMode,
     nowIso: string,
   ): CodingRuntimeResolution {
-    if (this.runtimeState.state !== "running" || this.runtimeState.runId !== reference.runId) {
+    if (
+      this.activeTreeBindingId === undefined ||
+      this.runtimeState.state !== "running" ||
+      this.runtimeState.runId !== reference.runId
+    ) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
     return this.registry.resolveRuntime(
@@ -169,8 +219,97 @@ export class CodingRuntimeAuthorityService {
     );
   }
 
+  public resolveCapabilityForDelegation(
+    input: CodingRuntimeCapabilityDelegationInput,
+  ): CodingRuntimeResolution {
+    const authenticated = this.capabilities.authenticate(
+      input.capability,
+      Date.parse(input.nowIso),
+    );
+    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    const reference = this.activeAuthorityRef;
+    if (
+      this.runtimeState.state !== "running" ||
+      this.activeTreeBindingId === undefined ||
+      this.runtimeState.runId !== reference?.runId ||
+      !capabilityMatchesDelegation(authenticated.binding, reference, input)
+    ) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    return this.resolveForDelegation(
+      reference,
+      input.liveFacts,
+      input.delegationId,
+      input.idempotencyKey,
+      input.usage,
+      input.workspaceRoot,
+      input.deploymentCeiling,
+      input.nowIso,
+    );
+  }
+
+  public revalidateCapabilityForMutation(
+    input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeResolution {
+    const authenticated = this.capabilities.authenticate(
+      input.capability,
+      Date.parse(input.nowIso),
+    );
+    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    const reference = this.activeAuthorityRef;
+    if (
+      this.runtimeState.state !== "running" ||
+      this.activeTreeBindingId === undefined ||
+      this.runtimeState.runId !== reference?.runId ||
+      !capabilityMatchesDelegation(authenticated.binding, reference, input)
+    ) {
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+    return this.registry.revalidateRuntime(
+      reference,
+      input.liveFacts,
+      input.workspaceRoot,
+      input.deploymentCeiling,
+      input.nowIso,
+    );
+  }
+
   public revoke(runId: string, nowIso: string): void {
+    this.revokeBeforeTerminate(runId);
     this.transition(runId, "taken-over", nowIso);
+  }
+
+  /** Synchronously closes every server-owned authority before process termination is signalled. */
+  public revokeBeforeTerminate(runId: string): boolean {
+    if (this.activeAuthorityRef?.runId !== runId || this.activeTreeBindingId === undefined) {
+      return false;
+    }
+    this.registry.revoke(this.activeAuthorityRef);
+    this.capabilities.revokeRun(runId);
+    this.approvals.invalidateRun(runId);
+    this.reapPending = { runId, treeBindingId: this.activeTreeBindingId };
+    return true;
+  }
+
+  /** Marks a revoked run unrecoverable until its owning supervisor proves complete tree exit. */
+  public markRecoveryRequired(runId: string, nowIso: string): boolean {
+    if (this.reapPending?.runId !== runId || this.activeAuthorityRef?.runId !== runId) return false;
+    return this.transition(runId, "recovery-required", nowIso, "recovery-required");
+  }
+
+  /** Releases the active slot only for the exact run whose process tree was observed reaped. */
+  public confirmReaped(runId: string, receipt: RuntimeReapReceipt, nowIso: string): boolean {
+    if (
+      this.reapPending?.runId !== runId ||
+      !verifyRuntimeReapReceipt(receipt, runId, this.reapPending.treeBindingId) ||
+      this.activeAuthorityRef?.runId !== runId
+    )
+      return false;
+    if (!this.settleStateAfterObservedReap(runId, nowIso)) return false;
+    this.activeAuthorityRef = undefined;
+    this.activeTreeBindingId = undefined;
+    this.reapPending = undefined;
+    return true;
   }
 
   public complete(runId: string, nowIso: string): void {
@@ -187,13 +326,30 @@ export class CodingRuntimeAuthorityService {
     nowIso: string,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
   ): boolean {
-    if (!isLegalCodingWorkbenchRuntimeTransition(this.runtimeState.state, target)) return false;
-    if (this.runtimeState.runId !== undefined && this.runtimeState.runId !== runId) return false;
+    if (
+      !transitionAllowed(
+        this.runtimeState,
+        target,
+        runId,
+        this.reapPending?.runId,
+        this.activeTreeBindingId !== undefined,
+      )
+    )
+      return false;
     const candidate = transitionedState(this.runtimeState, target, nowIso, failureCode);
     if (!validateCodingWorkbenchRuntimeState(candidate).ok) return false;
+    return this.applyTransition(runId, target, candidate);
+  }
+
+  private applyTransition(
+    runId: string | undefined,
+    target: CodingWorkbenchRuntimeStateName,
+    candidate: CodingWorkbenchRuntimeState,
+  ): boolean {
+    const terminal = isTerminalRuntimeState(target);
+    if (terminal && runId !== undefined && !this.revokeBeforeTerminate(runId)) return false;
     this.runtimeState = candidate;
-    if (isTerminalRuntimeState(target)) {
-      if (this.activeAuthorityRef !== undefined) this.registry.revoke(this.activeAuthorityRef);
+    if (terminal && this.reapPending?.runId !== runId) {
       this.activeAuthorityRef = undefined;
     }
     return true;
@@ -219,6 +375,96 @@ export class CodingRuntimeAuthorityService {
       nowMs: Date.parse(nowIso),
     })?.approvalDigest;
   }
+
+  private issueCapability(
+    envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+    authorityRef: CodingRuntimeAuthorityRef,
+  ): ReturnType<RuntimeCapabilityStore["issue"]> {
+    const adapterKind = runtimeAdapterKind(envelope.authority.runtimeSource);
+    if (adapterKind === undefined) return { ok: false, reason: "invalid" };
+    return this.capabilities.issue({
+      runId: authorityRef.runId,
+      workspaceRootDigest: envelope.binding.workspaceRootDigest,
+      envelopeDigest: authorityRef.envelopeDigest,
+      adapterKind,
+      expiresAtMs: Date.parse(envelope.authority.expiresAt),
+    });
+  }
+
+  private settleStateAfterObservedReap(runId: string, nowIso: string): boolean {
+    if (this.runtimeState.state === "recovery-required") {
+      return this.applyObservedReapIdle(nowIso);
+    }
+    const transitions = REAP_SETTLEMENT_TRANSITIONS[this.runtimeState.state];
+    if (transitions === undefined) return false;
+    for (const target of transitions) {
+      if (!this.transition(runId, target, nowIso)) return false;
+    }
+    return this.applyObservedReapIdle(nowIso);
+  }
+
+  private applyObservedReapIdle(nowIso: string): boolean {
+    const candidate = transitionedState(this.runtimeState, "idle", nowIso, undefined);
+    if (!validateCodingWorkbenchRuntimeState(candidate).ok) return false;
+    this.runtimeState = candidate;
+    return true;
+  }
+}
+
+const REAP_SETTLEMENT_TRANSITIONS: Partial<
+  Readonly<Record<CodingWorkbenchRuntimeStateName, readonly CodingWorkbenchRuntimeStateName[]>>
+> = {
+  starting: ["cancelled"],
+  ready: ["stopping", "cancelled"],
+  running: ["stopping", "cancelled"],
+  "awaiting-approval": ["stopping", "cancelled"],
+  stopping: ["cancelled"],
+  succeeded: [],
+  failed: [],
+  cancelled: [],
+  "taken-over": [],
+};
+
+function capabilityMatchesDelegation(
+  binding: RuntimeCapabilityResolutionBinding,
+  reference: CodingRuntimeAuthorityRef | undefined,
+  input: CodingRuntimeCapabilityRecheckInput,
+): reference is CodingRuntimeAuthorityRef {
+  return (
+    reference?.runId === binding.runId &&
+    binding.envelopeDigest === reference.envelopeDigest &&
+    binding.workspaceRootDigest === editorAgentWorkspaceRootDigest(input.workspaceRoot) &&
+    binding.adapterKind === input.adapterKind
+  );
+}
+
+type RuntimeCapabilityResolutionBinding = Extract<
+  ReturnType<RuntimeCapabilityStore["authenticate"]>,
+  { readonly ok: true }
+>["binding"];
+
+function reusableTransitionRequiresReapProof(
+  current: CodingWorkbenchRuntimeStateName,
+  target: CodingWorkbenchRuntimeStateName,
+  reapPendingRunId: string | undefined,
+): boolean {
+  return (
+    (target === "idle" || target === "unavailable") &&
+    (current === "recovery-required" || reapPendingRunId !== undefined)
+  );
+}
+
+function transitionAllowed(
+  current: CodingWorkbenchRuntimeState,
+  target: CodingWorkbenchRuntimeStateName,
+  runId: string | undefined,
+  reapPendingRunId: string | undefined,
+  treeBound: boolean,
+): boolean {
+  if (reusableTransitionRequiresReapProof(current.state, target, reapPendingRunId)) return false;
+  if ((target === "ready" || target === "running") && !treeBound) return false;
+  if (!isLegalCodingWorkbenchRuntimeTransition(current.state, target)) return false;
+  return current.runId === undefined || current.runId === runId;
 }
 
 function isTerminalRuntimeState(state: CodingWorkbenchRuntimeStateName): boolean {
@@ -342,6 +588,23 @@ function buildRuntimeAuthority(
 
 function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function runtimeAdapterKind(
+  runtimeSource: CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["runtimeSource"],
+): CodingWorkbenchRuntimeAdapterKind | undefined {
+  if (runtimeSource === "keiko-sidecar") return "model-gateway-sidecar";
+  if (runtimeSource === "codex-cli-adapter") return "codex-cli-adapter";
+  return undefined;
+}
+
+function capabilityFailure(reason: "invalid" | "expired" | "revoked"): {
+  readonly ok: false;
+  readonly reason: CodingWorkbenchRuntimeFailureCode;
+} {
+  if (reason === "expired") return { ok: false, reason: "authority-expired" };
+  if (reason === "revoked") return { ok: false, reason: "revoked" };
+  return { ok: false, reason: "authority-resolution-failed" };
 }
 
 function canonicalJson(value: unknown): string {
