@@ -22,6 +22,7 @@ const ALL_CAPABILITIES: readonly EditorHostCapability[] = [
   "runVerification",
   "runWorkspaceVerification",
   "renameSymbol",
+  "fetchGitBlame",
 ];
 
 const EXPECTED_IDS: readonly EditorCommandId[] = [
@@ -46,6 +47,12 @@ const EXPECTED_IDS: readonly EditorCommandId[] = [
   "editor.find",
   "editor.requestContext",
   "editor.renameSymbol",
+  "editor.toggleBlame",
+  "editor.nextConflict",
+  "editor.previousConflict",
+  "editor.acceptConflictOurs",
+  "editor.acceptConflictTheirs",
+  "editor.acceptConflictBoth",
 ];
 
 const baseContext = (overrides: Partial<EditorCommandContext> = {}): EditorCommandContext => ({
@@ -83,6 +90,18 @@ describe("EDITOR_COMMANDS", () => {
 });
 
 describe("isCommandAvailable capability gate", () => {
+  it("exposes blame only when the saved non-degraded host capability is present", () => {
+    expect(
+      isCommandAvailable(
+        command("editor.toggleBlame"),
+        baseContext({ availableCapabilities: ["fetchGitBlame"], dirty: true }),
+      ),
+    ).toBe(true);
+    expect(
+      isCommandAvailable(command("editor.toggleBlame"), baseContext({ availableCapabilities: [] })),
+    ).toBe(false);
+  });
+
   it("is unavailable when a required capability is missing", () => {
     const ctx = baseContext({
       dirty: true,
@@ -122,6 +141,28 @@ describe("isCommandAvailable state gates", () => {
     expect(isCommandAvailable(command("editor.acceptInlineCompletion"), ctx)).toBe(false);
     expect(isCommandAvailable(command("editor.applyPatch"), ctx)).toBe(false);
     expect(isCommandAvailable(command("editor.renameSymbol"), ctx)).toBe(false);
+  });
+
+  it("gates conflict navigation on detection and resolution on writability", () => {
+    expect(isCommandAvailable(command("editor.nextConflict"), baseContext())).toBe(false);
+    expect(
+      isCommandAvailable(
+        command("editor.nextConflict"),
+        baseContext({ mergeConflictCount: 2, readOnly: true }),
+      ),
+    ).toBe(true);
+    expect(
+      isCommandAvailable(
+        command("editor.acceptConflictBoth"),
+        baseContext({ mergeConflictCount: 2, readOnly: true }),
+      ),
+    ).toBe(false);
+    expect(
+      isCommandAvailable(
+        command("editor.acceptConflictBoth"),
+        baseContext({ mergeConflictCount: 2 }),
+      ),
+    ).toBe(true);
   });
 
   it("read-only still allows reject, preview, Generate Tests, Ask Keiko, and context", () => {
@@ -216,6 +257,7 @@ describe("availableCommands", () => {
         inlineCompletionVisible: true,
         pendingPatchId: "p1",
         activeFileVerifiable: true,
+        mergeConflictCount: 1,
       }),
     ).map((entry) => entry.id);
     // editor.cancelVerification is available only while a run IS active (verificationRunning), the

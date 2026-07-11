@@ -128,6 +128,7 @@ function buildInternalRequest(body: Record<string, unknown>): CodingContextReque
   return {
     schemaVersion: CODING_CONTEXT_SCHEMA_VERSION,
     purpose: body.purpose as CodingContextPurpose,
+    editorSessionId: typeof body.editorSessionId === "string" ? body.editorSessionId : undefined,
     documentPath: body.documentPath as string,
     symbol: typeof body.symbol === "string" ? body.symbol : undefined,
     queryText: typeof body.queryText === "string" ? body.queryText : undefined,

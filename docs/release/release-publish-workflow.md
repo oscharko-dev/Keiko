@@ -30,6 +30,9 @@ without parsing prose.
 
 Portable archive layout, launcher, and manifest rules are documented in
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
+Production provider trust, protected-environment configuration, credential hygiene, and the native
+signing/verifier handoff are governed by the
+[Portable Production Signing Contract](portable-production-signing-contract.md).
 The user/operator launch and first-run setup journey is documented in
 [Portable Launch And Setup Guide](portable-launch-setup-guide.md).
 Portable artifact signing verification is owned by `scripts/verify-portable-runtime-signing.mjs`
@@ -43,9 +46,9 @@ a second release process. Stable `latest` publishes must provide `--portable-ass
 `KEIKO_PORTABLE_ASSETS_MANIFEST`; beta, next, plan-only, and dry-run executions do not require real
 portable files unless a manifest is supplied. When supplied, the manifest is validated before npm
 publish starts. For stable `latest`, the publisher then creates or updates the GitHub Release,
-uploads and verifies the three portable ZIPs, binds the uploaded manifest copies to the actual
+uploads and verifies the three zero-id portable candidates, binds the uploaded manifest copies to the actual
 GitHub release id and archive asset ids, uploads the evidence assets, verifies unauthenticated
-download URLs, and only then proceeds to npm publication. A broken portable asset set therefore
+full-download bytes by size and SHA-256, and only then proceeds to npm publication. A broken portable asset set therefore
 cannot produce a stable package release without matching GitHub Release Assets.
 
 The portable assets manifest is a content-free operator input:
@@ -80,8 +83,8 @@ containment, checksums binding, signing/notarization verification state, and opt
 must resolve to regular non-symlink files under the target's portable stage root. After the GitHub
 Release exists, it uploads the three archives plus target-prefixed manifest/checksum/SBOM/license/
 provenance/signing evidence assets with `gh release upload --clobber`, verifies GitHub reports
-non-zero asset ids and HTTPS `browser_download_url` values, and performs unauthenticated ranged
-download smoke checks for every uploaded portable asset. Generated archives and evidence remain
+non-zero asset ids and HTTPS `browser_download_url` values, and performs unauthenticated full-byte
+digest checks for every uploaded portable asset. Generated archives and evidence remain
 release artifacts; they are not committed to Git.
 
 Optional coding sidecar runtime payloads are release inputs, not customer-installed tools.
@@ -106,9 +109,12 @@ it:
 3. Stages all three portable targets from those approvals with
    `scripts/run-portable-assets-stage.mjs` (Windows x64 on a Windows runner, both macOS targets on
    a macOS runner, native launcher compiled in place).
-4. Smoke-tests every staged artifact on its native platform via
-   `npm run smoke:portable-launch-setup -- --stage-root … --stage-target <target>`.
-5. Assembles the digest-cross-checked `portable-release-assets` bundle (with
+4. Re-downloads the final archives on fresh native runners. Windows re-verifies the Public Trust
+   Authenticode chain, reviewed subscriber EKU, and RFC 3161 timestamp. Both macOS runners re-verify
+   architecture, Developer ID identity/team, hardened runtime, timestamp, stapling, and Gatekeeper
+   over extracted final bytes, then run the terminal payload smoke without credential or Actions
+   file-command authority.
+5. Assembles the exact-three, digest-cross-checked `portable-release-assets` bundle (with
    `portable-assets.json`) via `scripts/assemble-portable-release-assets.mjs` in exactly the layout
    the Release workflow consumes through `portable_assets_run_id`.
 
@@ -118,10 +124,16 @@ SHA-256 digests. `npm run portable:approve-runtimes -- --node-version <v> --open
 regenerates the pins from the official upstream sources; reviewing and merging that diff is the
 release approval act. The staging pipeline never downloads unpinned or `latest` inputs.
 
-Publishing remains a human decision. The workflow uploads a reviewed-candidate bundle artifact
-only; `release.yml` still requires an operator dispatch (with `portable_assets_run_id` pointing at
-a green `Portable assets` run), and production signing verification stays an operator-owned step —
-CI-staged artifacts intentionally carry staging (unverified) signing status.
+Publishing remains a human decision. Secret-free `workflow_dispatch`, prerelease, development, and
+pull-request staging never selects `portable-release-signing`, requests Azure OIDC, or receives Apple
+secrets; those artifacts intentionally remain staging/non-production, do not emit the canonical
+`portable-release-assets` bundle, and cannot be promoted. Production
+signing is restricted to protected native-runner jobs triggered by a reviewed stable tag, with separate
+event, tag-shape, exact `v<package.json.version>`, digest, and signing-identity guards. Only their
+`verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler validates
+those outputs but cannot generate or upgrade signing-verification booleans. `release.yml` still requires
+an operator dispatch with `portable_assets_run_id` pointing at the resulting green `Portable assets`
+run.
 
 ## Triggering
 
@@ -130,7 +142,10 @@ CI-staged artifacts intentionally carry staging (unverified) signing status.
 - Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
 - Stable `latest` publishes require a reviewed portable asset bundle. In GitHub Actions, provide
-  `portable_assets_run_id` and `portable_assets_artifact_name`; the workflow downloads that bundle
+  `portable_assets_run_id`, `portable_assets_run_attempt`, and the canonical
+  `portable_assets_artifact_name` value `portable-release-assets`; the workflow first verifies that
+  the run is a successful stable-tag push of `.github/workflows/portable-assets.yml` for the exact
+  repository, SHA, tag, and attempt and contains one nonexpired canonical artifact, then downloads it
   with `gh run download` before resolving `portable_assets_manifest`. If
   `portable_assets_manifest` is empty in that mode, it defaults to
   `.portable-release-assets/portable-assets.json`. The manifest input is interpreted only as a
@@ -181,9 +196,21 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.2.0-beta.0`,
 - provide `portable_assets_run_id` and `portable_assets_artifact_name` for the reviewed portable
   asset bundle when publishing the stable `latest` release,
+- provide the exact `portable_assets_run_attempt` recorded by that successful tag-push run,
 - optionally set `portable_assets_manifest` to the manifest path inside that bundle; otherwise it
-  defaults to `portable-assets.json`,
-- provide `NPM_TOKEN` in repository secrets.
+  defaults to `portable-assets.json`.
+
+No `NPM_TOKEN` is required for a normal publish — see [npm authentication](#npm-authentication-trusted-publishing)
+below. The npm Trusted Publisher must already be configured for this package on npmjs.com.
+
+For the first stable handoff, the release owner records only the reviewed tag/SHA, portable-assets
+run id/attempt, canonical artifact name, three target statuses, and manifest/archive digests. Do not
+copy provider logs, certificate bodies, credentials, private paths, or raw tool output. If run
+resolution, fresh native qualification, assembly, upload, remote binding, or full-byte verification
+fails, leave npm and its dist-tags unchanged. Recover by fixing the producer input or protected
+configuration, rerunning the stable-tag portable-assets workflow, and using the new exact run
+id/attempt; never reuse an expired artifact, edit a candidate manifest, fabricate positive ids, or
+promote a partial target set.
 
 The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after confirming
 that the tag-push release verification already completed successfully for the same commit.
@@ -201,8 +228,8 @@ The script:
   `runtime/sidecars/<runtime-name>`,
 - uploads target-prefixed portable manifests, checksums, SBOM/license evidence, provenance, and
   signing verification summaries as GitHub Release Assets,
-- verifies non-zero asset ids, HTTPS `browser_download_url` values, and unauthenticated ranged
-  downloads after upload,
+- binds real positive release/asset ids only from the GitHub API snapshot, then verifies HTTPS
+  `browser_download_url` values and complete unauthenticated download size/SHA-256 after upload,
 - publishes stable `latest` portable ZIPs and evidence before npm publication, so the primary
   user journey is download once, click the bundled launcher, and keep npm as a developer and
   compatibility path,
@@ -223,6 +250,36 @@ The script:
 
 Prerelease package versions are blocked from publishing with the `latest` dist-tag, and the
 selected tag must exactly match `v<package.json version>`.
+
+## npm authentication (Trusted Publishing)
+
+The `publish` job authenticates to the npm registry with [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)
+(OIDC) instead of a long-lived `NPM_TOKEN` secret ([ADR-0130](../adr/ADR-0130-npm-trusted-publishing-for-release-pipeline.md)):
+
+- The job's `id-token: write` permission lets the npm CLI exchange a short-lived, workflow-scoped
+  GitHub Actions OIDC token for registry access. The "Publish package" step deliberately sets no
+  `NODE_AUTH_TOKEN` / `NPM_TOKEN`; `scripts/release-publish.mjs` only writes a registry auth line
+  into its temporary `.npmrc` when one of those env vars (or a local `.env`) is actually present,
+  so leaving them unset in CI is what lets the npm CLI attempt the OIDC exchange.
+- npm CLI `>= 11.5.1` is required. The workflow pins an exact npm version with
+  `npm install --global npm@<pinned>` right after `actions/setup-node`, because Node 22.x does not
+  bundle a new-enough npm.
+- **One-time setup on npmjs.com is required before the first trusted publish**, and is outside
+  this repository: on the package's Settings → Trusted Publishers page, add a GitHub Actions
+  publisher naming this exact repository and the exact workflow filename
+  `.github/workflows/release.yml` (case-sensitive, extension included, no `workflow_call`
+  indirection). Nothing in CI can perform or verify this step; a maintainer with npm publish
+  rights on the package must do it by hand.
+- **Scope limitation**: trusted publishing authorizes `npm publish` only, not `npm dist-tag add`.
+  A fresh publish is unaffected, because `npm publish --tag <tag>` sets the dist-tag atomically as
+  part of that same authenticated call; `ensurePackageDistTag` in `scripts/release-publish.mjs`
+  retries the follow-up `npm view` read (reusing the same attempt/delay settings as the post-publish
+  registry verification) before concluding anything is actually wrong, so ordinary registry CDN
+  propagation lag on a successful publish never fails the release. The only path that still needs a
+  registry-write credential is repairing a _genuinely_ stale dist-tag on an idempotent re-run over a
+  partially completed prior attempt. If that repair is ever needed, export `NODE_AUTH_TOKEN` (or
+  `NPM_TOKEN`) for that one-off manual run; the script fails with an explicit, actionable error once
+  its retry budget is exhausted and no token is configured, rather than an opaque npm 401.
 
 The `prepack` and `prepublishOnly` gates also run `npm run check:workspace-supply-chain` and
 `npm run check:release-impact`, so a publish cannot bypass SBOM/license verification or missing,

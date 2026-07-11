@@ -30,7 +30,17 @@ interface FaithfulnessFixture {
 
 // Distractor-dense: every fixture shares the same non-empty evidence pack (except the empty-evidence
 // case), so a hallucinated citation is a genuine out-of-pack reference, not a trivially-absent one.
-const PACK_PATHS = ["src/auth/login.ts", "src/http/routes.ts", "src/config/env.ts"];
+// The pack includes connector-pod document references (Epic #2238, Issues #2242/#2243) so citation
+// reconciliation over synced Confluence AND Jira content is gated alongside repository evidence.
+const CONNECTOR_PAGE_PATH = "confluence/ENG/pages/98311.html";
+const CONNECTOR_ISSUE_PATH = "jira/PLAT/issues/10002.html";
+const PACK_PATHS = [
+  "src/auth/login.ts",
+  "src/http/routes.ts",
+  "src/config/env.ts",
+  CONNECTOR_PAGE_PATH,
+  CONNECTOR_ISSUE_PATH,
+];
 
 const FIXTURES: readonly FaithfulnessFixture[] = [
   {
@@ -71,6 +81,31 @@ const FIXTURES: readonly FaithfulnessFixture[] = [
     packScopePaths: PACK_PATHS,
     packLineWindows: { "src/auth/login.ts": [{ startLine: 1, endLine: 30 }] },
     answerText: "See [src/auth/login.ts:900-950] for the handler.",
+  },
+  {
+    name: "faithful-connector-page",
+    variant: "faithful",
+    packScopePaths: PACK_PATHS,
+    answerText: `The restart procedure is documented in [${CONNECTOR_PAGE_PATH}:3-9].`,
+  },
+  {
+    name: "hallucinated-connector-page",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText:
+      "The rollback steps are documented in [confluence/ENG/pages/424242.html:1-12] of the wiki.",
+  },
+  {
+    name: "faithful-connector-issue",
+    variant: "faithful",
+    packScopePaths: PACK_PATHS,
+    answerText: `PLAT-2 tracks the login regression; see [${CONNECTOR_ISSUE_PATH}:2-6].`,
+  },
+  {
+    name: "hallucinated-connector-issue",
+    variant: "hallucinated-citation",
+    packScopePaths: PACK_PATHS,
+    answerText: "The estimate is recorded on [jira/PLAT/issues/424242.html:1-4] in the tracker.",
   },
   {
     name: "confident-over-empty",

@@ -340,6 +340,7 @@ export function dispatchEditorAgentAction(
       };
     case "navigateSymbol":
     case "searchWorkspace":
+    case "queryGit":
       return {
         status: "failed",
         message: "Server-resolved editor actions cannot execute in the browser bridge.",

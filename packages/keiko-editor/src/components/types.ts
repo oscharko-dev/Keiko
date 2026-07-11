@@ -35,6 +35,9 @@ import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-tele
 import type { CallHierarchyPanelLabels } from "./CallHierarchyPanel.js";
 import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
 import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
+import type { EditorGitGutterHost } from "./git-gutter-bridge.js";
+import type { EditorBlameHost } from "./blame-bridge.js";
+import type { ConflictLabels } from "./conflict-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
 
 export interface EditorUriLike {
@@ -235,4 +238,17 @@ export interface KeikoCodeEditorProps {
   readonly onAskKeikoAboutSelection?: AskKeikoAboutSelectionHandler | undefined;
   /** Host handler for the F2 Rename Symbol command (Epic #2089, Issue #2105). */
   readonly onRenameSymbol?: (() => void) | undefined;
+  /** Host-owned, read-only Git hunk source for event-driven gutter decorations (ADR-0127). */
+  readonly editorGitGutter?: EditorGitGutterHost | undefined;
+  /** On-demand, read-only blame source; registration performs no read until toggled. */
+  readonly editorBlame?: EditorBlameHost | undefined;
+  /** Monotonic save/explicit-refresh trigger; content edits intentionally do not change it. */
+  readonly gitGutterRefreshNonce?: number | undefined;
+  readonly editorConflicts?:
+    | {
+        readonly labels: ConflictLabels;
+        readonly onChange: (count: number, truncated: boolean) => void;
+        readonly onStale?: (() => void) | undefined;
+      }
+    | undefined;
 }

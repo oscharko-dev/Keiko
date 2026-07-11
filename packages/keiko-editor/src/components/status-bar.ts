@@ -87,6 +87,14 @@ export interface EditorStatusBarInput {
   readonly completionsEnabled: boolean;
   readonly largeFileMode?: "normal" | "degraded" | undefined;
   readonly diagnostics: EditorDiagnosticsSummary | null;
+  readonly mergeConflicts?:
+    | {
+        readonly count: number;
+        readonly truncated: boolean;
+        readonly label: string;
+        readonly ariaLabel: string;
+      }
+    | undefined;
   readonly languageService?: EditorStatusLanguageService | undefined;
   /**
    * Browser document-formatting reachability for the current language (ADR-0068 D4). Fed the SAME
@@ -220,6 +228,20 @@ function diagnosticsField(summary: EditorDiagnosticsSummary | null): EditorStatu
   const label = `${String(errors)} ⚠ ${String(warnings)}`;
   // Diagnostics are informational and announced politely; they never interrupt with an alert.
   return { id: "problems", label, ariaLabel, tone, live: true, assertive: false };
+}
+
+function mergeConflictsField(
+  state: EditorStatusBarInput["mergeConflicts"],
+): EditorStatusField | null {
+  if (state === undefined || state.count === 0) return null;
+  return {
+    id: "merge-conflicts",
+    label: state.label,
+    ariaLabel: state.ariaLabel,
+    tone: "warn",
+    live: true,
+    assertive: false,
+  };
 }
 
 function runField(run: EditorStatusRun | undefined): EditorStatusField | null {
@@ -383,6 +405,7 @@ export function deriveEditorStatusBar(input: EditorStatusBarInput): EditorStatus
   fields.push(completionsField(input.completionsEnabled));
   pushOptional(fields, largeFileField(input.largeFileMode));
   pushOptional(fields, diagnosticsField(input.diagnostics));
+  pushOptional(fields, mergeConflictsField(input.mergeConflicts));
   pushOptional(fields, languageServiceField(input.languageService));
   pushOptional(fields, formattingField(input.formatting));
   pushOptional(fields, runField(input.run));

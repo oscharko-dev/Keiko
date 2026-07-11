@@ -365,3 +365,82 @@ describe("EditorAgentAuthorityRegistry", () => {
     ).toEqual({ ok: false, reason: "invalid" });
   });
 });
+
+// ─── Issue #2244: connector-action budget reservation ───────────────────────────
+
+describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
+  function registered(over: Partial<CodingWorkbenchAuthorityEnvelope> = {}): {
+    registry: EditorAgentAuthorityRegistry;
+    reference: { runId: string; envelopeDigest: string };
+  } {
+    const registry = new EditorAgentAuthorityRegistry();
+    const registration = registry.register(envelope(over), "autonomous-delivery", NOW);
+    if (!registration.ok) throw new Error("registration failed");
+    return { registry, reference: registration.authorityRef };
+  }
+
+  it("charges exactly one toolCall per reservation and fails closed at the budget", () => {
+    const { registry, reference } = registered({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 2, maxPromptTokens: 1, maxPatchBytes: 1 },
+    });
+    expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW).ok).toBe(true);
+    expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW).ok).toBe(true);
+    expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW)).toEqual({
+      ok: false,
+      reason: "budget-exceeded",
+    });
+  });
+
+  it("rejects an expired envelope, a digest mismatch, and a workspace-root mismatch", () => {
+    const { registry, reference } = registered();
+    expect(
+      registry.reserveForConnector(
+        reference,
+        ROOT,
+        "autonomous-delivery",
+        "2027-01-01T00:00:00.000Z",
+      ),
+    ).toEqual({ ok: false, reason: "expired" });
+    const fresh = registered();
+    expect(
+      fresh.registry.reserveForConnector(
+        { runId: fresh.reference.runId, envelopeDigest: "b".repeat(64) },
+        ROOT,
+        "autonomous-delivery",
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(
+      fresh.registry.reserveForConnector(
+        fresh.reference,
+        "/other-root",
+        "autonomous-delivery",
+        NOW,
+      ),
+    ).toEqual({ ok: false, reason: "invalid" });
+  });
+
+  it("refuses a local-bridge-bound envelope: one-shot editor authority is not connector-consumable", () => {
+    const registry = new EditorAgentAuthorityRegistry();
+    const snapshot = {
+      schemaVersion: "1",
+      sessionId: "session-1",
+      windowId: "window-1",
+      workspaceRoot: ROOT,
+      activePaneId: "pane-1",
+      panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+      dirtyFiles: [],
+      activeFile: "src/a.ts",
+      cursor: null,
+      selection: null,
+      diagnosticsSummary: null,
+      textMode: "none",
+      updatedAt: 1,
+    } as const;
+    const registration = registry.registerLocalBridge(snapshot, action(), "governed-assist", NOW);
+    if (!registration.ok) throw new Error("local bridge registration failed");
+    expect(
+      registry.reserveForConnector(registration.authorityRef, ROOT, "governed-assist", NOW),
+    ).toEqual({ ok: false, reason: "invalid" });
+  });
+});

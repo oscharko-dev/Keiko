@@ -30,6 +30,11 @@ on:
         type: string
         required: false
         default: ""
+      portable_assets_run_attempt:
+        description: "Workflow run attempt that produced the reviewed portable asset bundle"
+        type: string
+        required: false
+        default: ""
       portable_assets_artifact_name:
         description: "Artifact name containing the reviewed portable asset bundle"
         type: string
@@ -46,7 +51,7 @@ env:
   RELEASE_BASE_BRANCH: release/0.2
   # Dependency Review is enforced on release PRs. It is intentionally omitted here because
   # the check is pull_request-only and is not emitted on the tagged squash commit.
-  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
+  RELEASE_REQUIRED_CHECKS: '["ci","actionlint","Verify pinned action SHAs","zizmor","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
   release-verify:
@@ -63,9 +68,11 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
+          package-manager-cache: false
       - name: Validate release tag
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -104,11 +111,16 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
-          cache: "npm"
+          package-manager-cache: false
           registry-url: "https://registry.npmjs.org"
+      - name: Ensure npm supports OIDC trusted publishing
+        # npm Trusted Publishing requires npm CLI >= 11.5.1; Node 22.x does not bundle a new
+        # enough npm. Pinned exactly, like the action SHAs below, rather than `@latest`.
+        run: npm install --global npm@11.18.0
       - name: Install dependencies
         run: npm ci
       - name: Validate required-check workflow names
@@ -136,11 +148,21 @@ jobs:
             throw new Error("Prerelease versions must not be published with the latest dist-tag.");
           }
           NODE
+      - name: Resolve successful stable portable-assets workflow run
+        if: inputs.portable_assets_run_id != '' || inputs.portable_assets_artifact_name != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
+          PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
+          PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/resolve-release-portable-assets.mjs --validate-run
       - name: Download reviewed portable asset bundle
         if: inputs.portable_assets_run_id != '' || inputs.portable_assets_artifact_name != ''
         env:
           GH_TOKEN: ${{ github.token }}
           PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
+          PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
           PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
         run: |
           if [ -z "$PORTABLE_ASSETS_RUN_ID" ] || [ -z "$PORTABLE_ASSETS_ARTIFACT_NAME" ]; then
@@ -155,14 +177,27 @@ jobs:
         env:
           PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
           PORTABLE_ASSETS_MANIFEST: ${{ inputs.portable_assets_manifest }}
+          PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
           PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
+          RELEASE_TAG: ${{ github.ref_name }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: node scripts/resolve-release-portable-assets.mjs
       - name: Publish package
+        # No NODE_AUTH_TOKEN/NPM_TOKEN here by design: this job authenticates to the npm
+        # registry via OIDC trusted publishing (id-token: write above), scoped to this exact
+        # repository + workflow file on npmjs.com. release-publish.mjs falls back to a
+        # NODE_AUTH_TOKEN/NPM_TOKEN env var only for the narrow dist-tag-repair path that
+        # trusted publishing does not cover (see docs/release/release-publish-workflow.md).
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: ${{ inputs.portable_assets_artifact_name }}
           KEIKO_PORTABLE_ASSETS_MANIFEST: ${{ steps.portable_assets.outputs.manifest }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          KEIKO_PORTABLE_ASSETS_REPOSITORY: ${{ github.repository }}
+          KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: ${{ inputs.portable_assets_run_attempt }}
+          KEIKO_PORTABLE_ASSETS_RUN_ID: ${{ inputs.portable_assets_run_id }}
+          KEIKO_PORTABLE_ASSETS_SOURCE_SHA: ${{ github.sha }}
+          KEIKO_PORTABLE_ASSETS_TAG: ${{ github.ref_name }}
+          KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: .github/workflows/portable-assets.yml
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"

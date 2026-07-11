@@ -389,11 +389,23 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/diff"),
     ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/diff/structured"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/blame"),
+    ).toBeDefined();
     expect(matchRoute("GET", "/api/git/status")).toMatchObject({
       definition: { pattern: "/api/git/status" },
     });
     expect(matchRoute("GET", "/api/git/diff")).toMatchObject({
       definition: { pattern: "/api/git/diff" },
+    });
+    expect(matchRoute("GET", "/api/git/diff/structured")).toMatchObject({
+      definition: { pattern: "/api/git/diff/structured" },
+    });
+    expect(matchRoute("GET", "/api/git/blame")).toMatchObject({
+      definition: { pattern: "/api/git/blame" },
     });
   });
 

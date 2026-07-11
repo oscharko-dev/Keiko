@@ -558,6 +558,29 @@ export {
 } from "./components/large-file-mode.js";
 export type { EditorLargeFileMode, LargeFileModeInput } from "./components/large-file-mode.js";
 
+// ─── Runtime: event-driven structured Git gutter bridge (#2229, ADR-0127) ───
+export { registerEditorGitGutter } from "./components/git-gutter-bridge.js";
+export type {
+  EditorGitGutterBridge,
+  EditorGitGutterChanges,
+  EditorGitGutterHost,
+  EditorGitGutterLabels,
+  EditorGitGutterLayer,
+  EditorGitGutterPeek,
+  EditorGitGutterResolver,
+  MonacoGitGutterEditor,
+  RegisterEditorGitGutterArgs,
+} from "./components/git-gutter-bridge.js";
+
+export { registerEditorBlame } from "./components/blame-bridge.js";
+export type {
+  EditorBlameBridge,
+  EditorBlameHost,
+  EditorBlameLabels,
+  MonacoBlameEditor,
+  RegisterEditorBlameArgs,
+} from "./components/blame-bridge.js";
+
 // ─── Runtime: KeikoCodeEditor React component (#1194) ───
 export { KeikoCodeEditor } from "./components/KeikoCodeEditor.js";
 export type {
@@ -671,3 +694,16 @@ export type {
 } from "./components/status-bar.js";
 export { EditorStatusBar } from "./components/EditorStatusBar.js";
 export type { EditorStatusBarProps } from "./components/EditorStatusBar.js";
+export {
+  MAX_CONFLICT_CHARS,
+  MAX_TRACKED_CONFLICTS,
+  conflictReplacement,
+  parseConflictMarkers,
+} from "./components/conflict-markers.js";
+export type {
+  ConflictBlock,
+  ConflictChoice,
+  ConflictMarkerModel,
+  ConflictRange,
+} from "./components/conflict-markers.js";
+export type { ConflictLabels } from "./components/conflict-bridge.js";

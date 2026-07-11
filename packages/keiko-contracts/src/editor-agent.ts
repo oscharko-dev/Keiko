@@ -10,6 +10,21 @@ import {
   parseEditorVerificationRunRequest,
   type EditorVerificationRunRequest,
 } from "./editor-verification.js";
+import {
+  GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+  GIT_AGENT_CONTEXT_MAX_FILES,
+  GIT_AGENT_CONTEXT_MAX_HUNKS,
+  GIT_AGENT_CONTEXT_MAX_RESULT_BYTES,
+  isGitEditorBlameLine,
+  isGitEditorDiffFileStatus,
+  isGitEditorDiffHunk,
+  type GitEditorBlameLine,
+  type GitEditorDiffFileStatus,
+  type GitEditorDiffHunk,
+  type GitEditorDiffLayer,
+  type GitEditorDiffScope,
+} from "./git-editor.js";
+import type { GitRepositoryState, GitStatusCode } from "./git-repository.js";
 
 export { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath };
 
@@ -111,6 +126,14 @@ export interface EditorAgentSessionSnapshot {
     readonly available: boolean;
     readonly unavailableReason?: string | undefined;
   } | null;
+  // Issue #2234 (ADR-0127): content-free, additive Git awareness. Content-bearing diff, conflict,
+  // and blame excerpts remain server-internal coding context. Old snapshots without this field
+  // continue to validate.
+  readonly gitContextSummary?: {
+    readonly hasConflictMarkers: boolean;
+    readonly changedFileCount: number;
+    readonly truncated: boolean;
+  } | null;
   readonly documentVersion?: EditorDocumentVersion | undefined;
   readonly activeFileContentHash?: string | undefined;
   readonly textMode: EditorAgentSnapshotTextMode;
@@ -149,6 +172,131 @@ export interface EditorAgentSearchWorkspaceRequest {
   readonly scopePath?: string | undefined;
 }
 
+// Issue #2298: the read-only aspects an agent may request for a file's source-control state. Each
+// maps to one already-bounded, redacted M5 git read handler; the tool never mutates git state.
+export type EditorAgentGitAspect = "status" | "diff" | "blame";
+
+export const EDITOR_AGENT_GIT_ASPECTS: readonly EditorAgentGitAspect[] = [
+  "status",
+  "diff",
+  "blame",
+];
+
+// Issue #2298: a governed, non-mutating on-demand git query for one workspace-contained file. The
+// active complement to #2234's passive `git-context` CodingContextPack source: an agent asks for
+// the current status/diff-vs-HEAD/blame of a specific file at the moment it needs it. Server-owned
+// caps and redaction apply per aspect; no bound field is exposed the server does not honour.
+export interface EditorAgentQueryGitRequest {
+  readonly path: string;
+  readonly aspects: readonly EditorAgentGitAspect[];
+}
+
+export const EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION = "1" as const;
+export const EDITOR_AGENT_QUERY_GIT_TARGET_BASENAME_MAX_CHARS = 255;
+export const EDITOR_AGENT_QUERY_GIT_BRANCH_MAX_CHARS = 512;
+
+export const EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS = [
+  "unavailable",
+  "denied",
+  "out-of-budget",
+] as const;
+export type EditorAgentQueryGitOmissionReason =
+  (typeof EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS)[number];
+
+export const EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS = [
+  "not-repository",
+  "git-missing",
+  "unsafe-repository",
+  "git-error",
+  "malformed-response",
+] as const;
+export type EditorAgentQueryGitMachineReason =
+  (typeof EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS)[number];
+
+export interface EditorAgentQueryGitTarget {
+  readonly basename: string;
+  readonly pathHash: string;
+}
+
+export interface EditorAgentQueryGitCaps {
+  readonly maxFiles: typeof GIT_AGENT_CONTEXT_MAX_FILES;
+  readonly maxHunks: typeof GIT_AGENT_CONTEXT_MAX_HUNKS;
+  readonly maxBlameLines: typeof GIT_AGENT_CONTEXT_MAX_BLAME_LINES;
+  readonly maxResultBytes: typeof GIT_AGENT_CONTEXT_MAX_RESULT_BYTES;
+}
+
+export interface EditorAgentQueryGitStatusChange {
+  readonly indexStatus: GitStatusCode;
+  readonly worktreeStatus: GitStatusCode;
+  readonly staged: boolean;
+  readonly unstaged: boolean;
+  readonly untracked: boolean;
+  readonly conflicted: boolean;
+}
+
+export interface EditorAgentQueryGitStatus {
+  readonly state: GitRepositoryState;
+  readonly available: boolean;
+  readonly branch?: string | undefined;
+  readonly detached: boolean;
+  readonly clean: boolean;
+  readonly change: EditorAgentQueryGitStatusChange | null;
+  readonly truncated: boolean;
+}
+
+export interface EditorAgentQueryGitDiffFile {
+  readonly layer: GitEditorDiffLayer;
+  readonly status: GitEditorDiffFileStatus;
+  readonly binary: boolean;
+  readonly hunks: readonly GitEditorDiffHunk[];
+  readonly addedLines: number;
+  readonly removedLines: number;
+  readonly truncated: boolean;
+}
+
+export interface EditorAgentQueryGitDiffLayer {
+  readonly scope: GitEditorDiffScope;
+  readonly layer: GitEditorDiffLayer;
+  readonly files: readonly EditorAgentQueryGitDiffFile[];
+  readonly truncated: boolean;
+  readonly totalFiles: number;
+  readonly totalBytes: number;
+}
+
+export interface EditorAgentQueryGitDiff {
+  readonly staged?: EditorAgentQueryGitDiffLayer | undefined;
+  readonly unstaged?: EditorAgentQueryGitDiffLayer | undefined;
+}
+
+export interface EditorAgentQueryGitBlame {
+  readonly startLine: number;
+  readonly lines: readonly GitEditorBlameLine[];
+  readonly truncated: boolean;
+  readonly totalLines: number;
+  readonly totalBytes: number;
+}
+
+export interface EditorAgentQueryGitAspects {
+  readonly status?: EditorAgentQueryGitStatus | undefined;
+  readonly diff?: EditorAgentQueryGitDiff | undefined;
+  readonly blame?: EditorAgentQueryGitBlame | undefined;
+}
+
+export interface EditorAgentQueryGitOmission {
+  readonly aspect: EditorAgentGitAspect;
+  readonly scope?: GitEditorDiffScope | undefined;
+  readonly reason: EditorAgentQueryGitOmissionReason;
+  readonly machineReason?: EditorAgentQueryGitMachineReason | undefined;
+}
+
+export interface EditorAgentQueryGitData {
+  readonly schemaVersion: typeof EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION;
+  readonly target: EditorAgentQueryGitTarget;
+  readonly caps: EditorAgentQueryGitCaps;
+  readonly aspects: EditorAgentQueryGitAspects;
+  readonly omissions: readonly EditorAgentQueryGitOmission[];
+}
+
 export type EditorAgentActionType =
   | "openFile"
   | "focusTab"
@@ -164,7 +312,10 @@ export type EditorAgentActionType =
   // #2211's route. Added for policy classification; NOT dispatched to the browser bridge.
   | "requestVerification"
   | "navigateSymbol"
-  | "searchWorkspace";
+  | "searchWorkspace"
+  // Issue #2298: a governed, read-only on-demand git query resolved server-side; NOT dispatched to
+  // the browser bridge.
+  | "queryGit";
 
 // Issue #2210 (ADR-0126 D5): an agent-originated verification request uses the same wire shape as the
 // human editor route request (kinds/targetPath/requestId). Aliased to avoid duplicating the shape;
@@ -235,6 +386,7 @@ export interface EditorAgentAction {
   readonly changeset?: EditorAgentChangeset | undefined;
   readonly navigateSymbol?: EditorAgentNavigateSymbolRequest | undefined;
   readonly searchWorkspace?: EditorAgentSearchWorkspaceRequest | undefined;
+  readonly queryGit?: EditorAgentQueryGitRequest | undefined;
 }
 
 export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "conflict";
@@ -423,6 +575,7 @@ const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "requestVerification",
   "navigateSymbol",
   "searchWorkspace",
+  "queryGit",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -708,6 +861,18 @@ function isLanguageCapability(value: unknown): boolean {
   );
 }
 
+function isGitContextSummary(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) =>
+      ["hasConflictMarkers", "changedFileCount", "truncated"].includes(key),
+    ) &&
+    typeof value.hasConflictMarkers === "boolean" &&
+    isNonNegativeInteger(value.changedFileCount) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
 function isPaneSnapshot(value: unknown): value is EditorAgentPaneSnapshot {
   return (
     isRecord(value) &&
@@ -763,6 +928,9 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
     isNullOr(value.diagnosticsSummary, isDiagnosticsSummary),
     isUndefinedOr(value.diagnosticsDetail, isEditorAgentDiagnosticsDetail),
     isUndefinedOr(value.languageCapability, (c) => c === null || isLanguageCapability(c)),
+    isUndefinedOr(value.gitContextSummary, (summary) =>
+      summary === null ? true : isGitContextSummary(summary),
+    ),
     isUndefinedOr(value.documentVersion, isDocumentVersion),
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
     isSnapshotTextMode(value.textMode),
@@ -884,6 +1052,314 @@ function isSearchWorkspaceRequest(value: unknown): value is EditorAgentSearchWor
   );
 }
 
+function isGitAspect(value: unknown): value is EditorAgentGitAspect {
+  return value === "status" || value === "diff" || value === "blame";
+}
+
+function hasOnlyObjectKeys(
+  value: Readonly<Record<string, unknown>>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isPosixCanonicalQueryGitPath(value: unknown): value is string {
+  if (!isBoundedTargetPath(value) || !isContainedAgentPath(value) || value.includes("\\")) {
+    return false;
+  }
+  const segments = value.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+function isQueryGitRequest(value: unknown): value is EditorAgentQueryGitRequest {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["path", "aspects"]) &&
+    isPosixCanonicalQueryGitPath(value.path) &&
+    Array.isArray(value.aspects) &&
+    value.aspects.length > 0 &&
+    value.aspects.length <= EDITOR_AGENT_GIT_ASPECTS.length &&
+    value.aspects.every(isGitAspect) &&
+    new Set(value.aspects).size === value.aspects.length
+  );
+}
+
+function isQueryGitTarget(value: unknown): value is EditorAgentQueryGitTarget {
+  if (!isRecord(value) || !hasOnlyObjectKeys(value, ["basename", "pathHash"])) return false;
+  return (
+    isBoundedNonEmptyString(value.basename, EDITOR_AGENT_QUERY_GIT_TARGET_BASENAME_MAX_CHARS) &&
+    value.basename !== "." &&
+    value.basename !== ".." &&
+    !value.basename.includes("/") &&
+    !value.basename.includes("\\") &&
+    !value.basename.includes("\0") &&
+    isSha256Hex(value.pathHash)
+  );
+}
+
+function isQueryGitCaps(value: unknown): value is EditorAgentQueryGitCaps {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["maxFiles", "maxHunks", "maxBlameLines", "maxResultBytes"]) &&
+    value.maxFiles === GIT_AGENT_CONTEXT_MAX_FILES &&
+    value.maxHunks === GIT_AGENT_CONTEXT_MAX_HUNKS &&
+    value.maxBlameLines === GIT_AGENT_CONTEXT_MAX_BLAME_LINES &&
+    value.maxResultBytes === GIT_AGENT_CONTEXT_MAX_RESULT_BYTES
+  );
+}
+
+const QUERY_GIT_STATUS_CODES: readonly GitStatusCode[] = [
+  " ",
+  "M",
+  "A",
+  "D",
+  "R",
+  "C",
+  "U",
+  "?",
+  "!",
+] as const;
+
+function isQueryGitStatusCode(value: unknown): value is GitStatusCode {
+  return typeof value === "string" && QUERY_GIT_STATUS_CODES.includes(value as GitStatusCode);
+}
+
+function isQueryGitStatusChange(value: unknown): value is EditorAgentQueryGitStatusChange {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, [
+      "indexStatus",
+      "worktreeStatus",
+      "staged",
+      "unstaged",
+      "untracked",
+      "conflicted",
+    ]) &&
+    isQueryGitStatusCode(value.indexStatus) &&
+    isQueryGitStatusCode(value.worktreeStatus) &&
+    typeof value.staged === "boolean" &&
+    typeof value.unstaged === "boolean" &&
+    typeof value.untracked === "boolean" &&
+    typeof value.conflicted === "boolean"
+  );
+}
+
+function isQueryGitRepositoryState(value: unknown): value is GitRepositoryState {
+  return (
+    value === "available" || value === "unavailable" || value === "unsafe" || value === "error"
+  );
+}
+
+function isQueryGitStatus(value: unknown): value is EditorAgentQueryGitStatus {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, [
+      "state",
+      "available",
+      "branch",
+      "detached",
+      "clean",
+      "change",
+      "truncated",
+    ]) &&
+    isQueryGitRepositoryState(value.state) &&
+    typeof value.available === "boolean" &&
+    value.available === (value.state === "available") &&
+    isUndefinedOr(value.branch, (branch) =>
+      isBoundedNonEmptyString(branch, EDITOR_AGENT_QUERY_GIT_BRANCH_MAX_CHARS),
+    ) &&
+    typeof value.detached === "boolean" &&
+    typeof value.clean === "boolean" &&
+    isNullOr(value.change, isQueryGitStatusChange) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+function isQueryGitDiffFile(
+  value: unknown,
+  expectedLayer: GitEditorDiffLayer,
+): value is EditorAgentQueryGitDiffFile {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, [
+      "layer",
+      "status",
+      "binary",
+      "hunks",
+      "addedLines",
+      "removedLines",
+      "truncated",
+    ]) &&
+    value.layer === expectedLayer &&
+    isGitEditorDiffFileStatus(value.status) &&
+    hasValidQueryGitDiffContent(value) &&
+    hasValidQueryGitDiffCounts(value)
+  );
+}
+
+function hasValidQueryGitDiffContent(value: Readonly<Record<string, unknown>>): boolean {
+  if (typeof value.binary !== "boolean") return false;
+  if (!Array.isArray(value.hunks) || !value.hunks.every(isGitEditorDiffHunk)) return false;
+  return !value.binary || value.hunks.length === 0;
+}
+
+function hasValidQueryGitDiffCounts(value: Readonly<Record<string, unknown>>): boolean {
+  if (!isNonNegativeInteger(value.addedLines) || !isNonNegativeInteger(value.removedLines)) {
+    return false;
+  }
+  if (typeof value.truncated !== "boolean") return false;
+  return value.binary !== true || (value.addedLines === 0 && value.removedLines === 0);
+}
+
+function isQueryGitDiffLayer(
+  value: unknown,
+  expectedScope: GitEditorDiffScope,
+  expectedLayer: GitEditorDiffLayer,
+): value is EditorAgentQueryGitDiffLayer {
+  if (!isRecord(value)) return false;
+  if (
+    !hasOnlyObjectKeys(value, ["scope", "layer", "files", "truncated", "totalFiles", "totalBytes"])
+  ) {
+    return false;
+  }
+  if (!Array.isArray(value.files) || value.files.length > GIT_AGENT_CONTEXT_MAX_FILES) return false;
+  return (
+    value.scope === expectedScope &&
+    value.layer === expectedLayer &&
+    value.files.every((file) => isQueryGitDiffFile(file, expectedLayer)) &&
+    hasValidQueryGitDiffTotals(value)
+  );
+}
+
+function hasValidQueryGitDiffTotals(value: Readonly<Record<string, unknown>>): boolean {
+  if (!Array.isArray(value.files)) return false;
+  return (
+    typeof value.truncated === "boolean" &&
+    isNonNegativeInteger(value.totalFiles) &&
+    value.totalFiles >= value.files.length &&
+    isNonNegativeInteger(value.totalBytes)
+  );
+}
+
+function queryGitDiffFiles(diff: EditorAgentQueryGitDiff): readonly EditorAgentQueryGitDiffFile[] {
+  return [...(diff.staged?.files ?? []), ...(diff.unstaged?.files ?? [])];
+}
+
+function isQueryGitDiff(value: unknown): value is EditorAgentQueryGitDiff {
+  if (!isRecord(value) || !hasOnlyObjectKeys(value, ["staged", "unstaged"])) return false;
+  if (value.staged === undefined && value.unstaged === undefined) return false;
+  if (!isUndefinedOr(value.staged, (layer) => isQueryGitDiffLayer(layer, "staged", "staged"))) {
+    return false;
+  }
+  if (
+    !isUndefinedOr(value.unstaged, (layer) => isQueryGitDiffLayer(layer, "unstaged", "worktree"))
+  ) {
+    return false;
+  }
+  const diff = value as unknown as EditorAgentQueryGitDiff;
+  const files = queryGitDiffFiles(diff);
+  return (
+    files.length <= GIT_AGENT_CONTEXT_MAX_FILES &&
+    files.reduce((total, file) => total + file.hunks.length, 0) <= GIT_AGENT_CONTEXT_MAX_HUNKS
+  );
+}
+
+function isQueryGitBlame(value: unknown): value is EditorAgentQueryGitBlame {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, ["startLine", "lines", "truncated", "totalLines", "totalBytes"]) &&
+    typeof value.startLine === "number" &&
+    Number.isInteger(value.startLine) &&
+    value.startLine >= 1 &&
+    hasValidQueryGitBlameLines(value) &&
+    hasValidQueryGitBlameTotals(value)
+  );
+}
+
+function hasValidQueryGitBlameLines(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    Array.isArray(value.lines) &&
+    value.lines.length <= GIT_AGENT_CONTEXT_MAX_BLAME_LINES &&
+    value.lines.every(isGitEditorBlameLine)
+  );
+}
+
+function hasValidQueryGitBlameTotals(value: Readonly<Record<string, unknown>>): boolean {
+  if (!Array.isArray(value.lines)) return false;
+  return (
+    typeof value.truncated === "boolean" &&
+    isNonNegativeInteger(value.totalLines) &&
+    value.totalLines >= value.lines.length &&
+    isNonNegativeInteger(value.totalBytes)
+  );
+}
+
+function isQueryGitAspects(value: unknown): value is EditorAgentQueryGitAspects {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["status", "diff", "blame"]) &&
+    isUndefinedOr(value.status, isQueryGitStatus) &&
+    isUndefinedOr(value.diff, isQueryGitDiff) &&
+    isUndefinedOr(value.blame, isQueryGitBlame)
+  );
+}
+
+function isQueryGitOmission(value: unknown): value is EditorAgentQueryGitOmission {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, ["aspect", "scope", "reason", "machineReason"]) &&
+    isGitAspect(value.aspect) &&
+    (value.scope === undefined ||
+      (value.aspect === "diff" && (value.scope === "staged" || value.scope === "unstaged"))) &&
+    EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS.includes(
+      value.reason as EditorAgentQueryGitOmissionReason,
+    ) &&
+    isUndefinedOr(value.machineReason, (reason) =>
+      EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS.includes(reason as EditorAgentQueryGitMachineReason),
+    )
+  );
+}
+
+function isQueryGitOmissions(value: unknown): value is readonly EditorAgentQueryGitOmission[] {
+  if (!Array.isArray(value) || value.length > 5 || !value.every(isQueryGitOmission)) return false;
+  const keys = value.map((entry) => `${entry.aspect}:${entry.scope ?? "all"}`);
+  return new Set(keys).size === keys.length;
+}
+
+function queryGitDataWithinByteCap(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    EDITOR_AGENT_TEXT_ENCODER.encode(JSON.stringify(value)).length <=
+    GIT_AGENT_CONTEXT_MAX_RESULT_BYTES
+  );
+}
+
+function parseEditorAgentQueryGitDataUnsafe(
+  value: unknown,
+): EditorAgentParse<EditorAgentQueryGitData> {
+  if (!isRecord(value)) return { ok: false, errors: ["queryGit data must be an object"] };
+  const valid =
+    hasOnlyObjectKeys(value, ["schemaVersion", "target", "caps", "aspects", "omissions"]) &&
+    value.schemaVersion === EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION &&
+    isQueryGitTarget(value.target) &&
+    isQueryGitCaps(value.caps) &&
+    isQueryGitAspects(value.aspects) &&
+    isQueryGitOmissions(value.omissions) &&
+    queryGitDataWithinByteCap(value);
+  return valid
+    ? { ok: true, value: value as unknown as EditorAgentQueryGitData }
+    : { ok: false, errors: ["queryGit data is malformed or exceeds agent caps"] };
+}
+
+export function parseEditorAgentQueryGitData(
+  value: unknown,
+): EditorAgentParse<EditorAgentQueryGitData> {
+  try {
+    return parseEditorAgentQueryGitDataUnsafe(value);
+  } catch {
+    return { ok: false, errors: ["queryGit data could not be inspected"] };
+  }
+}
+
 function isEditorAgentActionData(value: unknown): value is Readonly<Record<string, unknown>> {
   if (!isRecord(value)) return false;
   try {
@@ -939,6 +1415,7 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     value.type === "searchWorkspace"
       ? isSearchWorkspaceRequest(value.searchWorkspace)
       : value.searchWorkspace === undefined,
+    value.type === "queryGit" ? isQueryGitRequest(value.queryGit) : value.queryGit === undefined,
   ].every(Boolean);
 }
 
@@ -1343,6 +1820,15 @@ function canonicalSearchWorkspaceRequest(
   };
 }
 
+function canonicalQueryGitRequest(
+  request: NonNullable<EditorAgentAction["queryGit"]>,
+): NonNullable<EditorAgentAction["queryGit"]> {
+  return {
+    path: request.path,
+    aspects: EDITOR_AGENT_GIT_ASPECTS.filter((aspect) => request.aspects.includes(aspect)),
+  };
+}
+
 function canonicalTextEditsPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
   return action.textEdits === undefined
     ? {}
@@ -1356,6 +1842,25 @@ function canonicalPatchPayload(action: EditorAgentAction): Partial<EditorAgentAc
   };
 }
 
+function canonicalServerResolvedPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  switch (action.type) {
+    case "navigateSymbol":
+      return action.navigateSymbol === undefined
+        ? {}
+        : { navigateSymbol: canonicalNavigateSymbolRequest(action.navigateSymbol) };
+    case "searchWorkspace":
+      return action.searchWorkspace === undefined
+        ? {}
+        : { searchWorkspace: canonicalSearchWorkspaceRequest(action.searchWorkspace) };
+    case "queryGit":
+      return action.queryGit === undefined
+        ? {}
+        : { queryGit: canonicalQueryGitRequest(action.queryGit) };
+    default:
+      return {};
+  }
+}
+
 function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
   switch (action.type) {
     case "applyTextEdits":
@@ -1366,16 +1871,8 @@ function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<E
       return action.changeset === undefined
         ? {}
         : { changeset: canonicalChangeset(action.changeset) };
-    case "navigateSymbol":
-      return action.navigateSymbol === undefined
-        ? {}
-        : { navigateSymbol: canonicalNavigateSymbolRequest(action.navigateSymbol) };
-    case "searchWorkspace":
-      return action.searchWorkspace === undefined
-        ? {}
-        : { searchWorkspace: canonicalSearchWorkspaceRequest(action.searchWorkspace) };
     default:
-      return {};
+      return canonicalServerResolvedPayload(action);
   }
 }
 

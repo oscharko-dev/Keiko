@@ -9,6 +9,7 @@ import {
   type EditorAgentNavigateSymbolOperation,
   type EditorAgentSessionsResponse,
   type EditorAgentSearchWorkspaceMode,
+  type EditorAgentGitAspect,
   type EditorAgentSnapshotResponse,
   type EditorAgentSnapshotTextMode,
   type EditorAgentVerificationResult,
@@ -390,6 +391,41 @@ function parseSearchWorkspaceArguments(
   };
 }
 
+interface ParsedQueryGitArguments {
+  readonly sessionId: string;
+  readonly path: string;
+  readonly request: NonNullable<EditorAgentAction["queryGit"]>;
+}
+
+function gitAspect(value: unknown): EditorAgentGitAspect {
+  if (value === "status" || value === "diff" || value === "blame") return value;
+  throw new InvalidArgumentsError("Git aspect is invalid.");
+}
+
+function parseGitAspects(value: unknown): readonly EditorAgentGitAspect[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new InvalidArgumentsError("Argument 'aspects' must be a non-empty array.");
+  }
+  const aspects = value.map(gitAspect);
+  if (new Set(aspects).size !== aspects.length) {
+    throw new InvalidArgumentsError("Argument 'aspects' must not contain duplicates.");
+  }
+  return aspects;
+}
+
+function parseQueryGitArguments(args: Record<string, unknown>): ParsedQueryGitArguments {
+  expectOnly(args, ["sessionId", "idempotencyKey", "path", "aspects"]);
+  const path = requireString(args, "path");
+  return {
+    sessionId: requireString(args, "sessionId"),
+    path,
+    request: {
+      path,
+      aspects: parseGitAspects(args.aspects),
+    },
+  };
+}
+
 export class EditorAgentToolHost implements ToolPort {
   private readonly client: EditorAgentHttpClient;
   private readonly authorityRef: AuthorityReference;
@@ -449,6 +485,8 @@ export class EditorAgentToolHost implements ToolPort {
         return this.navigateSymbol(request);
       case "editor_search_workspace":
         return this.searchWorkspace(request);
+      case "editor_git_context":
+        return this.queryGit(request);
       case "editor_propose_edit":
         return this.proposeEdit(request);
       case "editor_propose_changeset":
@@ -552,6 +590,18 @@ export class EditorAgentToolHost implements ToolPort {
       type: "searchWorkspace",
       ...(parsed.scopePath === undefined ? {} : { target: { file: parsed.scopePath } }),
       searchWorkspace: parsed.request,
+    };
+    return this.sendAction(action, request.signal);
+  }
+
+  private queryGit(request: ToolCallRequest): Promise<EditorAgentToolOutput> {
+    const args = request.arguments;
+    const parsed = parseQueryGitArguments(args);
+    const action: EditorAgentAction = {
+      ...this.actionBase(args, parsed.sessionId, "queryGit"),
+      type: "queryGit",
+      target: { file: parsed.path },
+      queryGit: parsed.request,
     };
     return this.sendAction(action, request.signal);
   }

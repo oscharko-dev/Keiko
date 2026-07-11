@@ -25,6 +25,26 @@ import { buildRenameSymbolActionDescriptor } from "./rename-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
 import type { AskKeikoAboutSelectionHandler } from "./types.js";
 import {
+  registerConflictBridge,
+  type ConflictBridge,
+  type ConflictEditor,
+  type ConflictLabels,
+} from "./conflict-bridge.js";
+import {
+  registerEditorBlame,
+  type EditorBlameBridge,
+  type EditorBlameHost,
+  type MonacoBlameEditor,
+} from "./blame-bridge.js";
+import {
+  registerEditorGitGutter,
+  type EditorGitGutterBridge,
+  type EditorGitGutterLabels,
+  type EditorGitGutterPeek,
+  type EditorGitGutterResolver,
+  type MonacoGitGutterEditor,
+} from "./git-gutter-bridge.js";
+import {
   COMPLETION_ELIGIBLE_LANGUAGES,
   registerKeikoCompletionProvider,
   type MonacoDisposable,
@@ -129,7 +149,9 @@ import {
 
 /** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
 export interface MountMonaco {
-  readonly editor: MonacoThemeRegistrar;
+  readonly editor: MonacoThemeRegistrar & {
+    readonly MouseTargetType?: { readonly GUTTER_GLYPH_MARGIN: number } | undefined;
+  };
   readonly Uri?: { parse(value: string): MonacoUriLike };
   // `Alt` is needed for the host-owned command chords; `CtrlCmd` also backs save.
   readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
@@ -293,6 +315,27 @@ export interface WireEditorSignatureHelp {
   readonly retriggerCharacters?: readonly string[] | undefined;
 }
 
+export interface WireEditorGitGutter {
+  readonly resolve: EditorGitGutterResolver;
+  readonly labels: EditorGitGutterLabels;
+  readonly degraded: boolean;
+  readonly onPeek: (peek: EditorGitGutterPeek) => void;
+  readonly onError?: ((message: string) => void) | undefined;
+}
+
+export interface WireEditorBlame extends EditorBlameHost {
+  readonly degraded: boolean;
+  readonly dirty: () => boolean;
+  readonly onError?: ((message: string) => void) | undefined;
+}
+
+export interface WireEditorConflicts {
+  readonly labels: ConflictLabels;
+  readonly onChange: (count: number, truncated: boolean) => void;
+  readonly onStale?: (() => void) | undefined;
+  readonly degraded: boolean;
+}
+
 /** Minimal editor surface the mount wiring needs (the live `onMount` first arg). */
 export interface MountEditor {
   addAction(descriptor: monaco.editor.IActionDescriptor): monaco.IDisposable;
@@ -303,6 +346,15 @@ export interface MountEditor {
   ): monaco.IDisposable;
   onDidChangeCursorSelection(
     listener: (event: { selection: monaco.Selection }) => void,
+  ): monaco.IDisposable;
+  onDidFocusEditorWidget?(listener: () => void): monaco.IDisposable;
+  onMouseDown?(
+    listener: (event: {
+      readonly target: {
+        readonly type: number;
+        readonly position?: { readonly lineNumber: number } | null | undefined;
+      };
+    }) => void,
   ): monaco.IDisposable;
   focus(): void;
   setSelection(range: MonacoRange): void;
@@ -318,7 +370,10 @@ export interface MountEditor {
   ): boolean;
   pushUndoStop?(): boolean;
   getModel?(): {
-    getValue?(): string;
+    getValue(): string;
+    getVersionId?(): number;
+    getPositionAt?(offset: number): { readonly lineNumber: number; readonly column: number };
+    onDidChangeContent?(listener: () => void): monaco.IDisposable;
     readonly uri?: MonacoUriLike;
     getLineCount(): number;
     getLineMaxColumn(lineNumber: number): number;
@@ -373,6 +428,10 @@ export interface WireEditorOnMountArgs {
   readonly signatureHelp?: WireEditorSignatureHelp | undefined;
   /** Command-action wiring (Issue #1205); registers host commands into the Monaco command palette. */
   readonly commands?: WireEditorCommands | undefined;
+  readonly gitGutter?: WireEditorGitGutter | undefined;
+  readonly blame?: WireEditorBlame | undefined;
+  readonly conflicts?: WireEditorConflicts | undefined;
+  readonly onGitGutterBridge?: ((bridge: EditorGitGutterBridge | null) => void) | undefined;
 }
 
 /** True when a keyboard event is the Cmd/Ctrl+S save chord (regardless of platform modifier). */
@@ -849,6 +908,86 @@ function installCommandActions(args: WireEditorOnMountArgs): readonly monaco.IDi
   return disposables;
 }
 
+function installGitGutter(args: WireEditorOnMountArgs): EditorGitGutterBridge | null {
+  const gutter = args.gitGutter;
+  const targetType = args.monaco.editor.MouseTargetType?.GUTTER_GLYPH_MARGIN;
+  if (
+    gutter === undefined ||
+    targetType === undefined ||
+    args.editor.onDidFocusEditorWidget === undefined ||
+    args.editor.onMouseDown === undefined
+  ) {
+    return null;
+  }
+  const focus = args.editor.onDidFocusEditorWidget.bind(args.editor);
+  const mouse = args.editor.onMouseDown.bind(args.editor);
+  const editor: MonacoGitGutterEditor = {
+    deltaDecorations: (oldDecorations, newDecorations) =>
+      args.editor.deltaDecorations(oldDecorations, [...newDecorations]),
+    onDidFocusEditorWidget: focus,
+    onMouseDown: mouse,
+    getPosition: () => args.editor.getPosition?.() ?? null,
+    addAction: (descriptor) => args.editor.addAction(descriptor),
+  };
+  const bridge = registerEditorGitGutter({
+    editor,
+    resolve: gutter.resolve,
+    labels: gutter.labels,
+    degraded: gutter.degraded,
+    glyphMarginTargetType: targetType,
+    onPeek: gutter.onPeek,
+    onError: gutter.onError,
+  });
+  args.onGitGutterBridge?.(bridge);
+  return bridge;
+}
+
+function installBlame(args: WireEditorOnMountArgs): EditorBlameBridge | null {
+  const blame = args.blame;
+  const targetType = args.monaco.editor.MouseTargetType?.GUTTER_GLYPH_MARGIN;
+  if (blame === undefined || targetType === undefined || args.editor.onMouseDown === undefined) {
+    return null;
+  }
+  const editor: MonacoBlameEditor = {
+    deltaDecorations: (oldIds, decorations) =>
+      args.editor.deltaDecorations(oldIds, [...decorations]),
+    getPosition: () => args.editor.getPosition?.() ?? null,
+    onMouseDown: args.editor.onMouseDown.bind(args.editor),
+    addAction: (descriptor) => args.editor.addAction(descriptor),
+  };
+  return registerEditorBlame({ ...blame, editor, glyphMarginTargetType: targetType });
+}
+
+function supportsConflicts(editor: MountEditor): boolean {
+  const model = editor.getModel?.();
+  return (
+    model?.getVersionId !== undefined &&
+    model.getPositionAt !== undefined &&
+    model.onDidChangeContent !== undefined &&
+    editor.executeEdits !== undefined &&
+    editor.pushUndoStop !== undefined &&
+    editor.getPosition !== undefined
+  );
+}
+
+function installConflicts(args: WireEditorOnMountArgs): ConflictBridge | null {
+  const wiring = args.conflicts;
+  if (wiring === undefined || wiring.degraded || !supportsConflicts(args.editor)) return null;
+  return registerConflictBridge({
+    editor: args.editor as ConflictEditor,
+    labels: wiring.labels,
+    onChange: wiring.onChange,
+    onStale: wiring.onStale,
+  });
+}
+
+function installSourceControl(args: WireEditorOnMountArgs): readonly DisposableLike[] {
+  const bridges = [installGitGutter(args), installBlame(args), installConflicts(args)];
+  return bridges.filter(
+    (entry): entry is Exclude<(typeof bridges)[number], null> => entry !== null,
+  );
+}
+
 function isDisposable(disposable: DisposableLike | null): disposable is DisposableLike {
   return disposable !== null;
 }
@@ -859,11 +998,17 @@ function disposeAll(disposables: readonly DisposableLike[]): void {
   }
 }
 
+function installMountFoundation(args: WireEditorOnMountArgs): {
+  readonly action: monaco.IDisposable;
+  readonly removeBackstop: () => void;
+} {
+  registerTheme(args);
+  return { action: installSaveAction(args), removeBackstop: installKeydownBackstop(args) };
+}
+
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
 export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
-  registerTheme(args);
-  const action = installSaveAction(args);
-  const removeBackstop = installKeydownBackstop(args);
+  const { action, removeBackstop } = installMountFoundation(args);
   const cursorSub = subscribeCursor(args);
   const selectionSub = subscribeSelection(args);
   const completionSub = installCompletionProvider(args);
@@ -881,6 +1026,7 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const codeActionsSub = installCodeActionProvider(args);
   const signatureHelpSub = installSignatureHelpProvider(args);
   const commandActions = installCommandActions(args);
+  const sourceControlSubs = installSourceControl(args);
   const disposables = [
     action,
     cursorSub,
@@ -899,11 +1045,13 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     referencesSub,
     codeActionsSub,
     signatureHelpSub,
+    ...sourceControlSubs,
   ].filter(isDisposable);
   if (args.autoFocus) {
     args.editor.focus();
   }
   return () => {
+    args.onGitGutterBridge?.(null);
     removeBackstop();
     disposeAll([...disposables, ...commandActions]);
   };

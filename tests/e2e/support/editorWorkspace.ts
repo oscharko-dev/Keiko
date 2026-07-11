@@ -12,7 +12,8 @@
  * keiko-editor-hot-exit IndexedDB store in editorHotExitStore.ts.
  */
 import { expect, type Locator, type Page } from "@playwright/test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -53,6 +54,19 @@ interface EditorWorkspaceFile {
   readonly content: string;
 }
 
+export interface GitEditorWorkspace {
+  readonly root: string;
+  readonly baseCommit: string;
+  readonly incomingCommit: string;
+  readonly mainCommit: string;
+  readonly stagedPath: string;
+  readonly blamePath: string;
+  readonly conflictPath: string;
+  readonly nestedChangedPath: string;
+  readonly ignoredPath: string;
+  readonly conflictDiskContent: string;
+}
+
 interface SeedEditorWindowOptions {
   readonly root?: string;
   readonly openFiles?: readonly string[];
@@ -60,6 +74,7 @@ interface SeedEditorWindowOptions {
   readonly windowId?: string;
   readonly theme?: "dark" | "light";
   readonly resetWorkspace?: boolean;
+  readonly maximized?: boolean;
 }
 
 const createdRoots: string[] = [];
@@ -76,6 +91,144 @@ export function createEditorWorkspace(files: readonly EditorWorkspaceFile[]): {
     writeFileSync(absolute, file.content, "utf8");
   }
   return { root };
+}
+
+function runGit(root: string, args: readonly string[]): string {
+  return execFileSync("git", args, {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1" },
+  }).trim();
+}
+
+function writeWorkspaceFile(root: string, path: string, content: string): void {
+  const absolute = join(root, path);
+  mkdirSync(dirname(absolute), { recursive: true });
+  writeFileSync(absolute, content, "utf8");
+}
+
+const GIT_EDITOR_PATHS = {
+  stagedPath: "src/staged.ts",
+  blamePath: "src/blame.ts",
+  conflictPath: "src/merge/conflict.ts",
+  nestedChangedPath: "src/nested/changed.ts",
+  ignoredPath: "tmp/ignored.log",
+} as const;
+
+function stagedFixtureContent(
+  staged: "base" | "index",
+  unstaged: "base" | "index" | "worktree",
+): string {
+  return [
+    "export const alpha = 1;",
+    `export const staged = "${staged}";`,
+    "export const middle = true;",
+    `export const unstaged = "${unstaged}";`,
+    "export const omega = 5;",
+    "",
+  ].join("\n");
+}
+
+function seedGitEditorFiles(root: string): void {
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.stagedPath, stagedFixtureContent("base", "base"));
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.blamePath, 'export const blamed = "baseline";\n');
+  writeWorkspaceFile(
+    root,
+    GIT_EDITOR_PATHS.conflictPath,
+    [
+      'export const first = "base";',
+      ...Array.from(
+        { length: 10 },
+        (_, index) =>
+          `export const spacer${String(index + 1).padStart(2, "0")} = ${String(index + 1)};`,
+      ),
+      'export const second = "base";',
+      "",
+    ].join("\n"),
+  );
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.nestedChangedPath, 'export const nested = "base";\n');
+  writeWorkspaceFile(root, ".gitignore", "tmp/ignored.log\n");
+}
+
+function initializeFixtureRepository(root: string): string {
+  runGit(root, ["init", "-q", "-b", "main"]);
+  runGit(root, ["config", "user.email", "keiko-e2e@example.invalid"]);
+  runGit(root, ["config", "user.name", "Keiko E2E"]);
+  runGit(root, ["config", "commit.gpgsign", "false"]);
+  runGit(root, ["config", "core.hooksPath", ".git/disabled-hooks"]);
+  runGit(root, ["add", "--", "."]);
+  runGit(root, ["commit", "-q", "-m", "test: seed source-control fixture"]);
+  return runGit(root, ["rev-parse", "HEAD"]);
+}
+
+function conflictSide(root: string, side: "ours" | "theirs"): string {
+  return (
+    runGit(root, ["show", `main:${GIT_EDITOR_PATHS.conflictPath}`])
+      .replace('first = "base"', `first = "${side}"`)
+      .replace('second = "base"', `second = "${side}"`) + "\n"
+  );
+}
+
+function createFixtureConflict(root: string): {
+  readonly incomingCommit: string;
+  readonly mainCommit: string;
+  readonly conflictDiskContent: string;
+} {
+  runGit(root, ["switch", "-q", "-c", "incoming"]);
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.conflictPath, conflictSide(root, "theirs"));
+  runGit(root, ["add", "--", GIT_EDITOR_PATHS.conflictPath]);
+  runGit(root, ["commit", "-q", "-m", "test: create incoming conflict side"]);
+  const incomingCommit = runGit(root, ["rev-parse", "HEAD"]);
+  runGit(root, ["switch", "-q", "main"]);
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.conflictPath, conflictSide(root, "ours"));
+  runGit(root, ["add", "--", GIT_EDITOR_PATHS.conflictPath]);
+  runGit(root, ["commit", "-q", "-m", "test: create current conflict side"]);
+  const mainCommit = runGit(root, ["rev-parse", "HEAD"]);
+  const merge = spawnSync("git", ["merge", "--no-edit", "incoming"], {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, LC_ALL: "C", GIT_CONFIG_NOSYSTEM: "1" },
+  });
+  if (merge.status !== 1) {
+    throw new Error(`Expected the hermetic merge to conflict, got ${String(merge.status)}.`);
+  }
+  return {
+    incomingCommit,
+    mainCommit,
+    conflictDiskContent: readFileSync(join(root, GIT_EDITOR_PATHS.conflictPath), "utf8"),
+  };
+}
+
+function createFixtureWorktreeStates(root: string): void {
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.stagedPath, stagedFixtureContent("index", "index"));
+  runGit(root, ["add", "--", GIT_EDITOR_PATHS.stagedPath]);
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.stagedPath, stagedFixtureContent("index", "worktree"));
+  writeWorkspaceFile(
+    root,
+    GIT_EDITOR_PATHS.nestedChangedPath,
+    'export const nested = "worktree";\n',
+  );
+  writeWorkspaceFile(root, GIT_EDITOR_PATHS.ignoredPath, "ignored fixture\n");
+}
+
+/**
+ * Build the hermetic source-control workspace for Epic #2093's real-BFF closeout. The fixture has
+ * no remote, uses repository-local identity/signing configuration, and deliberately retains one
+ * unmerged index entry alongside staged, unstaged, nested, and ignored worktree states.
+ */
+export function createGitEditorWorkspace(): GitEditorWorkspace {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-2235-git-editor-")));
+  createdRoots.push(root);
+  seedGitEditorFiles(root);
+  const baseCommit = initializeFixtureRepository(root);
+  const conflict = createFixtureConflict(root);
+  createFixtureWorktreeStates(root);
+  return {
+    root,
+    baseCommit,
+    ...conflict,
+    ...GIT_EDITOR_PATHS,
+  };
 }
 
 /** Remove every workspace created during the run. Call from `test.afterAll`. */
@@ -162,7 +315,7 @@ export async function seedEditorWindow(
           h: 760,
           z: 10,
           cfg,
-          max: false,
+          max: opts.maximized ?? false,
         },
       },
     },

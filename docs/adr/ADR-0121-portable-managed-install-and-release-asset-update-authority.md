@@ -176,6 +176,84 @@ Child implementation work may branch for development and QA, but the only branch
 is the integrated branch after integrated end-to-end QA has passed and a human reviewer has approved
 the result.
 
+### D7 — Production signing uses protected, provider-managed trust
+
+Production portable signing is an extension of this ADR's installability authority, not a second
+artifact or evidence contract. The operator boundary and implementation interface are defined in the
+[Portable Production Signing Contract](../release/portable-production-signing-contract.md).
+
+Windows production artifacts use an Azure Artifact Signing **Basic** account with a **PublicTrust**
+certificate profile. The GitHub workload authenticates to Azure with environment-bound OIDC and has
+only `Artifact Signing Certificate Profile Signer` at the certificate-profile resource scope. Azure
+retains the non-exportable signing key and provides the RFC 3161 timestamp service. Repository,
+environment, or runner secrets must not contain a Windows signing private key or an Azure client
+secret. A `PublicTrust Test` profile is forbidden for production. The account and profile aliases
+select the signing resource but are not recoverable signer identity. Every signed PE must verify both a
+valid Public Trust/code-signing chain and the exact reviewed subscriber identity-validation EKU
+`1.3.6.1.4.1.311.97.<subscriber suffix>`. The workflow must not pin a rotating leaf thumbprint, public
+key, or certificate subject.
+
+macOS production artifacts use a Developer ID Application identity with hardened runtime. Every
+embedded Mach-O is signed leaf-to-root before the app; each target app is submitted with a team App
+Store Connect API key through `notarytool`, accepted, stapled, and assessed locally before its final
+archive is created. Apple certificate/key material exists only as protected environment secrets and is
+decoded into owner-only, per-run temporary storage and a generated temporary keychain. Cleanup is
+unconditional and a cleanup failure fails the job. The notarization key is a dedicated team key with
+the least-privilege `Developer` role; broader roles and unrelated use are forbidden. Team keys apply
+across all apps and cannot be restricted to Keiko alone, so this operational isolation is mandatory.
+
+Production signing is permitted only on protected native runners for a reviewed stable tag in the
+`portable-release-signing` GitHub environment. The same native job must sign, calculate or verify the
+artifact digest, verify every Windows PE against the exact reviewed subscriber identity-validation EKU
+and valid Public Trust/code-signing chain or verify macOS against the expected Developer ID identity and
+Team ID, and produce the platform booleans consumed by the existing signing verifier. A later job, a
+manually supplied Boolean, or the Ubuntu bundle assembler cannot assert that proof. Missing
+configuration, unavailable tools, provider failure, revoked identity, incomplete signing, failed
+notarization, failed stapling, failed assessment, or partial target completion fails closed and cannot
+produce or promote `verified-production`.
+
+The evidence remains the existing portable manifest and `evidence/signing-verification.json`
+projection. Provider logs, certificate bodies, notarization logs, credentials, private paths, and raw
+stdout/stderr are forbidden. The raw subscriber EKU is protected configuration and must not appear in
+posted or committed evidence. Azure's short-lived leaf certificate rotation is not an identity change:
+verification binds the Public Trust/code-signing chain and reviewed subscriber identity-validation EKU
+rather than pinning a leaf thumbprint, public key, certificate subject, account, or profile alias. An
+intentional subscriber identity EKU change requires a reviewed amendment to the signing contract and
+renewed qualification.
+
+Authenticode establishes publisher and artifact integrity but does not guarantee that Microsoft
+SmartScreen will suppress warnings for every new file hash. SmartScreen reputation remains a
+Microsoft-controlled signal and is not an installability acceptance criterion.
+
+### D8 — Release archives and SBOMs carry independently verifiable GitHub Artifact Attestations
+
+Each of the three portable release archives and its per-target SBOM additionally carries a GitHub
+Artifact Attestation: a build-provenance attestation over the archive, an SBOM attestation binding
+the archive to its `evidence/sbom.cdx.json` as that attestation's predicate, and a separate
+build-provenance attestation over the SBOM document itself so the SBOM file has its own attestation
+subject and is independently verifiable (`gh attestation verify <sbom-file>`) without requiring the
+archive. All three are generated with GitHub's keyless, Sigstore-backed `actions/attest` action
+using the same environment-scoped `id-token: write` OIDC mechanism already established for Windows
+production signing in D7 — no new secret material or credential class is introduced.
+
+Attestation generation runs once, in the `assemble` job of `.github/workflows/portable-assets.yml`,
+strictly after `validatePortableReleaseSet` has proven the reviewed bundle contains exactly three
+mutually consistent, qualification-bound targets. A missing, mismatched, or non-production target
+fails that gate before any attestation step runs; there is no path that attests an incomplete or
+unverified release set. The `ci` workflow's root, per-workspace, and UI CycloneDX SBOMs receive the
+same treatment as build-provenance attestations of the SBOM documents themselves, scoped to `push`
+events on integration branches, so pull-request and `workflow_dispatch` runs stay unverified-staging
+and do not accumulate attestations for commits that never ship.
+
+This is additive evidence, not a replacement for the existing portable manifest, the content-free
+`evidence/signing-verification.json` projection, or the `provenance.intoto.jsonl` statement. Those
+remain Keiko's own reviewed, internally validated evidence. A GitHub Artifact Attestation is an
+independently, cryptographically verifiable claim anchored to the exact GitHub Actions workflow run
+and commit that produced the artifact, checkable by any consumer with `gh attestation verify`
+without trusting Keiko's own manifest-validation code. Attestations are supplementary trust evidence
+only: they do not gate `verified-production` promotion, and the existing signing/notarization
+acceptance criteria are unchanged.
+
 ## Security and threat model
 
 Security review for implementation under this ADR must cover:
@@ -205,6 +283,18 @@ Security review for implementation under this ADR must cover:
 - **Failure posture.** Verification, staging, swap, relaunch, and remediation failures must be
   visible, resumable where possible, and fail closed. They must not delete `.keiko` runtime state or
   customer files.
+- **Signing workload identity.** Production signing is restricted by both the protected GitHub
+  environment and exact stable-tag workflow guards. Azure federation is repository- and
+  environment-bound, uses no client secret, and grants signer authority only at the selected
+  certificate profile. Every PE must independently match the reviewed subscriber identity-validation
+  EKU as well as the Public Trust/code-signing chain.
+- **Ephemeral Apple material.** Imported Developer ID and notarization credentials are masked,
+  owner-readable only, never passed on command lines, and removed in an always-run cleanup step
+  together with the temporary keychain. Cleanup failure blocks promotion.
+- **Evidence provenance.** Native verification booleans are trusted only when produced in the same
+  protected native job as signing and bound to the artifact digest and approved durable platform
+  identity: the Windows subscriber EKU and Public Trust/code-signing chain, or the macOS Developer ID
+  identity and Team ID. Cross-job declarations and assembly-time reconstruction are not signing proof.
 
 ## Consequences
 
@@ -217,6 +307,8 @@ Security review for implementation under this ADR must cover:
   payloads from being mixed.
 - The portable update path can reuse the existing governed updater and evidence semantics instead of
   creating a second mutation authority.
+- Windows private-key custody stays with Azure, Apple key material stays ephemeral on protected native
+  runners, and both platforms reuse the existing content-free signing evidence projection.
 
 ### Negative
 
@@ -224,6 +316,9 @@ Security review for implementation under this ADR must cover:
 - The portable path needs thin per-platform launchers and archive packaging support.
 - Portable installs that cannot attest a single managed target must fall back to manual
   instructions.
+- Stable portable delivery depends on protected GitHub environments and available Azure and Apple
+  signing/notarization services; an outage blocks production promotion while secret-free staging
+  remains available.
 
 ## Alternatives considered
 
@@ -235,6 +330,12 @@ Security review for implementation under this ADR must cover:
    owns compatibility and remediation, and a second catalog would drift.
 4. GitHub Release notes as the installability authority. Rejected because prose is not a source of
    installability truth.
+5. Exportable OV/EV keys or a self-hosted Windows signing token in GitHub. Rejected because Azure
+   Artifact Signing provides managed key custody and OIDC-scoped workload authorization.
+6. Azure `PublicTrust Test` for production. Rejected because test profiles do not establish the
+   production publisher trust required by this ADR.
+7. An individual App Store Connect API key for notarization. Rejected because the production
+   `notarytool` path requires a team key and a shared, revocable release identity.
 
 ## Compatibility with existing ADRs
 
@@ -254,5 +355,13 @@ Security review for implementation under this ADR must cover:
 - [ADR-0038: Shared proxy- and custom-CA-aware outbound HTTP egress](ADR-0038-outbound-egress.md)
 - [ADR-0048: Evidence and Quality Intelligence artifact confidentiality hardening](ADR-0048-evidence-artifact-confidentiality.md)
 - [ADR-0099: Governed in-app updates and release-impact contract](ADR-0099-governed-in-app-updates-and-release-impact-contract.md)
+- [Portable Production Signing Contract](../release/portable-production-signing-contract.md)
 - [Local runtime state contract](../local-runtime-state-contract.md)
 - Issue #1946
+
+## Amendment history
+
+- **2026-07-10 — Issue #2199:** Added D7 and its security, alternatives, and operating-contract
+  consequences to settle the production Windows and macOS signing trust boundary for Epic #2198.
+- **2026-07-11 — Issue #2308:** Added D8 to record GitHub Artifact Attestations (build provenance
+  and SBOM) for the three portable release archives and the `ci` workflow's SBOMs.

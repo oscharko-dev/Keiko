@@ -2438,6 +2438,291 @@ export const htmlManualMultilingualFixture: RetrievalEvalFixture = {
   ],
 };
 
+// Connector-backed Knowledge Pod (Epic #2238, Issue #2242): a pod shaped exactly like a synced
+// Confluence space — documents named by page TITLE (the connector sink renames
+// `safe_display_name` to the provider title), html-block units with heading paths from the
+// storage-format body, and a comments section captured through the same HTML parser. A sibling
+// of `htmlManualStructureFixture` in the SAME harness — retrieval and citation quality over
+// connector content is gated by the same scorecards as every other pod kind.
+export const confluenceConnectorFixture: RetrievalEvalFixture = {
+  id: "confluence-connector-pod",
+  description:
+    "Connector pod synced from a Confluence space: runbook lookup, policy table answer, and a " +
+    "page-comment answer over html-block units with page-title citations.",
+  capsules: [
+    {
+      id: capsuleId("cap-confluence-connector"),
+      displayName: "Confluence ENG Space",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-confluence-connector"),
+          documents: [
+            {
+              id: documentId("doc-conf-runbook"),
+              safeDisplayName: "Payment Gateway Runbook",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-conf-runbook-restart",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Payment Gateway Runbook", "Restart Procedure"],
+                    anchorId: "restart-procedure",
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+                {
+                  id: "u-conf-runbook-comments",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Payment Gateway Runbook", "Comments"],
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-conf-restart"),
+                  text:
+                    "Restart Procedure: drain the payment gateway node, wait for in-flight " +
+                    "captures to settle, then restart the gateway service.",
+                  topic: "conf-restart",
+                  parsedUnitId: "u-conf-runbook-restart",
+                },
+                {
+                  id: chunkId("c-conf-comment-oncall"),
+                  text:
+                    "Comment: the on-call engineer must page the payments channel before any " +
+                    "gateway restart during business hours.",
+                  topic: "conf-comment-oncall",
+                  parsedUnitId: "u-conf-runbook-comments",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-conf-retention"),
+              safeDisplayName: "Data Retention Policy",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-conf-retention",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["Data Retention Policy", "Retention Periods"],
+                    anchorId: "retention-periods",
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-conf-retention"),
+                  text:
+                    "Retention Periods: audit logs are retained for 400 days and payment " +
+                    "records for seven years.",
+                  topic: "conf-retention",
+                  parsedUnitId: "u-conf-retention",
+                },
+                {
+                  id: chunkId("c-conf-noise"),
+                  text: "This policy page was migrated from the legacy wiki during Q3.",
+                  topic: "conf-noise",
+                  parsedUnitId: "u-conf-retention",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-conf-restart",
+      text: "How do I restart the payment gateway safely?",
+      topic: "conf-restart",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-confluence-connector") },
+      expectedChunkIds: [chunkId("c-conf-restart")],
+      topK: 1,
+    },
+    {
+      id: "q-conf-retention",
+      text: "How long are audit logs retained?",
+      topic: "conf-retention",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-confluence-connector") },
+      expectedChunkIds: [chunkId("c-conf-retention")],
+      topK: 1,
+    },
+    {
+      id: "q-conf-comment",
+      text: "Who must be paged before a gateway restart during business hours?",
+      topic: "conf-comment-oncall",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-confluence-connector") },
+      expectedChunkIds: [chunkId("c-conf-comment-oncall")],
+      topK: 1,
+    },
+  ],
+};
+
+// Jira connector Knowledge Pod (Epic #2238, Issue #2243): a pod shaped exactly like a synced
+// Jira project — documents named `KEY: summary` (the connector sink renames `safe_display_name`
+// to the issue title), an html-block metadata line (status/type/priority/labels — retrievable
+// text mirroring the citation metadata), the ADF-converted description, and a comments section
+// with author/date headers. A sibling of `confluenceConnectorFixture` in the SAME harness — Jira
+// retrieval and citation quality is gated by the same scorecards as every other pod kind.
+export const jiraConnectorFixture: RetrievalEvalFixture = {
+  id: "jira-connector-pod",
+  description:
+    "Connector pod synced from a Jira project: a description answer, a status/type metadata-line " +
+    "answer, and an issue-comment answer over html-block units with KEY: summary citations.",
+  capsules: [
+    {
+      id: capsuleId("cap-jira-connector"),
+      displayName: "Platform Jira Project",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-jira-connector"),
+          documents: [
+            {
+              id: documentId("doc-jira-login"),
+              safeDisplayName: "PLAT-2: Fix login flow",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-jira-login-meta",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["PLAT-2: Fix login flow"],
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+                {
+                  id: "u-jira-login-desc",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["PLAT-2: Fix login flow"],
+                    characterStart: 0,
+                    characterEnd: 200,
+                  },
+                },
+                {
+                  id: "u-jira-login-comments",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["PLAT-2: Fix login flow", "Comments"],
+                    characterStart: 0,
+                    characterEnd: 200,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-jira-login-meta"),
+                  text:
+                    "Status: In Progress | Type: Bug | Priority: High | Assignee: Alice Example " +
+                    "| Remaining estimate: 2d | Parent: PLAT-1 | Labels: auth, backend",
+                  topic: "jira-login-meta",
+                  parsedUnitId: "u-jira-login-meta",
+                },
+                {
+                  id: chunkId("c-jira-login-desc"),
+                  text:
+                    "The login token expires early when single sign-on refreshes in the " +
+                    "background, so returning users are logged out mid-session.",
+                  topic: "jira-login-desc",
+                  parsedUnitId: "u-jira-login-desc",
+                },
+                {
+                  id: chunkId("c-jira-login-comment"),
+                  text:
+                    "Alice Example — 2026-05-01: the on-call engineer must page the identity " +
+                    "channel before rolling out the token fix.",
+                  topic: "jira-login-comment",
+                  parsedUnitId: "u-jira-login-comments",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-jira-billing"),
+              safeDisplayName: "PLAT-7: Billing export stalls",
+              mediaType: "text/html",
+              parserId: "html",
+              parsedUnits: [
+                {
+                  id: "u-jira-billing-desc",
+                  unit: {
+                    kind: "html-block",
+                    headingPath: ["PLAT-7: Billing export stalls"],
+                    characterStart: 0,
+                    characterEnd: 200,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-jira-billing-desc"),
+                  text:
+                    "The quarterly billing export stalls at midnight until the ledger " +
+                    "partition unlocks.",
+                  topic: "jira-billing-desc",
+                  parsedUnitId: "u-jira-billing-desc",
+                },
+                {
+                  id: chunkId("c-jira-noise"),
+                  text: "This ticket was migrated from the legacy tracker during the Q3 cleanup.",
+                  topic: "jira-noise",
+                  parsedUnitId: "u-jira-billing-desc",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-jira-desc",
+      text: "Why are returning users logged out mid-session?",
+      topic: "jira-login-desc",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-jira-connector") },
+      expectedChunkIds: [chunkId("c-jira-login-desc")],
+      topK: 1,
+    },
+    {
+      id: "q-jira-meta",
+      text: "What is the status, type, and remaining estimate of the login issue?",
+      topic: "jira-login-meta",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-jira-connector") },
+      expectedChunkIds: [chunkId("c-jira-login-meta")],
+      topK: 1,
+    },
+    {
+      id: "q-jira-comment",
+      text: "Who must be paged before rolling out the token fix?",
+      topic: "jira-login-comment",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-jira-connector") },
+      expectedChunkIds: [chunkId("c-jira-login-comment")],
+      topK: 1,
+    },
+  ],
+};
+
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
@@ -2466,4 +2751,6 @@ export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   htmlManualDeniedLinkFixture,
   htmlManualIndexPageFixture,
   htmlManualMultilingualFixture,
+  confluenceConnectorFixture,
+  jiraConnectorFixture,
 ] as const;

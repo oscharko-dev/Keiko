@@ -32,7 +32,11 @@ import type {
   WireEditorReferences,
   WireEditorSignatureHelp,
   WireEditorSymbols,
+  WireEditorGitGutter,
+  WireEditorBlame,
+  WireEditorConflicts,
 } from "./on-mount.js";
+import type { EditorGitGutterBridge, EditorGitGutterChanges } from "./git-gutter-bridge.js";
 import type { EditorCallHierarchyResponse } from "./call-hierarchy-bridge.js";
 import type { EditorInlayHintsResponse } from "./inlay-hints-bridge.js";
 import type {
@@ -68,12 +72,14 @@ import {
   createInlineCompletionTelemetry,
   type InlineCompletionTelemetry,
 } from "./inline-completion-telemetry.js";
+import { deriveLargeFileMode } from "./large-file-mode.js";
 
 export interface EditorHandlers {
   readonly onChange: OnChange;
   readonly onMount: OnMount;
   readonly formatDocument: () => void;
   readonly revealDiagnosticMarker: (marker: DiagnosticOverviewMarker) => void;
+  readonly refreshGitGutter: () => void;
 }
 
 // A single module-scope UTF-8 encoder shared across every change event. `TextEncoder` is stateless
@@ -101,6 +107,7 @@ interface EditorRefs {
   readonly disposeRef: MutableRefObject<(() => void) | null>;
   readonly revealDecorationIdsRef: MutableRefObject<string[]>;
   readonly revealTimeoutRef: MutableRefObject<number | null>;
+  readonly gitGutterBridgeRef: MutableRefObject<EditorGitGutterBridge | null>;
 }
 
 function useEditorRefs(): EditorRefs {
@@ -111,6 +118,7 @@ function useEditorRefs(): EditorRefs {
   const disposeRef = useRef<(() => void) | null>(null);
   const revealDecorationIdsRef = useRef<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
+  const gitGutterBridgeRef = useRef<EditorGitGutterBridge | null>(null);
   return useMemo(
     () => ({
       editorRef,
@@ -120,6 +128,7 @@ function useEditorRefs(): EditorRefs {
       disposeRef,
       revealDecorationIdsRef,
       revealTimeoutRef,
+      gitGutterBridgeRef,
     }),
     [
       editorRef,
@@ -129,6 +138,7 @@ function useEditorRefs(): EditorRefs {
       disposeRef,
       revealDecorationIdsRef,
       revealTimeoutRef,
+      gitGutterBridgeRef,
     ],
   );
 }
@@ -682,6 +692,66 @@ function buildSignatureHelpWiring(
   };
 }
 
+function buildGitGutterWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+): WireEditorGitGutter | undefined {
+  const gutter = latestProps.current.editorGitGutter;
+  if (gutter === undefined) return undefined;
+  const content = latestProps.current.buffer.content;
+  const degraded =
+    deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text }) === "degraded";
+  return {
+    degraded,
+    labels: gutter.labels,
+    onPeek: (peek): void => latestProps.current.editorGitGutter?.onPeek(peek),
+    resolve: (): Promise<EditorGitGutterChanges> => {
+      const live = latestProps.current.editorGitGutter;
+      return live === undefined ? Promise.resolve({ staged: [], unstaged: [] }) : live.resolve();
+    },
+    onError: (message) => latestProps.current.onRuntimeError?.(message),
+  };
+}
+
+function buildBlameWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+): WireEditorBlame | undefined {
+  const blame = latestProps.current.editorBlame;
+  if (blame === undefined) return undefined;
+  const content = latestProps.current.buffer.content;
+  return {
+    ...blame,
+    degraded:
+      deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text }) === "degraded",
+    dirty: () => latestProps.current.fileModel.dirty,
+    resolve: () =>
+      latestProps.current.editorBlame?.resolve() ?? Promise.reject(new Error("Blame unavailable")),
+    onCommit: (hash) => latestProps.current.editorBlame?.onCommit(hash),
+    onError: (message) => latestProps.current.onRuntimeError?.(message),
+  };
+}
+
+function buildConflictWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+): WireEditorConflicts | undefined {
+  const conflicts = latestProps.current.editorConflicts;
+  if (conflicts === undefined) return undefined;
+  const content = latestProps.current.buffer.content;
+  return {
+    degraded:
+      deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text }) === "degraded",
+    labels: conflicts.labels,
+    onChange: (count, truncated): void =>
+      latestProps.current.editorConflicts?.onChange(count, truncated),
+    onStale: (): void => latestProps.current.editorConflicts?.onStale?.(),
+  };
+}
+
+function captureGitGutterBridge(refs: EditorRefs): (bridge: EditorGitGutterBridge | null) => void {
+  return (bridge): void => {
+    refs.gitGutterBridgeRef.current = bridge;
+  };
+}
+
 function availabilityBit(value: unknown): string {
   return value === undefined ? "0" : "1";
 }
@@ -705,6 +775,13 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.onGenerateTests,
     props.onAskKeikoAboutSelection,
     props.onRenameSymbol,
+    props.editorGitGutter,
+    props.editorBlame,
+    props.editorConflicts,
+    deriveLargeFileMode({
+      sizeBytes: props.buffer.content.sizeBytes,
+      text: props.buffer.content.text,
+    }),
   ]
     .map(availabilityBit)
     .join("");
@@ -791,6 +868,10 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
     codeActions: buildCodeActionsWiring(args.latestProps, `${args.streamId}:codeActions`),
     signatureHelp: buildSignatureHelpWiring(args.latestProps, `${args.streamId}:signatureHelp`),
     commands: buildCommandsWiring(args.latestProps),
+    gitGutter: buildGitGutterWiring(args.latestProps),
+    blame: buildBlameWiring(args.latestProps),
+    conflicts: buildConflictWiring(args.latestProps),
+    onGitGutterBridge: captureGitGutterBridge(args.refs),
   });
   applyRevealRequest(args.refs, args.latestProps.current.revealRequest);
 }
@@ -841,6 +922,7 @@ function useRuntimeWiringBaseArgs(args: RuntimeWiringBaseArgs): RuntimeWiringBas
       args.onSelectionChange,
       args.onRuntimeError,
       args.themeVariant,
+      args.refs.gitGutterBridgeRef,
     ],
   );
 }
@@ -952,9 +1034,18 @@ export function useEditorHandlers(
     },
     [refs],
   );
+  const refreshGitGutter = useCallback((): void => {
+    refs.gitGutterBridgeRef.current?.refresh();
+  }, [refs.gitGutterBridgeRef]);
   useUnmountDisposal(refs);
   useHostEditRequest(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);
   useThemeReapply(props, refs);
-  return { onChange, onMount, formatDocument, revealDiagnosticMarker: revealDiagnostic };
+  return {
+    onChange,
+    onMount,
+    formatDocument,
+    revealDiagnosticMarker: revealDiagnostic,
+    refreshGitGutter,
+  };
 }

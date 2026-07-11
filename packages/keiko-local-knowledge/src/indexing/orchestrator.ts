@@ -1913,6 +1913,9 @@ function finalizeSourceRun(
   progress: SourceRunProgress,
   failedDocumentsThisSource: number,
 ): void {
+  // An incremental connector re-sync (#2243) mounts only re-fetched items: undiscovered
+  // documents are deliberately alive and removal is owned by the caller's enumeration diff.
+  if (state.options.retainUndiscoveredDocuments === true) return;
   if (progress.cancelled) return;
   if (!progress.completed || progress.sawScopeError) return;
   if (progress.discoveredPaths.size >= resolvedDiscoveryOptions(state).maxFiles) return;
