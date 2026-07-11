@@ -131,6 +131,14 @@ describe("findPortableMetadataRedactionFailures", () => {
     ).not.toEqual([]);
   });
 
+  it.each([
+    `github_pat_${"x".repeat(82)}`,
+    `npm_${"a".repeat(36)}`,
+  ])("rejects unlabelled modern registry credentials", (value) => {
+    expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+    expect(findPortableMetadataRedactionFailures(JSON.stringify({ evidence: value }))).not.toEqual([]);
+  });
+
   it("detects terminal credential labels and inline authorization syntax without rejecting qualified metadata", () => {
     for (const value of [
       "request header Authorization: Bearer opaque-value",
@@ -149,6 +157,8 @@ describe("findPortableMetadataRedactionFailures", () => {
       { authorizationPolicy: "release-owner-reviewed" },
       { authenticationMode: "mTLS" },
       { bearerDescription: "documents bearer semantics" },
+      { packageVariable: "npm_package_name" },
+      { documentation: "github_pat_ is the fine-grained PAT prefix" },
     ]) {
       expect(findPortableMetadataRedactionFailures(value)).toEqual([]);
     }

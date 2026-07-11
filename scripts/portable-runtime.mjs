@@ -79,7 +79,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 ]);
 
 const SECRET_PATTERN =
-  /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
+  /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{82}|npm_[A-Za-z0-9]{36}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
 const CREDENTIAL_VALUE_PATTERN =
   /(?:(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization)\s*:\s*|(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization|auth)\s*=\s*)(?:bearer|basic)\s+\S+/iu;
 const CREDENTIAL_URL_PATTERN = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;

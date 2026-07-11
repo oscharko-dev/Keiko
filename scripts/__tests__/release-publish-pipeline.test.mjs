@@ -779,6 +779,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         '{"bomFormat":"CycloneDX","description":"request header Authorization: Bearer opaque"}\n',
       ],
       ["SBOM terminal credential", "evidence/sbom.cdx.json", '{"apitoken":"opaque"}\n'],
+      ["SBOM GitHub PAT", "evidence/sbom.cdx.json", `{"component":"github_pat_${"x".repeat(82)}"}\n`],
       ["license", "evidence/third-party-notices.txt", "https://user:pass@example.com/private\n"],
       ["signing", "evidence/signing-verification.json", '{"rawOutput":"secret"}\n'],
       ["provenance", "evidence/provenance.intoto.jsonl", '{"privatePath":"/Users/customer"}\n'],
@@ -809,6 +810,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       '{"authToken":"opaque"}\n',
       '{"refresh_token":"opaque"}\n',
       '{"authtoken":"opaque"}\n',
+      `{"package":"npm_${"a".repeat(36)}"}\n`,
       '{"description":"mirror https://user:password@example.invalid/npm/"}\n',
     ])("rejects credential-bearing optional evidence before publication", (content) => {
       const viewBody =
@@ -857,6 +859,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       "request header Proxy-Authorization: Basic c2Vuc2l0aXZlOnZhbHVl\n",
       '{"proxy-authorization":"opaque"}\n',
       '{"client-password":"opaque"}\n',
+      `npm_${"a".repeat(36)}\n`,
     ])("rejects credential-bearing sidecar evidence before publication", (content) => {
       const viewBody =
         'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
