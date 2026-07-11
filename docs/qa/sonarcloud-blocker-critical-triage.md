@@ -132,21 +132,32 @@ findings and surfaced 22 more previously-undetected cases. All are left as bare 
 | `packages/keiko-workflows/src/planner/plan.ts:287,288`                               | `canonicalize()` → `createHash("sha256")` in `derivePlanId()`                                                                                                                                                             |
 | `packages/keiko-workflows/src/contextpack/assemble.ts:561,582`                       | `fingerprintSource` → `sha256Hex()` cache fingerprint (`fp-${...}`)                                                                                                                                                       |
 
-Two call sites that looked similar turned out to be safe and were **not** reverted — their sort
-order has no functional consumer, only an internal self-consistency test assertion, which was
-updated instead: `packages/keiko-workspace/src/ecosystems.ts` (`CANONICAL_MANIFEST_BASENAMES` is
-only ever consumed via `.some()`/membership checks, never positionally) and
-`packages/keiko-server/src/csp.ts` + `load-csp.ts` (`extractInlineScriptHashes`/`normalizeHashes`
-order has no effect on CSP enforcement — browsers treat `script-src` as an unordered set — and both
-sides of the one order-sensitive comparison, `hashesMatch()`, get the same `localeCompare` treatment
-consistently). `ecosystems.test.ts` and `csp.test.ts` were updated to assert the new, intentionally
-improved sort order.
+**Correction (found during the S3776 cleanup pass):** an earlier version of this document claimed
+two further call sites — `packages/keiko-workspace/src/ecosystems.ts`
+(`CANONICAL_MANIFEST_BASENAMES`/`allRegisteredFilePatterns`) and `packages/keiko-server/src/csp.ts`
+(`extractInlineScriptHashes`) — were safe to leave on `localeCompare` because their order "has no
+functional consumer, only an internal self-consistency test assertion." That claim was wrong for at
+least `CANONICAL_MANIFEST_BASENAMES`: `packages/keiko-server/src/grounded-orchestrator.ts` spreads
+it into `PROJECT_METADATA_FILENAMES` and iterates that array **in order** to build the evidence-atom
+list injected into grounded orchestration — a real positional consumer, not just a membership check.
+The claimed test-file updates (`ecosystems.test.ts`/`csp.test.ts` asserting a "new, intentionally
+improved" order) were also never actually present in the working tree — `npm test` caught both as
+live failures (the committed tests still asserted the original byte-order sort while the source had
+been switched to `localeCompare`), most likely lost in the unresolved external-reset anomaly noted
+at the end of this document. Both are now reverted to bare `.sort()` and added to the table above:
 
-**Recommended resolution:** leave the 4 reverted call sites as-is; not a Sonar false positive in the
-usual sense (the rule's general concern is valid) but cases where the mechanical fix would introduce
-a real regression. Track `check-adr-index.mjs:34` as a small separate follow-up (needs
-`(a, b) => a[0].localeCompare(b[0])` or equivalent) since unlike the other three, it has no invariant
-blocking a fix — it just wasn't safe to apply blindly.
+| File:Line                                                                          | What it feeds                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/keiko-workspace/src/ecosystems.ts:1128` (`CANONICAL_MANIFEST_BASENAMES`) | Spread into `PROJECT_METADATA_FILENAMES` in `grounded-orchestrator.ts:992`, iterated in order to build injected evidence atoms — locale-dependent order would make evidence ordering non-reproducible across environments |
+| `packages/keiko-workspace/src/ecosystems.ts` (`allRegisteredFilePatterns`)         | Same file, same reasoning — reverted alongside its sibling for consistency even though its own consumer (a test disjointness check) is order-insensitive                                                                  |
+| `packages/keiko-server/src/csp.ts:52` (`extractInlineScriptHashes`)                | Builds the deterministic `'sha256-...'` CSP source-list; kept locale-independent for the same reason as every other hash/digest-adjacent sort in this table                                                               |
+
+**Recommended resolution:** leave all 4 reverted call sites (2 from the original pass, 2 corrected
+here) as bare `.sort()`; not a Sonar false positive in the usual sense (the rule's general concern is
+valid) but cases where the mechanical fix would introduce a real regression. Track
+`check-adr-index.mjs:34` as a small separate follow-up (needs `(a, b) => a[0].localeCompare(b[0])`
+or equivalent) since unlike the others, it has no invariant blocking a fix — it just wasn't safe to
+apply blindly.
 
 ## Summary
 
@@ -162,3 +173,26 @@ blocking a fix — it just wasn't safe to apply blindly.
 All 31 `S2699` findings are therefore Won't Fix. PR 1 (see the implementation PRs) covers only the
 2 genuine, low-risk code fixes found in this review round outside the sort/nesting/complexity
 buckets: `Web:S7930` duplicate ids and `javascript:S2819` service-worker origin check.
+
+## 5. Six `S3776` findings deferred out of this PR — pre-existing i18n gap, not an architecture risk
+
+Distinct from the two `codeIntelligence.ts`/`EditorRuntimeWidget.tsx` hotspots in
+[`sonarcloud-complexity-followup-epic.md`](sonarcloud-complexity-followup-epic.md), six more `S3776`
+findings were deferred for an unrelated reason: `AgentRunWidget.tsx`, `FilePreview.tsx`,
+`FilesWidget.tsx`, `PdfCitationPreviewWindow.tsx`, `ReviewWidget.tsx`, and `FigmaSnapshotWindow.tsx`
+had **zero i18n coverage** on `dev` before this cleanup — every user-facing string was hardcoded
+English. Their complexity extraction reflows enough JSX that `check:ui-i18n` treats the diff as
+i18n-relevant, and since none of these files used the i18n API at all, the guard correctly failed.
+
+Rather than bolt on a token i18n usage just to satisfy the guard, a full retrofit was done as its own
+change on `claude/i18n-retrofit-quality-widgets`
+([PR #2315](https://github.com/oscharko-dev/Keiko/pull/2315)): all six files now wrap every
+user-facing string with `useTranslate()`/`t()`, with matching English/German catalog entries (419 new
+keys). Once that lands, the `S3776` extraction for these six files will be reapplied on top of it in
+a follow-up (tracked as its own step, not bundled into this PR) — `FigmaSnapshotWindow.tsx` also
+needs its already-fixed `S2004` nesting extraction (kept in this PR, see the interim-revert commit)
+merged in first so the two don't conflict.
+
+`GitClientWindow.tsx` was also touched (dev has zero i18n coverage there too) but its `S3776` finding
+was left as a partial, low-footprint extraction — see the audit note in the implementation commit —
+since its diff never grew large enough to trip the guard.
