@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 function Invoke-WindowsPortableNativePolicy {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory = $true)][object[]]$Entries,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Entries,
     [Parameter(Mandatory = $true)][string]$ExpectedIdentityEku,
     [Parameter(Mandatory = $true)][scriptblock]$VerifySigntool,
     [Parameter(Mandatory = $true)][scriptblock]$ReadSignature,
@@ -11,6 +11,15 @@ function Invoke-WindowsPortableNativePolicy {
     [Parameter(Mandatory = $true)][scriptblock]$VerifyEku,
     [Parameter(Mandatory = $true)][scriptblock]$VerifyTimestamp
   )
+
+  if ($Entries.Count -eq 0) {
+    return [pscustomobject]@{
+      PublisherChainVerified = $false
+      TimestampVerified = $false
+      ResultCount = 0
+      Results = @()
+    }
+  }
 
   $publisherVerified = $true
   $timestampVerified = $true
