@@ -94,5 +94,5 @@ registry/source replacement, credentials, arbitrary environment values, mutable 
 homes, network access, or downloads as a repair. Any future execution-derived fidelity requires a
 separate ADR-0043-compatible decision, explicit human-reviewed opt-in, and enforced matching
 execution isolation. See
-[ADR-0131](../adr/ADR-0131-managed-multi-language-lsp-activation-and-configuration.md) and the
+[ADR-0132](../adr/ADR-0132-managed-multi-language-lsp-activation-and-configuration.md) and the
 official [rust-analyzer configuration manual](https://rust-analyzer.github.io/book/configuration).

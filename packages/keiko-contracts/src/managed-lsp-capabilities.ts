@@ -1,5 +1,5 @@
 // Managed-LSP candidate, negotiation, and semantic-token contracts (Issue #2271, Epic #2094,
-// ADR-0131). Static candidates never imply reachability: only a versioned negotiated snapshot may
+// ADR-0132). Static candidates never imply reachability: only a versioned negotiated snapshot may
 // advertise an operation, and dynamic unregistration removes it fail closed.
 
 import { LANGUAGE_SERVICE_OPERATIONS, type LanguageServiceOperation } from "./language-service.js";

@@ -1,4 +1,4 @@
-// Content-free managed-LSP activation and lifecycle evidence (Issue #2271, Epic #2094, ADR-0131).
+// Content-free managed-LSP activation and lifecycle evidence (Issue #2271, Epic #2094, ADR-0132).
 // Every string is a closed enum/literal. Raw paths, environment values, source, stderr, command
 // lines, endpoints, and credentials are unrepresentable by these interfaces.
 

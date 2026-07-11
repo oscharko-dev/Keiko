@@ -84,5 +84,5 @@ classpath strings, Maven/Gradle import, wrappers, plugins, init scripts, annotat
 downloads, `workspace/executeCommand`, or `workspace/applyEdit` authority as a repair. Better project
 fidelity that requires execution needs a separately approved, enforced, and attested isolation
 boundary. See
-[ADR-0131](../adr/ADR-0131-managed-multi-language-lsp-activation-and-configuration.md) and the
+[ADR-0132](../adr/ADR-0132-managed-multi-language-lsp-activation-and-configuration.md) and the
 official [Eclipse JDT LS documentation](https://github.com/eclipse-jdtls/eclipse.jdt.ls).

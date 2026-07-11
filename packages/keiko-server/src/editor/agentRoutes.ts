@@ -1329,6 +1329,9 @@ function actionAbortSignal(ctx: RouteContext): AbortSignal {
       if (!ctx.res.writableEnded) controller.abort();
     });
   }
+  if (ctx.req.destroyed && typeof ctx.req.complete === "boolean" && !ctx.req.complete) {
+    controller.abort();
+  }
   return controller.signal;
 }
 

@@ -61,4 +61,4 @@ failed handshake or runtime. `RESTART_REQUIRED` confirms a valid pending configu
 
 Never weaken executable containment, command policy, or environment filtering to recover service.
 The governing boundaries are documented in
-[ADR-0131](../adr/ADR-0131-managed-multi-language-lsp-activation-and-configuration.md).
+[ADR-0132](../adr/ADR-0132-managed-multi-language-lsp-activation-and-configuration.md).

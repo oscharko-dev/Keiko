@@ -1,4 +1,4 @@
-// Bounded managed-LSP workspace runtime configuration (Issue #2271, Epic #2094, ADR-0131).
+// Bounded managed-LSP workspace runtime configuration (Issue #2271, Epic #2094, ADR-0132).
 // Executables and arguments are deliberately absent: persisted settings can reference only an
 // opaque operator-approved runtime and contained workspace-relative configuration files.
 

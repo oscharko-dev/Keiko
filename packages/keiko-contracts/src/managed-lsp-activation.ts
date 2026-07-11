@@ -1,4 +1,4 @@
-// Managed multi-language activation contracts (Issue #2271, Epic #2094, ADR-0131). This strict
+// Managed multi-language activation contracts (Issue #2271, Epic #2094, ADR-0132). This strict
 // contracts leaf owns only closed state, precedence, and content-free status vocabulary. Runtime
 // process supervision remains owned by ADR-0069 and keiko-server.
 

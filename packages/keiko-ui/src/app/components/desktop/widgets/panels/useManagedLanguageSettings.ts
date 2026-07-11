@@ -43,7 +43,6 @@ export interface ManagedLspViewController extends ManagedLspViewState {
   ) => Promise<void>;
 }
 
-const intentByRoot = new Map<string, ManagedLspPendingIntent>();
 let fallbackId = 0;
 
 function idempotencyKey(): string {
@@ -57,12 +56,13 @@ function aborted(error: unknown): boolean {
 }
 
 export function useManagedLanguageSettings(root: string | undefined): ManagedLspViewController {
+  const intentByRoot = useRef(new Map<string, ManagedLspPendingIntent>());
   const [state, setState] = useState<ManagedLspViewState>({
     data: undefined,
     loading: false,
     mutating: false,
     issue: undefined,
-    pendingIntent: root === undefined ? undefined : intentByRoot.get(root),
+    pendingIntent: root === undefined ? undefined : intentByRoot.current.get(root),
     announcement: "",
   });
   const rootRef = useRef(root);
@@ -97,7 +97,7 @@ export function useManagedLanguageSettings(root: string | undefined): ManagedLsp
       loading: root !== undefined,
       mutating: false,
       issue: undefined,
-      pendingIntent: root === undefined ? undefined : intentByRoot.get(root),
+      pendingIntent: root === undefined ? undefined : intentByRoot.current.get(root),
       announcement: "",
     });
     void load();
@@ -114,7 +114,7 @@ export function useManagedLanguageSettings(root: string | undefined): ManagedLsp
       mutationAbort.current?.abort();
       const controller = new AbortController();
       mutationAbort.current = controller;
-      intentByRoot.set(intent.root, intent);
+      intentByRoot.current.set(intent.root, intent);
       setState((value) => ({
         ...value,
         mutating: true,
@@ -137,7 +137,7 @@ export function useManagedLanguageSettings(root: string | undefined): ManagedLsp
         );
         const data = await fetchManagedLspSettings(intent.root, controller.signal);
         if (rootRef.current !== intent.root || controller.signal.aborted) return;
-        intentByRoot.delete(intent.root);
+        intentByRoot.current.delete(intent.root);
         setState((value) => ({
           ...value,
           data,

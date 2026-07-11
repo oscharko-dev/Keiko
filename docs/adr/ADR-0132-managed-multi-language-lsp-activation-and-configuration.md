@@ -1,4 +1,4 @@
-# ADR-0131: Managed multi-language LSP activation, configuration, negotiation, and evidence
+# ADR-0132: Managed multi-language LSP activation, configuration, negotiation, and evidence
 
 ## Status
 

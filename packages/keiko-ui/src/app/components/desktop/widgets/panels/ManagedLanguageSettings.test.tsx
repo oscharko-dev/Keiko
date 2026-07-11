@@ -291,6 +291,23 @@ describe("ManagedLanguageSettings", () => {
     expect(screen.getByRole("button", { name: /retry requested change/i })).toBeInTheDocument();
   });
 
+  it("discards a failed mutation intent when the panel unmounts", async () => {
+    fetchSettingsMock.mockResolvedValue(snapshot("restartRequired", "RESTART_REQUIRED"));
+    mutateSettingsMock.mockRejectedValue(new ApiError("STATE_UNAVAILABLE", "failed", 503));
+    const first = renderSettings("/workspace/discarded-intent");
+    fireEvent.click(await screen.findByRole("button", { name: "Restart Python" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm restart" }));
+    expect(
+      await screen.findByRole("button", { name: /retry requested change/i }),
+    ).toBeInTheDocument();
+
+    first.unmount();
+    renderSettings("/workspace/discarded-intent");
+
+    expect(await screen.findByText("Restart required")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry requested change/i })).toBeNull();
+  });
+
   it("cancels an in-flight mutation when the workspace changes", async () => {
     let mutationSignal: AbortSignal | undefined;
     fetchSettingsMock.mockImplementation((root: string) =>

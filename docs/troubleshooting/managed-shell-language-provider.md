@@ -54,6 +54,6 @@ Keiko never executes shell documents to repair or improve analysis.
 
 Do not enable external sources, explainshell, shfmt, startup profiles, arbitrary ShellCheck arguments,
 or a broad PATH as a repair. See
-[ADR-0131](../adr/ADR-0131-managed-multi-language-lsp-activation-and-configuration.md), the official
+[ADR-0132](../adr/ADR-0132-managed-multi-language-lsp-activation-and-configuration.md), the official
 [Bash Language Server configuration](https://github.com/bash-lsp/bash-language-server/blob/main/server/src/config.ts),
 and the official [ShellCheck documentation](https://www.shellcheck.net/).

@@ -53,6 +53,6 @@ external documentation links, and unimported-package indexing are disabled.
 
 Do not enable a proxy, automatic toolchain selection, checksum network access, VCS access, or
 provider downloads as a repair. See
-[ADR-0131](../adr/ADR-0131-managed-multi-language-lsp-activation-and-configuration.md), the official
+[ADR-0132](../adr/ADR-0132-managed-multi-language-lsp-activation-and-configuration.md), the official
 [gopls settings](https://go.dev/gopls/settings/), and the official
 [Go toolchain selection rules](https://go.dev/doc/toolchain).
