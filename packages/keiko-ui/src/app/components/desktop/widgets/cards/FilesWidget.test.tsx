@@ -1704,6 +1704,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     fireEvent.contextMenu(await screen.findByText("app.ts"));
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
     // The confirm dialog gates the destructive action.
@@ -1716,6 +1717,9 @@ describe("FilesWidget file operations", () => {
       op: "delete",
       mutation: { root: "/repo", path: "app.ts", kind: "file" },
     });
+    // AC2 (Epic #2093 audit) — deletion must invalidate the shared git status the same way
+    // rename already does, so decorations re-fetch instead of going stale.
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   // GEN-UI-FOCUS-002 — the delete-confirmation dialog must trap focus, focus a button on open,
@@ -1823,6 +1827,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     fireEvent.contextMenu(await screen.findByText("app.ts"));
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "Duplicate" }));
 
@@ -1838,6 +1843,9 @@ describe("FilesWidget file operations", () => {
       op: "create",
       mutation: { root: "/repo", path: "app copy.ts", kind: "file" },
     });
+    // AC2 (Epic #2093 audit) — duplication must invalidate the shared git status the same way
+    // rename already does, so decorations re-fetch instead of going stale.
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   it("moves a file into a folder when dropped on its row (drag-move = rename)", async () => {
@@ -1850,6 +1858,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     await screen.findByText("app.ts");
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     const source = screen.getByRole("treeitem", { name: /app\.ts/ });
     const target = screen.getByRole("treeitem", { name: /src/ });
@@ -1869,6 +1878,9 @@ describe("FilesWidget file operations", () => {
       op: "rename",
       mutation: expect.objectContaining({ path: "src/app.ts", previousPath: "app.ts" }),
     });
+    // AC2 (Epic #2093 audit) — a drag-move must invalidate the shared git status the same way
+    // the context-menu rename already does, so decorations re-fetch instead of going stale.
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   // GEN-PERF-WIDGET-004 — while a tooltip is visible, pointer motion must not commit a React
