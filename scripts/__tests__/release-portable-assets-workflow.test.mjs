@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   resolvePortableAssetsManifest,
+  validatePortableAssetsRunSnapshot,
   writeGithubOutput,
 } from "../resolve-release-portable-assets.mjs";
 import { portableReleaseAuthorityFailures } from "../check-release-required-workflow-names.mjs";
@@ -67,6 +68,7 @@ function latestEnv(overrides = {}) {
     NPM_DIST_TAG: "latest",
     PORTABLE_ASSETS_ARTIFACT_NAME: "portable-release-assets",
     PORTABLE_ASSETS_MANIFEST: "",
+    PORTABLE_ASSETS_RUN_ATTEMPT: "2",
     PORTABLE_ASSETS_RUN_ID: "123456789",
     ...overrides,
   };
@@ -171,6 +173,59 @@ describe("release workflow portable asset manifest resolution", () => {
     writeGithubOutput("portable-assets.json", { GITHUB_OUTPUT: outputPath });
 
     expect(readFileSync(outputPath, "utf8")).toBe("manifest=portable-assets.json\n");
+  });
+});
+
+describe("portable asset workflow run resolution", () => {
+  const config = {
+    artifactName: "portable-release-assets",
+    releaseTag: "v0.2.15",
+    repository: "oscharko-dev/Keiko",
+    runAttempt: "2",
+    runId: "123456789",
+    sha: "a".repeat(40),
+  };
+  const run = {
+    conclusion: "success",
+    event: "push",
+    head_branch: "v0.2.15",
+    head_sha: "a".repeat(40),
+    id: 123456789,
+    path: ".github/workflows/portable-assets.yml@refs/tags/v0.2.15",
+    repository: { full_name: "oscharko-dev/Keiko" },
+    run_attempt: 2,
+    status: "completed",
+  };
+  const artifacts = {
+    artifacts: [
+      { expired: false, id: 777, name: "portable-release-assets", workflow_run: { id: 123456789 } },
+    ],
+  };
+
+  it("accepts one nonexpired canonical artifact from the exact successful stable push", () => {
+    expect(validatePortableAssetsRunSnapshot(config, run, artifacts)).toEqual({
+      artifactId: 777,
+      runAttempt: 2,
+    });
+  });
+
+  it.each([
+    ["workflow", { path: ".github/workflows/ci.yml" }, artifacts, "workflow path"],
+    ["event", { event: "workflow_dispatch" }, artifacts, "event"],
+    ["conclusion", { conclusion: "failure" }, artifacts, "conclusion"],
+    ["SHA", { head_sha: "b".repeat(40) }, artifacts, "head SHA"],
+    ["attempt", { run_attempt: 3 }, artifacts, "run attempt"],
+    ["expired", {}, { artifacts: [{ ...artifacts.artifacts[0], expired: true }] }, "expired"],
+    [
+      "duplicate artifact",
+      {},
+      { artifacts: [...artifacts.artifacts, { ...artifacts.artifacts[0], id: 778 }] },
+      "exactly one",
+    ],
+  ])("rejects wrong %s metadata", (_name, runPatch, artifactValue, message) => {
+    expect(() =>
+      validatePortableAssetsRunSnapshot(config, { ...run, ...runPatch }, artifactValue),
+    ).toThrow(message);
   });
 });
 
@@ -348,10 +403,10 @@ describe("Windows Artifact Signing protected configuration", () => {
 describe("macOS portable production signing workflow", () => {
   const macJob = portableWorkflow.slice(
     portableWorkflow.indexOf("  stage-macos-production:"),
-    portableWorkflow.indexOf("\n  smoke-macos-production:"),
+    portableWorkflow.indexOf("\n  qualify-windows-production:"),
   );
   const smokeJob = portableWorkflow.slice(
-    portableWorkflow.indexOf("  smoke-macos-production:"),
+    portableWorkflow.indexOf("  qualify-macos-production:"),
     portableWorkflow.indexOf("\n  assemble:"),
   );
   const stagingJob = portableWorkflow.slice(
@@ -385,17 +440,15 @@ describe("macOS portable production signing workflow", () => {
     expect(stagingJob).not.toContain("environment: portable-release-signing");
   });
 
-  it("assembles only a complete dispatch set or a complete stable production set", () => {
+  it("assembles only a complete stable production set and never a dispatch set", () => {
     const assemble = portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"));
-    expect(assemble).toContain("github.event_name == 'workflow_dispatch'");
-    expect(assemble).toContain("needs.stage.result == 'success'");
-    expect(assemble).toContain("needs.stage-macos-production.result == 'skipped'");
-    expect(assemble).toContain("needs.smoke-macos-production.result == 'skipped'");
+    expect(assemble).not.toContain("github.event_name == 'workflow_dispatch'");
     expect(assemble).toContain("github.event_name == 'push'");
     expect(assemble).toContain("!contains(github.ref_name, '-')");
-    expect(assemble).toContain("needs.stage.result == 'skipped'");
+    expect(assemble).toContain("needs.stage-windows-production.result == 'success'");
     expect(assemble).toContain("needs.stage-macos-production.result == 'success'");
-    expect(assemble).toContain("needs.smoke-macos-production.result == 'success'");
+    expect(assemble).toContain("needs.qualify-windows-production.result == 'success'");
+    expect(assemble).toContain("needs.qualify-macos-production.result == 'success'");
     expect(assemble).not.toMatch(/result == 'success' \|\| needs\.[^.]+\.result == 'skipped'/u);
   });
 
@@ -446,7 +499,8 @@ describe("macOS portable production signing workflow", () => {
     expect(smokeJob).toContain("runner: macos-15-intel");
     expect(smokeJob).toContain("persist-credentials: false");
     expect(smokeJob).toContain("actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e");
-    expect(smokeJob).not.toMatch(/environment:|secrets\.|id-token: write|upload-artifact/u);
+    expect(smokeJob).toContain("environment: portable-release-signing");
+    expect(smokeJob).not.toMatch(/secrets\.|id-token: write|upload-artifact/u);
     expect(smokeJob).toContain("Download immutable verified macOS artifact");
     const execute = smokeJob.indexOf("Execute bundled runtimes in isolated disposable copy");
     expect(execute).toBeGreaterThan(0);
@@ -504,14 +558,14 @@ describe("macOS portable production signing workflow", () => {
     ).toBe(false);
     expect(smokeJob).toContain("needs.stage-macos-production.result == 'success'");
     expect(portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"))).toContain(
-      "needs.smoke-macos-production.result == 'success'",
+      "needs.qualify-macos-production.result == 'success'",
     );
   });
 
-  it("accepts only complete dispatch or stable states and rejects prerelease or smoke failure", () => {
+  it("accepts only complete stable states and rejects dispatch, prerelease, or qualification failure", () => {
     const assembles = ({ dispatch, prerelease, smoke }) =>
-      dispatch ? smoke === "skipped" : !prerelease && smoke === "success";
-    expect(assembles({ dispatch: true, prerelease: false, smoke: "skipped" })).toBe(true);
+      !dispatch && !prerelease && smoke === "success";
+    expect(assembles({ dispatch: true, prerelease: false, smoke: "skipped" })).toBe(false);
     expect(assembles({ dispatch: false, prerelease: false, smoke: "success" })).toBe(true);
     expect(assembles({ dispatch: false, prerelease: true, smoke: "skipped" })).toBe(false);
     expect(assembles({ dispatch: false, prerelease: false, smoke: "failure" })).toBe(false);

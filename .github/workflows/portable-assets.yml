@@ -349,8 +349,49 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  smoke-macos-production:
-    name: Isolated smoke portable asset (${{ matrix.platform_target }})
+  qualify-windows-production:
+    name: Fresh native qualification (windows-x64)
+    needs: stage-windows-production
+    if: ${{ needs.stage-windows-production.result == 'success' }}
+    runs-on: windows-latest
+    environment: portable-release-signing
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Download immutable verified Windows artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: portable-stage-windows-x64
+          path: .qualified-windows-stage/windows-x64
+      - name: Re-verify final Authenticode bytes on a fresh runner
+        shell: pwsh
+        env:
+          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
+        run: ./scripts/verify-fresh-windows-portable-artifact.ps1 -ArtifactRoot .qualified-windows-stage/windows-x64 -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU -ScratchRoot "$env:RUNNER_TEMP\keiko-windows-qualification"
+      - name: Execute terminal payload smoke without credential or file-command authority
+        env:
+          GH_TOKEN: ""
+          GITHUB_ENV: ""
+          GITHUB_OUTPUT: ""
+          GITHUB_PATH: ""
+          GITHUB_STEP_SUMMARY: ""
+          GITHUB_TOKEN: ""
+          NODE_AUTH_TOKEN: ""
+        run: npm run smoke:portable-launch-setup -- --stage-root .qualified-windows-stage --stage-target windows-x64
+
+  qualify-macos-production:
+    name: Fresh native qualification (${{ matrix.platform_target }})
     needs: stage-macos-production
     if: ${{ needs.stage-macos-production.result == 'success' }}
     strategy:
@@ -362,6 +403,7 @@ jobs:
           - platform_target: macos-x64
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
+    environment: portable-release-signing
     permissions:
       contents: read
     timeout-minutes: 20
@@ -380,13 +422,28 @@ jobs:
           path: .isolated-macos-artifact/${{ matrix.platform_target }}
       - name: Validate and extract disposable smoke copy
         run: node scripts/isolated-macos-production-smoke.mjs prepare --artifact-root .isolated-macos-artifact/${{ matrix.platform_target }} --target ${{ matrix.platform_target }} --runner-temp "$RUNNER_TEMP" --disposable-root "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}"
+      - name: Re-verify architecture, Developer ID, hardened runtime, timestamp, staple, and Gatekeeper
+        env:
+          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: ./scripts/verify-fresh-macos-portable-artifact.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}" "$RUNNER_TEMP/keiko-macos-qualification-${{ matrix.platform_target }}"
       - name: Execute bundled runtimes in isolated disposable copy
+        env:
+          APPLE_DEVELOPER_ID_IDENTITY: ""
+          APPLE_TEAM_ID: ""
+          GH_TOKEN: ""
+          GITHUB_ENV: ""
+          GITHUB_OUTPUT: ""
+          GITHUB_PATH: ""
+          GITHUB_STEP_SUMMARY: ""
+          GITHUB_TOKEN: ""
+          NODE_AUTH_TOKEN: ""
         run: ./scripts/run-isolated-macos-payload-smoke.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}"
 
   assemble:
     name: Assemble reviewed portable asset bundle
-    needs: [stage, production-signing-preflight, stage-windows-production, stage-macos-production, smoke-macos-production]
-    if: ${{ always() && ((github.event_name == 'workflow_dispatch' && needs.stage.result == 'success' && needs.production-signing-preflight.result == 'skipped' && needs.stage-windows-production.result == 'skipped' && needs.stage-macos-production.result == 'skipped' && needs.smoke-macos-production.result == 'skipped') || (github.event_name == 'push' && !contains(github.ref_name, '-') && needs.stage.result == 'skipped' && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.smoke-macos-production.result == 'success')) }}
+    needs: [production-signing-preflight, stage-windows-production, stage-macos-production, qualify-windows-production, qualify-macos-production]
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.qualify-windows-production.result == 'success' && needs.qualify-macos-production.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -409,7 +466,7 @@ jobs:
           pattern: portable-stage-*
           path: portable-release-assets/artifacts
       - name: Assemble and validate the release asset bundle
-        run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets
+        run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets --commit-sha "$GITHUB_SHA" --release-tag "$GITHUB_REF_NAME" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --version "$(node -p 'require(`./package.json`).version')"
       - name: Upload reviewed-candidate bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

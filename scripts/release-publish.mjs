@@ -23,10 +23,13 @@ import { basename, dirname, join, resolve } from "node:path";
 import { URL } from "node:url";
 
 import {
+  findPortableMetadataRedactionFailures,
   PORTABLE_TARGET_NAMES,
   PORTABLE_TARGETS,
+  portableVerificationSummaryForManifest,
   readPortableManifest,
-  validatePortableManifest,
+  validatePortableCandidateManifest,
+  validatePortablePublishedManifest,
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
@@ -34,6 +37,10 @@ import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
 const portableAssetManifestSchemaVersion = 1;
+const maxPortableEvidenceBytes = 16 * 1024 * 1024;
+const maxPortableArchiveBytes = 2 * 1024 * 1024 * 1024;
+const portableAssetsArtifactName = "portable-release-assets";
+const portableAssetsWorkflowPath = ".github/workflows/portable-assets.yml";
 const supportedDistTags = new Set(["beta", "next", "latest"]);
 const booleanArgHandlers = new Map([
   ["--allow-untagged", (options) => (options.allowUntagged = true)],
@@ -466,12 +473,16 @@ function sha256FileSync(path) {
   }
 }
 
+function sha256Text(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 function containedPath(root, path) {
   const normalizedRoot = root.endsWith("/") ? root : `${root}/`;
   return path === root || path.startsWith(normalizedRoot);
 }
 
-function regularContainedFile(path, root, label, failures) {
+function regularContainedFile(path, root, label, failures, maxBytes = maxPortableEvidenceBytes) {
   try {
     const rootRealPath = realpathSync(root);
     const fileStat = lstatSync(path);
@@ -483,8 +494,16 @@ function regularContainedFile(path, root, label, failures) {
       failures.push(`${label} must point to a regular file.`);
       return undefined;
     }
+    if (fileStat.nlink !== 1) {
+      failures.push(`${label} must not be hard linked.`);
+      return undefined;
+    }
     if (fileStat.size <= 0) {
       failures.push(`${label} must not be empty.`);
+      return undefined;
+    }
+    if (fileStat.size > maxBytes) {
+      failures.push(`${label} exceeds its bounded size.`);
       return undefined;
     }
     if (!containedPath(rootRealPath, realpathSync(path))) {
@@ -531,10 +550,58 @@ function loadPortableAssets(rootManifest, options) {
     }
     return [];
   }
-  return portableAssetsFromManifest(resolve(options.portableAssetsManifest), rootManifest);
+  const qualification = stablePortableAssetsRequired(rootManifest, options)
+    ? requiredPortableQualification(rootManifest)
+    : undefined;
+  return portableAssetsFromManifest(
+    resolve(options.portableAssetsManifest),
+    rootManifest,
+    qualification,
+  );
 }
 
-function portableAssetsFromManifest(inputPath, rootManifest) {
+function requiredPortableQualification(rootManifest) {
+  const qualification = {
+    artifactName: process.env.KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME,
+    repository: process.env.KEIKO_PORTABLE_ASSETS_REPOSITORY,
+    runAttempt: Number(process.env.KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT),
+    runId: Number(process.env.KEIKO_PORTABLE_ASSETS_RUN_ID),
+    sourceSha: process.env.KEIKO_PORTABLE_ASSETS_SOURCE_SHA,
+    tag: process.env.KEIKO_PORTABLE_ASSETS_TAG,
+    workflowPath: process.env.KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH,
+  };
+  const head = commandResult("git", ["rev-parse", "HEAD"]);
+  const failures = portableQualificationFailures(qualification, rootManifest, head);
+  if (failures.length > 0)
+    fail(`qualified portable run provenance is invalid:\n  - ${failures.join("\n  - ")}`);
+  return qualification;
+}
+
+function portableQualificationFailures(qualification, rootManifest, head) {
+  const positiveRunId = Number.isSafeInteger(qualification.runId) && qualification.runId > 0;
+  const positiveRunAttempt =
+    Number.isSafeInteger(qualification.runAttempt) && qualification.runAttempt > 0;
+  const repositoryMatches =
+    typeof qualification.repository === "string" &&
+    qualification.repository !== "" &&
+    qualification.repository === process.env.GITHUB_REPOSITORY;
+  const checks = [
+    [/^[a-f0-9]{40}$/u.test(qualification.sourceSha ?? ""), "source SHA must be exact"],
+    [qualification.tag === releaseTag(rootManifest.version), "stable tag must match release tag"],
+    [positiveRunId, "workflow run id must be positive"],
+    [positiveRunAttempt, "workflow run attempt must be positive"],
+    [qualification.artifactName === portableAssetsArtifactName, "artifact name must be canonical"],
+    [repositoryMatches, "repository must match GITHUB_REPOSITORY"],
+    [qualification.workflowPath === portableAssetsWorkflowPath, "workflow path must be canonical"],
+    [
+      head.status === 0 && head.stdout.trim() === qualification.sourceSha,
+      "source SHA must match HEAD",
+    ],
+  ];
+  return checks.flatMap(([valid, message]) => (valid ? [] : [`qualified portable ${message}`]));
+}
+
+function portableAssetsFromManifest(inputPath, rootManifest, qualification) {
   const manifest = readJsonFile(inputPath);
   const baseDir = dirname(inputPath);
   const failures = [];
@@ -546,14 +613,20 @@ function portableAssetsFromManifest(inputPath, rootManifest) {
   if (artifacts.length !== PORTABLE_TARGETS.length) {
     failures.push("portable assets manifest must list exactly three artifacts.");
   }
-  const normalized = normalizePortableAssets(artifacts, baseDir, rootManifest, failures);
+  const normalized = normalizePortableAssets(
+    artifacts,
+    baseDir,
+    rootManifest,
+    qualification,
+    failures,
+  );
   if (failures.length > 0) {
     fail(`portable assets manifest validation failed:\n  - ${failures.join("\n  - ")}`);
   }
   return normalized;
 }
 
-function normalizePortableAssets(artifacts, baseDir, rootManifest, failures) {
+function normalizePortableAssets(artifacts, baseDir, rootManifest, qualification, failures) {
   const byTarget = new Map();
   for (const entry of artifacts) {
     const targetName = isRecord(entry) ? entry.platformTarget : undefined;
@@ -574,30 +647,32 @@ function normalizePortableAssets(artifacts, baseDir, rootManifest, failures) {
       target,
       baseDir,
       rootManifest,
+      qualification,
       failures,
     ),
   );
 }
 
-function normalizePortableTargetAsset(entry, target, baseDir, rootManifest, failures) {
+function normalizePortableTargetAsset(
+  entry,
+  target,
+  baseDir,
+  rootManifest,
+  qualification,
+  failures,
+) {
   if (!isRecord(entry)) {
     failures.push(`missing portable asset entry for ${target.platformTarget}.`);
     return [];
   }
-  const archivePath = resolve(
-    baseDir,
-    requiredString(entry, "archivePath", target.platformTarget, failures),
-  );
-  const manifestPath = resolve(
-    baseDir,
-    requiredString(entry, "manifestPath", target.platformTarget, failures),
-  );
+  const { archivePath, manifestPath } = portableTargetPaths(entry, target, baseDir, failures);
   const stageRoot = dirname(dirname(manifestPath));
   const archiveStat = regularContainedFile(
     archivePath,
     stageRoot,
     `${target.platformTarget}.archivePath`,
     failures,
+    maxPortableArchiveBytes,
   );
   const manifestStat = regularContainedFile(
     manifestPath,
@@ -615,11 +690,25 @@ function normalizePortableTargetAsset(entry, target, baseDir, rootManifest, fail
     manifestPath,
     manifest,
     rootManifest,
+    qualification,
     failures,
   );
   return [
     portableAssetRecord(target, archivePath, manifestPath, manifest, entry, baseDir, failures),
   ];
+}
+
+function portableTargetPaths(entry, target, baseDir, failures) {
+  return {
+    archivePath: resolve(
+      baseDir,
+      requiredString(entry, "archivePath", target.platformTarget, failures),
+    ),
+    manifestPath: resolve(
+      baseDir,
+      requiredString(entry, "manifestPath", target.platformTarget, failures),
+    ),
+  };
 }
 
 function readPortableManifestSafely(path, platformTarget, failures) {
@@ -638,12 +727,13 @@ function validatePortableAssetFiles(
   manifestPath,
   manifest,
   rootManifest,
+  qualification,
   failures,
 ) {
   if (basename(archivePath) !== target.assetName) {
     failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
   }
-  for (const failure of validatePortableManifest(manifest, { allowUnverified: false })) {
+  for (const failure of validatePortableCandidateManifest(manifest)) {
     failures.push(`${target.platformTarget}.${failure}`);
   }
   if (manifest.product?.packageVersion !== rootManifest.version) {
@@ -656,8 +746,40 @@ function validatePortableAssetFiles(
       `${target.platformTarget}.release.releaseTag must match ${releaseTag(rootManifest.version)}.`,
     );
   }
+  validateQualificationBinding(manifest, target, qualification, failures);
+  validateOuterTargetBinding(manifest, target, failures);
   validatePortableArchiveDigest(target, archivePath, archiveStat, manifest, failures);
   validatePortableEvidenceFiles(target, dirname(dirname(manifestPath)), manifest, failures);
+}
+
+function validateQualificationBinding(manifest, target, qualification, failures) {
+  if (qualification === undefined) return;
+  const checks = [
+    [manifest.release?.commitSha, qualification.sourceSha, "source SHA"],
+    [manifest.provenance?.sourceCommitSha, qualification.sourceSha, "provenance source SHA"],
+    [manifest.release?.releaseTag, qualification.tag, "release tag"],
+    [manifest.provenance?.buildWorkflowRunId, qualification.runId, "workflow run id"],
+    [manifest.provenance?.buildWorkflowAttempt, qualification.runAttempt, "workflow run attempt"],
+  ];
+  for (const [actual, expected, label] of checks) {
+    if (actual !== expected) {
+      failures.push(`${target.platformTarget}.${label} must match the downloaded workflow run.`);
+    }
+  }
+}
+
+function validateOuterTargetBinding(manifest, target, failures) {
+  const checks = [
+    [manifest.artifact?.platformTarget, target.platformTarget, "artifact.platformTarget"],
+    [manifest.artifact?.assetName, target.assetName, "artifact.assetName"],
+    [manifest.runtime?.nodePlatform, target.nodePlatform, "runtime.nodePlatform"],
+    [manifest.runtime?.nodeArchitecture, target.nodeArchitecture, "runtime.nodeArchitecture"],
+    [manifest.security?.signatureKind, target.signatureKind, "security.signatureKind"],
+  ];
+  for (const [actual, expected, label] of checks) {
+    if (actual !== expected)
+      failures.push(`${target.platformTarget}.${label} must match the outer bundle target.`);
+  }
 }
 
 function validatePortableArchiveDigest(target, archivePath, archiveStat, manifest, failures) {
@@ -671,12 +793,14 @@ function validatePortableArchiveDigest(target, archivePath, archiveStat, manifes
 
 function validatePortableEvidenceFiles(target, stageRoot, manifest, failures) {
   for (const evidence of requiredPortableEvidence(target, stageRoot, manifest, failures)) {
-    regularContainedFile(
+    const stat = regularContainedFile(
       evidence.sourcePath,
       stageRoot,
       `${target.platformTarget}.${evidence.relativePath}`,
       failures,
     );
+    if (stat !== undefined && evidence.relativePath !== "manifest/portable-manifest.json")
+      validateEvidenceContent(evidence.sourcePath, evidence.assetName, failures);
   }
   const checksumsPath = containedLocalPath(
     stageRoot,
@@ -686,10 +810,145 @@ function validatePortableEvidenceFiles(target, stageRoot, manifest, failures) {
   );
   if (checksumsPath !== undefined && existsSync(checksumsPath)) {
     const expected = `${manifest.artifact?.sha256}  ${manifest.artifact?.assetName}`;
-    if (!readFileSync(checksumsPath, "utf8").includes(expected)) {
+    if (readFileSync(checksumsPath, "utf8") !== `${expected}\n`) {
       failures.push(`${target.platformTarget}.checksumsPath must bind the archive digest.`);
     }
   }
+  validateSigningSummary(target, stageRoot, manifest, failures);
+  validateProvenanceStatement(target, stageRoot, manifest, failures);
+  validateSbomAndLicense(target, stageRoot, manifest, failures);
+  validateSidecarEvidenceFiles(target, stageRoot, manifest, failures);
+}
+
+function validateEvidenceContent(path, label, failures) {
+  const text = readFileSync(path, "utf8");
+  const redactionFailures = findPortableMetadataRedactionFailures(text, label);
+  if (/\.(?:json|jsonl)$/u.test(path)) {
+    try {
+      redactionFailures.push(...findPortableMetadataRedactionFailures(JSON.parse(text), label));
+    } catch {
+      failures.push(`${label} must contain valid JSON evidence.`);
+    }
+  }
+  if (redactionFailures.length > 0) {
+    failures.push(`${label} is not redacted.`);
+  }
+}
+
+function readEvidenceJson(path, label, failures) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    failures.push(`${label} must contain valid JSON.`);
+    return {};
+  }
+}
+
+function validateSigningSummary(target, stageRoot, manifest, failures) {
+  const path = containedLocalPath(
+    stageRoot,
+    manifest.security?.verificationSummaryPath,
+    "signing summary",
+    failures,
+  );
+  if (path === undefined || !existsSync(path)) return;
+  const actual = readEvidenceJson(path, `${target.platformTarget}.signing summary`, failures);
+  if (JSON.stringify(actual) !== JSON.stringify(portableVerificationSummaryForManifest(manifest))) {
+    failures.push(`${target.platformTarget}.signing summary must match the manifest.`);
+  }
+}
+
+function validateProvenanceStatement(target, stageRoot, manifest, failures) {
+  const path = containedLocalPath(
+    stageRoot,
+    manifest.provenance?.provenanceStatementPath,
+    "provenance statement",
+    failures,
+  );
+  if (path === undefined || !existsSync(path)) return;
+  const text = readFileSync(path, "utf8");
+  if (sha256Text(text) !== manifest.provenance?.provenanceStatementSha256) {
+    failures.push(`${target.platformTarget}.provenance statement digest must match.`);
+  }
+  const statement = readEvidenceJson(
+    path,
+    `${target.platformTarget}.provenance statement`,
+    failures,
+  );
+  const expected = portableProvenanceExpectation(target, manifest);
+  if (!Object.entries(expected).every(([key, value]) => statement[key] === value))
+    failures.push(`${target.platformTarget}.provenance statement semantics must match.`);
+}
+
+function portableProvenanceExpectation(target, manifest) {
+  return {
+    artifact: manifest.artifact?.assetName,
+    buildWorkflowAttempt: manifest.provenance?.buildWorkflowAttempt,
+    buildWorkflowRunId: manifest.provenance?.buildWorkflowRunId,
+    packageVersion: manifest.product?.packageVersion,
+    sourceCommitSha: manifest.release?.commitSha,
+    subjectDigest: manifest.artifact?.sha256,
+    target: target.platformTarget,
+  };
+}
+
+function validateSbomAndLicense(target, stageRoot, manifest, failures) {
+  const sbomPath = containedLocalPath(
+    stageRoot,
+    manifest.evidence?.sbomPath,
+    "SBOM evidence",
+    failures,
+  );
+  if (sbomPath !== undefined && existsSync(sbomPath)) {
+    const sbom = readEvidenceJson(sbomPath, `${target.platformTarget}.SBOM evidence`, failures);
+    if (sbom.bomFormat !== "CycloneDX")
+      failures.push(`${target.platformTarget}.SBOM evidence is invalid.`);
+  }
+  const licensePath = containedLocalPath(
+    stageRoot,
+    manifest.evidence?.licenseNoticePath,
+    "license evidence",
+    failures,
+  );
+  if (licensePath !== undefined && existsSync(licensePath)) {
+    const text = readFileSync(licensePath, "utf8");
+    if (findPortableMetadataRedactionFailures(text).length > 0)
+      failures.push(`${target.platformTarget}.license evidence is not redacted.`);
+  }
+}
+
+function validateSidecarEvidenceFiles(target, stageRoot, manifest, failures) {
+  const resourceRoot =
+    target.nodePlatform === "darwin"
+      ? join(stageRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
+      : join(stageRoot, "payload", "Keiko");
+  for (const sidecar of manifest.sidecarRuntimes ?? []) {
+    for (const [evidence, requiresCycloneDx] of [
+      [sidecar.licenseEvidence, false],
+      [sidecar.sbomEvidence, true],
+    ]) {
+      validateOneSidecarEvidence(target, resourceRoot, evidence, requiresCycloneDx, failures);
+    }
+  }
+}
+
+function validateOneSidecarEvidence(target, resourceRoot, evidence, requiresCycloneDx, failures) {
+  const path = containedLocalPath(
+    resourceRoot,
+    evidence?.path,
+    `${target.platformTarget} sidecar evidence`,
+    failures,
+  );
+  if (path === undefined) return;
+  const stat = regularContainedFile(path, resourceRoot, "sidecar evidence", failures);
+  if (stat === undefined) return;
+  validateEvidenceContent(path, "sidecar evidence", failures);
+  if (requiresCycloneDx) {
+    const sbom = readEvidenceJson(path, "sidecar SBOM evidence", failures);
+    if (sbom.bomFormat !== "CycloneDX") failures.push("sidecar SBOM evidence is invalid.");
+  }
+  if (sha256FileSync(path) !== evidence.sha256)
+    failures.push("sidecar evidence digest must match the manifest.");
 }
 
 function requiredPortableEvidence(target, stageRoot, manifest, failures) {
@@ -723,13 +982,16 @@ function portableAssetRecord(
   failures,
 ) {
   const stageRoot = dirname(dirname(manifestPath));
+  const requiredEvidence = requiredPortableEvidence(target, stageRoot, manifest, failures);
+  const extraEvidence = extraPortableEvidenceFiles(entry, stageRoot, target, failures);
+  for (const evidence of extraEvidence) {
+    validateEvidenceContent(evidence.sourcePath, evidence.assetName, failures);
+  }
+  const evidenceFiles = [...requiredEvidence, ...extraEvidence];
   return {
     archiveAssetName: target.assetName,
     archivePath,
-    evidenceFiles: [
-      ...requiredPortableEvidence(target, stageRoot, manifest, failures),
-      ...extraPortableEvidenceFiles(entry, stageRoot, target, failures),
-    ],
+    evidenceFiles,
     manifest,
     platformTarget: target.platformTarget,
     stageRoot,
@@ -912,6 +1174,7 @@ function portableArchiveUploadFiles(assets) {
     addUploadPath(asset.archivePath, asset.archiveAssetName, names, paths);
     expected.push({
       assetName: asset.archiveAssetName,
+      expectedSha256: asset.manifest.artifact.sha256,
       expectedSize: asset.manifest.artifact.sizeBytes,
       firstClassArchive: true,
     });
@@ -929,6 +1192,7 @@ function portableEvidenceUploadFiles(assets, root) {
       addUploadPath(destination, evidence.assetName, names, paths);
       expected.push({
         assetName: evidence.assetName,
+        expectedSha256: sha256FileSync(destination),
         expectedSize: statSync(destination).size,
         firstClassArchive: false,
       });
@@ -983,9 +1247,10 @@ function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
     fail(`${asset.archiveAssetName} must have a remote GitHub asset id before evidence upload.`);
   }
   const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id);
-  const failures = validatePortableManifest(manifest, { allowUnverified: false }).map(
-    (failure) => `${asset.platformTarget}.${failure}`,
-  );
+  const failures = validatePortablePublishedManifest(manifest, {
+    assetId: remote.id,
+    releaseId,
+  }).map((failure) => `${asset.platformTarget}.${failure}`);
   if (failures.length > 0) {
     fail(`portable manifest binding failed:\n  - ${failures.join("\n  - ")}`);
   }
@@ -1063,28 +1328,30 @@ function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
   for (const expected of expectedAssets) {
     const url = remoteByName.get(expected.assetName)?.browser_download_url;
     if (typeof url !== "string") fail(`${expected.assetName} has no browser_download_url.`);
-    smokePortableDownloadUrl(expected.assetName, url);
+    smokePortableDownloadUrl(expected, url);
   }
 }
 
-function smokePortableDownloadUrl(assetName, url) {
-  const result = commandResult(
-    "curl",
-    [
-      "--fail",
-      "--silent",
-      "--show-error",
-      "--location",
-      "--range",
-      "0-0",
-      "--output",
-      "/dev/null",
-      url,
-    ],
-    { env: networkEnvironment() },
-  );
-  if (result.error !== undefined || result.status !== 0) {
-    fail(`unauthenticated portable asset download failed for ${assetName}.`);
+function smokePortableDownloadUrl(expected, url) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
+  const destination = join(root, expected.assetName);
+  try {
+    const result = commandResult(
+      "curl",
+      ["--fail", "--silent", "--show-error", "--location", "--output", destination, url],
+      { env: networkEnvironment() },
+    );
+    if (result.error !== undefined || result.status !== 0) {
+      fail(`unauthenticated portable asset download failed for ${expected.assetName}.`);
+    }
+    if (
+      statSync(destination).size !== expected.expectedSize ||
+      sha256FileSync(destination) !== expected.expectedSha256
+    ) {
+      fail(`downloaded portable asset bytes do not match ${expected.assetName}.`);
+    }
+  } finally {
+    rmSync(root, { force: true, recursive: true });
   }
 }
 

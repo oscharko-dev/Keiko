@@ -328,6 +328,15 @@ targets must independently reach `verified-production` before the reviewed bundl
 Secret-free tag and manual staging remains `unverified-staging`. It must not select the protected
 environment, request OIDC, read Apple secrets, or become production evidence. In particular,
 `workflow_dispatch` is staging-only even when dispatched against a stable tag.
+It may upload the three individually named staging artifacts for inspection, but it must never emit
+the canonical reviewed `portable-release-assets` artifact.
+
+After native producer upload, fresh read-only Windows and macOS qualification jobs download the final
+archives on new GitHub-hosted runners and repeat the native checks over extracted final bytes. These
+jobs receive no signing secret, OIDC, write permission, or provider mutation authority; only the
+reviewed identity values are read from protected configuration. Assembly gates on their actual job
+conclusions and exact manifest/run inputs. The Ubuntu assembler cannot replace a missing conclusion
+with a declared Boolean and cannot modify native verification results.
 
 ## Authoritative provider references
 
@@ -386,7 +395,8 @@ SmartScreen reputation is observed but is not asserted as a Keiko-controlled out
   notarization/stapling/assessment, identity binding, macOS verifier input, and fail-closed upload.
 - **#2202 (qualification):** proves all three target artifacts and their sidecars arrive from the native
   jobs with matching digests, identities, manifests, summaries, and release-impact bindings; proves
-  staging/manual paths remain secret-free; and proves the assembler/publisher cannot create success.
+  staging/manual paths remain secret-free; reruns native verification on fresh runners; resolves one
+  exact successful stable-tag run/artifact; and proves the assembler/publisher cannot create success.
 
 Changes to these interfaces require a reviewed update to this contract and ADR-0121 when they alter
 trust authority. Implementation details that preserve the boundary remain owned by the child issue.

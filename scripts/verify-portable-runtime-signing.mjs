@@ -8,7 +8,9 @@ import {
   portableTargetByName,
   portableVerificationSummaryForManifest,
   readPortableManifest,
+  validatePortableCandidateManifest,
   validatePortableManifest,
+  validatePortableStagingManifest,
 } from "./portable-runtime.mjs";
 import {
   PortableVerificationInputError,
@@ -277,12 +279,18 @@ export function runPortableRuntimeSigningVerify(argv = process.argv.slice(2)) {
     sidecarStates,
   );
   writeOutputs(options.manifest, manifest);
-  const failures = validatePortableManifest(manifest, { allowUnverified: true });
-  if (failures.length > 0) fail(failures.join("\n  - "));
   if (options.policy === "production") assertProductionVerified(manifest);
+  const failures = verificationManifestFailures(manifest, options.policy);
+  if (failures.length > 0) fail(failures.join("\n  - "));
   console.log(
     `portable-signing verify: PASS ${manifest.artifact.platformTarget} ${manifest.security.verificationStatus}`,
   );
+}
+
+function verificationManifestFailures(manifest, policy) {
+  if (policy === "production") return validatePortableCandidateManifest(manifest);
+  if (policy === "staging") return validatePortableStagingManifest(manifest);
+  return validatePortableManifest(manifest, { context: "non-production" });
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

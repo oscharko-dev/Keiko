@@ -24,7 +24,7 @@ import {
   hashDirectoryTree,
   portableVerificationSummaryForManifest,
   sha256File,
-  validatePortableManifest,
+  validatePortableCandidateManifest,
 } from "../portable-runtime.mjs";
 import { prepareIsolatedMacSmoke } from "../isolated-macos-production-smoke.mjs";
 
@@ -90,6 +90,10 @@ function macManifest() {
   const manifest = contractManifest();
   const sidecar = manifest.sidecarRuntimes[0];
   const binding = manifest.releaseImpact.reviewedBinding;
+  manifest.release.releaseId = 0;
+  manifest.artifact.assetId = 0;
+  binding.releaseId = 0;
+  binding.assetId = 0;
   manifest.artifact.platformTarget = "macos-arm64";
   manifest.artifact.assetName = "keiko-macos-arm64.zip";
   manifest.runtime.nodePlatform = "darwin";
@@ -313,7 +317,7 @@ describe("macOS portable signing inventory", () => {
     const sidecarRoot = join(fixture.resources, "runtime", "sidecars", "opencode-compatible");
     const provenance = JSON.parse(readFileSync(fixture.provenancePath, "utf8"));
     const summary = JSON.parse(readFileSync(fixture.summaryPath, "utf8"));
-    expect(validatePortableManifest(manifest)).toEqual([]);
+    expect(validatePortableCandidateManifest(manifest)).toEqual([]);
     expect(manifest.artifact.sha256).toBe(archiveSha256);
     expect(manifest.provenance.packagedAppTreeSha256).toBe(
       hashDirectoryTree(join(fixture.resources, "app")),
