@@ -160,6 +160,8 @@ test("staged and unstaged gutter channels open the bounded hunk peek", async ({
   const workspace = await openFixtureEditor(page, fixture, fixture.stagedPath);
 
   await workspace.getByRole("button", { name: /Refresh (?:editor )?change indicators/u }).click();
+  await expect(workspace.locator(".keiko-git-gutter-staged").first()).toBeVisible();
+  await expect(workspace.locator(".keiko-git-gutter-unstaged").first()).toBeVisible();
   await placeCursorAtLine(page, workspace, 4);
   await runEditorCommand(page, workspace, "Open change hunk");
 
@@ -182,6 +184,7 @@ test("on-demand blame opens its commit in the internal Git history", async ({ pa
   await page.keyboard.press("ArrowRight");
   await expect(workspace.locator('[data-field="cursor"]')).toContainText("Ln 1");
   await runEditorCommand(page, workspace, "Toggle line blame");
+  await expect(workspace.locator(".keiko-blame-gutter").first()).toBeVisible();
   await runEditorCommand(page, workspace, "Open line commit in Git");
 
   const git = page.locator('[aria-label="Git"]').last();

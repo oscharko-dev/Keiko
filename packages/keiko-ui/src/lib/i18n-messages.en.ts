@@ -889,6 +889,20 @@ export const EN_MESSAGES = {
   "relationships.health.show": "Graph health",
   "relationships.create.aria": "Create new relationship",
   "relationships.create.button": "+ New relationship",
+  "editorSourceControl.diff.hunkHeader": "Hunk header",
+  "editorSourceControl.diff.hunkHeaderWithValue": "Hunk header {header}",
+  "editorSourceControl.diff.addedLine": "Added line",
+  "editorSourceControl.diff.deletedLine": "Deleted line",
+  "editorSourceControl.diff.contextLine": "Context line",
+  "editorSourceControl.diff.metadata": "Diff metadata",
+  "editorSourceControl.diff.hunkTruncated":
+    "This hunk is incomplete because the bounded diff was truncated.",
+  "editorSourceControl.diff.previousPath": " (was {path})",
+  "editorSourceControl.diff.fileStatus": "{status} file",
+  "editorSourceControl.diff.elevatedReview": "Elevated review",
+  "editorSourceControl.diff.binaryFile": "Binary file — no text diff to display.",
+  "editorSourceControl.diff.fileTruncated":
+    "This file diff is incomplete because the bounded diff was truncated.",
   // Issue #2150: Workspace.tsx/WindowFrame.tsx changed but added no new
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to

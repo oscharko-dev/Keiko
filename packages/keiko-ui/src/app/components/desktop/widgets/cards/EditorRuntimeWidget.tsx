@@ -4590,7 +4590,7 @@ function EditorRuntimeWidget({
     );
   } else if (hasTarget && buffer !== null && fileModel !== null) {
     panel = (
-      <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}>
+      <div style={{ position: "relative", flex: "1 1 auto", minHeight: 0, height: "100%" }}>
         <EditorSurface
           key={editorSurfaceKey}
           buffer={buffer}
