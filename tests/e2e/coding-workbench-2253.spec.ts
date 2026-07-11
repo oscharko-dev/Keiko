@@ -393,12 +393,11 @@ async function boundsCheck(
     withinViewport,
     `${label}: left=${String(box.x)}, right=${String(box.x + box.width)}`,
   ).toBe(true);
-  const withinOuterFrame =
-    outerFrame === null
-      ? null
-      : box.x >= outerFrame.left - HORIZONTAL_OVERFLOW_TOLERANCE_PX &&
-        box.x + box.width <= outerFrame.right + HORIZONTAL_OVERFLOW_TOLERANCE_PX;
-  if (withinOuterFrame !== null) {
+  let withinOuterFrame: boolean | null = null;
+  if (outerFrame !== null) {
+    withinOuterFrame =
+      box.x >= outerFrame.left - HORIZONTAL_OVERFLOW_TOLERANCE_PX &&
+      box.x + box.width <= outerFrame.right + HORIZONTAL_OVERFLOW_TOLERANCE_PX;
     expect(
       withinOuterFrame,
       `${label}: left=${String(box.x)}, right=${String(box.x + box.width)}, outerLeft=${String(outerFrame.left)}, outerRight=${String(outerFrame.right)}`,
