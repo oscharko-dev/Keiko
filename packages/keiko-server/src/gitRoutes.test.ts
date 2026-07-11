@@ -361,6 +361,80 @@ describe("GET /api/git/status", () => {
     expect(invalid).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
   });
 
+  it("scopes status to one literal selected-root path and drops unrelated output", async () => {
+    const selectedRoot = join(root, "workspace");
+    await mkdir(selectedRoot);
+    store.createProject(selectedRoot, "nested fixture");
+    const path = "src/:(top)*.ts";
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\nworkspace/\n`))
+      .mockResolvedValueOnce(
+        ok(
+          [
+            "## main",
+            ` M workspace/${path}`,
+            "?? workspace/.env.production",
+            "M  other-package/credentials.json",
+          ].join("\0") + "\0",
+        ),
+      );
+
+    const result = await handleGitStatus(
+      ctx(
+        `/api/git/status?root=${encodeURIComponent(selectedRoot)}&path=${encodeURIComponent(path)}`,
+      ),
+      deps(runner, (value) => value),
+    );
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        clean: false,
+        stagedCount: 0,
+        unstagedCount: 1,
+        untrackedCount: 0,
+        changes: [{ path, unstaged: true }],
+      },
+    });
+    expect(JSON.stringify(result.body)).not.toContain(".env.production");
+    expect(JSON.stringify(result.body)).not.toContain("credentials.json");
+    expect(runner.mock.calls[1]?.[0].slice(-2)).toEqual(["--", `:(literal)workspace/${path}`]);
+  });
+
+  it.each(["../secret.ts", "/absolute.ts", "src/../../secret.ts"])(
+    "rejects invalid file-scoped status path %s before invoking Git",
+    async (path) => {
+      const runner = vi.fn<GitProcessRunner>();
+
+      const result = await handleGitStatus(
+        ctx(`/api/git/status?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`),
+        deps(runner),
+      );
+
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_PATH" } } });
+      expect(runner).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a file-scoped status symlink escape before running status", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "keiko-git-route-outside-"));
+    try {
+      await symlink(outside, join(root, "escape"));
+      const runner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(ok(`${root}\n`));
+
+      const result = await handleGitStatus(
+        ctx(`/api/git/status?root=${encodeURIComponent(root)}&path=escape%2Fsecret.ts`),
+        deps(runner),
+      );
+
+      expect(result).toMatchObject({ status: 400, body: { error: { code: "BAD_PATH" } } });
+      expect(runner).toHaveBeenCalledTimes(1);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("surfaces non-repositories as a clean unavailable state", async () => {
     const runner = vi
       .fn<GitProcessRunner>()
