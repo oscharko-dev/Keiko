@@ -777,6 +777,9 @@ function verifiedSidecarSigning(target) {
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified: target.nodePlatform === "darwin",
     verificationChecks,
+    shippedExecutableSha256: DIGEST_D,
+    shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    shippedExecutableTreeSha256: DIGEST_C,
   };
 }
 
@@ -798,6 +801,9 @@ function stagingSidecarSigning(target) {
             notarizationVerified: false,
             stapleVerified: false,
           }),
+    shippedExecutableSha256: DIGEST_D,
+    shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    shippedExecutableTreeSha256: DIGEST_C,
   };
 }
 
@@ -1139,6 +1145,29 @@ describe("validatePortableManifest", () => {
     expect(failures).toContain("sidecarRuntimes[0].protocolSchema.digestInput: is required");
     expect(failures).toContain(
       "sidecarRuntimes[0].releaseApproval.redistribution.status: must be approved",
+    );
+  });
+
+  it("requires exact lowercase shipped executable evidence for production sidecars", () => {
+    const missing = manifest();
+    addSidecarRuntime(missing, "windows-x64");
+    delete missing.sidecarRuntimes[0].signing.shippedExecutableTreeSha256;
+    expect(validatePortableCandidateManifest(missing)).toContain(
+      "sidecarRuntimes[0].signing.shippedExecutableTreeSha256: is required",
+    );
+
+    const malformed = manifest();
+    addSidecarRuntime(malformed, "windows-x64");
+    malformed.sidecarRuntimes[0].signing.shippedExecutableSha256 = "A".repeat(64);
+    expect(validatePortableCandidateManifest(malformed)).toContain(
+      "sidecarRuntimes[0].signing.shippedExecutableSha256: must be a SHA-256 digest",
+    );
+
+    const unknown = manifest();
+    addSidecarRuntime(unknown, "windows-x64");
+    unknown.sidecarRuntimes[0].signing.nativeProof = true;
+    expect(validatePortableCandidateManifest(unknown)).toContain(
+      "sidecarRuntimes[0].signing.nativeProof: is not allowed",
     );
   });
 

@@ -28,6 +28,7 @@ import {
   validatePortableCandidateManifest,
 } from "../portable-runtime.mjs";
 import { prepareIsolatedMacSmoke } from "../isolated-macos-production-smoke.mjs";
+import { rebindSignedPayload } from "../portable-signed-archive.mjs";
 
 const roots = [];
 function root() {
@@ -169,7 +170,11 @@ function macFinalizeStage() {
   const resources = join(payloadRoot, "Keiko.app", "Contents", "Resources");
   write(join(payloadRoot, "Keiko.app", "Contents", "MacOS", "Keiko"), macho());
   write(join(resources, "runtime", "node", "bin", "node"), macho(0xfeedfacf, 1));
-  const sidecarExecutable = macho(0xfeedfacf, 2);
+  const upstreamSidecarExecutable = macho(0xfeedfacf, 2);
+  const sidecarExecutable = Buffer.concat([
+    upstreamSidecarExecutable,
+    Buffer.from("developer-id-signature", "utf8"),
+  ]);
   const sidecarLicense = Buffer.from("license", "utf8");
   write(
     join(resources, "runtime", "sidecars", "opencode-compatible", "bin", "opencode"),
@@ -192,11 +197,39 @@ function macFinalizeStage() {
     })}\n`,
   );
   write(join(payloadRoot, "support", "keiko-support.sh"), "#!/bin/sh\n");
-  const manifest = macManifest(sidecarExecutable, sidecarLicense);
+  const manifest = macManifest(upstreamSidecarExecutable, sidecarLicense);
+  const sidecar = manifest.sidecarRuntimes[0];
+  write(
+    join(resources, "runtime", "sidecars", "opencode-compatible", "evidence", "sbom.cdx.json"),
+    `${JSON.stringify({
+      bomFormat: "CycloneDX",
+      metadata: {
+        component: { name: sidecar.name, version: sidecar.upstream.version },
+      },
+      components: [
+        {
+          name: sidecar.upstream.name,
+          version: sidecar.upstream.version,
+          purl: `pkg:github/${sidecar.upstream.owner}/${sidecar.upstream.repository}@${sidecar.upstream.tag}`,
+          licenses: [{ license: { id: sidecar.license.spdxId } }],
+          hashes: [{ alg: "SHA-256", content: sidecar.executableSha256 }],
+          externalReferences: [
+            {
+              type: "distribution",
+              url: sidecar.archive.url,
+              hashes: [{ alg: "SHA-256", content: sidecar.archive.sha256 }],
+            },
+          ],
+        },
+      ],
+    })}\n`,
+  );
   const manifestPath = join(stage, "manifest", "portable-manifest.json");
   const provenancePath = join(stage, "evidence", "provenance.intoto.jsonl");
   const checksumPath = join(stage, "evidence", "SHA256SUMS.txt");
   const summaryPath = join(stage, "evidence", "signing-verification.json");
+  write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  rebindSignedPayload(stage, manifest, "macos-arm64");
   write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   write(provenancePath, `${JSON.stringify({ subjectDigest: "0".repeat(64) })}\n`);
   write(checksumPath, "before\n");
@@ -223,6 +256,7 @@ function macFinalizeStage() {
     resources,
     stage,
     summaryPath,
+    upstreamSidecarExecutableSha256: sha256(upstreamSidecarExecutable),
   };
 }
 afterEach(() => {
@@ -230,6 +264,17 @@ afterEach(() => {
 });
 
 describe("macOS portable signing inventory", () => {
+  it("rebinds signed sidecar evidence before outer app signing and archive creation", () => {
+    const script = readFileSync("scripts/run-macos-portable-signing.sh", "utf8");
+    const rebind = script.indexOf("macos-portable-signing.mjs rebind-payload");
+    const outerSigning = script.indexOf('sign "$APPLE_DEVELOPER_ID_IDENTITY" "$app"');
+    const archive = script.indexOf('ditto -c -k --sequesterRsrc --keepParent "$payload"');
+
+    expect(rebind).toBeGreaterThan(0);
+    expect(rebind).toBeLessThan(outerSigning);
+    expect(rebind).toBeLessThan(archive);
+  });
+
   it("detects thin/fat Mach-O content and assigns only Node the JIT role", () => {
     const path = payload();
     write(
@@ -348,6 +393,12 @@ describe("macOS portable signing inventory", () => {
       hashDirectoryTree(join(fixture.resources, "app")),
     );
     expect(manifest.sidecarRuntimes[0].payloadSha256).toBe(hashDirectoryTree(sidecarRoot));
+    expect(manifest.sidecarRuntimes[0].executableSha256).toBe(
+      fixture.upstreamSidecarExecutableSha256,
+    );
+    expect(manifest.sidecarRuntimes[0].signing.shippedExecutableSha256).not.toBe(
+      fixture.upstreamSidecarExecutableSha256,
+    );
     expect(manifest.sidecarRuntimes[0].sizeBytes).toBeGreaterThan(0);
     expect(provenance.subjectDigest).toBe(archiveSha256);
     expect(readFileSync(fixture.checksumPath, "utf8")).toBe(

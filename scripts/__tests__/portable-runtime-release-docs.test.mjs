@@ -32,6 +32,11 @@ describe("portable runtime release documentation", () => {
     expect(documented.executableTreeSha256).toBe(
       approved.archives[documented.platformTarget].executableTreeSha256,
     );
+    expect(documented.signing).toMatchObject({
+      shippedExecutableSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+      shippedExecutableTreeSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
   });
 
   it("removes the fictional sidecar protocol and records raw HTTP/SSE schema provenance", () => {
@@ -44,6 +49,17 @@ describe("portable runtime release documentation", () => {
       "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
     );
     expect(releaseDocs).toContain("474abdd7ee60f4b67476cfcef7e5311beff4a824");
+  });
+
+  it("distinguishes immutable upstream evidence from signed shipped evidence", () => {
+    const documented = embeddedManifest().sidecarRuntimes[0];
+
+    expect(contract).toContain("signed evidence for the executable bytes");
+    expect(contract).toContain("remain immutable provenance for the approved upstream release");
+    expect(documented.signing.shippedExecutableSha256).not.toBe(documented.executableSha256);
+    expect(documented.signing.shippedExecutableTreeSha256).not.toBe(
+      documented.executableTreeSha256,
+    );
   });
 
   it("documents closed redistribution and whole-product promotion boundaries", () => {

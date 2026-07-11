@@ -95,6 +95,19 @@ const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 const OPENCODE_VERSION = "1.17.17";
 const OPENCODE_COMMIT = "474abdd7ee60f4b67476cfcef7e5311beff4a824";
 const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const SIGNING_KEYS = [
+  "notarizationRequired",
+  "notarizationVerified",
+  "shippedExecutableSha256",
+  "shippedExecutableTreeAlgorithm",
+  "shippedExecutableTreeSha256",
+  "signatureKind",
+  "signatureVerified",
+  "verificationChecks",
+  "verificationPolicy",
+  "verificationReasonCodes",
+  "verificationStatus",
+] as const;
 
 /**
  * Evaluates the closed pre-spawn order from #2253. Missing evidence is always false: callers
@@ -239,6 +252,8 @@ function signingVerified(
   signing: Record<string, unknown> | undefined,
   target: UpdatePortableTarget,
 ): boolean {
+  if (signing === undefined) return false;
+  if (!signingKeysExact(signing)) return false;
   const checks = recordAt(signing, "verificationChecks");
   const macos = target !== "windows-x64";
   return (
@@ -248,7 +263,23 @@ function signingVerified(
     fieldEquals(signing, "signatureVerified", true) &&
     fieldEquals(signing, "notarizationRequired", macos) &&
     fieldEquals(signing, "notarizationVerified", macos) &&
+    shippedExecutableEvidenceVerified(signing) &&
     targetChecksVerified(target, checks)
+  );
+}
+
+function signingKeysExact(signing: Record<string, unknown> | undefined): boolean {
+  return (
+    signing !== undefined &&
+    JSON.stringify(Object.keys(signing).sort()) === JSON.stringify(SIGNING_KEYS)
+  );
+}
+
+function shippedExecutableEvidenceVerified(signing: Record<string, unknown>): boolean {
+  return (
+    digestFieldRequired(signing, "shippedExecutableSha256") !== undefined &&
+    fieldEquals(signing, "shippedExecutableTreeAlgorithm", "keiko-directory-tree-sha256-v1") &&
+    digestFieldRequired(signing, "shippedExecutableTreeSha256") !== undefined
   );
 }
 
@@ -400,8 +431,16 @@ function parseNamedRuntime(
     fail("sidecar-metadata-malformed", "sidecar executable tree digest is invalid");
   }
   const evidence = requiredRuntimeEvidence(runtime, payload.payloadRootPath);
-  if (!signingVerified(recordAt(runtime, "signing"), target)) {
+  const signing = recordAt(runtime, "signing");
+  if (signing === undefined) {
     fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
+  }
+  if (!signingVerified(signing, target)) {
+    fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
+  }
+  const shippedExecutableTreeSha256 = digestFieldRequired(signing, "shippedExecutableTreeSha256");
+  if (shippedExecutableTreeSha256 === undefined) {
+    fail("sidecar-metadata-malformed", "sidecar shipped executable tree digest is invalid");
   }
   const summary = baseSummary(runtime, target, payload.payloadSha256, payload.sizeBytes);
   if (summary === undefined) fail("sidecar-metadata-malformed", "sidecar metadata is incomplete");
@@ -409,7 +448,7 @@ function parseNamedRuntime(
     summary,
     payloadRootPath: payload.payloadRootPath,
     executablePath: payload.executablePath,
-    executableTreeSha256,
+    executableTreeSha256: shippedExecutableTreeSha256,
     licenseEvidencePath: evidence.license.path,
     licenseEvidenceSha256: evidence.license.sha256,
     sbomEvidencePath: evidence.sbom.path,

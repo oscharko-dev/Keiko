@@ -815,6 +815,7 @@ function validateVerificationCheckConsistency(
 function validateSidecarSigning(runtime, target, path, failures, options) {
   const signing = recordAt(runtime, "signing", path, failures);
   const signingPath = `${path}.signing`;
+  validateSidecarSigningKeys(signing, signingPath, failures);
   const policy = stringAt(signing, "verificationPolicy", signingPath, failures);
   const status = stringAt(signing, "verificationStatus", signingPath, failures);
   const reasonCodes = stringArrayAt(signing, "verificationReasonCodes", signingPath, failures);
@@ -831,6 +832,7 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     push(failures, `${signingPath}.signatureVerified`, "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures, signingPath);
+  validateShippedExecutableEvidence(signing, policy, signingPath, failures, options);
   validateLifecycleVerificationContext(policy, status, signingPath, options, failures);
   validateVerificationCheckConsistency(
     target,
@@ -849,6 +851,34 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     options,
     path,
   );
+}
+
+function validateSidecarSigningKeys(signing, signingPath, failures) {
+  exactKeysAt(
+    signing,
+    [
+      "verificationPolicy",
+      "verificationStatus",
+      "verificationReasonCodes",
+      "signatureKind",
+      "signatureVerified",
+      "notarizationRequired",
+      "notarizationVerified",
+      "verificationChecks",
+      "shippedExecutableSha256",
+      "shippedExecutableTreeAlgorithm",
+      "shippedExecutableTreeSha256",
+    ],
+    signingPath,
+    failures,
+  );
+}
+
+function validateShippedExecutableEvidence(signing, policy, path, failures, options) {
+  if (policy !== "production") return;
+  digestAt(signing, "shippedExecutableSha256", path, failures, options);
+  literalAt(signing, "shippedExecutableTreeAlgorithm", EXECUTABLE_TREE_ALGORITHM, path, failures);
+  digestAt(signing, "shippedExecutableTreeSha256", path, failures, options);
 }
 
 function validateLifecycleVerificationContext(policy, status, path, options, failures) {

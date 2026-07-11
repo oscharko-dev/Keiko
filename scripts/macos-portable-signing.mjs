@@ -17,7 +17,7 @@ import {
   PortableVerificationInputError,
   readPortableVerificationInput,
 } from "./portable-verification-input.mjs";
-import { rebindExistingSignedArchive } from "./portable-signed-archive.mjs";
+import { rebindExistingSignedArchive, rebindSignedPayload } from "./portable-signed-archive.mjs";
 
 const TEAM_PATTERN = /^[A-Z0-9]{10}$/u;
 const UUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
@@ -179,6 +179,18 @@ function compareCommand(options, includeHashes) {
     fail("macOS code inventory changed unexpectedly");
 }
 
+function rebindPayloadCommand(options) {
+  const stage = resolve(required(options, "stage-root"));
+  const target = required(options, "target");
+  const manifestPath = join(stage, "manifest", "portable-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (manifest.artifact?.platformTarget !== target) {
+    fail("manifest target does not match signed payload");
+  }
+  rebindSignedPayload(stage, manifest, target);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
 async function finalize(options) {
   const stage = resolve(required(options, "stage-root"));
   const expected = readInventory(required(options, "expected-inventory"));
@@ -193,7 +205,9 @@ async function finalize(options) {
   assertProductionInput(inputPath, manifest);
   const archivePath = join(stage, manifest.artifact.assetName);
   if (!existsSync(archivePath)) fail("final ditto archive is missing");
-  await rebindExistingSignedArchive(stage, manifest, archivePath);
+  await rebindExistingSignedArchive(stage, manifest, archivePath, expected.target, {
+    payloadAlreadyRebound: true,
+  });
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   const { spawnSync } = await import("node:child_process");
   const result = spawnSync(
@@ -229,6 +243,7 @@ export async function main(argv = process.argv.slice(2)) {
   else if (command === "inventory-root") inventoryRootCommand(options);
   else if (command === "compare-paths") compareCommand(options, false);
   else if (command === "compare-bytes") compareCommand(options, true);
+  else if (command === "rebind-payload") rebindPayloadCommand(options);
   else if (command === "notary-result")
     assertAcceptedNotaryResult(resolve(required(options, "result")));
   else if (command === "finalize") await finalize(options);

@@ -33,6 +33,7 @@ while IFS= read -r relative; do
     --entitlements native/portable-launcher/macos-entitlements.plist \
     --sign "$APPLE_DEVELOPER_ID_IDENTITY" "$payload/$relative" >/dev/null 2>&1
 done < <(node -e 'const x=require(process.argv[1]); for(const e of x.nestedBundles) console.log(e)' "$inventory")
+node scripts/macos-portable-signing.mjs rebind-payload --stage-root "$stage" --target "$target"
 codesign --force --options runtime --timestamp --keychain "$KEIKO_KEYCHAIN_PATH" \
   --entitlements native/portable-launcher/macos-entitlements.plist \
   --sign "$APPLE_DEVELOPER_ID_IDENTITY" "$app" >/dev/null 2>&1

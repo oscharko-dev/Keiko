@@ -341,6 +341,9 @@ function signingEvidence(target: UpdatePortableTarget): Record<string, unknown> 
     signatureVerified: true,
     notarizationRequired: target !== "windows-x64",
     notarizationVerified: target !== "windows-x64",
+    shippedExecutableSha256: "b".repeat(64),
+    shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    shippedExecutableTreeSha256: "c".repeat(64),
     verificationChecks:
       target === "windows-x64"
         ? { publisherChainVerified: true, timestampVerified: true }
@@ -758,6 +761,34 @@ describe("update preflight service", () => {
             ...(sidecar.signing as Record<string, unknown>),
             verificationStatus: "verification-failed",
           };
+        }),
+    ],
+    [
+      "missing signing evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          delete sidecar.signing;
+        }),
+    ],
+    [
+      "missing shipped executable evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          delete (sidecar.signing as Record<string, unknown>).shippedExecutableTreeSha256;
+        }),
+    ],
+    [
+      "malformed shipped executable evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          (sidecar.signing as Record<string, unknown>).shippedExecutableSha256 = "A".repeat(64);
+        }),
+    ],
+    [
+      "unexpected signing evidence",
+      (target: UpdatePortableTarget): Record<string, unknown> =>
+        sidecarRuntimeWith(target, (sidecar) => {
+          (sidecar.signing as Record<string, unknown>).nativeProof = true;
         }),
     ],
   ])("blocks portable one-click readiness for sidecar %s", async (_label, makeSidecar) => {

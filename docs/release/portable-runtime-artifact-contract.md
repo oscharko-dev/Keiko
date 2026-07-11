@@ -386,7 +386,10 @@ required contract vocabulary.
         "verificationChecks": {
           "publisherChainVerified": true,
           "timestampVerified": true
-        }
+        },
+        "shippedExecutableSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "shippedExecutableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
+        "shippedExecutableTreeSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       }
     }
   ],
@@ -539,7 +542,10 @@ required contract vocabulary.
             "verificationChecks": {
               "publisherChainVerified": true,
               "timestampVerified": true
-            }
+            },
+            "shippedExecutableSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "shippedExecutableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
+            "shippedExecutableTreeSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
           }
         }
       ]
@@ -606,8 +612,14 @@ Validation rules:
   protocol-schema SHA-256 values bind independently reviewed inputs to the staged bytes. Any
   mismatch fails closed before spawn or promotion.
 - Sidecar signing metadata uses the same bounded verification vocabulary as the parent artifact.
-  Production validation requires a verified signature, and macOS sidecars require Developer ID,
-  notarization, stapling, and assessment proof where applicable.
+  Production validation requires a verified signature plus the shipped executable fields
+  `shippedExecutableSha256`, `shippedExecutableTreeAlgorithm`, and
+  `shippedExecutableTreeSha256`. These fields are signed evidence for the executable bytes and
+  executable tree that Keiko stages and checks before production staging or sidecar pre-spawn.
+  The upstream `executableSha256`, `executableTreeAlgorithm`, and `executableTreeSha256` fields
+  remain immutable provenance for the approved upstream release; shipped evidence does not replace
+  or rewrite that upstream record. macOS sidecars also require Developer ID, notarization,
+  stapling, and assessment proof where applicable.
 - `release.stable` and `updateEligibility.stableOnly` must both be `true` for one-click portable
   update eligibility. Prerelease, beta, canary, downgrade, and rollback paths are out of scope.
 - `security.verificationPolicy` is one of `staging`, `development`, `pull-request`, or

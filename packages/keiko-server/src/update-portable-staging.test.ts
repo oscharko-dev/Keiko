@@ -220,9 +220,7 @@ function sidecarRuntime(
       sha256: "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85",
     },
     executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
-    executableTreeSha256: createHash("sha256")
-      .update(`opencode.cmd\0${sidecarFileSha256(files, "opencode.cmd")}\0`)
-      .digest("hex"),
+    executableTreeSha256: "f".repeat(64),
     platformTarget: TARGET,
     payloadRootPath: SIDECAR_ROOT,
     executablePath: `${SIDECAR_ROOT}/opencode.cmd`,
@@ -245,6 +243,11 @@ function sidecarRuntime(
       notarizationRequired: false,
       notarizationVerified: false,
       verificationChecks: { publisherChainVerified: true, timestampVerified: true },
+      shippedExecutableSha256: sidecarFileSha256(files, "opencode.cmd"),
+      shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+      shippedExecutableTreeSha256: createHash("sha256")
+        .update(`opencode.cmd\0${sidecarFileSha256(files, "opencode.cmd")}\0`)
+        .digest("hex"),
     },
   };
 }
