@@ -6,6 +6,7 @@ import type { FilesContentResponse, LanguageServiceCapabilities } from "../../..
 import {
   fetchEditorLanguageCapabilities,
   fetchFilesContent,
+  fetchGitStatus,
   fetchGitStructuredDiff,
   fetchGitBlame,
   postEditorAgentSessionSnapshot,
@@ -23,6 +24,7 @@ vi.mock("../../../../../lib/api", async () => {
     ...actual,
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchFilesContent: vi.fn(),
+    fetchGitStatus: vi.fn(),
     fetchGitStructuredDiff: vi.fn(),
     fetchGitBlame: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
@@ -138,6 +140,21 @@ async function renderEditorWithBlame(onOpenGitCommit = vi.fn()): Promise<ReturnT
 beforeEach(() => {
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(CAPABILITIES);
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
+  vi.mocked(fetchGitStatus).mockResolvedValue({
+    schemaVersion: "1",
+    root: "/repo",
+    state: "available",
+    available: true,
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  });
   vi.mocked(fetchGitStructuredDiff).mockImplementation(async ({ scope }) => diff(scope));
   vi.mocked(fetchGitBlame).mockResolvedValue({
     schemaVersion: "1",
@@ -198,6 +215,73 @@ describe("EditorRuntimeWidget Git gutter", () => {
     expect(screen.getByTestId("editor-status-bar-live")).toHaveTextContent("2 merge conflicts");
     expect(saveFilesContent).not.toHaveBeenCalled();
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("reports gitContextSummary on the posted agent snapshot (Issue #2234, ADR-0127)", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo",
+      state: "available",
+      available: true,
+      detached: false,
+      clean: false,
+      stagedCount: 1,
+      unstagedCount: 2,
+      untrackedCount: 0,
+      conflictedCount: 1,
+      changes: [
+        {
+          path: "src/app.ts",
+          indexStatus: "M",
+          worktreeStatus: " ",
+          staged: true,
+          unstaged: false,
+          untracked: false,
+          conflicted: false,
+        },
+        {
+          path: "src/other.ts",
+          indexStatus: " ",
+          worktreeStatus: "M",
+          staged: false,
+          unstaged: true,
+          untracked: false,
+          conflicted: false,
+        },
+        {
+          path: "src/conflict.ts",
+          indexStatus: "U",
+          worktreeStatus: "U",
+          staged: false,
+          unstaged: false,
+          untracked: false,
+          conflicted: true,
+        },
+      ],
+      truncated: false,
+      maxChanges: 500,
+    });
+    await renderEditor("<<<<<<< ours\nleft\n=======\nright\n>>>>>>> theirs\n");
+
+    await waitFor(() => {
+      const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+      expect(snapshot?.gitContextSummary).toEqual({
+        hasConflictMarkers: false,
+        changedFileCount: 3,
+        truncated: false,
+      });
+    });
+
+    act(() => surface.props?.editorConflicts?.onChange(2, false));
+
+    await waitFor(() => {
+      const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+      expect(snapshot?.gitContextSummary).toEqual({
+        hasConflictMarkers: true,
+        changedFileCount: 3,
+        truncated: false,
+      });
+    });
   });
 
   it("reads staged and unstaged once per bridge refresh and never from content changes", async () => {

@@ -15,7 +15,11 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FilesContentResponse } from "../../../../../lib/types";
-import { fetchFilesContent, postEditorAgentSessionSnapshot } from "../../../../../lib/api";
+import {
+  fetchFilesContent,
+  fetchGitStatus,
+  postEditorAgentSessionSnapshot,
+} from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
@@ -35,6 +39,7 @@ vi.mock("../../../../../lib/api", async () => {
       Promise.resolve({ schemaVersion: "1", providers: [] }),
     ),
     fetchFilesContent: vi.fn(),
+    fetchGitStatus: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
@@ -154,6 +159,21 @@ async function applyWhenReady(
 }
 
 beforeEach(() => {
+  vi.mocked(fetchGitStatus).mockResolvedValue({
+    schemaVersion: "1",
+    root: "/repo",
+    state: "available",
+    available: true,
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  });
   vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
 });
 
