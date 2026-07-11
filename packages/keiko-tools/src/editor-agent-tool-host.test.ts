@@ -242,6 +242,23 @@ describe("EditorAgentToolHost route dispatch", () => {
     });
   });
 
+  // Issue #2298 — the read-only git-query tool queues a queryGit action with the file as its target.
+  it("queues a bounded read-only git context query", async () => {
+    const route = recordingRoute();
+    await execute(host(route), "editor_git_context", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      path: "src/a.ts",
+      aspects: ["status", "blame"],
+    });
+    const action = JSON.parse(route.requests[0]?.body ?? "null") as EditorAgentAction;
+    expect(action).toMatchObject({
+      type: "queryGit",
+      target: { file: "src/a.ts" },
+      queryGit: { path: "src/a.ts", aspects: ["status", "blame"] },
+    });
+  });
+
   it.each(["references", "renamePrepare", "signatureHelp"] as const)(
     "queues the %s symbol navigation operation",
     async (operation) => {
@@ -499,6 +516,28 @@ describe("EditorAgentToolHost route dispatch", () => {
       sessionId: "session-1",
       idempotencyKey: IDEMPOTENCY_KEY,
       query: "query",
+      ...extras,
+    });
+    expect(parseOutput(result)).toMatchObject({
+      ok: false,
+      error: { kind: "invalid-arguments", code: "INVALID_ARGUMENTS" },
+    });
+    expect(route.requests).toHaveLength(0);
+  });
+
+  // Issue #2298 — malformed git-context arguments never reach the action queue.
+  it.each([
+    ["missing aspects", {}],
+    ["empty aspects", { aspects: [] }],
+    ["unknown aspect", { aspects: ["history"] }],
+    ["duplicate aspects", { aspects: ["status", "status"] }],
+    ["unsupported property", { aspects: ["status"], scope: "staged" }],
+  ])("rejects %s for git context", async (_label, extras) => {
+    const route = recordingRoute();
+    const result = await execute(host(route), "editor_git_context", {
+      sessionId: "session-1",
+      idempotencyKey: IDEMPOTENCY_KEY,
+      path: "src/a.ts",
       ...extras,
     });
     expect(parseOutput(result)).toMatchObject({

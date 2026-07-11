@@ -157,6 +157,25 @@ export interface EditorAgentSearchWorkspaceRequest {
   readonly scopePath?: string | undefined;
 }
 
+// Issue #2298: the read-only aspects an agent may request for a file's source-control state. Each
+// maps to one already-bounded, redacted M5 git read handler; the tool never mutates git state.
+export type EditorAgentGitAspect = "status" | "diff" | "blame";
+
+export const EDITOR_AGENT_GIT_ASPECTS: readonly EditorAgentGitAspect[] = [
+  "status",
+  "diff",
+  "blame",
+];
+
+// Issue #2298: a governed, non-mutating on-demand git query for one workspace-contained file. The
+// active complement to #2234's passive `git-context` CodingContextPack source: an agent asks for
+// the current status/diff-vs-HEAD/blame of a specific file at the moment it needs it. Server-owned
+// caps and redaction apply per aspect; no bound field is exposed the server does not honour.
+export interface EditorAgentQueryGitRequest {
+  readonly path: string;
+  readonly aspects: readonly EditorAgentGitAspect[];
+}
+
 export type EditorAgentActionType =
   | "openFile"
   | "focusTab"
@@ -172,7 +191,10 @@ export type EditorAgentActionType =
   // #2211's route. Added for policy classification; NOT dispatched to the browser bridge.
   | "requestVerification"
   | "navigateSymbol"
-  | "searchWorkspace";
+  | "searchWorkspace"
+  // Issue #2298: a governed, read-only on-demand git query resolved server-side; NOT dispatched to
+  // the browser bridge.
+  | "queryGit";
 
 // Issue #2210 (ADR-0126 D5): an agent-originated verification request uses the same wire shape as the
 // human editor route request (kinds/targetPath/requestId). Aliased to avoid duplicating the shape;
@@ -243,6 +265,7 @@ export interface EditorAgentAction {
   readonly changeset?: EditorAgentChangeset | undefined;
   readonly navigateSymbol?: EditorAgentNavigateSymbolRequest | undefined;
   readonly searchWorkspace?: EditorAgentSearchWorkspaceRequest | undefined;
+  readonly queryGit?: EditorAgentQueryGitRequest | undefined;
 }
 
 export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "conflict";
@@ -431,6 +454,7 @@ const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "requestVerification",
   "navigateSymbol",
   "searchWorkspace",
+  "queryGit",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -907,6 +931,22 @@ function isSearchWorkspaceRequest(value: unknown): value is EditorAgentSearchWor
   );
 }
 
+function isGitAspect(value: unknown): value is EditorAgentGitAspect {
+  return value === "status" || value === "diff" || value === "blame";
+}
+
+function isQueryGitRequest(value: unknown): value is EditorAgentQueryGitRequest {
+  return (
+    isRecord(value) &&
+    isBoundedTargetPath(value.path) &&
+    Array.isArray(value.aspects) &&
+    value.aspects.length > 0 &&
+    value.aspects.length <= EDITOR_AGENT_GIT_ASPECTS.length &&
+    value.aspects.every(isGitAspect) &&
+    new Set(value.aspects).size === value.aspects.length
+  );
+}
+
 function isEditorAgentActionData(value: unknown): value is Readonly<Record<string, unknown>> {
   if (!isRecord(value)) return false;
   try {
@@ -962,6 +1002,7 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
     value.type === "searchWorkspace"
       ? isSearchWorkspaceRequest(value.searchWorkspace)
       : value.searchWorkspace === undefined,
+    value.type === "queryGit" ? isQueryGitRequest(value.queryGit) : value.queryGit === undefined,
   ].every(Boolean);
 }
 
@@ -1366,6 +1407,15 @@ function canonicalSearchWorkspaceRequest(
   };
 }
 
+function canonicalQueryGitRequest(
+  request: NonNullable<EditorAgentAction["queryGit"]>,
+): NonNullable<EditorAgentAction["queryGit"]> {
+  return {
+    path: request.path,
+    aspects: EDITOR_AGENT_GIT_ASPECTS.filter((aspect) => request.aspects.includes(aspect)),
+  };
+}
+
 function canonicalTextEditsPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
   return action.textEdits === undefined
     ? {}
@@ -1379,6 +1429,25 @@ function canonicalPatchPayload(action: EditorAgentAction): Partial<EditorAgentAc
   };
 }
 
+function canonicalServerResolvedPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  switch (action.type) {
+    case "navigateSymbol":
+      return action.navigateSymbol === undefined
+        ? {}
+        : { navigateSymbol: canonicalNavigateSymbolRequest(action.navigateSymbol) };
+    case "searchWorkspace":
+      return action.searchWorkspace === undefined
+        ? {}
+        : { searchWorkspace: canonicalSearchWorkspaceRequest(action.searchWorkspace) };
+    case "queryGit":
+      return action.queryGit === undefined
+        ? {}
+        : { queryGit: canonicalQueryGitRequest(action.queryGit) };
+    default:
+      return {};
+  }
+}
+
 function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
   switch (action.type) {
     case "applyTextEdits":
@@ -1389,16 +1458,8 @@ function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<E
       return action.changeset === undefined
         ? {}
         : { changeset: canonicalChangeset(action.changeset) };
-    case "navigateSymbol":
-      return action.navigateSymbol === undefined
-        ? {}
-        : { navigateSymbol: canonicalNavigateSymbolRequest(action.navigateSymbol) };
-    case "searchWorkspace":
-      return action.searchWorkspace === undefined
-        ? {}
-        : { searchWorkspace: canonicalSearchWorkspaceRequest(action.searchWorkspace) };
     default:
-      return {};
+      return canonicalServerResolvedPayload(action);
   }
 }
 
