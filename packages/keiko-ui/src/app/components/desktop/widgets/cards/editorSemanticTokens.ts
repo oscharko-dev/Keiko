@@ -62,6 +62,14 @@ interface CreateEditorSemanticTokensHostArgs {
 type SemanticHost = NonNullable<KeikoCodeEditorProps["semanticTokens"]>;
 type SemanticProvider = SemanticHost["provider"];
 
+interface SemanticResponseContext {
+  readonly uri: string;
+  readonly version: number;
+  readonly sequence: number;
+  readonly response: ManagedLspSemanticTokenData;
+  readonly signal: AbortSignal;
+}
+
 function lineLengths(model: SemanticModel): readonly number[] {
   return Array.from(
     { length: model.getLineCount() },
@@ -73,19 +81,15 @@ function responseIsCurrent(
   args: CreateEditorSemanticTokensHostArgs,
   runtime: SemanticRuntime,
   model: SemanticModel,
-  uri: string,
-  version: number,
-  sequence: number,
-  response: ManagedLspSemanticTokenData,
-  signal: AbortSignal,
+  context: SemanticResponseContext,
 ): boolean {
   return (
     !runtime.disposed &&
-    !signal.aborted &&
-    runtime.sequence === sequence &&
-    args.isCurrentDocument(uri) &&
-    model.getVersionId() === version &&
-    response.documentVersion === version
+    !context.signal.aborted &&
+    runtime.sequence === context.sequence &&
+    args.isCurrentDocument(context.uri) &&
+    model.getVersionId() === context.version &&
+    context.response.documentVersion === context.version
   );
 }
 
@@ -122,7 +126,13 @@ async function resolveTokens(
     );
     if (
       response === null ||
-      !responseIsCurrent(args, runtime, model, uri, version, sequence, response, controller.signal)
+      !responseIsCurrent(args, runtime, model, {
+        uri,
+        version,
+        sequence,
+        response,
+        signal: controller.signal,
+      })
     )
       return null;
     const parsed = parseManagedLspSemanticTokenData(response, args.legend);

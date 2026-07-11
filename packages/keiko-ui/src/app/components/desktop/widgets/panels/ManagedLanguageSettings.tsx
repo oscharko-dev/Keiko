@@ -65,10 +65,10 @@ export function ManagedLanguageSettings({
         </h3>
         <p className={styles.description}>{t("description")}</p>
       </header>
-      <div className={styles.srOnly} role="status" aria-live="polite" aria-atomic="true">
+      <output className={styles.srOnly} aria-live="polite" aria-atomic="true">
         {announcement(view.announcement, t)}
         {view.mutating ? t("applying") : ""}
-      </div>
+      </output>
       {root === undefined ? <p className={styles.empty}>{t("noWorkspace")}</p> : null}
       {root !== undefined && view.loading && view.data === undefined ? (
         <p className={styles.empty} role="status">
@@ -212,10 +212,10 @@ function LanguageCard(props: LanguageCardProps): ReactNode {
           </div>
           <div className={styles.reason}>{reasonLabel(status.reasonCode, t)}</div>
         </div>
-        <span className={styles.state} data-state={status.state} role="status">
+        <output className={styles.state} data-state={status.state}>
           <span aria-hidden="true">{stateIcon(status.state)}</span>
           {stateLabel(status.state, t)}
-        </span>
+        </output>
       </div>
       {guidance(status.state, status.reasonCode, t)}
       <div className={styles.details}>

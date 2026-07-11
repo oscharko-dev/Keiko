@@ -534,8 +534,13 @@ function safeRouteString(value: unknown, maximum: number): value is string {
 
 function hasForbiddenControl(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code === 127 || (code < 32 && code !== 9 && code !== 10 && code !== 13)) return true;
+    const code = value.codePointAt(index);
+    if (
+      code !== undefined &&
+      (code === 127 || (code < 32 && code !== 9 && code !== 10 && code !== 13))
+    ) {
+      return true;
+    }
   }
   return false;
 }

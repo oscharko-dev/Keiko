@@ -108,7 +108,9 @@ export function defaultHostLanguageCommandRules(): readonly CommandRule[] {
     names.add(spec.executableName);
     for (const executable of spec.requiredExecutables) names.add(executable);
   }
-  return [...names].sort().map((executable) => ({ executable }));
+  return [...names]
+    .sort((left, right) => left.localeCompare(right))
+    .map((executable) => ({ executable }));
 }
 
 export function isHostLanguageProviderProvisioned(

@@ -22,14 +22,14 @@ import { detectPythonConfigurationPrecedence } from "./providers/pythonProvider.
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 const MAX_ROOT_CHARS = 4_096;
 const MAX_IDEMPOTENCY_KEY_CHARS = 128;
-const ACTIONS: readonly ManagedLspControlAction[] = [
+const ACTIONS: ReadonlySet<ManagedLspControlAction> = new Set([
   "activate",
   "deactivate",
   "configure",
   "reset",
   "rollback",
   "restart",
-];
+]);
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
@@ -82,7 +82,7 @@ function validMutationScalars(value: UnknownRecord): boolean {
     hasOnlyKeys(value, ["root", "language", "action", "expectedRevision", "configuration"]),
     typeof value.root === "string" && value.root.length > 0 && value.root.length <= MAX_ROOT_CHARS,
     MANAGED_LSP_LANGUAGES.includes(value.language as ManagedLspLanguage),
-    ACTIONS.includes(value.action as ManagedLspControlAction),
+    ACTIONS.has(value.action as ManagedLspControlAction),
     typeof value.expectedRevision === "number" &&
       Number.isSafeInteger(value.expectedRevision) &&
       value.expectedRevision >= 0,
@@ -105,8 +105,8 @@ function idempotencyKey(ctx: RouteContext): string | undefined {
 
 function hasControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 31 || code === 127) return true;
+    const code = value.codePointAt(index);
+    if (code !== undefined && (code <= 31 || code === 127)) return true;
   }
   return false;
 }

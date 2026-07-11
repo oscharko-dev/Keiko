@@ -728,17 +728,15 @@ function recordRequestFailure(state: RuntimeState, error: LspProcessError): void
 function recordLatency(state: RuntimeState, durationMs: number): void {
   state.latencyTotalMs += durationMs;
   state.latencyMaximumMs = Math.max(state.latencyMaximumMs, durationMs);
-  const index =
-    durationMs <= 10
-      ? 0
-      : durationMs <= 50
-        ? 1
-        : durationMs <= 250
-          ? 2
-          : durationMs <= 1_000
-            ? 3
-            : 4;
-  state.latencyBuckets[index] += 1;
+  state.latencyBuckets[latencyBucketIndex(durationMs)] += 1;
+}
+
+function latencyBucketIndex(durationMs: number): 0 | 1 | 2 | 3 | 4 {
+  if (durationMs <= 10) return 0;
+  if (durationMs <= 50) return 1;
+  if (durationMs <= 250) return 2;
+  if (durationMs <= 1_000) return 3;
+  return 4;
 }
 
 function mapRequestError(error: unknown): LspProcessError {

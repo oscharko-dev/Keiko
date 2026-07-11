@@ -73,9 +73,9 @@ export function pythonProtocolConfiguration(
 export function detectPythonConfigurationPrecedence(root: string): PythonConfigurationPrecedence {
   if (safeContainedFile(root, "pyrightconfig.json") !== undefined) return "pyrightconfig";
   const pyproject = safeContainedFile(root, "pyproject.toml");
-  return pyproject !== undefined && /^\s*\[tool\.pyright\]\s*$/mu.test(pyproject)
-    ? "pyproject"
-    : "workspaceConfiguration";
+  const hasPyrightSection =
+    pyproject?.split("\n").some((line) => line.trim() === "[tool.pyright]") === true;
+  return hasPyrightSection ? "pyproject" : "workspaceConfiguration";
 }
 
 function safeContainedFile(root: string, relativePath: string): string | undefined {

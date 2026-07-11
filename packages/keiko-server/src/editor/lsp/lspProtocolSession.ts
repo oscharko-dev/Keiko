@@ -227,11 +227,11 @@ function buildSnapshot(
   state: SessionState,
   deps: LspProtocolSessionDeps,
 ): ManagedLspNegotiatedCapabilitySnapshot {
-  const dynamic = [...state.dynamicRegistrations.values()];
+  const dynamic = new Set(state.dynamicRegistrations.values());
   const negotiated = orderedOperations(
     deps.candidateOperations.filter(
       (operation) =>
-        (state.staticOperations.has(operation) || dynamic.includes(operation)) &&
+        (state.staticOperations.has(operation) || dynamic.has(operation)) &&
         !state.unregistered.has(operation),
     ),
   );

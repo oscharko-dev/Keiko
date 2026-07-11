@@ -278,11 +278,11 @@ function isOptionalWorkspaceRelativePath(value: unknown): boolean {
 }
 
 const SOURCES: readonly ManagedLspSettingSource[] = MANAGED_LSP_SETTING_PRECEDENCE;
-const PERSISTED_SOURCES: readonly ManagedLspPersistedSettingSource[] = [
+const PERSISTED_SOURCES: ReadonlySet<ManagedLspPersistedSettingSource> = new Set([
   "builtInDefault",
   "operatorProvisioning",
   "workspace",
-];
+]);
 
 function isSource(value: unknown): value is ManagedLspSettingSource {
   return typeof value === "string" && SOURCES.includes(value as ManagedLspSettingSource);
@@ -290,8 +290,7 @@ function isSource(value: unknown): value is ManagedLspSettingSource {
 
 function isPersistedSource(value: unknown): value is ManagedLspPersistedSettingSource {
   return (
-    typeof value === "string" &&
-    PERSISTED_SOURCES.includes(value as ManagedLspPersistedSettingSource)
+    typeof value === "string" && PERSISTED_SOURCES.has(value as ManagedLspPersistedSettingSource)
   );
 }
 
@@ -377,20 +376,25 @@ function isGoBuildFlags(value: unknown): value is ManagedLspGoBuildFlags {
   );
 }
 
-const GO_OPERATING_SYSTEMS: readonly ManagedLspGoOperatingSystem[] = [
+const GO_OPERATING_SYSTEMS: ReadonlySet<ManagedLspGoOperatingSystem> = new Set([
   "linux",
   "darwin",
   "windows",
   "freebsd",
-];
-const GO_ARCHITECTURES: readonly ManagedLspGoArchitecture[] = ["amd64", "arm64", "386", "arm"];
+]);
+const GO_ARCHITECTURES: ReadonlySet<ManagedLspGoArchitecture> = new Set([
+  "amd64",
+  "arm64",
+  "386",
+  "arm",
+]);
 
 function isGoTarget(value: unknown): value is ManagedLspGoTarget {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, ["goos", "goarch", "minimumGoVersion"]) &&
-    GO_OPERATING_SYSTEMS.includes(value.goos as ManagedLspGoOperatingSystem) &&
-    GO_ARCHITECTURES.includes(value.goarch as ManagedLspGoArchitecture) &&
+    GO_OPERATING_SYSTEMS.has(value.goos as ManagedLspGoOperatingSystem) &&
+    GO_ARCHITECTURES.has(value.goarch as ManagedLspGoArchitecture) &&
     typeof value.minimumGoVersion === "string" &&
     /^1\.(?:2[2-9]|[3-9]\d)$/u.test(value.minimumGoVersion)
   );
@@ -415,7 +419,7 @@ function isGoDirectoryFilters(value: unknown): value is readonly ManagedLspGoDir
 
 function isGoSettings(value: unknown): value is ManagedLspGoSettings {
   const validTag = (tag: string): boolean =>
-    tag.length <= MANAGED_LSP_BUILD_TAG_MAX_CHARS && /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/u.test(tag);
+    tag.length <= MANAGED_LSP_BUILD_TAG_MAX_CHARS && /^\w[\w.-]*$/u.test(tag);
   if (!isRecord(value)) return false;
   return [
     hasOnlyKeys(value, [
@@ -472,10 +476,16 @@ function isShellSettings(value: unknown): value is ManagedLspShellSettings {
   );
 }
 
-const JAVA_LEVELS: readonly ManagedLspJavaLanguageLevel[] = ["8", "11", "17", "21", "25"];
+const JAVA_LEVELS: ReadonlySet<ManagedLspJavaLanguageLevel> = new Set([
+  "8",
+  "11",
+  "17",
+  "21",
+  "25",
+]);
 
 function isJavaLanguageLevel(value: unknown): value is ManagedLspJavaLanguageLevel {
-  return typeof value === "string" && JAVA_LEVELS.includes(value as ManagedLspJavaLanguageLevel);
+  return typeof value === "string" && JAVA_LEVELS.has(value as ManagedLspJavaLanguageLevel);
 }
 
 function hasValidJavaLevels(value: UnknownRecord): boolean {
@@ -518,9 +528,9 @@ function isRustCfg(value: unknown): value is ManagedLspRustCfg {
     isRecord(value) &&
     hasOnlyKeys(value, ["key", "value"]) &&
     typeof value.key === "string" &&
-    /^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(value.key) &&
+    /^[A-Za-z_]\w{0,63}$/u.test(value.key) &&
     (value.value === null ||
-      (typeof value.value === "string" && /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/u.test(value.value)))
+      (typeof value.value === "string" && /^\w[\w.-]{0,127}$/u.test(value.value)))
   );
 }
 

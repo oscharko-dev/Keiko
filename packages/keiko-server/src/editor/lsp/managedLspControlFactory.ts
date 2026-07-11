@@ -1,4 +1,8 @@
-import type { ManagedLspLanguage, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type {
+  EvidenceStore,
+  ManagedLspLanguage,
+  WorkspaceInfo,
+} from "@oscharko-dev/keiko-contracts";
 
 import { createWorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import { disposeHostLspPoolEntry } from "./hostLanguageOperation.js";
@@ -17,7 +21,6 @@ import {
   createManagedLspEvidenceProjector,
   type ManagedLspEvidenceProjector,
 } from "./managedLspEvidenceProjector.js";
-import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,

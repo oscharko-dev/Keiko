@@ -293,20 +293,20 @@ function runInProcessLanguageOperation(
   });
 }
 
-const SPAWNABLE_MANAGED_STATES: readonly ManagedLspEffectiveState[] = [
+const SPAWNABLE_MANAGED_STATES: ReadonlySet<ManagedLspEffectiveState> = new Set([
   "available",
   "starting",
   "active",
   "degraded",
   "restartRequired",
-];
+]);
 
 function snapshotAuthorizesLanguage(
   snapshot: ManagedLspControlSnapshot,
   languageId: string,
 ): boolean {
   const status = snapshot.languages.find((entry) => entry.ok && entry.language === languageId);
-  return status?.ok === true && SPAWNABLE_MANAGED_STATES.includes(status.state);
+  return status?.ok === true && SPAWNABLE_MANAGED_STATES.has(status.state);
 }
 
 async function managedActivationAuthorization(

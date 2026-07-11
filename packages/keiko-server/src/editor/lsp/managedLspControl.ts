@@ -133,12 +133,6 @@ function trueLike(value: string): boolean {
   );
 }
 
-function falseLike(value: string): boolean {
-  return ["0", "false", "off", "no", "disabled", "deny", "denied"].includes(
-    value.trim().toLowerCase(),
-  );
-}
-
 function deploymentPolicy(
   env: Readonly<Record<string, string | undefined>>,
   language: ManagedLspLanguage,
@@ -155,7 +149,7 @@ function legacyEnvironment(
   const value = env[`KEIKO_EDITOR_LSP_${languageToken(language)}`];
   if (value === undefined) return "unset";
   if (trueLike(value)) return "enabled";
-  return falseLike(value) ? "disabled" : "disabled";
+  return "disabled";
 }
 
 function unavailableActivation(

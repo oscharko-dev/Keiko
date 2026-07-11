@@ -203,7 +203,7 @@ function validIdempotencyFields(value: UnknownRecord): boolean {
 function parseIdempotency(value: unknown): readonly ManagedLspIdempotencyRecord[] | undefined {
   if (!Array.isArray(value) || value.length > MAX_IDEMPOTENCY_RECORDS) return undefined;
   const result = value.map(parseIdempotencyRecord);
-  if (result.some((entry) => entry === undefined)) return undefined;
+  if (result.includes(undefined)) return undefined;
   return result as readonly ManagedLspIdempotencyRecord[];
 }
 
