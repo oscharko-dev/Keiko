@@ -4,7 +4,11 @@ import {
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
   isLegalCodingWorkbenchRuntimeTransition,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
+  validateCodingWorkbenchRuntimeAdapterStartRequest,
+  validateCodingWorkbenchRuntimeAuthorityFacts,
   validateCodingWorkbenchRuntimeIntent,
+  validateCodingWorkbenchRuntimeMintConfirmation,
+  validateCodingWorkbenchRuntimeState,
   type CodingWorkbenchAuthorityEnvelope,
   type CodingWorkbenchRuntimeAuthorityEnvelope,
 } from "./index.js";
@@ -144,6 +148,78 @@ describe("Coding Workbench runtime contracts", () => {
         ...runtimeAuthority(),
         binding: { ...runtimeAuthority().binding, workspaceRootDigest: "b".repeat(64) },
       }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it.each([
+    ["task", { binding: { ...runtimeAuthority().binding, taskId: "other" } }],
+    ["workspace", { binding: { ...runtimeAuthority().binding, workspaceId: "other" } }],
+    ["root", { binding: { ...runtimeAuthority().binding, workspaceRootDigest: "b".repeat(64) } }],
+    ["branch", { binding: { ...runtimeAuthority().binding, branchRef: "other" } }],
+  ])("rejects a %s correlation mismatch", (_axis, override) => {
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityEnvelope({ ...runtimeAuthority(), ...override }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("validates exact-key state, confirmation, adapter request, and live facts", () => {
+    const state = {
+      schemaVersion: "1",
+      state: "idle",
+      revision: 0,
+      updatedAt: "2026-07-11T12:00:00.000Z",
+    };
+    expect(validateCodingWorkbenchRuntimeState(state)).toMatchObject({ ok: true });
+    expect(validateCodingWorkbenchRuntimeState({ ...state, revision: -1 })).toMatchObject({
+      ok: false,
+    });
+    expect(validateCodingWorkbenchRuntimeState({ ...state, updatedAt: "bad" })).toMatchObject({
+      ok: false,
+    });
+    expect(validateCodingWorkbenchRuntimeState({ ...state, prompt: "content" })).toMatchObject({
+      ok: false,
+    });
+    const confirmation = {
+      approvalId: "approval",
+      approvalToken: "token",
+      taskId: "task-1",
+      intentDigest: DIGEST,
+      expiresAt: "2026-07-11T13:00:00.000Z",
+    };
+    expect(validateCodingWorkbenchRuntimeMintConfirmation(confirmation)).toMatchObject({
+      ok: true,
+    });
+    expect(
+      validateCodingWorkbenchRuntimeMintConfirmation({ ...confirmation, rawPrompt: "content" }),
+    ).toMatchObject({ ok: false });
+    const adapter = {
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      delegationId: "d-1",
+      idempotencyKey: "i-1",
+      binding: runtimeAuthority().binding,
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+    };
+    expect(validateCodingWorkbenchRuntimeAdapterStartRequest(adapter)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeAdapterStartRequest({ ...adapter, argv: [] }),
+    ).toMatchObject({ ok: false });
+    const facts = {
+      binding: runtimeAuthority().binding,
+      actionClasses: [],
+      connectorScopes: [],
+      runtimeSource: "keiko-sidecar",
+      modelSource: "keiko-model-gateway",
+      budgetDigest: DIGEST,
+      commandPolicyDigest: DIGEST,
+      networkPolicyDigest: DIGEST,
+      gatesDigest: DIGEST,
+      branchConstraintsDigest: DIGEST,
+      modelProfileDigest: DIGEST,
+    };
+    expect(validateCodingWorkbenchRuntimeAuthorityFacts(facts)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeAuthorityFacts({ ...facts, response: "content" }),
     ).toMatchObject({ ok: false });
   });
 });

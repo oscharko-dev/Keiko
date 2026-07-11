@@ -769,6 +769,7 @@ export type {
   CodingWorkbenchRuntimeAdapterStartRequest,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchRuntimeDelegationUsage,
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeIntent,
@@ -784,7 +785,11 @@ export {
   CODING_WORKBENCH_TASK_INTENT_MAX_CHARS,
   isLegalCodingWorkbenchRuntimeTransition,
   validateCodingWorkbenchRuntimeAuthorityEnvelope,
+  validateCodingWorkbenchRuntimeAdapterStartRequest,
+  validateCodingWorkbenchRuntimeAuthorityFacts,
   validateCodingWorkbenchRuntimeIntent,
+  validateCodingWorkbenchRuntimeMintConfirmation,
+  validateCodingWorkbenchRuntimeState,
 } from "./coding-workbench-runtime.js";
 export type {
   CodingWorkbenchCodexAuthCommandLabel,

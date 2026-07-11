@@ -89,6 +89,7 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "branch-drift"
   | "scope-drift"
   | "budget-drift"
+  | "authority-budget-exceeded"
   | "source-drift"
   | "runtime-failed"
   | "revoked"
@@ -108,6 +109,7 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "branch-drift",
     "scope-drift",
     "budget-drift",
+    "authority-budget-exceeded",
     "source-drift",
     "runtime-failed",
     "revoked",
@@ -134,10 +136,10 @@ export interface CodingWorkbenchRuntimeAuthorityEnvelope {
 }
 
 export interface CodingWorkbenchRuntimeMintConfirmation {
-  readonly confirmationId: string;
+  readonly approvalId: string;
+  readonly approvalToken: string;
   readonly taskId: string;
   readonly intentDigest: string;
-  readonly proofDigest: string;
   readonly expiresAt: string;
 }
 
@@ -148,6 +150,17 @@ export interface CodingWorkbenchRuntimeAuthorityFacts {
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly modelSource: CodingWorkbenchModelSource;
   readonly budgetDigest: string;
+  readonly commandPolicyDigest: string;
+  readonly networkPolicyDigest: string;
+  readonly gatesDigest: string;
+  readonly branchConstraintsDigest: string;
+  readonly modelProfileDigest: string;
+}
+
+export interface CodingWorkbenchRuntimeDelegationUsage {
+  readonly toolCalls: number;
+  readonly patchBytes: number;
+  readonly promptTokens: number;
 }
 
 export interface CodingWorkbenchRuntimeAdapterStartRequest {
@@ -260,9 +273,149 @@ export function validateCodingWorkbenchRuntimeAuthorityEnvelope(
   if (authority.ok && authority.value.workspace.rootDigest !== bindingRootDigest(value.binding)) {
     errors.push("binding workspace root digest must match authority workspace");
   }
+  if (authority.ok && isRecord(value.binding)) {
+    validateAuthorityBindingCorrelation(authority.value, value.binding, errors);
+  }
   return errors.length === 0
     ? { ok: true, value: value as unknown as CodingWorkbenchRuntimeAuthorityEnvelope }
     : { ok: false, errors };
+}
+
+export function validateCodingWorkbenchRuntimeState(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeState> {
+  if (!isRecord(value)) return { ok: false, errors: ["runtime state must be an object"] };
+  const errors = unknownKeys(
+    value,
+    [
+      "schemaVersion",
+      "state",
+      "revision",
+      "updatedAt",
+      "runId",
+      "taskId",
+      "workspaceId",
+      "runtimeSource",
+      "modelSource",
+      "failureCode",
+    ],
+    "runtimeState",
+  );
+  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
+    errors.push("schemaVersion is invalid");
+  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
+  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0)
+    errors.push("revision must be non-negative");
+  validateIso(value.updatedAt, "updatedAt", errors);
+  return result(value, errors);
+}
+
+export function validateCodingWorkbenchRuntimeMintConfirmation(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeMintConfirmation> {
+  if (!isRecord(value)) return { ok: false, errors: ["mint confirmation must be an object"] };
+  const errors = unknownKeys(
+    value,
+    ["approvalId", "approvalToken", "taskId", "intentDigest", "expiresAt"],
+    "mintConfirmation",
+  );
+  for (const key of ["approvalId", "approvalToken", "taskId"] as const)
+    if (!isNonEmpty(value[key])) errors.push(`${key} is required`);
+  validateDigest(value.intentDigest, "intentDigest", errors);
+  validateIso(value.expiresAt, "expiresAt", errors);
+  return result(value, errors);
+}
+
+export function validateCodingWorkbenchRuntimeAuthorityFacts(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeAuthorityFacts> {
+  if (!isRecord(value)) return { ok: false, errors: ["authority facts must be an object"] };
+  const keys = [
+    "binding",
+    "actionClasses",
+    "connectorScopes",
+    "runtimeSource",
+    "modelSource",
+    "budgetDigest",
+    "commandPolicyDigest",
+    "networkPolicyDigest",
+    "gatesDigest",
+    "branchConstraintsDigest",
+    "modelProfileDigest",
+  ];
+  const errors = unknownKeys(value, keys, "authorityFacts");
+  validateBinding(value.binding, errors);
+  for (const key of keys.filter((key) => key.endsWith("Digest")))
+    validateDigest(value[key], key, errors);
+  if (!Array.isArray(value.actionClasses) || !Array.isArray(value.connectorScopes))
+    errors.push("authority scopes must be arrays");
+  if (!isOneOf(value.runtimeSource, ["keiko-sidecar", "codex-cli-adapter", "delivery-runner"]))
+    errors.push("runtimeSource is invalid");
+  if (
+    !isOneOf(value.modelSource, [
+      "keiko-model-gateway",
+      "openai-api-key-through-gateway",
+      "chatgpt-codex-subscription-profile",
+    ])
+  )
+    errors.push("modelSource is invalid");
+  return result(value, errors);
+}
+
+export function validateCodingWorkbenchRuntimeAdapterStartRequest(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeAdapterStartRequest> {
+  if (!isRecord(value)) return { ok: false, errors: ["adapter request must be an object"] };
+  const errors = unknownKeys(
+    value,
+    ["authorityRef", "delegationId", "idempotencyKey", "binding", "runtimeSource", "modelSource"],
+    "adapterRequest",
+  );
+  validateBinding(value.binding, errors);
+  if (!isRecord(value.authorityRef)) errors.push("authorityRef is required");
+  else {
+    errors.push(...unknownKeys(value.authorityRef, ["runId", "envelopeDigest"], "authorityRef"));
+    if (!isNonEmpty(value.authorityRef.runId)) errors.push("authorityRef.runId is required");
+    validateDigest(value.authorityRef.envelopeDigest, "authorityRef.envelopeDigest", errors);
+  }
+  for (const key of ["delegationId", "idempotencyKey"] as const)
+    if (!isNonEmpty(value[key])) errors.push(`${key} is required`);
+  if (!isOneOf(value.runtimeSource, ["keiko-sidecar", "codex-cli-adapter", "delivery-runner"]))
+    errors.push("runtimeSource is invalid");
+  if (
+    !isOneOf(value.modelSource, [
+      "keiko-model-gateway",
+      "openai-api-key-through-gateway",
+      "chatgpt-codex-subscription-profile",
+    ])
+  )
+    errors.push("modelSource is invalid");
+  return result(value, errors);
+}
+
+function result<T>(value: unknown, errors: string[]): CodingWorkbenchValidationResult<T> {
+  return errors.length === 0 ? { ok: true, value: value as T } : { ok: false, errors };
+}
+
+function validateAuthorityBindingCorrelation(
+  authority: CodingWorkbenchAuthorityEnvelope,
+  binding: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (!authority.taskRefs.includes(String(binding.taskId))) {
+    errors.push("binding task id must be present in authority task references");
+  }
+  if (authority.workspace.workspaceId !== binding.workspaceId) {
+    errors.push("binding workspace id must match authority workspace");
+  }
+  if (authority.branch.headRef !== binding.branchRef) {
+    errors.push("binding branch reference must match authority head reference");
+  }
+  if (
+    !authority.branch.allowedPrefixes.some((prefix) => String(binding.branchRef).startsWith(prefix))
+  ) {
+    errors.push("binding branch reference must satisfy authority branch constraints");
+  }
 }
 
 function unknownKeys(
