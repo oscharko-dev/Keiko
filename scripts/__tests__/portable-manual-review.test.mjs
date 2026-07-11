@@ -11,7 +11,11 @@ import {
   prepareScenarioFixture,
   targetRoot,
 } from "../portable-manual-review.mjs";
-import { findPortableMetadataRedactionFailures, PORTABLE_TARGETS } from "../portable-runtime.mjs";
+import {
+  findPortableMetadataRedactionFailures,
+  PORTABLE_TARGETS,
+  validatePortablePublishedManifest,
+} from "../portable-runtime.mjs";
 
 const SCENARIO_COUNT = 17;
 
@@ -125,5 +129,34 @@ describe("portable manual review harness", () => {
     const entries = await zipEntryNames(join(root, "release-assets", "keiko-macos-arm64.zip"));
     expect(entries.some((entry) => entry.endsWith("/"))).toBe(false);
     expect(entries).toContain("Keiko/Keiko.app/Contents/Resources/app/package.json");
+  });
+
+  it("generates a valid schema-v2 OpenCode whole-product sidecar manifest", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "macos-arm64", "sidecar-present");
+    const manifest = jsonAt(join(root, "release-assets", "macos-arm64-portable-manifest.json"));
+    const sidecar = manifest.sidecarRuntimes[0];
+
+    expect(
+      validatePortablePublishedManifest(manifest, {
+        releaseId: manifest.release.releaseId,
+        assetId: manifest.artifact.assetId,
+      }),
+    ).toEqual([]);
+    expect(sidecar.approvalSchemaVersion).toBe(2);
+    expect(sidecar.upstream).toMatchObject({
+      owner: "anomalyco",
+      repository: "opencode",
+      version: "1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    });
+    expect(sidecar.protocolSchema.digestInput).toBe("upstream-raw-bytes");
+    expect(sidecar.adapterCompatibility.protocolVersion).toBeUndefined();
+    expect(sidecar.signing.shippedExecutableTreeSha256).not.toBe(sidecar.executableTreeSha256);
+    expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
+      manifest.sidecarRuntimes,
+    );
+    expect(manifest.updateEligibility.rollbackSupported).toBe(false);
+    expect(JSON.stringify(sidecar)).not.toMatch(/selfUpdate|independentUpdate|rollback/iu);
   });
 });
