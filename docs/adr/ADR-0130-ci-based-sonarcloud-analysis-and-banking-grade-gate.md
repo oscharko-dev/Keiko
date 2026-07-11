@@ -235,6 +235,20 @@ adoption) are in flight in parallel. Neither is a prerequisite for this ADR:
   steps), but the two PRs should be sequenced/rebased deliberately rather than merged concurrently
   without review.
 
+## Investigated non-issue: PR comment timing
+
+During this PR's own review, a stale-looking `sonarqubecloud[bot]` PR comment ("Quality Gate
+failed") caused confusion after a fix had already been pushed. Investigation (both the official
+docs and direct inspection of this PR's comment history via the GitHub API) confirmed SonarCloud
+**replaces** its own summary comment on each analysis (delete-and-repost, not append) — this PR's
+comment history shows exactly one `sonarqubecloud[bot]` comment at any point in time across
+multiple analyses. The apparent staleness was purely a timing artifact: the comment for a given
+commit's analysis is only visible until the next commit's analysis completes and replaces it, so a
+comment can lag a few minutes behind a just-pushed fix. `sonar.pullrequest.github.summary_comment`
+(already `true`, instance default) controls only whether a summary comment is posted at all, not
+its update behavior — there is no configuration gap to close here. The reliable, always-current
+signal for a specific commit is the `SonarCloud Code Analysis` GitHub check, not the PR comment.
+
 ## Related
 
 - [ADR-0019](ADR-0019-modular-package-architecture.md) — the monorepo topology that Automatic

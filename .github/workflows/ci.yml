@@ -359,7 +359,7 @@ jobs:
         # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
         # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
         # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
-        run: npx playwright@1.61.1 install --with-deps chromium
+        run: npx --ignore-scripts playwright@1.61.1 install --with-deps chromium
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
