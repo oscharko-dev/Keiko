@@ -122,7 +122,7 @@ export async function prepareIsolatedMacSmoke(options) {
     required(options, "runner-temp"),
   );
   const manifestPath = join(artifactRoot, "manifest", "portable-manifest.json");
-  validatePortableTargetRoot(artifactRoot, target);
+  validatePortableTargetRoot(artifactRoot, target, { context: "candidate" });
   assertRegularUnlinkedFile(manifestPath);
   const manifest = readPortableManifest(manifestPath);
   assertVerifiedManifest(manifest, target);
