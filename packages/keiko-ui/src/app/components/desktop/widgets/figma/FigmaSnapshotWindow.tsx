@@ -883,8 +883,6 @@ export interface FigmaSnapshotWindowProps {
 // reuse the "building" copy ("fetching screens from Figma…").
 type BuildState = "idle" | "loading" | "building" | "done" | "error";
 
-type Setter<T> = Dispatch<SetStateAction<T>>;
-
 // ── Snapshot management (rename / delete) ───────────────────────────────────
 
 interface RenameFigmaSnapshotParams {
@@ -894,13 +892,13 @@ interface RenameFigmaSnapshotParams {
   readonly summaryRunId: string | undefined;
   readonly updateMetadataImpl: typeof updateFigmaSnapshotMetadata;
   readonly snapshotManagementAbortRef: MutableRefObject<AbortController | null>;
-  readonly setSummary: Setter<FigmaSnapshotSummary | null>;
-  readonly setBoardSnapshots: Setter<readonly FigmaSnapshotListEntry[]>;
-  readonly setRecentSnapshots: Setter<readonly FigmaSnapshotListEntry[]>;
-  readonly setRenamingSnapshotRunId: Setter<string | null>;
-  readonly setRenameValue: Setter<string>;
-  readonly setSnapshotManagementError: Setter<string | null>;
-  readonly setSnapshotManagementBusyRunId: Setter<string | null>;
+  readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
+  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setRenameValue: Dispatch<SetStateAction<string>>;
+  readonly setSnapshotManagementError: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementBusyRunId: Dispatch<SetStateAction<string | null>>;
 }
 
 // The AbortController and the snapshotManagementAbortRef assignment are handled by the caller
@@ -965,19 +963,19 @@ interface DeleteFigmaSnapshotByRunIdParams {
   readonly deleteImpl: typeof deleteFigmaSnapshot;
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
   readonly snapshotManagementAbortRef: MutableRefObject<AbortController | null>;
-  readonly setSummary: Setter<FigmaSnapshotSummary | null>;
-  readonly setBuildState: Setter<BuildState>;
-  readonly setCodeState: Setter<"idle" | "generating" | "done" | "error">;
-  readonly setCode: Setter<FigmaCodegenResponse | null>;
-  readonly setScreenJsonState: Setter<"idle" | "loading" | "done" | "error">;
-  readonly setScreenJson: Setter<FigmaSnapshotScreenJsonResponse | null>;
-  readonly setBoardSnapshots: Setter<readonly FigmaSnapshotListEntry[]>;
-  readonly setRecentSnapshots: Setter<readonly FigmaSnapshotListEntry[]>;
-  readonly setDeleteConfirmRunId: Setter<string | null>;
-  readonly setRenamingSnapshotRunId: Setter<string | null>;
-  readonly setDetailsSnapshotRunId: Setter<string | null>;
-  readonly setSnapshotManagementError: Setter<string | null>;
-  readonly setSnapshotManagementBusyRunId: Setter<string | null>;
+  readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
+  readonly setBuildState: Dispatch<SetStateAction<BuildState>>;
+  readonly setCodeState: Dispatch<SetStateAction<"idle" | "generating" | "done" | "error">>;
+  readonly setCode: Dispatch<SetStateAction<FigmaCodegenResponse | null>>;
+  readonly setScreenJsonState: Dispatch<SetStateAction<"idle" | "loading" | "done" | "error">>;
+  readonly setScreenJson: Dispatch<SetStateAction<FigmaSnapshotScreenJsonResponse | null>>;
+  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setDeleteConfirmRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setDetailsSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementError: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementBusyRunId: Dispatch<SetStateAction<string | null>>;
 }
 
 function applyFigmaSnapshotDeletion(runId: string, params: DeleteFigmaSnapshotByRunIdParams): void {
