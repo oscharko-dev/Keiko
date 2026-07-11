@@ -1102,6 +1102,115 @@ export const DE_MESSAGES = {
     "Connector-Schreibzugriff ist für diese Aktion nicht zulässig.",
   "atlassianConnectors.denied.reason.generic":
     "Diese Aktion wurde durch die Richtlinie verweigert.",
+  "managedLanguage.title": "Sprachintelligenz",
+  "managedLanguage.description":
+    "Verwalte Workspace-Sprachserver, ausgehandelte Funktionen, Zustand und Neustartstatus.",
+  "managedLanguage.noWorkspace":
+    "Wähle einen Workspace aus, um die Sprachintelligenz zu verwalten.",
+  "managedLanguage.loading": "Sprachintelligenz wird geladen...",
+  "managedLanguage.loadFailed": "Die Sprachintelligenz konnte nicht geladen werden.",
+  "managedLanguage.retry": "Erneut versuchen",
+  "managedLanguage.retryIntent": "Angeforderte Änderung erneut versuchen",
+  "managedLanguage.conflict":
+    "Der Workspace wurde auf dem Server geändert. Der aktuelle Zustand wurde neu geladen; deine angeforderte Änderung kann erneut versucht werden.",
+  "managedLanguage.mutationFailed":
+    "Die angeforderte Änderung wurde nicht angewendet. Der Serverzustand bleibt maßgeblich.",
+  "managedLanguage.applying": "Workspace-Sprachänderung wird angewendet...",
+  "managedLanguage.enabled": "{language} aktivieren",
+  "managedLanguage.disabled": "{language} deaktivieren",
+  "managedLanguage.restart": "{language} neu starten",
+  "managedLanguage.reset": "{language} zurücksetzen",
+  "managedLanguage.confirmTitle": "Unterbrechende Sprachänderung bestätigen",
+  "managedLanguage.confirmBody":
+    "{action} kann Sprachfunktionen für geöffnete Dateien in diesem Workspace unterbrechen.",
+  "managedLanguage.confirm": "{action} bestätigen",
+  "managedLanguage.cancel": "Abbrechen",
+  "managedLanguage.actionEnable": "Aktivieren",
+  "managedLanguage.actionDisable": "Deaktivieren",
+  "managedLanguage.actionRestart": "Neustart",
+  "managedLanguage.actionReset": "Zurücksetzen",
+  "managedLanguage.stateDisabled": "Deaktiviert",
+  "managedLanguage.stateDisabledByPolicy": "Durch Richtlinie deaktiviert",
+  "managedLanguage.stateNotProvisioned": "Nicht bereitgestellt",
+  "managedLanguage.stateAvailable": "Verfügbar",
+  "managedLanguage.stateStarting": "Wird gestartet",
+  "managedLanguage.stateActive": "Aktiv",
+  "managedLanguage.stateDegraded": "Eingeschränkt",
+  "managedLanguage.stateUnhealthy": "Fehlerhaft",
+  "managedLanguage.stateRestartRequired": "Neustart erforderlich",
+  "managedLanguage.languagePython": "Python",
+  "managedLanguage.languageGo": "Go",
+  "managedLanguage.languageShell": "Shell",
+  "managedLanguage.languageJava": "Java",
+  "managedLanguage.languageRust": "Rust",
+  "managedLanguage.capabilities": "Ausgehandelte Funktionen",
+  "managedLanguage.noCapabilities": "Es wurden keine ausführbaren Funktionen ausgehandelt.",
+  "managedLanguage.moreCapabilities": "{count} weitere Funktionen",
+  "managedLanguage.health": "Laufzeitzustand",
+  "managedLanguage.healthSummary":
+    "{status}; {success} erfolgreiche Anfragen; {failures} Fehler; maximale Latenz {latency} ms.",
+  "managedLanguage.healthUnavailable": "Es ist noch kein Laufzeitzustand verfügbar.",
+  "managedLanguage.configuration": "Laufzeiteinstellungen",
+  "managedLanguage.configured": "Konfiguriert",
+  "managedLanguage.notConfigured": "Regulierte Standardwerte werden verwendet",
+  "managedLanguage.source": "Einstellungsquelle: {source}",
+  "managedLanguage.sourceWorkspace": "Workspace",
+  "managedLanguage.sourceOperatorProvisioning": "Operator-Bereitstellung",
+  "managedLanguage.sourceBuiltInDefault": "integrierter Standard",
+  "managedLanguage.providerConfigurationSource": "Erkannte Projektkonfiguration: {source}",
+  "managedLanguage.restartImpact": "Neustartauswirkung: {fields}",
+  "managedLanguage.restartRuntime": "Laufzeit",
+  "managedLanguage.restartSettings": "Einstellungen",
+  "managedLanguage.pythonSettings":
+    "Typprüfung: {mode}; Interpreter: {interpreter}; virtuelle Umgebung: {venv}; Reihenfolge: {precedence}; zusätzliche Workspace-Pfade: {count}.",
+  "managedLanguage.goSettings":
+    "Statische Analyse: {staticcheck}; Build-Tags: {count}; Ziel: {target}.",
+  "managedLanguage.shellSettings":
+    "Dialekt: {dialect}; ShellCheck: {shellcheck}; Schweregrad: {severity}; Ausschlüsse: {exclusions}; Workspace-Quellpfade: {paths}.",
+  "managedLanguage.javaSettings": "Java-Quelle {source}, Ziel {target}; Projektwurzeln: {count}.",
+  "managedLanguage.rustSettings": "Features: {count}; Ziel: {target}; Cargo-Metadaten: {metadata}.",
+  "managedLanguage.valueEnabled": "aktiviert",
+  "managedLanguage.valueDisabled": "deaktiviert",
+  "managedLanguage.valueDefault": "Standard",
+  "managedLanguage.editTypeChecking": "Typprüfungsmodus",
+  "managedLanguage.editStaticcheck": "Statische Analyse aktivieren",
+  "managedLanguage.editDialect": "Shell-Dialekt",
+  "managedLanguage.editJavaSource": "Java-Quelllevel",
+  "managedLanguage.editJavaTarget": "Java-Ziellevel",
+  "managedLanguage.editRustTarget": "Rust-Ziel-Tripel",
+  "managedLanguage.saveSettings": "Einstellungen speichern",
+  "managedLanguage.unsaved": "Ungespeicherte Workspace-Einstellungen",
+  "managedLanguage.invalidTarget":
+    "Verwende ein leeres Ziel oder ein Ziel-Tripel nur aus Buchstaben, Ziffern, Punkten, Unterstrichen und Bindestrichen.",
+  "managedLanguage.guidancePolicy":
+    "Eine Operator-Richtlinie verhindert die Aktivierung. Dieser Bildschirm sendet keine Änderung.",
+  "managedLanguage.guidanceProvisioning":
+    "Stelle den freigegebenen Sprachserver außerhalb des Workspace bereit und aktualisiere danach den Status.",
+  "managedLanguage.guidanceUnavailable":
+    "Die Spracheinstellungen sind vorübergehend nicht verfügbar und bleiben deaktiviert.",
+  "managedLanguage.reasonProductUnsupported":
+    "Diese Sprache wird von diesem Keiko-Build nicht unterstützt.",
+  "managedLanguage.reasonPolicyDenied":
+    "Die Bereitstellungsrichtlinie hat die Aktivierung abgelehnt.",
+  "managedLanguage.reasonLegacyDisabled":
+    "Die Kompatibilitäts-Umgebungsrichtlinie hat diesen Provider deaktiviert.",
+  "managedLanguage.reasonNotProvisioned": "Der freigegebene Sprachserver ist nicht bereitgestellt.",
+  "managedLanguage.reasonWorkspaceDisabled": "Dieser Workspace hat den Provider deaktiviert.",
+  "managedLanguage.reasonWorkspaceUnset": "Dieser Workspace hat den Provider nicht aktiviert.",
+  "managedLanguage.reasonAvailable": "Der Provider ist bereitgestellt und kann aktiviert werden.",
+  "managedLanguage.reasonStarting": "Der Server startet und handelt Funktionen aus.",
+  "managedLanguage.reasonCapabilityMissing":
+    "Eine erforderliche Live-Funktion wurde nicht ausgehandelt.",
+  "managedLanguage.reasonHealthUnknown": "Der Laufzeitzustand wurde noch nicht ermittelt.",
+  "managedLanguage.reasonDegraded": "Die Laufzeit meldet eingeschränkten Betrieb.",
+  "managedLanguage.reasonUnhealthy": "Die Laufzeit ist fehlerhaft.",
+  "managedLanguage.reasonRestartRequired":
+    "Geänderte Laufzeiteinstellungen erfordern einen kontrollierten Neustart.",
+  "managedLanguage.reasonActive": "Der Server ist mit ausgehandelten Funktionen aktiv.",
+  "managedLanguage.reasonStateUnavailable":
+    "Servereigene Einstellungen konnten nicht sicher gelesen werden.",
+  "managedLanguage.reasonInvalid": "Der Server hat einen ungültigen Zustand abgelehnt.",
+  "managedLanguage.announcedApplied": "{action} für {language} abgeschlossen.",
   // The voice-dialogue composer motion update adds no user-facing copy; this
   // catalog touch records the required German-copy review for ChatWindow.tsx.
   // The SonarCloud cognitive-complexity refactor (S3776) reflows JSX in

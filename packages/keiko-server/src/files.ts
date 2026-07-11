@@ -38,6 +38,7 @@ import {
   type EditorDocumentVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { containsPath } from "@oscharko-dev/keiko-git";
+import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
   STREAMING,
@@ -2221,16 +2222,15 @@ async function writeFilesContentRoute(
     }
     baseVersion = parsed.value;
   }
-  return {
-    status: 200,
-    body: await writeResolvedFilesContent({
-      target,
-      content: fields.content,
-      expectedModifiedAt:
-        typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
-      baseVersion,
-    }),
-  };
+  const response = await writeResolvedFilesContent({
+    target,
+    content: fields.content,
+    expectedModifiedAt:
+      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
+    baseVersion,
+  });
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
+  return { status: 200, body: response };
 }
 
 export async function handleFilesContent(

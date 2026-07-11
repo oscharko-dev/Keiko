@@ -176,6 +176,9 @@ import {
 } from "./coding-runtime/autonomousDeliveryApprovalStore.js";
 import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
 import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
+import { createNodeManagedLspControl } from "./editor/lsp/managedLspControlFactory.js";
+import { shutdownHostLspPool } from "./editor/lsp/hostLanguageOperation.js";
+import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -297,7 +300,7 @@ export interface UiHandlerDeps {
   // Releases process-lifetime resources owned by these deps (today: the shared node:sqlite
   // handle, closed with an explicit WAL checkpoint instead of relying on process exit).
   // Optional and idempotent; hosts call it once the HTTP server has fully shut down.
-  readonly dispose?: (() => void) | undefined;
+  readonly dispose?: (() => void | Promise<void>) | undefined;
   // Project path selected by the process that launched this loopback UI. When set, /api/projects
   // reports this project first so first-run UI state cannot drift to stale persisted rows.
   readonly preferredProjectPath?: string | undefined;
@@ -374,6 +377,9 @@ export interface UiHandlerDeps {
   // Test-only deterministic editor language route options. Production leaves this undefined so the
   // language service keeps the default deadline and real clock.
   readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
+  // Epic #2094 / Issue #2272 — canonical server-owned per-workspace managed-LSP control plane.
+  // Optional for legacy dependency fixtures; production always wires a state-dir-backed service.
+  readonly managedLspControl?: ManagedLspControlService | undefined;
   // Test-only runtime detector seams. Production leaves this undefined so detection uses
   // metadata-only PATH scanning plus contained manifest reads.
   readonly runtimeCapabilityRouteOptions?: RuntimeCapabilityRouteOptions | undefined;
@@ -527,6 +533,8 @@ export interface BuildHandlerDepsOptions {
   // Optional injected editor hot-exit store (tests); production creates an encrypted local vault
   // under the UI state directory.
   readonly editorHotExitStore?: EditorHotExitStore | undefined;
+  // Deterministic activation-control seam for route/bootstrap tests.
+  readonly managedLspControl?: ManagedLspControlService | undefined;
   // Optional injected governed update remediation manager (tests); production composes one over
   // updateLocalState and the Local Knowledge reindex port.
   readonly updateRemediation?: UpdateRemediationManager | undefined;
@@ -1475,6 +1483,7 @@ interface PeripheralManagers {
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
   readonly editorHotExitStore: EditorHotExitStore;
+  readonly managedLspControl: ManagedLspControlService;
   readonly memoryAuthorization: MemoryAuthorizationContext;
 }
 
@@ -1577,6 +1586,14 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       createEditorHotExitStore({
         stateDir: args.runtimeStateDir,
         env: args.options.env,
+      }),
+    managedLspControl:
+      args.options.managedLspControl ??
+      createNodeManagedLspControl({
+        stateDir: args.runtimeStateDir,
+        processEnv: args.options.env,
+        redact: args.liveRedactor,
+        evidenceStore: args.evidenceStore,
       }),
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
@@ -1955,7 +1972,10 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     }),
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
     ...optionalPersistenceServices(args.bundle),
-    ...(args.bundle.dispose !== undefined ? { dispose: args.bundle.dispose } : {}),
+    dispose: async (): Promise<void> => {
+      await shutdownHostLspPool();
+      args.bundle.dispose?.();
+    },
   };
 }
 

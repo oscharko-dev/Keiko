@@ -16,6 +16,7 @@
 // status descriptor mapping reuses the language-service provider vocabulary directly.
 
 import type { LanguageProviderDescriptor, LanguageServiceOperation } from "./language-service.js";
+import type { ManagedLspLanguage } from "./managed-lsp-activation.js";
 
 // Schema version for the lifecycle-event envelope. Bump as a new string member when the shape
 // changes incompatibly; consumers pin against the literal to detect skew.
@@ -30,6 +31,8 @@ export type LspProcessErrorCode =
   | "INITIALIZE_TIMEOUT"
   | "REQUEST_TIMED_OUT"
   | "RESPONSE_TOO_LARGE"
+  | "RESOURCE_BUDGET_EXCEEDED"
+  | "RUNTIME_STATE_CLEANUP_FAILED"
   | "CRASHED"
   | "RESTART_THROTTLED"
   | "SHUTDOWN_TIMEOUT"
@@ -90,6 +93,35 @@ export interface LspLifecycleEvent {
   readonly stderrBytesSeen: number;
 }
 
+export interface LspLatencyHistogram {
+  readonly count: number;
+  readonly totalMs: number;
+  readonly maximumMs: number;
+  readonly lessThanOrEqual10Ms: number;
+  readonly lessThanOrEqual50Ms: number;
+  readonly lessThanOrEqual250Ms: number;
+  readonly lessThanOrEqual1Second: number;
+  readonly greaterThan1Second: number;
+}
+
+export interface ManagedLspProcessHealthSnapshot {
+  readonly schemaVersion: typeof LSP_PROCESS_SCHEMA_VERSION;
+  readonly managerId: string;
+  readonly language: ManagedLspLanguage;
+  readonly status: LspProcessStatus;
+  readonly restartCount: number;
+  readonly configurationRevision: number;
+  readonly negotiatedOperations: readonly LanguageServiceOperation[];
+  readonly lastTransitionTimestampMs: number;
+  readonly pendingRequestCount: number;
+  readonly requestCount: number;
+  readonly successCount: number;
+  readonly timeoutCount: number;
+  readonly cancellationCount: number;
+  readonly failureCount: number;
+  readonly latency: LspLatencyHistogram;
+}
+
 export const LSP_PROCESS_ERROR_CODES: readonly LspProcessErrorCode[] = Object.freeze([
   "EXECUTABLE_NOT_FOUND",
   "SPAWN_FAILED",
@@ -97,6 +129,8 @@ export const LSP_PROCESS_ERROR_CODES: readonly LspProcessErrorCode[] = Object.fr
   "INITIALIZE_TIMEOUT",
   "REQUEST_TIMED_OUT",
   "RESPONSE_TOO_LARGE",
+  "RESOURCE_BUDGET_EXCEEDED",
+  "RUNTIME_STATE_CLEANUP_FAILED",
   "CRASHED",
   "RESTART_THROTTLED",
   "SHUTDOWN_TIMEOUT",

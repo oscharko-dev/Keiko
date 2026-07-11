@@ -181,8 +181,13 @@ import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepos
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilitiesForRoute,
+  handleEditorLanguageSemanticTokens,
 } from "./editor/languageRoutes.js";
 import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
+import {
+  handleGetManagedLspControl,
+  handlePutManagedLspControl,
+} from "./editor/lsp/managedLspRoutes.js";
 import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
@@ -398,6 +403,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-sidecar/gateway/profile",
     handler: handleCodingSidecarGatewayProfile,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/language/semantic-tokens",
+    handler: (ctx, deps) =>
+      handleEditorLanguageSemanticTokens(ctx, deps, deps.editorLanguageRouteOptions),
   },
   {
     method: "POST",
@@ -828,6 +839,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/editor/lsp/status",
     handler: (ctx, deps) => handleEditorLspStatus(ctx, { env: deps.env }),
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/lsp/settings",
+    handler: handleGetManagedLspControl,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/editor/lsp/settings",
+    handler: handlePutManagedLspControl,
   },
   {
     method: "POST",

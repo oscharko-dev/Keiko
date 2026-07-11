@@ -66,6 +66,14 @@ describe("API route contract", () => {
     }
   });
 
+  it("includes the managed LSP settings read/write routes (#2272)", () => {
+    for (const method of ["GET", "PUT"]) {
+      expect(matchRoute(method, "/api/editor/lsp/settings")).toMatchObject({
+        definition: { method, pattern: "/api/editor/lsp/settings" },
+      });
+    }
+  });
+
   it("includes the user-facing workspace search route pair (#2108)", () => {
     for (const pattern of [
       "/api/editor/workspace-search",

@@ -1,5 +1,6 @@
 import {
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
+  EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_VERIFICATION_SCHEMA_VERSION,
   isEditorAgentAction,
@@ -283,13 +284,10 @@ interface ParsedNavigateSymbolArguments {
 
 function navigateSymbolOperation(value: unknown): EditorAgentNavigateSymbolOperation {
   if (
-    value === "definition" ||
-    value === "references" ||
-    value === "renamePrepare" ||
-    value === "codeActions" ||
-    value === "signatureHelp"
+    typeof value === "string" &&
+    EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS.includes(value as EditorAgentNavigateSymbolOperation)
   ) {
-    return value;
+    return value as EditorAgentNavigateSymbolOperation;
   }
   throw new InvalidArgumentsError("Symbol navigation operation is invalid.");
 }
@@ -300,11 +298,23 @@ function validateNavigateSymbolExtras(
   diagnostics: readonly LanguageDiagnostic[] | undefined,
 ): void {
   const hasExtras = range !== undefined || diagnostics !== undefined;
-  if (operation === "codeActions" && (range === undefined || diagnostics === undefined)) {
-    throw new InvalidArgumentsError("Code actions require range and diagnostics.");
-  }
-  if (operation !== "codeActions" && hasExtras) {
-    throw new InvalidArgumentsError("Range and diagnostics are only valid for code actions.");
+  switch (operation) {
+    case "codeActions":
+      if (range === undefined || diagnostics === undefined) {
+        throw new InvalidArgumentsError("Code actions require range and diagnostics.");
+      }
+      return;
+    case "inlayHints":
+      if (range === undefined || diagnostics !== undefined) {
+        throw new InvalidArgumentsError("Inlay hints require a range and no diagnostics.");
+      }
+      return;
+    default:
+      if (hasExtras) {
+        throw new InvalidArgumentsError(
+          "Range is only valid for code actions or inlay hints; diagnostics require code actions.",
+        );
+      }
   }
 }
 

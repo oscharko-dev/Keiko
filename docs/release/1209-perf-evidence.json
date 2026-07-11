@@ -1,17 +1,17 @@
 {
-  "measuredAtIso": "2026-07-11T00:17:45.746Z",
-  "commit": "fdbed5a75157a442f8c76ba2be3a702c49037e21",
+  "measuredAtIso": "2026-07-11T15:18:04.649Z",
+  "commit": "c9563ae4cd9b12aef6f20ad9170315c3b74124ec",
   "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
   "b4ColdStartMs": {
     "budgetP50": 1500,
     "budgetP95": 2500,
     "samples": [
-      859,
-      856,
-      863
+      848,
+      849,
+      852
     ],
-    "p50": 859,
-    "p95": 863
+    "p50": 849,
+    "p95": 852
   },
   "b5KeystrokeMs": {
     "budgetMax": 50,
@@ -96,21 +96,21 @@
   "navigationRoundTripMs": {
     "definition": {
       "samples": [
-        197,
-        11,
-        10
+        186,
+        12,
+        11
       ],
       "resultCounts": [
         1,
         1,
         1
       ],
-      "p50": 11,
-      "p95": 197
+      "p50": 12,
+      "p95": 186
     },
     "references": {
       "samples": [
-        28,
+        26,
         11,
         11
       ],
@@ -120,7 +120,7 @@
         5
       ],
       "p50": 11,
-      "p95": 28
+      "p95": 26
     }
   },
   "b11Memory": {
@@ -160,7 +160,7 @@
     "attempted": true,
     "ok": true,
     "truncated": true,
-    "durationMs": 146,
+    "durationMs": 156,
     "statusCode": 413,
     "errorCode": "DOCUMENT_TOO_LARGE",
     "paddingFileCount": 5,
