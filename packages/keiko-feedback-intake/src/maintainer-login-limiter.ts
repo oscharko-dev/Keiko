@@ -15,6 +15,7 @@ interface SourceWindow {
   startedAt: number;
   count: number;
   active: number;
+  lastSeenAt: number;
 }
 
 const MAX_TRACKED_SOURCES = 10_000;
@@ -29,17 +30,27 @@ export class MaintainerLoginLimiter {
   constructor(
     private readonly limits: MaintainerLoginLimits,
     private readonly now: () => number = Date.now,
-  ) {}
+    private readonly maxTrackedSources = MAX_TRACKED_SOURCES,
+  ) {
+    if (!Number.isSafeInteger(maxTrackedSources) || maxTrackedSources < 1) {
+      throw new Error("Maintainer login source capacity must be a positive safe integer");
+    }
+  }
 
   begin(address: Uint8Array): MaintainerLoginAdmission {
     const at = this.now();
     this.cleanup(at);
     const sourceKey = createHmac("sha256", this.key).update(address).digest("base64url");
     const existing = this.sources.get(sourceKey);
-    if (existing === undefined && this.sources.size >= MAX_TRACKED_SOURCES) {
-      return this.denied(at, this.globalStartedAt + this.limits.windowMs);
+    if (
+      existing === undefined &&
+      this.sources.size >= this.maxTrackedSources &&
+      !this.evictOldestInactive()
+    ) {
+      return this.denied(at, at + 1_000);
     }
-    const source = existing ?? { startedAt: at, count: 0, active: 0 };
+    const source = existing ?? { startedAt: at, count: 0, active: 0, lastSeenAt: at };
+    source.lastSeenAt = at;
     if (at - source.startedAt >= this.limits.windowMs && source.active === 0) {
       source.startedAt = at;
       source.count = 0;
@@ -92,5 +103,17 @@ export class MaintainerLoginLimiter {
         this.sources.delete(key);
       }
     }
+  }
+
+  private evictOldestInactive(): boolean {
+    let oldestKey: string | undefined;
+    let oldestAt = Number.POSITIVE_INFINITY;
+    for (const [key, source] of this.sources) {
+      if (source.active === 0 && source.lastSeenAt < oldestAt) {
+        oldestKey = key;
+        oldestAt = source.lastSeenAt;
+      }
+    }
+    return oldestKey === undefined ? false : this.sources.delete(oldestKey);
   }
 }

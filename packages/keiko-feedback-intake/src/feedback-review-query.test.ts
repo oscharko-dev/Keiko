@@ -13,4 +13,16 @@ describe("feedback review query validation", () => {
     });
     expect(connect).not.toHaveBeenCalled();
   });
+
+  it.each(["detail", "hold"] as const)(
+    "rejects a non-canonical %s item UUID before acquiring PostgreSQL",
+    async (method) => {
+      const connect = vi.fn();
+      const query = new PostgresFeedbackReviewQuery({ connect });
+      await expect(query[method]("not-a-uuid", false)).rejects.toMatchObject({
+        code: "invalid-request",
+      });
+      expect(connect).not.toHaveBeenCalled();
+    },
+  );
 });

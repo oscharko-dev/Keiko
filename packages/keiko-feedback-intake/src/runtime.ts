@@ -14,9 +14,16 @@ import {
   type MaintainerRuntimeServer,
 } from "./maintainer-runtime.js";
 import { applyFeedbackMigrations, type FeedbackMigration } from "./migrations.js";
-import { PostgresIntakeRepository, type PgClientLike, type PgPoolLike } from "./postgres.js";
+import { PostgresIntakeRepository, type PgClientLike } from "./postgres.js";
 import { createPostgresFeedbackIntake } from "./production-service.js";
 import type { HostedRuntimeConfig } from "./runtime-config.js";
+import {
+  createRuntimePools,
+  endRuntimePools,
+  type RuntimePool,
+  type RuntimePoolFactory,
+  type RuntimePools,
+} from "./runtime-pools.js";
 import {
   assertRepositoryKeyCustody,
   snapshotIndependentKeyCustody,
@@ -24,9 +31,6 @@ import {
 import { defaultRuntimeTimer, type RuntimeTimer } from "./runtime-timer.js";
 import type { ContentFreeLogger, ContentFreeMetrics } from "./types.js";
 
-interface RuntimePool extends PgPoolLike {
-  end(): Promise<void>;
-}
 type RuntimeServer = MaintainerRuntimeServer;
 interface RuntimeHealth {
   dependenciesHealthy: boolean;
@@ -44,8 +48,7 @@ export interface HostedRuntimeOptions {
   readonly now?: (() => Date) | undefined;
   readonly logger?: ContentFreeLogger | undefined;
   readonly metrics?: ContentFreeMetrics | undefined;
-  readonly poolFactory?:
-    ((databaseUrl: string, max: number, connectTimeoutMs: number) => RuntimePool) | undefined;
+  readonly poolFactory?: RuntimePoolFactory | undefined;
   readonly serverFactory?:
     ((handler: (req: IncomingMessage, res: ServerResponse) => void) => RuntimeServer) | undefined;
   readonly timer?: RuntimeTimer | undefined;
@@ -304,26 +307,31 @@ async function stopServers(surface: RuntimeSurface, config: HostedRuntimeConfig)
 async function initializeSurface(
   options: HostedRuntimeOptions,
   config: HostedRuntimeConfig,
-  pool: RuntimePool,
+  pools: RuntimePools,
   health: RuntimeHealth,
   now: () => Date,
   maintainerConfig: MaintainerRuntimeConfig,
 ): Promise<RuntimeSurface> {
   let surface: RuntimeSurface | undefined;
   try {
-    await applyFeedbackMigrations(pool, await migrationSources(options)());
-    surface = composeSurface(options, config, pool, health, now);
-    const maintainer = maintainerConfig.enabled
-      ? await createMaintainerRuntimeServer({
-          config: maintainerConfig,
-          runtimeConfig: config,
-          pool,
-          now,
-          oidc: options.maintainerOidcClient,
-          diagnostics: options.maintainerDiagnostics,
-          serverFactory: options.serverFactory,
-        })
-      : undefined;
+    await applyFeedbackMigrations(pools.intake, await migrationSources(options)());
+    surface = composeSurface(options, config, pools.intake, health, now);
+    const maintainerPool = pools.maintainer;
+    let maintainer: MaintainerRuntimeServer | undefined;
+    if (maintainerConfig.enabled) {
+      if (maintainerPool === undefined) {
+        throw new Error("Maintainer database pool was not initialized");
+      }
+      maintainer = await createMaintainerRuntimeServer({
+        config: maintainerConfig,
+        runtimeConfig: config,
+        pool: maintainerPool,
+        now,
+        oidc: options.maintainerOidcClient,
+        diagnostics: options.maintainerDiagnostics,
+        serverFactory: options.serverFactory,
+      });
+    }
     surface = { ...surface, maintainer };
     await retention(surface, health, now());
     await listen(surface.management, config.managementPort, config.managementHost);
@@ -335,7 +343,7 @@ async function initializeSurface(
     return surface;
   } catch (error) {
     if (surface !== undefined) await stopServers(surface, config).catch(() => undefined);
-    await pool.end();
+    await endRuntimePools(pools);
     throw error;
   }
 }
@@ -346,25 +354,20 @@ export async function startHostedFeedbackIntake(
   const { config, maintainerConfig } = loadFeedbackRuntimeConfigs(options.env, options);
   const now = options.now ?? ((): Date => new Date());
   const health: RuntimeHealth = { dependenciesHealthy: false, running: false };
-  const pool = (options.poolFactory ?? defaultPool)(
+  const pools = await createRuntimePools(
+    options.poolFactory ?? defaultPool,
     config.databaseUrl,
     config.limits.concurrency + config.limits.receiptConcurrency,
     config.limits.storageDeadlineMs,
+    maintainerConfig.enabled,
   );
-  const activeSurface = await initializeSurface(
-    options,
-    config,
-    pool,
-    health,
-    now,
-    maintainerConfig,
-  );
+  const surface = await initializeSurface(options, config, pools, health, now, maintainerConfig);
   const timer = options.timer ?? defaultRuntimeTimer();
   let activeRetention = Promise.resolve();
   const runRetention = (): Promise<void> => {
     const next = activeRetention
       .catch(() => undefined)
-      .then(() => retention(activeSurface, health, now()));
+      .then(() => retention(surface, health, now()));
     activeRetention = next;
     return next;
   };
@@ -383,9 +386,9 @@ export async function startHostedFeedbackIntake(
       timer.clearInterval(handle);
       try {
         await activeRetention.catch(() => undefined);
-        await stopServers(activeSurface, config);
+        await stopServers(surface, config);
       } finally {
-        await pool.end();
+        await endRuntimePools(pools);
       }
     },
   };

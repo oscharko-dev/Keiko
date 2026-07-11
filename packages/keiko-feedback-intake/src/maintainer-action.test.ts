@@ -11,6 +11,8 @@ const base = {
   expectedPayloadDigest: "a".repeat(64),
   idempotencyKey: "idempotency-key-1",
 };
+const ITEM = "11111111-1111-4111-8111-111111111111";
+const TARGET = "22222222-2222-4222-8222-222222222222";
 
 describe("maintainer action contract", () => {
   it.each([
@@ -22,7 +24,7 @@ describe("maintainer action contract", () => {
   ] as const)("maps %s to %s", (action, permission) => {
     const extras =
       action === "mark-duplicate"
-        ? { targetItemId: "target" }
+        ? { targetItemId: TARGET }
         : action === "reject"
           ? { reason: "not-actionable" }
           : action === "place-legal-hold"
@@ -32,21 +34,32 @@ describe("maintainer action contract", () => {
                 expiresAt: "2026-07-13T00:00:00.000Z",
               }
             : {};
-    const parsed = parseMaintainerAction({ ...base, action, ...extras }, "item", actor);
+    const parsed = parseMaintainerAction({ ...base, action, ...extras }, ITEM, actor);
     expect(parsed).toBeDefined();
     if (parsed !== undefined) expect(permissionForAction(parsed)).toBe(permission);
   });
 
   it.each(["approve", "expire", "request-follow-up"])("does not expose %s", (action) => {
-    expect(parseMaintainerAction({ ...base, action }, "item", actor)).toBeUndefined();
+    expect(parseMaintainerAction({ ...base, action }, ITEM, actor)).toBeUndefined();
   });
 
   it("rejects unknown properties and malformed closed fields", () => {
     expect(
-      parseMaintainerAction({ ...base, action: "archive", annotation: "hidden" }, "item", actor),
+      parseMaintainerAction({ ...base, action: "archive", annotation: "hidden" }, ITEM, actor),
     ).toBeUndefined();
     expect(
-      parseMaintainerAction({ ...base, action: "reject", reason: "arbitrary" }, "item", actor),
+      parseMaintainerAction({ ...base, action: "reject", reason: "arbitrary" }, ITEM, actor),
+    ).toBeUndefined();
+  });
+
+  it("rejects non-canonical path and duplicate-target UUIDs", () => {
+    expect(parseMaintainerAction({ ...base, action: "archive" }, "not-a-uuid", actor)).toBeUndefined();
+    expect(
+      parseMaintainerAction(
+        { ...base, action: "mark-duplicate", targetItemId: "not-a-uuid" },
+        ITEM,
+        actor,
+      ),
     ).toBeUndefined();
   });
 });

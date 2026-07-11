@@ -165,6 +165,23 @@ function repository(
 }
 
 describe("Postgres feedback review repository", () => {
+  it("rejects malformed command UUIDs before acquiring PostgreSQL", async (): Promise<void> => {
+    let connects = 0;
+    const store = new PostgresFeedbackReviewRepository({
+      connect: (): Promise<PgClientLike> => {
+        connects += 1;
+        return Promise.resolve(new ReviewClient());
+      },
+    });
+    await expect(store.execute({ ...archive(), itemId: "not-a-uuid" })).rejects.toMatchObject({
+      code: "invalid-request",
+    });
+    await expect(
+      store.execute({ ...archive(), action: "mark-duplicate", targetItemId: "not-a-uuid" }),
+    ).rejects.toMatchObject({ code: "invalid-request" });
+    expect(connects).toBe(0);
+  });
+
   it("atomically applies a terminal action and returns an identical replay", async (): Promise<void> => {
     const client = new ReviewClient();
     const store = repository(client);
