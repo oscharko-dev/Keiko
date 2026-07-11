@@ -16,6 +16,11 @@ const KILL_GRACE_MS = 2_000;
 // read must not block the user's own concurrent git commands on the same repository.
 export const GIT_BASE_ARGS: readonly string[] = ["--no-pager", "--no-optional-locks"];
 
+// Repository-local configuration is intentionally still visible for ordinary repository data,
+// but executable read helpers must never run. This fixed override is injected by the local runner
+// before every caller-supplied argument, so no route can accidentally omit it.
+const LOCAL_READ_CONFIG_ARGS: readonly string[] = ["-c", "core.fsmonitor=false"];
+
 // Git options that make a remote-facing subcommand run a local command of the caller's choosing:
 // `git clone --upload-pack=<cmd>` / `--receive-pack=<cmd>` / `git send-pack --exec=<cmd>`. No Keiko
 // git invocation ever needs these, so the single spawn boundary refuses them for EVERY command —
@@ -102,7 +107,21 @@ const SPAWN_ERROR_RESULT: Omit<GitProcessResult, "truncated" | "timedOut"> = {
   stderr: "git executable unavailable",
 };
 
-export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitProcessRunner {
+function refusedOptionResult(forbidden: string): GitProcessResult {
+  return {
+    exitCode: 128,
+    signal: null,
+    stdout: "",
+    stderr: `refused git option: ${forbidden.split("=")[0] ?? forbidden}`,
+    truncated: false,
+    timedOut: false,
+  };
+}
+
+function createGitProcessRunnerWithFixedArgs(
+  buildEnv: () => NodeJS.ProcessEnv,
+  fixedArgs: readonly string[],
+): GitProcessRunner {
   return (args, options) =>
     new Promise((resolveResult) => {
       // Fail closed before the spawn: a remote-command option (`--upload-pack`/`--receive-pack`/
@@ -110,17 +129,10 @@ export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitPr
       // into executing an arbitrary local command via a hostile URL argument.
       const forbidden = forbiddenGitOption(args);
       if (forbidden !== undefined) {
-        resolveResult({
-          exitCode: 128,
-          signal: null,
-          stdout: "",
-          stderr: `refused git option: ${forbidden.split("=")[0] ?? forbidden}`,
-          truncated: false,
-          timedOut: false,
-        });
+        resolveResult(refusedOptionResult(forbidden));
         return;
       }
-      const child = spawn("git", args, {
+      const child = spawn("git", [...fixedArgs, ...args], {
         cwd: options.cwd,
         env: buildEnv(),
         shell: false,
@@ -155,9 +167,16 @@ export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitPr
     });
 }
 
+export function createGitProcessRunner(buildEnv: () => NodeJS.ProcessEnv): GitProcessRunner {
+  return createGitProcessRunnerWithFixedArgs(buildEnv, []);
+}
+
 // Local reads use the hardened, config-isolated env; network sync needs the user's credential
 // configuration but must still never prompt (fail-closed) — see env.ts.
-export const defaultGitProcessRunner: GitProcessRunner = createGitProcessRunner(gitEnv);
+export const defaultGitProcessRunner: GitProcessRunner = createGitProcessRunnerWithFixedArgs(
+  gitEnv,
+  LOCAL_READ_CONFIG_ARGS,
+);
 
 export const defaultGitNetworkProcessRunner: GitProcessRunner =
   createGitProcessRunner(networkGitEnv);

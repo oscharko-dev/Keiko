@@ -266,6 +266,26 @@ function useEditorConstructionOptions(
 
 type EditorHandlers = ReturnType<typeof useEditorHandlers>;
 
+function useGitGutterRefresh(props: KeikoCodeEditorProps, handlers: EditorHandlers): void {
+  const lastNonce = useRef(props.gitGutterRefreshNonce ?? 0);
+  useEffect(() => {
+    const nonce = props.gitGutterRefreshNonce ?? 0;
+    if (nonce === lastNonce.current) return;
+    lastNonce.current = nonce;
+    handlers.refreshGitGutter();
+  }, [handlers, props.gitGutterRefreshNonce]);
+}
+
+function useFormatRequest(props: KeikoCodeEditorProps, handlers: EditorHandlers): void {
+  const lastNonce = useRef(props.formatRequestNonce ?? 0);
+  useEffect(() => {
+    const nonce = props.formatRequestNonce ?? 0;
+    if (nonce === lastNonce.current) return;
+    lastNonce.current = nonce;
+    handlers.formatDocument();
+  }, [handlers, props.formatRequestNonce]);
+}
+
 function ReadyEditorSurface(props: {
   readonly editorProps: KeikoCodeEditorProps;
   readonly monacoLanguage: string;
@@ -363,13 +383,8 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
     () => countLines(props.buffer.content.text),
     [props.buffer.content.text],
   );
-  const lastFormatRequestNonce = useRef(props.formatRequestNonce ?? 0);
-  useEffect(() => {
-    const nonce = props.formatRequestNonce ?? 0;
-    if (nonce === lastFormatRequestNonce.current) return;
-    lastFormatRequestNonce.current = nonce;
-    handlers.formatDocument();
-  }, [handlers, props.formatRequestNonce]);
+  useFormatRequest(props, handlers);
+  useGitGutterRefresh(props, handlers);
   useEffect(() => {
     setCallHierarchy(null);
   }, [props.fileModel.identity.uri]);

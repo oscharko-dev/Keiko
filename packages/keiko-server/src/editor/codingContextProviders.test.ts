@@ -1,11 +1,18 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
+  GIT_EDITOR_BLAME_MAX_BYTES,
+  GIT_EDITOR_BLAME_MAX_LINES,
+  GIT_EDITOR_DIFF_MAX_BYTES,
+  GIT_EDITOR_DIFF_MAX_FILES,
+  GIT_EDITOR_SCHEMA_VERSION,
+  GIT_REPOSITORY_SCHEMA_VERSION,
   type EditorAgentDiagnostic,
   type EditorAgentSessionSnapshot,
+  type GitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
@@ -13,12 +20,14 @@ import { buildRedactor } from "../index.js";
 import type { UiHandlerDeps } from "../index.js";
 import {
   runEditorStateProvider,
+  runGitContextProvider,
   runLocalKnowledgeProvider,
   runMemoryProvider,
   runRepoSearchProvider,
   type ProviderContext,
   type ProviderOutcome,
   type RawExcerpt,
+  type GitContextReadResult,
 } from "./codingContextProviders.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { buildLocalKnowledgeScope } from "./localKnowledgeRetrieval.js";
@@ -128,6 +137,92 @@ function firstExcerpt(outcome: ProviderOutcome): RawExcerpt {
     throw new Error("expected one editor-state excerpt");
   }
   return excerpt;
+}
+
+function gitReadResult(overrides: Partial<GitContextReadResult> = {}): GitContextReadResult {
+  const diff: GitEditorDiffResponse = {
+    schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+    scope: "unstaged",
+    files: [
+      {
+        path: "src/main.ts",
+        layer: "worktree",
+        status: "modified",
+        binary: false,
+        addedLines: 1,
+        removedLines: 1,
+        truncated: false,
+        hunks: [
+          {
+            header: "@@ -1 +1 @@",
+            oldStart: 1,
+            oldCount: 1,
+            newStart: 1,
+            newCount: 1,
+            truncated: false,
+            lines: [
+              { kind: "del", oldLine: 1, newLine: null, text: "old content" },
+              { kind: "add", oldLine: null, newLine: 1, text: "new content" },
+            ],
+          },
+        ],
+      },
+    ],
+    truncated: false,
+    totalFiles: 1,
+    totalBytes: 64,
+    maxBytes: GIT_EDITOR_DIFF_MAX_BYTES,
+    maxFiles: GIT_EDITOR_DIFF_MAX_FILES,
+  };
+  return {
+    status: {
+      schemaVersion: GIT_REPOSITORY_SCHEMA_VERSION,
+      root: "/workspace",
+      repositoryRoot: "/workspace",
+      state: "available",
+      available: true,
+      detached: false,
+      clean: false,
+      stagedCount: 0,
+      unstagedCount: 1,
+      untrackedCount: 0,
+      conflictedCount: 1,
+      changes: [
+        {
+          path: "src/main.ts",
+          indexStatus: "U",
+          worktreeStatus: "U",
+          staged: false,
+          unstaged: true,
+          untracked: false,
+          conflicted: true,
+        },
+      ],
+      truncated: false,
+      maxChanges: 500,
+    },
+    diffs: [diff],
+    blame: {
+      schemaVersion: GIT_EDITOR_SCHEMA_VERSION,
+      path: "src/main.ts",
+      startLine: 1,
+      lines: [
+        {
+          line: 1,
+          commitHash: "a".repeat(40),
+          author: "Ada",
+          authorTime: "2026-07-10T10:00:00.000Z",
+          summary: "Change main",
+        },
+      ],
+      truncated: false,
+      totalLines: 1,
+      totalBytes: 32,
+      maxBytes: GIT_EDITOR_BLAME_MAX_BYTES,
+      maxLines: GIT_EDITOR_BLAME_MAX_LINES,
+    },
+    ...overrides,
+  };
 }
 
 afterEach(() => {
@@ -283,6 +378,198 @@ describe("runEditorStateProvider", () => {
 
     expect(new TextEncoder().encode(excerpt.text).length).toBeLessThanOrEqual(96);
     expect(excerpt.truncated).toBe(true);
+  });
+});
+
+describe("runGitContextProvider", () => {
+  it("returns bounded conflict, diff, and blame context with first-party-safe citations", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const reader = vi.fn().mockResolvedValue(gitReadResult());
+    const outcome = await runGitContextProvider(
+      providerCtx({ realRoot: "/workspace", gitContextReader: reader }),
+      { sessionId: "editor-session-1" },
+    );
+
+    expect(reader).toHaveBeenCalledOnce();
+    expect(outcome.omission).toBeUndefined();
+    expect(outcome.excerpts.every((excerpt) => excerpt.sourceKind === "git-context")).toBe(true);
+    expect(outcome.excerpts.map((excerpt) => excerpt.citationRef)).toEqual([
+      "main.ts",
+      "main.ts",
+      "main.ts",
+    ]);
+    expect(outcome.excerpts[0]?.text).toContain('"hasConflictMarkers":true');
+    expect(outcome.excerpts.some((excerpt) => excerpt.text.includes("new content"))).toBe(true);
+    expect(outcome.excerpts.some((excerpt) => excerpt.text.includes("Change main"))).toBe(true);
+    expect(outcome.excerpts.every((excerpt) => !excerpt.text.includes('"author"'))).toBe(true);
+  });
+
+  it("denies a root mismatch before any Git read", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot({ workspaceRoot: "/other-workspace" }));
+    const reader = vi.fn().mockResolvedValue(gitReadResult());
+    const outcome = await runGitContextProvider(
+      providerCtx({ realRoot: "/workspace", gitContextReader: reader }),
+      { sessionId: "editor-session-1" },
+    );
+
+    expect(reader).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      excerpts: [],
+      omission: { sourceKind: "git-context", reason: "denied" },
+    });
+  });
+
+  it("reports unavailable without leaking details when the Git reads fail", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const reader = vi.fn().mockResolvedValue(undefined);
+    const outcome = await runGitContextProvider(
+      providerCtx({ realRoot: "/workspace", gitContextReader: reader }),
+      { sessionId: "editor-session-1" },
+    );
+
+    expect(outcome).toEqual({
+      excerpts: [],
+      omission: { sourceKind: "git-context", reason: "unavailable" },
+    });
+    expect(JSON.stringify(outcome)).not.toContain("/workspace");
+  });
+
+  it("caps files, hunks, blame, and bytes with auditable omission accounting", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const base = gitReadResult();
+    const file = base.diffs[0]?.files[0];
+    const hunk = file?.hunks[0];
+    const firstChange = base.status.changes[0];
+    const firstBlameLine = base.blame?.lines[0];
+    if (
+      file === undefined ||
+      hunk === undefined ||
+      base.blame === undefined ||
+      firstChange === undefined ||
+      firstBlameLine === undefined
+    ) {
+      throw new Error("expected complete Git fixture");
+    }
+    const oversizedDiff: GitEditorDiffResponse = {
+      ...base.diffs[0],
+      files: Array.from({ length: 12 }, (_, fileIndex) => ({
+        ...file,
+        path: `src/file-${String(fileIndex)}.ts`,
+        hunks: Array.from({ length: 4 }, (_, hunkIndex) => ({
+          ...hunk,
+          header: `@@ -${String(hunkIndex + 1)} +${String(hunkIndex + 1)} @@`,
+        })),
+      })),
+      truncated: true,
+      totalFiles: 12,
+    } as GitEditorDiffResponse;
+    const result = gitReadResult({
+      status: {
+        ...base.status,
+        changes: Array.from({ length: 12 }, (_, index) => ({
+          ...firstChange,
+          path: `src/file-${String(index)}.ts`,
+        })),
+        truncated: true,
+      },
+      diffs: [oversizedDiff],
+      blame: {
+        ...base.blame,
+        lines: Array.from({ length: 48 }, (_, index) => ({
+          ...firstBlameLine,
+          line: index + 1,
+        })),
+        truncated: true,
+        totalLines: 48,
+      },
+    });
+    const outcome = await runGitContextProvider(
+      providerCtx({
+        realRoot: "/workspace",
+        maxBytesPerExcerpt: 512,
+        gitContextReader: vi.fn().mockResolvedValue(result),
+      }),
+      { sessionId: "editor-session-1" },
+    );
+
+    expect(outcome.excerpts.length).toBeLessThanOrEqual(18);
+    expect(outcome.excerpts.some((excerpt) => excerpt.truncated)).toBe(true);
+    expect(outcome.omission).toEqual({ sourceKind: "git-context", reason: "out-of-budget" });
+    expect(
+      outcome.excerpts.every((excerpt) => new TextEncoder().encode(excerpt.text).length <= 512),
+    ).toBe(true);
+  });
+
+  it("redacts hostile content and keeps citations and omissions body-free", async () => {
+    const secret = ["sk-", "git-context-test-1234567890abcdef"].join("");
+    const email = "author@example.invalid";
+    const absolutePath = "/workspace/private/main.ts";
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const base = gitReadResult();
+    const diff = base.diffs[0];
+    const file = diff?.files[0];
+    const hunk = file?.hunks[0];
+    const firstBlameLine = base.blame?.lines[0];
+    if (
+      diff === undefined ||
+      file === undefined ||
+      hunk === undefined ||
+      base.blame === undefined ||
+      firstBlameLine === undefined
+    ) {
+      throw new Error("expected complete Git fixture");
+    }
+    const outcome = await runGitContextProvider(
+      providerCtx({
+        realRoot: "/workspace",
+        deps: baseDeps({ redactor: buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }) }),
+        gitContextReader: vi.fn().mockResolvedValue(
+          gitReadResult({
+            diffs: [
+              {
+                ...diff,
+                files: [
+                  {
+                    ...file,
+                    hunks: [
+                      {
+                        ...hunk,
+                        lines: [
+                          {
+                            kind: "add",
+                            oldLine: null,
+                            newLine: 1,
+                            text: `${secret} ${absolutePath}`,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+            blame: {
+              ...base.blame,
+              lines: [{ ...firstBlameLine, author: email, summary: secret }],
+            },
+          }),
+        ),
+      }),
+      { sessionId: "editor-session-1" },
+    );
+    const evidenceProjection = JSON.stringify({
+      citations: outcome.excerpts.map(({ text: _text, ...excerpt }) => excerpt),
+      omission: outcome.omission,
+    });
+    const internalText = outcome.excerpts.map((excerpt) => excerpt.text).join("\n");
+
+    expect(internalText).toContain("[REDACTED]");
+    expect(internalText).not.toContain(secret);
+    expect(internalText).not.toContain(email);
+    expect(evidenceProjection).not.toContain(absolutePath);
+    expect(evidenceProjection).not.toContain(email);
+    expect(evidenceProjection).not.toContain("old content");
+    expect(evidenceProjection).not.toContain("new content");
   });
 });
 

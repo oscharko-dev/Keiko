@@ -3,21 +3,54 @@
 // no-diff states the issue requires the diff surface to represent clearly.
 
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GitEditorDiffFile, GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import type { GitDiffScope } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { DiffPane } from "./DiffPane";
 
-function makeDiffResponse(diff: string, overrides: { readonly truncated?: boolean } = {}) {
+function makeDiffFile(overrides: Partial<GitEditorDiffFile> = {}): GitEditorDiffFile {
   return {
-    schemaVersion: "1" as const,
-    root: "/repos/alpha",
-    state: "available" as const,
-    available: true,
-    scope: "worktree" as const,
-    diff,
-    truncated: overrides.truncated ?? false,
-    maxBytes: 131072,
+    path: "src/index.ts",
+    layer: "worktree",
+    status: "modified",
+    binary: false,
+    hunks: [
+      {
+        header: "@@ -7,1 +7,1 @@",
+        oldStart: 7,
+        oldCount: 1,
+        newStart: 7,
+        newCount: 1,
+        lines: [
+          { kind: "del", oldLine: 7, newLine: null, text: "const a = 1;" },
+          { kind: "add", oldLine: null, newLine: 7, text: "const a = 2;" },
+        ],
+        truncated: false,
+      },
+    ],
+    addedLines: 1,
+    removedLines: 1,
+    truncated: false,
+    ...overrides,
+  };
+}
+
+function makeDiffResponse(
+  files: readonly GitEditorDiffFile[] = [],
+  overrides: Partial<GitEditorDiffResponse> = {},
+): GitEditorDiffResponse {
+  return {
+    schemaVersion: "1",
+    scope: "unstaged",
+    files,
+    truncated: false,
+    totalFiles: files.length,
+    totalBytes: 256,
+    maxBytes: 524288,
+    maxFiles: 400,
+    ...overrides,
   };
 }
 
@@ -32,7 +65,8 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     getHistory: vi.fn<GitClientSeam["getHistory"]>(),
     getRemotes: vi.fn<GitClientSeam["getRemotes"]>(),
     getStatus: vi.fn<GitClientSeam["getStatus"]>(),
-    getDiff: vi.fn(async () => makeDiffResponse("")),
+    getDiff: vi.fn<GitClientSeam["getDiff"]>(),
+    getStructuredDiff: vi.fn(async () => makeDiffResponse()),
     branchCreate: vi.fn<GitClientSeam["branchCreate"]>(async () => ok),
     branchSwitch: vi.fn<GitClientSeam["branchSwitch"]>(async () => ok),
     stage: vi.fn<GitClientSeam["stage"]>(async () => ok),
@@ -69,16 +103,6 @@ function renderPane(props: Partial<Parameters<typeof DiffPane>[0]> = {}) {
   return { client, onScopeChange };
 }
 
-const REAL_DIFF = [
-  "diff --git a/src/index.ts b/src/index.ts",
-  "--- a/src/index.ts",
-  "+++ b/src/index.ts",
-  "@@ -1,1 +1,1 @@",
-  "-const a = 1;",
-  "+const a = 2;",
-  "",
-].join("\n");
-
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -90,20 +114,20 @@ describe("DiffPane — states", () => {
   });
 
   it("shows a loading state while the diff is in flight", async () => {
-    let resolve!: (v: ReturnType<typeof makeDiffResponse>) => void;
-    const pending = new Promise<ReturnType<typeof makeDiffResponse>>((res) => {
+    let resolve!: (v: GitEditorDiffResponse) => void;
+    const pending = new Promise<GitEditorDiffResponse>((res) => {
       resolve = res;
     });
-    renderPane({ client: makeSeam({ getDiff: vi.fn(() => pending) }) });
+    renderPane({ client: makeSeam({ getStructuredDiff: vi.fn(() => pending) }) });
 
     expect(await screen.findByText("Loading diff…")).toBeInTheDocument();
-    act(() => resolve(makeDiffResponse("")));
+    act(() => resolve(makeDiffResponse()));
   });
 
   it("shows an error state when the diff request rejects", async () => {
     renderPane({
       client: makeSeam({
-        getDiff: vi.fn(async () => {
+        getStructuredDiff: vi.fn(async () => {
           throw new Error("diff failed");
         }),
       }),
@@ -112,17 +136,15 @@ describe("DiffPane — states", () => {
   });
 
   it("shows the no-diff state for an empty diff", async () => {
-    renderPane({ client: makeSeam({ getDiff: vi.fn(async () => makeDiffResponse("")) }) });
+    renderPane({ client: makeSeam({ getStructuredDiff: vi.fn(async () => makeDiffResponse()) }) });
     expect(await screen.findByText("No diff content for this change.")).toBeInTheDocument();
   });
 
   it("shows a binary-file notice instead of attempting to render a hunk", async () => {
     renderPane({
       client: makeSeam({
-        getDiff: vi.fn(async () =>
-          makeDiffResponse(
-            "diff --git a/img.png b/img.png\nBinary files a/img.png and b/img.png differ\n",
-          ),
+        getStructuredDiff: vi.fn(async () =>
+          makeDiffResponse([makeDiffFile({ path: "img.png", binary: true, hunks: [] })]),
         ),
       }),
     });
@@ -132,11 +154,13 @@ describe("DiffPane — states", () => {
   it("surfaces a truncated diff with a clear notice", async () => {
     renderPane({
       client: makeSeam({
-        getDiff: vi.fn(async () => makeDiffResponse(REAL_DIFF, { truncated: true })),
+        getStructuredDiff: vi.fn(async () =>
+          makeDiffResponse([makeDiffFile({ truncated: true })], { truncated: true }),
+        ),
       }),
     });
     expect(
-      await screen.findByText("This diff is large and has been truncated."),
+      await screen.findByText(/This diff is large and has been truncated at 524,288 bytes/u),
     ).toBeInTheDocument();
   });
 });
@@ -145,7 +169,7 @@ describe("DiffPane — scope controls", () => {
   it("fetches the diff with the active scope", async () => {
     const { client } = renderPane({ scope: "staged" });
     await waitFor(() =>
-      expect(client.getDiff).toHaveBeenCalledWith({
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
         root: "/repos/alpha",
         path: "src/index.ts",
         scope: "staged",
@@ -170,5 +194,87 @@ describe("DiffPane — scope controls", () => {
     const { onScopeChange } = renderPane({ scope: "worktree" });
     fireEvent.click(screen.getByRole("button", { name: "Staged" }));
     expect(onScopeChange).toHaveBeenCalledWith("staged");
+  });
+});
+
+describe("DiffPane — structured navigation", () => {
+  it("reveals the selected file at the first added line from the matching structured hunk", async () => {
+    const onRevealFile = vi.fn();
+    renderPane({
+      client: makeSeam({
+        getStructuredDiff: vi.fn(async () => makeDiffResponse([makeDiffFile()])),
+      }),
+      revealRequestId: 1,
+      onRevealFile,
+    });
+
+    await waitFor(() => expect(onRevealFile).toHaveBeenCalledWith("src/index.ts", 7));
+  });
+
+  it("drops a late response after the selected path changes", async () => {
+    let resolveOld!: (value: GitEditorDiffResponse) => void;
+    const oldResponse = new Promise<GitEditorDiffResponse>((resolve) => {
+      resolveOld = resolve;
+    });
+    const getStructuredDiff = vi
+      .fn<GitClientSeam["getStructuredDiff"]>()
+      .mockReturnValueOnce(oldResponse)
+      .mockResolvedValueOnce(makeDiffResponse([makeDiffFile({ path: "src/new.ts" })]));
+    const onRevealFile = vi.fn();
+    const { rerender } = render(
+      <DiffPane
+        client={makeSeam({ getStructuredDiff })}
+        repositoryRoot="/repos/alpha"
+        selectedChangePath="src/old.ts"
+        selectedCommit={null}
+        scope="worktree"
+        onScopeChange={vi.fn()}
+        revealRequestId={1}
+        onRevealFile={onRevealFile}
+        revision={0}
+      />,
+    );
+
+    rerender(
+      <DiffPane
+        client={makeSeam({ getStructuredDiff })}
+        repositoryRoot="/repos/alpha"
+        selectedChangePath="src/new.ts"
+        selectedCommit={null}
+        scope="worktree"
+        onScopeChange={vi.fn()}
+        revealRequestId={2}
+        onRevealFile={onRevealFile}
+        revision={0}
+      />,
+    );
+    await waitFor(() => expect(onRevealFile).toHaveBeenCalledWith("src/new.ts", 7));
+    act(() => resolveOld(makeDiffResponse([makeDiffFile({ path: "src/old.ts" })])));
+
+    expect(onRevealFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the structured binary and truncation surface axe-clean", async () => {
+    const { container } = render(
+      <DiffPane
+        client={makeSeam({
+          getStructuredDiff: vi.fn(async () =>
+            makeDiffResponse(
+              [makeDiffFile({ path: "asset.bin", binary: true, hunks: [], truncated: true })],
+              { truncated: true },
+            ),
+          ),
+        })}
+        repositoryRoot="/repos/alpha"
+        selectedChangePath="asset.bin"
+        selectedCommit={null}
+        scope="worktree"
+        onScopeChange={vi.fn()}
+        revision={0}
+      />,
+    );
+    await screen.findByText("Binary file — no text diff to display.");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

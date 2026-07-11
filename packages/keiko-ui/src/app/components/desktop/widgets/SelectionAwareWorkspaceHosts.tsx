@@ -8,6 +8,7 @@ import { useChatSessionContext } from "../context/ChatSessionContext";
 import type { ChatSessionApi } from "../hooks/useChatSession";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import type { EditorWidgetProps } from "./cards/EditorWidget";
+import { gitObjectId } from "./gitObjectId";
 import { useEditorAgentTranslate, type EditorAgentMessageKey } from "./cards/editor-agent-i18n";
 import {
   composeEditorSelectionPrompt,
@@ -352,6 +353,13 @@ export function EditorWindowSessionHost({
         layoutJson: patch.layoutJson,
       }),
     openEditorFile: ctx.openEditorFile,
+    onOpenGitCommit: (projectPath, commit) => {
+      const target = gitObjectId(commit);
+      if (target !== undefined) ctx.openWindow("governedGit", { projectPath, commit: target });
+    },
+    onOpenGitDiff: (projectPath, path) => {
+      ctx.openWindow("governedGit", { projectPath, path });
+    },
     onAskSelection: (handoff) => {
       if (root === undefined) return false;
       const selectionHandoffId = registerEditorSelectionHandoff(root, handoff);

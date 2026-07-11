@@ -45,7 +45,8 @@ export type CodingContextSourceKind =
   | "quality-intelligence"
   | "workflow-context"
   | "files-focus"
-  | "editor-state";
+  | "editor-state"
+  | "git-context";
 
 export const CODING_CONTEXT_SOURCE_KINDS: readonly CodingContextSourceKind[] = [
   "repo-search",
@@ -56,6 +57,7 @@ export const CODING_CONTEXT_SOURCE_KINDS: readonly CodingContextSourceKind[] = [
   "workflow-context",
   "files-focus",
   "editor-state",
+  "git-context",
 ] as const;
 
 // OWASP LLM08/LLM01 trust tier. The tier is a provenance label for audit and consumer policy; it is
@@ -78,6 +80,7 @@ export const CODING_CONTEXT_SOURCE_TIER_BY_KIND: Readonly<
   "repo-search": "first-party-workspace",
   "files-focus": "first-party-workspace",
   "editor-state": "first-party-workspace",
+  "git-context": "first-party-workspace",
   "connected-context": "first-party-workspace",
   "local-knowledge": "indexed-knowledge",
   memory: "retained-memory",

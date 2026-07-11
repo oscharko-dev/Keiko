@@ -11,7 +11,11 @@ import type { ReactNode } from "react";
 import type { ChangedFile } from "../../../../../../lib/types";
 import { langOf, highlightLines } from "./syntaxHighlight";
 import type { Token } from "./syntaxHighlight";
-import type { DiffFile, DiffHunk, DiffLine } from "./diffParser";
+import type {
+  GitEditorDiffFile as DiffFile,
+  GitEditorDiffHunk as DiffHunk,
+  GitEditorDiffLine as DiffLine,
+} from "@oscharko-dev/keiko-contracts";
 
 export function lineKindLabel(kind: DiffLine["kind"]): string {
   const map: Record<DiffLine["kind"], string> = {
@@ -42,9 +46,10 @@ function TokenSpans({ tokens }: TokensProps): ReactNode {
 interface DiffLineViewProps {
   readonly line: DiffLine;
   readonly lang: string;
+  readonly kindLabel?: string | undefined;
 }
 
-export function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
+export function DiffLineView({ line, lang, kindLabel }: DiffLineViewProps): ReactNode {
   // gutter sign provides a non-color channel for add/del/ctx (WCAG 1.4.1)
   const sign =
     line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "ctx" ? "·" : "";
@@ -61,7 +66,7 @@ export function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
 
   return (
     <div className={`rv-line${cls}`}>
-      <span className="rv-sr-only">{lineKindLabel(line.kind)}</span>
+      <span className="rv-sr-only">{kindLabel ?? lineKindLabel(line.kind)}</span>
       <span className="rv-num-old rv-num">{line.oldLine ?? ""}</span>
       <span className="rv-num-new rv-num">{line.newLine ?? ""}</span>
       <span className="rv-gutter" aria-hidden="true">
@@ -72,21 +77,35 @@ export function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
   );
 }
 
+export interface DiffHunkViewLabels {
+  readonly header: string;
+  readonly add: string;
+  readonly del: string;
+  readonly ctx: string;
+  readonly meta: string;
+}
+
 interface DiffHunkViewProps {
   readonly hunk: DiffHunk;
   readonly lang: string;
+  readonly labels?: DiffHunkViewLabels | undefined;
 }
 
-export function DiffHunkView({ hunk, lang }: DiffHunkViewProps): ReactNode {
+export function DiffHunkView({ hunk, lang, labels }: DiffHunkViewProps): ReactNode {
   return (
     <>
       <div className="rv-hunk mono" aria-label={`Hunk header ${hunk.header}`}>
-        <span className="rv-sr-only">Hunk header</span>
+        <span className="rv-sr-only">{labels?.header ?? "Hunk header"}</span>
         {hunk.header}
       </div>
       {hunk.lines.map((line, idx) => (
-        <DiffLineView key={idx} line={line} lang={lang} />
+        <DiffLineView key={idx} line={line} lang={lang} kindLabel={labels?.[line.kind]} />
       ))}
+      {hunk.truncated ? (
+        <p className="rv-truncated" role="status">
+          This hunk is incomplete because the bounded diff was truncated.
+        </p>
+      ) : null}
     </>
   );
 }
@@ -94,14 +113,14 @@ export function DiffHunkView({ hunk, lang }: DiffHunkViewProps): ReactNode {
 interface DiffFileSectionProps {
   readonly file: DiffFile;
   readonly index: number;
-  readonly changedFiles: readonly ChangedFile[];
+  readonly changedFiles?: readonly ChangedFile[] | undefined;
   readonly sectionRef: (el: HTMLElement | null) => void;
 }
 
 export function DiffFileSection({
   file,
   index,
-  changedFiles,
+  changedFiles = [],
   sectionRef,
 }: DiffFileSectionProps): ReactNode {
   const cf = changedFiles.find((c) => c.path === file.path);
@@ -112,6 +131,7 @@ export function DiffFileSection({
       <h3 id={`rv-file-${index}-h`} className="rv-file mono">
         <span className="rv-path">{file.path}</span>
         {file.oldPath !== undefined && <span className="rv-oldpath"> (was {file.oldPath})</span>}
+        <span className="rv-sr-only">{file.status} file</span>
         <span className="spacer" />
         <span className="rv-stat add">+{file.addedLines}</span>
         <span className="rv-stat del">−{file.removedLines}</span>
@@ -122,9 +142,16 @@ export function DiffFileSection({
         )}
       </h3>
       <div className="rv-code mono">
-        {file.hunks.map((hunk, hi) => (
-          <DiffHunkView key={hi} hunk={hunk} lang={ext} />
-        ))}
+        {file.binary ? (
+          <p className="rv-empty-p">Binary file — no text diff to display.</p>
+        ) : (
+          file.hunks.map((hunk, hi) => <DiffHunkView key={hi} hunk={hunk} lang={ext} />)
+        )}
+        {file.truncated && !file.hunks.some((hunk) => hunk.truncated) ? (
+          <p className="rv-truncated" role="status">
+            This file diff is incomplete because the bounded diff was truncated.
+          </p>
+        ) : null}
       </div>
     </section>
   );

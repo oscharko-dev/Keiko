@@ -133,6 +133,9 @@ import type {
   WorkspaceSymbolSearchResponse,
   LanguageCallHierarchyResult,
   LanguageInlayHintsResult,
+  GitEditorBlameResponse,
+  GitEditorDiffResponse,
+  GitEditorDiffScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
   validateGitHistoryResponse,
@@ -143,6 +146,8 @@ import {
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
   validateCodingWorkbenchCodexSubscriptionProfile,
+  parseGitEditorBlameResponse,
+  parseGitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -202,6 +207,16 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
 
 function validateCodexSubscriptionProfileResponse(value: unknown): GitRepositoryValidation {
   const result = validateCodingWorkbenchCodexSubscriptionProfile(value);
+  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
+}
+
+function validateGitEditorDiffResponse(value: unknown): GitRepositoryValidation {
+  const result = parseGitEditorDiffResponse(value);
+  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
+}
+
+function validateGitEditorBlameResponse(value: unknown): GitRepositoryValidation {
+  const result = parseGitEditorBlameResponse(value);
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
@@ -1623,13 +1638,51 @@ export async function copyFilesEntry(input: {
   return fetchJson("/api/files/copy", { method: "POST", body: JSON.stringify(input) });
 }
 
-export async function fetchGitStatus(root: string): Promise<GitRepositoryStatusResponse> {
+export async function fetchGitStatus(
+  root: string,
+  options?: { readonly includeIgnored?: boolean | undefined },
+): Promise<GitRepositoryStatusResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
+  if (options?.includeIgnored === true) params.set("includeIgnored", "true");
   return fetchJson(
     `/api/git/status?${params.toString()}`,
     undefined,
     validateGitRepositoryStatusResponse,
+  );
+}
+
+export async function fetchGitStructuredDiff(input: {
+  readonly root: string;
+  readonly path?: string | undefined;
+  readonly scope: GitEditorDiffScope;
+}): Promise<GitEditorDiffResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  params.set("scope", input.scope);
+  if (input.path !== undefined) params.set("path", input.path);
+  return fetchJson(
+    `/api/git/diff/structured?${params.toString()}`,
+    undefined,
+    validateGitEditorDiffResponse,
+  );
+}
+
+export async function fetchGitBlame(input: {
+  readonly root: string;
+  readonly path: string;
+  readonly startLine: number;
+  readonly maxLines: number;
+}): Promise<GitEditorBlameResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  params.set("path", input.path);
+  params.set("startLine", input.startLine.toString());
+  params.set("maxLines", input.maxLines.toString());
+  return fetchJson(
+    `/api/git/blame?${params.toString()}`,
+    undefined,
+    validateGitEditorBlameResponse,
   );
 }
 

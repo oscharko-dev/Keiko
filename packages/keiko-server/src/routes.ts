@@ -166,7 +166,13 @@ import {
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
-import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import {
+  handleGitBlame,
+  handleGitBranches,
+  handleGitDiff,
+  handleGitStatus,
+  handleGitStructuredDiff,
+} from "./gitRoutes.js";
 import {
   handleNativeFileDialogCapability,
   handleNativeFileDialogOpen,
@@ -507,6 +513,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/git/diff",
     handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/diff/structured",
+    handler: (ctx, deps) => handleGitStructuredDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/blame",
+    handler: (ctx, deps) => handleGitBlame(ctx, deps, deps.gitRouteOptions),
   },
   {
     method: "GET",

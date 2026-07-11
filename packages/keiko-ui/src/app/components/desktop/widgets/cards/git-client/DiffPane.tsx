@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import type {
+  GitEditorDiffFile,
+  GitEditorDiffResponse,
+  GitEditorDiffScope,
+} from "@oscharko-dev/keiko-contracts";
 import type { GitDiffScope, GitHistoryEntry } from "@/lib/types";
-import { parseUnifiedDiff } from "../shared/diffParser";
 import { DiffFileSection } from "../shared/diffView";
 import type { GitClientSeam } from "./git-client-seam";
 import { formatGitError } from "./git-client-seam";
@@ -21,21 +25,26 @@ import {
 
 interface DiffState {
   readonly loading: boolean;
-  readonly diff: string | null;
-  readonly truncated: boolean;
+  readonly response: GitEditorDiffResponse | null;
   readonly error: string | null;
 }
 
-const EMPTY_DIFF: DiffState = { loading: false, diff: null, truncated: false, error: null };
+const EMPTY_DIFF: DiffState = { loading: false, response: null, error: null };
 
 const SCOPES: readonly { readonly id: GitDiffScope; readonly label: string }[] = [
   { id: "worktree", label: "Worktree" },
   { id: "staged", label: "Staged" },
 ];
 
-// git emits "Binary files a/x and b/x differ" (or a "GIT binary patch") instead of a text hunk.
-function isBinaryDiff(diff: string): boolean {
-  return /^Binary files .+ differ$/m.test(diff) || diff.includes("GIT binary patch");
+function structuredScope(scope: GitDiffScope): GitEditorDiffScope {
+  return scope === "staged" ? "staged" : "unstaged";
+}
+
+function firstChangedLine(file: GitEditorDiffFile): number {
+  const hunk = file.hunks[0];
+  if (hunk === undefined) return 1;
+  const changed = hunk.lines.find((line) => line.kind === "add" && line.newLine !== null);
+  return changed?.newLine ?? Math.max(1, hunk.newStart);
 }
 
 // Split a repo-relative path into its directory (with trailing slash) and the file name.
@@ -62,6 +71,8 @@ interface DiffPaneProps {
   readonly selectedCommit: GitHistoryEntry | null;
   readonly scope: GitDiffScope;
   readonly onScopeChange: (scope: GitDiffScope) => void;
+  readonly revealRequestId?: number | undefined;
+  readonly onRevealFile?: ((path: string, line: number) => void) | undefined;
   /** Bumped after a staging/commit mutation so the visible diff reloads. */
   readonly revision: number;
 }
@@ -73,9 +84,12 @@ export function DiffPane({
   selectedCommit,
   scope,
   onScopeChange,
+  revealRequestId = 0,
+  onRevealFile,
   revision,
 }: DiffPaneProps): ReactNode {
   const [state, setState] = useState<DiffState>(EMPTY_DIFF);
+  const handledRevealRef = useRef(0);
 
   useEffect(() => {
     if (selectedCommit !== null) {
@@ -87,27 +101,45 @@ export function DiffPane({
       return;
     }
     let cancelled = false;
-    setState({ loading: true, diff: null, truncated: false, error: null });
-    void client.getDiff({ root: repositoryRoot, path: selectedChangePath, scope }).then(
-      (res) => {
-        if (cancelled) return;
-        setState({ loading: false, diff: res.diff, truncated: res.truncated, error: null });
-      },
-      (err: unknown) => {
-        if (cancelled) return;
-        setState({ loading: false, diff: null, truncated: false, error: formatGitError(err) });
-      },
-    );
+    setState({ loading: true, response: null, error: null });
+    void client
+      .getStructuredDiff({
+        root: repositoryRoot,
+        path: selectedChangePath,
+        scope: structuredScope(scope),
+      })
+      .then(
+        (res) => {
+          if (cancelled) return;
+          setState({ loading: false, response: res, error: null });
+          const file = res.files.find((entry) => entry.path === selectedChangePath) ?? res.files[0];
+          if (
+            file !== undefined &&
+            onRevealFile !== undefined &&
+            revealRequestId > handledRevealRef.current
+          ) {
+            handledRevealRef.current = revealRequestId;
+            onRevealFile(file.path, firstChangedLine(file));
+          }
+        },
+        (err: unknown) => {
+          if (cancelled) return;
+          setState({ loading: false, response: null, error: formatGitError(err) });
+        },
+      );
     return () => {
       cancelled = true;
     };
-  }, [client, repositoryRoot, selectedChangePath, selectedCommit, scope, revision]);
-
-  const binary = state.diff !== null && isBinaryDiff(state.diff);
-  const parsed = useMemo(
-    () => (state.diff !== null && !binary ? parseUnifiedDiff(state.diff) : null),
-    [state.diff, binary],
-  );
+  }, [
+    client,
+    onRevealFile,
+    repositoryRoot,
+    revealRequestId,
+    revision,
+    scope,
+    selectedChangePath,
+    selectedCommit,
+  ]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, flex: 1 }}>
@@ -147,8 +179,6 @@ export function DiffPane({
           selectedChangePath={selectedChangePath}
           selectedCommit={selectedCommit}
           state={state}
-          binary={binary}
-          files={parsed?.files ?? null}
         />
       </div>
     </div>
@@ -203,14 +233,10 @@ function DiffBody({
   selectedChangePath,
   selectedCommit,
   state,
-  binary,
-  files,
 }: {
   readonly selectedChangePath: string | null;
   readonly selectedCommit: GitHistoryEntry | null;
   readonly state: DiffState;
-  readonly binary: boolean;
-  readonly files: ReturnType<typeof parseUnifiedDiff>["files"] | null;
 }): ReactNode {
   if (selectedCommit !== null) return <CommitDetailMeta entry={selectedCommit} />;
   if (selectedChangePath === null) {
@@ -235,16 +261,7 @@ function DiffBody({
       </p>
     );
   }
-  if (binary) {
-    return (
-      <div className="rv-empty">
-        <p className="rv-empty-p" style={SUBTLE_TEXT_STYLE}>
-          Binary file — no text diff to display.
-        </p>
-      </div>
-    );
-  }
-  if (files === null || files.length === 0) {
+  if (state.response === null || state.response.files.length === 0) {
     return (
       <div className="rv-empty">
         <p className="rv-empty-p" style={SUBTLE_TEXT_STYLE}>
@@ -255,19 +272,14 @@ function DiffBody({
   }
   return (
     <div className="rv-body">
-      {state.truncated ? (
+      {state.response.truncated ? (
         <p className="rv-truncated" role="status" style={{ ...SUBTLE_TEXT_STYLE, padding: 14 }}>
-          This diff is large and has been truncated.
+          This diff is large and has been truncated at {state.response.maxBytes.toLocaleString()}{" "}
+          bytes or {state.response.maxFiles.toLocaleString()} files.
         </p>
       ) : null}
-      {files.map((file, index) => (
-        <DiffFileSection
-          key={file.path}
-          file={file}
-          index={index}
-          changedFiles={[]}
-          sectionRef={() => undefined}
-        />
+      {state.response.files.map((file, index) => (
+        <DiffFileSection key={file.path} file={file} index={index} sectionRef={() => undefined} />
       ))}
     </div>
   );

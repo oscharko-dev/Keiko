@@ -81,6 +81,12 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     title: "Request Context",
     requiredCapabilities: ["provideContext"],
   },
+  { id: "editor.toggleBlame", title: "Toggle Blame", requiredCapabilities: ["fetchGitBlame"] },
+  { id: "editor.nextConflict", title: "Next Merge Conflict", requiredCapabilities: [] },
+  { id: "editor.previousConflict", title: "Previous Merge Conflict", requiredCapabilities: [] },
+  { id: "editor.acceptConflictOurs", title: "Accept Ours", requiredCapabilities: [] },
+  { id: "editor.acceptConflictTheirs", title: "Accept Theirs", requiredCapabilities: [] },
+  { id: "editor.acceptConflictBoth", title: "Accept Both", requiredCapabilities: [] },
 ] as const;
 
 /**
@@ -114,6 +120,12 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   // Find is read-only and always available once the editor is mounted.
   "editor.find": () => true,
   "editor.requestContext": () => true,
+  "editor.toggleBlame": () => true,
+  "editor.nextConflict": (ctx) => (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.previousConflict": (ctx) => (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.acceptConflictOurs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.acceptConflictTheirs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.acceptConflictBoth": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
 };
 
 function hasRequiredCapabilities(command: EditorCommand, ctx: EditorCommandContext): boolean {
