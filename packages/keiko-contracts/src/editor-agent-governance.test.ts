@@ -40,6 +40,7 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "navigateSymbol",
   "searchWorkspace",
   "requestVerification",
+  "queryGit",
 ];
 
 const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
@@ -59,6 +60,7 @@ const NON_MUTATING: readonly EditorAgentActionType[] = [
   "navigateSymbol",
   "searchWorkspace",
   "requestVerification",
+  "queryGit",
 ];
 
 function ctx(over: Partial<EditorAgentActionPolicyContext> = {}): EditorAgentActionPolicyContext {
@@ -97,6 +99,7 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.setSelection).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.navigateSymbol).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.searchWorkspace).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.queryGit).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.moveTab).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.splitPane).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.requestVerification).toBe("execution");
