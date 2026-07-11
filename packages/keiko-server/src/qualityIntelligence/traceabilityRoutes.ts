@@ -209,7 +209,7 @@ function recordTraceabilityExportEvidence(
 }
 
 function resultWarnings(warnings: readonly string[]): { readonly warnings?: readonly string[] } {
-  return warnings.length > 0 ? { warnings: [...warnings].sort() } : {};
+  return warnings.length > 0 ? { warnings: [...warnings].sort((a, b) => a.localeCompare(b)) } : {};
 }
 
 // eslint-disable-next-line max-lines-per-function, complexity

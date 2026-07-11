@@ -69,7 +69,7 @@ export function checkAdrRegistry(adrDir) {
       .map((name) => `ADR file not indexed in docs/adr/README.md: ${name}`),
     // 3. no orphan links — every README ADR link must resolve to an existing file.
     ...[...linkedFiles]
-      .sort()
+      .sort((a, b) => a.localeCompare(b))
       .filter((target) => !onDisk.has(target))
       .map((target) => `docs/adr/README.md links a missing ADR file: ${target}`),
   ];

@@ -24,8 +24,10 @@ export const ALL_VOICE_PROFILES: readonly VoiceProfile[] = [
 // Whether the contract's media-transport table — keyed by `VoiceProfile` for totality — still lists
 // exactly the locally-declared profiles. A drift (a new profile added to the contract) makes this false.
 export function localProfilesMatchContract(): boolean {
-  const contractKeys = Object.keys(VOICE_PROFILE_MEDIA_TRANSPORT).slice().sort();
-  const local = ALL_VOICE_PROFILES.slice().sort();
+  const contractKeys = Object.keys(VOICE_PROFILE_MEDIA_TRANSPORT)
+    .slice()
+    .sort((a, b) => a.localeCompare(b));
+  const local = ALL_VOICE_PROFILES.slice().sort((a, b) => a.localeCompare(b));
   return contractKeys.length === local.length && contractKeys.every((k, i) => k === local[i]);
 }
 

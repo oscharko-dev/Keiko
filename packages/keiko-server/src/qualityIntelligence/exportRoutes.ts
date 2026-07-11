@@ -467,7 +467,7 @@ function resultWithWarnings(result: RouteResult, warnings: readonly string[]): R
     ...result,
     body: {
       ...result.body,
-      warnings: [...new Set([...existing, ...warnings])].sort(),
+      warnings: [...new Set([...existing, ...warnings])].sort((a, b) => a.localeCompare(b)),
     },
   };
 }
@@ -644,7 +644,9 @@ function binaryResponse(
         byteLen: bytes.length,
         encoding: "base64" as const,
         body: bodyBase64,
-        ...(warnings.size > 0 ? { warnings: [...warnings].sort() } : {}),
+        ...(warnings.size > 0
+          ? { warnings: [...warnings].sort((a, b) => a.localeCompare(b)) }
+          : {}),
       },
     },
     evidence: buildExportEvidenceRow(

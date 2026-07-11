@@ -418,8 +418,32 @@ export async function persistedFirstPaneTabOrder(page: Page): Promise<readonly s
 /** Read every key from the keiko-editor-hot-exit snapshot store (for deterministic polling). */
 export async function readHotExitSnapshotKeys(page: Page): Promise<readonly string[]> {
   return page.evaluate(
-    ({ dbName, storeName }): Promise<string[]> =>
-      new Promise<string[]>((resolvePromise: (keys: string[]) => void): void => {
+    ({ dbName, storeName }): Promise<string[]> => {
+      // Wires the getAllKeys() request's outcome handlers. Declared here — a sibling of the
+      // Promise executor below, not nested inside its open-success handler — so the handlers it
+      // assigns stay within the nesting depth limit (S2004); it is called with just the values it
+      // needs. It must stay inside this callback: page.evaluate serializes only this function's
+      // own source into the browser context, so it cannot call a helper declared at module scope.
+      function attachKeysRequestHandlers(
+        db: IDBDatabase,
+        keysRequest: IDBRequest<IDBValidKey[]>,
+        resolvePromise: (keys: string[]) => void,
+      ): void {
+        keysRequest.onerror = (): void => {
+          db.close();
+          resolvePromise([]);
+        };
+        keysRequest.onsuccess = (): void => {
+          db.close();
+          // Hot-exit keys are v2 SHA-256 locator hashes; raw roots/paths never enter IndexedDB.
+          const keys: string[] = keysRequest.result.map((entry: IDBValidKey) =>
+            typeof entry === "string" ? entry : JSON.stringify(entry),
+          );
+          resolvePromise(keys);
+        };
+      }
+
+      return new Promise<string[]>((resolvePromise: (keys: string[]) => void): void => {
         if (typeof indexedDB === "undefined") {
           resolvePromise([]);
           return;
@@ -437,20 +461,10 @@ export async function readHotExitSnapshotKeys(page: Page): Promise<readonly stri
           }
           const tx = db.transaction(storeName, "readonly");
           const keysRequest = tx.objectStore(storeName).getAllKeys();
-          keysRequest.onerror = (): void => {
-            db.close();
-            resolvePromise([]);
-          };
-          keysRequest.onsuccess = (): void => {
-            db.close();
-            // Hot-exit keys are v2 SHA-256 locator hashes; raw roots/paths never enter IndexedDB.
-            const keys: string[] = keysRequest.result.map((entry: IDBValidKey) =>
-              typeof entry === "string" ? entry : JSON.stringify(entry),
-            );
-            resolvePromise(keys);
-          };
+          attachKeysRequestHandlers(db, keysRequest, resolvePromise);
         };
-      }),
+      });
+    },
     { dbName: HOT_EXIT_DB, storeName: HOT_EXIT_STORE },
   );
 }

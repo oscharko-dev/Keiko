@@ -256,6 +256,29 @@ function winAnsiEncode(text: string): Uint8Array {
   return out;
 }
 
+// Hard-break a single over-length word into full-width chunks; returns the emitted chunks and the
+// trailing remainder (which fits within maxChars and seeds the next in-progress line).
+function hardBreakWord(word: string, maxChars: number): readonly [string[], string] {
+  const chunks: string[] = [];
+  let rest = word;
+  while (rest.length > maxChars) {
+    chunks.push(rest.slice(0, maxChars));
+    rest = rest.slice(maxChars);
+  }
+  return [chunks, rest];
+}
+
+// Append `word` to the in-progress `current` line, flushing it to `out` when it would overflow.
+// Returns the (possibly new) in-progress line.
+function appendWrappedWord(out: string[], current: string, word: string, maxChars: number): string {
+  const candidate = current.length === 0 ? word : `${current} ${word}`;
+  if (candidate.length > maxChars) {
+    out.push(current);
+    return word;
+  }
+  return candidate;
+}
+
 // Greedy word-aware wrap to `maxChars`; a single over-long token is hard-broken. Preserves blanks.
 function wrapText(line: string, maxChars: number): string[] {
   if (line.length <= maxChars) return [line];
@@ -264,21 +287,12 @@ function wrapText(line: string, maxChars: number): string[] {
   for (const word of line.split(" ")) {
     if (word.length > maxChars) {
       if (current.length > 0) out.push(current);
-      let rest = word;
-      while (rest.length > maxChars) {
-        out.push(rest.slice(0, maxChars));
-        rest = rest.slice(maxChars);
-      }
-      current = rest;
+      const [chunks, remainder] = hardBreakWord(word, maxChars);
+      out.push(...chunks);
+      current = remainder;
       continue;
     }
-    const candidate = current.length === 0 ? word : `${current} ${word}`;
-    if (candidate.length > maxChars) {
-      out.push(current);
-      current = word;
-    } else {
-      current = candidate;
-    }
+    current = appendWrappedWord(out, current, word, maxChars);
   }
   if (current.length > 0) out.push(current);
   return out.length > 0 ? out : [""];

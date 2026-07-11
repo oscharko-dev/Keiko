@@ -241,7 +241,57 @@ function emitMarkdownSections(
   return { units, diagnostics };
 }
 
-// eslint-disable-next-line complexity
+function isBlankOrNonTableRow(text: string): boolean {
+  return !text.includes("|") || text.trim().length === 0;
+}
+
+interface TableRowScan {
+  readonly units: readonly ParsedUnit[];
+  readonly diagnostics: readonly ParserDiagnostic[];
+  readonly nextIndex: number;
+  readonly stopped: boolean;
+}
+
+// Consumes the row lines of a single markdown table starting at `startIndex` (the first line
+// after the header + separator). Stops at the first non-row line or once `shouldStop` trips.
+function scanTableRows(
+  lines: readonly MarkdownLine[],
+  startIndex: number,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+  baseUnitCount: number,
+): TableRowScan {
+  const units: ParsedUnit[] = [];
+  const diagnostics: ParserDiagnostic[] = [];
+  const tableName = "markdown-table";
+  let rowIndex = 0;
+  let i = startIndex;
+  while (i < lines.length) {
+    const row = lines[i];
+    if (row === undefined || isBlankOrNonTableRow(row.text)) {
+      i -= 1;
+      break;
+    }
+    const limit = shouldStop(startedAt, options, baseUnitCount + units.length);
+    if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
+      diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
+      return { units, diagnostics, nextIndex: i, stopped: true };
+    }
+    units.push({
+      kind: "csv-row",
+      documentId: input.documentId,
+      tableName,
+      rowIndex,
+      characterStart: row.start,
+      characterEnd: row.end,
+    });
+    rowIndex += 1;
+    i += 1;
+  }
+  return { units, diagnostics, nextIndex: i, stopped: false };
+}
+
 function emitMarkdownTableRows(
   text: string,
   input: ParserSelectionInput,
@@ -262,31 +312,18 @@ function emitMarkdownTableRows(
     }
     if (inFence) continue;
     if (!isMarkdownTableHeader(line.text, lines[i + 1]?.text)) continue;
-    const tableName = "markdown-table";
-    let rowIndex = 0;
-    i += 2;
-    while (i < lines.length) {
-      const row = lines[i];
-      if (row === undefined || !row.text.includes("|") || row.text.trim().length === 0) {
-        i -= 1;
-        break;
-      }
-      const limit = shouldStop(startedAt, options, initialUnitCount + units.length);
-      if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-        diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
-        return { units, diagnostics };
-      }
-      units.push({
-        kind: "csv-row",
-        documentId: input.documentId,
-        tableName,
-        rowIndex,
-        characterStart: row.start,
-        characterEnd: row.end,
-      });
-      rowIndex += 1;
-      i += 1;
-    }
+    const scan = scanTableRows(
+      lines,
+      i + 2,
+      input,
+      options,
+      startedAt,
+      initialUnitCount + units.length,
+    );
+    units.push(...scan.units);
+    diagnostics.push(...scan.diagnostics);
+    i = scan.nextIndex;
+    if (scan.stopped) return { units, diagnostics };
   }
   return { units, diagnostics };
 }

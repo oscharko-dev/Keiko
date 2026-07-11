@@ -286,7 +286,7 @@ async function assertInstalledRootRuntimeSurface(tmp) {
       join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "index.js"),
     ).href;
     const mod = await import(moduleUrl);
-    const runtimeExports = Object.keys(mod).sort();
+    const runtimeExports = Object.keys(mod).sort((a, b) => a.localeCompare(b));
     const diff = diffExpectedExports(runtimeExports, rootPackageSurfaceContract.runtimeExports);
     if (diff.missing.length > 0 || diff.unexpected.length > 0) {
       fail(

@@ -863,7 +863,7 @@ function summariseReferenceUsage(
     .map(([capsuleId, value]) => ({
       capsuleId,
       sourceIds: [...value.sourceIds].sort((a, b) => (String(a) < String(b) ? -1 : 1)),
-      chunkIds: [...value.chunkIds].sort(),
+      chunkIds: [...value.chunkIds].sort((a, b) => a.localeCompare(b)),
       referenceCount: value.referenceCount,
     }));
 }

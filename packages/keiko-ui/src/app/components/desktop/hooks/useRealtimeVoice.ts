@@ -10,6 +10,7 @@
 // Every failure resolves to a non-blocking `error` phase that leaves the composer fully usable (AC4).
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import type { Dispatch, MutableRefObject } from "react";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   type VoicePersona,
@@ -527,6 +528,146 @@ function optionsGroundingToolActive(options: UseRealtimeVoiceOptions): boolean {
 
 function optionsMemoryToolActive(options: UseRealtimeVoiceOptions): boolean {
   return options.memoryToolActive === true;
+}
+
+// Builds the retry callback for the delayed reconnect attempt scheduled by
+// `createIceDisconnectGraceTimeoutHandler`. Extracted to a named factory so the returned callback is
+// defined at module scope instead of nested inline inside the grace-timeout handler.
+function createReconnectRetryHandler(
+  mountedRef: MutableRefObject<boolean>,
+  reconnectTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | undefined>,
+  startRef: MutableRefObject<(() => void) | undefined>,
+): () => void {
+  return () => {
+    reconnectTimerRef.current = undefined;
+    if (!mountedRef.current) return;
+    startRef.current?.();
+  };
+}
+
+interface IceDisconnectGraceTimeoutDeps {
+  readonly graceTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | undefined>;
+  readonly mountedRef: MutableRefObject<boolean>;
+  readonly reconnectAttemptsRef: MutableRefObject<number>;
+  readonly reconnectTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | undefined>;
+  readonly startRef: MutableRefObject<(() => void) | undefined>;
+  readonly cleanupRefs: (options?: { readonly discardControl?: boolean }) => void;
+  readonly dispatch: Dispatch<RealtimeVoiceAction>;
+  readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
+}
+
+// Builds the grace-timeout callback for a transient `disconnected` RTC state. Extracted to a named
+// factory (instead of an inline closure inside `onConnectionStateChange`) so neither this callback nor
+// its own nested reconnect-retry timeout add to the lexical nesting depth of the connect() promise chain.
+function createIceDisconnectGraceTimeoutHandler(deps: IceDisconnectGraceTimeoutDeps): () => void {
+  const {
+    graceTimerRef,
+    mountedRef,
+    reconnectAttemptsRef,
+    reconnectTimerRef,
+    startRef,
+    cleanupRefs,
+    dispatch,
+    applyTurnSignal,
+  } = deps;
+  return () => {
+    graceTimerRef.current = undefined;
+    if (!mountedRef.current) return;
+    const attempt = reconnectAttemptsRef.current;
+    cleanupRefs({ discardControl: false });
+    if (attempt >= MAX_REALTIME_RECONNECT_ATTEMPTS) {
+      dispatch({
+        type: "error",
+        reason: "connection-failed",
+        message: "Real-time voice connection was lost.",
+      });
+      return;
+    }
+    reconnectAttemptsRef.current = attempt + 1;
+    applyTurnSignal({ kind: "provider-failure", recoverable: true });
+    const delayMs = Math.min(
+      DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffInitialMs * 2 ** attempt,
+      DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffMaxMs,
+    );
+    reconnectTimerRef.current = setTimeout(
+      createReconnectRetryHandler(mountedRef, reconnectTimerRef, startRef),
+      delayMs,
+    );
+  };
+}
+
+interface AssistantTranscriptDedupeRefs {
+  readonly assistantTranscriptItemsRef: MutableRefObject<Set<string>>;
+  readonly assistantResponseTextItemsRef: MutableRefObject<Set<string>>;
+  readonly assistantTranscriptTextItemsRef: MutableRefObject<Set<string>>;
+}
+
+// Determines whether an assistant transcript-committed event has already been recorded, marking it
+// as seen (by itemId, then responseId, then turn-scoped text) when it has not. Extracted from
+// `commitAssistantTranscript` so the three dedupe strategies read as a flat sequence of checks
+// instead of a nested if/else-if/else chain.
+function isDuplicateAssistantTranscript(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "assistant-transcript-committed" }>,
+  normalizedText: string,
+  ensureVoiceTurn: () => VoiceTurnDraft,
+  refs: AssistantTranscriptDedupeRefs,
+): boolean {
+  if (event.itemId !== undefined) {
+    if (refs.assistantTranscriptItemsRef.current.has(event.itemId)) {
+      return true;
+    }
+    refs.assistantTranscriptItemsRef.current.add(event.itemId);
+    return false;
+  }
+  if (event.responseId !== undefined) {
+    const responseTextKey = `${event.responseId}:${normalizedText}`;
+    if (refs.assistantResponseTextItemsRef.current.has(responseTextKey)) {
+      return true;
+    }
+    refs.assistantResponseTextItemsRef.current.add(responseTextKey);
+    return false;
+  }
+  const turn = ensureVoiceTurn();
+  const textKey = `${String(turn.seq)}:${normalizedText}`;
+  if (refs.assistantTranscriptTextItemsRef.current.has(textKey)) {
+    return true;
+  }
+  refs.assistantTranscriptTextItemsRef.current.add(textKey);
+  return false;
+}
+
+// Applies a freshly committed assistant transcript to the active voice turn and clears the
+// in-flight delta buffer. Extracted so `commitAssistantTranscript` reads as one linear sequence.
+function applyAssistantTranscriptToTurn(
+  turn: VoiceTurnDraft,
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "assistant-transcript-committed" }>,
+  normalizedText: string,
+  refs: {
+    readonly assistantTranscriptBufferRef: MutableRefObject<string>;
+    readonly assistantTranscriptResponseRef: MutableRefObject<string | undefined>;
+    readonly assistantTranscriptItemRef: MutableRefObject<string | undefined>;
+  },
+): void {
+  turn.assistantText = normalizedText;
+  turn.assistantResponseId = event.responseId;
+  turn.assistantItemId = event.itemId;
+  refs.assistantTranscriptBufferRef.current = "";
+  refs.assistantTranscriptResponseRef.current = undefined;
+  refs.assistantTranscriptItemRef.current = undefined;
+}
+
+// Transcript completion is a persistence signal. The audible assistant floor is owned only by
+// provider audio-output lifecycle events, so text can never announce "speaking" ahead of sound —
+// this only decides whether the turn should flush now.
+function shouldFlushOnAssistantTranscript(
+  turn: VoiceTurnDraft,
+  hasVoiceTurnCommittedHandler: boolean,
+): boolean {
+  return (
+    !turn.groundingActive &&
+    !turn.groundedToolPersisted &&
+    (turn.userText !== undefined || !hasVoiceTurnCommittedHandler)
+  );
 }
 
 export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoiceController {
@@ -1205,42 +1346,24 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       if (normalizedText.length === 0) {
         return;
       }
-      if (event.itemId !== undefined) {
-        if (assistantTranscriptItemsRef.current.has(event.itemId)) {
-          return;
-        }
-        assistantTranscriptItemsRef.current.add(event.itemId);
-      } else if (event.responseId !== undefined) {
-        const responseTextKey = `${event.responseId}:${normalizedText}`;
-        if (assistantResponseTextItemsRef.current.has(responseTextKey)) {
-          return;
-        }
-        assistantResponseTextItemsRef.current.add(responseTextKey);
-      } else {
-        const turn = ensureVoiceTurn();
-        const textKey = `${String(turn.seq)}:${normalizedText}`;
-        if (assistantTranscriptTextItemsRef.current.has(textKey)) {
-          return;
-        }
-        assistantTranscriptTextItemsRef.current.add(textKey);
+      const isDuplicate = isDuplicateAssistantTranscript(event, normalizedText, ensureVoiceTurn, {
+        assistantTranscriptItemsRef,
+        assistantResponseTextItemsRef,
+        assistantTranscriptTextItemsRef,
+      });
+      if (isDuplicate) {
+        return;
       }
       if (event.responseId !== undefined) {
         assistantResponseTextItemsRef.current.add(`${event.responseId}:${normalizedText}`);
       }
       const turn = ensureVoiceTurn();
-      turn.assistantText = normalizedText;
-      turn.assistantResponseId = event.responseId;
-      turn.assistantItemId = event.itemId;
-      assistantTranscriptBufferRef.current = "";
-      assistantTranscriptResponseRef.current = undefined;
-      assistantTranscriptItemRef.current = undefined;
-      // Transcript completion is a persistence signal. The audible assistant floor is owned only by
-      // provider audio-output lifecycle events, so text can never announce "speaking" ahead of sound.
-      if (
-        !turn.groundingActive &&
-        !turn.groundedToolPersisted &&
-        (turn.userText !== undefined || onVoiceTurnCommittedRef.current === undefined)
-      ) {
+      applyAssistantTranscriptToTurn(turn, event, normalizedText, {
+        assistantTranscriptBufferRef,
+        assistantTranscriptResponseRef,
+        assistantTranscriptItemRef,
+      });
+      if (shouldFlushOnAssistantTranscript(turn, onVoiceTurnCommittedRef.current !== undefined)) {
         flushVoiceTurn({ allowAssistantFallback: true });
       }
       applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
@@ -1593,31 +1716,19 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           } else if (rtcState === "disconnected") {
             applyTurnSignal({ kind: "provider-failure", recoverable: true });
             if (graceTimerRef.current === undefined) {
-              graceTimerRef.current = setTimeout(() => {
-                graceTimerRef.current = undefined;
-                if (!mountedRef.current) return;
-                const attempt = reconnectAttemptsRef.current;
-                cleanupRefs({ discardControl: false });
-                if (attempt >= MAX_REALTIME_RECONNECT_ATTEMPTS) {
-                  dispatch({
-                    type: "error",
-                    reason: "connection-failed",
-                    message: "Real-time voice connection was lost.",
-                  });
-                  return;
-                }
-                reconnectAttemptsRef.current = attempt + 1;
-                applyTurnSignal({ kind: "provider-failure", recoverable: true });
-                const delayMs = Math.min(
-                  DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffInitialMs * 2 ** attempt,
-                  DEFAULT_VOICE_PROTOCOL_TIMEOUTS.reconnectBackoffMaxMs,
-                );
-                reconnectTimerRef.current = setTimeout(() => {
-                  reconnectTimerRef.current = undefined;
-                  if (!mountedRef.current) return;
-                  startRef.current?.();
-                }, delayMs);
-              }, ICE_DISCONNECT_GRACE_MS);
+              graceTimerRef.current = setTimeout(
+                createIceDisconnectGraceTimeoutHandler({
+                  graceTimerRef,
+                  mountedRef,
+                  reconnectAttemptsRef,
+                  reconnectTimerRef,
+                  startRef,
+                  cleanupRefs,
+                  dispatch,
+                  applyTurnSignal,
+                }),
+                ICE_DISCONNECT_GRACE_MS,
+              );
             }
           }
         });

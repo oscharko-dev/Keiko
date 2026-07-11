@@ -14,7 +14,7 @@
 // while the written answer stays untouched (AC4). The hook holds no credential and never persists the
 // synthesized audio: the object URL lives only for the duration of one spoken turn.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { VoicePersona } from "@oscharko-dev/keiko-contracts";
 import type { VoiceProfile } from "@/lib/types";
 import { ApiError, synthesizeAssistantSpeech, type VoiceSpeechResult } from "@/lib/api";
@@ -130,6 +130,52 @@ interface HandledTurn {
   readonly nonce: number;
 }
 
+// Wires the buffered <audio> element's terminal event handlers for one synthesis turn. Hoisted out of
+// the effect (rather than left as inline closures on `.then`) to keep function nesting under the
+// S2004 limit; `cancelledRef` is read at fire time, not at attachment time, so a turn cancelled after
+// attachment (effect re-run / unmount / stop) still short-circuits the handler.
+function attachBufferedAudioHandlers(
+  audio: AssistantSpeechAudioElement,
+  playbackRef: MutableRefObject<VoicePlaybackBinding>,
+  teardown: () => void,
+  cancelledRef: MutableRefObject<boolean>,
+): void {
+  audio.onplaying = (): void => {
+    if (!cancelledRef.current) {
+      playbackRef.current.playStarted();
+    }
+  };
+  audio.onended = (): void => {
+    if (!cancelledRef.current) {
+      playbackRef.current.complete();
+      teardown();
+    }
+  };
+  audio.onerror = (): void => {
+    if (!cancelledRef.current) {
+      playbackRef.current.fail("internal");
+      teardown();
+    }
+  };
+}
+
+// Starts buffered playback and routes a blocked/failed `play()` (e.g. an autoplay policy) through the
+// same failure path as a decode or provider error. Extracted alongside `attachBufferedAudioHandlers`
+// for the same nesting reason.
+function playBufferedAudio(
+  audio: AssistantSpeechAudioElement,
+  playbackRef: MutableRefObject<VoicePlaybackBinding>,
+  teardown: () => void,
+  cancelledRef: MutableRefObject<boolean>,
+): Promise<void> {
+  return Promise.resolve(audio.play()).catch((error: unknown) => {
+    if (!cancelledRef.current && !isAbortError(error)) {
+      playbackRef.current.fail("internal");
+      teardown();
+    }
+  });
+}
+
 export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePlaybackBinding {
   const { profile, enabled, text, messageId, replayAllowed, turnManager, persona } = options;
 
@@ -224,53 +270,33 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
       return;
     }
 
-    let cancelled = false;
+    const cancelledRef: MutableRefObject<boolean> = { current: false };
     const controller = new AbortController();
     abortRef.current = controller;
     pb.prepare();
 
     // The buffered fallback: synthesize the whole clip, then play it through one HTMLAudioElement.
-    // `cancelled` covers an effect re-run / unmount; `controller.signal.aborted` covers a stop / mute /
-    // interrupt that aborted this turn — either way a late provider answer must not start playback.
+    // `cancelledRef` covers an effect re-run / unmount; `controller.signal.aborted` covers a stop /
+    // mute / interrupt that aborted this turn — either way a late provider answer must not start
+    // playback.
     const runBuffered = (): void => {
       const audio = createAudioRef.current();
       audio.muted = false;
       audioRef.current = audio;
       Promise.resolve(synthesizeRef.current(text, controller.signal))
         .then((result) => {
-          if (cancelled || controller.signal.aborted) {
+          if (cancelledRef.current || controller.signal.aborted) {
             return undefined;
           }
           const blob = new Blob([decodeBase64(result.audio)], { type: result.mimeType });
           const url = createUrlRef.current(blob);
           urlRef.current = url;
           audio.src = url;
-          audio.onplaying = (): void => {
-            if (!cancelled) {
-              playbackRef.current.playStarted();
-            }
-          };
-          audio.onended = (): void => {
-            if (!cancelled) {
-              playbackRef.current.complete();
-              teardown();
-            }
-          };
-          audio.onerror = (): void => {
-            if (!cancelled) {
-              playbackRef.current.fail("internal");
-              teardown();
-            }
-          };
-          return Promise.resolve(audio.play()).catch((error: unknown) => {
-            if (!cancelled && !isAbortError(error)) {
-              playbackRef.current.fail("internal");
-              teardown();
-            }
-          });
+          attachBufferedAudioHandlers(audio, playbackRef, teardown, cancelledRef);
+          return playBufferedAudio(audio, playbackRef, teardown, cancelledRef);
         })
         .catch((error: unknown) => {
-          if (cancelled || isAbortError(error)) {
+          if (cancelledRef.current || isAbortError(error)) {
             return;
           }
           playbackRef.current.fail(failureFromError(error));
@@ -290,18 +316,18 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
           controller.signal,
           {
             onStart: (): void => {
-              if (!cancelled) {
+              if (!cancelledRef.current) {
                 playbackRef.current.playStarted();
               }
             },
             onEnded: (): void => {
-              if (!cancelled) {
+              if (!cancelledRef.current) {
                 playbackRef.current.complete();
                 teardown();
               }
             },
             onError: (): void => {
-              if (!cancelled && !controller.signal.aborted) {
+              if (!cancelledRef.current && !controller.signal.aborted) {
                 playbackRef.current.fail("internal");
                 teardown();
               }
@@ -309,19 +335,19 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
           },
         )
         .then((engaged) => {
-          if (!engaged && !cancelled && !controller.signal.aborted) {
+          if (!engaged && !cancelledRef.current && !controller.signal.aborted) {
             runBuffered();
           }
         })
         .catch(() => {
-          if (!cancelled && !controller.signal.aborted) {
+          if (!cancelledRef.current && !controller.signal.aborted) {
             runBuffered();
           }
         });
     }
 
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
       teardown();
     };
   }, [enabled, available, text, messageId, replayNonce, teardown]);

@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
 import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
@@ -252,6 +260,40 @@ async function appendDesktopChatVoiceTurnWithRetry(
 
 function sortChats(chats: readonly Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+// Sonar S2004 — the upsert/remove/replace/rollback list transforms below are extracted to
+// module scope (out of the deeply nested setState updaters that build them) so each nested
+// callback resets its own nesting depth instead of stacking onto the caller's.
+function upsertChatIntoList(chats: readonly Chat[], chat: Chat): Chat[] {
+  return sortChats([chat, ...chats.filter((existing) => existing.id !== chat.id)]);
+}
+
+function removeChatFromList(chats: readonly Chat[], chatId: string): Chat[] {
+  return chats.filter((chat) => chat.id !== chatId);
+}
+
+function replaceChatInList(chats: readonly Chat[], updatedChat: Chat): Chat[] {
+  return chats.map((chat) => (chat.id === updatedChat.id ? updatedChat : chat));
+}
+
+function restoreChatSelectedModel(
+  chats: readonly Chat[],
+  activeChatId: string,
+  rollbackChats: readonly Chat[],
+): Chat[] {
+  return chats.map((chat) => {
+    if (chat.id !== activeChatId) return chat;
+    const restored = rollbackChats.find((candidate) => candidate.id === activeChatId);
+    return restored !== undefined ? { ...chat, selectedModel: restored.selectedModel } : chat;
+  });
+}
+
+function removeMessagesByIds(
+  messages: readonly ChatMessage[],
+  excludedIds: readonly string[],
+): ChatMessage[] {
+  return messages.filter((message) => !excludedIds.includes(message.id));
 }
 
 function isChatPayload(value: unknown): value is Chat {
@@ -837,6 +879,25 @@ function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   return pending.then(cloneSessionPatch);
 }
 
+// Sonar S2004 — extracted out of streamUngrounded's `.catch` handler (itself already nested
+// inside a `new Promise` executor inside the useCallback body) so this setState updater is not
+// a fifth level of nested function. Takes the specific dispatchers/values it needs rather than
+// closing over hook state, matching the module-scope helpers above.
+function handleStreamUngroundedTransportFailure(
+  caught: unknown,
+  optimisticId: string,
+  setError: Dispatch<SetStateAction<string | undefined>>,
+  setState: Dispatch<SetStateAction<SessionState>>,
+  resolve: (status: SendStatus) => void,
+): void {
+  setError(errorMessage(caught));
+  setState((previous) => ({
+    ...previous,
+    messages: removeMessagesByIds(previous.messages, [optimisticId]),
+  }));
+  resolve("failed");
+}
+
 export interface UseChatSessionOptions {
   readonly autoCreate?: boolean;
 }
@@ -1158,7 +1219,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const { chat } = mutation;
         setState((previous) => ({
           ...previous,
-          chats: sortChats([chat, ...previous.chats.filter((existing) => existing.id !== chat.id)]),
+          chats: upsertChatIntoList(previous.chats, chat),
           activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
           selectedModel:
             previous.activeChat?.id === chat.id
@@ -1169,7 +1230,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       }
       setState((previous) => ({
         ...previous,
-        chats: previous.chats.filter((chat) => chat.id !== mutation.chatId),
+        chats: removeChatFromList(previous.chats, mutation.chatId),
         activeChat: previous.activeChat?.id === mutation.chatId ? undefined : previous.activeChat,
         messages: previous.activeChat?.id === mutation.chatId ? [] : previous.messages,
       }));
@@ -1270,7 +1331,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           selectedModel: result.chat.selectedModel,
           activeChat:
             previous.activeChat?.id === result.chat.id ? result.chat : previous.activeChat,
-          chats: previous.chats.map((chat) => (chat.id === result.chat.id ? result.chat : chat)),
+          chats: replaceChatInList(previous.chats, result.chat),
         }));
       })
       .catch((caught) => {
@@ -1295,13 +1356,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
                 : previous.selectedModel,
             activeChat:
               previous.activeChat?.id === activeChatId ? rollback.activeChat : previous.activeChat,
-            chats: previous.chats.map((chat) => {
-              if (chat.id !== activeChatId) return chat;
-              const restored = rollback.chats.find((c) => c.id === activeChatId);
-              return restored !== undefined
-                ? { ...chat, selectedModel: restored.selectedModel }
-                : chat;
-            }),
+            chats: restoreChatSelectedModel(previous.chats, activeChatId, rollback.chats),
           }));
         }
       });
@@ -1524,12 +1579,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           setState((previous) => ({
             ...previous,
             activeChat: payload.chat,
-            chats: sortChats([
-              payload.chat,
-              ...previous.chats.filter((existing) => existing.id !== payload.chat.id),
-            ]),
+            chats: upsertChatIntoList(previous.chats, payload.chat),
             messages: [
-              ...previous.messages.filter((m) => m.id !== optimisticId && m.id !== tempAssistantId),
+              ...removeMessagesByIds(previous.messages, [optimisticId, tempAssistantId]),
               ...Array.from(payload.messages),
             ],
           }));
@@ -1623,12 +1675,13 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             // UI does not silently swallow the failure. The server has already persisted the
             // user message at this point; removing it here is UI-only — it reappears on reload,
             // which matches the behaviour of sendUngroundedBuffered and sendGrounded.
-            setError(errorMessage(caught));
-            setState((previous) => ({
-              ...previous,
-              messages: previous.messages.filter((message) => message.id !== optimisticId),
-            }));
-            resolve("failed");
+            handleStreamUngroundedTransportFailure(
+              caught,
+              optimisticId,
+              setError,
+              setState,
+              resolve,
+            );
           }
         });
       });

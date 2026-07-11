@@ -231,7 +231,7 @@ function sourceKey(source: ConnectedRunSource): string {
                 ids.map((screenId) => screenId.trim()).filter((screenId) => screenId.length > 0),
               ),
             ]
-              .sort()
+              .sort((a, b) => a.localeCompare(b))
               .join(",");
       return `figma-snapshot:${source.snapshotRunId}:${scope}`;
     }

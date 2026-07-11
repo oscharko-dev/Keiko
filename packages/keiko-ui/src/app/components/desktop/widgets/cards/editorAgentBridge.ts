@@ -612,7 +612,9 @@ interface ReadySubscribedSession {
 
 function readySubscribedSessions(): readonly ReadySubscribedSession[] {
   const ready: ReadySubscribedSession[] = [];
-  for (const sessionId of [...editorAgentSubscribersBySession.keys()].sort()) {
+  for (const sessionId of [...editorAgentSubscribersBySession.keys()].sort((a, b) =>
+    a.localeCompare(b),
+  )) {
     const capability = editorAgentDecisionCapabilities.get(sessionId);
     if (!editorAgentReadySessions.has(sessionId) || capability === undefined) continue;
     ready.push({ sessionId, capability });

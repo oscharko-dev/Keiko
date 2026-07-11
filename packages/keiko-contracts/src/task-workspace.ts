@@ -521,15 +521,13 @@ export const WORKSPACE_EVENT_ALLOWED_KEYS: readonly string[] = [
   "lockId",
 ] as const;
 
-// eslint-disable-next-line complexity
-export function validateWorkspaceEvent(input: unknown): TaskWorkspaceValidation {
-  if (!isRecord(input)) return { ok: false, reasons: ["event must be an object"] };
-  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_EVENT_ALLOWED_KEYS);
-  if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
-  for (const key of ["eventId", "workspaceId", "taskId", "at", "correlationId"] as const) {
-    if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
-  }
-  if (!isWorkspaceEventType(input.type)) reasons.push("type invalid");
+// Optional lifecycle-transition fields (fromState/toState/health): only checked when present, since
+// not every event type carries a transition. Split out of validateWorkspaceEvent to keep it within
+// the complexity budget while preserving the exact same checks in the same order.
+function validateWorkspaceEventLifecycleFields(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
   if (input.fromState !== undefined && !isTaskWorkspaceLifecycleState(input.fromState)) {
     reasons.push("fromState invalid");
   }
@@ -539,6 +537,14 @@ export function validateWorkspaceEvent(input: unknown): TaskWorkspaceValidation 
   if (input.health !== undefined && !isTaskWorkspaceHealth(input.health)) {
     reasons.push("health invalid");
   }
+}
+
+// Optional driftMarkers/lockId fields: only checked when present. Split out of validateWorkspaceEvent
+// alongside validateWorkspaceEventLifecycleFields for the same reason.
+function validateWorkspaceEventDriftAndLock(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
   if (input.driftMarkers !== undefined) {
     if (!Array.isArray(input.driftMarkers)) reasons.push("driftMarkers must be an array");
     else if (!input.driftMarkers.every(isTaskWorkspaceDriftMarker)) {
@@ -548,6 +554,18 @@ export function validateWorkspaceEvent(input: unknown): TaskWorkspaceValidation 
   if (input.lockId !== undefined && !isNonEmptyString(input.lockId)) {
     reasons.push("lockId must be a non-empty string when present");
   }
+}
+
+export function validateWorkspaceEvent(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["event must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_EVENT_ALLOWED_KEYS);
+  if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
+  for (const key of ["eventId", "workspaceId", "taskId", "at", "correlationId"] as const) {
+    if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
+  }
+  if (!isWorkspaceEventType(input.type)) reasons.push("type invalid");
+  validateWorkspaceEventLifecycleFields(input, reasons);
+  validateWorkspaceEventDriftAndLock(input, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
@@ -1118,25 +1136,24 @@ function outcome(
   return { status, driftMarkers: markers, recoveryHints: planWorkspaceRecoveryHints(markers) };
 }
 
-// Pure deterministic classifier with a fixed precedence (most severe first): a containment escape and
-// a live foreign lock short-circuit before any disk classification; terminal lifecycles are settled;
-// then partial-creation, then on-disk drift (missing → stale pointer → branch/HEAD/dirty), then a
-// lingering recovery-required flag, then a stale lock on an otherwise-healthy workspace.
-// eslint-disable-next-line complexity
-export function classifyWorkspaceReconciliation(
+// The drift marker (if any) for a partially-created (provisioning/failed) workspace: still creating
+// its worktree, or the worktree exists but the git pointer hasn't landed yet. Split out of
+// classifyWorkspaceReconciliation — same nested-ternary precedence, expressed as early returns.
+function partialCreationMarkers(
   facts: WorkspaceReconciliationFacts,
-): WorkspaceReconciliationOutcome {
-  if (!facts.pathContained) return outcome("unmanaged-path", ["path-escape"]);
-  if (facts.lockedByOtherActor) return outcome("locked", []);
-  if (TERMINAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) return outcome("healthy", []);
-  if (PARTIAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) {
-    const base: readonly TaskWorkspaceDriftMarker[] = !facts.worktreeDirExists
-      ? ["worktree-missing"]
-      : !facts.gitPointerPresent
-        ? ["pointer-stale"]
-        : [];
-    return outcome("partially-created", withStaleLock(base, facts));
-  }
+): readonly TaskWorkspaceDriftMarker[] {
+  if (!facts.worktreeDirExists) return ["worktree-missing"];
+  if (!facts.gitPointerPresent) return ["pointer-stale"];
+  return [];
+}
+
+// The on-disk drift chain for an operationally-active workspace (missing → stale pointer → gitdir
+// mismatch → branch/HEAD/dirty), in the same fixed precedence as classifyWorkspaceReconciliation.
+// Returns null when the worktree is fully in sync, so the caller falls through to the remaining
+// (non-disk) checks.
+function classifyOnDiskDrift(
+  facts: WorkspaceReconciliationFacts,
+): WorkspaceReconciliationOutcome | null {
   if (!facts.worktreeDirExists)
     return outcome("missing", withStaleLock(["worktree-missing"], facts));
   if (!facts.gitPointerPresent)
@@ -1149,6 +1166,24 @@ export function classifyWorkspaceReconciliation(
   if (facts.uncommittedChanges) {
     return outcome("drifted", withStaleLock(["uncommitted-changes"], facts));
   }
+  return null;
+}
+
+// Pure deterministic classifier with a fixed precedence (most severe first): a containment escape and
+// a live foreign lock short-circuit before any disk classification; terminal lifecycles are settled;
+// then partial-creation, then on-disk drift (missing → stale pointer → branch/HEAD/dirty), then a
+// lingering recovery-required flag, then a stale lock on an otherwise-healthy workspace.
+export function classifyWorkspaceReconciliation(
+  facts: WorkspaceReconciliationFacts,
+): WorkspaceReconciliationOutcome {
+  if (!facts.pathContained) return outcome("unmanaged-path", ["path-escape"]);
+  if (facts.lockedByOtherActor) return outcome("locked", []);
+  if (TERMINAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) return outcome("healthy", []);
+  if (PARTIAL_LIFECYCLE_STATES.includes(facts.lifecycleState)) {
+    return outcome("partially-created", withStaleLock(partialCreationMarkers(facts), facts));
+  }
+  const diskDrift = classifyOnDiskDrift(facts);
+  if (diskDrift) return diskDrift;
   if (facts.lifecycleState === "recovery-required") {
     return outcome("recovery-required", withStaleLock([], facts));
   }

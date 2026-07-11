@@ -78,5 +78,5 @@ export function parseFigmaSnapshotScreenIds(raw: unknown): FigmaScreenIdsResult 
   }
   // Canonical: dedupe (Set) + sort so the derived envelope id / provenance ref is order- and
   // duplicate-stable, and dedupe across reconnections / re-check is exact.
-  return { ok: true, screenIds: [...seen].sort() };
+  return { ok: true, screenIds: [...seen].sort((a, b) => a.localeCompare(b)) };
 }

@@ -356,15 +356,11 @@ function installModeDetailText(session: UpdateSessionStatus, t: I18nTranslate): 
   return kind ?? session.installMode.status;
 }
 
-function primaryActionText(
-  report: UpdatePreflightReport,
-  session: UpdateSessionStatus,
+function primaryActionTextForSession(
+  visibleSession: ReturnType<typeof sessionForDisplay>,
   remediation: UpdateRemediationStatusReport,
   t: I18nTranslate,
-  manualInstallVerified = false,
-): string {
-  const visibleSession = sessionForDisplay(session, report);
-  if (manualInstallVerified) return t("updates.primary.installed");
+): string | undefined {
   if (visibleSession?.phase === "succeeded" && !remediation.updateCanComplete) {
     return t("updates.primary.followUp");
   }
@@ -372,6 +368,14 @@ function primaryActionText(
   if (visibleSession?.phase === "cancelled") return t("updates.primary.cancelled");
   if (visibleSession?.phase === "failed") return t("updates.primary.failed");
   if (visibleSession?.phase === "restart-required") return t("updates.primary.restart");
+  return undefined;
+}
+
+function primaryActionTextForPortable(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  t: I18nTranslate,
+): string | undefined {
   if (isPortableExternallyManaged(report, session)) {
     return t("updates.primary.portableExternallyManaged");
   }
@@ -384,6 +388,22 @@ function primaryActionText(
   if (report.updateAvailable && isPortableManagedPolicyDisabled(session)) {
     return t("updates.primary.policyDisabled");
   }
+  return undefined;
+}
+
+function primaryActionText(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  remediation: UpdateRemediationStatusReport,
+  t: I18nTranslate,
+  manualInstallVerified = false,
+): string {
+  const visibleSession = sessionForDisplay(session, report);
+  if (manualInstallVerified) return t("updates.primary.installed");
+  const sessionText = primaryActionTextForSession(visibleSession, remediation, t);
+  if (sessionText !== undefined) return sessionText;
+  const portableText = primaryActionTextForPortable(report, session, t);
+  if (portableText !== undefined) return portableText;
   if (isUpdateCheckUnavailable(report)) return t("updates.primary.unavailable");
   if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
   if (remediation.overallStatus === "manual-review-required") {
@@ -745,6 +765,171 @@ function PlannedRemediationPanel({
   );
 }
 
+function remediationHeaderTitle(
+  isManualReview: boolean,
+  hasFailedAction: boolean,
+  hasDeferredAction: boolean,
+  t: I18nTranslate,
+): string {
+  if (isManualReview) return t("updates.manualReview.title");
+  if (hasFailedAction) return t("updates.remediation.failedTitle");
+  if (hasDeferredAction) return t("updates.remediation.deferredTitle");
+  return t("updates.remediation.title");
+}
+
+function remediationHeaderBody(
+  isManualReview: boolean,
+  hasFailedAction: boolean,
+  hasDeferredAction: boolean,
+  remediation: UpdateRemediationStatusReport,
+  t: I18nTranslate,
+): string {
+  if (isManualReview) return t("updates.manualReview.body");
+  if (hasFailedAction) return t("updates.remediation.failedBody");
+  if (hasDeferredAction) return t("updates.remediation.deferredBody");
+  if (remediation.updateCanComplete) return t("updates.remediation.canComplete");
+  return t("updates.remediation.needsAction");
+}
+
+function RemediationFeatureSummary({
+  showFeatureSummary,
+  isManualReview,
+  remediation,
+  t,
+}: {
+  readonly showFeatureSummary: boolean;
+  readonly isManualReview: boolean;
+  readonly remediation: UpdateRemediationStatusReport;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (!showFeatureSummary) return null;
+  if (isManualReview) {
+    return (
+      <>
+        {remediation.affectedFeatures.map((feature) => (
+          <div className="upd-action" key={feature.featureId}>
+            <div>
+              <div className="upd-action-title">
+                <strong>{feature.label}</strong>
+              </div>
+              <small>{manualReviewRisk(feature, t)}</small>
+            </div>
+          </div>
+        ))}
+      </>
+    );
+  }
+  if (remediation.affectedFeatures.length === 0) return null;
+  return (
+    <ul className="upd-feature-list">
+      {remediation.affectedFeatures.map((feature) => (
+        <li key={feature.featureId}>
+          <span>{feature.label}</span>
+          <span className="upd-chip">{featureStateLabel(feature.state, t)}</span>
+          <small>{feature.reason}</small>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function actionTitleText(
+  action: UpdateRemediationAction,
+  feature: UpdateRemediationAffectedFeature | undefined,
+  manualReviewAction: boolean,
+  t: I18nTranslate,
+): string {
+  if (manualReviewAction) return feature?.label ?? remediationLabel(action.remediation, t);
+  return remediationLabel(action.remediation, t);
+}
+
+function actionDescriptionText(
+  action: UpdateRemediationAction,
+  feature: UpdateRemediationAffectedFeature | undefined,
+  manualReviewAction: boolean,
+  t: I18nTranslate,
+): string {
+  if (manualReviewAction && feature !== undefined) return manualReviewRisk(feature, t);
+  return feature?.reason ?? action.message;
+}
+
+function RemediationActionButtons({
+  action,
+  busy,
+  onAction,
+  t,
+}: {
+  readonly action: UpdateRemediationAction;
+  readonly busy: BusyAction;
+  readonly onAction: (action: UpdateRemediationAction, decision: "run" | "defer") => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className="upd-action-buttons">
+      {action.canRun ? (
+        <button
+          type="button"
+          className="upd-secondary-btn"
+          disabled={busy !== undefined}
+          onClick={() => onAction(action, "run")}
+        >
+          {action.status === "deferred"
+            ? t("updates.action.runDeferred")
+            : t("updates.action.runRemediation")}
+        </button>
+      ) : null}
+      {action.canDefer && action.status !== "deferred" ? (
+        <button
+          type="button"
+          className="upd-ghost-btn"
+          disabled={busy !== undefined}
+          onClick={() => onAction(action, "defer")}
+        >
+          {t("updates.action.defer")}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function RemediationActionItem({
+  action,
+  remediation,
+  busy,
+  onAction,
+  t,
+}: {
+  readonly action: UpdateRemediationAction;
+  readonly remediation: UpdateRemediationStatusReport;
+  readonly busy: BusyAction;
+  readonly onAction: (action: UpdateRemediationAction, decision: "run" | "defer") => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const feature = featureForAction(remediation, action);
+  const manualReviewAction = action.status === "manual-review-required";
+  const open = actionStatusOpen(action);
+  return (
+    <div className={classNames("upd-action", action.status === "failed" && styles.failedAction)}>
+      <div>
+        <div className="upd-action-title">
+          <strong>{actionTitleText(action, feature, manualReviewAction, t)}</strong>
+          {manualReviewAction ? null : (
+            <span className="upd-chip">{actionStatusLabel(action.status, t)}</span>
+          )}
+        </div>
+        <small>{actionDescriptionText(action, feature, manualReviewAction, t)}</small>
+        {action.instructions !== undefined ? <small>{action.instructions}</small> : null}
+        {action.status === "failed" ? (
+          <small className={styles.failedCopy}>{t("updates.remediation.failedActionHelp")}</small>
+        ) : null}
+      </div>
+      {open ? (
+        <RemediationActionButtons action={action} busy={busy} onAction={onAction} t={t} />
+      ) : null}
+    </div>
+  );
+}
+
 function RemediationPanel({
   report,
   remediation,
@@ -779,110 +964,34 @@ function RemediationPanel({
     >
       <div className="upd-panel-head">
         <strong id="updates-remediation-title">
-          {isManualReview
-            ? t("updates.manualReview.title")
-            : hasFailedAction
-              ? t("updates.remediation.failedTitle")
-              : hasDeferredAction
-                ? t("updates.remediation.deferredTitle")
-                : t("updates.remediation.title")}
+          {remediationHeaderTitle(isManualReview, hasFailedAction, hasDeferredAction, t)}
         </strong>
         <span>
-          {isManualReview
-            ? t("updates.manualReview.body")
-            : hasFailedAction
-              ? t("updates.remediation.failedBody")
-              : hasDeferredAction
-                ? t("updates.remediation.deferredBody")
-                : remediation.updateCanComplete
-                  ? t("updates.remediation.canComplete")
-                  : t("updates.remediation.needsAction")}
+          {remediationHeaderBody(
+            isManualReview,
+            hasFailedAction,
+            hasDeferredAction,
+            remediation,
+            t,
+          )}
         </span>
       </div>
-      {showFeatureSummary && isManualReview
-        ? remediation.affectedFeatures.map((feature) => (
-            <div className="upd-action" key={feature.featureId}>
-              <div>
-                <div className="upd-action-title">
-                  <strong>{feature.label}</strong>
-                </div>
-                <small>{manualReviewRisk(feature, t)}</small>
-              </div>
-            </div>
-          ))
-        : null}
-      {showFeatureSummary && !isManualReview && remediation.affectedFeatures.length > 0 ? (
-        <ul className="upd-feature-list">
-          {remediation.affectedFeatures.map((feature) => (
-            <li key={feature.featureId}>
-              <span>{feature.label}</span>
-              <span className="upd-chip">{featureStateLabel(feature.state, t)}</span>
-              <small>{feature.reason}</small>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {visibleActions.map((action) => {
-        const feature = featureForAction(remediation, action);
-        const manualReviewAction = action.status === "manual-review-required";
-        const open = actionStatusOpen(action);
-        return (
-          <div
-            className={classNames("upd-action", action.status === "failed" && styles.failedAction)}
-            key={action.actionId}
-          >
-            <div>
-              <div className="upd-action-title">
-                <strong>
-                  {manualReviewAction
-                    ? (feature?.label ?? remediationLabel(action.remediation, t))
-                    : remediationLabel(action.remediation, t)}
-                </strong>
-                {manualReviewAction ? null : (
-                  <span className="upd-chip">{actionStatusLabel(action.status, t)}</span>
-                )}
-              </div>
-              <small>
-                {manualReviewAction && feature !== undefined
-                  ? manualReviewRisk(feature, t)
-                  : (feature?.reason ?? action.message)}
-              </small>
-              {action.instructions !== undefined ? <small>{action.instructions}</small> : null}
-              {action.status === "failed" ? (
-                <small className={styles.failedCopy}>
-                  {t("updates.remediation.failedActionHelp")}
-                </small>
-              ) : null}
-            </div>
-            {open ? (
-              <div className="upd-action-buttons">
-                {action.canRun ? (
-                  <button
-                    type="button"
-                    className="upd-secondary-btn"
-                    disabled={busy !== undefined}
-                    onClick={() => onAction(action, "run")}
-                  >
-                    {action.status === "deferred"
-                      ? t("updates.action.runDeferred")
-                      : t("updates.action.runRemediation")}
-                  </button>
-                ) : null}
-                {action.canDefer && action.status !== "deferred" ? (
-                  <button
-                    type="button"
-                    className="upd-ghost-btn"
-                    disabled={busy !== undefined}
-                    onClick={() => onAction(action, "defer")}
-                  >
-                    {t("updates.action.defer")}
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-          </div>
-        );
-      })}
+      <RemediationFeatureSummary
+        showFeatureSummary={showFeatureSummary}
+        isManualReview={isManualReview}
+        remediation={remediation}
+        t={t}
+      />
+      {visibleActions.map((action) => (
+        <RemediationActionItem
+          key={action.actionId}
+          action={action}
+          remediation={remediation}
+          busy={busy}
+          onAction={onAction}
+          t={t}
+        />
+      ))}
       {showDecisionCopy ? (
         <p className="upd-muted">{t("updates.remediation.userActionRequired")}</p>
       ) : null}
@@ -1237,6 +1346,80 @@ function TechnicalDetails({
   );
 }
 
+function computePreviousManualTarget(
+  manual: boolean,
+  previousReady: Extract<LoadState, { status: "ready" }> | undefined,
+): string | undefined {
+  if (
+    manual &&
+    previousReady !== undefined &&
+    isManualUpdatePath(previousReady.report, previousReady.session)
+  ) {
+    return previousReady.report.targetVersion;
+  }
+  return undefined;
+}
+
+function computeManualInstallVerified(
+  previousManualTarget: string | undefined,
+  report: UpdatePreflightReport,
+): boolean {
+  return (
+    previousManualTarget !== undefined &&
+    !report.updateAvailable &&
+    report.currentVersion === previousManualTarget
+  );
+}
+
+function applyReleaseNotesState(
+  report: UpdatePreflightReport,
+  setReleaseNotesReport: (report: UpdatePreflightReport) => void,
+): void {
+  if (hasReleaseNotes(report) && report.targetVersion !== undefined) {
+    setReleaseNotesReport(report);
+  }
+}
+
+function applyManualInstallState(
+  manualInstallVerified: boolean,
+  previousManualTarget: string | undefined,
+  report: UpdatePreflightReport,
+  setVerifiedManualTargetVersion: (value: string | undefined) => void,
+  setManualInstructionsOpen: (open: boolean) => void,
+): void {
+  if (manualInstallVerified) {
+    setVerifiedManualTargetVersion(previousManualTarget);
+    setManualInstructionsOpen(false);
+  } else if (report.updateAvailable) {
+    setVerifiedManualTargetVersion(undefined);
+  }
+}
+
+function checkFeedbackMessage(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  manualInstallVerified: boolean,
+  t: I18nTranslate,
+): string {
+  if (manualInstallVerified) {
+    return t("updates.check.manualInstalled", { version: report.currentVersion });
+  }
+  if (isPortableExternallyManaged(report, session)) {
+    return t("updates.check.portableExternallyManaged");
+  }
+  if (isPortableBootstrapSetupRequired(report, session)) {
+    return t("updates.check.portableSetupRequired");
+  }
+  if (isPortableReleaseMetadataUnavailable(report)) {
+    return t("updates.check.releaseUnavailable");
+  }
+  if (isUpdateCheckUnavailable(report)) return t("updates.check.unavailable");
+  if (!report.updateAvailable) return t("updates.check.current");
+  if (isPortableManagedPolicyDisabled(session)) return t("updates.check.policyDisabled");
+  if (isManualUpdatePath(report, session)) return t("updates.check.manualStillRequired");
+  return t("updates.check.available");
+}
+
 export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNode {
   const t = useTranslate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -1254,55 +1437,24 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
       setBusy(manual ? "checking" : undefined);
       setCheckFeedback(manual ? t("updates.check.checking") : undefined);
       try {
-        const previousReady = readyStateRef.current;
-        const previousManualTarget =
-          manual &&
-          previousReady !== undefined &&
-          isManualUpdatePath(previousReady.report, previousReady.session)
-            ? previousReady.report.targetVersion
-            : undefined;
+        const previousManualTarget = computePreviousManualTarget(manual, readyStateRef.current);
         const report = manual ? await api.checkPreflight() : await api.fetchPreflight();
         const [session, remediation] = await Promise.all([
           api.fetchSessionStatus(),
           loadRemediation(api, report),
         ]);
-        const manualInstallVerified =
-          previousManualTarget !== undefined &&
-          !report.updateAvailable &&
-          report.currentVersion === previousManualTarget;
+        const manualInstallVerified = computeManualInstallVerified(previousManualTarget, report);
         setState({ status: "ready", report, session, remediation });
-        if (hasReleaseNotes(report) && report.targetVersion !== undefined) {
-          setReleaseNotesReport(report);
-        }
-        if (manualInstallVerified) {
-          setVerifiedManualTargetVersion(previousManualTarget);
-          setManualInstructionsOpen(false);
-        } else if (report.updateAvailable) {
-          setVerifiedManualTargetVersion(undefined);
-        }
+        applyReleaseNotesState(report, setReleaseNotesReport);
+        applyManualInstallState(
+          manualInstallVerified,
+          previousManualTarget,
+          report,
+          setVerifiedManualTargetVersion,
+          setManualInstructionsOpen,
+        );
         if (manual) {
-          const manualStillRequired = report.updateAvailable && isManualUpdatePath(report, session);
-          const setupRequired = isPortableBootstrapSetupRequired(report, session);
-          const policyDisabled = report.updateAvailable && isPortableManagedPolicyDisabled(session);
-          setCheckFeedback(
-            manualInstallVerified
-              ? t("updates.check.manualInstalled", { version: report.currentVersion })
-              : isPortableExternallyManaged(report, session)
-                ? t("updates.check.portableExternallyManaged")
-                : setupRequired
-                  ? t("updates.check.portableSetupRequired")
-                  : isPortableReleaseMetadataUnavailable(report)
-                    ? t("updates.check.releaseUnavailable")
-                    : isUpdateCheckUnavailable(report)
-                      ? t("updates.check.unavailable")
-                      : report.updateAvailable
-                        ? policyDisabled
-                          ? t("updates.check.policyDisabled")
-                          : manualStillRequired
-                            ? t("updates.check.manualStillRequired")
-                            : t("updates.check.available")
-                        : t("updates.check.current"),
-          );
+          setCheckFeedback(checkFeedbackMessage(report, session, manualInstallVerified, t));
         }
       } catch (error) {
         setCheckFeedback(undefined);

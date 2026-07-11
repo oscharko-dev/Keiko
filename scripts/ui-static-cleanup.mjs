@@ -30,5 +30,5 @@ async function walkRuntimeTree(dir, removed) {
 export async function removeRuntimeJavaScriptSourceMaps(staticDir) {
   const removed = [];
   await walkRuntimeTree(staticDir, removed);
-  return removed.sort();
+  return removed.sort((a, b) => a.localeCompare(b));
 }

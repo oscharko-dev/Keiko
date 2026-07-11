@@ -303,59 +303,100 @@ function verifyMaterializedReviewState(
   }
 }
 
+// Reports the unchained-entry-after-chained-entries violation, if any. Extracted so
+// verifyQiReviewAuditIntegrity stays under the cognitive-complexity bound.
+const checkUnchainedAuditEntry = (
+  issues: QiReviewAuditIntegrityIssue[],
+  index: number,
+  sawChainedEntry: boolean,
+): void => {
+  if (!sawChainedEntry) return;
+  addIntegrityIssue(
+    issues,
+    index,
+    "MISSING_CHAIN_FIELD",
+    "Unchained audit entry appears after chained entries.",
+  );
+};
+
+const checkAuditSequence = (
+  issues: QiReviewAuditIntegrityIssue[],
+  index: number,
+  entry: QiReviewAuditEntry,
+): void => {
+  const expectedSequence = index + 1;
+  if (entry.sequence === expectedSequence) return;
+  addIntegrityIssue(
+    issues,
+    index,
+    "SEQUENCE_NOT_MONOTONE",
+    `Expected audit sequence ${String(expectedSequence)}, got ${String(entry.sequence)}.`,
+  );
+};
+
+const expectedPriorHashAt = (auditLog: readonly QiReviewAuditEntry[], index: number): string => {
+  const prior = auditLog[index - 1];
+  if (prior === undefined) return GENESIS_AUDIT_HASH;
+  return prior.entryHashSha256Hex ?? hashQiReviewAuditEntry(prior);
+};
+
+const checkAuditPriorHash = (
+  issues: QiReviewAuditIntegrityIssue[],
+  index: number,
+  entry: QiReviewAuditEntry,
+  auditLog: readonly QiReviewAuditEntry[],
+): void => {
+  if (entry.priorHashSha256Hex === expectedPriorHashAt(auditLog, index)) return;
+  addIntegrityIssue(
+    issues,
+    index,
+    "PRIOR_HASH_MISMATCH",
+    "Audit entry prior hash does not match the previous entry.",
+  );
+};
+
+const checkAuditEntryHash = (
+  issues: QiReviewAuditIntegrityIssue[],
+  index: number,
+  entry: QiReviewAuditEntry,
+): void => {
+  const expectedHash = hashQiReviewAuditEntry(entry);
+  if (entry.entryHashSha256Hex === expectedHash) return;
+  addIntegrityIssue(
+    issues,
+    index,
+    "ENTRY_HASH_MISMATCH",
+    "Audit entry hash does not match its content.",
+  );
+};
+
+// Runs the sequence/prior-hash/entry-hash checks for a chained audit entry. Extracted so
+// verifyQiReviewAuditIntegrity stays under the cognitive-complexity bound.
+const checkChainedAuditEntry = (
+  artifact: QiReviewStateArtifact,
+  issues: QiReviewAuditIntegrityIssue[],
+  index: number,
+  entry: QiReviewAuditEntry,
+): void => {
+  checkAuditSequence(issues, index, entry);
+  checkAuditPriorHash(issues, index, entry, artifact.auditLog);
+  checkAuditEntryHash(issues, index, entry);
+};
+
 export const verifyQiReviewAuditIntegrity = (
   artifact: QiReviewStateArtifact,
-  // eslint-disable-next-line max-lines-per-function
 ): QiReviewAuditIntegrityReport => {
   const issues: QiReviewAuditIntegrityIssue[] = [];
   let sawChainedEntry = false;
   for (let index = 0; index < artifact.auditLog.length; index += 1) {
     const entry = artifact.auditLog[index];
     if (entry === undefined) continue;
-    const isChained = hasAnyChainField(entry);
-    if (!isChained) {
-      if (sawChainedEntry) {
-        addIntegrityIssue(
-          issues,
-          index,
-          "MISSING_CHAIN_FIELD",
-          "Unchained audit entry appears after chained entries.",
-        );
-      }
+    if (!hasAnyChainField(entry)) {
+      checkUnchainedAuditEntry(issues, index, sawChainedEntry);
       continue;
     }
     sawChainedEntry = true;
-    const expectedSequence = index + 1;
-    if (entry.sequence !== expectedSequence) {
-      addIntegrityIssue(
-        issues,
-        index,
-        "SEQUENCE_NOT_MONOTONE",
-        `Expected audit sequence ${String(expectedSequence)}, got ${String(entry.sequence)}.`,
-      );
-    }
-    const prior = artifact.auditLog[index - 1];
-    const expectedPrior =
-      prior === undefined
-        ? GENESIS_AUDIT_HASH
-        : (prior.entryHashSha256Hex ?? hashQiReviewAuditEntry(prior));
-    if (entry.priorHashSha256Hex !== expectedPrior) {
-      addIntegrityIssue(
-        issues,
-        index,
-        "PRIOR_HASH_MISMATCH",
-        "Audit entry prior hash does not match the previous entry.",
-      );
-    }
-    const expectedHash = hashQiReviewAuditEntry(entry);
-    if (entry.entryHashSha256Hex !== expectedHash) {
-      addIntegrityIssue(
-        issues,
-        index,
-        "ENTRY_HASH_MISMATCH",
-        "Audit entry hash does not match its content.",
-      );
-    }
+    checkChainedAuditEntry(artifact, issues, index, entry);
   }
   verifyMaterializedReviewState(artifact, issues);
   return { ok: issues.length === 0, issues };
@@ -579,6 +620,32 @@ const stampReviewLockOwner = (fd: number): void => {
   }
 };
 
+// Closes and removes a lock handle that failed mid-acquisition. Extracted so
+// withReviewArtifactLock stays under the cognitive-complexity bound.
+const cleanupFailedLockHandle = (fd: number | undefined, lockPath: string): void => {
+  if (fd === undefined) return;
+  try {
+    closeSync(fd);
+  } catch {
+    // Ignore close failures while unwinding a failed lock holder.
+  }
+  rmSync(lockPath, { force: true });
+};
+
+// Only EEXIST ("another writer already holds the lock") is retryable; anything else is a real
+// failure and must propagate unchanged.
+const assertRetryableLockError = (error: unknown): void => {
+  if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+};
+
+// Reclaim a dead/ownerless lock immediately instead of busy-waiting; a live foreign holder still
+// gets the short poll so real cross-writer contention stays serialised.
+const reclaimDeadReviewLock = (lockPath: string): boolean => {
+  if (!reviewLockOwnerIsDead(lockPath)) return false;
+  rmSync(lockPath, { force: true });
+  return true;
+};
+
 const withReviewArtifactLock = <T>(evidenceDir: string, runId: string, operation: () => T): T => {
   const lockDir = join(evidenceDir, "qi", REVIEW_LOCK_SUBDIR);
   const lockPath = join(lockDir, `${sha256Hex(runId).slice(0, 32)}.lock`);
@@ -595,21 +662,9 @@ const withReviewArtifactLock = <T>(evidenceDir: string, runId: string, operation
         rmSync(lockPath, { force: true });
       }
     } catch (error) {
-      if (fd !== undefined) {
-        try {
-          closeSync(fd);
-        } catch {
-          // Ignore close failures while unwinding a failed lock holder.
-        }
-        rmSync(lockPath, { force: true });
-      }
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      // Reclaim a dead/ownerless lock immediately instead of busy-waiting; a live foreign holder
-      // still gets the short poll so real cross-writer contention stays serialised.
-      if (reviewLockOwnerIsDead(lockPath)) {
-        rmSync(lockPath, { force: true });
-        continue;
-      }
+      cleanupFailedLockHandle(fd, lockPath);
+      assertRetryableLockError(error);
+      if (reclaimDeadReviewLock(lockPath)) continue;
       sleepSync(REVIEW_LOCK_SLEEP_MS);
     }
   }

@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
+import type {
+  CSSProperties,
+  Dispatch,
+  KeyboardEvent,
+  MutableRefObject,
+  ReactNode,
+  SetStateAction,
+} from "react";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
@@ -141,6 +148,90 @@ function binaryPreviewMessage(
   return "No safe text or image preview is available for this file type.";
 }
 
+function resolvePreviewLangLabel(
+  preview: FilesPreviewResponse | null,
+  denied: boolean,
+  error: PreviewError | null,
+): string {
+  if (preview !== null) return previewKindLabel(preview);
+  if (denied) return "denied";
+  if (error !== null) return "error";
+  return "loading";
+}
+
+function resolveHeaderName(
+  preview: FilesPreviewResponse | null,
+  denied: boolean,
+  error: PreviewError | null,
+): string {
+  if (denied) return "Hidden file";
+  return preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview");
+}
+
+function resolveRefreshStatusText(status: PreviewRefreshStatus): string {
+  if (status === "refreshing") return "Refreshing...";
+  if (status === "refreshed") return "Reloaded";
+  if (status === "failed") return "Refresh failed";
+  return "";
+}
+
+function computePreviewLines(
+  preview: FilesPreviewResponse | null,
+  shouldHighlight: boolean,
+): readonly (readonly Token[])[] {
+  if (preview?.kind !== "text") return [];
+  return shouldHighlight
+    ? highlightLines(preview.content, langOf(preview.name))
+    : preview.content.split("\n").map((line): readonly Token[] => [["id", line]]);
+}
+
+// The main load effect below runs on every (root, path, refreshKey) change. These three
+// helpers isolate its state-transition logic so the effect body stays a plain sequence of
+// calls (audit S3776 — cognitive complexity).
+function determineIsManualRefresh(
+  previousTarget: { readonly root: string; readonly path: string } | null,
+  root: string,
+  path: string,
+  refreshKey: number,
+): boolean {
+  const targetChanged =
+    previousTarget === null || previousTarget.root !== root || previousTarget.path !== path;
+  return previousTarget !== null && !targetChanged && refreshKey > 0;
+}
+
+function beginPreviewLoad(
+  isManualRefresh: boolean,
+  setLoading: Dispatch<SetStateAction<boolean>>,
+  setError: Dispatch<SetStateAction<PreviewError | null>>,
+  setRefreshStatus: Dispatch<SetStateAction<PreviewRefreshStatus>>,
+  setPreview: Dispatch<SetStateAction<FilesPreviewResponse | null>>,
+): void {
+  setLoading(true);
+  setError(null);
+  setRefreshStatus(isManualRefresh ? "refreshing" : "idle");
+  if (!isManualRefresh) setPreview(null);
+}
+
+function applyPreviewSuccess(
+  response: FilesPreviewResponse,
+  isManualRefresh: boolean,
+  setPreview: Dispatch<SetStateAction<FilesPreviewResponse | null>>,
+  setRefreshStatus: Dispatch<SetStateAction<PreviewRefreshStatus>>,
+): void {
+  setPreview(response);
+  if (isManualRefresh) setRefreshStatus("refreshed");
+}
+
+function applyPreviewFailure(
+  err: unknown,
+  isManualRefresh: boolean,
+  setError: Dispatch<SetStateAction<PreviewError | null>>,
+  setRefreshStatus: Dispatch<SetStateAction<PreviewRefreshStatus>>,
+): void {
+  setError(classifyError(err));
+  if (isManualRefresh) setRefreshStatus("failed");
+}
+
 function MetadataRow({
   label,
   value,
@@ -152,6 +243,290 @@ function MetadataRow({
     <div className="fpv-meta-row">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+interface FilePreviewBarProps {
+  readonly root: string;
+  readonly path: string;
+  readonly preview: FilesPreviewResponse | null;
+  readonly denied: boolean;
+  readonly headerName: string;
+  readonly headerTitle: string;
+  readonly lang: string;
+  readonly copyStatus: string | null;
+  readonly loading: boolean;
+  readonly refreshStatus: PreviewRefreshStatus;
+  readonly refreshStatusText: string;
+  readonly canOpenInEditor: boolean;
+  readonly onCopyMetadata: (target: MetadataCopyTarget) => void;
+  readonly onRefresh: () => void;
+  readonly onOpenInEditor: ((root: string, path: string) => void) | undefined;
+  readonly onClose: () => void;
+  readonly backRef: MutableRefObject<HTMLButtonElement | null>;
+}
+
+// The header bar's action cluster (copy buttons, refresh, open-in-editor, close) — split out
+// of FilePreview so its several independent `? ... : null` toggles don't compound the parent
+// component's cognitive complexity (audit S3776).
+function FilePreviewBar({
+  root,
+  path,
+  preview,
+  denied,
+  headerName,
+  headerTitle,
+  lang,
+  copyStatus,
+  loading,
+  refreshStatus,
+  refreshStatusText,
+  canOpenInEditor,
+  onCopyMetadata,
+  onRefresh,
+  onOpenInEditor,
+  onClose,
+  backRef,
+}: FilePreviewBarProps): ReactNode {
+  return (
+    <div className="fpv-bar">
+      <button
+        className="fpv-back"
+        type="button"
+        ref={backRef}
+        onClick={onClose}
+        title="Back to files"
+        aria-label="Back to files"
+      >
+        <Icons.back size={15} />
+      </button>
+      <FileIcon name={denied || preview === null ? "" : preview.name} />
+      <span className="fpv-name" title={headerTitle}>
+        {headerName}
+      </span>
+      {preview !== null ? (
+        <>
+          <button
+            className="fpv-back fpv-copy"
+            type="button"
+            onClick={() => onCopyMetadata("name")}
+            title="Copy file name"
+            aria-label="Copy file name"
+          >
+            <Icons.copy size={13} />
+          </button>
+          <button
+            className="fpv-back fpv-copy"
+            type="button"
+            onClick={() => onCopyMetadata("path")}
+            title="Copy file path"
+            aria-label="Copy file path"
+          >
+            <Icons.copy size={13} />
+          </button>
+        </>
+      ) : null}
+      <span className="fpv-lang mono">{lang}</span>
+      <span className="spacer" />
+      {copyStatus !== null ? (
+        <span
+          className="fpv-status fpv-copy-status"
+          role={copyStatus === "Clipboard access failed." ? "alert" : "status"}
+          aria-live="polite"
+        >
+          {copyStatus}
+        </span>
+      ) : null}
+      <button
+        className="fpv-back fpv-refresh"
+        type="button"
+        onClick={onRefresh}
+        disabled={loading}
+        data-state={refreshStatus}
+        title={loading ? "Refreshing preview" : "Refresh preview"}
+        aria-label={loading ? "Refreshing preview" : "Refresh preview"}
+      >
+        <Icons.reset size={14} />
+      </button>
+      {refreshStatusText.length > 0 ? (
+        <span
+          className="fpv-status mono"
+          data-state={refreshStatus}
+          role="status"
+          aria-live="polite"
+        >
+          {refreshStatusText}
+        </span>
+      ) : null}
+      {canOpenInEditor ? (
+        <button
+          className="fpv-back"
+          type="button"
+          onClick={() => onOpenInEditor?.(root, path)}
+          title="Open in editor"
+          aria-label="Open in editor"
+        >
+          <Icons.editor size={15} />
+        </button>
+      ) : null}
+      <button
+        className="fpv-back"
+        type="button"
+        onClick={onClose}
+        title="Close preview"
+        aria-label="Close preview"
+      >
+        <Icons.close size={15} />
+      </button>
+    </div>
+  );
+}
+
+interface FilePreviewStatusBlockProps {
+  readonly loading: boolean;
+  readonly preview: FilesPreviewResponse | null;
+  readonly error: PreviewError | null;
+  readonly onRetry: () => void;
+}
+
+// Loading and error surfaces — the error branch nests a conditional Retry button, which is
+// exactly the kind of nested-ternary shape that inflates cognitive complexity in place.
+function FilePreviewStatusBlock({
+  loading,
+  preview,
+  error,
+  onRetry,
+}: FilePreviewStatusBlockProps): ReactNode {
+  return (
+    <>
+      {loading && preview === null ? (
+        <div className="fpv-state" role="status">
+          Loading preview…
+        </div>
+      ) : null}
+      {error !== null ? (
+        <div className="fpv-state fpv-error" role="alert">
+          <span>{error.message}</span>
+          {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
+          {!error.denied ? (
+            <button type="button" className="fpv-retry" onClick={onRetry}>
+              Retry
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+interface FilePreviewTextBodyProps {
+  readonly preview: Extract<FilesPreviewResponse, { readonly kind: "text" }>;
+  readonly lines: readonly (readonly Token[])[];
+  readonly visibleLines: readonly (readonly Token[])[];
+  readonly hiddenLineCount: number;
+  readonly shouldHighlight: boolean;
+  readonly onShowMore: () => void;
+}
+
+// Text-kind preview body: truncation/highlight banners, the windowed code pane, and the
+// "show more lines" control (GEN-PERF-WIDGET-005).
+function FilePreviewTextBody({
+  preview,
+  lines,
+  visibleLines,
+  hiddenLineCount,
+  shouldHighlight,
+  onShowMore,
+}: FilePreviewTextBodyProps): ReactNode {
+  return (
+    <>
+      {preview.truncated ? (
+        <div className="fpv-banner">
+          Preview truncated at {formatBytes(preview.maxBytes)}. Larger files can&apos;t be shown in
+          full here.
+        </div>
+      ) : null}
+      {!shouldHighlight ? (
+        <div className="fpv-banner">Syntax highlighting disabled for large previews.</div>
+      ) : null}
+      <div
+        className="fpv-code mono"
+        // Scrollable code pane: tabIndex makes the overflow region keyboard-scrollable
+        // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+        role="region"
+        aria-label={`File preview: ${preview.name}`}
+        // The 44px default gutter fits 4 digits; previews under MAX_HIGHLIGHT_BYTES can
+        // exceed 9,999 lines, so the gutter grows with the widest line number instead of
+        // overflowing its fixed box (audit F044 C351). 16px = the gutter's padding-right.
+        style={
+          {
+            "--fpv-gutter-w": `max(44px, calc(${String(String(lines.length).length)}ch + 16px))`,
+          } as CSSProperties
+        }
+      >
+        {visibleLines.map((toks, i) => (
+          <div className="fpv-line" key={i}>
+            <span className="fpv-num">{i + 1}</span>
+            <span className="fpv-src">
+              {toks.map((t, j) => (
+                <span key={j} className={`hl-${t[0]}`}>
+                  {t[1]}
+                </span>
+              ))}
+            </span>
+          </div>
+        ))}
+        {hiddenLineCount > 0 ? (
+          <button type="button" className="fpv-retry fpv-show-more" onClick={onShowMore}>
+            Show {Math.min(PREVIEW_LINE_BATCH, hiddenLineCount)} more lines
+          </button>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+interface FilePreviewImageBodyProps {
+  readonly preview: Extract<FilesPreviewResponse, { readonly kind: "image" }>;
+}
+
+function FilePreviewImageBody({ preview }: FilePreviewImageBodyProps): ReactNode {
+  return (
+    <div className="fpv-image-pane">
+      <div className="fpv-image-card">
+        {/* eslint-disable-next-line @next/next/no-img-element -- local BFF streams a size-capped image preview */}
+        <img className="fpv-image" src={preview.url} alt={preview.name} />
+      </div>
+      <div className="fpv-meta">
+        <MetadataRow label="Type" value={preview.mime} />
+        <MetadataRow label="Size" value={formatBytes(preview.sizeBytes)} />
+        <MetadataRow label="Modified" value={formatDate(preview.modifiedAt)} />
+      </div>
+    </div>
+  );
+}
+
+interface FilePreviewBinaryBodyProps {
+  readonly preview: Extract<FilesPreviewResponse, { readonly kind: "binary" }>;
+}
+
+function FilePreviewBinaryBody({ preview }: FilePreviewBinaryBodyProps): ReactNode {
+  return (
+    <div className="fpv-meta-pane">
+      <div className="fpv-meta-card">
+        <FileIcon name={preview.name} />
+        <h3>{preview.name}</h3>
+        <p>{binaryPreviewMessage(preview)}</p>
+        <div className="fpv-meta">
+          <MetadataRow label="Type" value={preview.mime} />
+          <MetadataRow label="Extension" value={preview.extension ?? "none"} />
+          <MetadataRow label="Size" value={formatBytes(preview.sizeBytes)} />
+          <MetadataRow label="Modified" value={formatDate(preview.modifiedAt)} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -185,28 +560,18 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   useEffect(() => {
     let cancelled = false;
     const previousTarget = loadTargetRef.current;
-    const targetChanged =
-      previousTarget === null || previousTarget.root !== root || previousTarget.path !== path;
-    const isManualRefresh = previousTarget !== null && !targetChanged && refreshKey > 0;
+    const isManualRefresh = determineIsManualRefresh(previousTarget, root, path, refreshKey);
     loadTargetRef.current = { root, path };
 
-    setLoading(true);
-    setError(null);
-    setRefreshStatus(isManualRefresh ? "refreshing" : "idle");
-    if (!isManualRefresh) setPreview(null);
+    beginPreviewLoad(isManualRefresh, setLoading, setError, setRefreshStatus, setPreview);
 
     void fetchFilesPreview(root, path)
       .then((response) => {
-        if (!cancelled) {
-          setPreview(response);
-          if (isManualRefresh) setRefreshStatus("refreshed");
-        }
+        if (!cancelled)
+          applyPreviewSuccess(response, isManualRefresh, setPreview, setRefreshStatus);
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
-          setError(classifyError(err));
-          if (isManualRefresh) setRefreshStatus("failed");
-        }
+        if (!cancelled) applyPreviewFailure(err, isManualRefresh, setError, setRefreshStatus);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -234,36 +599,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
   };
 
   const denied = error?.denied === true;
-  const lang =
-    preview !== null
-      ? previewKindLabel(preview)
-      : denied
-        ? "denied"
-        : error !== null
-          ? "error"
-          : "loading";
-  const headerName = denied
-    ? "Hidden file"
-    : (preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview"));
+  const lang = resolvePreviewLangLabel(preview, denied, error);
+  const headerName = resolveHeaderName(preview, denied, error);
   const headerTitle = headerName;
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
   const canOpenInEditor =
     onOpenInEditor !== undefined && preview?.kind === "text" && !preview.truncated;
-  const refreshStatusText =
-    refreshStatus === "refreshing"
-      ? "Refreshing..."
-      : refreshStatus === "refreshed"
-        ? "Reloaded"
-        : refreshStatus === "failed"
-          ? "Refresh failed"
-          : "";
+  const refreshStatusText = resolveRefreshStatusText(refreshStatus);
   const lines: readonly (readonly Token[])[] = useMemo(
-    () =>
-      preview?.kind === "text"
-        ? shouldHighlight
-          ? highlightLines(preview.content, langOf(preview.name))
-          : preview.content.split("\n").map((line): readonly Token[] => [["id", line]])
-        : [],
+    () => computePreviewLines(preview, shouldHighlight),
     [preview, shouldHighlight],
   );
 
@@ -284,198 +628,49 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     // container, not a standalone interaction — static-element-interactions does not apply.
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div className="fpv" onKeyDown={onPreviewKeyDown}>
-      <div className="fpv-bar">
-        <button
-          className="fpv-back"
-          type="button"
-          ref={backRef}
-          onClick={onClose}
-          title="Back to files"
-          aria-label="Back to files"
-        >
-          <Icons.back size={15} />
-        </button>
-        <FileIcon name={denied || preview === null ? "" : preview.name} />
-        <span className="fpv-name" title={headerTitle}>
-          {headerName}
-        </span>
-        {preview !== null ? (
-          <>
-            <button
-              className="fpv-back fpv-copy"
-              type="button"
-              onClick={() => copyMetadata("name")}
-              title="Copy file name"
-              aria-label="Copy file name"
-            >
-              <Icons.copy size={13} />
-            </button>
-            <button
-              className="fpv-back fpv-copy"
-              type="button"
-              onClick={() => copyMetadata("path")}
-              title="Copy file path"
-              aria-label="Copy file path"
-            >
-              <Icons.copy size={13} />
-            </button>
-          </>
-        ) : null}
-        <span className="fpv-lang mono">{lang}</span>
-        <span className="spacer" />
-        {copyStatus !== null ? (
-          <span
-            className="fpv-status fpv-copy-status"
-            role={copyStatus === "Clipboard access failed." ? "alert" : "status"}
-            aria-live="polite"
-          >
-            {copyStatus}
-          </span>
-        ) : null}
-        <button
-          className="fpv-back fpv-refresh"
-          type="button"
-          onClick={refreshPreview}
-          disabled={loading}
-          data-state={refreshStatus}
-          title={loading ? "Refreshing preview" : "Refresh preview"}
-          aria-label={loading ? "Refreshing preview" : "Refresh preview"}
-        >
-          <Icons.reset size={14} />
-        </button>
-        {refreshStatusText.length > 0 ? (
-          <span
-            className="fpv-status mono"
-            data-state={refreshStatus}
-            role="status"
-            aria-live="polite"
-          >
-            {refreshStatusText}
-          </span>
-        ) : null}
-        {canOpenInEditor ? (
-          <button
-            className="fpv-back"
-            type="button"
-            onClick={() => onOpenInEditor(root, path)}
-            title="Open in editor"
-            aria-label="Open in editor"
-          >
-            <Icons.editor size={15} />
-          </button>
-        ) : null}
-        <button
-          className="fpv-back"
-          type="button"
-          onClick={onClose}
-          title="Close preview"
-          aria-label="Close preview"
-        >
-          <Icons.close size={15} />
-        </button>
-      </div>
+      <FilePreviewBar
+        root={root}
+        path={path}
+        preview={preview}
+        denied={denied}
+        headerName={headerName}
+        headerTitle={headerTitle}
+        lang={lang}
+        copyStatus={copyStatus}
+        loading={loading}
+        refreshStatus={refreshStatus}
+        refreshStatusText={refreshStatusText}
+        canOpenInEditor={canOpenInEditor}
+        onCopyMetadata={copyMetadata}
+        onRefresh={refreshPreview}
+        onOpenInEditor={onOpenInEditor}
+        onClose={onClose}
+        backRef={backRef}
+      />
 
-      {loading && preview === null ? (
-        <div className="fpv-state" role="status">
-          Loading preview…
-        </div>
-      ) : null}
-      {error !== null ? (
-        <div className="fpv-state fpv-error" role="alert">
-          <span>{error.message}</span>
-          {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
-          {!error.denied ? (
-            <button type="button" className="fpv-retry" onClick={refreshPreview}>
-              Retry
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <FilePreviewStatusBlock
+        loading={loading}
+        preview={preview}
+        error={error}
+        onRetry={refreshPreview}
+      />
 
       {preview?.kind === "text" ? (
-        <>
-          {preview.truncated ? (
-            <div className="fpv-banner">
-              Preview truncated at {formatBytes(preview.maxBytes)}. Larger files can&apos;t be shown
-              in full here.
-            </div>
-          ) : null}
-          {!shouldHighlight ? (
-            <div className="fpv-banner">Syntax highlighting disabled for large previews.</div>
-          ) : null}
-          <div
-            className="fpv-code mono"
-            // Scrollable code pane: tabIndex makes the overflow region keyboard-scrollable
-            // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
-            tabIndex={0}
-            role="region"
-            aria-label={`File preview: ${preview.name}`}
-            // The 44px default gutter fits 4 digits; previews under MAX_HIGHLIGHT_BYTES can
-            // exceed 9,999 lines, so the gutter grows with the widest line number instead of
-            // overflowing its fixed box (audit F044 C351). 16px = the gutter's padding-right.
-            style={
-              {
-                "--fpv-gutter-w": `max(44px, calc(${String(String(lines.length).length)}ch + 16px))`,
-              } as CSSProperties
-            }
-          >
-            {visibleLines.map((toks, i) => (
-              <div className="fpv-line" key={i}>
-                <span className="fpv-num">{i + 1}</span>
-                <span className="fpv-src">
-                  {toks.map((t, j) => (
-                    <span key={j} className={`hl-${t[0]}`}>
-                      {t[1]}
-                    </span>
-                  ))}
-                </span>
-              </div>
-            ))}
-            {hiddenLineCount > 0 ? (
-              <button
-                type="button"
-                className="fpv-retry fpv-show-more"
-                onClick={() =>
-                  setVisibleLineCount((count) => Math.min(lines.length, count + PREVIEW_LINE_BATCH))
-                }
-              >
-                Show {Math.min(PREVIEW_LINE_BATCH, hiddenLineCount)} more lines
-              </button>
-            ) : null}
-          </div>
-        </>
+        <FilePreviewTextBody
+          preview={preview}
+          lines={lines}
+          visibleLines={visibleLines}
+          hiddenLineCount={hiddenLineCount}
+          shouldHighlight={shouldHighlight}
+          onShowMore={() =>
+            setVisibleLineCount((count) => Math.min(lines.length, count + PREVIEW_LINE_BATCH))
+          }
+        />
       ) : null}
 
-      {preview?.kind === "image" ? (
-        <div className="fpv-image-pane">
-          <div className="fpv-image-card">
-            {/* eslint-disable-next-line @next/next/no-img-element -- local BFF streams a size-capped image preview */}
-            <img className="fpv-image" src={preview.url} alt={preview.name} />
-          </div>
-          <div className="fpv-meta">
-            <MetadataRow label="Type" value={preview.mime} />
-            <MetadataRow label="Size" value={formatBytes(preview.sizeBytes)} />
-            <MetadataRow label="Modified" value={formatDate(preview.modifiedAt)} />
-          </div>
-        </div>
-      ) : null}
+      {preview?.kind === "image" ? <FilePreviewImageBody preview={preview} /> : null}
 
-      {preview?.kind === "binary" ? (
-        <div className="fpv-meta-pane">
-          <div className="fpv-meta-card">
-            <FileIcon name={preview.name} />
-            <h3>{preview.name}</h3>
-            <p>{binaryPreviewMessage(preview)}</p>
-            <div className="fpv-meta">
-              <MetadataRow label="Type" value={preview.mime} />
-              <MetadataRow label="Extension" value={preview.extension ?? "none"} />
-              <MetadataRow label="Size" value={formatBytes(preview.sizeBytes)} />
-              <MetadataRow label="Modified" value={formatDate(preview.modifiedAt)} />
-            </div>
-          </div>
-        </div>
-      ) : null}
+      {preview?.kind === "binary" ? <FilePreviewBinaryBody preview={preview} /> : null}
     </div>
   );
 }

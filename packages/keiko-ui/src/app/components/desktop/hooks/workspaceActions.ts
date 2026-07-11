@@ -1278,7 +1278,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const cleaned = parsed
         .filter((value): value is string => typeof value === "string" && value.trim() !== "")
         .map((value) => value.trim());
-      return [...new Set(cleaned)].sort();
+      return [...new Set(cleaned)].sort((a, b) => a.localeCompare(b));
     } catch {
       return [];
     }

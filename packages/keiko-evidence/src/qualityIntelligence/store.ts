@@ -78,7 +78,7 @@ export function createInMemoryQualityIntelligenceLocalStore(): QualityIntelligen
       assertValidRunId(runId);
       return data.get(runId);
     },
-    list: (): readonly string[] => [...data.keys()].sort(),
+    list: (): readonly string[] => [...data.keys()].sort((a, b) => a.localeCompare(b)),
     location: (runId: string): string => {
       assertValidRunId(runId);
       return `${runId}${QI_MANIFEST_SUFFIX}`;
@@ -156,7 +156,7 @@ function listQiRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
       `cannot list QI manifests: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  return runIds.sort();
+  return runIds.sort((a, b) => a.localeCompare(b));
 }
 
 function atomicWriteQiManifest(target: string, json: string, randomSuffix: () => string): void {

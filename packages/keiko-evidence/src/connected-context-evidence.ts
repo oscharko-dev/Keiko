@@ -159,7 +159,7 @@ function toolsUsed(pack: ConnectedContextPack, redact: Redactor): readonly strin
       tools.add(redactString(redact, excerpt.atom.provenance.tool));
     }
   }
-  return [...tools].sort();
+  return [...tools].sort((a, b) => a.localeCompare(b));
 }
 
 function scopeOf(
@@ -204,7 +204,7 @@ function planOf(
       anchorKinds[anchor.kind] = (anchorKinds[anchor.kind] ?? 0) + 1;
       return sha256Hex(redactString(redact, anchor.term));
     })
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
   return {
     planIdHash: sha256Hex(redactString(redact, input.plan.planId)),
     state: input.plan.state,
@@ -213,7 +213,7 @@ function planOf(
     anchorCount: anchorTermHashes.length,
     anchorKinds,
     anchorTermHashes,
-    ringKinds: rings.map((ring) => ring.kind).sort(),
+    ringKinds: rings.map((ring) => ring.kind).sort((a, b) => a.localeCompare(b)),
     clarificationReason:
       typeof input.plan.clarification?.reason === "string"
         ? input.plan.clarification.reason

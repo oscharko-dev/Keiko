@@ -12,7 +12,7 @@
 // See ADR-0098 for the git-client window conventions (layout contract, vocabulary, seam boundaries).
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import type {
   GitChangedFile,
@@ -83,6 +83,34 @@ function normalizeDiffScopeForChange(current: GitDiffScope, change: GitChangedFi
     return "worktree";
   }
   return current;
+}
+
+// Resolves the next selected history commit after a history load: honours a pending commit
+// deep-link, falls back to keeping the current selection if it still exists, then the newest entry.
+function resolveSelectedCommitSha(
+  entries: readonly GitHistoryEntry[],
+  requestedCommit: string | undefined,
+  hasRequestedCommit: boolean,
+  current: string | null,
+): string | null {
+  if (entries.length === 0) return null;
+  if (requestedCommit !== undefined) return hasRequestedCommit ? requestedCommit : null;
+  if (current !== null && entries.some((entry) => entry.sha === current)) return current;
+  return entries[0]?.sha ?? null;
+}
+
+// Re-validates the selected change path after a status load and, when it still exists, renormalizes
+// the diff scope for the (possibly updated) staged/unstaged state of that change.
+function applyChangePathSelection(
+  changes: readonly GitChangedFile[],
+  prev: string | null,
+  setDiffScope: Dispatch<SetStateAction<GitDiffScope>>,
+): string | null {
+  if (prev === null) return null;
+  const selectedChange = changes.find((c) => c.path === prev);
+  if (selectedChange === undefined) return null;
+  setDiffScope((current) => normalizeDiffScopeForChange(current, selectedChange));
+  return prev;
 }
 
 function ownerRepoFromRemoteUrl(value: string | undefined): string | undefined {
@@ -382,13 +410,9 @@ export function GitClientWindow({
         setHistoryError(
           hasRequestedCommit ? null : "The requested commit is not available in bounded history.",
         );
-        setSelectedCommitSha((current) => {
-          if (res.entries.length === 0) return null;
-          if (requestedCommit !== undefined) return hasRequestedCommit ? requestedCommit : null;
-          if (current !== null && res.entries.some((entry) => entry.sha === current))
-            return current;
-          return res.entries[0]?.sha ?? null;
-        });
+        setSelectedCommitSha((current) =>
+          resolveSelectedCommitSha(res.entries, requestedCommit, hasRequestedCommit, current),
+        );
       },
       (err: unknown) => {
         if (cancelled) return;
@@ -421,13 +445,7 @@ export function GitClientWindow({
         setStatus(res);
         setStatusProjectKey(selectedPath);
         setStatusLoading(false);
-        setSelectedChangePath((prev) => {
-          if (prev === null) return null;
-          const selectedChange = res.changes.find((c) => c.path === prev);
-          if (selectedChange === undefined) return null;
-          setDiffScope((current) => normalizeDiffScopeForChange(current, selectedChange));
-          return prev;
-        });
+        setSelectedChangePath((prev) => applyChangePathSelection(res.changes, prev, setDiffScope));
       },
       (err: unknown) => {
         if (cancelled) return;

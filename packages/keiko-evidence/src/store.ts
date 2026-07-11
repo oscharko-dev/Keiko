@@ -89,7 +89,7 @@ export function createInMemoryEvidenceStore(): EvidenceStore {
       data.set(runId, next);
       return `${runId}${MANIFEST_SUFFIX}`;
     },
-    list: (): readonly string[] => [...data.keys()].sort(),
+    list: (): readonly string[] => [...data.keys()].sort((a, b) => a.localeCompare(b)),
     get: (runId: string): string | undefined => {
       assertValidRunId(runId);
       return data.get(runId);
@@ -183,7 +183,7 @@ function listManifestRunIds(
       `cannot list evidence manifests: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  return runIds.sort();
+  return runIds.sort((a, b) => a.localeCompare(b));
 }
 
 function atomicWrite(target: string, json: string, randomSuffix: () => string): void {

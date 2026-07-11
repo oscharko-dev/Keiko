@@ -380,7 +380,7 @@ function scriptNames(record: Record<string, unknown> | undefined): readonly stri
     .filter(([, value]) => typeof value === "string")
     .map(([name]) => name)
     .filter((name) => name.length > 0 && name.length <= 120)
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function isLifecycleWrapper(lowerName: string, needle: string): boolean {

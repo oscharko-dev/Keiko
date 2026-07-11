@@ -235,7 +235,7 @@ export function sameRealPath(left: string, right: string): boolean {
 }
 
 function readdirSafe(path: string): readonly string[] {
-  return existsSync(path) ? [...new Set(readdirSync(path))].sort() : [];
+  return existsSync(path) ? [...new Set(readdirSync(path))].sort((a, b) => a.localeCompare(b)) : [];
 }
 
 function copyTreeSafe(source: string, destination: string): void {

@@ -584,36 +584,28 @@ export const CODING_WORKBENCH_PROJECTIONS = Object.freeze({
   }),
 } as const);
 
+const PROJECTION_BY_STATE: ReadonlyMap<string, CodingWorkbenchProjection> = new Map([
+  ["running", CODING_WORKBENCH_PROJECTIONS.running],
+  ["approval-required", CODING_WORKBENCH_PROJECTIONS.approvalRequired],
+  ["supervised-approval-required", CODING_WORKBENCH_PROJECTIONS.supervisedApprovalRequired],
+  ["supervised-approved", CODING_WORKBENCH_PROJECTIONS.supervisedApproved],
+  ["supervised-denied", CODING_WORKBENCH_PROJECTIONS.supervisedDenied],
+  ["supervised-stopped", CODING_WORKBENCH_PROJECTIONS.supervisedStopped],
+  ["supervised-failed", CODING_WORKBENCH_PROJECTIONS.supervisedFailed],
+  ["blocked", CODING_WORKBENCH_PROJECTIONS.blocked],
+  ["governed-assist", CODING_WORKBENCH_PROJECTIONS.governedAssist],
+  ["governed-assist-blocked", CODING_WORKBENCH_PROJECTIONS.governedAssistBlocked],
+  ["autonomous-confirmed", CODING_WORKBENCH_PROJECTIONS.autonomousConfirmed],
+  ["autonomous-policy-blocked", CODING_WORKBENCH_PROJECTIONS.autonomousPolicyBlocked],
+  ["autonomous-verification-failed", CODING_WORKBENCH_PROJECTIONS.autonomousVerificationFailed],
+  ["autonomous-completed", CODING_WORKBENCH_PROJECTIONS.autonomousCompleted],
+  ["failed", CODING_WORKBENCH_PROJECTIONS.failed],
+  ["completed", CODING_WORKBENCH_PROJECTIONS.completed],
+]);
+
 export function codingWorkbenchProjectionForState(
   state: string | undefined,
 ): CodingWorkbenchProjection {
-  if (state === "running") return CODING_WORKBENCH_PROJECTIONS.running;
-  if (state === "approval-required") return CODING_WORKBENCH_PROJECTIONS.approvalRequired;
-  if (state === "supervised-approval-required") {
-    return CODING_WORKBENCH_PROJECTIONS.supervisedApprovalRequired;
-  }
-  if (state === "supervised-approved") return CODING_WORKBENCH_PROJECTIONS.supervisedApproved;
-  if (state === "supervised-denied") return CODING_WORKBENCH_PROJECTIONS.supervisedDenied;
-  if (state === "supervised-stopped") return CODING_WORKBENCH_PROJECTIONS.supervisedStopped;
-  if (state === "supervised-failed") return CODING_WORKBENCH_PROJECTIONS.supervisedFailed;
-  if (state === "blocked") return CODING_WORKBENCH_PROJECTIONS.blocked;
-  if (state === "governed-assist") return CODING_WORKBENCH_PROJECTIONS.governedAssist;
-  if (state === "governed-assist-blocked") {
-    return CODING_WORKBENCH_PROJECTIONS.governedAssistBlocked;
-  }
-  if (state === "autonomous-confirmed") {
-    return CODING_WORKBENCH_PROJECTIONS.autonomousConfirmed;
-  }
-  if (state === "autonomous-policy-blocked") {
-    return CODING_WORKBENCH_PROJECTIONS.autonomousPolicyBlocked;
-  }
-  if (state === "autonomous-verification-failed") {
-    return CODING_WORKBENCH_PROJECTIONS.autonomousVerificationFailed;
-  }
-  if (state === "autonomous-completed") {
-    return CODING_WORKBENCH_PROJECTIONS.autonomousCompleted;
-  }
-  if (state === "failed") return CODING_WORKBENCH_PROJECTIONS.failed;
-  if (state === "completed") return CODING_WORKBENCH_PROJECTIONS.completed;
-  return CODING_WORKBENCH_PROJECTIONS.empty;
+  if (state === undefined) return CODING_WORKBENCH_PROJECTIONS.empty;
+  return PROJECTION_BY_STATE.get(state) ?? CODING_WORKBENCH_PROJECTIONS.empty;
 }

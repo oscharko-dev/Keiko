@@ -115,6 +115,7 @@ import {
   DEFAULT_INDEXING_CONCURRENCY,
   IndexingError,
   type ChunkToEmbed,
+  type EmbedBatchResult,
   type IndexingEvent,
   type IndexingOptions,
   type IndexingResult,
@@ -763,57 +764,67 @@ function recordCancellationIfRequested(state: RunState, errors: IndexingJobError
   }
 }
 
-// eslint-disable-next-line max-lines-per-function
-async function embedDocumentChunks(
+function contextualRetrievalFailureResult(): EmbedDocumentResult {
+  return {
+    vectorCount: 0,
+    errors: [
+      {
+        code: "CONTEXTUAL_RETRIEVAL_FAILED",
+        message: "contextual retrieval generation failed",
+      },
+    ],
+    lastChunkId: null,
+  };
+}
+
+async function prepareChunksToEmbedSafely(
   state: RunState,
   documentId: DocumentId,
-  source: KnowledgeSource,
-  relativePath: string,
-): Promise<EmbedDocumentResult> {
-  // Text-like documents are re-read from disk; binary parsers persist a normalized text
-  // projection so chunk slicing stays aligned with extracted content.
-  const sourceText = resolveChunkSourceText(state, documentId, source, relativePath);
-  let chunks: readonly ChunkToEmbed[];
+  sourceText: string,
+): Promise<readonly ChunkToEmbed[] | null> {
   try {
-    chunks = await prepareChunksToEmbed(state, documentId, sourceText);
+    return await prepareChunksToEmbed(state, documentId, sourceText);
   } catch {
-    return {
-      vectorCount: 0,
-      errors: [
-        {
-          code: "CONTEXTUAL_RETRIEVAL_FAILED",
-          message: "contextual retrieval generation failed",
-        },
-      ],
-      lastChunkId: null,
-    };
+    return null;
   }
-  replaceLexicalRowsForChunks(state, documentId, chunks);
-  if (chunks.length === 0) {
-    return { vectorCount: 0, errors: [], lastChunkId: null };
-  }
-  const batches = sliceIntoBatches(chunks, state.batchSize);
+}
+
+function lastChunkIdOfBatch(vectors: EmbedBatchResult["vectors"]): ChunkId | null {
+  if (vectors.length === 0) return null;
+  const last = vectors[vectors.length - 1];
+  return last === undefined ? null : last.chunkId;
+}
+
+async function embedOneChunkBatch(
+  state: RunState,
+  batch: readonly ChunkToEmbed[],
+): Promise<EmbedBatchResult> {
+  return embedChunkBatch(batch, {
+    adapter: state.options.embeddingAdapter,
+    store: state.options.store,
+    pinnedIdentity: state.capsule.embeddingModelIdentity,
+    concurrency: state.concurrency,
+    ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+    now: state.now,
+    idSource: state.idSource,
+    tokenizer: state.tokenizer,
+  });
+}
+
+async function embedChunkBatches(
+  state: RunState,
+  batches: readonly (readonly ChunkToEmbed[])[],
+): Promise<EmbedDocumentResult> {
   const errors: IndexingJobError[] = [];
   let vectorCount = 0;
   let lastChunkId: ChunkId | null = null;
   for (const batch of batches) {
     if (cancellationRequested(state)) break;
-    const result = await embedChunkBatch(batch, {
-      adapter: state.options.embeddingAdapter,
-      store: state.options.store,
-      pinnedIdentity: state.capsule.embeddingModelIdentity,
-      concurrency: state.concurrency,
-      ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
-      now: state.now,
-      idSource: state.idSource,
-      tokenizer: state.tokenizer,
-    });
+    const result = await embedOneChunkBatch(state, batch);
     vectorCount += result.vectors.length;
     errors.push(...result.errors);
-    if (result.vectors.length > 0) {
-      const last = result.vectors[result.vectors.length - 1];
-      if (last !== undefined) lastChunkId = last.chunkId;
-    }
+    const batchLastChunkId = lastChunkIdOfBatch(result.vectors);
+    if (batchLastChunkId !== null) lastChunkId = batchLastChunkId;
     // Identity-incompatibility is detected by the batcher — stop emitting further batches
     // for this document so the orchestrator can mark the whole job failed.
     if (result.errors.some((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY")) {
@@ -823,6 +834,27 @@ async function embedDocumentChunks(
   }
   recordCancellationIfRequested(state, errors);
   return { vectorCount, errors, lastChunkId };
+}
+
+async function embedDocumentChunks(
+  state: RunState,
+  documentId: DocumentId,
+  source: KnowledgeSource,
+  relativePath: string,
+): Promise<EmbedDocumentResult> {
+  // Text-like documents are re-read from disk; binary parsers persist a normalized text
+  // projection so chunk slicing stays aligned with extracted content.
+  const sourceText = resolveChunkSourceText(state, documentId, source, relativePath);
+  const chunks = await prepareChunksToEmbedSafely(state, documentId, sourceText);
+  if (chunks === null) {
+    return contextualRetrievalFailureResult();
+  }
+  replaceLexicalRowsForChunks(state, documentId, chunks);
+  if (chunks.length === 0) {
+    return { vectorCount: 0, errors: [], lastChunkId: null };
+  }
+  const batches = sliceIntoBatches(chunks, state.batchSize);
+  return embedChunkBatches(state, batches);
 }
 
 // ─── Document handlers ────────────────────────────────────────────────────────

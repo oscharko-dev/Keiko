@@ -88,7 +88,7 @@ function listPrivateWorkspacePackages() {
       workspaces.push(manifest.name);
     }
   }
-  return workspaces.sort();
+  return workspaces.sort((a, b) => a.localeCompare(b));
 }
 
 function assertCspHashesMatchStaticHtml() {
@@ -264,7 +264,7 @@ async function assertRootPublicApiContract(paths) {
   const url = pathToFileURL(resolve("dist/index.js")).href;
   const currentContract = {
     packageExports,
-    runtimeExports: Object.keys(await import(url)).sort(),
+    runtimeExports: Object.keys(await import(url)).sort((a, b) => a.localeCompare(b)),
     declarationExports: collectTypeExports(resolve("dist/index.d.ts")),
   };
   if (WRITE_CONTRACT) {
@@ -316,7 +316,7 @@ function collectExportTargets(exportsField) {
     }
   }
   visit(exportsField);
-  return [...targets].sort();
+  return [...targets].sort((a, b) => a.localeCompare(b));
 }
 
 function assertBundledWorkspaceExportArtifacts(paths) {

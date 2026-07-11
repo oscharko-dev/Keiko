@@ -143,11 +143,11 @@ export function applyQualityIntelligenceRetention(
     decisions.push(...decideOneBucket(bucket, input.now));
   }
   const expired = new Set(decisions.map((d) => d.runId));
-  const expiredRunIds = [...expired].sort();
+  const expiredRunIds = [...expired].sort((a, b) => a.localeCompare(b));
   const retainedRunIds = input.snapshot
     .map((entry) => entry.runId)
     .filter((runId) => !expired.has(runId))
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
   return { expiredRunIds, retainedRunIds, decisions };
 }
 
@@ -239,7 +239,7 @@ function removeRunCompanions(
       removed.push(suffix);
     }
   }
-  return removed.sort();
+  return removed.sort((a, b) => a.localeCompare(b));
 }
 
 // Idempotent removal of a single QI run's local state. Returns a structured receipt rather than
@@ -576,8 +576,8 @@ export function enforceQualityIntelligenceQuarantineRetention(
   }
   return {
     removed,
-    retainedPaths: retainedPaths.sort(),
-    skippedPaths: skippedPaths.sort(),
+    retainedPaths: retainedPaths.sort((a, b) => a.localeCompare(b)),
+    skippedPaths: skippedPaths.sort((a, b) => a.localeCompare(b)),
   };
 }
 
@@ -613,5 +613,8 @@ export function snapshotQualityIntelligenceRunsForRecovery(
     }
     loaded.push(runId);
   }
-  return { loadedRunIds: loaded.sort(), skippedRunIds: skipped.sort() };
+  return {
+    loadedRunIds: loaded.sort((a, b) => a.localeCompare(b)),
+    skippedRunIds: skipped.sort((a, b) => a.localeCompare(b)),
+  };
 }

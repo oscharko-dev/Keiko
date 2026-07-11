@@ -158,7 +158,7 @@ function matchedTerms(
       terms.add(entry.term);
     }
   }
-  return [...terms].sort();
+  return [...terms].sort((a, b) => a.localeCompare(b));
 }
 
 function classifyByPatterns(

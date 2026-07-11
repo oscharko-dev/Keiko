@@ -569,12 +569,12 @@ function decodeCacheKey(
 
 function sourceFilterKey(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
   if (sourceFilter === undefined) return "*";
-  return [...new Set(sourceFilter.map(String))].sort().join("\u0000");
+  return [...new Set(sourceFilter.map(String))].sort((a, b) => a.localeCompare(b)).join("\u0000");
 }
 
 function chunkFilterKey(chunkFilter: readonly string[] | undefined): string {
   if (chunkFilter === undefined) return "*";
-  return [...new Set(chunkFilter)].sort().join("\u0000");
+  return [...new Set(chunkFilter)].sort((a, b) => a.localeCompare(b)).join("\u0000");
 }
 
 function uniqueStrings(values: readonly string[]): readonly string[] {
@@ -2509,7 +2509,9 @@ function embeddingLaneDiagnostics(
     .sort((left, right) => left.laneId.localeCompare(right.laneId))
     .map((lane) => ({
       laneId: lane.laneId,
-      capsuleIds: [...lane.capsuleIds].sort().map((id) => id as KnowledgeCapsuleId),
+      capsuleIds: [...lane.capsuleIds]
+        .sort((a, b) => a.localeCompare(b))
+        .map((id) => id as KnowledgeCapsuleId),
       status: finalLaneStatus(lane),
       queryEmbeddingRequested: lane.queryEmbeddingRequested,
       vectorCount: lane.vectorCount,

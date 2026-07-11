@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { ApiError, applyRun, fetchEvidenceManifest, fetchRunReport } from "../../../../../lib/api";
 import { runStatusLabel } from "../../../../../lib/format";
 import type { ChangedFile, RunReport } from "../../../../../lib/types";
+import type { DiffFile, DiffParseResult } from "./shared/diffParser";
 import { parseUnifiedDiff } from "./shared/diffParser";
 import { DiffFileSection } from "./shared/diffView";
 
@@ -93,6 +94,346 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
   );
 }
 
+// --- run + evidence loading --------------------------------------------------
+// Extracted from the runId effect (uiux-fix S3776): module-scope so the branching
+// that used to live inside the effect's `.then` closure is assessed on its own
+// instead of adding to the component's cognitive complexity.
+
+interface ReviewLoadSetters {
+  readonly setReport: Dispatch<SetStateAction<RunReport | null>>;
+  readonly setHasManifest: Dispatch<SetStateAction<boolean>>;
+  readonly setEvidenceError: Dispatch<SetStateAction<ErrorState | null>>;
+  readonly setFetchError: Dispatch<SetStateAction<ErrorState | null>>;
+  readonly setLoading: Dispatch<SetStateAction<boolean>>;
+  readonly setActiveFile: Dispatch<SetStateAction<number | null>>;
+}
+
+type RunReportResult = PromiseSettledResult<Awaited<ReturnType<typeof fetchRunReport>>>;
+type EvidenceManifestResult = PromiseSettledResult<
+  Awaited<ReturnType<typeof fetchEvidenceManifest>>
+>;
+
+function resetReviewLoadState(setters: ReviewLoadSetters): void {
+  setters.setLoading(true);
+  setters.setFetchError(null);
+  setters.setReport(null);
+  setters.setHasManifest(false);
+  setters.setEvidenceError(null);
+  setters.setActiveFile(null);
+}
+
+function applyManifestResult(
+  manifRes: EvidenceManifestResult,
+  setters: Pick<ReviewLoadSetters, "setHasManifest" | "setEvidenceError">,
+): void {
+  if (manifRes.status === "fulfilled") {
+    setters.setHasManifest(true);
+    setters.setEvidenceError(null);
+    return;
+  }
+  const manifestError = errorFromUnknown(manifRes.reason);
+  setters.setHasManifest(false);
+  setters.setEvidenceError(manifestError.code === "NOT_FOUND" ? null : manifestError);
+}
+
+function applyRunResult(
+  runRes: RunReportResult,
+  setters: Pick<ReviewLoadSetters, "setReport" | "setFetchError" | "setLoading">,
+): void {
+  if (runRes.status === "fulfilled") {
+    setters.setReport(runRes.value.report);
+    setters.setLoading(false);
+    return;
+  }
+  setters.setFetchError(errorFromUnknown(runRes.reason));
+  setters.setLoading(false);
+}
+
+function applyLoadResult(
+  runRes: RunReportResult,
+  manifRes: EvidenceManifestResult,
+  setters: ReviewLoadSetters,
+): void {
+  applyManifestResult(manifRes, setters);
+  applyRunResult(runRes, setters);
+}
+
+// --- State 1: empty state -----------------------------------------------------
+
+interface ReviewEmptyStateProps {
+  readonly onRunIdSubmit: ((runId: string) => void) | undefined;
+  readonly runIdInput: string;
+  readonly setRunIdInput: Dispatch<SetStateAction<string>>;
+}
+
+function ReviewEmptyState({
+  onRunIdSubmit,
+  runIdInput,
+  setRunIdInput,
+}: ReviewEmptyStateProps): ReactNode {
+  return (
+    <section className="review rv-empty" aria-label="Diff review">
+      <h2 className="rv-empty-h">Review</h2>
+      {onRunIdSubmit !== undefined ? (
+        <>
+          <p className="rv-empty-p">Paste a run ID below to load a proposed diff.</p>
+          <form
+            className="rv-empty-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const trimmed = runIdInput.trim();
+              if (trimmed.length === 0) return;
+              onRunIdSubmit(trimmed);
+            }}
+          >
+            <label className="rv-empty-label" htmlFor="rv-runid-input">
+              Run ID
+            </label>
+            <input
+              id="rv-runid-input"
+              className="rv-runid-input mono"
+              type="text"
+              value={runIdInput}
+              onChange={(e) => setRunIdInput(e.target.value)}
+              placeholder="e.g. 7f3a9c12…"
+            />
+            <button type="submit" className="arun-btn">
+              Load run
+            </button>
+          </form>
+        </>
+      ) : (
+        <p className="rv-empty-p">
+          Enter a run ID in the window configuration to load a proposed diff.
+        </p>
+      )}
+    </section>
+  );
+}
+
+// --- State 3: fetch error -----------------------------------------------------
+
+interface ReviewFetchErrorProps {
+  readonly fetchError: ErrorState;
+  readonly hasManifest: boolean;
+  readonly evidenceError: ErrorState | null;
+  readonly evidenceHref: string;
+}
+
+function ReviewFetchError({
+  fetchError,
+  hasManifest,
+  evidenceError,
+  evidenceHref,
+}: ReviewFetchErrorProps): ReactNode {
+  return (
+    <div role="alert" className="rv-error">
+      {fetchError.code === "NOT_FOUND" ? (
+        "No run with that ID was found."
+      ) : (
+        <>
+          {fetchError.message} <span className="err-code mono">({fetchError.code})</span>
+        </>
+      )}
+      {(hasManifest || evidenceError !== null) && (
+        <span className="rv-error-evidence">
+          <EvidenceControl href={evidenceHref} hasManifest={hasManifest} error={evidenceError} />
+        </span>
+      )}
+    </div>
+  );
+}
+
+// --- State 5: loaded with diff ------------------------------------------------
+
+interface ReviewHeaderProps {
+  readonly report: RunReport;
+  readonly diff: DiffParseResult | null;
+  readonly totals: { readonly added: number; readonly removed: number };
+  readonly evidenceHref: string;
+  readonly hasManifest: boolean;
+  readonly evidenceError: ErrorState | null;
+}
+
+function ReviewHeader({
+  report,
+  diff,
+  totals,
+  evidenceHref,
+  hasManifest,
+  evidenceError,
+}: ReviewHeaderProps): ReactNode {
+  return (
+    <div className="rv-header">
+      <span className="rv-status mono">{runStatusLabel(report.status)}</span>
+      {report.modelId !== undefined && <span className="rv-model mono">{report.modelId}</span>}
+      <span className="rv-counts mono">
+        {diff !== null && `${diff.files.length} file${diff.files.length !== 1 ? "s" : ""}`}{" "}
+        <span className="rv-stat add">+{totals.added}</span>{" "}
+        <span className="rv-stat del">−{totals.removed}</span>
+      </span>
+      <span className="spacer" />
+      <EvidenceControl href={evidenceHref} hasManifest={hasManifest} error={evidenceError} />
+    </div>
+  );
+}
+
+interface ReviewFileListProps {
+  readonly files: readonly DiffFile[];
+  readonly changedFiles: readonly ChangedFile[];
+  readonly selectedFileIndex: number;
+  readonly onSelectFile: (index: number) => void;
+}
+
+function ReviewFileList({
+  files,
+  changedFiles,
+  selectedFileIndex,
+  onSelectFile,
+}: ReviewFileListProps): ReactNode {
+  return (
+    <nav className="rv-filelist" aria-label="Changed files">
+      <ul>
+        {files.map((file, idx) => {
+          const cf = changedFiles.find((c) => c.path === file.path);
+          const selected = selectedFileIndex === idx;
+          return (
+            <li key={file.path}>
+              <button
+                type="button"
+                className="rv-filerow"
+                title={file.path}
+                aria-pressed={selected}
+                aria-controls={selected ? `rv-file-${idx}` : undefined}
+                onClick={() => onSelectFile(idx)}
+              >
+                <span className="rv-filerow-path mono">{shortPath(file.path)}</span>
+                <span className="rv-stat add">+{file.addedLines}</span>
+                <span className="rv-stat del">−{file.removedLines}</span>
+                {cf?.elevatedReview === true && (
+                  <span className="rv-elevated" aria-label="Elevated review">
+                    !
+                  </span>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
+interface ReviewDiffLayoutProps {
+  readonly diff: DiffParseResult;
+  readonly changedFiles: readonly ChangedFile[];
+  readonly selectedFileIndex: number;
+  readonly selectedFile: DiffFile;
+  readonly hasManifest: boolean;
+  readonly evidenceHref: string;
+  readonly onSelectFile: (index: number) => void;
+}
+
+function ReviewDiffLayout({
+  diff,
+  changedFiles,
+  selectedFileIndex,
+  selectedFile,
+  hasManifest,
+  evidenceHref,
+  onSelectFile,
+}: ReviewDiffLayoutProps): ReactNode {
+  return (
+    <div className="rv-layout">
+      {/* File list */}
+      <ReviewFileList
+        files={diff.files}
+        changedFiles={changedFiles}
+        selectedFileIndex={selectedFileIndex}
+        onSelectFile={onSelectFile}
+      />
+
+      {/* Diff body */}
+      <div className="rv-body">
+        <DiffFileSection
+          key={selectedFile.path}
+          file={selectedFile}
+          index={selectedFileIndex}
+          changedFiles={changedFiles}
+          sectionRef={() => undefined}
+        />
+        {diff.truncated && (
+          <p role="note" className="rv-truncated">
+            Diff truncated at 512 KB. Open the{" "}
+            {hasManifest ? (
+              <a href={evidenceHref} target="_blank" rel="noopener noreferrer">
+                evidence manifest
+              </a>
+            ) : (
+              "evidence manifest"
+            )}{" "}
+            for the full record.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function applyStatusText(applying: boolean, appliedAt: number | undefined): string {
+  if (applying) return "Applying…";
+  if (appliedAt !== undefined) return "Applied";
+  return "";
+}
+
+function applyButtonLabel(applying: boolean, confirmApply: boolean, fileCount: number): string {
+  if (applying) return "Applying…";
+  if (confirmApply) {
+    return `Confirm apply (${fileCount.toString()} file${fileCount === 1 ? "" : "s"})`;
+  }
+  return "Apply";
+}
+
+interface ReviewApplyControlsProps {
+  readonly report: RunReport;
+  readonly applying: boolean;
+  readonly applyError: ErrorState | null;
+  readonly confirmApply: boolean;
+  readonly diff: DiffParseResult | null;
+  readonly onApplyClick: () => void;
+}
+
+function ReviewApplyControls({
+  report,
+  applying,
+  applyError,
+  confirmApply,
+  diff,
+  onApplyClick,
+}: ReviewApplyControlsProps): ReactNode {
+  return (
+    <div className="rv-controls">
+      <span role="status" aria-live="polite" className="rv-apply-status">
+        {applyStatusText(applying, report.appliedAt)}
+      </span>
+      {applyError !== null && (
+        <span role="alert" className="rv-apply-error">
+          {applyError.message}
+        </span>
+      )}
+      {report.appliedAt !== undefined ? (
+        <span className="rv-final mono">Applied</span>
+      ) : canApplyReport(report) ? (
+        // uiux-fix F018 C124/C258: aria-disabled keeps focus on the button while
+        // applying; the confirm step names the blast radius before writing.
+        <button type="button" className="arun-btn" aria-disabled={applying} onClick={onApplyClick}>
+          {applyButtonLabel(applying, confirmApply, diff?.files.length ?? 0)}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 // --- main widget ------------------------------------------------------------
 
 export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): ReactNode {
@@ -120,34 +461,26 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
   useEffect(() => {
     if (runId === undefined || runId === "") return;
     let cancelled = false;
-    setLoading(true);
-    setFetchError(null);
-    setReport(null);
-    setHasManifest(false);
-    setEvidenceError(null);
-    setActiveFile(null);
+    resetReviewLoadState({
+      setLoading,
+      setFetchError,
+      setReport,
+      setHasManifest,
+      setEvidenceError,
+      setActiveFile,
+    });
 
     void Promise.allSettled([fetchRunReport(runId), fetchEvidenceManifest(runId)]).then(
       ([runRes, manifRes]) => {
         if (cancelled) return;
-
-        if (manifRes.status === "fulfilled") {
-          setHasManifest(true);
-          setEvidenceError(null);
-        } else {
-          const manifestError = errorFromUnknown(manifRes.reason);
-          setHasManifest(false);
-          setEvidenceError(manifestError.code === "NOT_FOUND" ? null : manifestError);
-        }
-
-        if (runRes.status === "fulfilled") {
-          setReport(runRes.value.report);
-          setLoading(false);
-          return;
-        }
-
-        setFetchError(errorFromUnknown(runRes.reason));
-        setLoading(false);
+        applyLoadResult(runRes, manifRes, {
+          setReport,
+          setHasManifest,
+          setEvidenceError,
+          setFetchError,
+          setLoading,
+          setActiveFile,
+        });
       },
     );
 
@@ -215,48 +548,18 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
       : null;
   const selectedFile = selectedFileIndex !== null ? diff?.files[selectedFileIndex] : undefined;
   const isRunning = report?.status === "running";
+  const showRunningStatus = !loading && fetchError === null && report !== null && isRunning;
 
   // State 1: no runId — uiux-fix F018 C110: there is no editable "window
   // configuration" after opening, so offer an inline run-ID form instead of
   // pointing at a dead end. Without the persistence callback the old copy stays.
   if (runId === undefined || runId === "") {
     return (
-      <section className="review rv-empty" aria-label="Diff review">
-        <h2 className="rv-empty-h">Review</h2>
-        {onRunIdSubmit !== undefined ? (
-          <>
-            <p className="rv-empty-p">Paste a run ID below to load a proposed diff.</p>
-            <form
-              className="rv-empty-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                const trimmed = runIdInput.trim();
-                if (trimmed.length === 0) return;
-                onRunIdSubmit(trimmed);
-              }}
-            >
-              <label className="rv-empty-label" htmlFor="rv-runid-input">
-                Run ID
-              </label>
-              <input
-                id="rv-runid-input"
-                className="rv-runid-input mono"
-                type="text"
-                value={runIdInput}
-                onChange={(e) => setRunIdInput(e.target.value)}
-                placeholder="e.g. 7f3a9c12…"
-              />
-              <button type="submit" className="arun-btn">
-                Load run
-              </button>
-            </form>
-          </>
-        ) : (
-          <p className="rv-empty-p">
-            Enter a run ID in the window configuration to load a proposed diff.
-          </p>
-        )}
-      </section>
+      <ReviewEmptyState
+        onRunIdSubmit={onRunIdSubmit}
+        runIdInput={runIdInput}
+        setRunIdInput={setRunIdInput}
+      />
     );
   }
 
@@ -274,37 +577,19 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
       {/* State 3: fetch error. uiux-fix F018 C124: the human message leads; the
           machine code is demoted to a small mono detail instead of a bold prefix. */}
       {!loading && fetchError !== null && (
-        <div role="alert" className="rv-error">
-          {fetchError.code === "NOT_FOUND" ? (
-            "No run with that ID was found."
-          ) : (
-            <>
-              {fetchError.message} <span className="err-code mono">({fetchError.code})</span>
-            </>
-          )}
-          {(hasManifest || evidenceError !== null) && (
-            <span className="rv-error-evidence">
-              <EvidenceControl
-                href={evidenceHref}
-                hasManifest={hasManifest}
-                error={evidenceError}
-              />
-            </span>
-          )}
-        </div>
+        <ReviewFetchError
+          fetchError={fetchError}
+          hasManifest={hasManifest}
+          evidenceError={evidenceError}
+          evidenceHref={evidenceHref}
+        />
       )}
 
       {/* State 4: running. uiux-fix F018 C124: the live region stays mounted (class
           swaps to .sr-only when empty) so AT reliably announce the text — a region
           mounted together with its content is often missed by NVDA/VoiceOver. */}
-      <p
-        role="status"
-        aria-live="polite"
-        className={
-          !loading && fetchError === null && report !== null && isRunning ? "rv-no-diff" : "sr-only"
-        }
-      >
-        {!loading && fetchError === null && report !== null && isRunning
+      <p role="status" aria-live="polite" className={showRunningStatus ? "rv-no-diff" : "sr-only"}>
+        {showRunningStatus
           ? "Run is still running. The proposed diff will appear when the run completes."
           : ""}
       </p>
@@ -317,111 +602,39 @@ export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): React
       {/* State 5: loaded with diff */}
       {!loading && fetchError === null && report !== null && hasDiff(report) && (
         <>
-          <div className="rv-header">
-            <span className="rv-status mono">{runStatusLabel(report.status)}</span>
-            {report.modelId !== undefined && (
-              <span className="rv-model mono">{report.modelId}</span>
-            )}
-            <span className="rv-counts mono">
-              {diff !== null && `${diff.files.length} file${diff.files.length !== 1 ? "s" : ""}`}{" "}
-              <span className="rv-stat add">+{totals.added}</span>{" "}
-              <span className="rv-stat del">−{totals.removed}</span>
-            </span>
-            <span className="spacer" />
-            <EvidenceControl href={evidenceHref} hasManifest={hasManifest} error={evidenceError} />
-          </div>
+          <ReviewHeader
+            report={report}
+            diff={diff}
+            totals={totals}
+            evidenceHref={evidenceHref}
+            hasManifest={hasManifest}
+            evidenceError={evidenceError}
+          />
 
           {diff !== null &&
             diff.files.length > 0 &&
             selectedFileIndex !== null &&
             selectedFile !== undefined && (
-              <div className="rv-layout">
-                {/* File list */}
-                <nav className="rv-filelist" aria-label="Changed files">
-                  <ul>
-                    {diff.files.map((file, idx) => {
-                      const cf = changedFiles.find((c) => c.path === file.path);
-                      const selected = selectedFileIndex === idx;
-                      return (
-                        <li key={file.path}>
-                          <button
-                            type="button"
-                            className="rv-filerow"
-                            title={file.path}
-                            aria-pressed={selected}
-                            aria-controls={selected ? `rv-file-${idx}` : undefined}
-                            onClick={() => selectFile(idx)}
-                          >
-                            <span className="rv-filerow-path mono">{shortPath(file.path)}</span>
-                            <span className="rv-stat add">+{file.addedLines}</span>
-                            <span className="rv-stat del">−{file.removedLines}</span>
-                            {cf?.elevatedReview === true && (
-                              <span className="rv-elevated" aria-label="Elevated review">
-                                !
-                              </span>
-                            )}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </nav>
-
-                {/* Diff body */}
-                <div className="rv-body">
-                  <DiffFileSection
-                    key={selectedFile.path}
-                    file={selectedFile}
-                    index={selectedFileIndex}
-                    changedFiles={changedFiles}
-                    sectionRef={() => undefined}
-                  />
-                  {diff.truncated && (
-                    <p role="note" className="rv-truncated">
-                      Diff truncated at 512 KB. Open the{" "}
-                      {hasManifest ? (
-                        <a href={evidenceHref} target="_blank" rel="noopener noreferrer">
-                          evidence manifest
-                        </a>
-                      ) : (
-                        "evidence manifest"
-                      )}{" "}
-                      for the full record.
-                    </p>
-                  )}
-                </div>
-              </div>
+              <ReviewDiffLayout
+                diff={diff}
+                changedFiles={changedFiles}
+                selectedFileIndex={selectedFileIndex}
+                selectedFile={selectedFile}
+                hasManifest={hasManifest}
+                evidenceHref={evidenceHref}
+                onSelectFile={selectFile}
+              />
             )}
 
           {/* Apply controls */}
-          <div className="rv-controls">
-            <span role="status" aria-live="polite" className="rv-apply-status">
-              {applying ? "Applying…" : report.appliedAt !== undefined ? "Applied" : ""}
-            </span>
-            {applyError !== null && (
-              <span role="alert" className="rv-apply-error">
-                {applyError.message}
-              </span>
-            )}
-            {report.appliedAt !== undefined ? (
-              <span className="rv-final mono">Applied</span>
-            ) : canApplyReport(report) ? (
-              // uiux-fix F018 C124/C258: aria-disabled keeps focus on the button while
-              // applying; the confirm step names the blast radius before writing.
-              <button
-                type="button"
-                className="arun-btn"
-                aria-disabled={applying}
-                onClick={onApplyClick}
-              >
-                {applying
-                  ? "Applying…"
-                  : confirmApply
-                    ? `Confirm apply (${(diff?.files.length ?? 0).toString()} file${diff?.files.length === 1 ? "" : "s"})`
-                    : "Apply"}
-              </button>
-            ) : null}
-          </div>
+          <ReviewApplyControls
+            report={report}
+            applying={applying}
+            applyError={applyError}
+            confirmApply={confirmApply}
+            diff={diff}
+            onApplyClick={onApplyClick}
+          />
         </>
       )}
     </section>

@@ -368,6 +368,387 @@ function DriftUnavailablePanel({
   );
 }
 
+interface LoadDetailParams {
+  readonly runId: string;
+  readonly fetchDetailImpl: typeof fetchQiRunDetail;
+  readonly seqRef: { current: number };
+  readonly setLoading: (value: boolean) => void;
+  readonly setError: (value: string | null) => void;
+  readonly setDetail: (value: QualityIntelligenceUiRunDetail | null) => void;
+}
+
+// Fetches the run detail and commits it to state, dropping stale responses when the same card
+// re-fetches after a review (request-of-record guard via seqRef). Extracted from the loadDetail
+// callback (SonarCloud S3776) so the hook itself stays a thin useCallback wrapper.
+async function loadRunDetail(params: LoadDetailParams): Promise<void> {
+  const { runId, fetchDetailImpl, seqRef, setLoading, setError, setDetail } = params;
+  const seq = seqRef.current + 1;
+  seqRef.current = seq;
+  setLoading(true);
+  setError(null);
+  try {
+    const res = await fetchDetailImpl(runId);
+    if (seqRef.current === seq) setDetail(res);
+  } catch (err) {
+    if (seqRef.current === seq) setError(formatError(err));
+  } finally {
+    if (seqRef.current === seq) setLoading(false);
+  }
+}
+
+interface RunReviewActionParams {
+  readonly runId: string;
+  readonly action: QiReviewAction;
+  readonly candidateId: string;
+  readonly trimmedReviewerLabel: string;
+  readonly reviewImpl: typeof reviewQiRun;
+  readonly loadDetail: () => Promise<void>;
+  readonly detail: QualityIntelligenceUiRunDetail | null;
+  readonly t: I18nTranslate;
+  readonly announceNonceRef: { current: number };
+  readonly setActionError: (value: string | null) => void;
+  readonly setReviewAnnounce: (value: string) => void;
+  readonly setPendingReview: (value: QiPendingReview | null) => void;
+}
+
+// Issue #282 A11y-1: performs the review call, reloads the run, and announces the outcome via a
+// dedicated live region. Extracted from handleReview (uiux-fix F029 C275 / SonarCloud S3776) so
+// the callback itself stays a thin guard + dispatch.
+async function runReviewAction(params: RunReviewActionParams): Promise<void> {
+  const {
+    runId,
+    action,
+    candidateId,
+    trimmedReviewerLabel,
+    reviewImpl,
+    loadDetail,
+    detail,
+    t,
+    announceNonceRef,
+    setActionError,
+    setReviewAnnounce,
+    setPendingReview,
+  } = params;
+  setActionError(null);
+  try {
+    await reviewImpl(runId, action, candidateId, trimmedReviewerLabel);
+    await loadDetail();
+    // The shared contracts projection maps the action to the resulting review state ("reopen" →
+    // "open", "withdraw" → "withdrawn", …) and REVIEW_LABEL renders its human label. A monotonic
+    // nonce guarantees the string differs on identical repeat actions so AT always re-reads it (AT
+    // suppresses byte-identical repeated announcements).
+    const resultLabel = reviewLabel(reviewActionResultState(action), t);
+    // Look up the candidate title from the last-loaded detail snapshot (best effort: the reload
+    // above may have updated state but setDetail is async; use the snapshot we had at the time of
+    // the call — the title is immutable so this is always correct).
+    const candidateTitle =
+      detail?.candidates.find((c) => c.id === candidateId)?.title ?? candidateId;
+    announceNonceRef.current += 1;
+    setReviewAnnounce(
+      t("qi.review.announce", {
+        title: candidateTitle,
+        state: resultLabel,
+        nonce: announceNonceRef.current,
+      }),
+    );
+  } catch (err) {
+    setActionError(formatError(err));
+  } finally {
+    setPendingReview(null);
+  }
+}
+
+// uiux-fix F030 C111: the load-status live region text. Extracted so the loading/error/loaded
+// ternary chain isn't nested inline inside the JSX (SonarCloud S3776).
+function computeStatusText(
+  loading: boolean,
+  error: string | null,
+  detail: QualityIntelligenceUiRunDetail | null,
+  t: I18nTranslate,
+): string {
+  if (loading) return t("qi.run.loading");
+  if (error === null && detail !== null) {
+    return t("qi.run.loaded", { count: detail.totals.candidates });
+  }
+  return "";
+}
+
+function GovernanceSection({
+  runId,
+  t,
+  reviewerLabel,
+  onReviewerLabelChange,
+  governanceEnabled,
+  reviewerHelpId,
+  reviewerWarningId,
+}: {
+  readonly runId: string;
+  readonly t: I18nTranslate;
+  readonly reviewerLabel: string;
+  readonly onReviewerLabelChange: (value: string) => void;
+  readonly governanceEnabled: boolean;
+  readonly reviewerHelpId: string;
+  readonly reviewerWarningId: string;
+}): ReactNode {
+  return (
+    <section className="qi-run-governance" aria-label={t("qi.governance.title")}>
+      <label className="qi-field" htmlFor={`qi-reviewer-label-${runId}`}>
+        <span className="qi-field-label">{t("qi.governance.auditLabel")}</span>
+        <input
+          id={`qi-reviewer-label-${runId}`}
+          className="qi-input qi-run-governance-input"
+          value={reviewerLabel}
+          placeholder={t("qi.governance.auditPlaceholder")}
+          aria-invalid={!governanceEnabled}
+          aria-describedby={
+            governanceEnabled ? reviewerHelpId : `${reviewerHelpId} ${reviewerWarningId}`
+          }
+          onChange={(event) => {
+            onReviewerLabelChange(event.target.value);
+          }}
+        />
+      </label>
+      <p id={reviewerHelpId} className="qi-run-governance-help">
+        {t("qi.governance.help")}
+      </p>
+      {/* Persistent live region (a11y M-02): always mounted so AT announces when the user clears
+          the reviewer label and governance turns off. role="note" carries no implicit aria-live,
+          and a conditionally-inserted region is unreliably announced. Empty (and visually nothing
+          — the class has no box) while governance is enabled. */}
+      <p
+        id={reviewerWarningId}
+        className="qi-run-governance-warning"
+        role="status"
+        aria-live="polite"
+      >
+        {!governanceEnabled ? t("qi.governance.required") : ""}
+      </p>
+    </section>
+  );
+}
+
+function ActionErrorBanner({
+  actionError,
+  onDismiss,
+  t,
+}: {
+  readonly actionError: string | null;
+  readonly onDismiss: () => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (actionError === null) return null;
+  return (
+    <div className="lk-alert qi-action-error" role="alert" data-testid="qi-action-error">
+      {actionError}
+      <button type="button" className="lk-alert-retry" onClick={onDismiss}>
+        {t("common.dismiss")}
+      </button>
+    </div>
+  );
+}
+
+function DriftSection({
+  runId,
+  detail,
+  t,
+  connectedSources,
+  onRegenerated,
+  reCheckImpl,
+  regenerateImpl,
+}: {
+  readonly runId: string;
+  readonly detail: QualityIntelligenceUiRunDetail;
+  readonly t: I18nTranslate;
+  readonly connectedSources: DriftPanelProps["connectedSources"] | undefined;
+  readonly onRegenerated: DriftPanelProps["onRegenerated"];
+  readonly reCheckImpl: DriftPanelProps["reCheckImpl"];
+  readonly regenerateImpl: DriftPanelProps["regenerateImpl"];
+}): ReactNode {
+  if (connectedSources !== undefined && connectedSources.length > 0) {
+    return (
+      <DriftPanel
+        runId={runId}
+        connectedSources={connectedSources}
+        onRegenerated={onRegenerated}
+        reCheckImpl={reCheckImpl}
+        regenerateImpl={regenerateImpl}
+      />
+    );
+  }
+  return <DriftUnavailablePanel detail={detail} t={t} />;
+}
+
+function RunCasesSection({
+  runId,
+  detail,
+  t,
+  onReview,
+  pendingReview,
+  onEdit,
+  governanceEnabled,
+}: {
+  readonly runId: string;
+  readonly detail: QualityIntelligenceUiRunDetail;
+  readonly t: I18nTranslate;
+  readonly onReview: (candidateId: string, action: QiReviewAction) => void;
+  readonly pendingReview: QiPendingReview | null;
+  readonly onEdit: (
+    candidateId: string,
+    edited: QualityIntelligenceCandidateEditableFields,
+  ) => Promise<void>;
+  readonly governanceEnabled: boolean;
+}): ReactNode {
+  return (
+    <section className="qi-run-cases" aria-label={t("qi.run.generatedTestCases")}>
+      <div className="qi-run-cases-head">
+        <h3 className="qi-col-subtitle">
+          {t("qi.run.testCases")}
+          <span className="qi-col-count">{detail.candidates.length.toString()}</span>
+        </h3>
+        {detail.candidates.length > 0 ? <ExportBar runId={runId} /> : null}
+      </div>
+      <CandidatesPane
+        candidates={detail.candidates}
+        onReview={onReview}
+        pendingReview={pendingReview}
+        onEdit={onEdit}
+        actionsDisabled={!governanceEnabled}
+        actionsDisabledReason={t("qi.governance.required")}
+      />
+    </section>
+  );
+}
+
+interface RunCardContentProps {
+  readonly runId: string;
+  readonly detail: QualityIntelligenceUiRunDetail;
+  readonly t: I18nTranslate;
+  readonly actionError: string | null;
+  readonly onDismissActionError: () => void;
+  readonly reviewerLabel: string;
+  readonly onReviewerLabelChange: (value: string) => void;
+  readonly governanceEnabled: boolean;
+  readonly reviewerHelpId: string;
+  readonly reviewerWarningId: string;
+  readonly connectedSources: DriftPanelProps["connectedSources"] | undefined;
+  readonly onRegenerated: DriftPanelProps["onRegenerated"];
+  readonly reCheckImpl: DriftPanelProps["reCheckImpl"];
+  readonly regenerateImpl: DriftPanelProps["regenerateImpl"];
+  readonly onReview: (candidateId: string, action: QiReviewAction) => void;
+  readonly pendingReview: QiPendingReview | null;
+  readonly onEdit: (
+    candidateId: string,
+    edited: QualityIntelligenceCandidateEditableFields,
+  ) => Promise<void>;
+}
+
+// The detail-loaded card body (uiux-fix F030 C113: action errors render as a dismissible alert
+// above the still-rendered content, never replacing the whole card). Extracted from QiRunCard's
+// JSX (SonarCloud S3776) alongside the other qi-run-* sections above.
+function RunCardContent({
+  runId,
+  detail,
+  t,
+  actionError,
+  onDismissActionError,
+  reviewerLabel,
+  onReviewerLabelChange,
+  governanceEnabled,
+  reviewerHelpId,
+  reviewerWarningId,
+  connectedSources,
+  onRegenerated,
+  reCheckImpl,
+  regenerateImpl,
+  onReview,
+  pendingReview,
+  onEdit,
+}: RunCardContentProps): ReactNode {
+  return (
+    <>
+      <ActionErrorBanner actionError={actionError} onDismiss={onDismissActionError} t={t} />
+      <GovernanceSection
+        runId={runId}
+        t={t}
+        reviewerLabel={reviewerLabel}
+        onReviewerLabelChange={onReviewerLabelChange}
+        governanceEnabled={governanceEnabled}
+        reviewerHelpId={reviewerHelpId}
+        reviewerWarningId={reviewerWarningId}
+      />
+      <SummaryStrip detail={detail} t={t} />
+      <FindingsList detail={detail} t={t} />
+      <CoveragePanel detail={detail} t={t} />
+      <DriftSection
+        runId={runId}
+        detail={detail}
+        t={t}
+        connectedSources={connectedSources}
+        onRegenerated={onRegenerated}
+        reCheckImpl={reCheckImpl}
+        regenerateImpl={regenerateImpl}
+      />
+      <RunCasesSection
+        runId={runId}
+        detail={detail}
+        t={t}
+        onReview={onReview}
+        pendingReview={pendingReview}
+        onEdit={onEdit}
+        governanceEnabled={governanceEnabled}
+      />
+    </>
+  );
+}
+
+interface RunCardBodyProps {
+  readonly runId: string;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly detail: QualityIntelligenceUiRunDetail | null;
+  readonly onRetry: () => void;
+  readonly t: I18nTranslate;
+  readonly actionError: string | null;
+  readonly onDismissActionError: () => void;
+  readonly reviewerLabel: string;
+  readonly onReviewerLabelChange: (value: string) => void;
+  readonly governanceEnabled: boolean;
+  readonly reviewerHelpId: string;
+  readonly reviewerWarningId: string;
+  readonly connectedSources: DriftPanelProps["connectedSources"] | undefined;
+  readonly onRegenerated: DriftPanelProps["onRegenerated"];
+  readonly reCheckImpl: DriftPanelProps["reCheckImpl"];
+  readonly regenerateImpl: DriftPanelProps["regenerateImpl"];
+  readonly onReview: (candidateId: string, action: QiReviewAction) => void;
+  readonly pendingReview: QiPendingReview | null;
+  readonly onEdit: (
+    candidateId: string,
+    edited: QualityIntelligenceCandidateEditableFields,
+  ) => Promise<void>;
+}
+
+// The three-way loading/error/not-found gate in front of RunCardContent. Extracted from
+// QiRunCard's JSX (SonarCloud S3776).
+function RunCardBody({
+  loading,
+  error,
+  detail,
+  onRetry,
+  t,
+  ...contentProps
+}: RunCardBodyProps): ReactNode {
+  if (loading && detail === null) return <LoadingSkeleton />;
+  if (error !== null) return <ErrorState message={error} onRetry={onRetry} />;
+  if (detail === null) {
+    return (
+      <div className="lk-empty">
+        <p className="lk-empty-body">{t("qi.run.notFound")}</p>
+      </div>
+    );
+  }
+  return <RunCardContent {...contentProps} detail={detail} t={t} />;
+}
+
 export function QiRunCard({
   runId,
   connectedSources,

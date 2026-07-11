@@ -520,7 +520,7 @@ const perfFailed =
   boundedRowSmoke.stickyHeaderDeltaPx > 4;
 // A missing probe selector (e.g. a migrated surface was renamed away) must FAIL the gate, not pass
 // silently — otherwise a dropped surface would still record PASS with fewer probes.
-const missingSelectors = [...missing].sort();
+const missingSelectors = [...missing].sort((a, b) => a.localeCompare(b));
 const failed = rDiffsGated.length > 0 || missingSelectors.length > 0 || focusFailed || perfFailed;
 
 writeFileSync(

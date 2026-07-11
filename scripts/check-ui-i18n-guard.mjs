@@ -249,7 +249,7 @@ function symmetricDifference(left, right) {
   return [
     ...Array.from(left).filter((key) => !right.has(key)),
     ...Array.from(right).filter((key) => !left.has(key)),
-  ].sort();
+  ].sort((a, b) => a.localeCompare(b));
 }
 
 export function checkUiI18nGuard({

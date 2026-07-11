@@ -295,7 +295,7 @@ export function createInMemoryPromptEnhancementLocalStore(): PromptEnhancementLo
         ? undefined
         : parseAndValidateManifest(JSON.stringify(manifest));
     },
-    list: (): readonly string[] => [...data.keys()].sort(),
+    list: (): readonly string[] => [...data.keys()].sort((a, b) => a.localeCompare(b)),
     location: (runId: string): string => {
       assertValidRunId(runId);
       return `${runId}${PE_MANIFEST_SUFFIX}`;
@@ -426,7 +426,7 @@ function listRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
       `cannot list PE manifests: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  return runIds.sort();
+  return runIds.sort((a, b) => a.localeCompare(b));
 }
 
 function atomicWriteManifest(target: string, json: string, randomSuffix: () => string): void {
