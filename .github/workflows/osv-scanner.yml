@@ -14,9 +14,6 @@ on:
       - feat/keiko-repository-centered-desktop-workflow
       - epic/coding-workbench-opencode-codex
       - "release/**"
-    paths:
-      - "**/package-lock.json"
-      - ".github/workflows/osv-scanner.yml"
   push:
     branches:
       - dev
@@ -30,9 +27,6 @@ on:
       - feat/keiko-repository-centered-desktop-workflow
       - epic/coding-workbench-opencode-codex
       - "release/**"
-    paths:
-      - "**/package-lock.json"
-      - ".github/workflows/osv-scanner.yml"
   schedule:
     - cron: "37 3 * * *"
   workflow_dispatch:

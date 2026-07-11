@@ -9,10 +9,30 @@ const workflow = readFileSync(resolve(repoRoot, ".github/workflows/osv-scanner.y
 
 const OSV_SCANNER_RELEASE_SHA = "9a498708959aeaef5ef730655706c5a1df1edbc2";
 
+function readEventBlock(eventName) {
+  const lines = workflow.split("\n");
+  const start = lines.findIndex((line) => line === `  ${eventName}:`);
+
+  if (start === -1) {
+    return "";
+  }
+
+  const end = lines.findIndex(
+    (line, index) => index > start && (/^ {2}[a-z_]+:/u.test(line) || line === "jobs:"),
+  );
+
+  return lines.slice(start, end === -1 ? undefined : end).join("\n");
+}
+
 describe("OSV Scanner workflow", () => {
-  it("scans dependency lockfile changes on pull requests and pushes", () => {
-    expect(workflow).toMatch(/pull_request:[\s\S]*?paths:[\s\S]*?"\*\*\/package-lock\.json"/u);
-    expect(workflow).toMatch(/push:[\s\S]*?paths:[\s\S]*?"\*\*\/package-lock\.json"/u);
+  it("reports the required scan status on pull requests and protected branch pushes", () => {
+    const pullRequestBlock = readEventBlock("pull_request");
+    const pushBlock = readEventBlock("push");
+
+    expect(pullRequestBlock).toContain("branches:");
+    expect(pushBlock).toContain("branches:");
+    expect(pullRequestBlock).not.toContain("paths:");
+    expect(pushBlock).not.toContain("paths:");
   });
 
   it("runs daily and supports a manual scan", () => {
