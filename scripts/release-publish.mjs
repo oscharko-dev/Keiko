@@ -295,6 +295,7 @@ function authConfigKey(registry) {
 
 function createNpmEnvironment(registry) {
   const token = process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken();
+  const hasToken = token !== undefined && token.length > 0;
   const strictSsl = process.env.NPM_CONFIG_STRICT_SSL ?? readNpmStrictSsl();
   if (strictSsl !== "true") {
     fail(
@@ -308,7 +309,10 @@ function createNpmEnvironment(registry) {
     `${packageRegistryScope}:registry=${registry}`,
     `strict-ssl=${strictSsl}`,
   ];
-  if (token !== undefined && token.length > 0) {
+  // No token in CI is expected, not an oversight: the release workflow authenticates
+  // `npm publish` via OIDC trusted publishing instead. Leaving no _authToken line here is
+  // what lets the npm CLI attempt that OIDC exchange rather than an anonymous request.
+  if (hasToken) {
     lines.push(`${authConfigKey(registry)}=${token}`);
   }
   writeFileSync(userConfig, `${lines.join("\n")}\n`);
@@ -319,6 +323,7 @@ function createNpmEnvironment(registry) {
       ...process.env,
       NPM_CONFIG_USERCONFIG: userConfig,
     },
+    hasToken,
   };
 }
 
@@ -1413,7 +1418,7 @@ function packageRecord(manifest, packageDir) {
   };
 }
 
-function publishPackage(pkg, npmEnv, options) {
+function publishPackage(pkg, npmEnv, options, hasToken) {
   if (options.dryRun) {
     publishPackageDryRun(pkg, npmEnv, options);
     return;
@@ -1424,7 +1429,7 @@ function publishPackage(pkg, npmEnv, options) {
   } else {
     publishPackageToRegistry(pkg, npmEnv, options);
   }
-  ensurePackageDistTag(pkg, npmEnv, options);
+  ensurePackageDistTag(pkg, npmEnv, options, hasToken);
 }
 
 function publishPackageDryRun(pkg, npmEnv, options) {
@@ -1467,11 +1472,39 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
   );
 }
 
-function ensurePackageDistTag(pkg, npmEnv, options) {
-  const currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
+function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
+  let currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
   if (currentTag === pkg.version) {
     console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
     return;
+  }
+  // npm Trusted Publishing (OIDC) authorizes `npm publish` only, not `npm dist-tag add`. A
+  // fresh `npm publish --tag` already sets the tag atomically at the source, but the very
+  // next `npm view` can still race the registry's own read replicas/CDN, so a mismatch here
+  // is usually transient propagation lag rather than a real problem — the same reality
+  // verifyPackage() below already retries for. Only after that same retry budget is
+  // exhausted do we treat it as a genuine idempotent-re-run repair and fail with a recovery
+  // hint, instead of letting an unauthenticated `npm dist-tag add` 401 confusingly.
+  if (!hasToken) {
+    for (let attempt = 2; attempt <= verifyAttempts && currentTag !== pkg.version; attempt += 1) {
+      console.log(
+        `release-publish: TAG pending ${pkg.name}@${options.tag} ` +
+          `(attempt ${String(attempt)}/${String(verifyAttempts)}; observed ${currentTag || "no published version"}).`,
+      );
+      waitForRegistryPropagation();
+      currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
+    }
+    if (currentTag === pkg.version) {
+      console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
+      return;
+    }
+    fail(
+      `${pkg.name}@${options.tag} points to ${currentTag || "no published version"}, expected ` +
+        `${pkg.version}, and no registry credential is configured to correct it. npm Trusted ` +
+        "Publishing does not cover `npm dist-tag add`. Supply NODE_AUTH_TOKEN (or NPM_TOKEN) " +
+        "for a one-off manual fix, or confirm the earlier publish attempt actually completed " +
+        "before retrying.",
+    );
   }
   console.log(`release-publish: DIST-TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
   run("npm", ["dist-tag", "add", pkg.spec, options.tag, "--registry", options.registry], {
@@ -1585,7 +1618,7 @@ if (!options.allowUntagged) {
 }
 ensureTrackedTreeIsClean();
 
-const { cleanup, env: npmEnv } = createNpmEnvironment(options.registry);
+const { cleanup, env: npmEnv, hasToken } = createNpmEnvironment(options.registry);
 try {
   runReleaseGates();
   const releaseInfo =
@@ -1596,9 +1629,9 @@ try {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
   }
   for (const pkg of workspacePackages) {
-    publishPackage(pkg, npmEnv, options);
+    publishPackage(pkg, npmEnv, options, hasToken);
   }
-  publishPackage(rootPackage, npmEnv, options);
+  publishPackage(rootPackage, npmEnv, options, hasToken);
 
   if (!options.dryRun) {
     for (const pkg of publishPlan) {
