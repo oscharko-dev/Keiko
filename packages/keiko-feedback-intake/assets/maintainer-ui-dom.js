@@ -29,31 +29,64 @@ export function element(name, properties, children = []) {
   return node;
 }
 
+function createNotice(message, kind = "info") {
+  const glyph = kind === "error" ? "!" : kind === "warning" ? "△" : "i";
+  return element(
+    "section",
+    {
+      className: `mq-notice${kind === "error" ? " mq-notice--error" : kind === "warning" ? " mq-notice--warning" : ""}`,
+      "aria-live": "polite",
+      "aria-atomic": "true",
+    },
+    [
+      element("p", {}, [
+        element("span", {
+          className: "mq-notice-glyph",
+          "aria-hidden": "true",
+          textContent: glyph,
+        }),
+        text(message),
+      ]),
+    ],
+  );
+}
+
+function requestError(response) {
+  if (response.status === 401) return "session";
+  if (response.status === 403) return "forbidden";
+  if (response.status === 404) return "stale";
+  if (response.status === 409) return "conflict";
+  if (response.status === 429) return "rateLimited";
+  if (response.status === 503) return "unavailable";
+  return "failed";
+}
+
+function createRequest(endpoint) {
+  return async (path, options = {}) => {
+    const response = await fetch(`${endpoint}${path}`, { credentials: "same-origin", ...options });
+    if (!response.ok) throw new Error(requestError(response));
+    return response.status === 204 ? undefined : response.json();
+  };
+}
+
+function applyBusy(root, state, value) {
+  state.busy = value;
+  root.setAttribute("aria-busy", String(value));
+  root.querySelectorAll("button, input, select").forEach((control) => {
+    if (value && !control.disabled) {
+      control.dataset.mqBusyDisabled = "true";
+      control.disabled = true;
+    } else if (!value && control.dataset.mqBusyDisabled === "true") {
+      delete control.dataset.mqBusyDisabled;
+      control.disabled = false;
+    }
+  });
+}
+
 export function createUiHelpers(root, state, endpoint) {
   function replace(children) {
     root.replaceChildren(...children);
     root.setAttribute("aria-busy", String(state.busy));
-  }
-  function notice(message, kind = "info") {
-    const glyph = kind === "error" ? "!" : kind === "warning" ? "△" : "i";
-    return element(
-      "section",
-      {
-        className: `mq-notice${kind === "error" ? " mq-notice--error" : kind === "warning" ? " mq-notice--warning" : ""}`,
-        "aria-live": "polite",
-        "aria-atomic": "true",
-      },
-      [
-        element("p", {}, [
-          element("span", {
-            className: "mq-notice-glyph",
-            "aria-hidden": "true",
-            textContent: glyph,
-          }),
-          text(message),
-        ]),
-      ],
-    );
   }
   function button(label, onClick, variant = "", type = "button") {
     const node = element("button", {
@@ -66,34 +99,13 @@ export function createUiHelpers(root, state, endpoint) {
     if (onClick) node.addEventListener("click", onClick);
     return node;
   }
-  function requestError(response) {
-    if (response.status === 401) return "session";
-    if (response.status === 403) return "forbidden";
-    if (response.status === 404) return "stale";
-    if (response.status === 409) return "conflict";
-    if (response.status === 429) return "rateLimited";
-    if (response.status === 503) return "unavailable";
-    return "failed";
-  }
-  async function request(path, options = {}) {
-    const response = await fetch(`${endpoint}${path}`, { credentials: "same-origin", ...options });
-    if (!response.ok) throw new Error(requestError(response));
-    return response.status === 204 ? undefined : response.json();
-  }
-  function setBusy(value) {
-    state.busy = value;
-    root.setAttribute("aria-busy", String(value));
-    root.querySelectorAll("button, input, select").forEach((control) => {
-      if (value && !control.disabled) {
-        control.dataset.mqBusyDisabled = "true";
-        control.disabled = true;
-      } else if (!value && control.dataset.mqBusyDisabled === "true") {
-        delete control.dataset.mqBusyDisabled;
-        control.disabled = false;
-      }
-    });
-  }
-  return { button, notice, replace, request, setBusy };
+  return {
+    button,
+    notice: createNotice,
+    replace,
+    request: createRequest(endpoint),
+    setBusy: (value) => applyBusy(root, state, value),
+  };
 }
 
 export function metadata(detail, copy, statusLabel) {

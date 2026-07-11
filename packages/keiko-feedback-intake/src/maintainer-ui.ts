@@ -92,7 +92,7 @@ export async function serveMaintainerUi(
   method: string | undefined,
   pathname: string,
   res: ServerResponse,
-  acceptEncoding?: string | undefined,
+  acceptEncoding?: string,
 ): Promise<boolean> {
   if (pathname === "/maintainer") {
     if (method === "GET" || method === "HEAD") redirect(res);
