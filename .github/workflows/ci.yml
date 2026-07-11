@@ -61,7 +61,7 @@ jobs:
         with:
           node-version: "22.x"
           cache: "npm"
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Install sandbox isolation backend (bubblewrap)
         run: |
           sudo apt-get update
@@ -166,7 +166,7 @@ jobs:
         # this has no other toolchain dependency.
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |
-          curl -sSfL -o sonar-scanner-cli.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
+          curl --proto '=https' -sSfL -o sonar-scanner-cli.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
           echo "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b  sonar-scanner-cli.zip" | sha256sum --check
           unzip -q sonar-scanner-cli.zip
       - name: SonarCloud CI-based analysis (ADR-0128)
@@ -192,7 +192,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Download and verify actionlint
         run: |
-          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" -o actionlint.tar.gz
+          curl --proto '=https' -sSfL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" -o actionlint.tar.gz
           echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check
           tar -xzf actionlint.tar.gz actionlint
           chmod +x actionlint
@@ -234,7 +234,7 @@ jobs:
         with:
           node-version: "22.x"
           cache: "npm"
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Build
         run: npm run build
       - name: Prepare packaged CLI and UI assets
@@ -304,7 +304,7 @@ jobs:
         with:
           node-version: "22.x"
           cache: "npm"
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - name: Build
         run: npm run build
       # Two separate steps (not one multi-line run): on the Windows runner the default shell is
@@ -335,7 +335,7 @@ jobs:
           node-version: "22.x"
           cache: "npm"
       - name: Install workspaces (single root lockfile after #167)
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Build internal packages so contracts dist resolves for UI tsc
         run: npm run build:packages
       - name: Security audit UI dependencies (moderate and above)
@@ -359,7 +359,7 @@ jobs:
         # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
         # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
         # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
-        run: npx playwright install --with-deps chromium
+        run: npx playwright@1.61.1 install --with-deps chromium
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
