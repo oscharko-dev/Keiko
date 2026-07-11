@@ -174,6 +174,8 @@ import {
   createAutonomousDeliveryApprovalStore,
   type AutonomousDeliveryApprovalStore,
 } from "./coding-runtime/autonomousDeliveryApprovalStore.js";
+import type { AtlassianConnectorCredentialDeps } from "./atlassian/credentialRoutes.js";
+import { buildAtlassianConnectorCredentialDeps } from "./atlassian/wiring.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -276,6 +278,14 @@ export interface UiHandlerDeps {
   // composes real ports from env/workspace when absent; tests inject deterministic fakes.
   readonly codingContextGitHubPort?: GitHubCodeContextApiPort | undefined;
   readonly codingContextJiraPort?: JiraCodeContextHttpPort | undefined;
+  // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody: the write-only
+  // custody surface plus the per-credential outbound HTTP port factory. The decrypted token is
+  // intentionally NOT part of redactionSecrets (same rationale as the Figma vault PAT): it never
+  // reaches a redactable payload — it is confined to the outbound Authorization header by
+  // construction (atlassian/httpPort.ts) and is never returned, logged, or serialized. Optional so
+  // legacy tests that do not exercise /api/atlassian-connectors/* keep their fixtures unchanged;
+  // the routes degrade to 503 when absent.
+  readonly atlassianConnectorCredentials?: AtlassianConnectorCredentialDeps | undefined;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
@@ -1886,6 +1896,21 @@ function autonomousDeliveryFields(
   };
 }
 
+// Issue #2241 — lazy Atlassian custody wiring: no vault key, keychain entry, or metadata file is
+// created until the first /api/atlassian-connectors/* custody operation. Egress is resolved per
+// outbound request from the live runtime config (first-run onboarding updates are honored).
+function atlassianConnectorCredentialFields(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<UiHandlerDeps, "atlassianConnectorCredentials"> {
+  return {
+    atlassianConnectorCredentials: buildAtlassianConnectorCredentialDeps({
+      configPath: args.runtimeConfig.storagePath,
+      env: args.options.env,
+      egress: () => args.runtimeConfig.current()?.egress ?? args.egress,
+    }),
+  };
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
@@ -1899,6 +1924,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...codingSidecarGatewayModelSourceFields(args),
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     ...autonomousDeliveryFields(args.options),
+    ...atlassianConnectorCredentialFields(args),
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,

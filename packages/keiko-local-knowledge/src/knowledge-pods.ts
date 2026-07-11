@@ -29,15 +29,23 @@ import {
   type KnowledgePodSummaryKind,
   type KnowledgeSource,
   isKnowledgePodEvidenceSafeText,
+  isSafeAtlassianIdentifier,
   parseHtmlManualSourceTagMetadata,
   resolveKnowledgePodModelUsePolicy,
+  validateAtlassianSyncChangeSummary,
   validateKnowledgePodSummary,
   validateManualRefreshChangeSummary,
+  type AtlassianConnectorPodSource,
+  type AtlassianSyncFailureReason,
   type ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule, listCapsules } from "./capsule-lifecycle.js";
 import { listCapsuleSets } from "./capsule-set-lifecycle.js";
+import {
+  listConnectorSourceMetadata,
+  type ConnectorSourceMetadata,
+} from "./connector-source-metadata.js";
 import { KnowledgeStoreError } from "./errors.js";
 import { readHtmlManualSourceMetadata } from "./manual-source-metadata.js";
 import { resolveScopeModelUsePolicy } from "./model-use-policy.js";
@@ -130,6 +138,7 @@ export function buildKnowledgePodSummary(
   const counts = capsuleCounts(store, capsule.id);
   const embeddingProfile = capsuleEmbeddingProfile(capsule);
   const embeddingDecision = compareEmbeddingProfiles(embeddingProfile, embeddingProfile);
+  const connector = connectorPodProjection(store, capsule.id);
   const projection = capsuleProjection({
     capsule,
     sources,
@@ -140,12 +149,109 @@ export function buildKnowledgePodSummary(
     },
     embeddingProfile,
     embeddingDecision,
-    degradationReasons: capsuleDegradationReasons(capsule, sources, counts, embeddingDecision),
+    degradationReasons: [
+      ...capsuleDegradationReasons(capsule, sources, counts, embeddingDecision),
+      ...connector.degradationReasons,
+    ],
   });
   const manualRefresh = readManualRefreshSummary(store, capsule.id, sources);
-  return assertValidSummary(
-    manualRefresh !== undefined ? { ...projection, manualRefresh } : projection,
-  );
+  return assertValidSummary({
+    ...projection,
+    ...(manualRefresh !== undefined ? { manualRefresh } : {}),
+    ...(connector.connectorSource !== undefined
+      ? { connectorSource: connector.connectorSource }
+      : {}),
+    ...(connector.readinessOverride !== undefined
+      ? { readiness: connector.readinessOverride }
+      : {}),
+  });
+}
+
+// ─── Connector-pod projection (Epic #2238, Issue #2242) ───────────────────────
+// Projects the persisted connector sync state into the pod summary: the redacted
+// `connectorSource` block (ADR-0128 D6 — identifiers, counts, and hashes only), sync-degradation
+// reasons, and the ADR-0128 D5 readiness mapping's `unavailable` override for a revoked
+// credential (`auth-failed`). Read from persisted state and re-validated as a defense-in-depth
+// boundary; a corrupt record degrades to omission rather than failing the whole summary.
+interface ConnectorPodProjection {
+  readonly connectorSource?: AtlassianConnectorPodSource;
+  readonly degradationReasons: readonly string[];
+  readonly readinessOverride?: KnowledgePodReadiness;
+}
+
+const CONNECTOR_FAILURE_GUIDANCE: Readonly<Partial<Record<AtlassianSyncFailureReason, string>>> = {
+  "auth-failed":
+    "The connector credential was rejected; verify or rotate the Atlassian credential, then re-sync.",
+  "permission-denied":
+    "Some connector content was denied by the provider; the pod reflects the token's current permissions.",
+  "rate-limited": "The provider rate-limited the last sync; re-sync later.",
+  timeout: "The last connector sync exceeded its time budget; narrow the scope or re-sync.",
+  unavailable: "The provider was unreachable during the last sync; re-sync when it is available.",
+  "bounds-exceeded":
+    "The last connector sync exceeded its run bounds; narrow the scope or re-sync.",
+  "malformed-payload": "The provider returned unreadable content for some items.",
+};
+
+function connectorDegradationReasons(metadata: ConnectorSourceMetadata): readonly string[] {
+  const reasons: string[] = [];
+  if (metadata.lastSyncStatus === "partial") {
+    reasons.push("The last connector sync completed partially; re-sync to retry skipped items.");
+  }
+  if (metadata.lastSyncStatus === "failed") {
+    reasons.push("The last connector sync failed.");
+  }
+  const guidance =
+    metadata.lastFailureReason === undefined
+      ? undefined
+      : CONNECTOR_FAILURE_GUIDANCE[metadata.lastFailureReason];
+  if (guidance !== undefined) reasons.push(guidance);
+  return reasons;
+}
+
+function connectorSourceProjection(metadata: ConnectorSourceMetadata): AtlassianConnectorPodSource {
+  const lastChangeSummary = parseConnectorChangeSummary(metadata.lastChangeSummaryJson);
+  return {
+    provider: metadata.provider,
+    connectorId: metadata.connectorId,
+    // Scope labels are identifier tokens only; anything unsafe is dropped rather than failing
+    // the summary (fail closed toward omission on an evidence-facing surface).
+    scopeLabels: metadata.scopeKeys.filter((key) => isSafeAtlassianIdentifier(key)),
+    ...(metadata.lastSyncAt !== undefined ? { lastSyncAt: metadata.lastSyncAt } : {}),
+    ...(lastChangeSummary !== undefined ? { lastChangeSummary } : {}),
+  };
+}
+
+function parseConnectorChangeSummary(
+  json: string | undefined,
+): AtlassianConnectorPodSource["lastChangeSummary"] {
+  if (json === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+  const validation = validateAtlassianSyncChangeSummary(parsed);
+  return validation.ok ? validation.value : undefined;
+}
+
+function connectorPodProjection(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+): ConnectorPodProjection {
+  let metadataList: readonly ConnectorSourceMetadata[];
+  try {
+    metadataList = listConnectorSourceMetadata(store, capsuleId);
+  } catch {
+    return { degradationReasons: [] };
+  }
+  const metadata = metadataList[0];
+  if (metadata === undefined) return { degradationReasons: [] };
+  return {
+    connectorSource: connectorSourceProjection(metadata),
+    degradationReasons: connectorDegradationReasons(metadata),
+    ...(metadata.lastFailureReason === "auth-failed" ? { readinessOverride: "unavailable" } : {}),
+  };
 }
 
 // Surface the last explicit-refresh change summary (Epic #1856) for an HTML manual pod. It is read

@@ -568,6 +568,27 @@ describe("isCodingWorkbenchEvidenceSafeText", () => {
   ])("rejects unsafe evidence text: $label", ({ value }) => {
     expect(isCodingWorkbenchEvidenceSafeText(value)).toBe(false);
   });
+
+  // Issue #2244 (ADR-0128 D4): the knowledge-base connector scope labels are evidence-safe, so a
+  // permission request or evidence record carrying the Confluence write scope never gets
+  // redacted into an unreadable token. The segments are inert vocabulary words; hostile labels
+  // that merely CONTAIN them still fail the detectors.
+  it("accepts the knowledge-base connector scope labels as evidence-safe text", () => {
+    for (const scopeLabel of [
+      "knowledge-base.read",
+      "knowledge-base.write",
+      "issue-tracker.write",
+    ]) {
+      expect(isCodingWorkbenchEvidenceSafeText(scopeLabel)).toBe(true);
+    }
+  });
+
+  it("still rejects hostile labels around the knowledge-base tokens", () => {
+    expect(isCodingWorkbenchEvidenceSafeText("knowledge-base.write token=abc")).toBe(false);
+    expect(isCodingWorkbenchEvidenceSafeText("https://knowledge-base.write")).toBe(false);
+    expect(isCodingWorkbenchEvidenceSafeText("knowledge-base.write\u202E")).toBe(false);
+    expect(isCodingWorkbenchEvidenceSafeText("knowledge-base-password")).toBe(false);
+  });
 });
 
 describe("validateCodingWorkbenchAuthorityEnvelope", () => {

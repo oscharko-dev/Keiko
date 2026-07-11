@@ -731,6 +731,18 @@ behaviour, and empty-crawl handling.
 
 ---
 
+## Atlassian connector
+
+Failures when verifying a connector, syncing Confluence or Jira into a connector pod, running a
+live Jira read, or performing a governed write action are documented separately. Refer to the
+[Atlassian connector troubleshooting runbook](./atlassian-connector.md) for every verify status
+(`auth-failed`, `forbidden`, `unreachable`, `timeout`) and degradation reason (`permission-denied`,
+`rate-limited`, `unavailable`, `scope-exceeded`, `bounds-exceeded`, `cancelled`, `malformed-payload`,
+`conflict`, `invalid-transition`, and the scope/authority denials), including the
+`NODE_EXTRA_CA_CERTS` guidance for enterprise proxy and CA failures.
+
+---
+
 ## Related documentation
 
 - [README](../../README.md) — installation, daily use, and configuration.
@@ -739,6 +751,7 @@ behaviour, and empty-crawl handling.
 - [Local runtime state contract](../local-runtime-state-contract.md) — files written under `.keiko/` and `~/.keiko/`.
 - [Keiko Editor troubleshooting](../keiko-editor/troubleshooting.md) — Monaco workers, CSP, unsupported files, completion, and verification failures.
 - [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) — refresh-specific troubleshooting and operational guidance.
+- [Atlassian connector troubleshooting runbook](./atlassian-connector.md) — verify statuses, sync and write degradation reasons, and enterprise proxy/CA failures for the Atlassian connector.
 - [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
 
 For new entries, follow the [troubleshooting entry template](./_template.md).
