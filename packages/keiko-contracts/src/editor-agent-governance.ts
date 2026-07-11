@@ -50,12 +50,14 @@ export const EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS = 200;
 // Every action type maps to exactly one effect class. The class drives both the policy disposition
 // and whether the action is audited. `external-effect` is defined for the future Git/command action
 // types named in the issue scope ("when available"); it has NO members in the current action
-// contract. `execution` (Issue #2210, ADR-0126 D4) governs agent-triggered verification runs — a
-// non-mutating but sandbox-consuming effect, gated through the Authority Envelope like a mutation.
+// contract. `workspace-read` (Issue #2298) governs bounded local repository reads, while
+// `execution` (Issue #2210, ADR-0126 D4) governs agent-triggered verification runs. Both are
+// non-mutating effects gated through the Authority Envelope so existing tool/runtime budget
+// reservation applies.
 // The `Record<EditorAgentActionType, …>` makes the table exhaustive at compile time, so a future
 // action type cannot be added to the union without being given a class here.
 export type EditorAgentActionEffectClass =
-  "navigation" | "layout" | "content-mutation" | "external-effect" | "execution";
+  "navigation" | "layout" | "workspace-read" | "content-mutation" | "external-effect" | "execution";
 
 export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   Record<EditorAgentActionType, EditorAgentActionEffectClass>
@@ -73,11 +75,9 @@ export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   requestVerification: "execution",
   navigateSymbol: "navigation",
   searchWorkspace: "navigation",
-  // Issue #2298: read-only on-demand git query. Navigation-class like search/symbol lookup — it
-  // reads bounded, redacted source-control state and never mutates, so it inherits the deliberate
-  // Authority-Envelope exemption and is unconditionally `allowed` by the classifier, gated only by
-  // the structural workspace-containment / sensitive-path check on its file argument.
-  queryGit: "navigation",
+  // Issue #2298 amendment: bounded local repository reads require workspace-read authority and
+  // budget reservation, but remain distinct from mutation, external effect, and delivery.
+  queryGit: "workspace-read",
 };
 
 // Pure editor navigation and layout do not consume workspace or delivery authority. Mutating and
@@ -88,6 +88,7 @@ export const EDITOR_AGENT_WORKBENCH_ACTION_CLASS: Readonly<
 > = {
   navigation: null,
   layout: null,
+  "workspace-read": "workspace-read",
   "content-mutation": "workspace-write",
   "external-effect": "delivery-substrate",
   // Non-null so a verification run is gated through the Authority Envelope, not short-circuited like
@@ -100,6 +101,7 @@ export const EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE: Readonly<
 > = {
   navigation: null,
   layout: null,
+  "workspace-read": "workspace-contained",
   "content-mutation": "workspace-contained",
   "external-effect": "delivery",
   // Verification runs execute scoped to the project root; reuse the existing workspace-contained
@@ -285,6 +287,21 @@ function classifyExecution(
   return allowedDecision("execution", origin);
 }
 
+// A bounded repository read is non-mutating, but its file target is still subject to the same
+// immutable containment and sensitive-path posture before Authority Envelope composition.
+function classifyWorkspaceRead(
+  context: EditorAgentActionPolicyContext,
+  origin: EditorAgentActionOrigin,
+): EditorAgentActionPolicyDecision {
+  if (context.targetPath !== null && !isContainedAgentPath(context.targetPath)) {
+    return denyDecision("workspace-read", "workspace-boundary-escape", origin);
+  }
+  if (context.targetSensitive) {
+    return denyDecision("workspace-read", "denied-sensitive-path", origin);
+  }
+  return allowedDecision("workspace-read", origin);
+}
+
 // Deterministic, fail-closed policy classifier (AC2). Pure: same (type, context) always yields the
 // same decision, which is required for replay-safe audit and for idempotent action handling. The
 // classifier governs policy posture only; it does NOT re-check the #1394 structural preconditions
@@ -299,6 +316,8 @@ export function classifyEditorAgentAction(
     case "navigation":
     case "layout":
       return allowedDecision(effectClass, origin);
+    case "workspace-read":
+      return classifyWorkspaceRead(context, origin);
     case "content-mutation":
       return classifyContentMutation(context, origin);
     case "external-effect":
@@ -396,6 +415,10 @@ export interface EditorAgentActionAuditRecord {
   // Workspace-relative target path (never an absolute or escaping path). Redacted server-side as
   // defense in depth before storage; a path is metadata, not source content.
   readonly targetPath?: string | undefined;
+  // Issue #2298 queryGit target metadata. The server computes the basename and SHA-256 path digest;
+  // contracts only bound and carry them, and queryGit records omit the full targetPath.
+  readonly targetBasename?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   // Content-free counts. `editCount` is the number of text edits, never their content.
   readonly editCount?: number | undefined;
   readonly patchByteLength?: number | undefined;
@@ -416,6 +439,8 @@ export interface EditorAgentActionAuditInput {
   readonly conflictCode?: EditorAgentConflictCode | undefined;
   readonly failureCode?: EditorAgentFailureCode | undefined;
   readonly targetPath?: string | null | undefined;
+  readonly targetBasename?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   readonly editCount?: number | undefined;
   readonly patchByteLength?: number | undefined;
 }
@@ -426,15 +451,90 @@ function boundedSummary(text: string): string {
     : text.slice(0, EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS);
 }
 
-function buildAuditSummary(input: EditorAgentActionAuditInput): string {
+const EDITOR_AGENT_AUDIT_TARGET_BASENAME_MAX_CHARS = 255;
+const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+
+function isBoundedTargetBasename(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= EDITOR_AGENT_AUDIT_TARGET_BASENAME_MAX_CHARS &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    !value.includes("\0")
+  );
+}
+
+function isTargetPathHash(value: unknown): value is string {
+  return typeof value === "string" && SHA256_HEX_PATTERN.test(value);
+}
+
+function hasMatchingActionEffect(
+  actionType: unknown,
+  effectClass: unknown,
+  mutating: unknown,
+): boolean {
+  if (
+    !isEditorAgentActionEffectClass(effectClass) ||
+    typeof mutating !== "boolean" ||
+    typeof actionType !== "string" ||
+    !Object.prototype.hasOwnProperty.call(EDITOR_AGENT_ACTION_EFFECT_CLASS, actionType)
+  ) {
+    return false;
+  }
+  const type = actionType as EditorAgentActionType;
+  return (
+    EDITOR_AGENT_ACTION_EFFECT_CLASS[type] === effectClass &&
+    isMutatingEditorAgentAction(type) === mutating
+  );
+}
+
+interface AuditTargetMetadata {
+  readonly targetPath?: string | undefined;
+  readonly targetBasename?: string | undefined;
+  readonly targetPathHash?: string | undefined;
+}
+
+function auditTargetMetadata(input: EditorAgentActionAuditInput): AuditTargetMetadata {
+  const targetPath =
+    input.actionType !== "queryGit" &&
+    typeof input.targetPath === "string" &&
+    input.targetPath.length > 0
+      ? input.targetPath
+      : undefined;
+  const targetBasename = isBoundedTargetBasename(input.targetBasename)
+    ? input.targetBasename
+    : undefined;
+  const targetPathHash = isTargetPathHash(input.targetPathHash) ? input.targetPathHash : undefined;
+  return {
+    ...(targetPath === undefined ? {} : { targetPath }),
+    ...(targetBasename === undefined ? {} : { targetBasename }),
+    ...(targetPathHash === undefined ? {} : { targetPathHash }),
+  };
+}
+
+function hasValidAuditTargetMetadata(value: Record<string, unknown>): boolean {
+  return (
+    (value.targetPath === undefined ||
+      (typeof value.targetPath === "string" && value.targetPath.length > 0)) &&
+    (value.actionType !== "queryGit" || value.targetPath === undefined) &&
+    (value.targetBasename === undefined || isBoundedTargetBasename(value.targetBasename)) &&
+    (value.targetPathHash === undefined || isTargetPathHash(value.targetPathHash))
+  );
+}
+
+function buildAuditSummary(
+  input: EditorAgentActionAuditInput,
+  targetPath: string | undefined,
+  targetBasename: string | undefined,
+): string {
   const parts: string[] = [
     input.actionType,
     input.decision.disposition,
     `outcome=${input.outcome}`,
   ];
-  if (typeof input.targetPath === "string" && input.targetPath.length > 0) {
-    parts.push(`file=${input.targetPath}`);
-  }
+  if (targetBasename !== undefined) parts.push(`file=${targetBasename}`);
+  else if (targetPath !== undefined) parts.push(`file=${targetPath}`);
   if (input.decision.denyReason !== undefined) parts.push(`deny=${input.decision.denyReason}`);
   if (input.decision.reviewReason !== undefined) {
     parts.push(`review=${input.decision.reviewReason}`);
@@ -448,10 +548,7 @@ function buildAuditSummary(input: EditorAgentActionAuditInput): string {
 export function buildEditorAgentActionAuditRecord(
   input: EditorAgentActionAuditInput,
 ): EditorAgentActionAuditRecord {
-  const targetPath =
-    typeof input.targetPath === "string" && input.targetPath.length > 0
-      ? input.targetPath
-      : undefined;
+  const target = auditTargetMetadata(input);
   return {
     schemaVersion: EDITOR_AGENT_AUDIT_SCHEMA_VERSION,
     auditId: input.auditId,
@@ -470,10 +567,10 @@ export function buildEditorAgentActionAuditRecord(
     outcome: input.outcome,
     ...(input.conflictCode === undefined ? {} : { conflictCode: input.conflictCode }),
     ...(input.failureCode === undefined ? {} : { failureCode: input.failureCode }),
-    ...(targetPath === undefined ? {} : { targetPath }),
+    ...target,
     ...(input.editCount === undefined ? {} : { editCount: input.editCount }),
     ...(input.patchByteLength === undefined ? {} : { patchByteLength: input.patchByteLength }),
-    summary: buildAuditSummary(input),
+    summary: buildAuditSummary(input, target.targetPath, target.targetBasename),
   };
 }
 
@@ -502,6 +599,7 @@ export function isEditorAgentActionEffectClass(
   return (
     value === "navigation" ||
     value === "layout" ||
+    value === "workspace-read" ||
     value === "content-mutation" ||
     value === "external-effect" ||
     value === "execution"
@@ -523,10 +621,10 @@ export function isEditorAgentActionAuditRecord(
     typeof value.sessionId === "string" && value.sessionId.length > 0,
     typeof value.actionId === "string" && value.actionId.length > 0,
     value.origin === undefined || isEditorAgentActionOrigin(value.origin),
-    isEditorAgentActionEffectClass(value.effectClass),
-    typeof value.mutating === "boolean",
+    hasMatchingActionEffect(value.actionType, value.effectClass, value.mutating),
     isEditorAgentActionDisposition(value.disposition),
     typeof value.outcome === "string" && value.outcome.length > 0,
+    hasValidAuditTargetMetadata(value),
     typeof value.summary === "string" &&
       value.summary.length <= EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS,
   ].every(Boolean);
