@@ -432,8 +432,8 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     desc: "Govern coding agents",
     w: 860,
     h: 680,
-    min: { w: 520, h: 420 },
-    tiny: { w: 320, h: 260 },
+    min: { w: 302, h: 420 },
+    tiny: { w: 300, h: 260 },
     tool: true,
     singleton: true,
     config: [

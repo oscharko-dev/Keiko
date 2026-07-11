@@ -1,0 +1,26 @@
+{
+  "issue": "#2253",
+  "generatedAt": "2026-07-11T20:48:57.703Z",
+  "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-2253",
+  "playwrightCommand": "playwright test --config tests/e2e/config/playwright.issue-2253-coding-workbench.config.ts --project=chromium",
+  "artifacts": [
+    "01-dark-desktop.png",
+    "02-light-desktop.png",
+    "03-dark-high-contrast.png",
+    "04-light-high-contrast.png",
+    "05-prefers-contrast.png",
+    "06-forced-colors.png",
+    "07-reduced-motion.png",
+    "08-320px-reflow.png",
+    "09-desktop-304px-frame-reflow.png",
+    "coding-workbench-unavailable-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ],
+  "captureCount": 9,
+  "redaction": {
+    "profileFixture": "contains only deterministic status/capability metadata; no credentials, paths, endpoints, or runtime output",
+    "screenshots": "capture the labelled Source status region and unavailable Codex card",
+    "proofs": "contain assertions, accessibility counts, hashes, and visible product copy only"
+  }
+}

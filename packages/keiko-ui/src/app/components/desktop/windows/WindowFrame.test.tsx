@@ -376,6 +376,7 @@ describe("WindowFrame content zoom controls", () => {
     expect(contentZoom).toHaveStyle({
       width: "498.571px",
       height: "298.571px",
+      maxWidth: "71.429%",
       transform: "scale(1.4)",
       transformOrigin: "0 0",
     });
@@ -416,6 +417,37 @@ describe("WindowFrame content zoom controls", () => {
     expect(contentZoom?.style.minWidth).toBe("0px");
     expect(contentZoom?.style.minHeight).toBe("0px");
     expect(contentZoom?.style.overflow).toBe("clip");
+  });
+
+  it("caps normal-zoom content to a CSS-constrained outer frame without clipping", () => {
+    const { container, rerender } = render(
+      <WindowFrame
+        win={appWindow({ id: "coding-1", type: "coding", w: 304, h: 420, zoom: 1 })}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const windowSection = container.querySelector<HTMLElement>(".window");
+    const contentZoom = container.querySelector<HTMLElement>(".win-content-zoom");
+    expect(windowSection).toHaveStyle({ width: "304px" });
+    expect(contentZoom).toHaveStyle({ width: "302px", maxWidth: "100%", transform: "scale(1)" });
+
+    rerender(
+      <WindowFrame
+        win={appWindow({ id: "coding-1", type: "coding", w: 304, h: 420, zoom: 0.5 })}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+    expect(contentZoom?.style.maxWidth).toBe("");
+    expect(contentZoom).toHaveStyle({ width: "604px", transform: "scale(0.5)" });
   });
 
   it("keeps chat scrolling inside the chat log instead of the outer window body", () => {
@@ -1444,6 +1476,32 @@ describe("WindowFrame content zoom controls", () => {
       "data-mode",
       "tiny",
     );
+  });
+
+  it("renders the full Coding Workbench at a 304px frame width and 100% content zoom", () => {
+    const renderCodingWorkbench = vi.fn(() => <div data-testid="coding-workbench-full" />);
+    registerWindowRender("coding", renderCodingWorkbench);
+
+    expect(WIN_TYPES.coding.min.w).toBe(302);
+    expect(WIN_TYPES.coding.tiny.w).toBe(300);
+    render(
+      <WindowFrame
+        win={appWindow({ id: "coding-1", type: "coding", w: 304, h: 420, zoom: 1 })}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    expect(screen.getByTestId("coding-workbench-full")).toBeInTheDocument();
+    expect(screen.queryByText("Too small to show Coding Workbench")).not.toBeInTheDocument();
+    expect(screen.getByTestId("coding-workbench-full").closest(".win-body")).toHaveAttribute(
+      "data-mode",
+      "full",
+    );
+    expect(renderCodingWorkbench).toHaveBeenCalledOnce();
   });
 });
 

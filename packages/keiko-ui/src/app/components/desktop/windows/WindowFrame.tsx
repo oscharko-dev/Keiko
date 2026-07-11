@@ -117,6 +117,12 @@ function clampContentZoom(z: number): number {
   return Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, Math.round(z * 10) / 10));
 }
 
+function contentMaxWidthForZoom(zoom: number): string | undefined {
+  if (zoom < 1) return undefined;
+  const percentage = Math.round((100 / zoom) * 1000) / 1000;
+  return `${String(percentage)}%`;
+}
+
 function shouldMaximizeFromHeaderDoubleClick(event: ReactMouseEvent<HTMLElement>): boolean {
   const target = event.target;
   if (target instanceof Element && target.closest("button,[role='button']") !== null) return false;
@@ -1114,6 +1120,7 @@ function WindowFrameImpl({
       height: eh,
       minWidth: 0,
       minHeight: 0,
+      maxWidth: contentMaxWidthForZoom(zoom),
       overflow: "clip",
       transform: `scale(${String(zoom)})`,
       transformOrigin: "0 0",

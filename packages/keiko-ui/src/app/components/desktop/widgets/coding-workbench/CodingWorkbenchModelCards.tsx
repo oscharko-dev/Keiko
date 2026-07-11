@@ -30,6 +30,10 @@ interface ModelCard {
 export function ModelRuntimeStatus({ projection, profiles }: ModelRuntimeStatusProps): ReactNode {
   const t = useTranslate();
   const cards = modelCards(projection.authority.modelProfile.source, profiles, t);
+  const codexAnnouncement =
+    codexStatusFor(profiles) === "redistribution-unapproved"
+      ? t("codingWorkbench.runtime.codexUnavailableAnnouncement")
+      : "";
   return (
     <section className={styles.card} aria-labelledby="coding-workbench-runtime-title">
       <div className={styles.cardHeader}>
@@ -51,6 +55,11 @@ export function ModelRuntimeStatus({ projection, profiles }: ModelRuntimeStatusP
           </article>
         ))}
       </div>
+      {codexAnnouncement.length > 0 ? (
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {codexAnnouncement}
+        </p>
+      ) : null}
     </section>
   );
 }

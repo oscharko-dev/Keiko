@@ -359,7 +359,7 @@ describe("CodingWorkbenchWindow", () => {
   });
 
   it("keeps an unapproved Codex subscription unavailable without setup or local-install controls", async () => {
-    render(
+    const { container } = render(
       <CodingWorkbenchWindow
         api={{
           fetchSidecarGatewayProfile: vi.fn(async () => sidecarProfile()),
@@ -377,6 +377,13 @@ describe("CodingWorkbenchWindow", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("Needs setup")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /login|local install/u })).not.toBeInTheDocument();
+    const availabilityStatus = screen.getByText(
+      "ChatGPT/Codex subscription profile unavailable in this release",
+    );
+    expect(availabilityStatus).toHaveAttribute("role", "status");
+    expect(availabilityStatus).toHaveAttribute("aria-live", "polite");
+    expect(availabilityStatus).toHaveAttribute("aria-atomic", "true");
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("passes axe for the running workbench surface", async () => {
