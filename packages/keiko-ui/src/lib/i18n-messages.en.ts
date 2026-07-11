@@ -15,6 +15,15 @@ export const EN_MESSAGES = {
   "rail.coding": "Coding Workbench",
   "rail.localKnowledge": "Local Knowledge",
   "rail.editor": "Editor",
+  "editor.callHierarchy.title": "Call hierarchy",
+  "editor.callHierarchy.incoming": "Incoming calls",
+  "editor.callHierarchy.outgoing": "Outgoing calls",
+  "editor.callHierarchy.callSite": "Call site",
+  "editor.callHierarchy.empty": "No calls found for this symbol.",
+  "editor.callHierarchy.close": "Close call hierarchy",
+  "editor.callHierarchy.command": "Show Call Hierarchy",
+  "editor.verification.run": "Run Verification",
+  "editor.verification.runReviewedChangeLabel": "Run verification for the reviewed change",
   "rail.figma": "Figma Snapshot",
   "rail.lightMode": "Light mode",
   "rail.darkMode": "Dark mode",
@@ -35,6 +44,42 @@ export const EN_MESSAGES = {
   "common.working": "Working…",
   "common.tryAgain": "Try again",
   "common.dismiss": "Dismiss",
+  "common.on": "on",
+  "common.off": "off",
+  "common.advanced": "advanced",
+  "gatewaySetup.voice.title": "Audio & Digital Voice",
+  "gatewaySetup.voice.description":
+    "Optional models for dictation, live conversation, and spoken answers.",
+  "gatewaySetup.voice.guidance":
+    "Configure only what you need: Dictate requires a speech-to-text deployment. Digital Voice requires a separate Realtime deployment. The same audio connection and credential are used for the selected deployments below. Use the exact deployment names shown by your provider.",
+  "gatewaySetup.voice.selectedCapabilities":
+    "Selected capabilities: Dictate {dictate} · Digital Voice {digitalVoice} · Read aloud {readAloud}.",
+  "gatewaySetup.voice.dictateDeployment": "Dictate · speech-to-text deployment",
+  "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime deployment",
+  "gatewaySetup.voice.speechOutputDeployment": "Read aloud · speech-output deployment",
+  "gatewaySetup.voice.outputVoice": "Output voice",
+  "gatewaySetup.voice.outputVoiceHint": "optional; default alloy",
+  "gatewaySetup.voice.endpointUrl": "Audio endpoint URL",
+  "gatewaySetup.voice.endpointReplacePlaceholder":
+    "Only enter a value to replace the stored audio URL",
+  "gatewaySetup.voice.credential": "Audio credential",
+  "gatewaySetup.voice.credentialReplacePlaceholder":
+    "Only enter a value to replace the stored audio credential",
+  "gatewaySetup.voice.credentialPlaceholder": "Paste your audio credential",
+  "gatewaySetup.voice.authHeader": "Audio auth header",
+  "gatewaySetup.voice.timeout": "Audio timeout (ms)",
+  "gatewaySetup.voice.storedAria": "Stored audio credentials",
+  "gatewaySetup.voice.audioModels": "Audio models",
+  "gatewaySetup.voice.updateSettings": "Update audio and Digital Voice settings",
+  "gatewaySetup.voice.success.audioAndFigma":
+    "Updated audio and Digital Voice settings and verified Figma access token. Reloading Keiko…",
+  "gatewaySetup.voice.success.gatewayAudioAndFigma":
+    "Updated model gateway, audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…",
+  "gatewaySetup.voice.success.audio": "Updated audio and Digital Voice settings. Reloading Keiko…",
+  "gatewaySetup.voice.success.verifiedAudioAndFigma":
+    "{verified}, updated audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…{skipped}",
+  "gatewaySetup.voice.success.verifiedAudio":
+    "{verified} and updated audio and Digital Voice settings. Reloading Keiko…{skipped}",
   "codingWorkbench.status.checking": "Checking",
   "codingWorkbench.status.available": "Available",
   "codingWorkbench.status.unavailable": "Unavailable",
@@ -84,6 +129,9 @@ export const EN_MESSAGES = {
   // Editor-agent surface messages live in the lazy `editor-agent-i18n.ts` namespace so opening the
   // workspace shell does not preload editor-only translations. Issue #2120 added the localized
   // agent-presence-indicator labels to that lazy namespace (EN/DE) rather than this shell catalog.
+  // The Epic #2092 audit follow-up (verification-target scoping in EditorRuntimeWidget.tsx, tab-
+  // eviction correctness in ProblemsPanel.tsx) is purely behavioral and introduces no new strings;
+  // Problems-panel text lives in the lazy `problems-i18n.ts` namespace, also unaffected.
   "chat.regenerate.cancelled": "Regeneration cancelled",
   "chat.regenerate.running": "Regenerating response",
   "chat.regenerate.cancel": "Cancel regeneration",

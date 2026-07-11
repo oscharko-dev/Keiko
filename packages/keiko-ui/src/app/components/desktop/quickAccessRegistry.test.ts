@@ -26,6 +26,8 @@ function host(): EditorPaletteHost {
     activeFile: "src/app.ts",
     closedTabCount: 1,
     dirtyCount: 1,
+    verificationRunning: false,
+    verifiableTarget: "src/app.test.ts",
     splitActive: vi.fn(),
     closeActiveSplit: vi.fn(),
     closeActiveTab: vi.fn(),
@@ -33,6 +35,9 @@ function host(): EditorPaletteHost {
     prevTab: vi.fn(),
     reopenClosed: vi.fn(),
     saveAll: vi.fn(),
+    runFileTests: vi.fn(),
+    runWorkspaceVerification: vi.fn(),
+    cancelVerification: vi.fn(),
   };
 }
 

@@ -20,6 +20,7 @@ const ALL_CAPABILITIES: readonly EditorHostCapability[] = [
   "applyPatchReview",
   "formatDocument",
   "runVerification",
+  "runWorkspaceVerification",
   "renameSymbol",
 ];
 
@@ -32,6 +33,11 @@ const EXPECTED_IDS: readonly EditorCommandId[] = [
   "editor.generateTests",
   "editor.askKeikoAboutSelection",
   "editor.runVerification",
+  "editor.runFileTests",
+  "editor.runTypecheck",
+  "editor.runLint",
+  "editor.runBuild",
+  "editor.cancelVerification",
   "editor.previewPatch",
   "editor.openDiff",
   "editor.applyPatch",
@@ -48,6 +54,8 @@ const baseContext = (overrides: Partial<EditorCommandContext> = {}): EditorComma
   hasSelection: false,
   inlineCompletionVisible: false,
   pendingPatchId: null,
+  verificationRunning: false,
+  activeFileVerifiable: false,
   availableCapabilities: ALL_CAPABILITIES,
   ...overrides,
 });
@@ -207,9 +215,14 @@ describe("availableCommands", () => {
         hasSelection: true,
         inlineCompletionVisible: true,
         pendingPatchId: "p1",
+        activeFileVerifiable: true,
       }),
     ).map((entry) => entry.id);
-    expect([...ids].sort()).toEqual([...EXPECTED_IDS].sort());
+    // editor.cancelVerification is available only while a run IS active (verificationRunning), the
+    // inverse of the idle state that makes the four run commands available, so no single context can
+    // offer both — it is excluded from this idle-state maximal set.
+    const expected = EXPECTED_IDS.filter((id) => id !== "editor.cancelVerification");
+    expect([...ids].sort()).toEqual([...expected].sort());
   });
 
   it("keeps only intrinsic always-on commands when no capability is present", () => {
@@ -227,5 +240,68 @@ describe("availableCommands", () => {
     ).map((entry) => entry.id);
     // Save (capability + dirty) plus the intrinsic, always-available Find.
     expect([...ids].sort()).toEqual(["editor.find", "editor.save"]);
+  });
+});
+
+describe("run affordances (Issue #2212, ADR-0126)", () => {
+  const RUN_COMMANDS: readonly EditorCommandId[] = [
+    "editor.runFileTests",
+    "editor.runTypecheck",
+    "editor.runLint",
+    "editor.runBuild",
+  ];
+
+  it("gates the four run commands on the runWorkspaceVerification capability being present", () => {
+    const withCap = baseContext({ activeFileVerifiable: true });
+    const withoutCap = baseContext({
+      activeFileVerifiable: true,
+      availableCapabilities: ALL_CAPABILITIES.filter((c) => c !== "runWorkspaceVerification"),
+    });
+    for (const id of RUN_COMMANDS) {
+      expect(isCommandAvailable(command(id), withCap)).toBe(true);
+      expect(isCommandAvailable(command(id), withoutCap)).toBe(false);
+    }
+  });
+
+  it("offers the run commands only while idle and cancel only while running (mutually exclusive)", () => {
+    const idle = baseContext({ verificationRunning: false, activeFileVerifiable: true });
+    const running = baseContext({ verificationRunning: true, activeFileVerifiable: true });
+    for (const id of RUN_COMMANDS) {
+      expect(isCommandAvailable(command(id), idle)).toBe(true);
+      expect(isCommandAvailable(command(id), running)).toBe(false);
+    }
+    expect(isCommandAvailable(command("editor.cancelVerification"), idle)).toBe(false);
+    expect(isCommandAvailable(command("editor.cancelVerification"), running)).toBe(true);
+  });
+
+  it("gates runFileTests additionally on a resolvable target (activeFileVerifiable)", () => {
+    expect(
+      isCommandAvailable(
+        command("editor.runFileTests"),
+        baseContext({ activeFileVerifiable: false }),
+      ),
+    ).toBe(false);
+    expect(
+      isCommandAvailable(
+        command("editor.runFileTests"),
+        baseContext({ activeFileVerifiable: true }),
+      ),
+    ).toBe(true);
+    // The workspace-wide kinds do NOT depend on a resolvable file target.
+    expect(
+      isCommandAvailable(
+        command("editor.runTypecheck"),
+        baseContext({ activeFileVerifiable: false }),
+      ),
+    ).toBe(true);
+  });
+
+  it("leaves editor.runVerification's shape and patch-review gate unchanged", () => {
+    const runVerification = command("editor.runVerification");
+    expect(runVerification.title).toBe("Run Verification");
+    expect(runVerification.requiredCapabilities).toEqual(["runVerification"]);
+    // Still gated to a pending patch (not the new runWorkspaceVerification state).
+    expect(isCommandAvailable(runVerification, baseContext({ pendingPatchId: "p1" }))).toBe(true);
+    expect(isCommandAvailable(runVerification, baseContext({ pendingPatchId: null }))).toBe(false);
   });
 });

@@ -10,8 +10,11 @@ import {
   DEFAULT_API_KEY_HEADER_NAME,
   Gateway,
   createDefaultChatCapability,
+  isVoiceCapability,
   listConfiguredCapabilities,
+  modelSupportsRealtimeVoice,
   modelSupportsSpeechInput,
+  modelSupportsSpeechOutput,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
   selectSpeechToTextModel,
@@ -27,6 +30,7 @@ import type {
   ModelCapability,
   ModelProviderConfig,
   ParseGatewayConfigOptions,
+  VoicePersonaVoice,
   VoiceProviderLocality,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -288,10 +292,22 @@ function providerRaw(
   };
 }
 
-function createDefaultVoiceDictationCapabilityForSetup(
+interface SetupVoiceCapabilities {
+  readonly speechInput: boolean;
+  readonly speechOutput: boolean;
+  readonly realtime: boolean;
+}
+
+function createDefaultVoiceCapabilityForSetup(
   modelId: string,
   providerLocality: VoiceProviderLocality,
+  capabilities: SetupVoiceCapabilities,
 ): ModelCapability {
+  const preferredUseCases = [
+    ...(capabilities.speechInput ? ["Dictation"] : []),
+    ...(capabilities.speechOutput ? ["Speech output"] : []),
+    ...(capabilities.realtime ? ["Digital Voice"] : []),
+  ];
   return {
     id: modelId,
     kind: "voice",
@@ -299,19 +315,19 @@ function createDefaultVoiceDictationCapabilityForSetup(
     maxOutputTokens: 0,
     toolCalling: false,
     structuredOutput: false,
-    streaming: false,
+    streaming: capabilities.realtime,
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: false,
-    supportsSpeechInput: true,
+    ...(capabilities.speechInput ? { supportsSpeechInput: true } : {}),
+    ...(capabilities.speechOutput ? { supportsSpeechOutput: true } : {}),
+    ...(capabilities.realtime ? { supportsRealtimeVoice: true } : {}),
     voiceProviderLocality: providerLocality,
     costClass: "low",
     latencyClass: "fast",
-    throughputHint: "runtime-configured speech-to-text endpoint",
-    preferredUseCases: ["Dictation"],
-    knownLimitations: [
-      "Speech-to-text only; dictation is verified when the first audio clip is transcribed",
-    ],
+    throughputHint: "runtime-configured audio endpoint",
+    preferredUseCases,
+    knownLimitations: ["Audio availability is verified on first use"],
   };
 }
 
@@ -319,23 +335,27 @@ interface VoiceProviderRawOptions {
   readonly apiKeyHeaderName?: string | undefined;
   readonly timeoutMs?: number | undefined;
   readonly providerLocality?: VoiceProviderLocality | undefined;
+  readonly capabilities: SetupVoiceCapabilities;
+  readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
 }
 
 function voiceProviderRaw(
   modelId: string,
   baseUrl: string,
   apiKey: string,
-  options: VoiceProviderRawOptions = {},
+  options: VoiceProviderRawOptions,
 ): Record<string, unknown> {
   return {
     modelId,
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-    capability: createDefaultVoiceDictationCapabilityForSetup(
+    capability: createDefaultVoiceCapabilityForSetup(
       modelId,
       options.providerLocality ?? "azure-foundry",
+      options.capabilities,
     ),
+    ...(options.voiceProfiles === undefined ? {} : { voiceProfiles: options.voiceProfiles }),
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: 1,
     retryBaseDelayMs: 500,
@@ -500,6 +520,11 @@ export function rawConfigFromCurrent(
         baseUrl: provider.baseUrl,
         apiKey: provider.apiKey,
         apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+        ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
+        ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
+        ...(provider.realtimeAuthMode === undefined
+          ? {}
+          : { realtimeAuthMode: provider.realtimeAuthMode }),
         timeoutMs: timeoutMs ?? provider.timeoutMs,
         maxRetries: provider.maxRetries,
         retryBaseDelayMs: provider.retryBaseDelayMs,
@@ -518,65 +543,77 @@ export function rawConfigFromCurrent(
   };
 }
 
-function rawCapabilityIsSpeechInputVoice(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    value.kind === "voice" &&
-    (value.supportsSpeechInput === true || value.supportsRealtimeVoice === true)
-  );
+function rawCapabilityIsVoice(value: unknown): boolean {
+  return isRecord(value) && value.kind === "voice";
 }
 
-function rawProviderIsSpeechInputVoice(value: unknown): boolean {
-  return isRecord(value) && rawCapabilityIsSpeechInputVoice(value.capability);
+function rawProviderIsVoice(value: unknown): boolean {
+  return isRecord(value) && rawCapabilityIsVoice(value.capability);
 }
 
-function setupVoiceProviderFromCurrent(
+function setupVoiceProvidersFromCurrent(
   current: GatewayConfig | undefined,
-): SetupVoiceProvider | undefined {
-  const provider = currentSpeechInputProvider(current);
-  if (provider === undefined) {
-    return undefined;
-  }
-  const capability = currentSpeechInputCapability(current, provider.modelId);
-  return {
-    modelId: provider.modelId,
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
-    apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
-    timeoutMs: provider.timeoutMs,
-    providerLocality: capability?.voiceProviderLocality ?? "azure-foundry",
-  };
+): readonly SetupVoiceProvider[] {
+  if (current === undefined) return [];
+  return current.providers.flatMap((provider) => {
+    const capability = current.capabilities?.find(
+      (candidate) => candidate.id === provider.modelId && isVoiceCapability(candidate),
+    );
+    if (capability === undefined) return [];
+    return [
+      {
+        modelId: provider.modelId,
+        baseUrl: provider.baseUrl,
+        apiKey: provider.apiKey,
+        apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+        timeoutMs: provider.timeoutMs,
+        providerLocality: capability.voiceProviderLocality ?? "azure-foundry",
+        capabilities: {
+          speechInput: modelSupportsSpeechInput(capability),
+          speechOutput: modelSupportsSpeechOutput(capability),
+          realtime: modelSupportsRealtimeVoice(capability),
+        },
+        ...(provider.voiceProfiles === undefined ? {} : { voiceProfiles: provider.voiceProfiles }),
+      },
+    ];
+  });
 }
 
-function applyVoiceProvider(
+function applyVoiceProviders(
   rawConfig: Record<string, unknown>,
-  voiceProvider: SetupVoiceProvider | undefined,
+  voiceProviders: readonly SetupVoiceProvider[],
 ): Record<string, unknown> {
-  if (voiceProvider === undefined) {
+  if (voiceProviders.length === 0) {
     return rawConfig;
   }
   const providers: unknown[] = Array.isArray(rawConfig.providers) ? rawConfig.providers : [];
-  const nextProviders = providers.filter(
-    (provider) =>
-      !rawProviderIsSpeechInputVoice(provider) &&
-      (!isRecord(provider) || provider.modelId !== voiceProvider.modelId),
-  );
+  const configuredIds = new Set(voiceProviders.map((provider) => provider.modelId));
+  const nextProviders = providers.filter((provider) => {
+    if (!isRecord(provider)) return true;
+    return !rawProviderIsVoice(provider) && !configuredIds.has(String(provider.modelId));
+  });
   const nextConfig: Record<string, unknown> = {
     ...rawConfig,
     providers: [
       ...nextProviders,
-      voiceProviderRaw(voiceProvider.modelId, voiceProvider.baseUrl, voiceProvider.apiKey, {
-        apiKeyHeaderName: voiceProvider.apiKeyHeaderName,
-        timeoutMs: voiceProvider.timeoutMs,
-        providerLocality: voiceProvider.providerLocality,
-      }),
+      ...voiceProviders.map((provider) =>
+        voiceProviderRaw(provider.modelId, provider.baseUrl, provider.apiKey, {
+          apiKeyHeaderName: provider.apiKeyHeaderName,
+          timeoutMs: provider.timeoutMs,
+          providerLocality: provider.providerLocality,
+          capabilities: provider.capabilities,
+          ...(provider.voiceProfiles === undefined
+            ? {}
+            : { voiceProfiles: provider.voiceProfiles }),
+        }),
+      ),
     ],
   };
   if (Array.isArray(rawConfig.capabilities)) {
     nextConfig.capabilities = rawConfig.capabilities.filter(
       (capability) =>
-        !rawCapabilityIsSpeechInputVoice(capability) &&
-        (!isRecord(capability) || capability.id !== voiceProvider.modelId),
+        !rawCapabilityIsVoice(capability) &&
+        (!isRecord(capability) || !configuredIds.has(String(capability.id))),
     );
   }
   return nextConfig;
@@ -1041,7 +1078,7 @@ interface SetupRequest {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
-  readonly voiceProvider: SetupVoiceProvider | undefined;
+  readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly figmaAccessToken: string | undefined;
   readonly verifyGateway: boolean;
   readonly verifyFigmaCredential: boolean;
@@ -1065,6 +1102,8 @@ interface SetupVoiceProvider {
   readonly apiKeyHeaderName: string;
   readonly timeoutMs: number | undefined;
   readonly providerLocality: VoiceProviderLocality;
+  readonly capabilities: SetupVoiceCapabilities;
+  readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
 }
 
 function normalizeSetupApiKeyHeaderName(value: unknown): string | RouteResult {
@@ -1149,6 +1188,10 @@ function hasVoiceProviderInput(raw: Record<string, unknown>): boolean {
     hasNonBlankStringField(raw, "voiceApiKey") ||
     hasNonBlankStringField(raw, "voiceApiKeyHeaderName") ||
     hasNonBlankStringField(raw, "voiceModelId") ||
+    hasNonBlankStringField(raw, "voiceSpeechToTextModelId") ||
+    hasNonBlankStringField(raw, "voiceRealtimeModelId") ||
+    hasNonBlankStringField(raw, "voiceSpeechOutputModelId") ||
+    hasNonBlankStringField(raw, "voiceOutputVoiceId") ||
     hasNonBlankStringField(raw, "voiceProviderLocality") ||
     raw.voiceTimeoutMs !== undefined
   );
@@ -1176,6 +1219,16 @@ function currentSpeechInputProvider(
     return undefined;
   }
   return current.providers.find((provider) => provider.modelId === modelId);
+}
+
+function firstCurrentVoiceProvider(
+  current: GatewayConfig | undefined,
+): ModelProviderConfig | undefined {
+  return setupVoiceProvidersFromCurrent(current)[0] === undefined
+    ? undefined
+    : current?.providers.find(
+        (provider) => provider.modelId === setupVoiceProvidersFromCurrent(current)[0]?.modelId,
+      );
 }
 
 function currentSpeechInputCapability(
@@ -1266,6 +1319,10 @@ function validateVoiceProviderConnection(
             apiKeyHeaderName: provider.apiKeyHeaderName,
             timeoutMs: provider.timeoutMs,
             providerLocality: provider.providerLocality,
+            capabilities: provider.capabilities,
+            ...(provider.voiceProfiles === undefined
+              ? {}
+              : { voiceProfiles: provider.voiceProfiles }),
           }),
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
@@ -1282,17 +1339,15 @@ function validateVoiceProviderConnection(
   }
 }
 
-function setupVoiceModelId(
+function submittedVoiceModelId(
   raw: Record<string, unknown>,
-  existing: ModelProviderConfig | undefined,
-  preserveExisting: boolean,
-): string | RouteResult {
-  const modelId =
-    trimmedSubmittedString(raw, "voiceModelId") ??
-    (preserveExisting ? existing?.modelId : undefined) ??
-    "keiko-stt";
+  key: string,
+  fallback?: string,
+): string | RouteResult | undefined {
+  const modelId = trimmedSubmittedString(raw, key) ?? fallback;
+  if (modelId === undefined) return undefined;
   if (!isUsableModelId(modelId)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "voiceModelId is invalid.") };
+    return { status: 400, body: errorBody("BAD_REQUEST", `${key} is invalid.`) };
   }
   return modelId;
 }
@@ -1312,7 +1367,10 @@ function setupVoiceConnection(
   if (baseUrl.length === 0 || apiKey.length === 0) {
     return {
       status: 400,
-      body: errorBody("BAD_REQUEST", "voiceBaseUrl and voiceApiKey are required for dictation."),
+      body: errorBody(
+        "BAD_REQUEST",
+        "Audio endpoint URL and credential are required when an audio model is selected.",
+      ),
     };
   }
   return { baseUrl, apiKey };
@@ -1342,24 +1400,132 @@ function firstRouteResult(values: readonly unknown[]): RouteResult | undefined {
   return values.find(isRouteResult);
 }
 
-function readSetupVoiceProvider(
+interface VoiceRoleModelIds {
+  readonly speechInput?: string | undefined;
+  readonly speechOutput?: string | undefined;
+  readonly realtime?: string | undefined;
+}
+
+function existingVoiceRoleModelIds(providers: readonly SetupVoiceProvider[]): VoiceRoleModelIds {
+  return {
+    speechInput: providers.find((provider) => provider.capabilities.speechInput)?.modelId,
+    speechOutput: providers.find((provider) => provider.capabilities.speechOutput)?.modelId,
+    realtime: providers.find((provider) => provider.capabilities.realtime)?.modelId,
+  };
+}
+
+function voiceRoleFallbacks(
+  hasNewRole: boolean,
+  providers: readonly SetupVoiceProvider[],
+): VoiceRoleModelIds {
+  if (hasNewRole) return {};
+  const existing = existingVoiceRoleModelIds(providers);
+  return {
+    ...existing,
+    speechInput: existing.speechInput ?? (providers.length === 0 ? "keiko-stt" : undefined),
+  };
+}
+
+function voiceRoleModelIds(
+  raw: Record<string, unknown>,
+  current: GatewayConfig | undefined,
+  preserveExisting: boolean,
+): VoiceRoleModelIds | RouteResult {
+  const hasNewRole = [
+    "voiceSpeechToTextModelId",
+    "voiceSpeechOutputModelId",
+    "voiceRealtimeModelId",
+  ].some((key) => hasNonBlankStringField(raw, key));
+  const existing = preserveExisting ? setupVoiceProvidersFromCurrent(current) : [];
+  const fallbacks = voiceRoleFallbacks(hasNewRole, existing);
+  const speechInput = submittedVoiceModelId(
+    raw,
+    "voiceSpeechToTextModelId",
+    trimmedSubmittedString(raw, "voiceModelId") ?? fallbacks.speechInput,
+  );
+  const speechOutput = submittedVoiceModelId(
+    raw,
+    "voiceSpeechOutputModelId",
+    fallbacks.speechOutput,
+  );
+  const realtime = submittedVoiceModelId(raw, "voiceRealtimeModelId", fallbacks.realtime);
+  const routeError = firstRouteResult([speechInput, speechOutput, realtime]);
+  return (
+    routeError ?? {
+      speechInput: speechInput as string | undefined,
+      speechOutput: speechOutput as string | undefined,
+      realtime: realtime as string | undefined,
+    }
+  );
+}
+
+function setupVoiceProfiles(raw: Record<string, unknown>): readonly VoicePersonaVoice[] {
+  return [
+    { persona: "neutral", voiceId: trimmedSubmittedString(raw, "voiceOutputVoiceId") ?? "alloy" },
+  ];
+}
+
+function providersForVoiceRoles(
+  roleIds: VoiceRoleModelIds,
+  shared: Omit<SetupVoiceProvider, "modelId" | "capabilities" | "voiceProfiles">,
+  raw: Record<string, unknown>,
+): readonly SetupVoiceProvider[] {
+  const ids = new Map<string, SetupVoiceCapabilities>();
+  const roles: readonly (readonly [keyof SetupVoiceCapabilities, string | undefined])[] = [
+    ["speechInput", roleIds.speechInput],
+    ["speechOutput", roleIds.speechOutput],
+    ["realtime", roleIds.realtime],
+  ];
+  for (const [role, modelId] of roles) {
+    if (modelId === undefined) continue;
+    const current = ids.get(modelId) ?? {
+      speechInput: false,
+      speechOutput: false,
+      realtime: false,
+    };
+    ids.set(modelId, { ...current, [role]: true });
+  }
+  return [...ids.entries()].map(([modelId, capabilities]) => ({
+    ...shared,
+    modelId,
+    capabilities,
+    ...(capabilities.speechOutput || capabilities.realtime
+      ? { voiceProfiles: setupVoiceProfiles(raw) }
+      : {}),
+  }));
+}
+
+function validateVoiceProviders(
+  providers: readonly SetupVoiceProvider[],
+  env: EnvSource,
+): RouteResult | undefined {
+  for (const provider of providers) {
+    const invalidConnection = validateVoiceProviderConnection(provider, env);
+    if (invalidConnection !== undefined) return invalidConnection;
+  }
+  return undefined;
+}
+
+function readSetupVoiceProviders(
   raw: Record<string, unknown>,
   env: EnvSource,
   current: GatewayConfig | undefined,
   preserveExisting: boolean,
-): SetupVoiceProvider | RouteResult | undefined {
+): readonly SetupVoiceProvider[] | RouteResult {
   if (!hasVoiceProviderInput(raw)) {
-    return undefined;
+    return [];
   }
-  const existing = preserveExisting ? currentSpeechInputProvider(current) : undefined;
+  const existing = preserveExisting
+    ? (currentSpeechInputProvider(current) ?? firstCurrentVoiceProvider(current))
+    : undefined;
   const existingCapability = currentSpeechInputCapability(current, existing?.modelId);
-  const modelId = setupVoiceModelId(raw, existing, preserveExisting);
+  const roleIds = voiceRoleModelIds(raw, current, preserveExisting);
   const connection = setupVoiceConnection(raw, existing, preserveExisting);
   const apiKeyHeaderName = setupVoiceApiKeyHeaderName(raw, existing, preserveExisting);
   const timeoutMs = optionalSetupPositiveInt(raw.voiceTimeoutMs, "voiceTimeoutMs");
   const providerLocality = setupVoiceProviderLocality(raw, existingCapability);
   const routeError = firstRouteResult([
-    modelId,
+    roleIds,
     connection,
     apiKeyHeaderName,
     timeoutMs,
@@ -1370,19 +1536,15 @@ function readSetupVoiceProvider(
   }
   const resolvedConnection = connection as { readonly baseUrl: string; readonly apiKey: string };
   const resolvedTimeoutMs = timeoutMs as number | undefined;
-  const provider: SetupVoiceProvider = {
-    modelId: modelId as string,
+  const shared = {
     baseUrl: resolvedConnection.baseUrl,
     apiKey: resolvedConnection.apiKey,
     apiKeyHeaderName: apiKeyHeaderName as string,
     timeoutMs: resolvedTimeoutMs ?? existing?.timeoutMs,
     providerLocality: providerLocality as VoiceProviderLocality,
   };
-  const invalidConnection = validateVoiceProviderConnection(provider, env);
-  if (invalidConnection !== undefined) {
-    return invalidConnection;
-  }
-  return provider;
+  const providers = providersForVoiceRoles(roleIds as VoiceRoleModelIds, shared, raw);
+  return validateVoiceProviders(providers, env) ?? providers;
 }
 
 function resolveSetupModelLists(
@@ -1442,9 +1604,9 @@ function readSetupRequest(
   if (isRouteResult(figmaAccessToken)) {
     return figmaAccessToken;
   }
-  const voiceProvider = readSetupVoiceProvider(raw, env, current, preserveExisting);
-  if (isRouteResult(voiceProvider)) {
-    return voiceProvider;
+  const voiceProviders = readSetupVoiceProviders(raw, env, current, preserveExisting);
+  if (isRouteResult(voiceProviders)) {
+    return voiceProviders;
   }
   const resolvedModelLists = resolveSetupModelLists(modelLists, current, preserveExisting);
   return {
@@ -1452,7 +1614,7 @@ function readSetupRequest(
     timeoutMs,
     deploymentNames: resolvedModelLists.deploymentNames,
     imageInputModelIds: resolvedModelLists.imageInputModelIds,
-    voiceProvider,
+    voiceProviders,
     figmaAccessToken: figmaAccessToken ?? current?.figma?.accessToken,
     verifyGateway: setupRequiresGatewayVerification(raw, preserveExisting),
     verifyFigmaCredential: figmaAccessToken !== undefined,
@@ -1481,7 +1643,7 @@ interface SetupVerificationInput {
   readonly timeoutMs: number | undefined;
   readonly deploymentNames: readonly string[];
   readonly imageInputModelIds: readonly string[];
-  readonly voiceProvider: SetupVoiceProvider | undefined;
+  readonly voiceProviders: readonly SetupVoiceProvider[];
   readonly tester: GatewaySetupTester;
   readonly discovery: GatewayModelDiscovery;
   readonly env: EnvSource;
@@ -1626,9 +1788,11 @@ function finalRawConfigForSetup(
       ? {}
       : { figma: { accessToken: input.figmaAccessToken } }),
   };
-  return applyVoiceProvider(
+  return applyVoiceProviders(
     rawConfigWithOptionalBlocks,
-    input.voiceProvider ?? setupVoiceProviderFromCurrent(input.current),
+    input.voiceProviders.length > 0
+      ? input.voiceProviders
+      : setupVoiceProvidersFromCurrent(input.current),
   );
 }
 
@@ -1772,8 +1936,7 @@ function figmaCredentialFailureResult(error: unknown, request: SetupRequest): Ro
         request.figmaAccessToken,
         request.apiKey,
         request.baseUrl,
-        request.voiceProvider?.apiKey,
-        request.voiceProvider?.baseUrl,
+        ...request.voiceProviders.flatMap((provider) => [provider.apiKey, provider.baseUrl]),
       ]),
     ),
   };
@@ -1852,7 +2015,7 @@ async function trySetupCandidate(
     timeoutMs: request.timeoutMs,
     deploymentNames: request.deploymentNames,
     imageInputModelIds: request.imageInputModelIds,
-    voiceProvider: request.voiceProvider,
+    voiceProviders: request.voiceProviders,
     tester,
     discovery,
     env: deps.env,
@@ -1871,8 +2034,7 @@ function setupCandidateError(error: unknown, request: SetupRequest, baseUrl: str
     request.baseUrl,
     baseUrl,
     request.figmaAccessToken,
-    request.voiceProvider?.apiKey,
-    request.voiceProvider?.baseUrl,
+    ...request.voiceProviders.flatMap((provider) => [provider.apiKey, provider.baseUrl]),
   ]);
 }
 
@@ -1882,9 +2044,9 @@ function saveExistingConfigUpdate(
   deps: UiHandlerDeps,
   gatewayConfig: RuntimeGatewayConfig,
 ): RouteResult {
-  const rawConfig = applyVoiceProvider(
+  const rawConfig = applyVoiceProviders(
     rawConfigFromCurrent(current, request.figmaAccessToken, request.timeoutMs),
-    request.voiceProvider,
+    request.voiceProviders,
   );
   const config = parseGatewayConfig(
     withInheritedEgress(rawConfig, currentGatewayEgressConfig(deps)),

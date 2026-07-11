@@ -93,6 +93,13 @@ export interface EditorSurfaceProps {
   readonly provideSymbols?: EditorSymbolsResolver | undefined;
   readonly provideFormatting?: EditorFormattingResolver | undefined;
   readonly provideDefinition?: EditorDefinitionResolver | undefined;
+  readonly provideTypeDefinition?: EditorDefinitionResolver | undefined;
+  readonly provideImplementation?: EditorDefinitionResolver | undefined;
+  readonly provideCallHierarchy?: KeikoCodeEditorProps["provideCallHierarchy"] | undefined;
+  readonly callHierarchyLabels?: KeikoCodeEditorProps["callHierarchyLabels"] | undefined;
+  readonly onRevealCallHierarchyLocation?:
+    KeikoCodeEditorProps["onRevealCallHierarchyLocation"] | undefined;
+  readonly provideInlayHints?: KeikoCodeEditorProps["provideInlayHints"] | undefined;
   readonly uriForPath?: KeikoCodeEditorProps["uriForPath"] | undefined;
   readonly provideReferences?: EditorReferencesResolver | undefined;
   readonly provideCodeActions?: EditorCodeActionsResolver | undefined;
@@ -100,6 +107,8 @@ export interface EditorSurfaceProps {
   readonly formatRequestNonce?: number | undefined;
   /** Content-free diagnostic-count observer for the host status bar (Issue #1205). */
   readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+  /** Issue #2213 (ADR-0126) — full per-diagnostic list for the workspace Problems panel. */
+  readonly onDiagnostics?: KeikoCodeEditorProps["onDiagnostics"] | undefined;
   /** Host handler for the palette/keybinding "Generate Tests" command (Issue #1205). */
   readonly onGenerateTests?: (() => void) | undefined;
   /** Host handler for the selection-only Ask Keiko command (Issue #2119). */
@@ -180,12 +189,19 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
       provideSymbols={props.provideSymbols}
       provideFormatting={props.provideFormatting}
       provideDefinition={props.provideDefinition}
+      provideTypeDefinition={props.provideTypeDefinition}
+      provideImplementation={props.provideImplementation}
+      provideCallHierarchy={props.provideCallHierarchy}
+      callHierarchyLabels={props.callHierarchyLabels}
+      onRevealCallHierarchyLocation={props.onRevealCallHierarchyLocation}
+      provideInlayHints={props.provideInlayHints}
       uriForPath={props.uriForPath}
       provideReferences={props.provideReferences}
       provideCodeActions={props.provideCodeActions}
       provideSignatureHelp={props.provideSignatureHelp}
       formatRequestNonce={props.formatRequestNonce}
       onDiagnosticsSummary={props.onDiagnosticsSummary}
+      onDiagnostics={props.onDiagnostics}
       onGenerateTests={props.onGenerateTests}
       onAskKeikoAboutSelection={props.onAskKeikoAboutSelection}
       onRenameSymbol={props.onRenameSymbol}

@@ -15,6 +15,9 @@
 
 import type {
   EditorCodeAction,
+  EditorCallHierarchyCall,
+  EditorCallHierarchyItem,
+  EditorCallHierarchyResponse,
   EditorCodeActionsResponse,
   EditorDefinitionResponse,
   EditorDiagnostic,
@@ -22,6 +25,7 @@ import type {
   EditorDocumentSymbol,
   EditorFormattingResponse,
   EditorHoverResponse,
+  EditorInlayHintsResponse,
   EditorLocation,
   EditorRange,
   EditorReferencesResponse,
@@ -31,6 +35,13 @@ import type {
   EditorSymbolsResponse,
   EditorTextEdit,
 } from "@oscharko-dev/keiko-editor";
+import type {
+  LanguageCallHierarchyIncomingCall,
+  LanguageCallHierarchyItem,
+  LanguageCallHierarchyOutgoingCall,
+  LanguageCallHierarchyResult,
+  LanguageInlayHintsResult,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   LanguageCodeAction,
   LanguageCodeActionsResult,
@@ -129,6 +140,56 @@ export function mapWireToEditorDefinitionResponse(
   wire: LanguageDefinitionResult,
 ): EditorDefinitionResponse {
   return { request, locations: wire.locations.map(toEditorLocation) };
+}
+
+function toEditorCallHierarchyItem(item: LanguageCallHierarchyItem): EditorCallHierarchyItem {
+  return {
+    name: item.name,
+    kind: item.kind,
+    path: item.path,
+    range: toEditorRange(item.range),
+    selectionRange: toEditorRange(item.selectionRange),
+    ...(item.containerName === undefined ? {} : { containerName: item.containerName }),
+  };
+}
+
+function toEditorCallHierarchyCall(
+  call: LanguageCallHierarchyIncomingCall | LanguageCallHierarchyOutgoingCall,
+): EditorCallHierarchyCall {
+  return {
+    item: toEditorCallHierarchyItem(call.item),
+    fromRanges: call.fromRanges.map(toEditorRange),
+  };
+}
+
+export function mapWireToEditorCallHierarchyResponse(
+  request: EditorRequestIdentity,
+  wire: LanguageCallHierarchyResult,
+): EditorCallHierarchyResponse {
+  return {
+    request,
+    roots: wire.roots.map((root) => ({
+      item: toEditorCallHierarchyItem(root.item),
+      incomingCalls: root.incomingCalls.map(toEditorCallHierarchyCall),
+      outgoingCalls: root.outgoingCalls.map(toEditorCallHierarchyCall),
+    })),
+  };
+}
+
+export function mapWireToEditorInlayHintsResponse(
+  request: EditorRequestIdentity,
+  wire: LanguageInlayHintsResult,
+): EditorInlayHintsResponse {
+  return {
+    request,
+    hints: wire.hints.map((hint) => ({
+      position: { line: hint.position.line, column: hint.position.character },
+      label: hint.label,
+      kind: hint.kind,
+      ...(hint.paddingLeft === undefined ? {} : { paddingLeft: hint.paddingLeft }),
+      ...(hint.paddingRight === undefined ? {} : { paddingRight: hint.paddingRight }),
+    })),
+  };
 }
 
 /** Adapt the references wire result into the editor references response. */

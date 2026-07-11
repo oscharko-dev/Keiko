@@ -48,6 +48,8 @@ export type WindowType =
   | "connector"
   // Local Knowledge Connector hub. Singleton tool window: manages capsules inside the Workspace.
   | "localKnowledge"
+  // Issue #2213 (Epic #2092) — workspace Problems panel. Singleton tool window.
+  | "problems"
   // Epic #270 — Quality Intelligence: a singleton hub (start runs + run list) plus per-run result
   // cards. QI lives inside the Workspace like every other window, not as a full-page route.
   | "quality"
@@ -656,6 +658,21 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  // Issue #2213 (Epic #2092, ADR-0126) — workspace Problems panel. Singleton tool window (one
+  // deduplicated instance, localKnowledge-style) aggregating open-file diagnostics + verification
+  // failures with jump-to-line.
+  problems: {
+    title: "Problems",
+    icon: "activity",
+    accent: true,
+    desc: "Diagnostics and verification failures",
+    w: 640,
+    h: 480,
+    min: { w: 360, h: 280 },
+    tiny: { w: 300, h: 200 },
+    tool: true,
+    singleton: true,
+  },
   // Epic #270 — Quality Intelligence hub. Singleton tool window: start a run (requirements or
   // workspace folder) and browse past runs. Selecting/finishing a run opens a `qiRun` result card.
   quality: {
@@ -886,6 +903,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "memoria",
   "connector",
   "localKnowledge",
+  "problems",
   "figma",
   "figmaJson",
   "files",

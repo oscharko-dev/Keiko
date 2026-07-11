@@ -19,6 +19,8 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactEle
 
 import { inferMonacoLanguageId } from "../monaco/language-inference.js";
 import { buildEditorOptions } from "./editor-options.js";
+import { CallHierarchyPanel } from "./CallHierarchyPanel.js";
+import type { EditorCallHierarchyResponse } from "./call-hierarchy-bridge.js";
 import type { DiagnosticOverviewMarker } from "./diagnostics-bridge.js";
 import { deriveLargeFileMode } from "./large-file-mode.js";
 import type { EditorStatusViewModel } from "./status-text.js";
@@ -224,6 +226,7 @@ function useEditorConstructionOptions(
   const hoverEnabled = props.provideHover !== undefined;
   const codeActionsEnabled = props.provideCodeActions !== undefined;
   const signatureHelpEnabled = props.provideSignatureHelp !== undefined;
+  const inlayHintsEnabled = props.provideInlayHints !== undefined;
   // Large-file degraded mode (Issue #1207, ADR-0042 D3.6). Recomputed only when the buffer size or
   // text changes; the byte check short-circuits before the bounded line scan so the derivation never
   // dominates a keystroke.
@@ -242,6 +245,7 @@ function useEditorConstructionOptions(
         hoverEnabled,
         codeActionsEnabled,
         signatureHelpEnabled,
+        inlayHintsEnabled,
         degraded,
       }),
     [
@@ -252,6 +256,7 @@ function useEditorConstructionOptions(
       hoverEnabled,
       codeActionsEnabled,
       signatureHelpEnabled,
+      inlayHintsEnabled,
       degraded,
     ],
   );
@@ -329,10 +334,30 @@ function EditorBody(props: {
   );
 }
 
+function CallHierarchySurface(props: {
+  readonly response: EditorCallHierarchyResponse | null;
+  readonly editorProps: KeikoCodeEditorProps;
+  readonly onClose: () => void;
+}): ReactElement | null {
+  const labels = props.editorProps.callHierarchyLabels;
+  if (props.response === null || labels === undefined) return null;
+  return (
+    <CallHierarchyPanel
+      response={props.response}
+      labels={labels}
+      onClose={props.onClose}
+      onReveal={(location) => {
+        props.editorProps.onRevealCallHierarchyLocation?.(location);
+      }}
+    />
+  );
+}
+
 export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
   const view = computeEditorViewModel(props);
   const [overviewMarkers, setOverviewMarkers] = useState<readonly DiagnosticOverviewMarker[]>([]);
-  const handlers = useEditorHandlers(props, view.readOnly, setOverviewMarkers);
+  const [callHierarchy, setCallHierarchy] = useState<EditorCallHierarchyResponse | null>(null);
+  const handlers = useEditorHandlers(props, view.readOnly, setOverviewMarkers, setCallHierarchy);
   const { options, monacoLanguage } = useEditorConstructionOptions(props, view.readOnly);
   const lineCount = useMemo(
     () => countLines(props.buffer.content.text),
@@ -345,6 +370,9 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
     lastFormatRequestNonce.current = nonce;
     handlers.formatDocument();
   }, [handlers, props.formatRequestNonce]);
+  useEffect(() => {
+    setCallHierarchy(null);
+  }, [props.fileModel.identity.uri]);
 
   return (
     <div
@@ -358,6 +386,13 @@ export function KeikoCodeEditor(props: KeikoCodeEditorProps): ReactElement {
         handlers={handlers}
         overviewMarkers={overviewMarkers}
         lineCount={lineCount}
+      />
+      <CallHierarchySurface
+        response={callHierarchy}
+        editorProps={props}
+        onClose={() => {
+          setCallHierarchy(null);
+        }}
       />
       {(props.showStatusFooter ?? true) ? (
         <EditorStatusFooter

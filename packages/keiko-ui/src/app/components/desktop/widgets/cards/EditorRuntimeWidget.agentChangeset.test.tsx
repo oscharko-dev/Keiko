@@ -23,6 +23,7 @@ import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
+import { resetEditorVerificationRunStateForTests } from "./useEditorVerificationRun";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -327,6 +328,15 @@ async function renderAgentEditor(
   };
 }
 
+// Issue #2212 fix-up — the run-verification intent (Issue #2211's governed route) is exercised by
+// name in this file's changeset-review tests; stub `fetch` so those calls resolve deterministically
+// instead of reaching a real network layer, and capture the POST body to assert on run scoping.
+const verificationFetchMock = vi.fn((url: string, init?: RequestInit) => {
+  const body = init?.method === "DELETE" ? { ok: true } : { runId: "verification-run-1" };
+  void url;
+  return Promise.resolve({ json: () => Promise.resolve(body) } as Response);
+});
+
 beforeEach(() => {
   surface.props = null;
   diffSurface.props = null;
@@ -343,11 +353,15 @@ beforeEach(() => {
   vi.mocked(postEditorAgentActionResult).mockResolvedValue({
     result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
   });
+  verificationFetchMock.mockClear();
+  vi.stubGlobal("fetch", verificationFetchMock);
 });
 
 afterEach(() => {
   restoreEventSource();
   _resetEditorAgentBridgeStateForTests();
+  resetEditorVerificationRunStateForTests();
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
 
@@ -592,10 +606,28 @@ describe("EditorRuntimeWidget applyChangeset review", () => {
     expect(diffSurface.props?.actions).toEqual({
       canApply: true,
       canReject: true,
-      canRunVerification: false,
+      // Issue #2212 (ADR-0126) — the run-verification intent is now activated (idle → available).
+      canRunVerification: true,
     });
     expect(diffSurface.props?.onApply).toBeTypeOf("function");
     expect(diffSurface.props?.onReject).toBeTypeOf("function");
+    expect(diffSurface.props?.onRunVerification).toBeTypeOf("function");
+    // Issue #2212 fix-up (dispatch proof, not just presence): the reviewed changeset touches THREE
+    // files while the pane's active file is only one of them (src/active.ts) — verifying that single
+    // active file would silently check the wrong scope, so a multi-file changeset must fall back to a
+    // workspace typecheck instead of guessing one file.
+    act(() => {
+      diffSurface.props?.onRunVerification?.();
+    });
+    await waitFor(() => expect(verificationFetchMock).toHaveBeenCalled());
+    const [runUrl, runInit] = verificationFetchMock.mock.calls[0] ?? [];
+    expect(runUrl).toBe("/api/editor/verification/runs");
+    const runBody = JSON.parse((runInit as RequestInit).body as string) as {
+      kinds: readonly string[];
+      targetPath?: string;
+    };
+    expect(runBody.kinds).toEqual(["typecheck"]);
+    expect(runBody.targetPath).toBeUndefined();
     // applyTextEdits would mutate and report immediately instead of staging EditorDiffSurface.
     expect(surface.props?.buffer.content.text).toBe(ORIGINAL_ACTIVE);
     expect(submittedResults().filter((result) => result.actionId === action.actionId)).toHaveLength(

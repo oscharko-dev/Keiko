@@ -162,6 +162,39 @@ describe("EditorAgentActionsPanel", () => {
     expect(row).not.toHaveTextContent("applyTextEdits");
   });
 
+  // Issue #2214 AC9 — an agent-triggered verification run renders through the generic actionType path
+  // AND is selectable via the actionType filter, so a human can recognize and isolate it in the audit.
+  it("renders and filters an agent-triggered requestVerification audit record", async () => {
+    const user = userEvent.setup();
+    fetchEditorAgentAudit.mockResolvedValue({
+      records: [
+        record(),
+        record({
+          auditId: "audit-verify",
+          actionType: "requestVerification",
+          effectClass: "execution",
+          mutating: false,
+          disposition: "allowed",
+          reviewReason: undefined,
+          outcome: "succeeded",
+          summary: "requestVerification allowed outcome=succeeded",
+        }),
+      ],
+    });
+    render(<EditorAgentActionsPanel agentSessionId="session-1" refreshNonce={0} />);
+    await waitFor(() => expect(screen.getAllByTestId("agent-action-row")).toHaveLength(2));
+
+    expect(screen.getByRole("option", { name: "Request verification" })).toBeInTheDocument();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Action type" }),
+      "requestVerification",
+    );
+
+    const row = screen.getByTestId("agent-action-row");
+    expect(row).toHaveTextContent("requestVerification");
+    expect(row).not.toHaveTextContent("applyTextEdits");
+  });
+
   it("filters records by the existing disposition vocabulary", async () => {
     const user = userEvent.setup();
     fetchEditorAgentAudit.mockResolvedValue({

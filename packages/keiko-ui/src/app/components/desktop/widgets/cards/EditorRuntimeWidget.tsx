@@ -63,6 +63,8 @@ import {
   testGenerationReducer,
   type EditorBuffer,
   type EditorChangeOrigin,
+  type EditorCallHierarchyQuery,
+  type EditorCallHierarchyResolver,
   type EditorCodeActionsQuery,
   type EditorCodeActionsResolver,
   type EditorCompletionQuery,
@@ -85,6 +87,8 @@ import {
   type EditorHoverQuery,
   type EditorInlineCompletionResolver,
   type EditorInlineCompletionQuery,
+  type EditorInlayHintsQuery,
+  type EditorInlayHintsResolver,
   type EditorLanguageId,
   type EditorLocation,
   type EditorPosition,
@@ -127,6 +131,10 @@ import {
   requestEditorCompletion,
   requestEditorCodeActions,
   requestEditorDefinition,
+  requestEditorTypeDefinition,
+  requestEditorImplementation,
+  requestEditorCallHierarchy,
+  requestEditorInlayHints,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -146,6 +154,8 @@ import { mapWireToEditorTestGenerationOutcome } from "../../../../../lib/editor-
 import {
   mapWireToEditorDiagnosticsResponse,
   mapWireToEditorDefinitionResponse,
+  mapWireToEditorCallHierarchyResponse,
+  mapWireToEditorInlayHintsResponse,
   mapWireToEditorFormattingResponse,
   mapWireToEditorHoverResponse,
   mapWireToEditorCodeActionsResponse,
@@ -178,6 +188,8 @@ import {
 import { FileIcon } from "../shared/projectTree";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 import { EditorAgentActionsPanel } from "./EditorAgentActionsPanel";
+import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import { removePaneDiagnostics, setPaneDiagnostics } from "./editorProblemsStore";
 import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 import {
   postEditorAgentResult,
@@ -959,7 +971,11 @@ function providerOperationEnabled(
     | "symbols"
     | "formatting"
     | "definition"
+    | "typeDefinition"
+    | "implementation"
     | "references"
+    | "callHierarchy"
+    | "inlayHints"
     | "renamePrepare"
     | "renameApply"
     | "codeActions"
@@ -1230,6 +1246,47 @@ function EditorRuntimeWidget({
 }: EditorRuntimeWidgetProps): ReactNode {
   const commonT = useTranslate();
   const t = useEditorAgentTranslate();
+  // Issue #2212 (ADR-0126) — verification run state for the status bar + diff-review affordances,
+  // derived from the same governed route/stream the palette uses (server-authoritative via SSE).
+  const verification = useEditorVerificationRun({
+    root: root ?? "",
+    activeFile: file !== undefined && file.length > 0 ? file : null,
+  });
+  const { runFileTests: runVerificationFileTests, runWorkspaceVerification } = verification;
+  // Issue #2212 fix-up — the diff-review "Run Verification" intent is scoped to the file(s) the
+  // active review surface is actually reviewing, never to the pane's currently active file. This
+  // matters most for `agentChangesetPending`/rename review: both can legitimately touch a file other
+  // than the one open in the pane (`runtimeAgentTargetMatches` deliberately bypasses the active-file
+  // match for `applyChangeset`), so resolving from the pane's active file would silently verify the
+  // wrong file. `applyPatch` review's target always equals the active file by construction
+  // (`runtimeAgentTargetMatches` requires it for admission), so it is scoped explicitly here too for
+  // consistency and to stay correct if that invariant ever changes. `reviewedFiles` singular resolves
+  // to that file's test counterpart; a multi-file review (or none) falls back to a workspace typecheck
+  // rather than guessing which single file represents "the reviewed change".
+  const runScopedVerification = useCallback(
+    (reviewedFiles: readonly string[]): void => {
+      if (reviewedFiles.length === 1 && reviewedFiles[0] !== undefined) {
+        runVerificationFileTests(reviewedFiles[0]);
+      } else {
+        runWorkspaceVerification("typecheck");
+      }
+    },
+    [runVerificationFileTests, runWorkspaceVerification],
+  );
+  // Issue #2213 (ADR-0126) — feed this pane's diagnostics (keyed by path) into the workspace Problems
+  // panel store, and remove them only once a file is truly no longer open (closed, or the pane
+  // unmounts) — never merely because the user switched to a different already-open tab. Language
+  // diagnostics are inherently bounded to currently-open buffers; the panel copy must not imply
+  // full-workspace coverage, but it must also not silently drop a background tab's diagnostics the
+  // instant the user looks away from it (Issue #2213 fix-up).
+  const onPaneDiagnostics = useCallback(
+    (diagnostics: readonly EditorDiagnostic[]): void => {
+      if (root !== undefined && root.length > 0 && file !== undefined && file.length > 0) {
+        setPaneDiagnostics(root, file, diagnostics);
+      }
+    },
+    [root, file],
+  );
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
   const editorModelScope = useMemo(
@@ -1250,6 +1307,24 @@ function EditorRuntimeWidget({
     }
     return deduped;
   }, [file, openFiles]);
+  // Issue #2213 fix-up — evict a path's Problems-panel diagnostics only when it leaves documentTabs
+  // (a genuine close), never on a mere active-tab switch between still-open tabs. Cleans up every
+  // remaining open path on unmount (the whole pane closing).
+  const documentTabsRef = useRef<readonly string[]>(documentTabs);
+  useEffect(() => {
+    const previousTabs = documentTabsRef.current;
+    documentTabsRef.current = documentTabs;
+    if (root === undefined || root.length === 0) return;
+    for (const previousPath of previousTabs) {
+      if (!documentTabs.includes(previousPath)) removePaneDiagnostics(root, previousPath);
+    }
+  }, [documentTabs, root]);
+  useEffect(() => {
+    return (): void => {
+      if (root === undefined || root.length === 0) return;
+      for (const openPath of documentTabsRef.current) removePaneDiagnostics(root, openPath);
+    };
+  }, [root]);
   const [tablistWidth, setTablistWidth] = useState(0);
 
   useLayoutEffect(() => {
@@ -1351,6 +1426,10 @@ function EditorRuntimeWidget({
   const [currentSelection, setCurrentSelection] = useState<EditorRange | null>(null);
   // Issue #1205: live cursor and diagnostic-count state backing the unified status bar.
   const [cursor, setCursor] = useState<EditorPosition | null>(null);
+  const [callHierarchyRevealRequest, setCallHierarchyRevealRequest] = useState<
+    { readonly id: string; readonly range: EditorRange } | undefined
+  >(undefined);
+  const callHierarchyRevealSeqRef = useRef(0);
   const [diagnosticsSummary, setDiagnosticsSummary] = useState<EditorDiagnosticsSummary | null>(
     null,
   );
@@ -1409,6 +1488,20 @@ function EditorRuntimeWidget({
     // cache capacity, so relying on the cache produced spurious "not loaded" conflicts — Issue #2105).
     readonly snapshots: Readonly<Record<string, EditorFileSessionSnapshot>>;
   } | null>(null);
+  // Issue #2212 fix-up — one scoped "Run Verification" callback per review surface, each resolving its
+  // OWN reviewed file(s) rather than the pane's active file (see runScopedVerification above).
+  const runChangesetVerification = useCallback((): void => {
+    const files = agentChangesetPending?.action.changeset?.files.map((f) => f.file) ?? [];
+    runScopedVerification(files);
+  }, [agentChangesetPending, runScopedVerification]);
+  const runPatchVerification = useCallback((): void => {
+    const targetFile = agentPatchPending?.action.target?.file;
+    runScopedVerification(targetFile === undefined ? [] : [targetFile]);
+  }, [agentPatchPending, runScopedVerification]);
+  const runRenameVerification = useCallback((): void => {
+    const files = renameReview?.changeset.files.map((f) => f.path) ?? [];
+    runScopedVerification(files);
+  }, [renameReview, runScopedVerification]);
   const [activeHostEditRequest, setActiveHostEditRequest] = useState<
     EditorHostEditRequest | undefined
   >(undefined);
@@ -2288,6 +2381,120 @@ function EditorRuntimeWidget({
     [file, hasTarget, openEditorFile, root],
   );
 
+  const provideTypeDefinition = useCallback<EditorDefinitionResolver>(
+    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, locations: [] };
+      }
+      const wire = await requestEditorTypeDefinition(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      const response = mapWireToEditorDefinitionResponse(query.request.request, wire);
+      const crossFile = response.locations.find((location) => location.path !== file);
+      if (crossFile !== undefined) {
+        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
+      }
+      return response;
+    },
+    [file, hasTarget, openEditorFile, root],
+  );
+
+  const provideImplementation = useCallback<EditorDefinitionResolver>(
+    async (query: EditorDefinitionQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, locations: [] };
+      }
+      const wire = await requestEditorImplementation(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      const response = mapWireToEditorDefinitionResponse(query.request.request, wire);
+      const crossFile = response.locations.find((location) => location.path !== file);
+      if (crossFile !== undefined) {
+        openCrossFileLocation({ root, file, location: crossFile, openEditorFile });
+      }
+      return response;
+    },
+    [file, hasTarget, openEditorFile, root],
+  );
+
+  const provideCallHierarchy = useCallback<EditorCallHierarchyResolver>(
+    async (query: EditorCallHierarchyQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, roots: [] };
+      }
+      const wire = await requestEditorCallHierarchy(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          position: {
+            line: query.request.position.line,
+            character: query.request.position.column,
+          },
+        },
+        signal,
+      );
+      return mapWireToEditorCallHierarchyResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const provideInlayHints = useCallback<EditorInlayHintsResolver>(
+    async (query: EditorInlayHintsQuery, signal: AbortSignal) => {
+      if (!hasTarget || root === undefined || file === undefined) {
+        return { request: query.request.request, hints: [] };
+      }
+      const wire = await requestEditorInlayHints(
+        {
+          root,
+          path: file,
+          languageId: query.request.document.language,
+          text: query.documentText,
+          range: editorRangeToWire(query.request.range),
+        },
+        signal,
+      );
+      return mapWireToEditorInlayHintsResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const revealCallHierarchyLocation = useCallback(
+    (location: EditorLocation): void => {
+      if (location.path === file) {
+        callHierarchyRevealSeqRef.current += 1;
+        setCallHierarchyRevealRequest({
+          id: `call-hierarchy:${String(callHierarchyRevealSeqRef.current)}`,
+          range: location.range,
+        });
+        return;
+      }
+      openCrossFileLocation({ root, file, location, openEditorFile });
+    },
+    [file, openEditorFile, root],
+  );
+
   const provideReferences = useCallback<EditorReferencesResolver>(
     async (query: EditorReferencesQuery, signal: AbortSignal) => {
       if (!hasTarget || root === undefined || file === undefined) {
@@ -2438,6 +2645,14 @@ function EditorRuntimeWidget({
     providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
   const definitionEnabled =
     providerOperationEnabled(languageProvider, "definition") && !largeFileDegraded;
+  const typeDefinitionEnabled =
+    providerOperationEnabled(languageProvider, "typeDefinition") && !largeFileDegraded;
+  const implementationEnabled =
+    providerOperationEnabled(languageProvider, "implementation") && !largeFileDegraded;
+  const callHierarchyEnabled =
+    providerOperationEnabled(languageProvider, "callHierarchy") && !largeFileDegraded;
+  const inlayHintsEnabled =
+    providerOperationEnabled(languageProvider, "inlayHints") && !largeFileDegraded;
   const referencesEnabled =
     providerOperationEnabled(languageProvider, "references") && !largeFileDegraded;
   const renameEnabled =
@@ -2822,8 +3037,12 @@ function EditorRuntimeWidget({
     currentSelection === null
       ? undefined
       : currentSelection.end.line - currentSelection.start.line + 1;
+  // Issue #2212 (ADR-0126) — precedence: while a verification run is active (or has a not-yet-dismissed
+  // terminal result), its content-free {label, busy} owns the single status-bar `run` slot; otherwise
+  // it falls back to the existing test-generation-derived value unchanged.
   const statusBarRun: EditorStatusRun | undefined =
-    testGenStatusLabel.length > 0 ? { label: testGenStatusLabel, busy: testGenBusy } : undefined;
+    verification.statusBarRun ??
+    (testGenStatusLabel.length > 0 ? { label: testGenStatusLabel, busy: testGenBusy } : undefined);
   const statusBarViewModel =
     fileModel === null
       ? null
@@ -4031,7 +4250,19 @@ function EditorRuntimeWidget({
             },
           },
         }
-      : (outlineSelectionRequest ?? lineRevealRequest);
+      : (callHierarchyRevealRequest ?? outlineSelectionRequest ?? lineRevealRequest);
+  const callHierarchyLabels = useMemo(
+    () => ({
+      title: commonT("editor.callHierarchy.title"),
+      incoming: commonT("editor.callHierarchy.incoming"),
+      outgoing: commonT("editor.callHierarchy.outgoing"),
+      callSite: commonT("editor.callHierarchy.callSite"),
+      empty: commonT("editor.callHierarchy.empty"),
+      close: commonT("editor.callHierarchy.close"),
+      command: commonT("editor.callHierarchy.command"),
+    }),
+    [commonT],
+  );
   useEffect(() => {
     if (agentSelectionRequest !== null) consumeSelectionRequest();
   }, [agentSelectionRequest, consumeSelectionRequest]);
@@ -4106,10 +4337,11 @@ function EditorRuntimeWidget({
             actions={{
               canApply: !agentChangesetPending.applying,
               canReject: !agentChangesetPending.applying,
-              canRunVerification: false,
+              canRunVerification: !verification.verificationRunning,
             }}
             onApply={handleAgentChangesetAccept}
             onReject={handleAgentChangesetReject}
+            onRunVerification={runChangesetVerification}
           />
         </div>
       </div>
@@ -4166,6 +4398,18 @@ function EditorRuntimeWidget({
           >
             Reject
           </button>
+          {/* Issue #2212 (ADR-0126) — activate the run-verification intent on this custom-button
+              review surface (no built-in KeikoDiffEditor action bar here). Idle-gated. */}
+          <button
+            type="button"
+            className="ed-reload"
+            data-testid="agent-patch-run-verification"
+            aria-label={commonT("editor.verification.runReviewedChangeLabel")}
+            disabled={agentPatchPending.applying || verification.verificationRunning}
+            onClick={runPatchVerification}
+          >
+            {commonT("editor.verification.run")}
+          </button>
         </div>
       </div>
     );
@@ -4175,9 +4419,14 @@ function EditorRuntimeWidget({
         model={renameReview.model}
         loadState={{ status: "ready" }}
         themeVariant={themeVariant}
-        actions={{ canApply: true, canReject: true, canRunVerification: false }}
+        actions={{
+          canApply: true,
+          canReject: true,
+          canRunVerification: !verification.verificationRunning,
+        }}
         onApply={handleRenameAccept}
         onReject={handleRenameReject}
+        onRunVerification={runRenameVerification}
       />
     );
   } else if (testGenerationPreview !== null) {
@@ -4228,7 +4477,19 @@ function EditorRuntimeWidget({
         provideSymbols={symbolsEnabled ? provideSymbols : undefined}
         provideFormatting={formattingEnabled ? provideFormatting : undefined}
         provideDefinition={definitionEnabled ? provideDefinition : undefined}
-        uriForPath={definitionEnabled || referencesEnabled ? uriForPath : undefined}
+        provideTypeDefinition={typeDefinitionEnabled ? provideTypeDefinition : undefined}
+        provideImplementation={implementationEnabled ? provideImplementation : undefined}
+        provideCallHierarchy={callHierarchyEnabled ? provideCallHierarchy : undefined}
+        callHierarchyLabels={callHierarchyEnabled ? callHierarchyLabels : undefined}
+        onRevealCallHierarchyLocation={
+          callHierarchyEnabled ? revealCallHierarchyLocation : undefined
+        }
+        provideInlayHints={inlayHintsEnabled ? provideInlayHints : undefined}
+        uriForPath={
+          definitionEnabled || typeDefinitionEnabled || implementationEnabled || referencesEnabled
+            ? uriForPath
+            : undefined
+        }
         provideReferences={referencesEnabled ? provideReferences : undefined}
         provideCodeActions={codeActionsEnabled ? provideCodeActions : undefined}
         provideSignatureHelp={signatureHelpEnabled ? provideSignatureHelp : undefined}
@@ -4238,6 +4499,7 @@ function EditorRuntimeWidget({
         revealRequest={surfaceRevealRequest}
         hostEditRequest={activeHostEditRequest}
         onDiagnosticsSummary={diagnosticsEnabled ? setDiagnosticsSummary : undefined}
+        onDiagnostics={diagnosticsEnabled ? onPaneDiagnostics : undefined}
         onGenerateTests={completionEnabled ? runTestGeneration : undefined}
         onAskKeikoAboutSelection={onAskSelection === undefined ? undefined : handleAskSelection}
         onRenameSymbol={canRename ? runRename : undefined}

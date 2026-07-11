@@ -1,12 +1,15 @@
 import {
   isEditorAgentActionResult,
   isEditorAgentSessionSnapshot,
+  isEditorAgentVerificationResult,
   type EditorAgentAction,
   type EditorAgentActionQueuedResponse,
   type EditorAgentActionResult,
   type EditorAgentSessionsResponse,
   type EditorAgentSnapshotRequest,
   type EditorAgentSnapshotResponse,
+  type EditorAgentVerificationResult,
+  type EditorAgentVerificationRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 
 type EditorAgentConflictDetail = NonNullable<EditorAgentActionResult["conflict"]>;
@@ -14,6 +17,12 @@ type EditorAgentFileActionResult = NonNullable<EditorAgentActionResult["files"]>
 
 export const DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS = 2_000;
 export const DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES = 256 * 1024;
+// Issue #2214 (AC7) — a verification run's own wall-time ceiling is DEFAULT_VERIFICATION_LIMITS.wallTimeMs
+// (120_000 ms). The synchronous, single-shot verification route holds its POST open until the run
+// resolves, so this call needs a timeout that spans that ceiling plus margin — NOT the shared 2-second
+// default, which would abort every real `npm test`/`npm run build`. Early cancellation still flows
+// through `request.signal`; this ceiling only bounds a run the caller does not cancel.
+export const DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS = 135_000;
 
 export interface EditorAgentHttpTransportRequest {
   readonly method: "GET" | "POST";
@@ -219,6 +228,14 @@ function parseActionResult(value: unknown): EditorAgentActionQueuedResponse | nu
   return isEditorAgentActionResult(result) ? { result: redactActionResult(result) } : null;
 }
 
+// Issue #2214 — the verification route's response is content-free BY CONSTRUCTION (the redacted report
+// type has no field for raw output), so the client validates its shape rather than re-redacting it.
+function parseVerificationResult(value: unknown): EditorAgentVerificationResult | null {
+  if (!isRecord(value)) return null;
+  const result = value.result;
+  return isEditorAgentVerificationResult(result) ? result : null;
+}
+
 function parseRouteCode(value: unknown): string | null {
   if (!isRecord(value) || !isRecord(value.error)) return null;
   const code = value.error.code;
@@ -304,6 +321,7 @@ export class EditorAgentHttpClient {
   private readonly origin: URL;
   private readonly transport: EditorAgentHttpTransport;
   private readonly timeoutMs: number;
+  private readonly verificationTimeoutMs: number;
   private readonly maxResponseBytes: number;
   private readonly scheduler: EditorAgentTimeoutScheduler;
 
@@ -311,15 +329,22 @@ export class EditorAgentHttpClient {
     readonly baseUrl: string;
     readonly transport: EditorAgentHttpTransport;
     readonly timeoutMs?: number | undefined;
+    readonly verificationTimeoutMs?: number | undefined;
     readonly maxResponseBytes?: number | undefined;
     readonly scheduler?: EditorAgentTimeoutScheduler | undefined;
   }) {
     this.origin = parseLoopbackOrigin(deps.baseUrl);
     this.transport = deps.transport;
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS;
+    this.verificationTimeoutMs =
+      deps.verificationTimeoutMs ?? DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS;
     this.maxResponseBytes = deps.maxResponseBytes ?? DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES;
     this.scheduler = deps.scheduler ?? scheduler;
-    if (!isPositiveInteger(this.timeoutMs) || !isPositiveInteger(this.maxResponseBytes)) {
+    if (
+      !isPositiveInteger(this.timeoutMs) ||
+      !isPositiveInteger(this.verificationTimeoutMs) ||
+      !isPositiveInteger(this.maxResponseBytes)
+    ) {
       throw new Error("Editor agent HTTP bounds must be positive.");
     }
   }
@@ -332,6 +357,7 @@ export class EditorAgentHttpClient {
       signal,
       [200],
       parseSessions,
+      this.timeoutMs,
     );
   }
 
@@ -339,7 +365,15 @@ export class EditorAgentHttpClient {
     body: EditorAgentSnapshotRequest,
     signal: AbortSignal,
   ): Promise<EditorAgentClientResult<EditorAgentSnapshotResponse>> {
-    return this.request("/api/editor/agent/snapshot", "POST", body, signal, [200], parseSnapshot);
+    return this.request(
+      "/api/editor/agent/snapshot",
+      "POST",
+      body,
+      signal,
+      [200],
+      parseSnapshot,
+      this.timeoutMs,
+    );
   }
 
   action(
@@ -353,6 +387,26 @@ export class EditorAgentHttpClient {
       signal,
       [200, 202, 409, 429],
       parseActionResult,
+      this.timeoutMs,
+    );
+  }
+
+  // Issue #2214 — call item 2's synchronous verification route. Governance (classify → compose →
+  // reserve → audit) runs server-side BEFORE any run starts; the route holds the POST open until the
+  // run resolves, so this uses the long verification timeout (AC7). A 200 carries either the redacted
+  // completed report or the governance not-run disposition; both are typed, non-throwing results.
+  requestVerification(
+    body: EditorAgentVerificationRunRequest,
+    signal: AbortSignal,
+  ): Promise<EditorAgentClientResult<EditorAgentVerificationResult>> {
+    return this.request(
+      "/api/editor/verification/agent-runs",
+      "POST",
+      body,
+      signal,
+      [200],
+      parseVerificationResult,
+      this.verificationTimeoutMs,
     );
   }
 
@@ -363,6 +417,7 @@ export class EditorAgentHttpClient {
     signal: AbortSignal,
     statuses: readonly number[],
     parser: ResponseParser<T>,
+    timeoutMs: number,
   ): Promise<EditorAgentClientResult<T>> {
     const request: EditorAgentHttpTransportRequest = {
       method,
@@ -371,7 +426,7 @@ export class EditorAgentHttpClient {
       signal: new AbortController().signal,
       maxResponseBytes: this.maxResponseBytes,
     };
-    const outcome = await this.perform(request, signal);
+    const outcome = await this.perform(request, signal, timeoutMs);
     if (!outcome.ok) return { ok: false, error: outcome.error };
     return this.parseResponse(request, outcome.response, statuses, parser);
   }
@@ -379,6 +434,7 @@ export class EditorAgentHttpClient {
   private async perform(
     request: EditorAgentHttpTransportRequest,
     signal: AbortSignal,
+    timeoutMs: number,
   ): Promise<TransportOutcome> {
     const controller = new AbortController();
     const boundedRequest = { ...request, signal: controller.signal };
@@ -395,7 +451,7 @@ export class EditorAgentHttpClient {
     const handle = this.scheduler.set(() => {
       controller.abort();
       stop?.(transportError("TIMED_OUT", "The editor agent route timed out."));
-    }, this.timeoutMs);
+    }, timeoutMs);
     const transport = this.callTransport(boundedRequest, signal);
     const outcome = await Promise.race([transport, stopped]);
     this.scheduler.clear(handle);

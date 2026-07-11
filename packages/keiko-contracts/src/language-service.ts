@@ -34,7 +34,11 @@ export type LanguageServiceOperation =
   | "symbols"
   | "formatting"
   | "definition"
+  | "typeDefinition"
+  | "implementation"
   | "references"
+  | "callHierarchy"
+  | "inlayHints"
   | "renamePrepare"
   | "renameApply"
   | "codeActions"
@@ -47,7 +51,11 @@ export const LANGUAGE_SERVICE_OPERATIONS: readonly LanguageServiceOperation[] = 
   "symbols",
   "formatting",
   "definition",
+  "typeDefinition",
+  "implementation",
   "references",
+  "callHierarchy",
+  "inlayHints",
   "renamePrepare",
   "renameApply",
   "codeActions",
@@ -229,6 +237,54 @@ export interface LanguageDefinitionResult {
   readonly truncated: boolean;
 }
 
+export type LanguageTypeDefinitionResult = LanguageDefinitionResult;
+export type LanguageImplementationResult = LanguageDefinitionResult;
+
+export interface LanguageCallHierarchyItem {
+  readonly name: string;
+  readonly kind: LanguageSymbolKind;
+  readonly path: string;
+  readonly range: LanguageRange;
+  readonly selectionRange: LanguageRange;
+  readonly containerName?: string;
+}
+
+export interface LanguageCallHierarchyIncomingCall {
+  readonly item: LanguageCallHierarchyItem;
+  readonly fromRanges: readonly LanguageRange[];
+}
+
+export interface LanguageCallHierarchyOutgoingCall {
+  readonly item: LanguageCallHierarchyItem;
+  readonly fromRanges: readonly LanguageRange[];
+}
+
+export interface LanguageCallHierarchyRoot {
+  readonly item: LanguageCallHierarchyItem;
+  readonly incomingCalls: readonly LanguageCallHierarchyIncomingCall[];
+  readonly outgoingCalls: readonly LanguageCallHierarchyOutgoingCall[];
+}
+
+export interface LanguageCallHierarchyResult {
+  readonly roots: readonly LanguageCallHierarchyRoot[];
+  readonly truncated: boolean;
+}
+
+export type LanguageInlayHintKind = "type" | "parameter" | "enum";
+
+export interface LanguageInlayHint {
+  readonly position: LanguagePosition;
+  readonly label: string;
+  readonly kind: LanguageInlayHintKind;
+  readonly paddingLeft?: boolean;
+  readonly paddingRight?: boolean;
+}
+
+export interface LanguageInlayHintsResult {
+  readonly hints: readonly LanguageInlayHint[];
+  readonly truncated: boolean;
+}
+
 export interface LanguageReferencesResult {
   readonly locations: readonly LanguageLocation[];
   readonly includesDeclaration: boolean;
@@ -326,6 +382,9 @@ export interface LanguageServiceLimits {
   readonly maxFormattingEdits: number;
   readonly maxDefinitionLocations: number;
   readonly maxReferenceLocations: number;
+  readonly maxCallHierarchyItems: number;
+  readonly maxCallHierarchyCallSites: number;
+  readonly maxInlayHints: number;
   readonly maxCodeActions: number;
   readonly maxSignatures: number;
   readonly maxRenameChangesetFiles: number;
@@ -353,6 +412,9 @@ export const DEFAULT_LANGUAGE_SERVICE_LIMITS: LanguageServiceLimits = {
   maxFormattingEdits: 4_096,
   maxDefinitionLocations: 64,
   maxReferenceLocations: 512,
+  maxCallHierarchyItems: 128,
+  maxCallHierarchyCallSites: 512,
+  maxInlayHints: 512,
   maxCodeActions: 32,
   maxSignatures: 32,
   maxRenameChangesetFiles: 128,
@@ -410,6 +472,34 @@ export interface LanguageDefinitionRequest {
   readonly position: LanguagePosition;
 }
 
+export interface LanguageTypeDefinitionRequest {
+  readonly operation: "typeDefinition";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+}
+
+export interface LanguageImplementationRequest {
+  readonly operation: "implementation";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+}
+
+export interface LanguageCallHierarchyRequest {
+  readonly operation: "callHierarchy";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly position: LanguagePosition;
+}
+
+export interface LanguageInlayHintsRequest {
+  readonly operation: "inlayHints";
+  readonly root: string;
+  readonly document: LanguageDocumentOverlay;
+  readonly range: LanguageRange;
+}
+
 export interface LanguageReferencesRequest {
   readonly operation: "references";
   readonly root: string;
@@ -454,7 +544,11 @@ export type LanguageServiceRequest =
   | LanguageSymbolsRequest
   | LanguageFormattingRequest
   | LanguageDefinitionRequest
+  | LanguageTypeDefinitionRequest
+  | LanguageImplementationRequest
   | LanguageReferencesRequest
+  | LanguageCallHierarchyRequest
+  | LanguageInlayHintsRequest
   | LanguageRenamePrepareRequest
   | LanguageRenameApplyRequest
   | LanguageCodeActionsRequest
@@ -572,7 +666,10 @@ type PositionOperation = Extract<
   | "completion"
   | "hover"
   | "definition"
+  | "typeDefinition"
+  | "implementation"
   | "references"
+  | "callHierarchy"
   | "renamePrepare"
   | "renameApply"
   | "signatureHelp"
@@ -584,7 +681,10 @@ const POSITION_OPERATIONS: readonly PositionOperation[] = [
   "completion",
   "hover",
   "definition",
+  "typeDefinition",
+  "implementation",
   "references",
+  "callHierarchy",
   "renamePrepare",
   "renameApply",
   "signatureHelp",
@@ -633,7 +733,8 @@ function collectRangeErrors(
   operation: LanguageServiceOperation,
   value: Record<string, unknown>,
 ): readonly string[] {
-  return operation === "codeActions" && !isLanguageRange(value.range)
+  return (operation === "codeActions" || operation === "inlayHints") &&
+    !isLanguageRange(value.range)
     ? ["range must be { start, end }"]
     : [];
 }
@@ -726,6 +827,14 @@ function assembleValidatedRequest(
   }
   if (operation === "codeActions") {
     return assembleCodeActionsRequest(root, document, value);
+  }
+  if (operation === "inlayHints") {
+    return {
+      operation,
+      root,
+      document,
+      range: value.range as LanguageRange,
+    };
   }
   if (operation === "formatting") {
     return assembleFormattingRequest(root, document, value);

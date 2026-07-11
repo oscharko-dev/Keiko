@@ -54,6 +54,10 @@ import {
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
 import {
+  createVerificationRunnerManager,
+  type VerificationRunnerManager,
+} from "./editor/verificationRunner.js";
+import {
   createUpdateSessionManager,
   type UpdateCompletionGate,
   type UpdateSessionManager,
@@ -294,6 +298,7 @@ export interface UiHandlerDeps {
   // exercise /api/commands/* keep their fixtures unchanged; production wiring creates one per BFF and
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
+  readonly verificationRunner?: VerificationRunnerManager | undefined;
   // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
   // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
   readonly updateSession?: UpdateSessionManager | undefined;
@@ -1025,6 +1030,30 @@ function buildCommandRunner(options: {
   });
 }
 
+// Issue #2211 — the editor verification runner reuses the same project store as the command runner.
+// The workspace-trust decider is intentionally left at its fail-closed `() => false` default, matching
+// buildCommandRunner's current production wiring, until a future issue wires a real trust source for
+// BOTH surfaces. SSE-event redaction is applied at the route boundary (deps.redactor); the manager's
+// OWN redactor (below) only guards the persisted evidence entry, mirroring buildCommandRunner.
+//
+// Issue #2211 fix-up (Epic #2092): also wires the SAME evidenceStore + live-redactor construction
+// pattern buildCommandRunner uses, so every finished verification run writes a content-free audit
+// entry instead of running silently unaudited.
+function buildVerificationRunner(options: {
+  readonly store: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly liveRedactor: Redactor;
+}): VerificationRunnerManager {
+  return createVerificationRunnerManager({
+    store: options.store,
+    evidenceStore: options.evidenceStore,
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
+}
+
 function buildUpdateSession(options: {
   readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
@@ -1427,6 +1456,7 @@ function seedInitialProject(
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
+  readonly verificationRunner: VerificationRunnerManager;
   readonly updateSession: UpdateSessionManager;
   readonly updatePreflight: UiHandlerDeps["updatePreflight"];
   readonly updateLocalState: UpdateLocalStateManager;
@@ -1502,6 +1532,11 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       store: args.uiStore,
       evidenceStore: args.evidenceStore,
       env: args.options.env,
+      liveRedactor: args.liveRedactor,
+    }),
+    verificationRunner: buildVerificationRunner({
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
       liveRedactor: args.liveRedactor,
     }),
     updateSession: buildUpdateSession({

@@ -66,6 +66,57 @@ describe("runVerification — outcomes", () => {
     expect(report.overallStatus).toBe("failed");
   });
 
+  // Issue #2211 (ADR-0126 D3) — a failing script step's already-redacted output is mapped to
+  // structured failure locations on the result (the `locations.length > 0` branch in toResult).
+  it("populates failure locations from a failing typecheck step's tsc output", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, {
+      stdout: "src/a.ts(12,3): error TS2322: Type mismatch.\n",
+      exitCode: 2,
+    });
+    const typecheck = step({
+      kind: "typecheck",
+      scriptName: "typecheck",
+      args: ["run", "typecheck"],
+    });
+    const report = await runVerification(planOf([typecheck], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results[0]?.status).toBe("failed");
+    expect(report.results[0]?.locations).toEqual([
+      { file: "src/a.ts", line: 12, column: 3, message: "Type mismatch.", ruleId: "TS2322" },
+    ]);
+  });
+
+  it("omits the locations field when a failing step yields no parseable location", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "build failed: unknown\n", exitCode: 1 });
+    const build = step({ kind: "build", scriptName: "build", args: ["run", "build"] });
+    const report = await runVerification(planOf([build], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results[0]?.status).toBe("failed");
+    expect(report.results[0]?.locations).toBeUndefined();
+  });
+
+  it("threads a caller-provided resolveExecutable into the spawn configuration", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });
+    const report = await runVerification(
+      planOf([step()], ws.info.root),
+      depsWith(ws, rec.fn, { resolveExecutable: (command) => command }),
+    );
+    expect(report.results[0]?.status).toBe("passed");
+  });
+
+  it("validates a test-kind step whose script name is not the bare 'test' script", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });
+    const scripted = step({ kind: "test", scriptName: "coverage", args: ["run", "coverage"] });
+    const report = await runVerification(planOf([scripted], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results).toHaveLength(1);
+  });
+
   it("a skipReason step is skipped and never spawns", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();

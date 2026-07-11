@@ -137,6 +137,15 @@ describe("buildEditorOptions", () => {
     expect(options.minimap).toEqual({ enabled: false });
   });
 
+  it("enables Monaco inlay-hint rendering only when the governed provider is wired", () => {
+    expect(buildEditorOptions({ readOnly: false, ariaPath: "a.ts" }).inlayHints).toEqual({
+      enabled: "off",
+    });
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", inlayHintsEnabled: true }).inlayHints,
+    ).toEqual({ enabled: "on" });
+  });
+
   it("keeps every other markdown-capable helper surface off even when hover is enabled (#1201)", () => {
     const withHover = buildEditorOptions({
       readOnly: false,

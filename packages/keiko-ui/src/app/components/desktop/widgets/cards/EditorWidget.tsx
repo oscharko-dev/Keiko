@@ -50,6 +50,7 @@ import {
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
+import { useEditorVerificationRun } from "./useEditorVerificationRun";
 import {
   completeEditorAgentReconciliation,
   enqueueEditorAgentReconciliation,
@@ -1268,6 +1269,12 @@ export function EditorWidget({
   const nextTab = useCallback((): void => cycleActiveTab(1), [cycleActiveTab]);
   const prevTab = useCallback((): void => cycleActiveTab(-1), [cycleActiveTab]);
 
+  // Issue #2212 (ADR-0126) — run-affordance state + actions through the governed verification route.
+  const verification = useEditorVerificationRun({
+    root: workspaceRoot,
+    activeFile: activeFile.length > 0 ? activeFile : null,
+  });
+
   // Content-free host snapshot consumed by the palette + keybinding layer. Memoized so the command
   // palette does not receive a new object on unrelated editor chrome renders.
   const commandHost: EditorPaletteHost = useMemo(
@@ -1278,6 +1285,8 @@ export function EditorWidget({
       activeFile: activeFile.length > 0 ? activeFile : null,
       closedTabCount: closedTabsRef.current.length,
       dirtyCount: dirtyFileList.length,
+      verificationRunning: verification.verificationRunning,
+      verifiableTarget: verification.verifiableTarget,
       splitActive: splitActivePane,
       closeActiveSplit: closeActivePane,
       closeActiveTab,
@@ -1285,6 +1294,9 @@ export function EditorWidget({
       prevTab,
       reopenClosed: reopenClosedTab,
       saveAll: saveAllDirty,
+      runFileTests: verification.runFileTests,
+      runWorkspaceVerification: verification.runWorkspaceVerification,
+      cancelVerification: verification.cancelVerification,
     }),
     [
       activeFile,
@@ -1297,6 +1309,11 @@ export function EditorWidget({
       reopenClosedTab,
       saveAllDirty,
       splitActivePane,
+      verification.cancelVerification,
+      verification.runFileTests,
+      verification.runWorkspaceVerification,
+      verification.verifiableTarget,
+      verification.verificationRunning,
       workspaceRoot,
     ],
   );

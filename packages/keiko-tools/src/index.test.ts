@@ -146,12 +146,15 @@ describe("keiko-tools public surface", () => {
     // Schemas + registry:
     expect(tools.TOOL_DEFINITIONS).toBeDefined();
     expect(typeof tools.WorkspaceToolHost).toBe("function");
-    expect(tools.EDITOR_AGENT_TOOL_DEFINITIONS).toHaveLength(7);
+    expect(tools.EDITOR_AGENT_TOOL_DEFINITIONS).toHaveLength(8);
     expect(typeof tools.EditorAgentHttpClient).toBe("function");
     expect(typeof tools.createFetchEditorAgentHttpTransport).toBe("function");
     expect(typeof tools.EditorAgentToolHost).toBe("function");
     expect(tools.DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS).toBeGreaterThan(0);
     expect(tools.DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES).toBeGreaterThan(0);
+    expect(tools.DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS).toBeGreaterThan(
+      tools.DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+    );
     // Terminal policy:
     expect(tools.TERMINAL_COMMAND_RULES).toBeDefined();
     expect(tools.TERMINAL_NO_FLAGS).toBeDefined();

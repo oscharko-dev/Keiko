@@ -30,6 +30,7 @@ import {
   isEditorAgentAction,
   isEditorAgentActionOrigin,
   isEditorAgentActionResult,
+  isEditorAgentActiveBufferActionType,
   isEditorAgentBridgeDecisionCapability,
   isEditorAgentChangeset,
   isEditorAgentConflictCode,
@@ -42,6 +43,7 @@ import {
   isEditorAgentOneUseApprovalReference,
   isEditorAgentPreparedChangeset,
   isEditorAgentSessionSnapshot,
+  isEditorAgentVerificationRequest,
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
@@ -1439,5 +1441,30 @@ describe("languageCapability snapshot field (Issue #1379 AC4)", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("requestVerification action type (Issue #2210, ADR-0126 D5)", () => {
+  it("is a recognized action type but not a write or active-buffer action", () => {
+    // The type is a member of the action union, so the bare envelope validates...
+    expect(isEditorAgentAction(baseAction({ type: "requestVerification" }))).toBe(true);
+    // ...but it never joins the mutating write set or the active-buffer set (ADR-0126 D5).
+    expect(isEditorAgentWriteActionType("requestVerification")).toBe(false);
+    expect(isEditorAgentActiveBufferActionType("requestVerification")).toBe(false);
+  });
+
+  it("validates the verification request wire shape (kinds/targetPath/requestId)", () => {
+    expect(isEditorAgentVerificationRequest({ kinds: ["typecheck", "lint"] })).toBe(true);
+    expect(
+      isEditorAgentVerificationRequest({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+    ).toBe(true);
+    expect(isEditorAgentVerificationRequest({ kinds: [] })).toBe(false);
+    expect(isEditorAgentVerificationRequest({ kinds: ["not-a-kind"] })).toBe(false);
+    expect(isEditorAgentVerificationRequest(null)).toBe(false);
+  });
+
+  it("leaves existing schemaVersion-1 action fixtures parsing unchanged (additive)", () => {
+    expect(isEditorAgentAction(baseAction({ type: "openFile" }))).toBe(true);
+    expect(isEditorAgentAction(baseAction({ type: "applyPatch" }))).toBe(true);
   });
 });

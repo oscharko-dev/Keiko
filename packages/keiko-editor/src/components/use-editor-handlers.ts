@@ -27,10 +27,14 @@ import type {
   WireEditorFormatting,
   WireEditorHover,
   WireEditorInlineCompletion,
+  WireEditorInlayHints,
+  WireEditorCallHierarchy,
   WireEditorReferences,
   WireEditorSignatureHelp,
   WireEditorSymbols,
 } from "./on-mount.js";
+import type { EditorCallHierarchyResponse } from "./call-hierarchy-bridge.js";
+import type { EditorInlayHintsResponse } from "./inlay-hints-bridge.js";
 import type {
   EditorCodeActionsResponse,
   EditorCompletionResponse,
@@ -80,6 +84,7 @@ export interface EditorHandlers {
 const CHANGE_UTF8_ENCODER = new TextEncoder();
 
 type OverviewMarkersHandler = (markers: readonly DiagnosticOverviewMarker[]) => void;
+type CallHierarchyResultHandler = (response: EditorCallHierarchyResponse) => void;
 
 interface ProgrammaticEditorChange {
   readonly text: string;
@@ -394,6 +399,9 @@ function buildDiagnosticsWiring(
     onSummary: (summary): void => {
       latestProps.current.onDiagnosticsSummary?.(summary);
     },
+    onDiagnostics: (diagnostics): void => {
+      latestProps.current.onDiagnostics?.(diagnostics);
+    },
     ...(onOverviewMarkers === undefined ? {} : { onOverviewMarkers }),
   };
 }
@@ -529,6 +537,90 @@ function buildDefinitionWiring(
   };
 }
 
+function buildTypeDefinitionWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorDefinition | undefined {
+  if (latestProps.current.provideTypeDefinition === undefined) return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorDefinitionResponse> => {
+      const live = latestProps.current.provideTypeDefinition;
+      return live === undefined
+        ? Promise.reject(new Error("type-definition resolver unavailable"))
+        : live(query, signal);
+    },
+    uriForPath: latestProps.current.uriForPath,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildImplementationWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorDefinition | undefined {
+  if (latestProps.current.provideImplementation === undefined) return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorDefinitionResponse> => {
+      const live = latestProps.current.provideImplementation;
+      return live === undefined
+        ? Promise.reject(new Error("implementation resolver unavailable"))
+        : live(query, signal);
+    },
+    uriForPath: latestProps.current.uriForPath,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildInlayHintsWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorInlayHints | undefined {
+  if (latestProps.current.provideInlayHints === undefined) return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorInlayHintsResponse> => {
+      const live = latestProps.current.provideInlayHints;
+      return live === undefined
+        ? Promise.reject(new Error("inlay-hints resolver unavailable"))
+        : live(query, signal);
+    },
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildCallHierarchyWiring(
+  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  streamId: string,
+  onResult: CallHierarchyResultHandler | undefined,
+): WireEditorCallHierarchy | undefined {
+  const labels = latestProps.current.callHierarchyLabels;
+  if (
+    latestProps.current.provideCallHierarchy === undefined ||
+    labels === undefined ||
+    onResult === undefined
+  )
+    return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorCallHierarchyResponse> => {
+      const live = latestProps.current.provideCallHierarchy;
+      return live === undefined
+        ? Promise.reject(new Error("call-hierarchy resolver unavailable"))
+        : live(query, signal);
+    },
+    documentLanguage: latestProps.current.fileModel.identity.language,
+    streamId,
+    newRequestId: createEditorRequestId,
+    labels: { command: labels.command },
+    onResult,
+  };
+}
+
 function buildReferencesWiring(
   latestProps: MutableRefObject<KeikoCodeEditorProps>,
   streamId: string,
@@ -603,6 +695,10 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.provideSymbols,
     props.provideFormatting,
     props.provideDefinition,
+    props.provideTypeDefinition,
+    props.provideImplementation,
+    props.provideCallHierarchy,
+    props.provideInlayHints,
     props.provideReferences,
     props.provideCodeActions,
     props.provideSignatureHelp,
@@ -644,6 +740,7 @@ interface MountRuntimeArgs {
   readonly inlineStreamId: string;
   readonly telemetry: InlineCompletionTelemetry;
   readonly onOverviewMarkers: OverviewMarkersHandler | undefined;
+  readonly onCallHierarchyResult: CallHierarchyResultHandler | undefined;
   readonly onCursorChange: KeikoCodeEditorProps["onCursorChange"];
   readonly onSelectionChange: KeikoCodeEditorProps["onSelectionChange"];
   readonly onRuntimeError: KeikoCodeEditorProps["onRuntimeError"];
@@ -682,6 +779,14 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
     symbols: buildSymbolsWiring(args.latestProps, `${args.streamId}:symbols`),
     formatting: buildFormattingWiring(args.latestProps, `${args.streamId}:formatting`),
     definition: buildDefinitionWiring(args.latestProps, `${args.streamId}:definition`),
+    typeDefinition: buildTypeDefinitionWiring(args.latestProps, `${args.streamId}:type-definition`),
+    implementation: buildImplementationWiring(args.latestProps, `${args.streamId}:implementation`),
+    callHierarchy: buildCallHierarchyWiring(
+      args.latestProps,
+      `${args.streamId}:call-hierarchy`,
+      args.onCallHierarchyResult,
+    ),
+    inlayHints: buildInlayHintsWiring(args.latestProps, `${args.streamId}:inlay-hints`),
     references: buildReferencesWiring(args.latestProps, `${args.streamId}:references`),
     codeActions: buildCodeActionsWiring(args.latestProps, `${args.streamId}:codeActions`),
     signatureHelp: buildSignatureHelpWiring(args.latestProps, `${args.streamId}:signatureHelp`),
@@ -731,6 +836,7 @@ function useRuntimeWiringBaseArgs(args: RuntimeWiringBaseArgs): RuntimeWiringBas
       args.inlineStreamId,
       args.telemetry,
       args.onOverviewMarkers,
+      args.onCallHierarchyResult,
       args.onCursorChange,
       args.onSelectionChange,
       args.onRuntimeError,
@@ -744,6 +850,7 @@ function useMountHandler(
   refs: EditorRefs,
   emitSave: () => void,
   onOverviewMarkers: OverviewMarkersHandler | undefined,
+  onCallHierarchyResult: CallHierarchyResultHandler | undefined,
 ): OnMount {
   const { onCursorChange, onSelectionChange, onRuntimeError, themeVariant, autoFocus } = props;
   const latestProps = useRef(props);
@@ -758,6 +865,7 @@ function useMountHandler(
     inlineStreamId,
     telemetry,
     onOverviewMarkers,
+    onCallHierarchyResult,
     onCursorChange,
     onSelectionChange,
     onRuntimeError,
@@ -826,12 +934,13 @@ export function useEditorHandlers(
   props: KeikoCodeEditorProps,
   readOnly: boolean,
   onOverviewMarkers?: OverviewMarkersHandler,
+  onCallHierarchyResult?: CallHierarchyResultHandler,
 ): EditorHandlers {
   const refs = useEditorRefs();
   const programmaticChangeRef = useRef<ProgrammaticEditorChange | null>(null);
   const emitSave = useSaveEmitter(props, refs.editorRef, readOnly);
   const onChange = useChangeHandler(props.onContentChange, readOnly, programmaticChangeRef);
-  const onMount = useMountHandler(props, refs, emitSave, onOverviewMarkers);
+  const onMount = useMountHandler(props, refs, emitSave, onOverviewMarkers, onCallHierarchyResult);
   const formatDocument = useCallback((): void => {
     const editor = refs.editorRef.current;
     if (editor === null || readOnly) return;

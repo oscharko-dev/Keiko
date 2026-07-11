@@ -8,6 +8,8 @@ import type {
   MonacoLanguagesRegistrar,
 } from "./completion-bridge.js";
 import type { MonacoDefinitionProvider, MonacoUriForPath } from "./definition-bridge.js";
+import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
+import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
 import type {
   MonacoInlineCompletionsProvider,
   MonacoInlineCompletionsRegistrar,
@@ -757,6 +759,9 @@ interface FakeNavigationRegistrar {
   readonly registrar: MountMonaco["languages"];
   readonly definitions: () => readonly (string | readonly string[])[];
   readonly references: () => readonly (string | readonly string[])[];
+  readonly typeDefinitions: () => readonly (string | readonly string[])[];
+  readonly implementations: () => readonly (string | readonly string[])[];
+  readonly inlayHints: () => readonly (string | readonly string[])[];
   readonly definitionProviders: () => readonly MonacoDefinitionProvider[];
   readonly referenceProviders: () => readonly MonacoReferenceProvider[];
   readonly codeActions: () => readonly (string | readonly string[])[];
@@ -767,6 +772,9 @@ interface FakeNavigationRegistrar {
 function buildFakeNavigationRegistrar(withMethods = true): FakeNavigationRegistrar {
   const definitions: (string | readonly string[])[] = [];
   const references: (string | readonly string[])[] = [];
+  const typeDefinitions: (string | readonly string[])[] = [];
+  const implementations: (string | readonly string[])[] = [];
+  const inlayHints: (string | readonly string[])[] = [];
   const definitionProviders: MonacoDefinitionProvider[] = [];
   const referenceProviders: MonacoReferenceProvider[] = [];
   const codeActions: (string | readonly string[])[] = [];
@@ -796,6 +804,24 @@ function buildFakeNavigationRegistrar(withMethods = true): FakeNavigationRegistr
           referenceProviders.push(provider);
           return disposable;
         },
+        registerTypeDefinitionProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          typeDefinitions.push(selector);
+          return disposable;
+        },
+        registerImplementationProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          implementations.push(selector);
+          return disposable;
+        },
+        registerInlayHintsProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          inlayHints.push(selector);
+          return disposable;
+        },
         registerCodeActionProvider: (
           selector: string | readonly string[],
         ): { dispose: () => void } => {
@@ -814,6 +840,9 @@ function buildFakeNavigationRegistrar(withMethods = true): FakeNavigationRegistr
     registrar: { ...methods } as unknown as MountMonaco["languages"],
     definitions: () => definitions,
     references: () => references,
+    typeDefinitions: () => typeDefinitions,
+    implementations: () => implementations,
+    inlayHints: () => inlayHints,
     definitionProviders: () => definitionProviders,
     referenceProviders: () => referenceProviders,
     codeActions: () => codeActions,
@@ -891,6 +920,26 @@ function signatureHelpArg(): NonNullable<WireEditorOnMountArgs["signatureHelp"]>
   return { resolve, isCurrentDocument: () => true, streamId: "sig", newRequestId: () => "sig-r" };
 }
 
+function inlayHintsArg(): NonNullable<WireEditorOnMountArgs["inlayHints"]> {
+  const resolve: EditorInlayHintsResolver = (query) =>
+    Promise.resolve({ request: query.request.request, hints: [] });
+  return { resolve, isCurrentDocument: () => true, streamId: "inlay", newRequestId: () => "i" };
+}
+
+function callHierarchyArg(): NonNullable<WireEditorOnMountArgs["callHierarchy"]> {
+  const resolve: EditorCallHierarchyResolver = (query) =>
+    Promise.resolve({ request: query.request.request, roots: [] });
+  return {
+    resolve,
+    isCurrentDocument: () => true,
+    streamId: "calls",
+    newRequestId: () => "c",
+    documentLanguage: "typescript",
+    labels: { command: "Show Call Hierarchy" },
+    onResult: vi.fn(),
+  };
+}
+
 describe("wireEditorOnMount navigation/action/signature providers (#2104)", () => {
   it("registers each provider per governed language when resolvers and registry exist", () => {
     const fakes = buildFakes();
@@ -906,6 +955,37 @@ describe("wireEditorOnMount navigation/action/signature providers (#2104)", () =
     expect(languages.references()).toEqual(["typescript", "javascript"]);
     expect(languages.codeActions()).toEqual(["typescript", "javascript"]);
     expect(languages.signatureHelp()).toEqual(["typescript", "javascript"]);
+  });
+
+  it("registers the additive navigation, inlay-hints, and call-hierarchy bridges", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeNavigationRegistrar();
+    const model = {
+      getValue: (): string => "function target() {}",
+      uri: { toString: (): string => "keiko-editor://current" },
+      getLineCount: (): number => 1,
+      getLineMaxColumn: (): number => 21,
+    };
+    const editor = {
+      ...fakes.editor,
+      getPosition: (): { lineNumber: number; column: number } => ({ lineNumber: 1, column: 10 }),
+      getModel: () => model,
+    } as unknown as MountEditor;
+    wire(fakes, {
+      editor,
+      monaco: { ...fakes.monaco, languages: languages.registrar },
+      typeDefinition: definitionArg(),
+      implementation: definitionArg(),
+      inlayHints: inlayHintsArg(),
+      callHierarchy: callHierarchyArg(),
+    });
+
+    expect(languages.typeDefinitions()).toEqual(["typescript", "javascript"]);
+    expect(languages.implementations()).toEqual(["typescript", "javascript"]);
+    expect(languages.inlayHints()).toEqual(["typescript", "javascript"]);
+    expect(fakes.actionDescriptors().map((action) => action.id)).toContain(
+      "keiko.editor.showCallHierarchy",
+    );
   });
 
   it("registers no providers and no F12/Shift+F12 actions when the host supplies no resolvers", () => {

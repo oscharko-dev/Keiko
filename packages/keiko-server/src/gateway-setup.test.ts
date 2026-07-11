@@ -17,7 +17,7 @@ import type { IncomingMessage } from "node:http";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
-import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { parseGatewayConfig, resolveVoiceCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   handleGatewaySetup,
   MAX_DISCOVERED_MODELS,
@@ -234,14 +234,15 @@ describe("handleGatewaySetup", () => {
 
     expect(updated.status).toBe(200);
     const config = currentGatewayConfig(deps);
-    expect(config?.providers.map((provider) => provider.modelId)).toEqual([
+    if (config === undefined) throw new Error("expected saved gateway config");
+    expect(config.providers.map((provider) => provider.modelId)).toEqual([
       "example-chat-model",
       "keiko-stt",
     ]);
-    const voiceProvider = config?.providers.find((provider) => provider.modelId === "keiko-stt");
+    const voiceProvider = config.providers.find((provider) => provider.modelId === "keiko-stt");
     expect(voiceProvider?.apiKey).toBe("voice-secret-token");
     expect(voiceProvider?.apiKeyHeaderName).toBe("api-key");
-    const voiceCapability = config?.capabilities?.find(
+    const voiceCapability = config.capabilities?.find(
       (capability) => capability.id === "keiko-stt",
     );
     expect(voiceCapability).toMatchObject({
@@ -254,6 +255,94 @@ describe("handleGatewaySetup", () => {
     expect(saved).not.toContain("voice-secret-token");
     expect(saved).toContain("cred:keiko-stt");
     expect(saved).toContain('"kind": "voice"');
+    deps.store.close();
+  });
+
+  it("configures distinct Dictate, Digital Voice, and read-aloud models from one audio connection", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-full-voice-");
+    const evidenceDir = await tempDir("keiko-gw-ev-full-voice-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const updated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceBaseUrl: "https://audio.example.com/v1",
+        voiceApiKey: "audio-token",
+        voiceSpeechToTextModelId: "transcribe-model",
+        voiceRealtimeModelId: "realtime-model",
+        voiceSpeechOutputModelId: "speech-model",
+        voiceOutputVoiceId: "alloy",
+        voiceProviderLocality: "customer-hosted",
+      }),
+      deps,
+    );
+
+    expect(updated.status).toBe(200);
+    const config = currentGatewayConfig(deps);
+    if (config === undefined) throw new Error("expected saved full-voice gateway config");
+    expect(config.providers.map((provider) => provider.modelId)).toEqual([
+      "example-chat-model",
+      "transcribe-model",
+      "speech-model",
+      "realtime-model",
+    ]);
+    expect(resolveVoiceCapability(config)).toMatchObject({
+      available: true,
+      profile: "full-realtime",
+      capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+      availableVoicePersonas: ["neutral"],
+      providerLocality: "customer-hosted",
+    });
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).not.toContain("audio-token");
+    expect(saved).toContain('"voiceId": "alloy"');
+    expect(JSON.stringify(updated.body)).not.toContain("alloy");
+    deps.store.close();
+  });
+
+  it("explains the missing shared audio connection when only a Realtime deployment is entered", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-voice-connection-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-connection-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    expect(
+      (
+        await handleGatewaySetup(
+          ctx({ baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" }),
+          deps,
+        )
+      ).status,
+    ).toBe(200);
+
+    const result = await handleGatewaySetup(
+      ctx({ preserveExisting: true, voiceRealtimeModelId: "realtime-model" }),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain(
+      "Audio endpoint URL and credential are required when an audio model is selected.",
+    );
     deps.store.close();
   });
 
