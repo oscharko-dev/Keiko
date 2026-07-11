@@ -79,16 +79,14 @@ function globalsCssSha256(): string {
     .digest("hex");
 }
 
-export function writeFeedback2074Evidence(captures: readonly Feedback2074Capture[]): void {
-  const command = 'npm run test:e2e:feedback-2074 -- --grep "fidelity evidence"';
-  const seriousOrCritical = captures.flatMap((capture) => capture.seriousOrCritical);
-  writeJson("feedback-fidelity-proof.json", {
+function fidelityProof(captures: readonly Feedback2074Capture[], cssSha256: string): object {
+  return {
     issue: 2074,
     epic: 2070,
     verdict: "PASS",
     harness: "tests/e2e/config/playwright.issue-2074-feedback-ui.config.ts",
     appPath: "packaged-cli-ui",
-    globalsCssSha256: globalsCssSha256(),
+    globalsCssSha256: cssSha256,
     captures,
     assertions: {
       canonicalModeCoverage: 7,
@@ -105,11 +103,15 @@ export function writeFeedback2074Evidence(captures: readonly Feedback2074Capture
       forcedColorsActionReadability:
         "ButtonFace/ButtonText, text fill, and forced-color-adjust are asserted in real Chromium.",
     },
-  });
-  writeJson("a11y-proof.json", {
+  };
+}
+
+function a11yProof(captures: readonly Feedback2074Capture[], cssSha256: string): object {
+  const seriousOrCritical = captures.flatMap((capture) => capture.seriousOrCritical);
+  return {
     issue: 2074,
     verdict: "PASS",
-    globalsCssSha256: globalsCssSha256(),
+    globalsCssSha256: cssSha256,
     gate: "zero serious or critical axe violations across accepted-copy and rate-limited states",
     captures: captures.map((capture) => ({
       mode: capture.mode,
@@ -118,8 +120,11 @@ export function writeFeedback2074Evidence(captures: readonly Feedback2074Capture
       seriousOrCritical: capture.seriousOrCritical,
     })),
     seriousOrCriticalViolationCount: seriousOrCritical.length,
-  });
-  writeJson("manifest.json", {
+  };
+}
+
+function evidenceManifest(command: string): object {
+  return {
     issue: "#2074",
     epic: "#2070",
     command: `KEIKO_WRITE_TRACKED_EVIDENCE=1 ${command}`,
@@ -137,5 +142,13 @@ export function writeFeedback2074Evidence(captures: readonly Feedback2074Capture
       "Receipt secrets are asserted absent from the DOM and evidence while the exact clipboard tuple is verified.",
       "Rate-limited conflict presentation uses the governed warning token pair plus a visible icon and word.",
     ],
-  });
+  };
+}
+
+export function writeFeedback2074Evidence(captures: readonly Feedback2074Capture[]): void {
+  const command = 'npm run test:e2e:feedback-2074 -- --grep "fidelity evidence"';
+  const cssSha256 = globalsCssSha256();
+  writeJson("feedback-fidelity-proof.json", fidelityProof(captures, cssSha256));
+  writeJson("a11y-proof.json", a11yProof(captures, cssSha256));
+  writeJson("manifest.json", evidenceManifest(command));
 }

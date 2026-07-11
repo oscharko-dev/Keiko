@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Locator, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
 import {
@@ -103,6 +103,13 @@ async function boot(
   mode: FeedbackMode = BASELINE_FEEDBACK_MODE,
 ): Promise<{ readonly feedback: Locator; readonly labels: Labels }> {
   const labels = LABELS[locale];
+  await configurePage(page, locale, mode);
+  const feedback = await openFeedback(page, labels);
+  await fillAndScan(feedback, labels);
+  return { feedback, labels };
+}
+
+async function configurePage(page: Page, locale: "en" | "de", mode: FeedbackMode): Promise<void> {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.addInitScript(
     ({ dataHc, locale: selectedLocale, theme }) => {
@@ -134,12 +141,19 @@ async function boot(
   await page.emulateMedia(mode.media);
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-locale", locale);
+}
+
+async function openFeedback(page: Page, labels: Labels): Promise<Locator> {
   const settings = page.locator('.window[data-window-id="issue-2074-settings"]');
   await settings.getByRole("button", { name: labels.general }).click();
   await settings.getByRole("button", { name: labels.open }).click();
   const feedback = page.locator('.window[data-window-id="feedback"]');
   await expect(feedback).toBeVisible();
   await feedback.getByRole("button", { name: labels.continue }).click();
+  return feedback;
+}
+
+async function fillAndScan(feedback: Locator, labels: Labels): Promise<void> {
   await feedback.getByLabel(labels.productVersion).fill("0.2.14");
   await feedback.getByLabel(labels.title, { exact: true }).fill("Safe feedback title");
   await feedback.getByLabel(labels.description, { exact: true }).fill("Safe feedback description.");
@@ -150,7 +164,6 @@ async function boot(
   await expect(
     feedback.getByRole("region", { name: /Sanitized preview|Bereinigte Vorschau/u }),
   ).toBeVisible();
-  return { feedback, labels };
 }
 
 async function forceClipboardFailure(page: Page): Promise<void> {
@@ -290,89 +303,97 @@ test.describe("Issue #2074 packaged feedback receipt and conflict journeys", () 
   }
 });
 
-test("Issue #2074 fidelity evidence", async ({ browser }) => {
-  const captures: Feedback2074Capture[] = [];
-  for (const mode of FEEDBACK_MODES) {
-    const context = await browser.newContext({
-      bypassCSP: true,
-      viewport: { width: 1440, height: 980 },
-    });
-    try {
-      const accepted = await context.newPage();
-      const feedback = await acceptAndCopy(accepted, "en", mode);
-      const acceptedViolations = await runAxe(accepted, '.window[data-window-id="feedback"]');
-      const copied = feedback.locator("p").filter({ hasText: LABELS.en.copied });
-      await feedback.screenshot({
-        path: feedback2074ScreenshotPath(screenshot(mode, "accepted-copied")),
-        animations: "disabled",
-      });
-      captures.push({
-        file: screenshot(mode, "accepted-copied"),
-        state: "accepted-copied",
-        mode: mode.name,
-        locale: "en",
-        focusText: (await copied.textContent()) ?? "",
-        seriousOrCritical: seriousOrCritical(acceptedViolations),
-        style: await captureStyle(accepted, copied),
-      });
+async function captureAccepted(page: Page, mode: FeedbackMode): Promise<Feedback2074Capture> {
+  const feedback = await acceptAndCopy(page, "en", mode);
+  const violations = await runAxe(page, '.window[data-window-id="feedback"]');
+  const copied = feedback.locator("p").filter({ hasText: LABELS.en.copied });
+  const file = screenshot(mode, "accepted-copied");
+  await feedback.screenshot({ path: feedback2074ScreenshotPath(file), animations: "disabled" });
+  return {
+    file,
+    state: "accepted-copied",
+    mode: mode.name,
+    locale: "en",
+    focusText: (await copied.textContent()) ?? "",
+    seriousOrCritical: seriousOrCritical(violations),
+    style: await captureStyle(page, copied),
+  };
+}
 
-      const limited = await context.newPage();
-      await stubSubmit(limited, "rate-limited");
-      const { feedback: rateFeedback, labels } = await boot(limited, "en", mode);
-      await (await confirm(rateFeedback, labels)).click();
-      const result = rateFeedback.getByRole("region", { name: labels.rateLimited });
-      if (mode.name === "forced-colors") {
-        await assertForcedColorsActionReadability(limited, [
-          result.getByRole("button", { name: labels.edit }),
-          rateFeedback.getByRole("button", { name: labels.publicFallback }),
-        ]);
-      }
-      const violations = await runAxe(limited, '.window[data-window-id="feedback"]');
-      await rateFeedback.screenshot({
-        path: feedback2074ScreenshotPath(screenshot(mode, "rate-limited")),
-        animations: "disabled",
-      });
-      captures.push({
-        file: screenshot(mode, "rate-limited"),
-        state: "rate-limited",
-        mode: mode.name,
-        locale: "en",
-        focusText: (await result.textContent()) ?? "",
-        seriousOrCritical: seriousOrCritical(violations),
-        style: await captureStyle(limited, result),
-      });
-    } finally {
-      await context.close();
-    }
+async function captureRateLimited(page: Page, mode: FeedbackMode): Promise<Feedback2074Capture> {
+  await stubSubmit(page, "rate-limited");
+  const { feedback, labels } = await boot(page, "en", mode);
+  await (await confirm(feedback, labels)).click();
+  const result = feedback.getByRole("region", { name: labels.rateLimited });
+  if (mode.name === "forced-colors") {
+    await assertForcedColorsActionReadability(page, [
+      result.getByRole("button", { name: labels.edit }),
+      feedback.getByRole("button", { name: labels.publicFallback }),
+    ]);
   }
-  const responsiveContext = await browser.newContext({
-    bypassCSP: true,
-    viewport: { width: 1440, height: 980 },
-  });
+  const violations = await runAxe(page, '.window[data-window-id="feedback"]');
+  const file = screenshot(mode, "rate-limited");
+  await feedback.screenshot({ path: feedback2074ScreenshotPath(file), animations: "disabled" });
+  return {
+    file,
+    state: "rate-limited",
+    mode: mode.name,
+    locale: "en",
+    focusText: (await result.textContent()) ?? "",
+    seriousOrCritical: seriousOrCritical(violations),
+    style: await captureStyle(page, result),
+  };
+}
+
+async function captureMode(
+  createContext: () => Promise<BrowserContext>,
+  mode: FeedbackMode,
+): Promise<readonly Feedback2074Capture[]> {
+  const context = await createContext();
   try {
-    const page = await responsiveContext.newPage();
+    return [
+      await captureAccepted(await context.newPage(), mode),
+      await captureRateLimited(await context.newPage(), mode),
+    ];
+  } finally {
+    await context.close();
+  }
+}
+
+async function captureResponsive(
+  createContext: () => Promise<BrowserContext>,
+): Promise<Feedback2074Capture> {
+  const context = await createContext();
+  try {
+    const page = await context.newPage();
     await stubSubmit(page, "rate-limited");
     const { feedback, labels } = await boot(page, "en");
     await (await confirm(feedback, labels)).click();
     await resizeFeedbackWindowToWidth(page, feedback, 500);
     const result = feedback.getByRole("region", { name: labels.rateLimited });
     const violations = await runAxe(page, '.window[data-window-id="feedback"]');
-    await feedback.screenshot({
-      path: feedback2074ScreenshotPath("08-responsive-500-rate-limited.png"),
-      animations: "disabled",
-    });
-    captures.push({
-      file: "08-responsive-500-rate-limited.png",
+    const file = "08-responsive-500-rate-limited.png";
+    await feedback.screenshot({ path: feedback2074ScreenshotPath(file), animations: "disabled" });
+    return {
+      file,
       state: "rate-limited",
       mode: "responsive-500",
       locale: "en",
       focusText: (await result.textContent()) ?? "",
       seriousOrCritical: seriousOrCritical(violations),
       style: await captureStyle(page, result),
-    });
+    };
   } finally {
-    await responsiveContext.close();
+    await context.close();
   }
+}
+
+test("Issue #2074 fidelity evidence", async ({ browser }) => {
+  const captures: Feedback2074Capture[] = [];
+  const createContext = (): Promise<BrowserContext> =>
+    browser.newContext({ bypassCSP: true, viewport: { width: 1440, height: 980 } });
+  for (const mode of FEEDBACK_MODES) captures.push(...(await captureMode(createContext, mode)));
+  captures.push(await captureResponsive(createContext));
   const blocking = captures.flatMap((capture) => capture.seriousOrCritical);
   expect(blocking, formatViolations(blocking)).toEqual([]);
   writeFeedback2074Evidence(captures);
