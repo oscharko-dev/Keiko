@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { createServer, request, type IncomingHttpHeaders } from "node:http";
+import {
+  createServer,
+  request,
+  type IncomingHttpHeaders,
+  type OutgoingHttpHeaders,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import type { FeedbackMaintainerPermissionV1 } from "@oscharko-dev/keiko-contracts/feedback-maintainer";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,9 +30,19 @@ function csrfHash(token: string): Uint8Array {
 
 interface Harness {
   readonly options: MaintainerHttpOptions;
-  readonly auth: Readonly<Record<string, ReturnType<typeof vi.fn>>>;
-  readonly query: Readonly<Record<string, ReturnType<typeof vi.fn>>>;
-  readonly review: Readonly<Record<string, ReturnType<typeof vi.fn>>>;
+  readonly auth: {
+    readonly login: ReturnType<typeof vi.fn>;
+    readonly callback: ReturnType<typeof vi.fn>;
+    readonly session: ReturnType<typeof vi.fn>;
+    readonly logout: ReturnType<typeof vi.fn>;
+  };
+  readonly query: {
+    readonly list: ReturnType<typeof vi.fn>;
+    readonly detail: ReturnType<typeof vi.fn>;
+    readonly hold: ReturnType<typeof vi.fn>;
+    readonly audit: ReturnType<typeof vi.fn>;
+  };
+  readonly review: { readonly execute: ReturnType<typeof vi.fn> };
 }
 
 function harness(
@@ -106,7 +121,7 @@ function sessionHeaders(extra: Readonly<Record<string, string>> = {}): Record<st
 function rawStatus(
   origin: string,
   path: string,
-  headers: Readonly<Record<string, string | readonly string[]>> = {},
+  headers: OutgoingHttpHeaders = {},
   method = "GET",
   body?: string,
 ): Promise<number> {
@@ -135,7 +150,7 @@ function rawStatus(
 function rawResponse(
   origin: string,
   path: string,
-  headers: Readonly<Record<string, string | readonly string[]>> = {},
+  headers: OutgoingHttpHeaders = {},
   method = "GET",
 ): Promise<{ readonly status: number; readonly headers: IncomingHttpHeaders }> {
   const target = new URL(origin);
@@ -144,7 +159,9 @@ function rawResponse(
       { host: target.hostname, port: target.port, method, path, headers },
       (res) => {
         res.resume();
-        res.once("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers }));
+        res.once("end", () => {
+          resolve({ status: res.statusCode ?? 0, headers: res.headers });
+        });
       },
     );
     req.once("error", reject);

@@ -49,7 +49,13 @@ function config(): EnabledConfig {
 interface Harness {
   readonly auth: MaintainerAuthService;
   readonly exchange: ReturnType<typeof vi.fn>;
-  readonly store: Readonly<Record<string, ReturnType<typeof vi.fn>>>;
+  readonly store: {
+    readonly createTransaction: ReturnType<typeof vi.fn>;
+    readonly consumeTransaction: ReturnType<typeof vi.fn>;
+    readonly createSession: ReturnType<typeof vi.fn>;
+    readonly session: ReturnType<typeof vi.fn>;
+    readonly revoke: ReturnType<typeof vi.fn>;
+  };
 }
 
 function harness(identity: VerifiedOidcIdentity): Harness {
