@@ -9,10 +9,12 @@ import {
 import {
   createFetchEditorAgentHttpTransport,
   DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+  DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS,
   DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS,
   EditorAgentHttpClient,
   type EditorAgentHttpTransport,
   type EditorAgentHttpTransportRequest,
+  type EditorAgentHttpTransportResponse,
   type EditorAgentTimeoutScheduler,
 } from "./editor-agent-client.js";
 
@@ -25,6 +27,35 @@ const ACTION: EditorAgentAction = {
   sessionId: "session-1",
   type: "openFile",
 };
+const QUERY_GIT_ACTION: EditorAgentAction = {
+  ...ACTION,
+  actionId: "action-query-git",
+  idempotencyKey: "idempotency-query-git",
+  type: "queryGit",
+  queryGit: { path: "src/a.ts", aspects: ["status"] },
+};
+const QUERY_GIT_DATA = {
+  schemaVersion: "1",
+  target: { basename: "a.ts", pathHash: "b".repeat(64) },
+  caps: { maxFiles: 8, maxHunks: 16, maxBlameLines: 32, maxResultBytes: 192 * 1024 },
+  aspects: {},
+  omissions: [],
+} as const;
+
+function queryGitResultBody(data: unknown, status = "succeeded"): string {
+  return JSON.stringify({
+    result: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      actionId: QUERY_GIT_ACTION.actionId,
+      sessionId: QUERY_GIT_ACTION.sessionId,
+      status,
+      ...(status === "conflict"
+        ? { conflict: { code: "OUT_OF_SCOPE", message: "The path is denied." } }
+        : {}),
+      ...(data === undefined ? {} : { data }),
+    },
+  });
+}
 
 function transportWith(
   body: string,
@@ -117,15 +148,17 @@ describe("EditorAgentHttpClient", () => {
 
   it.each([
     { timeoutMs: 0, maxResponseBytes: 1 },
+    { timeoutMs: 1, queryGitTimeoutMs: 0, maxResponseBytes: 1 },
     { timeoutMs: 1, maxResponseBytes: 0 },
     { timeoutMs: 1.5, maxResponseBytes: 1 },
-  ])("rejects invalid HTTP bounds %#", ({ timeoutMs, maxResponseBytes }) => {
+  ])("rejects invalid HTTP bounds %#", ({ timeoutMs, queryGitTimeoutMs, maxResponseBytes }) => {
     expect(
       () =>
         new EditorAgentHttpClient({
           baseUrl: "http://localhost:1983",
           transport: transportWith("{}"),
           timeoutMs,
+          queryGitTimeoutMs,
           maxResponseBytes,
         }),
     ).toThrow("HTTP bounds must be positive");
@@ -226,7 +259,7 @@ describe("EditorAgentHttpClient", () => {
         callback();
         return "timeout";
       },
-      clear: () => undefined,
+      clear: (): void => undefined,
     };
     const transport: EditorAgentHttpTransport = {
       request: () => new Promise(() => undefined),
@@ -239,14 +272,31 @@ describe("EditorAgentHttpClient", () => {
     expect(result).toMatchObject({ ok: false, error: { code: "TIMED_OUT" } });
   });
 
-  it("cancels an uncooperative transport when the caller is already aborted", async () => {
+  it("cancels before scheduling or calling transport when the caller is already aborted", async () => {
     const controller = new AbortController();
     controller.abort();
+    let transportCalls = 0;
+    let scheduledTimeouts = 0;
     const transport: EditorAgentHttpTransport = {
-      request: () => new Promise(() => undefined),
+      request: (): Promise<EditorAgentHttpTransportResponse> => {
+        transportCalls += 1;
+        return new Promise(() => undefined);
+      },
     };
-    const result = await client(transport).listSessions(controller.signal);
+    const result = await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport,
+      scheduler: {
+        set: (): string => {
+          scheduledTimeouts += 1;
+          return "timeout";
+        },
+        clear: (): void => undefined,
+      },
+    }).listSessions(controller.signal);
     expect(result).toMatchObject({ ok: false, error: { kind: "cancelled", code: "CANCELLED" } });
+    expect(transportCalls).toBe(0);
+    expect(scheduledTimeouts).toBe(0);
   });
 
   it("maps a transport rejection caused by caller cancellation to cancelled", async () => {
@@ -561,6 +611,97 @@ function capturingScheduler(): {
     scheduler: { set: (_callback, timeoutMs) => timeouts.push(timeoutMs), clear: () => undefined },
   };
 }
+
+describe("EditorAgentHttpClient.action timeout selection", () => {
+  it("uses the dedicated bounded timeout for queryGit", async () => {
+    const captured = capturingScheduler();
+    await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(queryGitResultBody(QUERY_GIT_DATA)),
+      scheduler: captured.scheduler,
+    }).action(QUERY_GIT_ACTION, new AbortController().signal);
+    expect(captured.timeouts).toEqual([DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS]);
+    expect(DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS).toBe(25_000);
+    expect(DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS).toBeGreaterThan(
+      DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS,
+    );
+  });
+
+  it.each([
+    ["missing data", undefined],
+    ["a full path", { ...QUERY_GIT_DATA, path: "src/a.ts" }],
+    ["invalid caps", { ...QUERY_GIT_DATA, caps: { ...QUERY_GIT_DATA.caps, maxFiles: 400 } }],
+    ["the legacy unversioned shape", { path: "src/a.ts", aspects: {}, omissions: [] }],
+  ])("rejects a succeeded queryGit response with %s", async (_case, data) => {
+    const result = await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(queryGitResultBody(data)),
+    }).action(QUERY_GIT_ACTION, new AbortController().signal);
+    expect(result).toMatchObject({ ok: false, error: { code: "MALFORMED_RESPONSE" } });
+  });
+
+  it("accepts governed queryGit denials carried by HTTP 403", async () => {
+    const result = await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(queryGitResultBody(undefined, "conflict"), { status: 403 }),
+    }).action(QUERY_GIT_ACTION, new AbortController().signal);
+    expect(result).toMatchObject({ ok: true, value: { result: { status: "conflict" } } });
+  });
+
+  it("rejects arbitrary data on a governed HTTP 403 denial", async () => {
+    const result = await new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: transportWith(queryGitResultBody({ path: "src/a.ts" }, "conflict"), {
+        status: 403,
+      }),
+    }).action(QUERY_GIT_ACTION, new AbortController().signal);
+    expect(result).toMatchObject({ ok: false, error: { code: "MALFORMED_RESPONSE" } });
+  });
+
+  it.each(["save", "openFile"] as const)(
+    "keeps the generic timeout for %s actions",
+    async (type) => {
+      const captured = capturingScheduler();
+      const action: EditorAgentAction = { ...ACTION, type };
+      await new EditorAgentHttpClient({
+        baseUrl: "http://127.0.0.1:1983",
+        transport: transportWith(
+          JSON.stringify({
+            result: {
+              schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+              actionId: action.actionId,
+              sessionId: action.sessionId,
+              status: "succeeded",
+            },
+          }),
+        ),
+        scheduler: captured.scheduler,
+      }).action(action, new AbortController().signal);
+      expect(captured.timeouts).toEqual([DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS]);
+    },
+  );
+
+  it("lets external in-flight cancellation win for queryGit", async () => {
+    const controller = new AbortController();
+    const captured = capturingScheduler();
+    let transportCalls = 0;
+    const resultPromise = new EditorAgentHttpClient({
+      baseUrl: "http://127.0.0.1:1983",
+      transport: {
+        request: (): Promise<EditorAgentHttpTransportResponse> => {
+          transportCalls += 1;
+          return new Promise(() => undefined);
+        },
+      },
+      scheduler: captured.scheduler,
+    }).action(QUERY_GIT_ACTION, controller.signal);
+    controller.abort();
+    const result = await resultPromise;
+    expect(result).toMatchObject({ ok: false, error: { kind: "cancelled", code: "CANCELLED" } });
+    expect(transportCalls).toBe(1);
+    expect(captured.timeouts).toEqual([DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS]);
+  });
+});
 
 describe("EditorAgentHttpClient.requestVerification", () => {
   // Issue #2214 AC7 — the verification call must budget for a run up to the documented wall-time

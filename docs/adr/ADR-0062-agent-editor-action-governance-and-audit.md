@@ -24,6 +24,17 @@ Accepted
 > and sensitive-path denials remain stricter than every mode. The composed result now drives route
 > admission as well as audit.
 
+> **Amended by Issue #2298 (2026-07-11).** Bounded, read-only local repository queries use a
+> dedicated `workspace-read` editor effect mapped to the existing Workbench `workspace-read` /
+> `workspace-contained` policy vocabulary at low risk. Unlike pure editor navigation/layout, these
+> reads require a valid Authority Envelope and consume the existing Authority tool/runtime budgets.
+> They remain containment- and sensitive-path-gated, never perform Git mutation, and are neither an
+> external/delivery effect nor subject to delivery approval. `queryGit` audit targets are additive,
+> bounded basename plus server-computed SHA-256 path metadata; the full target path is omitted, and
+> contracts do not compute hashes. This mapping follows the product-wide shared-vocabulary rule in
+> [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md); it does not create a
+> surface-local authority stack.
+
 ## Context
 
 Issues #1394 ([ADR-0058](ADR-0058-safe-apply-edits-and-patch-workflow.md)), #1391
@@ -63,17 +74,19 @@ for the action types that exist today.
 
 A new content-free contract leaf `keiko-contracts/src/editor-agent-governance.ts` defines
 `EditorAgentActionDisposition = "allowed" | "review-required" | "denied"`, mirroring the proven
-three-way decision taxonomy used by `voice-action-governance` and memory capture. Each of the nine
-action types is mapped to an `EditorAgentActionEffectClass`
-(`navigation` | `layout` | `content-mutation` | `external-effect`) by a frozen table. The
-`external-effect` class is defined for the future Git/command action types but has no members in the
-current contract.
+three-way decision taxonomy used by `voice-action-governance` and memory capture. Each action type
+is mapped to an `EditorAgentActionEffectClass` (`navigation` | `layout` |
+`workspace-read` | `content-mutation` | `external-effect` | `execution`) by a frozen table. The
+`external-effect` class remains reserved for future delivery-like Git/command action types; the
+read-only `queryGit` action is deliberately not in that class.
 
 A pure, deterministic, fail-closed classifier `classifyEditorAgentAction(type, context)` establishes
 the action's baseline security posture. Issue #2121 then composes that decision with the shared
 Coding Workbench policy:
 
 - `navigation` / `layout` → `allowed`.
+- `workspace-read` → the same immutable workspace-boundary and sensitive-path checks, then baseline
+  `allowed`; `queryGit` maps to Workbench `workspace-read` / `workspace-contained` at low risk.
 - `content-mutation` whose target escapes the workspace root **or** matches the always-on
   workspace deny-list → `denied` (reason `workspace-boundary-escape` / `denied-sensitive-path`).
 - `content-mutation` otherwise → baseline `allowed`, then maps to Workbench `workspace-write` /
@@ -83,11 +96,15 @@ Coding Workbench policy:
   `external-effect-requires-review`) and maps to Workbench `delivery-substrate` / `delivery`.
 
 Pure navigation and layout are exempt from the Authority Envelope because they change only editor
-UI state. For the in-scope classes, `composeEditorAgentActionPolicyDecision` evaluates the central
-mode/resource/risk matrix and selects the stricter effect using `denied > approval-required >
-allowed`. The baseline decision wins ties so its specific reason is preserved. Thus an envelope can
-never loosen containment or sensitive-path denial, while normal contained edits and saves follow
-the maintained Ask for approval, Approve for me, and Full access semantics from ADR-0125.
+UI state. `workspace-read` is non-exempt: the server must resolve a valid Authority Envelope, admit
+the existing `workspace-read` action class, and reserve the existing tool-call and elapsed-runtime
+budgets before a repository read. For the in-scope classes,
+`composeEditorAgentActionPolicyDecision` evaluates the central mode/resource/risk matrix and selects
+the stricter effect using `denied > approval-required > allowed`. The baseline decision wins ties so
+its specific reason is preserved. Thus an envelope can never loosen containment or sensitive-path
+denial, while normal contained edits, saves, and bounded repository reads follow the maintained Ask
+for approval, Approve for me, and Full access semantics from ADR-0125. No Git mutation or delivery
+approval is introduced by `workspace-read`.
 
 Containment reuses the existing `isContainedAgentPath` contract guard. Sensitivity reuses
 `keiko-workspace`'s always-on `isDenied` deny-list (`.env`, `.ssh`, `.keiko`, credentials, etc.);
@@ -126,13 +143,16 @@ and enforces elapsed runtime. Exhaustion is a closed, content-free
 `MemoryAuditEvent` and `patchApplyEvidence`: `auditId`, `occurredAt`, `sessionId`, `actionId`,
 `actionType`, bounded `origin`, `effectClass`, `mutating`, `disposition`, optional
 `denyReason`/`reviewReason`, `outcome` (the existing `EditorAgentActionStatus`), optional
-`conflictCode`/`failureCode`, an optional workspace-relative `targetPath`, content-free counts
-(`editCount`, `patchByteLength`), and a bounded, redacted `summary` (≤
+`conflictCode`/`failureCode`, an optional workspace-relative `targetPath`, optional bounded
+`targetBasename` and lowercase SHA-256 `targetPathHash`, content-free counts (`editCount`,
+`patchByteLength`), and a bounded, redacted `summary` (≤
 `EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS`). The pure builder accepts only bounded inputs — it never
 receives `textEdits` content, a patch body, a prompt, or a selection body — so the record
 _structurally cannot_ carry raw producer content. The server additionally runs the record through
 `keiko-security`'s `createAuditRedactor` + `deepRedactStrings` (defense-in-depth) before it enters the
-ledger, scrubbing any secret-shaped substring.
+ledger, scrubbing any secret-shaped substring. For `queryGit`, the server computes and supplies the
+basename/hash metadata and the builder omits `targetPath`; the contracts package performs no hash
+computation and carries no diff, blame, or file body.
 
 The origin property is additive and optional in the V1 record type. The builder always emits a
 resolved value: explicit `chat` stays `chat`; omitted legacy action/decision values become `agent`.
@@ -149,8 +169,9 @@ long-term telemetry collection and SIEM export); the record shape is deliberatel
 `EvidenceStore`-compatible so a future durable sink can reuse it without a schema change.
 
 An audit record is recorded for every action whose effect class is `content-mutation` (the mutating
-set, AC1) and for any action that is `denied`. Navigation/layout `allowed` actions are not audited,
-keeping the ledger focused on governance-relevant activity.
+set, AC1), for governance-relevant execution and server-resolved reads including `queryGit`, and for
+any action that is `denied`. Ordinary navigation/layout `allowed` actions are not audited, keeping
+the ledger focused on governance-relevant activity.
 
 ### D3 — Read-only "recent agent editor actions" UI surface
 
