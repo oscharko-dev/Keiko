@@ -117,7 +117,7 @@ describe("Banking Quality Gate", () => {
     expect(comments.map((comment) => comment.findingCount)).toEqual([2, 1]);
   });
 
-  it("accepts only an exact-head CI workflow run for a dev pull request", () => {
+  it("accepts only an exact-head CI workflow run for a dev pull request", async () => {
     const event = {
       workflow_run: {
         event: "pull_request",
@@ -125,19 +125,30 @@ describe("Banking Quality Gate", () => {
         pull_requests: [{ base: { ref: "dev" }, head: { sha: headSha }, number: 2316 }],
       },
     };
-    expect(triggeringPullRequest(event).number).toBe(2316);
-    expect(() =>
+    await expect(triggeringPullRequest(event)).resolves.toMatchObject({ number: 2316 });
+    await expect(
       triggeringPullRequest({
         workflow_run: {
           ...event.workflow_run,
           pull_requests: [{ base: { ref: "main" }, head: { sha: headSha }, number: 2316 }],
         },
       }),
-    ).toThrow("must target dev");
-    expect(() =>
+    ).resolves.toBeUndefined();
+    await expect(
       triggeringPullRequest({
         workflow_run: { ...event.workflow_run, head_sha: "b".repeat(40) },
       }),
-    ).toThrow("not bound to the pull request head commit");
+    ).resolves.toBeUndefined();
+  });
+
+  it("resolves fork pull requests from the commit API fallback", async () => {
+    const forkPullRequest = { base: { ref: "dev" }, head: { sha: headSha }, number: 2317 };
+    const result = await triggeringPullRequest(
+      {
+        workflow_run: { event: "pull_request", head_sha: headSha, pull_requests: [] },
+      },
+      async () => [forkPullRequest],
+    );
+    expect(result).toEqual(forkPullRequest);
   });
 });

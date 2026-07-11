@@ -15,6 +15,10 @@ data reaches execution. The trigger has a narrow inline `dangerous-triggers` dis
 this workflow does not consume triggering-run artifacts, caches, environment files, command-line
 values, repository content, or executable input. The only untrusted values are a GitHub-issued PR
 number and commit SHA used in authenticated API paths after base-ref and exact-head validation.
+Non-PR CI completions are skipped at the job boundary, and CI runs for pull requests not targeting
+`dev` exit successfully without publishing a gate. When GitHub omits pull-request metadata for a
+fork, the script resolves candidate pull requests from the commit API and still requires the exact
+head SHA and `dev` base before publishing a check.
 
 The aggregate requires app-bound success from:
 

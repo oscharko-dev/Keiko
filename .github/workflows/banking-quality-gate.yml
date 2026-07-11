@@ -12,6 +12,7 @@ permissions: {}
 jobs:
   publish-banking-gate:
     name: Publish Banking gate
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 95
     permissions:

@@ -211,15 +211,18 @@ async function awaitBankingEvidence(config) {
   }
 }
 
-function runtimeConfig() {
+async function runtimeConfig() {
   const eventPath = process.env.GITHUB_EVENT_PATH;
   const repository = process.env.GITHUB_REPOSITORY;
   const token = process.env.GITHUB_TOKEN;
   if (eventPath === undefined || repository === undefined || token === undefined)
     throw new Error("GitHub runtime variables are required.");
   const event = JSON.parse(readFileSync(eventPath, "utf8"));
-  const pullRequest = triggeringPullRequest(event);
   const [owner, repo] = repository.split("/", 2);
+  const pullRequest = await triggeringPullRequest(event, (headSha) =>
+    githubJson(`/repos/${owner}/${repo}/commits/${headSha}/pulls`, token),
+  );
+  if (pullRequest === undefined) return undefined;
   return {
     headSha: pullRequest.head.sha,
     owner,
@@ -229,20 +232,28 @@ function runtimeConfig() {
   };
 }
 
-export function triggeringPullRequest(event) {
+export async function triggeringPullRequest(event, lookupPullRequests = async () => []) {
   const workflowRun = event.workflow_run;
-  if (workflowRun?.event !== "pull_request")
-    throw new Error("The triggering CI run must belong to a pull request.");
-  const pullRequest = workflowRun.pull_requests?.[0];
-  if (pullRequest === undefined || pullRequest.base?.ref !== "dev")
-    throw new Error("The triggering CI run must target dev.");
-  if (pullRequest.head?.sha !== workflowRun.head_sha)
-    throw new Error("The triggering CI run is not bound to the pull request head commit.");
-  return pullRequest;
+  if (workflowRun?.event !== "pull_request") return undefined;
+  const embedded = selectDevPullRequest(workflowRun, workflowRun.pull_requests ?? []);
+  if (embedded !== undefined) return embedded;
+  const candidates = await lookupPullRequests(workflowRun.head_sha);
+  return selectDevPullRequest(workflowRun, candidates);
+}
+
+function selectDevPullRequest(workflowRun, pullRequests) {
+  return pullRequests.find(
+    (pullRequest) =>
+      pullRequest.base?.ref === "dev" && pullRequest.head?.sha === workflowRun.head_sha,
+  );
 }
 
 async function main() {
-  const config = runtimeConfig();
+  const config = await runtimeConfig();
+  if (config === undefined) {
+    console.log("banking-quality-gate: skipped - CI run is not for a dev pull request.");
+    return;
+  }
   const check = await createCheck(config);
   try {
     await awaitBankingEvidence(config);
