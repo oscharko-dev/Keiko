@@ -13,15 +13,182 @@ import type {
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 
 import {
-  createCodingRuntimeManager,
+  createCodingRuntimeManager as createProductionCodingRuntimeManager,
   resolveCodingRuntimeSidecarLaunchTarget,
+  type CodingRuntimeManager,
+  type CodingRuntimeManagerDeps,
   type CodingRuntimeLaunchRequest,
-  type CodingRuntimeSpawnFn,
-  type CodingRuntimeSpawnHandle,
 } from "./codingRuntimeManager.js";
+import {
+  createRuntimeProcessSupervisor,
+  verifyRuntimeReapReceipt,
+  type RuntimeProcessBackend,
+  type RuntimeProcessSupervisor,
+  type RuntimeProcessTree,
+  type RuntimeQualificationIdentity,
+  type RuntimeSupervisorLaunchRequest,
+  type RuntimeTreeSignal,
+} from "./runtimeProcessSupervisor.js";
+import { createInMemorySupervisedCodingApprovalStore } from "./supervisedCodingApprovalStore.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 
 const tempDirs: string[] = [];
+const TEST_QUALIFICATION: RuntimeQualificationIdentity = {
+  platform: "win32",
+  arch: "x64",
+  backend: "windows-job-object",
+  releaseReceipt: `sha256:${"a".repeat(64)}`,
+};
+
+type TestCodingRuntimeManagerDeps = Omit<
+  CodingRuntimeManagerDeps,
+  | "revokeRuntime"
+  | "abortInFlightActions"
+  | "markRuntimeRecoveryRequired"
+  | "releaseRuntimeAfterReap"
+> &
+  Partial<
+    Pick<
+      CodingRuntimeManagerDeps,
+      | "revokeRuntime"
+      | "abortInFlightActions"
+      | "markRuntimeRecoveryRequired"
+      | "releaseRuntimeAfterReap"
+    >
+  >;
+
+function createTestCodingRuntimeManager(deps: TestCodingRuntimeManagerDeps): CodingRuntimeManager {
+  return createProductionCodingRuntimeManager({
+    revokeRuntime: (): true => true,
+    abortInFlightActions: (): true => true,
+    markRuntimeRecoveryRequired: (): true => true,
+    releaseRuntimeAfterReap: (): true => true,
+    ...deps,
+  });
+}
+
+function testSupervisor(
+  spawn: CodingRuntimeSpawnFn,
+  timer: RuntimeSupervisorTimer = {
+    setTimer: (callback, delayMs): ReturnType<typeof setTimeout> => setTimeout(callback, delayMs),
+  },
+): RuntimeProcessSupervisor {
+  return createRuntimeProcessSupervisor({
+    backend: new TestRuntimeProcessBackend(spawn, timer, TEST_QUALIFICATION),
+    qualifications: [TEST_QUALIFICATION],
+  });
+}
+
+interface CodingRuntimeSpawnHandle {
+  readonly stdout: PassThrough;
+  readonly stderr: PassThrough;
+  readonly pid?: number | undefined;
+  kill(signal: NodeJS.Signals): void;
+  onExit(callback: (code: number | null) => void): void;
+  onError(callback: (error: Error) => void): void;
+}
+
+type CodingRuntimeSpawnFn = (
+  executable: string,
+  args: readonly string[],
+  env: Record<string, string>,
+  cwd: string,
+) => CodingRuntimeSpawnHandle;
+
+interface RuntimeSupervisorTimer {
+  setTimer(callback: () => void, delayMs: number): unknown;
+}
+
+interface TestTreeState {
+  exited: boolean;
+  readonly exitCallbacks: ((code: number | null) => void)[];
+  readonly waiters: (() => void)[];
+}
+
+class TestRuntimeProcessBackend implements RuntimeProcessBackend {
+  private readonly states = new Map<RuntimeProcessTree, TestTreeState>();
+  public readonly identity: RuntimeProcessBackend["identity"];
+
+  public constructor(
+    private readonly spawn: CodingRuntimeSpawnFn,
+    private readonly timer: RuntimeSupervisorTimer,
+    qualification: RuntimeQualificationIdentity,
+  ) {
+    this.identity = {
+      platform: qualification.platform,
+      arch: qualification.arch,
+      backend: qualification.backend,
+    };
+  }
+
+  public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+    const child = this.spawn(request.executable, request.args, { ...request.env }, request.cwd);
+    const state: TestTreeState = { exited: false, exitCallbacks: [], waiters: [] };
+    const tree: RuntimeProcessTree & { readonly child: CodingRuntimeSpawnHandle } = {
+      treeId: `test-${String(child.pid ?? "unknown")}`,
+      stdout: child.stdout,
+      stderr: child.stderr,
+      child,
+      onTreeExit: (callback): void => {
+        state.exitCallbacks.push(callback);
+      },
+    };
+    child.onExit((code) => {
+      state.exited = true;
+      for (const callback of state.exitCallbacks) callback(code);
+      for (const waiter of state.waiters.splice(0)) waiter();
+    });
+    child.onError(() => {
+      state.exited = true;
+      for (const callback of state.exitCallbacks) callback(1);
+      for (const waiter of state.waiters.splice(0)) waiter();
+    });
+    this.states.set(tree, state);
+    return tree;
+  }
+
+  public signalTree(tree: RuntimeProcessTree, signal: RuntimeTreeSignal): void {
+    this.childFor(tree).kill(signal === "graceful" ? "SIGTERM" : "SIGKILL");
+  }
+
+  public async waitForCompleteTreeExit(
+    tree: RuntimeProcessTree,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const state = this.stateFor(tree);
+    if (state.exited) return true;
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (reaped: boolean): void => {
+        if (settled) return;
+        settled = true;
+        resolve(reaped);
+      };
+      state.waiters.push(() => {
+        finish(true);
+      });
+      this.timer.setTimer(() => {
+        finish(state.exited);
+      }, timeoutMs);
+    });
+  }
+
+  public reconcileTreeExit(tree: RuntimeProcessTree): Promise<boolean> {
+    return Promise.resolve(this.stateFor(tree).exited);
+  }
+
+  private stateFor(tree: RuntimeProcessTree): TestTreeState {
+    const state = this.states.get(tree);
+    if (state === undefined) throw new Error("runtime-tree-not-owned");
+    return state;
+  }
+
+  private childFor(tree: RuntimeProcessTree): CodingRuntimeSpawnHandle {
+    const child = (tree as RuntimeProcessTree & { child?: CodingRuntimeSpawnHandle }).child;
+    if (child === undefined) throw new Error("runtime-child-not-owned");
+    return child;
+  }
+}
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -94,6 +261,7 @@ function launchRequest(
 ): CodingRuntimeLaunchRequest {
   return {
     runId: "run-1988",
+    treeBindingId: "c".repeat(64),
     taskRef: "issue-1988",
     adapterKind: "opencode-compatible",
     runtimeSource: "keiko-sidecar",
@@ -109,6 +277,7 @@ function launchRequest(
     inheritedEnvAllowlist: ["PATH"],
     shutdownTimeoutMs: 5,
     startTimeoutMs: 30_000,
+    confinement: TEST_QUALIFICATION,
   };
 }
 
@@ -284,8 +453,8 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const unmanaged = executable(tempDir("keiko-runtime-unmanaged-"));
     const harness = createSpawnHarness();
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: { PATH: "/usr/bin", CODEX_ACCESS_TOKEN: "super-secret-token" },
     });
 
@@ -306,7 +475,10 @@ describe("coding runtime manager", () => {
   it("fails closed when OpenCode is paired with a Codex subscription profile", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
-    const manager = createCodingRuntimeManager({ spawn: harness.spawn, processEnv: {} });
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
     const request: CodingRuntimeLaunchRequest = {
       ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       modelSource: "chatgpt-codex-subscription-profile",
@@ -325,8 +497,8 @@ describe("coding runtime manager", () => {
   it("starts a managed sidecar with only allowlisted inherited env and runtime projection", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {
         PATH: "/usr/bin",
         OPENAI_API_KEY: "provider-secret-key",
@@ -364,8 +536,8 @@ describe("coding runtime manager", () => {
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const diagnostics = { record: vi.fn() };
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       now: () => Date.parse("2026-07-07T13:00:00.000Z"),
       nowIso: () => "not-an-iso-instant",
@@ -397,7 +569,10 @@ describe("coding runtime manager", () => {
   it("rejects non-loopback gateway URLs before spawn", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
-    const manager = createCodingRuntimeManager({ spawn: harness.spawn, processEnv: {} });
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
     const request = {
       ...launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       gatewayUrl: "https://provider.example/v1",
@@ -413,10 +588,51 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(0);
   });
 
+  it("performs zero spawn under the production-default unqualified supervisor", () => {
+    const fixture = createManagedFixture();
+    const manager = createTestCodingRuntimeManager({ processEnv: {} });
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({ ok: false, failureCode: "runtime-unqualified", retryable: false });
+    expect(manager.health()).toEqual({ status: "stopped" });
+  });
+
+  it("fails closed before signalling when the mandatory revocation barrier denies", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const manager = createProductionCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      revokeRuntime: (): false => false,
+      abortInFlightActions: (): true => true,
+      markRuntimeRecoveryRequired: (): true => true,
+      releaseRuntimeAfterReap: (): true => true,
+    });
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: true });
+    await expect(manager.stop("run-1988")).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(harness.children[0]?.kills).toEqual([]);
+    expect(manager.health()).toMatchObject({ status: "recovery-required" });
+  });
+
   it("stops the active sidecar and allows a clean restart", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
-    const manager = createCodingRuntimeManager({ spawn: harness.spawn, processEnv: {} });
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+    });
 
     manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
@@ -434,31 +650,63 @@ describe("coding runtime manager", () => {
     expect(harness.children).toHaveLength(2);
   });
 
-  it("marks crashes as restart-denied without respawning implicitly", () => {
+  it("revokes and proves tree exit before releasing a crashed runtime", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
-    const manager = createCodingRuntimeManager({ spawn: harness.spawn, processEnv: {} });
+    const revokeRuntime = vi.fn(() => true);
+    const abortInFlightActions = vi.fn(() => true);
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      revokeRuntime,
+      abortInFlightActions,
+    });
 
     manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
     harness.children[0]?.exit(1);
+    await settle();
 
-    expect(manager.health()).toEqual({
-      status: "restart-denied",
-      activeRunId: "run-1988",
-      failureCode: "runtime-crashed",
-      restartDenied: true,
+    expect(revokeRuntime).toHaveBeenCalledWith("run-1988");
+    expect(abortInFlightActions).toHaveBeenCalledWith("run-1988");
+    expect(harness.children[0]?.kills).toEqual(["SIGTERM"]);
+    expect(manager.health()).toEqual({ status: "stopped" });
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: true, status: "ready" });
+    expect(harness.children).toHaveLength(2);
+  });
+
+  it("releases an unexpected clean exit only after revocation and tree-exit proof", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const revokeRuntime = vi.fn(() => true);
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      revokeRuntime,
     });
-    expect(harness.children).toHaveLength(1);
+
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    harness.children[0]?.exit(0);
+    await settle();
+
+    expect(revokeRuntime).toHaveBeenCalledWith("run-1988");
+    expect(harness.children[0]?.kills).toEqual(["SIGTERM"]);
+    expect(manager.health()).toEqual({ status: "stopped" });
   });
 
   it("normalizes permission requests from the sidecar stream into content-free runtime events", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       onRuntimeEvent: (event) => {
         events.push(event);
@@ -503,8 +751,8 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       onRuntimeEvent: (event) => {
         events.push(event);
@@ -550,8 +798,8 @@ describe("coding runtime manager", () => {
     writeFileSync(join(fixture.workspaceRoot, "src", "allowed.ts"), "export const ok = true;\n");
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       onRuntimeEvent: (event) => {
         events.push(event);
@@ -616,8 +864,8 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       onRuntimeEvent: (event) => {
         events.push(event);
@@ -683,8 +931,8 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       now: () => 1_000,
       onRuntimeEvent: (event) => {
@@ -749,8 +997,8 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       now: () => 1_000,
       onRuntimeEvent: (event) => {
@@ -822,16 +1070,15 @@ describe("coding runtime manager", () => {
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const timers: (() => void)[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
-      processEnv: {},
-      now: () => 1_000,
-      killScheduler: {
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn, {
         setTimer: (callback): unknown => {
           timers.push(callback);
           return undefined;
         },
-      },
+      }),
+      processEnv: {},
+      now: () => 1_000,
       onRuntimeEvent: (event) => {
         events.push(event);
       },
@@ -867,16 +1114,19 @@ describe("coding runtime manager", () => {
     expect(events.some((event) => event.kind === "artifact-produced")).toBe(false);
     expect(events.some((event) => event.failureCode === "approval-proof-accepted")).toBe(false);
     timers[0]?.();
+    await settle();
+    timers[1]?.();
     await stopping;
     expect(harness.children[0]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(manager.health()).toMatchObject({ status: "recovery-required" });
   });
 
   it("fails closed for mismatched supervised sidecar permission metadata", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       onRuntimeEvent: (event) => {
         events.push(event);
@@ -945,8 +1195,8 @@ describe("coding runtime manager", () => {
       const fixture = createManagedFixture();
       const harness = createSpawnHarness();
       const events: CodingWorkbenchRuntimeEvent[] = [];
-      const manager = createCodingRuntimeManager({
-        spawn: harness.spawn,
+      const manager = createTestCodingRuntimeManager({
+        supervisor: testSupervisor(harness.spawn),
         processEnv: {},
         onRuntimeEvent: (event) => {
           events.push(event);
@@ -989,8 +1239,8 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       onRuntimeEvent: (event) => {
         events.push(event);
@@ -1055,8 +1305,8 @@ describe("coding runtime manager", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
     const events: CodingWorkbenchRuntimeEvent[] = [];
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {},
       onRuntimeEvent: (event) => {
         events.push(event);
@@ -1103,18 +1353,110 @@ describe("coding runtime manager", () => {
       callback();
       return undefined;
     });
-    const manager = createCodingRuntimeManager({
-      spawn: harness.spawn,
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn, { setTimer }),
       processEnv: {},
-      killScheduler: { setTimer },
     });
 
     manager.start(
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
-    await manager.stop("run-1988");
+    const result = await manager.stop("run-1988");
 
     expect(harness.children[0]?.kills).toEqual(["SIGTERM", "SIGKILL"]);
-    expect(manager.health()).toEqual({ status: "stopped" });
+    expect(result).toEqual({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(manager.health()).toEqual({
+      status: "recovery-required",
+      activeRunId: "run-1988",
+      failureCode: "runtime-reap-unproven",
+      restartDenied: true,
+    });
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toMatchObject({ ok: false, failureCode: "runtime-already-running" });
+    harness.children[0]?.exit(0);
+    await expect(manager.reconcile("run-1988")).resolves.toEqual({ ok: true, status: "stopped" });
+  });
+
+  it("takeover revokes, invalidates approvals, and aborts actions before signalling", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const order: string[] = [];
+    const approvals = createInMemorySupervisedCodingApprovalStore();
+    const approvalStore = {
+      ...approvals,
+      invalidateRun: (runId: string): void => {
+        order.push(`invalidate:${runId}`);
+        approvals.invalidateRun(runId);
+      },
+    };
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      approvalStore,
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (signal): void => {
+          order.push(`signal:${signal}`);
+          child.kills.push(signal);
+          child.exit(0);
+        },
+      })),
+      revokeRuntime: (runId): true => {
+        order.push(`revoke:${runId}`);
+        return true;
+      },
+      abortInFlightActions: (runId): true => {
+        order.push(`abort:${runId}`);
+        return true;
+      },
+      releaseRuntimeAfterReap: (runId, receipt): true => {
+        expect(verifyRuntimeReapReceipt(receipt, runId, "c".repeat(64))).toBe(true);
+        order.push(`release:${runId}`);
+        return true;
+      },
+    });
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    await manager.takeover("run-1988");
+
+    expect(order).toEqual([
+      "revoke:run-1988",
+      "invalidate:run-1988",
+      "abort:run-1988",
+      "signal:SIGTERM",
+      "release:run-1988",
+    ]);
+  });
+
+  it("keeps the slot in recovery when tree signalling fails", async () => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        kill: (): never => {
+          throw new Error("backend-signal-failed");
+        },
+      })),
+    });
+    manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    await expect(manager.stop("run-1988")).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-reap-unproven",
+      retryable: false,
+    });
+    expect(manager.health()).toMatchObject({ status: "recovery-required" });
   });
 });

@@ -1,5 +1,3 @@
-import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { accessSync, constants, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
 import { Readable } from "node:stream";
@@ -44,6 +42,14 @@ import {
   type SidecarPermissionEvent,
 } from "./codingSidecarEventParser.js";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  CLOSED_RUNTIME_LAUNCH_PROFILE,
+  createRuntimeProcessSupervisor,
+  type RuntimeProcessSupervisor,
+  type RuntimeProcessTree,
+  type RuntimeQualificationIdentity,
+  type RuntimeReapReceipt,
+} from "./runtimeProcessSupervisor.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -54,16 +60,20 @@ export type CodingRuntimeFailureCode =
   | "runtime-already-running"
   | "runtime-crashed"
   | "runtime-run-mismatch"
+  | "runtime-profile-open"
+  | "runtime-unqualified"
   | "sidecar-missing"
   | "sidecar-unmanaged"
   | "spawn-failed"
   | "start-aborted"
   | "start-timeout";
 
-export type CodingRuntimeStatus = "ready" | "restart-denied" | "stopped" | "stopping";
+export type CodingRuntimeStatus =
+  "ready" | "recovery-required" | "restart-denied" | "stopped" | "stopping";
 
 export interface CodingRuntimeLaunchRequest {
   readonly runId: string;
+  readonly treeBindingId: string;
   readonly taskRef: string;
   readonly adapterKind: CodingRuntimeAdapterKind;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
@@ -80,6 +90,7 @@ export interface CodingRuntimeLaunchRequest {
   readonly shutdownTimeoutMs: number;
   readonly startTimeoutMs: number;
   readonly signal?: AbortSignal | undefined;
+  readonly confinement?: RuntimeQualificationIdentity | undefined;
 }
 
 export type CodingRuntimeStartResult =
@@ -105,13 +116,19 @@ export type CodingRuntimeHealthReport =
       readonly activeRunId: string;
       readonly failureCode: "runtime-crashed";
       readonly restartDenied: true;
+    }
+  | {
+      readonly status: "recovery-required";
+      readonly activeRunId: string;
+      readonly failureCode: "runtime-reap-unproven";
+      readonly restartDenied: true;
     };
 
 export type CodingRuntimeStopResult =
   | { readonly ok: true; readonly status: "stopped" }
   | {
       readonly ok: false;
-      readonly failureCode: "runtime-run-mismatch";
+      readonly failureCode: "runtime-reap-unproven" | "runtime-run-mismatch";
       readonly retryable: false;
     };
 
@@ -137,35 +154,21 @@ export type CodingRuntimeApprovalIssueResult =
       readonly retryable: false;
     };
 
-export interface CodingRuntimeSpawnHandle {
-  readonly stdout: Readable;
-  readonly stderr: Readable;
-  readonly pid?: number | undefined;
-  kill(signal: NodeJS.Signals): void;
-  onExit(callback: (code: number | null) => void): void;
-  onError(callback: (error: Error) => void): void;
-}
-
-export type CodingRuntimeSpawnFn = (
-  executable: string,
-  args: readonly string[],
-  env: Record<string, string>,
-  cwd: string,
-) => CodingRuntimeSpawnHandle;
-
-export interface CodingRuntimeKillScheduler {
-  setTimer(callback: () => void, delayMs: number): unknown;
-}
-
 export interface CodingRuntimeManagerDeps {
-  readonly spawn?: CodingRuntimeSpawnFn | undefined;
+  readonly supervisor?: RuntimeProcessSupervisor | undefined;
   readonly processEnv: NodeJS.ProcessEnv;
   readonly now?: (() => number) | undefined;
   readonly nowIso?: (() => string) | undefined;
-  readonly killScheduler?: CodingRuntimeKillScheduler | undefined;
   readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly revokeRuntime: (runId: string) => boolean | Promise<boolean>;
+  readonly abortInFlightActions: (runId: string) => boolean | Promise<boolean>;
+  readonly markRuntimeRecoveryRequired: (runId: string) => boolean | Promise<boolean>;
+  readonly releaseRuntimeAfterReap: (
+    runId: string,
+    receipt: RuntimeReapReceipt,
+  ) => boolean | Promise<boolean>;
 }
 
 export interface CodingRuntimeSidecarLaunchTarget {
@@ -179,20 +182,28 @@ export type CodingRuntimeSidecarLaunchTargetResult =
   { readonly ok: true; readonly target: CodingRuntimeSidecarLaunchTarget } | FailureResult;
 
 interface NormalizedCodingRuntimeManagerDeps {
-  readonly spawn: CodingRuntimeSpawnFn;
+  readonly supervisor: RuntimeProcessSupervisor;
   readonly processEnv: NodeJS.ProcessEnv;
   readonly now: () => number;
   readonly nowIso: () => string;
-  readonly killScheduler: CodingRuntimeKillScheduler;
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly revokeRuntime: (runId: string) => boolean | Promise<boolean>;
+  readonly abortInFlightActions: (runId: string) => boolean | Promise<boolean>;
+  readonly markRuntimeRecoveryRequired: (runId: string) => boolean | Promise<boolean>;
+  readonly releaseRuntimeAfterReap: (
+    runId: string,
+    receipt: RuntimeReapReceipt,
+  ) => boolean | Promise<boolean>;
 }
 
 export interface CodingRuntimeManager {
   start(request: CodingRuntimeLaunchRequest): CodingRuntimeStartResult;
   issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
   stop(runId: string): Promise<CodingRuntimeStopResult>;
+  takeover(runId: string): Promise<CodingRuntimeStopResult>;
+  reconcile(runId: string): Promise<CodingRuntimeStopResult>;
   health(): CodingRuntimeHealthReport;
 }
 
@@ -219,14 +230,13 @@ interface RuntimeEventContext {
 
 interface ActiveRuntime {
   readonly context: RuntimeEventContext;
-  readonly child: CodingRuntimeSpawnHandle;
+  readonly tree: RuntimeProcessTree;
   readonly shutdownTimeoutMs: number;
-  readonly exitWaiters: (() => void)[];
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly nowMs: () => number;
   readonly nowIso: () => string;
   stdoutBuffer: string;
-  exited: boolean;
+  shutdownBarrierComplete: boolean;
   stopRequested: boolean;
   status: CodingRuntimeStatus;
   sequence: number;
@@ -244,27 +254,6 @@ interface SupervisedRuntimeEvidenceContext {
 const MAX_SIDECAR_EVENT_LINE_BYTES = 8192;
 const SECRET_ENV_NAME = /(AUTH|CREDENTIAL|KEY|PASSWORD|SECRET|TOKEN)/iu;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-
-const defaultKillScheduler: CodingRuntimeKillScheduler = {
-  setTimer: (callback, delayMs): ReturnType<typeof setTimeout> => setTimeout(callback, delayMs),
-};
-
-export function defaultCodingRuntimeSpawnFn(
-  executable: string,
-  args: readonly string[],
-  env: Record<string, string>,
-  cwd: string,
-): CodingRuntimeSpawnHandle {
-  const child = spawn(executable, [...args], {
-    cwd,
-    env,
-    shell: false,
-    detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
-  return wrapChild(child);
-}
 
 export function createCodingRuntimeManager(deps: CodingRuntimeManagerDeps): CodingRuntimeManager {
   return new CodingRuntimeManagerImpl(normalizeDeps(deps));
@@ -288,16 +277,36 @@ export function resolveCodingRuntimeSidecarLaunchTarget(
 
 function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeManagerDeps {
   return {
-    spawn: deps.spawn ?? defaultCodingRuntimeSpawnFn,
+    supervisor:
+      deps.supervisor ?? createRuntimeProcessSupervisor({ backend: unavailableRuntimeBackend }),
     processEnv: deps.processEnv,
     now: deps.now ?? Date.now,
     nowIso: deps.nowIso ?? ((): string => new Date().toISOString()),
-    killScheduler: deps.killScheduler ?? defaultKillScheduler,
     approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     diagnostics: deps.diagnostics,
+    revokeRuntime: deps.revokeRuntime,
+    abortInFlightActions: deps.abortInFlightActions,
+    markRuntimeRecoveryRequired: deps.markRuntimeRecoveryRequired,
+    releaseRuntimeAfterReap: deps.releaseRuntimeAfterReap,
   };
 }
+
+const unavailableRuntimeBackend = {
+  identity: {
+    platform: "win32" as const,
+    arch: "x64" as const,
+    backend: "windows-job-object" as const,
+  },
+  spawnOwnedTree: (): never => {
+    throw new Error("runtime-unqualified");
+  },
+  signalTree: (): never => {
+    throw new Error("runtime-tree-not-owned");
+  },
+  waitForCompleteTreeExit: (): Promise<false> => Promise.resolve(false),
+  reconcileTreeExit: (): Promise<false> => Promise.resolve(false),
+};
 
 class CodingRuntimeManagerImpl implements CodingRuntimeManager {
   private active: ActiveRuntime | undefined;
@@ -327,7 +336,46 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     active.stopRequested = true;
     active.status = "stopping";
-    await escalateRuntimeKill(active, this.deps.killScheduler);
+    const receipt = await this.revokeAndTerminate(active);
+    if (receipt === undefined) {
+      await this.enterRecoveryRequired(active);
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    }
+    if (!(await this.releaseAfterReap(active, receipt))) {
+      await this.enterRecoveryRequired(active);
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    }
+    active.status = "stopped";
+    this.active = undefined;
+    this.emit(
+      runtimeEvent(active, this.nextSequence(active), "runtime-stopped", { health: "stopped" }),
+    );
+    return { ok: true, status: "stopped" };
+  }
+
+  public takeover(runId: string): Promise<CodingRuntimeStopResult> {
+    return this.stop(runId);
+  }
+
+  public async reconcile(runId: string): Promise<CodingRuntimeStopResult> {
+    const active = this.active;
+    if (active === undefined) return { ok: true, status: "stopped" };
+    if (active.context.runId !== runId) {
+      return { ok: false, failureCode: "runtime-run-mismatch", retryable: false };
+    }
+    if (!active.shutdownBarrierComplete) {
+      await this.enterRecoveryRequired(active);
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    }
+    const result = await this.deps.supervisor.reconcile(active.tree);
+    if (result.status !== "reaped") {
+      await this.enterRecoveryRequired(active);
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    }
+    if (!(await this.releaseAfterReap(active, result.receipt))) {
+      await this.enterRecoveryRequired(active);
+      return { ok: false, failureCode: "runtime-reap-unproven", retryable: false };
+    }
     active.status = "stopped";
     this.active = undefined;
     this.emit(
@@ -371,6 +419,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
         restartDenied: true,
       };
     }
+    if (this.active.status === "recovery-required") {
+      return {
+        status: "recovery-required",
+        activeRunId: this.active.context.runId,
+        failureCode: "runtime-reap-unproven",
+        restartDenied: true,
+      };
+    }
     return { status: this.active.status, activeRunId: this.active.context.runId };
   }
 
@@ -379,45 +435,104 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     executablePath: string,
     env: Record<string, string>,
   ): CodingRuntimeStartResult {
-    try {
-      const child = this.deps.spawn(executablePath, request.args, env, request.workspaceRoot);
-      const active = createActiveRuntime(
+    const launched = this.deps.supervisor.spawnOwnedTree(
+      supervisorLaunchRequest(request, executablePath, env),
+    );
+    if (!launched.ok) {
+      return this.recordLaunchFailure(
         request,
-        child,
-        this.deps.approvalStore,
-        this.deps.now,
-        this.deps.nowIso,
+        failure(launched.failureCode, launched.failureCode === "spawn-failed"),
       );
-      this.active = active;
-      this.attachRuntime(active);
-      this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
-      return { ok: true, runId: request.runId, status: "ready" };
+    }
+    const active = createActiveRuntime(
+      request,
+      launched.tree,
+      this.deps.approvalStore,
+      this.deps.now,
+      this.deps.nowIso,
+    );
+    this.active = active;
+    this.attachRuntime(active);
+    this.emit(runtimeEvent(active, this.nextSequence(active), "runtime-started", {}));
+    return { ok: true, runId: request.runId, status: "ready" };
+  }
+
+  private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
+    try {
+      if (!(await this.deps.revokeRuntime(active.context.runId))) return undefined;
+      this.deps.approvalStore.invalidateRun(active.context.runId);
+      if (!(await this.deps.abortInFlightActions(active.context.runId))) return undefined;
+      active.shutdownBarrierComplete = true;
+      this.deps.supervisor.terminate(active.tree, "graceful");
+      let exit = await this.deps.supervisor.waitForCompleteTreeExit(
+        active.tree,
+        active.shutdownTimeoutMs,
+      );
+      if (exit.status === "reaped") return exit.receipt;
+      this.deps.supervisor.terminate(active.tree, "force");
+      exit = await this.deps.supervisor.waitForCompleteTreeExit(
+        active.tree,
+        active.shutdownTimeoutMs,
+      );
+      return exit.status === "reaped" ? exit.receipt : undefined;
     } catch {
-      return this.recordLaunchFailure(request, failure("spawn-failed", true));
+      return undefined;
     }
   }
 
   private attachRuntime(active: ActiveRuntime): void {
-    active.child.onExit((code) => {
+    active.tree.onTreeExit((code) => {
       this.handleExit(active, code);
     });
-    active.child.onError(() => {
-      this.handleExit(active, 1);
-    });
-    active.child.stdout.setEncoding("utf8");
-    active.child.stdout.on("data", (chunk) => {
+    active.tree.stdout.setEncoding("utf8");
+    active.tree.stdout.on("data", (chunk) => {
       this.handleStdout(active, String(chunk));
     });
   }
 
   private handleExit(active: ActiveRuntime, code: number | null): void {
-    active.exited = true;
-    for (const waiter of active.exitWaiters.splice(0)) waiter();
-    if (this.active !== active || active.status === "stopping" || active.status === "stopped")
+    if (this.active !== active || active.stopRequested || active.status === "stopped") return;
+    active.stopRequested = true;
+    active.status = "stopping";
+    void this.finalizeUnexpectedExit(active, code);
+  }
+
+  private async finalizeUnexpectedExit(active: ActiveRuntime, code: number | null): Promise<void> {
+    const receipt = await this.revokeAndTerminate(active);
+    if (this.active !== active) return;
+    if (receipt === undefined) {
+      await this.enterRecoveryRequired(active);
+      this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
       return;
-    active.status = code === 0 ? "stopped" : "restart-denied";
-    if (code === 0) this.active = undefined;
+    }
+    if (!(await this.releaseAfterReap(active, receipt))) {
+      await this.enterRecoveryRequired(active);
+      this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
+      return;
+    }
+    active.status = "stopped";
+    this.active = undefined;
     this.emit(runtimeExitEvent(active, this.nextSequence(active), code));
+  }
+
+  private async enterRecoveryRequired(active: ActiveRuntime): Promise<void> {
+    active.status = "recovery-required";
+    try {
+      await this.deps.markRuntimeRecoveryRequired(active.context.runId);
+    } catch {
+      // The manager remains fail-closed even if authority-state projection fails.
+    }
+  }
+
+  private async releaseAfterReap(
+    active: ActiveRuntime,
+    receipt: RuntimeReapReceipt,
+  ): Promise<boolean> {
+    try {
+      return await this.deps.releaseRuntimeAfterReap(active.context.runId, receipt);
+    } catch {
+      return false;
+    }
   }
 
   private handleStdout(active: ActiveRuntime, chunk: string): void {
@@ -504,42 +619,6 @@ function emitInvalidRuntimeEventDiagnostic(
   });
 }
 
-function wrapChild(child: ChildProcess): CodingRuntimeSpawnHandle {
-  if (child.stdout === null || child.stderr === null) throw new Error("spawn-failed");
-  return {
-    stdout: child.stdout,
-    stderr: child.stderr,
-    pid: child.pid,
-    kill: (signal): void => {
-      killProcessGroup(child, signal);
-    },
-    onExit: (callback): void => {
-      child.on("exit", (code) => {
-        callback(code);
-      });
-    },
-    onError: (callback): void => {
-      child.on("error", callback);
-    },
-  };
-}
-
-function killProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
-  try {
-    if (process.platform !== "win32" && child.pid !== undefined) {
-      process.kill(-child.pid, signal);
-      return;
-    }
-    child.kill(signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {
-      // Child may have exited between checks; termination remains idempotent.
-    }
-  }
-}
-
 function cancellationFailure(
   request: CodingRuntimeLaunchRequest,
   deps: NormalizedCodingRuntimeManagerDeps,
@@ -573,21 +652,20 @@ function validateAdapterSelection(
 
 function createActiveRuntime(
   request: CodingRuntimeLaunchRequest,
-  child: CodingRuntimeSpawnHandle,
+  tree: RuntimeProcessTree,
   approvalStore: SupervisedCodingApprovalStore,
   nowMs: () => number,
   nowIso: () => string,
 ): ActiveRuntime {
   return {
     context: eventContext(request),
-    child,
+    tree,
     shutdownTimeoutMs: request.shutdownTimeoutMs,
-    exitWaiters: [],
     approvalStore,
     nowMs,
     nowIso,
     stdoutBuffer: "",
-    exited: false,
+    shutdownBarrierComplete: false,
     stopRequested: false,
     status: "ready",
     sequence: 0,
@@ -602,14 +680,13 @@ function createInactiveRuntime(
 ): ActiveRuntime {
   return {
     context: eventContext(request),
-    child: inertChild(),
+    tree: inertTree(),
     shutdownTimeoutMs: request.shutdownTimeoutMs,
-    exitWaiters: [],
     approvalStore,
     nowMs,
     nowIso,
     stdoutBuffer: "",
-    exited: true,
+    shutdownBarrierComplete: false,
     stopRequested: false,
     status: "stopped",
     sequence: 0,
@@ -628,14 +705,13 @@ function eventContext(request: CodingRuntimeLaunchRequest): RuntimeEventContext 
   };
 }
 
-function inertChild(): CodingRuntimeSpawnHandle {
+function inertTree(): RuntimeProcessTree {
   const empty = new Readable({ read: (): void => undefined });
   return {
+    treeId: "inactive",
     stdout: empty,
     stderr: empty,
-    kill: (): void => undefined,
-    onExit: (): void => undefined,
-    onError: (): void => undefined,
+    onTreeExit: (): void => undefined,
   };
 }
 
@@ -728,35 +804,26 @@ function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureRes
   return { ok: false, failureCode: code, retryable };
 }
 
-async function escalateRuntimeKill(
-  active: ActiveRuntime,
-  scheduler: CodingRuntimeKillScheduler,
-): Promise<void> {
-  safeKill(active.child, "SIGTERM");
-  if (active.exited) return;
-  await new Promise<void>((resolve) => {
-    let settled = false;
-    const finish = (sendKill: boolean): void => {
-      if (settled) return;
-      settled = true;
-      if (sendKill && !active.exited) safeKill(active.child, "SIGKILL");
-      resolve();
-    };
-    active.exitWaiters.push(() => {
-      finish(false);
-    });
-    scheduler.setTimer(() => {
-      finish(true);
-    }, active.shutdownTimeoutMs);
-  });
-}
-
-function safeKill(child: CodingRuntimeSpawnHandle, signal: NodeJS.Signals): void {
-  try {
-    child.kill(signal);
-  } catch {
-    // Child may have already exited; kill escalation remains best-effort and idempotent.
-  }
+function supervisorLaunchRequest(
+  request: CodingRuntimeLaunchRequest,
+  executable: string,
+  env: Record<string, string>,
+): Parameters<RuntimeProcessSupervisor["spawnOwnedTree"]>[0] {
+  return {
+    runId: request.runId,
+    treeBindingId: request.treeBindingId,
+    executable,
+    args: request.args,
+    cwd: request.workspaceRoot,
+    env,
+    qualification: request.confinement ?? {
+      platform: "win32",
+      arch: "x64",
+      backend: "windows-job-object",
+      releaseReceipt: "unqualified",
+    },
+    launchProfile: CLOSED_RUNTIME_LAUNCH_PROFILE,
+  };
 }
 
 function runtimeExitEvent(
