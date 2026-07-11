@@ -68,6 +68,37 @@ describe("portable ZIP archive writer", () => {
     );
   });
 
+  it("preserves the archive replacement error after closing the temporary file", () => {
+    const archive = join(temporaryRoot(), "existing-directory");
+    mkdirSync(archive);
+    let failure;
+
+    try {
+      writeZipArchiveEntries(archive, [{ name: "entry.txt", data: "content" }]);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toMatchObject({ code: "EBADF" });
+  });
+
+  it("orders directory entries by locale-independent UTF-16 code units", async () => {
+    const root = temporaryRoot();
+    const source = join(root, "payload");
+    mkdirSync(source);
+    writeFileSync(join(source, "a.txt"), "lowercase\n");
+    writeFileSync(join(source, "B.txt"), "uppercase\n");
+    const archive = join(root, "ordered.zip");
+
+    writeZipArchiveFromDirectory(source, archive, { rootName: "Keiko" });
+
+    expect((await readEntries(archive)).map((entry) => entry.fileName)).toEqual([
+      "Keiko/B.txt",
+      "Keiko/a.txt",
+    ]);
+  });
+
   it.skipIf(process.platform === "win32")(
     "preserves symlink metadata when explicitly requested",
     async () => {

@@ -144,21 +144,48 @@ function writeCentralDirectory(fd, entries, state) {
   writeBuffer(fd, endRecord(entries.length, centralSize, centralOffset), state);
 }
 
+function cleanupFailedArchive(fd, temporaryPath, descriptorOpen) {
+  const failures = [];
+  if (descriptorOpen) {
+    try {
+      closeSync(fd);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  try {
+    rmSync(temporaryPath, { force: true });
+  } catch (error) {
+    failures.push(error);
+  }
+  return failures;
+}
+
 export function writeZipArchiveEntries(archivePath, records, options = {}) {
   mkdirSync(dirname(archivePath), { recursive: true });
   const temporaryPath = `${archivePath}.tmp-${process.pid}`;
   rmSync(temporaryPath, { force: true });
   const fd = openSync(temporaryPath, "wx", 0o600);
+  let descriptorOpen = true;
   try {
     const state = { offset: 0 };
     const entries = writeEntries(fd, records, options, state);
     writeCentralDirectory(fd, entries, state);
-    closeSync(fd);
+    try {
+      closeSync(fd);
+    } finally {
+      descriptorOpen = false;
+    }
     rmSync(archivePath, { force: true });
     renameSync(temporaryPath, archivePath);
   } catch (error) {
-    closeSync(fd);
-    rmSync(temporaryPath, { force: true });
+    const cleanupFailures = cleanupFailedArchive(fd, temporaryPath, descriptorOpen);
+    if (cleanupFailures.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupFailures],
+        "ZIP archive creation and temporary-file cleanup both failed",
+      );
+    }
     throw error;
   }
 }
@@ -167,7 +194,7 @@ function collectDirectoryEntries(sourceRoot, rootName, preserveSymlinks) {
   const records = [];
   function visit(directory, relativeDirectory) {
     const entries = readdirSync(directory, { withFileTypes: true }).sort((left, right) =>
-      left.name.localeCompare(right.name),
+      left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
     );
     for (const entry of entries) {
       const absolutePath = join(directory, entry.name);
