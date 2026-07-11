@@ -22,6 +22,13 @@ import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./porta
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+const portableApprovals = JSON.parse(
+  readFileSync(join(repoRoot, "portable-runtime-approvals.json"), "utf8"),
+);
+const OPEN_CODE_APPROVAL = portableApprovals.sidecarRuntimes.find(
+  (runtime) => runtime.name === "opencode-compatible",
+);
+if (OPEN_CODE_APPROVAL === undefined) fail("OpenCode portable runtime approval is missing");
 const CURRENT_VERSION = rootPackage.version;
 const TARGET_VERSION = nextPatchVersion(CURRENT_VERSION);
 const RELEASE_TAG = `v${TARGET_VERSION}`;
@@ -58,6 +65,28 @@ const MUTATING_SCENARIOS = new Set([
   "sidecar-absent",
   "sidecar-present",
 ]);
+const OPENCODE_LICENSE_BYTES = Buffer.from(`MIT License
+
+Copyright (c) 2025 opencode
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`);
 
 function fail(message) {
   throw new Error(`portable manual review failed: ${message}`);
@@ -492,15 +521,10 @@ function packageRootFor(root, target) {
 function writeSidecarPayload(root, target, sidecar) {
   if (sidecar === "absent") return;
   const sidecarRoot = join(root, "runtime", "sidecars", "opencode-compatible");
-  ensureDir(join(sidecarRoot, "evidence"));
-  const executable = target === "windows-x64" ? "opencode.cmd" : join("bin", "opencode");
-  ensureDir(dirname(join(sidecarRoot, executable)));
-  writeFileSync(join(sidecarRoot, "LICENSE.txt"), "sidecar license\n");
-  writeFileSync(join(sidecarRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
-  writeFileSync(
-    join(sidecarRoot, executable),
-    target === "windows-x64" ? "@echo off\r\n" : "#!/bin/sh\n",
-  );
+  for (const file of sidecarFiles(target)) {
+    ensureDir(dirname(join(sidecarRoot, file.path)));
+    writeFileSync(join(sidecarRoot, file.path), file.bytes);
+  }
 }
 
 function zipDirectory(sourceRoot, zipPath) {
@@ -542,15 +566,51 @@ function fileSize(path) {
 }
 
 function sidecarFiles(target) {
-  const executable = target === "windows-x64" ? "opencode.cmd" : "bin/opencode";
-  return [
-    { path: "LICENSE.txt", bytes: Buffer.from("sidecar license\n") },
-    { path: "evidence/sbom.cdx.json", bytes: Buffer.from('{"bomFormat":"CycloneDX"}\n') },
-    {
-      path: executable,
-      bytes: Buffer.from(target === "windows-x64" ? "@echo off\r\n" : "#!/bin/sh\n"),
+  const executable = target === "windows-x64" ? "bin/opencode.exe" : "bin/opencode";
+  const executableBytes = Buffer.from(
+    target === "windows-x64" ? "manual-review-signed-pe-fixture\n" : "#!/bin/sh\n",
+  );
+  const executableSha256 = sha256Bytes(executableBytes);
+  const approval = OPEN_CODE_APPROVAL;
+  const archive = approval.archives[target];
+  const sbom = {
+    bomFormat: "CycloneDX",
+    specVersion: "1.5",
+    version: 1,
+    metadata: {
+      component: {
+        type: "application",
+        name: approval.name,
+        version: approval.upstream.version,
+      },
     },
+    components: [
+      {
+        type: "application",
+        name: approval.upstream.name,
+        version: approval.upstream.version,
+        purl: `pkg:github/${approval.upstream.owner}/${approval.upstream.repository}@${approval.upstream.tag}`,
+        licenses: [{ license: { id: approval.license.spdxId } }],
+        hashes: [{ alg: "SHA-256", content: executableSha256 }],
+        externalReferences: [
+          {
+            type: "distribution",
+            url: archive.url,
+            hashes: [{ alg: "SHA-256", content: archive.sha256 }],
+          },
+        ],
+      },
+    ],
+  };
+  return [
+    { path: "evidence/LICENSE", bytes: OPENCODE_LICENSE_BYTES },
+    { path: "evidence/sbom.cdx.json", bytes: Buffer.from(`${JSON.stringify(sbom, null, 2)}\n`) },
+    { path: executable, bytes: executableBytes },
   ];
+}
+
+function sha256Bytes(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function treeDigest(files) {
@@ -565,31 +625,58 @@ function sidecarRuntime(target, scenario) {
   if (scenario !== "sidecar-present" && scenario !== "sidecar-failure") return undefined;
   const files = sidecarFiles(target);
   const root = "runtime/sidecars/opencode-compatible";
+  const approval = OPEN_CODE_APPROVAL;
+  const archive = approval.archives[target];
+  const executablePath = target === "windows-x64" ? "bin/opencode.exe" : "bin/opencode";
+  const executableFile = files.find((file) => file.path === executablePath);
+  if (executableFile === undefined) fail("OpenCode executable fixture is missing");
+  const shippedExecutableSha256 = sha256Bytes(executableFile.bytes);
+  const shippedExecutableTreeSha256 = createHash("sha256")
+    .update(`${executablePath}\0${shippedExecutableSha256}\0`)
+    .digest("hex");
   const runtime = {
-    name: "opencode-compatible",
-    kind: "coding-runtime",
-    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      protocolVersion: "coding-sidecar-v1",
+    approvalSchemaVersion: 2,
+    name: approval.name,
+    kind: approval.kind,
+    upstream: approval.upstream,
+    adapterCompatibility: approval.adapterCompatibility,
+    protocolSchema: approval.protocolSchema,
+    releaseApproval: approval.releaseApproval,
+    license: approval.license,
+    archive: {
+      platformTarget: target,
+      url: archive.url,
+      sizeBytes: archive.sizeBytes,
+      sha256: archive.sha256,
     },
+    executableTreeAlgorithm: approval.executableTreeAlgorithm,
+    executableTreeSha256: archive.executableTreeSha256,
+    executableSha256: "8".repeat(64),
     platformTarget: target,
     payloadRootPath: root,
-    executablePath: `${root}/${target === "windows-x64" ? "opencode.cmd" : "bin/opencode"}`,
+    executablePath: `${root}/${executablePath}`,
     payloadSha256: scenario === "sidecar-failure" ? "9".repeat(64) : treeDigest(files),
     sizeBytes: files.reduce((sum, file) => sum + file.bytes.length, 0),
     licenseEvidence: {
-      path: `${root}/LICENSE.txt`,
-      sha256: createHash("sha256").update(files[0].bytes).digest("hex"),
+      path: `${root}/evidence/LICENSE`,
+      sha256: sha256Bytes(files[0].bytes),
     },
     sbomEvidence: {
       path: `${root}/evidence/sbom.cdx.json`,
-      sha256: createHash("sha256").update(files[1].bytes).digest("hex"),
+      sha256: sha256Bytes(files[1].bytes),
     },
-    signing: signingEvidence(target, true),
+    signing: sidecarSigningEvidence(target, shippedExecutableSha256, shippedExecutableTreeSha256),
   };
   return runtime;
+}
+
+function sidecarSigningEvidence(target, executableSha256, executableTreeSha256) {
+  return {
+    ...signingEvidence(target, true),
+    shippedExecutableSha256: executableSha256,
+    shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    shippedExecutableTreeSha256: executableTreeSha256,
+  };
 }
 
 function signingEvidence(target, verified) {
@@ -706,18 +793,27 @@ function fakeCatalogReview() {
 }
 
 function portableManifest(input) {
+  const security = {
+    ...signingEvidence(input.target, input.signingVerified),
+    verificationSummaryPath: "evidence/signing-verification.json",
+  };
+  const provenance = portableManifestProvenance(input.targetVersion);
   const manifest = {
     schemaVersion: 1,
     product: { name: "Keiko", packageName: PACKAGE_NAME, packageVersion: input.targetVersion },
     release: portableManifestRelease(input.targetVersion),
     artifact: portableManifestArtifact(input),
+    provenance,
     runtime: portableManifestRuntime(input.target),
-    security: signingEvidence(input.target, input.signingVerified),
+    ...portableManifestProductSections(input.target),
+    security,
     updateEligibility: portableUpdateEligibility(),
     releaseImpact: {
+      catalogPath: "app/release-impact.catalog.json",
+      entryId: `manual-review-${input.targetVersion}`,
       entryPackageVersion: input.targetVersion,
       entryReleaseTag: `v${input.targetVersion}`,
-      reviewedBinding: reviewedBinding(input),
+      reviewedBinding: reviewedBinding(input, security, provenance),
     },
   };
   if (input.sidecar !== undefined) {
@@ -725,6 +821,55 @@ function portableManifest(input) {
     manifest.releaseImpact.reviewedBinding.sidecarRuntimes = [input.sidecar];
   }
   return manifest;
+}
+
+function portableManifestProductSections(target) {
+  return {
+    packageSurface: {
+      source: "root-npm-package-surface",
+      packageSurfaceGate: "npm run check:package-surface",
+      publishManifestGate: "npm run check:publish-manifests",
+      workspaceSupplyChainGate: "npm run check:workspace-supply-chain",
+    },
+    entrypoints: {
+      primaryLauncher: launcherName(target),
+      supportLaunchers: [
+        target === "windows-x64" ? "support/keiko-support.cmd" : "support/keiko-support.sh",
+      ],
+    },
+    installLayout: {
+      installMode: "portable-managed",
+      bootstrapUpdateEligible: false,
+      managedRootKind: "user-local-keiko-owned",
+      sameVolumeStagingRequired: true,
+      stateRootPolicy: "separate-local-runtime-state",
+    },
+    stateExclusion: {
+      excludesDotKeiko: true,
+      excludesCustomerData: true,
+      excludesSecrets: true,
+      excludesRawLogs: true,
+      excludesRepositories: true,
+    },
+    evidence: {
+      checksumsPath: "evidence/SHA256SUMS.txt",
+      sbomPath: "evidence/sbom.cdx.json",
+      licenseNoticePath: "evidence/third-party-notices.txt",
+    },
+  };
+}
+
+function portableManifestProvenance(targetVersion) {
+  return {
+    sourceCommitSha: "a".repeat(40),
+    rootPackageVersion: targetVersion,
+    rootPackageTarballSha256: "b".repeat(64),
+    packagedAppTreeSha256: "c".repeat(64),
+    buildWorkflowRunId: RELEASE_ID,
+    buildWorkflowAttempt: 1,
+    provenanceStatementPath: "evidence/provenance.intoto.jsonl",
+    provenanceStatementSha256: "d".repeat(64),
+  };
 }
 
 function portableManifestRelease(targetVersion) {
@@ -770,10 +915,18 @@ function portableUpdateEligibility() {
       sameVolumeCrashSafePromotionAvailable: true,
       relaunchVersionVerificationAvailable: true,
     },
+    manualOnlyWhen: [
+      "managed-root-cannot-be-attested",
+      "signature-or-notarization-cannot-be-verified",
+      "crash-safe-promotion-unavailable",
+      "admin-or-organization-managed-root",
+      "prerelease-beta-downgrade-or-rollback",
+    ],
   };
 }
 
-function reviewedBinding(input) {
+function reviewedBinding(input, security, provenance) {
+  const target = targetByName(input.target);
   return {
     releaseId: RELEASE_ID,
     releaseTag: `v${input.targetVersion}`,
@@ -782,8 +935,21 @@ function reviewedBinding(input) {
     assetSizeBytes: input.archive.size,
     platformTarget: input.target,
     packageVersion: input.targetVersion,
+    nodeRuntimeIdentity: `node-v22.23.1-${target.runtimeTarget}`,
     archiveSha256: input.archiveSha,
+    provenanceStatementSha256: provenance.provenanceStatementSha256,
+    sbomPath: "evidence/sbom.cdx.json",
+    licenseNoticePath: "evidence/third-party-notices.txt",
+    checksumsPath: "evidence/SHA256SUMS.txt",
+    verificationPolicy: security.verificationPolicy,
+    verificationStatus: security.verificationStatus,
+    verificationReasonCodes: security.verificationReasonCodes,
     platformSignatureLocallyVerified: input.signingVerified,
+    signatureKind: security.signatureKind,
+    signatureVerified: security.signatureVerified,
+    notarizationRequired: security.notarizationRequired,
+    notarizationVerified: security.notarizationVerified,
+    verificationChecks: security.verificationChecks,
   };
 }
 

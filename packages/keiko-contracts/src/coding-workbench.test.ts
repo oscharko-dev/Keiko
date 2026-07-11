@@ -591,6 +591,7 @@ describe("isCodingWorkbenchEvidenceSafeText", () => {
     { label: "url-like scheme", value: "ssh://corp-host/repo" },
     { label: "natural-language slug", value: "please-fix-login-bug" },
     { label: "fine-grained PAT", value: "github_pat_1234567890" },
+    { label: "retired local runtime source", value: "policy-allowed-local-install" },
   ])("rejects unsafe evidence text: $label", ({ value }) => {
     expect(isCodingWorkbenchEvidenceSafeText(value)).toBe(false);
   });

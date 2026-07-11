@@ -203,7 +203,6 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "keiko-owned-state",
   "managed-sidecar-runtime",
   "os-credential-store",
-  "policy-allowed-local-install",
   "unsupported-headless",
   "openai-api-key-through-gateway",
   "chatgpt-codex-subscription-profile",
