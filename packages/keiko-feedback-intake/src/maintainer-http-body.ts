@@ -32,6 +32,8 @@ export async function readMaintainerBody(req: IncomingMessage): Promise<unknown>
         finish(new MaintainerRequestError("body"));
       }
     });
-    req.on("error", () => finish(new MaintainerRequestError("body")));
+    req.on("error", () => {
+      finish(new MaintainerRequestError("body"));
+    });
   });
 }

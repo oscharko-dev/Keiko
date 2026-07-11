@@ -77,6 +77,21 @@ export default tseslint.config(
   },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
   {
+    files: ["packages/keiko-feedback-intake/assets/maintainer-ui*.js"],
+    languageOptions: {
+      globals: {
+        crypto: "readonly",
+        document: "readonly",
+        fetch: "readonly",
+        HTMLInputElement: "readonly",
+        navigator: "readonly",
+        URLSearchParams: "readonly",
+        window: "readonly",
+      },
+    },
+    rules: { "@typescript-eslint/explicit-function-return-type": "off" },
+  },
+  {
     files: ["design-system/**/*.js"],
     languageOptions: {
       globals: {
@@ -107,6 +122,14 @@ export default tseslint.config(
   // Build tooling under scripts/ is Node ESM outside the TypeScript program: disable type-aware
   // rules and permit console output (these scripts report build progress on stdout).
   { files: ["scripts/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
+  {
+    files: ["packages/keiko-feedback-intake/scripts/**/*.mjs"],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    files: ["packages/keiko-feedback-intake/scripts/**/*.mjs"],
+    rules: { "@typescript-eslint/explicit-function-return-type": "off" },
+  },
   {
     files: ["scripts/**/*.mjs"],
     languageOptions: { globals: { console: "readonly", process: "readonly" } },

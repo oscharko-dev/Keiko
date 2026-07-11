@@ -38,10 +38,10 @@
       "sha256": "09ea41a53db52f3ae303fc7b2217af4176600e260319b4c357e0a55c4f4c4374"
     },
     "maintainer-ui-dom.js": {
-      "identityBytes": 3891,
-      "gzipBytes": 1378,
-      "brotliBytes": 1152,
-      "sha256": "a67128ee2fadec685e517de7785448ad9c25c3202dce35930a068765ca2ed4b4"
+      "identityBytes": 3966,
+      "gzipBytes": 1408,
+      "brotliBytes": 1177,
+      "sha256": "1809fcd17b6b3b8bfeb5a170626231822644e975052ebd5712192c09cabb4bb7"
     }
   },
   "screenshots": [

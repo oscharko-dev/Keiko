@@ -367,12 +367,7 @@ async function dispatchMaintainer(
     return;
   }
   const url = new URL(target, options.publicOrigin);
-  const encoding = duplicateHeader(req, "accept-encoding")
-    ? undefined
-    : typeof req.headers["accept-encoding"] === "string"
-      ? req.headers["accept-encoding"]
-      : undefined;
-  if (await serveMaintainerUi(req.method, url.pathname, res, encoding)) return;
+  if (await serveMaintainerUi(req.method, url.pathname, res, acceptEncoding(req))) return;
   if (!url.pathname.startsWith("/v1/maintainer/")) {
     fail(res, 404);
     return;
@@ -389,4 +384,10 @@ async function dispatchMaintainer(
     return;
   }
   await handleAuthenticated(req, res, url, options, identity, capability);
+}
+
+function acceptEncoding(req: IncomingMessage): string | undefined {
+  if (duplicateHeader(req, "accept-encoding")) return undefined;
+  const value = req.headers["accept-encoding"];
+  return typeof value === "string" ? value : undefined;
 }

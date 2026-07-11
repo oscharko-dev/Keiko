@@ -70,6 +70,54 @@ async function assertSecurityBoundary(page: Page): Promise<void> {
   expect(externalRequests.get(page) ?? []).toEqual([]);
 }
 
+async function submitDuplicate(page: Page, actions: string[]): Promise<void> {
+  let releaseAction: (() => void) | undefined;
+  const actionGate = new Promise<void>((resolve) => {
+    releaseAction = resolve;
+  });
+  await page.route("**/v1/maintainer/reviews/*/actions", async (route) => {
+    await actionGate;
+    await reply(route, { itemId: item.itemId, state: "duplicate", version: 2 });
+  });
+  await page.getByLabel("Target item identifier").fill("22222222-2222-4222-8222-222222222222");
+  await page.getByLabel("Target item identifier").press("Enter");
+  await expect.poll(() => actions.length).toBe(1);
+  await expect(
+    page.locator(".mq-action input:disabled, .mq-action select:disabled"),
+  ).not.toHaveCount(0);
+  await capture(page, "17-submitting-busy");
+  releaseAction?.();
+  await expect(page.getByRole("heading", { name: "Review queue" })).toBeFocused();
+  await expect(page.getByText("Action saved. The queue has been refreshed.")).toBeVisible();
+  expect(JSON.parse(actions[0] ?? "{}") as { action?: string }).toMatchObject({
+    action: "mark-duplicate",
+  });
+}
+
+async function captureCanonicalModes(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "light";
+  });
+  await capture(page, "02-light-desktop-success");
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "dark";
+    document.documentElement.dataset.hc = "more";
+  });
+  await capture(page, "03-dark-high-contrast");
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = "light";
+  });
+  await capture(page, "04-light-high-contrast");
+  await page.evaluate(() => {
+    delete document.documentElement.dataset.hc;
+    document.documentElement.dataset.theme = "dark";
+  });
+  await page.emulateMedia({ forcedColors: "active" });
+  await capture(page, "05-forced-colors");
+  await page.emulateMedia({ forcedColors: "none", reducedMotion: "reduce" });
+  await capture(page, "06-reduced-motion");
+}
+
 async function fixture(
   page: Page,
   mode: "normal" | "empty" | "unauthenticated" = "normal",
@@ -180,52 +228,12 @@ test("maintainer queue uses production assets, inert payload rendering, keyboard
   const payload = page.locator("pre.mq-payload");
   await expect(payload).toContainText("<script>");
   await expect(page.locator("pre img, pre a, pre script")).toHaveCount(0);
-  const proofs = [await capture(page, "01-dark-desktop-detail-xss")];
+  await capture(page, "01-dark-desktop-detail-xss");
   await page.getByRole("button", { name: "Mark duplicate" }).click();
   await expect(page.getByText("Validation error: complete the required fields.")).toBeVisible();
-  proofs.push(await capture(page, "16-native-validation-error"));
-  let releaseAction: (() => void) | undefined;
-  const actionGate = new Promise<void>((resolve) => {
-    releaseAction = resolve;
-  });
-  await page.route("**/v1/maintainer/reviews/*/actions", async (route) => {
-    await actionGate;
-    await reply(route, { itemId: item.itemId, state: "duplicate", version: 2 });
-  });
-  await page.getByLabel("Target item identifier").fill("22222222-2222-4222-8222-222222222222");
-  await page.getByLabel("Target item identifier").press("Enter");
-  await expect.poll(() => actions.length).toBe(1);
-  await expect(
-    page.locator(".mq-action input:disabled, .mq-action select:disabled"),
-  ).not.toHaveCount(0);
-  proofs.push(await capture(page, "17-submitting-busy"));
-  releaseAction?.();
-  await expect(page.getByRole("heading", { name: "Review queue" })).toBeFocused();
-  await expect(page.getByText("Action saved. The queue has been refreshed.")).toBeVisible();
-  expect(JSON.parse(actions[0] ?? "{}") as { action?: string }).toMatchObject({
-    action: "mark-duplicate",
-  });
-  await page.evaluate(() => {
-    document.documentElement.dataset.theme = "light";
-  });
-  proofs.push(await capture(page, "02-light-desktop-success"));
-  await page.evaluate(() => {
-    document.documentElement.dataset.theme = "dark";
-    document.documentElement.dataset.hc = "more";
-  });
-  proofs.push(await capture(page, "03-dark-high-contrast"));
-  await page.evaluate(() => {
-    document.documentElement.dataset.theme = "light";
-  });
-  proofs.push(await capture(page, "04-light-high-contrast"));
-  await page.evaluate(() => {
-    delete document.documentElement.dataset.hc;
-    document.documentElement.dataset.theme = "dark";
-  });
-  await page.emulateMedia({ forcedColors: "active" });
-  proofs.push(await capture(page, "05-forced-colors"));
-  await page.emulateMedia({ forcedColors: "none", reducedMotion: "reduce" });
-  proofs.push(await capture(page, "06-reduced-motion"));
+  await capture(page, "16-native-validation-error");
+  await submitDuplicate(page, actions);
+  await captureCanonicalModes(page);
   await assertSecurityBoundary(page);
 });
 
