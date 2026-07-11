@@ -34,6 +34,16 @@ export function computeConnectorItemFingerprint(bytes: Uint8Array): string {
   return computeManualPageFingerprint(bytes);
 }
 
+// Deterministic, locale-independent UTF-16 code-unit order (identical to the default
+// `Array.prototype.sort()` this digest has always used). `String.localeCompare` must NOT be used
+// here: locale-aware collation would make the fingerprint depend on the host locale and break
+// byte-identical re-sync comparisons.
+function compareByCodeUnit(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 // Order-independent digest of an entire applied sync run's item set — the D5
 // `fingerprintSetDigest`. Same canonical construction as the #1856 crawl-run fingerprint (key +
 // non-printable `\u0001` separator + content fingerprint, sorted), emitted as 64-character
@@ -42,11 +52,7 @@ export function computeConnectorRunFingerprint(items: readonly ConnectorItemFing
   const FIELD_SEPARATOR = "\u0001";
   const canonical = [...items]
     .map((item) => `${item.itemKey}${FIELD_SEPARATOR}${item.contentFingerprint}`)
-    // Deterministic, locale-independent UTF-16 code-unit order (identical to the default
-    // `Array.prototype.sort()` this digest has always used). `String.localeCompare` must NOT be used
-    // here: locale-aware collation would make the fingerprint depend on the host locale and break
-    // byte-identical re-sync comparisons.
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    .sort(compareByCodeUnit)
     .join("\n");
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }

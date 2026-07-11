@@ -383,8 +383,10 @@ async function startSyncGoverned(
     return denied(outcome.decision.denyReason ?? "connector-access-denied");
   }
   if (outcome.kind === "review-required") {
-    const { authority: ignoredAuthority, ...syncStart } = body;
-    void ignoredAuthority;
+    // The raw request `authority` is validated separately above and must not ride into the
+    // pending-approval payload; peel it off and forward only the sync-start fields.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- rest-sibling omit of body.authority
+    const { authority: _authority, ...syncStart } = body;
     return createAtlassianPendingApprovalResult({
       connectorId,
       actionType,

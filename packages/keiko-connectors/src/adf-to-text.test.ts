@@ -314,11 +314,11 @@ describe("convertAdfToText — caps at boundary values", () => {
   it("renders at exactly the output cap and hard-truncates one character beyond it", () => {
     const atCap = convertAdfToText(doc(p("a".repeat(ADF_TO_TEXT_MAX_OUTPUT_CHARS))));
     expect(atCap.truncated).toBe(false);
-    expect(atCap.text.length).toBe(ADF_TO_TEXT_MAX_OUTPUT_CHARS);
+    expect(atCap.text).toHaveLength(ADF_TO_TEXT_MAX_OUTPUT_CHARS);
     const beyond = convertAdfToText(doc(p("a".repeat(ADF_TO_TEXT_MAX_OUTPUT_CHARS + 1))));
     expect(beyond.truncated).toBe(true);
     expect(beyond.truncationReasons).toStrictEqual(["output-budget-exceeded"]);
-    expect(beyond.text.length).toBe(ADF_TO_TEXT_MAX_OUTPUT_CHARS);
+    expect(beyond.text).toHaveLength(ADF_TO_TEXT_MAX_OUTPUT_CHARS);
   });
 
   it("charges list/quote prefix amplification against the output budget", () => {

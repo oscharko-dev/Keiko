@@ -47,8 +47,8 @@ function useConnectorCard(
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const fail = (caught: unknown): void => {
-    setError(caught instanceof ApiError ? caught.message : t("atlassianConnectors.retry"));
+  const fail = (error_: unknown): void => {
+    setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
   };
   const verify = (): void => {
     setBusy(true);
@@ -65,8 +65,8 @@ function useConnectorCard(
     client
       .deleteConnector(connector.authRef)
       .then(() => onDeleted(connector.authRef))
-      .catch((caught: unknown) => {
-        fail(caught);
+      .catch((error_: unknown) => {
+        fail(error_);
         setBusy(false);
       });
   };
@@ -162,6 +162,7 @@ export function ConnectorCard({
   pollIntervalMs,
 }: ConnectorCardProps): ReactNode {
   const ctrl = useConnectorCard(client, connector, onDeleted);
+  const syncPollProps = pollIntervalMs === undefined ? {} : { pollIntervalMs };
   return (
     <li className="acx-card" data-testid="acx-connector" data-auth-ref={connector.authRef}>
       <CardHeader connector={connector} verifyStatus={ctrl.verifyStatus} />
@@ -187,7 +188,7 @@ export function ConnectorCard({
           client={client}
           authRef={connector.authRef}
           provider={connector.provider}
-          {...(pollIntervalMs === undefined ? {} : { pollIntervalMs })}
+          {...syncPollProps}
         />
       ) : null}
     </li>

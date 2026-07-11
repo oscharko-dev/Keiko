@@ -99,7 +99,7 @@ import {
 const MAX_ACTION_BODY_BYTES = 512_000;
 const SINGLE_LINE_TEXT_MAX_CHARS = 255;
 const FIELD_TEXT_MAX_CHARS = 100;
-const NUMERIC_ID_PATTERN = /^[0-9]{1,32}$/u;
+const NUMERIC_ID_PATTERN = /^\d{1,32}$/u;
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const CONTROL_CHARS_PATTERN = /[\u0000-\u001F\u007F-\u009F]/u;
 

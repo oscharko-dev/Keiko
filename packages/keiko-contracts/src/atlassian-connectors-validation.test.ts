@@ -186,37 +186,13 @@ describe("validateAtlassianConnectorDescriptor (hostile input)", () => {
     }
   });
 
-  it("rejects an http base URL", () => {
-    const errors = errorsOf(
-      validateAtlassianConnectorDescriptor(descriptor({ baseUrl: "http://example.atlassian.net" })),
-    );
-    expect(errors.some((error) => error.includes("descriptor.baseUrl"))).toBe(true);
-  });
-
-  it("rejects a credentialed base URL", () => {
-    const errors = errorsOf(
-      validateAtlassianConnectorDescriptor(
-        descriptor({ baseUrl: "https://user:token@example.atlassian.net" }),
-      ),
-    );
-    expect(errors.some((error) => error.includes("descriptor.baseUrl"))).toBe(true);
-  });
-
-  it("rejects a base URL with a query string", () => {
-    const errors = errorsOf(
-      validateAtlassianConnectorDescriptor(
-        descriptor({ baseUrl: "https://example.atlassian.net?token=x" }),
-      ),
-    );
-    expect(errors.some((error) => error.includes("descriptor.baseUrl"))).toBe(true);
-  });
-
-  it("rejects a base URL with a fragment", () => {
-    const errors = errorsOf(
-      validateAtlassianConnectorDescriptor(
-        descriptor({ baseUrl: "https://example.atlassian.net#admin" }),
-      ),
-    );
+  it.each([
+    ["an http base URL", "http://example.atlassian.net"],
+    ["a credentialed base URL", "https://user:token@example.atlassian.net"],
+    ["a base URL with a query string", "https://example.atlassian.net?token=x"],
+    ["a base URL with a fragment", "https://example.atlassian.net#admin"],
+  ])("rejects %s", (_label, baseUrl) => {
+    const errors = errorsOf(validateAtlassianConnectorDescriptor(descriptor({ baseUrl })));
     expect(errors.some((error) => error.includes("descriptor.baseUrl"))).toBe(true);
   });
 
@@ -435,7 +411,8 @@ describe("validateAtlassianSyncJobState (discriminated lifecycle)", () => {
     for (const status of ["failed", "cancelled"]) {
       const never = job(status);
       delete never.startedAt;
-      expectOk(validateAtlassianSyncJobState(never));
+      const value = expectOk(validateAtlassianSyncJobState(never));
+      expect(value).not.toHaveProperty("startedAt");
     }
   });
 
@@ -585,10 +562,13 @@ describe("validateAtlassianConnectorActivityRecord (ADR-0128 D6 evidence)", () =
     const podSourceIsBodyFree: Extract<keyof AtlassianConnectorPodSource, BodyLikeKey> extends never
       ? true
       : false = true;
-    expect(activityIsBodyFree).toBe(true);
-    expect(descriptorIsSecretFree).toBe(true);
-    expect(changeSummaryIsBodyFree).toBe(true);
-    expect(podSourceIsBodyFree).toBe(true);
+    const bodyFreeProofs: readonly boolean[] = [
+      activityIsBodyFree,
+      descriptorIsSecretFree,
+      changeSummaryIsBodyFree,
+      podSourceIsBodyFree,
+    ];
+    expect(bodyFreeProofs).not.toContain(false);
   });
 
   it("pins the recorded class and provider to the D4 table for the action type", () => {
@@ -818,25 +798,31 @@ describe("validateAtlassianConnectorPodSource (#2240 Scope 6)", () => {
 describe("activity reason pairing — Issue #2244 vocabulary", () => {
   it("accepts envelope-authority failure codes on denied attempts", () => {
     for (const reasonCode of ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS) {
-      expectOk(
+      const value = expectOk(
         validateAtlassianConnectorActivityRecord(
           activity({ disposition: "denied", outcome: "denied", reasonCode }),
         ),
       );
+      expect(value).toMatchObject({ disposition: "denied", outcome: "denied", reasonCode });
     }
   });
 
   it("accepts a write failure reason on a failed allowed attempt", () => {
-    expectOk(
+    const conflict = expectOk(
       validateAtlassianConnectorActivityRecord(
         activity({ outcome: "failed", reasonCode: "conflict" }),
       ),
     );
-    expectOk(
+    expect(conflict).toMatchObject({ outcome: "failed", reasonCode: "conflict" });
+    const invalidTransition = expectOk(
       validateAtlassianConnectorActivityRecord(
         activity({ outcome: "failed", reasonCode: "invalid-transition" }),
       ),
     );
+    expect(invalidTransition).toMatchObject({
+      outcome: "failed",
+      reasonCode: "invalid-transition",
+    });
   });
 
   it("accepts human-initiated as the rationale on an allowed attempt, but never on failed", () => {
@@ -958,25 +944,30 @@ describe("validateAtlassianConnectorPendingApproval (Issue #2244 → #2245 UI)",
 
 describe("validateAtlassianConnectorActionExecutionResult (Issue #2244 wire results)", () => {
   it("accepts succeeded results with optional target and version", () => {
-    expectOk(validateAtlassianConnectorActionExecutionResult({ status: "succeeded" }));
-    expectOk(
+    const minimal = expectOk(
+      validateAtlassianConnectorActionExecutionResult({ status: "succeeded" }),
+    );
+    expect(minimal).toMatchObject({ status: "succeeded" });
+    const detailed = expectOk(
       validateAtlassianConnectorActionExecutionResult({
         status: "succeeded",
         targetRef: "PROJ-9",
         version: 4,
       }),
     );
+    expect(detailed).toMatchObject({ status: "succeeded", targetRef: "PROJ-9", version: 4 });
   });
 
   it("accepts failed results with every closed write failure reason", () => {
     for (const reason of ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS) {
-      expectOk(
+      const value = expectOk(
         validateAtlassianConnectorActionExecutionResult({
           status: "failed",
           reason,
           httpStatus: 409,
         }),
       );
+      expect(value).toMatchObject({ status: "failed", reason });
     }
   });
 

@@ -25,11 +25,7 @@ import type {
   AtlassianSyncJobState,
   JiraLiveSearchResult,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
-  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-  isAtlassianConnectionVerificationStatus,
-} from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
 // UI-local wire shapes (no contract equivalent; enums come from keiko-contracts)
@@ -39,11 +35,11 @@ import {
 // contract wire type; the UI aliases it (and its guard/status list) under local names so every
 // surface renders exactly these actionable states and never a raw provider error — one source of
 // truth in the contracts leaf, no re-declaration.
-export const ATLASSIAN_CONNECTOR_VERIFY_STATUSES = ATLASSIAN_CONNECTION_VERIFICATION_STATUSES;
+export { ATLASSIAN_CONNECTION_VERIFICATION_STATUSES as ATLASSIAN_CONNECTOR_VERIFY_STATUSES } from "@oscharko-dev/keiko-contracts";
 
 export type AtlassianConnectorVerifyStatus = AtlassianConnectionVerificationStatus;
 
-export const isAtlassianConnectorVerifyStatus = isAtlassianConnectionVerificationStatus;
+export { isAtlassianConnectionVerificationStatus as isAtlassianConnectorVerifyStatus } from "@oscharko-dev/keiko-contracts";
 
 // The non-secret credential metadata projection every credentials route answers (ADR-0128 D2). It
 // carries no field that could hold the token; `authRef` is the opaque vault handle and `createdAt`

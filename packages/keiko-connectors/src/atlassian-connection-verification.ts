@@ -10,8 +10,6 @@
 //   - Confluence Cloud: GET /wiki/rest/api/user/current
 
 import {
-  ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
-  isAtlassianConnectionVerificationStatus,
   isAtlassianConnectorProvider,
   isSafeAtlassianConnectorBaseUrl,
   type AtlassianConnectionVerificationStatus,
@@ -23,8 +21,8 @@ import {
 export {
   ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
   isAtlassianConnectionVerificationStatus,
-  type AtlassianConnectionVerificationStatus,
-};
+} from "@oscharko-dev/keiko-contracts";
+export type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-contracts";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type {
   AtlassianHttpPort,

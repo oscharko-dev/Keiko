@@ -46,7 +46,7 @@ function useScopeState(
 ): ScopeState {
   const [keys, setKeys] = useState<readonly string[]>([]);
   const [draft, setDraft] = useState("");
-  const [jql, setJqlState] = useState("");
+  const [jql, setJql] = useState("");
   const [error, setError] = useState<MessageKey | undefined>();
   const emit = (nextKeys: readonly string[], nextJql: string): void => {
     onChange({ keys: nextKeys, jql: nextJql });
@@ -70,11 +70,11 @@ function useScopeState(
     setKeys(nextKeys);
     emit(nextKeys, jql);
   };
-  const setJql = (value: string): void => {
-    setJqlState(value);
+  const updateJql = (value: string): void => {
+    setJql(value);
     emit(keys, value);
   };
-  return { keys, draft, jql, error, setDraft, setJql, addKey, removeKey };
+  return { keys, draft, jql, error, setDraft, setJql: updateJql, addKey, removeKey };
 }
 
 function ScopeChips({

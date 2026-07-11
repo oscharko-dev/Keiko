@@ -65,7 +65,9 @@ const DEFAULT_FIELDS: EntryFields = {
   token: "",
 };
 
-const EMAIL_PATTERN = /^\S+@\S+$/u;
+// Linear, backtracking-free: one-or-more non-space/non-`@` chars, a single `@`, then the same. The
+// disjoint character classes remove the `\S+`/`\S+` ambiguity around `@` (no super-linear matching).
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+$/u;
 
 const TEXT_FIELDS: readonly TextFieldConfig[] = [
   {
@@ -147,8 +149,8 @@ function useAddConnectorEntry(
       setFields(DEFAULT_FIELDS);
       onCreated(metadata);
       onVerifyPhase(metadata.authRef);
-    } catch (caught) {
-      setSubmitError(caught instanceof ApiError ? caught.message : t("atlassianConnectors.retry"));
+    } catch (error_) {
+      setSubmitError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
     } finally {
       setBusy(false);
     }
@@ -258,8 +260,8 @@ function VerifyPhase({
     setError(undefined);
     try {
       setStatus((await client.verifyConnector(authRef)).status);
-    } catch (caught) {
-      setError(caught instanceof ApiError ? caught.message : t("atlassianConnectors.retry"));
+    } catch (error_) {
+      setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
     } finally {
       setBusy(false);
     }

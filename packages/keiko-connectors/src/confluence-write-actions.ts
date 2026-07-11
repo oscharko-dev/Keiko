@@ -31,7 +31,7 @@ import { composePlainTextToStorageFormat } from "./plain-text-to-storage-format.
 
 const CONFLUENCE_API_ROOT = "/wiki/api/v2/";
 export const CONFLUENCE_TITLE_MAX_CHARS = 255;
-const NUMERIC_ID_PATTERN = /^[0-9]{1,32}$/u;
+const NUMERIC_ID_PATTERN = /^\d{1,32}$/u;
 // eslint-disable-next-line no-control-regex -- intentionally matches control chars to REJECT them
 const CONTROL_CHARS_PATTERN = /[\u0000-\u001F\u007F-\u009F]/u;
 

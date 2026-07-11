@@ -439,7 +439,6 @@ export function createAtlassianCredentialCustody(
 // sanctioned caller — keiko-server's outbound AtlassianHttpPort adapter — which materialises it
 // immediately before the platform fetch call and never logs or re-emits it (ADR-0128 D2).
 export function atlassianAuthorizationHeaderValue(credential: AtlassianResolvedCredential): string {
-  return `Basic ${Buffer.from(`${credential.accountEmail}:${credential.apiToken}`, "utf8").toString(
-    "base64",
-  )}`;
+  const basicToken = `${credential.accountEmail}:${credential.apiToken}`;
+  return `Basic ${Buffer.from(basicToken, "utf8").toString("base64")}`;
 }

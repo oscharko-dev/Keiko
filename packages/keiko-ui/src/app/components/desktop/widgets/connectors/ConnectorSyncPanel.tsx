@@ -87,8 +87,8 @@ function useSyncJob(
   const [busy, setBusy] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const fail = (caught: unknown): void => {
-    setError(caught instanceof ApiError ? caught.message : t("atlassianConnectors.retry"));
+  const fail = (error_: unknown): void => {
+    setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
   };
   useEffect(() => {
     if (!isRunning(job) || job === undefined) return;

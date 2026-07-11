@@ -322,7 +322,7 @@ describe("budgeted retrying transport (ADR-0128 D3)", () => {
     const harness = retryHarness();
     const result = await harness.run(() => rateLimited());
     expect(result).toMatchObject({ kind: "response", status: 429 });
-    expect(harness.requests.length).toBe(ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS);
+    expect(harness.requests).toHaveLength(ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS);
     expect(harness.delays).toEqual([500, 1000, 2000, 4000]);
   });
 
@@ -345,11 +345,11 @@ describe("budgeted retrying transport (ADR-0128 D3)", () => {
   it("retries 5xx but never a non-429 4xx", async () => {
     const flaky = retryHarness();
     await flaky.run((attempt) => (attempt === 1 ? { ...ok, status: 503 } : { ...ok, status: 200 }));
-    expect(flaky.requests.length).toBe(2);
+    expect(flaky.requests).toHaveLength(2);
     const denied = retryHarness();
     const result = await denied.run(() => ({ ...ok, status: 403 }));
     expect(result).toMatchObject({ status: 403 });
-    expect(denied.requests.length).toBe(1);
+    expect(denied.requests).toHaveLength(1);
   });
 
   it("sleeps when the delay lands exactly on the deadline — boundary exact", async () => {
@@ -357,7 +357,7 @@ describe("budgeted retrying transport (ADR-0128 D3)", () => {
     const harness = retryHarness();
     await harness.run((attempt) => (attempt === 1 ? rateLimited() : ok), { maxDurationMs: 500 });
     expect(harness.delays).toEqual([500]);
-    expect(harness.requests.length).toBe(2);
+    expect(harness.requests).toHaveLength(2);
   });
 
   it("gives up instead of sleeping past the run deadline", async () => {

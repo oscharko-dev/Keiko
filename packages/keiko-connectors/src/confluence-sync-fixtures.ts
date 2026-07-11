@@ -158,15 +158,14 @@ function routePagesRequest(
   model: FixtureModel,
   request: AtlassianHttpBodyRequest,
   rest: string,
-  url: URL,
 ): AtlassianHttpBodyResult {
-  const commentsMatch = /^([0-9]+)\/footer-comments$/u.exec(rest);
+  const commentsMatch = /^(\d+)\/footer-comments$/u.exec(rest);
   if (commentsMatch !== null) {
     const page = model.pagesById.get(commentsMatch[1] ?? "");
     if (page === undefined) return statusResult(request, 404);
     return jsonResult(request, 200, commentsListing(page));
   }
-  const pageMatch = /^([0-9]+)$/u.exec(rest);
+  const pageMatch = /^(\d+)$/u.exec(rest);
   const page = pageMatch === null ? undefined : model.pagesById.get(pageMatch[1] ?? "");
   if (page === undefined) return statusResult(request, 404);
   if (page.bodyStatus !== undefined) return statusResult(request, page.bodyStatus);
@@ -179,7 +178,6 @@ function routePagesRequest(
       truncated: false,
     };
   }
-  void url;
   return jsonResult(request, 200, pageBody(page, spaceKeyOfPage(model, page.pageId)));
 }
 
@@ -194,14 +192,14 @@ function routeRequest(
   if (!path.startsWith(apiPathPrefix)) return statusResult(request, 404);
   const rest = path.slice(apiPathPrefix.length);
   if (rest === "spaces") return jsonResult(request, 200, spacesListing(model, url));
-  const spacePages = /^spaces\/([0-9]+)\/pages$/u.exec(rest);
+  const spacePages = /^spaces\/(\d+)\/pages$/u.exec(rest);
   if (spacePages !== null) {
     const space = model.spacesById.get(spacePages[1] ?? "");
     if (space === undefined) return statusResult(request, 404);
     return jsonResult(request, 200, pageListing(space, url, apiPathPrefix, listPageSize));
   }
   if (rest.startsWith("pages/")) {
-    return routePagesRequest(model, request, rest.slice("pages/".length), url);
+    return routePagesRequest(model, request, rest.slice("pages/".length));
   }
   return statusResult(request, 404);
 }

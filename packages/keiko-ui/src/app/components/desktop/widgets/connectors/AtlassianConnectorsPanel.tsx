@@ -46,9 +46,9 @@ function useConnectors(client: AtlassianConnectorsClient): ConnectorsController 
       .then((list) => {
         if (active) setConnectors(list);
       })
-      .catch((caught: unknown) => {
+      .catch((error_: unknown) => {
         if (active) {
-          setError(caught instanceof ApiError ? caught.message : t("atlassianConnectors.retry"));
+          setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
         }
       })
       .finally(() => {

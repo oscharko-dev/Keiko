@@ -65,7 +65,7 @@ const MAX_COMMENT_PAGES_PER_ITEM = 10;
 const MAX_TITLE_CHARS = 500;
 
 const CONFLUENCE_API_ROOT = "/wiki/api/v2/";
-const NUMERIC_ID_PATTERN = /^[0-9]{1,32}$/u;
+const NUMERIC_ID_PATTERN = /^\d{1,32}$/u;
 
 export interface ConfluenceSyncSourceOptions {
   readonly baseUrl: string;
@@ -121,9 +121,26 @@ class ConfluenceScopeViolation extends Error {
 type ListWalkOutcome =
   { readonly ok: true } | { readonly ok: false; readonly reason: AtlassianSyncFailureReason };
 
+type NextCursorResult =
+  { readonly ok: true; readonly url: string | undefined } | { readonly ok: false };
+
+// Resolves the `_links.next` cursor, folding an off-scope cursor into a fail-closed result so the
+// walk loop stays flat (the scope violation never surfaces there as a thrown error).
+function nextCursorFrom(
+  endpoints: ConfluenceEndpoints,
+  body: Record<string, unknown>,
+): NextCursorResult {
+  try {
+    return { ok: true, url: resolveNextCursorUrl(endpoints, asRecord(body._links)?.next) };
+  } catch (error) {
+    if (error instanceof ConfluenceScopeViolation) return { ok: false };
+    throw error;
+  }
+}
+
 // Walks a cursor-paginated v2 list endpoint, handing each `results` array to `onResults` (which
 // returns false to stop early, e.g. once the lane's item ceiling is crossed). Fail-closed on
-// off-scope cursors and unbounded cursor chains.
+// off-scope cursors and on cursor chains longer than `MAX_PAGINATION_REQUESTS`.
 async function walkPaginatedList(
   context: AtlassianSyncFetchContext,
   endpoints: ConfluenceEndpoints,
@@ -131,7 +148,8 @@ async function walkPaginatedList(
   onResults: (results: readonly unknown[]) => boolean,
 ): Promise<ListWalkOutcome> {
   let url: string | undefined = firstUrl;
-  for (let requests = 0; url !== undefined; requests += 1) {
+  let requests = 0;
+  while (url !== undefined) {
     if (requests >= MAX_PAGINATION_REQUESTS) return { ok: false, reason: "malformed-payload" };
     if (context.deadlineExceeded()) return { ok: false, reason: "timeout" };
     const result = await context.http({
@@ -145,14 +163,10 @@ async function walkPaginatedList(
     const results = asArray(page.body.results);
     if (results === undefined) return { ok: false, reason: "malformed-payload" };
     if (!onResults(results)) return { ok: true };
-    try {
-      url = resolveNextCursorUrl(endpoints, asRecord(page.body._links)?.next);
-    } catch (error) {
-      if (error instanceof ConfluenceScopeViolation) {
-        return { ok: false, reason: "scope-exceeded" };
-      }
-      throw error;
-    }
+    const next = nextCursorFrom(endpoints, page.body);
+    if (!next.ok) return { ok: false, reason: "scope-exceeded" };
+    url = next.url;
+    requests += 1;
   }
   return { ok: true };
 }
@@ -352,14 +366,15 @@ async function fetchCommentBodies(
 ): Promise<readonly string[]> {
   const bodies: string[] = [];
   const allowance = { remaining: Math.max(0, byteAllowanceRemaining) };
-  if (allowance.remaining === 0) return bodies;
-  let pages = 0;
-  const url = apiUrl(endpoints, `pages/${pageId}/footer-comments?body-format=storage&limit=100`);
-  await walkPaginatedList(context, endpoints, url, (results) => {
-    pages += 1;
-    if (!collectCommentBodies(results, bodies, allowance)) return false;
-    return pages < MAX_COMMENT_PAGES_PER_ITEM;
-  });
+  if (allowance.remaining > 0) {
+    let pages = 0;
+    const url = apiUrl(endpoints, `pages/${pageId}/footer-comments?body-format=storage&limit=100`);
+    await walkPaginatedList(context, endpoints, url, (results) => {
+      pages += 1;
+      if (!collectCommentBodies(results, bodies, allowance)) return false;
+      return pages < MAX_COMMENT_PAGES_PER_ITEM;
+    });
+  }
   return bodies;
 }
 

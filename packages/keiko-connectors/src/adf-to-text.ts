@@ -43,7 +43,9 @@ const MAX_LINK_HREF_CHARS = 2_048;
 // (`String.localeCompare`) would make the output depend on the host locale and must not be used —
 // the converter's output is required to be byte-identical for the same input.
 function compareByCodeUnit(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
 }
 
 export type AdfTruncationReason =
@@ -210,13 +212,19 @@ function renderStatus(node: AdfNode, state: ConversionState): string {
   return emit(state, asString(attrsOf(node).text) ?? "");
 }
 
+// A `date` node's `timestamp` attribute is epoch-milliseconds carried as a number or numeric
+// string; anything else yields `Number.NaN` and renders empty.
+function timestampToMs(raw: unknown): number {
+  if (typeof raw === "number") return raw;
+  const text = asString(raw);
+  if (text !== undefined && text.length > 0) return Number(text);
+  return Number.NaN;
+}
+
 // `date` nodes carry an epoch-milliseconds timestamp (as a string); rendered as the ISO calendar
 // date in UTC — deterministic and timezone-independent.
 function renderDate(node: AdfNode, state: ConversionState): string {
-  const raw = attrsOf(node).timestamp;
-  const text = asString(raw);
-  const ms =
-    typeof raw === "number" ? raw : text !== undefined && text.length > 0 ? Number(text) : NaN;
+  const ms = timestampToMs(attrsOf(node).timestamp);
   if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return "";
   return emit(state, new Date(ms).toISOString().slice(0, 10));
 }

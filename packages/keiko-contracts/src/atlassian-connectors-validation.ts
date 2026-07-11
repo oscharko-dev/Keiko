@@ -381,11 +381,8 @@ const JOB_EXTRA_KEYS_BY_STATUS: Readonly<Record<AtlassianSyncJobStatus, readonly
 
 // `startedAt` is required once a job has run (`running`, `succeeded`, `partial`) and optional on
 // the arms that may terminate straight from the queue (`failed`, `cancelled`).
-const JOB_STARTED_AT_REQUIRED: readonly AtlassianSyncJobStatus[] = [
-  "running",
-  "succeeded",
-  "partial",
-];
+const JOB_STARTED_AT_REQUIRED: ReadonlySet<AtlassianSyncJobStatus> =
+  new Set<AtlassianSyncJobStatus>(["running", "succeeded", "partial"]);
 
 function validateJobCommon(input: Record<string, unknown>, errors: string[]): void {
   pushSchemaVersion(errors, "syncJob", input.schemaVersion);
@@ -403,7 +400,7 @@ function validateJobTimestamps(
   status: AtlassianSyncJobStatus,
   errors: string[],
 ): void {
-  if (JOB_STARTED_AT_REQUIRED.includes(status) || input.startedAt !== undefined) {
+  if (JOB_STARTED_AT_REQUIRED.has(status) || input.startedAt !== undefined) {
     pushTimestamp(errors, "syncJob.startedAt", input.startedAt);
   }
   if (status !== "pending" && status !== "running") {

@@ -93,7 +93,7 @@ export const JIRA_INCREMENTAL_SYNC_OVERLAP_MS = 300_000;
 const MAX_SEARCH_REQUESTS = 500;
 const MAX_COMMENT_PAGES_PER_ITEM = 10;
 const MAX_PAGE_TOKEN_CHARS = 4_096;
-const NUMERIC_ID_PATTERN = /^[0-9]{1,32}$/u;
+const NUMERIC_ID_PATTERN = /^\d{1,32}$/u;
 
 const JIRA_API_ROOT = "/rest/api/3/";
 // The full sync fetch list: the shared citation-metadata fields (#2243/#2248 parity source)

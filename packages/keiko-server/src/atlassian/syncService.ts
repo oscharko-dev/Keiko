@@ -539,17 +539,28 @@ async function applyCompletedOutcome(
   return { apply, reason: failureReasonsOf(outcome)[0] };
 }
 
+interface UnappliedRunMapping {
+  readonly outcome: "cancelled" | "partial" | "failed";
+  readonly reason: AtlassianSyncFailureReason | undefined;
+}
+
+// A non-completed fetch outcome maps onto the applied-run vocabulary: a cancelled run stays
+// cancelled (no reason), a truncated run becomes a partial apply, and a failed run stays failed —
+// the latter two carry the fetch failure reason.
+function mapUnappliedRun(
+  outcome: Exclude<AtlassianSyncFetchOutcome, { status: "completed" }>,
+): UnappliedRunMapping {
+  if (outcome.status === "cancelled") return { outcome: "cancelled", reason: undefined };
+  if (outcome.status === "truncated") return { outcome: "partial", reason: outcome.reason };
+  return { outcome: "failed", reason: outcome.reason };
+}
+
 function recordUnappliedOutcome(
   context: SyncRunContext,
   store: KnowledgeStore,
   outcome: Exclude<AtlassianSyncFetchOutcome, { status: "completed" }>,
 ): FinalizedRun {
-  const mapping =
-    outcome.status === "cancelled"
-      ? { outcome: "cancelled" as const, reason: undefined }
-      : outcome.status === "truncated"
-        ? { outcome: "partial" as const, reason: outcome.reason }
-        : { outcome: "failed" as const, reason: outcome.reason };
+  const mapping = mapUnappliedRun(outcome);
   const apply = recordUnappliedConnectorSyncRun(
     {
       store,
@@ -644,12 +655,9 @@ async function finalizeRun(
         ? await applyCompletedOutcome(context, opened.store, outcome)
         : recordUnappliedOutcome(context, opened.store, outcome);
     const completedAt = context.now();
+    const unappliedReasons = result.reason === undefined ? [] : [result.reason];
     const failureReasons =
-      outcome.status === "completed"
-        ? failureReasonsOf(outcome)
-        : result.reason === undefined
-          ? []
-          : [result.reason];
+      outcome.status === "completed" ? failureReasonsOf(outcome) : unappliedReasons;
     context.job.state = terminalJobState(
       context.job,
       progressWithIndexing(outcome.progress, result.apply),

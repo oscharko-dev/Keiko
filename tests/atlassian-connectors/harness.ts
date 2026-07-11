@@ -136,11 +136,17 @@ export function createInMemoryCustody(
   const { custody } = createAtlassianCredentialCustody({
     vault: {
       get: (key): string | undefined => vault.get(key),
-      set: (key, secret): void => void vault.set(key, secret),
-      delete: (key): void => void vault.delete(key),
+      set: (key, secret): void => {
+        vault.set(key, secret);
+      },
+      delete: (key): void => {
+        vault.delete(key);
+      },
     },
     metadataStore: {
-      insert: (entry): void => void metadata.set(entry.authRef, entry),
+      insert: (entry): void => {
+        metadata.set(entry.authRef, entry);
+      },
       get: (authRef): AtlassianCredentialMetadata | undefined => metadata.get(authRef),
       list: (): readonly AtlassianCredentialMetadata[] => [...metadata.values()],
       delete: (authRef): boolean => metadata.delete(authRef),
@@ -214,7 +220,9 @@ export function createConnectorServerHarness(
     env: {},
     redactor: buildRedactor({}),
     diagnostics: {
-      record: (record: ServerDiagnosticRecord): void => void diagnostics.push(record),
+      record: (record: ServerDiagnosticRecord): void => {
+        diagnostics.push(record);
+      },
     },
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
@@ -367,7 +375,12 @@ export function resetConnectorRegistries(): void {
   atlassianActionApprovalRegistry.reset();
 }
 
-const TERMINAL_STATUSES: readonly string[] = ["succeeded", "partial", "failed", "cancelled"];
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  "succeeded",
+  "partial",
+  "failed",
+  "cancelled",
+]);
 
 // Condition-await a sync job to its terminal state (never a sleep): the job runs in the background
 // (`setImmediate`) and this polls the in-process registry until it settles.
@@ -375,7 +388,7 @@ export async function awaitJobTerminal(jobId: string): Promise<AtlassianSyncJobS
   await vi.waitFor(
     () => {
       const job = atlassianSyncJobRegistry.get(jobId);
-      if (job === undefined || !TERMINAL_STATUSES.includes(job.state.status)) {
+      if (job === undefined || !TERMINAL_STATUSES.has(job.state.status)) {
         throw new Error(`job ${jobId} not terminal`);
       }
     },

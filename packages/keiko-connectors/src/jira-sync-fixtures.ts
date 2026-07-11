@@ -111,7 +111,7 @@ function fullIssueFields(issue: JiraFixtureIssue): Record<string, unknown> {
     summary: issue.summary,
     updated: issue.updated,
     ...(issue.descriptionAdf === undefined ? {} : { description: issue.descriptionAdf }),
-    ...(issue.extraFields ?? {}),
+    ...issue.extraFields,
   };
 }
 

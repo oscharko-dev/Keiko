@@ -53,8 +53,8 @@ function useApprovals(client: ApprovalsClient): ApprovalsController {
   const [error, setError] = useState<string | undefined>();
   const [outcomes, setOutcomes] = useState<ReadonlyMap<string, Outcome>>(new Map());
   const [busyId, setBusyId] = useState<string | undefined>();
-  const fail = (caught: unknown): void => {
-    setError(caught instanceof ApiError ? caught.message : t("atlassianConnectors.retry"));
+  const fail = (error_: unknown): void => {
+    setError(error_ instanceof ApiError ? error_.message : t("atlassianConnectors.retry"));
   };
   const record = (id: string, outcome: Outcome): void => {
     setOutcomes((current) => new Map(current).set(id, outcome));
@@ -66,8 +66,8 @@ function useApprovals(client: ApprovalsClient): ApprovalsController {
       .then((list) => {
         if (active) setApprovals(list);
       })
-      .catch((caught: unknown) => {
-        if (active) fail(caught);
+      .catch((error_: unknown) => {
+        if (active) fail(error_);
       })
       .finally(() => {
         if (active) setLoading(false);

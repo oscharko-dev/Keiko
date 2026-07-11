@@ -155,7 +155,7 @@ describe("enumerate — full id-set walk with token pagination", () => {
     const searchRequests = harness.requests.filter((request) =>
       request.url.includes("/search/jql"),
     );
-    expect(searchRequests.length).toBe(6);
+    expect(searchRequests).toHaveLength(6);
   });
 
   it("stops early with complete=false once the enumeration crosses the lane's item ceiling", async () => {

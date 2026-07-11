@@ -150,7 +150,7 @@ export function parseMarkdownLiteBlocks(input: string): MarkdownLiteParseResult 
   if (input.length > MARKDOWN_LITE_MAX_INPUT_CHARS) {
     return { ok: false, reason: "input-too-large" };
   }
-  const normalized = input.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+  const normalized = input.replaceAll(/\r\n/gu, "\n").replaceAll(/\r/gu, "\n");
   if (FORBIDDEN_CONTROL_PATTERN.test(normalized)) {
     return { ok: false, reason: "control-characters" };
   }

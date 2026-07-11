@@ -26,7 +26,9 @@ describe("VerifyConnectionStatus", () => {
       expect(el).toHaveAttribute("data-status", status);
       expect(el).toHaveAttribute("data-tone", expected?.tone ?? "");
       expect(el).toHaveTextContent(expected?.label ?? "");
-      expect(el).toHaveAttribute("role", "status");
+      // `<output>` carries an implicit role="status" (a polite live region) — assert the a11y role
+      // resolves rather than a literal attribute.
+      expect(screen.getByRole("status")).toBe(el);
       seen.add(el.textContent ?? "");
       unmount();
     }

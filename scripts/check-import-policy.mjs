@@ -22,8 +22,42 @@ const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
 // HTTP client packages, and @oscharko-dev/keiko-model-gateway in EVERY import form (a type-only
 // gateway import would still couple the leaf to the gateway surface ADR-0128 D1 rules out).
 // Mirrors adr-0019-trust-9-local-knowledge-no-egress.
-const CONNECTORS_FORBIDDEN_CAPABILITY_PATTERN =
-  /^(fetch$|node:(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|node:fs($|\/)|fs($|\/)|undici($|\/)|node-fetch($|\/)|axios($|\/)|got($|\/)|@oscharko-dev\/keiko-model-gateway($|\/))/;
+const CONNECTORS_NETWORK_CORE_MODULES = [
+  "child_process",
+  "http",
+  "https",
+  "http2",
+  "net",
+  "tls",
+  "dgram",
+  "dns",
+  "worker_threads",
+];
+// Forbidden only as an EXACT specifier (bare or `node:`-prefixed): `fetch` and every Node network
+// core module. A deeper subpath of these is not a core-module import.
+const CONNECTORS_FORBIDDEN_EXACT = new Set([
+  "fetch",
+  ...CONNECTORS_NETWORK_CORE_MODULES,
+  ...CONNECTORS_NETWORK_CORE_MODULES.map((name) => `node:${name}`),
+]);
+// Forbidden as the specifier itself OR any subpath beneath it (`prefix` or `prefix/...`): node:fs
+// (incl. fs/promises), the bare fs, the usual HTTP client packages, and the model gateway.
+const CONNECTORS_FORBIDDEN_PREFIXES = [
+  "node:fs",
+  "fs",
+  "undici",
+  "node-fetch",
+  "axios",
+  "got",
+  "@oscharko-dev/keiko-model-gateway",
+];
+
+function isConnectorsForbiddenCapability(specifier) {
+  if (CONNECTORS_FORBIDDEN_EXACT.has(specifier)) return true;
+  return CONNECTORS_FORBIDDEN_PREFIXES.some(
+    (prefix) => specifier === prefix || specifier.startsWith(`${prefix}/`),
+  );
+}
 
 // GEN-PERF-CLI-001 — the CLI barrel is evaluated on every `keiko` invocation (the
 // root bin imports it), so keiko-cli modules must not STATICALLY value-import the
@@ -95,7 +129,7 @@ const IMPORT_POLICY_RULES = [
       mode === "fixtures"
         ? path.startsWith(`${FIXTURE_ROOT}/connectors-no-egress/`)
         : path.startsWith("packages/keiko-connectors/src/"),
-    matchesSpecifier: (specifier) => CONNECTORS_FORBIDDEN_CAPABILITY_PATTERN.test(specifier),
+    matchesSpecifier: (specifier) => isConnectorsForbiddenCapability(specifier),
   },
   {
     name: "adr-0112-provider-runtime-no-internal-bypass",
