@@ -39,6 +39,24 @@ macOS arm64 and macOS x64 have the same release-blocking importance. A release i
 portable-complete when either macOS architecture is missing, unsigned, unnotarized where required,
 or not covered by the same launch/setup verification.
 
+### Verifying a downloaded artifact
+
+Every stable release archive and its SBOM (`<platform-target>-sbom.cdx.json`, also published as a
+release asset) carry a GitHub Artifact Attestation in addition to the platform code signature. An
+operator can verify a downloaded file independently of Keiko's own release tooling with the
+[GitHub CLI](https://cli.github.com/):
+
+```console
+gh attestation verify keiko-windows-x64.zip --repo oscharko-dev/Keiko
+gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko
+```
+
+A successful verification proves the file was built by the recorded `portable-assets` workflow run
+at the recorded commit, without needing to trust anything other than GitHub's Sigstore-backed
+attestation service. This is independent of, and in addition to, the Authenticode/notarization
+signature already required for the file to launch (see [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
+Attestation verification is optional; it is not part of the managed setup journey below.
+
 ## Managed Setup
 
 The first launch is a bootstrap launch. It validates the payload, copies Keiko into a stable
