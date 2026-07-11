@@ -1,0 +1,95 @@
+{
+  "issue": 2075,
+  "assets": {
+    "keiko-tokens.css": {
+      "identityBytes": 20112,
+      "gzipBytes": 5096,
+      "brotliBytes": 4223,
+      "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76"
+    },
+    "keiko-semantic-tokens.css": {
+      "identityBytes": 16141,
+      "gzipBytes": 4302,
+      "brotliBytes": 3556,
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
+    },
+    "maintainer-ui.css": {
+      "identityBytes": 9087,
+      "gzipBytes": 1963,
+      "brotliBytes": 1659,
+      "sha256": "f9090dc53eb6d20c680827a285556ade1421588936529e3b85f2a02c9d758e44"
+    },
+    "maintainer-ui.html": {
+      "identityBytes": 1655,
+      "gzipBytes": 716,
+      "brotliBytes": 550,
+      "sha256": "3f497a3754ae9876169d2ab04586093110742360dd09ad908288b483829e57e1"
+    },
+    "maintainer-ui.js": {
+      "identityBytes": 12672,
+      "gzipBytes": 3736,
+      "brotliBytes": 3227,
+      "sha256": "9ef8dfb858ac2653d26969a8d069072670a5c48889278cfc3d39c0c3ed3d2fb4"
+    },
+    "maintainer-ui-copy.js": {
+      "identityBytes": 6718,
+      "gzipBytes": 2275,
+      "brotliBytes": 1964,
+      "sha256": "09ea41a53db52f3ae303fc7b2217af4176600e260319b4c357e0a55c4f4c4374"
+    },
+    "maintainer-ui-dom.js": {
+      "identityBytes": 3891,
+      "gzipBytes": 1378,
+      "brotliBytes": 1152,
+      "sha256": "a67128ee2fadec685e517de7785448ad9c25c3202dce35930a068765ca2ed4b4"
+    }
+  },
+  "screenshots": [
+    "01-dark-desktop-detail-xss.png",
+    "02-light-desktop-success.png",
+    "03-dark-high-contrast.png",
+    "04-light-high-contrast.png",
+    "05-forced-colors.png",
+    "06-reduced-motion.png",
+    "07-de-mobile-empty-forced-colors.png",
+    "08-de-unauthenticated.png",
+    "09-forbidden-error.png",
+    "10-cas-conflict-warning.png",
+    "11-rate-limited.png",
+    "12-dependency-unavailable.png",
+    "13-audit.png",
+    "14-private-security-active-hold.png",
+    "15-expired-hold-cleanup.png",
+    "16-native-validation-error.png",
+    "17-submitting-busy.png",
+    "18-loading.png",
+    "19-filtered-empty.png",
+    "20-stale-detail-not-found.png",
+    "21-private-security-item.png"
+  ],
+  "declaredStates": [
+    "01-dark-desktop-detail-xss",
+    "02-light-desktop-success",
+    "03-dark-high-contrast",
+    "04-light-high-contrast",
+    "05-forced-colors",
+    "06-reduced-motion",
+    "07-de-mobile-empty-forced-colors",
+    "08-de-unauthenticated",
+    "09-forbidden-error",
+    "10-cas-conflict-warning",
+    "11-rate-limited",
+    "12-dependency-unavailable",
+    "13-audit",
+    "14-private-security-active-hold",
+    "15-expired-hold-cleanup",
+    "16-native-validation-error",
+    "17-submitting-busy",
+    "18-loading",
+    "19-filtered-empty",
+    "20-stale-detail-not-found",
+    "21-private-security-item"
+  ],
+  "cspBypassed": false,
+  "result": "PASS"
+}

@@ -1,0 +1,379 @@
+/* ============================================================
+   keiko-semantic-tokens.css
+   ------------------------------------------------------------
+   The middle + top of Keiko's three-tier token architecture.
+
+     1. PRIMITIVES   keiko-tokens.css   (raw oklch, shadows, radius)
+     2. SCALES       this file          (space · motion · z · opacity · blur · weight · leading)
+     3. SEMANTIC     this file          (background.* · text.* · action.* · feedback.* · focus …)
+     4. COMPONENT    this file          (button.* · input.* · card.* · ai.* · table.* · nav.*)
+
+   Every semantic + component token RESOLVES to a primitive from
+   keiko-tokens.css. Because the primitives already redefine themselves
+   for [data-theme="light"], prefers-contrast / [data-hc="more"], and
+   forced-colors, these aliases inherit all three modes automatically —
+   no per-mode duplication, nothing to keep in sync.
+
+   Naming: dot-paths are written with hyphens in CSS custom-property
+   form, e.g.  background.primary  ->  --background-primary
+   Load AFTER keiko-tokens.css, BEFORE ds.css / components.css.
+   ============================================================ */
+
+:root {
+  /* ───────────────────────── SCALE · SPACING ─────────────────────────
+     2-based rhythm. Mirrors Foundations → Spacing 1:1. Mode-independent. */
+  --space-0: 0;
+  --space-1: 2px; /* hairline insets */
+  --space-2: 4px; /* icon-to-icon in a cluster */
+  --space-3: 6px; /* chip / small-button padding */
+  --space-4: 8px; /* default gap between related elements */
+  --space-5: 12px; /* list-row padding, menu items */
+  --space-6: 14px; /* card inner padding, composer */
+  --space-7: 18px; /* gap between cards */
+  --space-8: 24px; /* dot-grid pitch · block spacing */
+  --space-9: 32px; /* sub-section separation */
+  --space-10: 48px; /* section separation */
+  --space-12: 64px;
+  --space-16: 96px;
+
+  /* ───────────────────────── SCALE · RADIUS (alias) ──────────────────
+     Primitives own the values; these give a semantic name + the pill. */
+  --radius-pill: 999px;
+  --radius-control: var(--radius-sm); /* chips, inputs, buttons, menu items */
+  --radius-surface: var(--radius); /* cards, windows, panels, popovers */
+  --radius-floating: var(--radius-lg); /* composer, sheets */
+
+  /* ───────────────────────── SCALE · TYPE WEIGHT ─────────────────────── */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-strong: 650; /* the brand/title weight used in chrome */
+
+  /* ───────────────────────── SCALE · LINE-HEIGHT ─────────────────────── */
+  --leading-tight: 1.1; /* display / large headings */
+  --leading-snug: 1.3; /* headings, labels */
+  --leading-normal: 1.5; /* body, long-form */
+  --leading-relaxed: 1.65; /* code blocks */
+
+  /* ───────────────────────── SCALE · TYPE SIZE ───────────────────────
+     Role-named ramp. 11px is the documented floor; nothing smaller ships. */
+  --text-caption: 11px;
+  --text-label: 12px;
+  --text-body-sm: 13px;
+  --text-body: 14px;
+  --text-body-lg: 15px;
+  --text-heading: 17px;
+  --text-title: 22px;
+  --text-title-lg: 28px;
+  --text-display-sm: 36px; /* fills the gap between title-lg and display */
+  --text-display: 50px;
+
+  /* ───────────────────────── SCALE · OPACITY ─────────────────────────── */
+  --opacity-disabled: 0.42; /* matches measured AA-safe dim floor */
+  --opacity-muted: 0.64;
+  --opacity-hover-veil: 0.06;
+  --opacity-scrim: 0.55; /* modal backdrop alpha */
+  --opacity-scrim-strong: 0.72;
+
+  /* ───────────────────────── SCALE · BLUR ────────────────────────────── */
+  --blur-sm: 4px;
+  --blur-md: 12px; /* popover / sheet backdrop */
+  --blur-lg: 28px; /* modal scrim glass */
+
+  /* ───────────────────────── SCALE · MOTION ──────────────────────────
+     Mirrors Motion → Durations. Reduced-motion is handled globally in
+     keiko-tokens.css (@media prefers-reduced-motion). */
+  --dur-instant: 80ms; /* press / colour shift */
+  --dur-fast: 120ms; /* hover, small state */
+  --dur-base: 180ms; /* entrances, lift */
+  --dur-slow: 260ms; /* overlays, sheets */
+  --dur-flow: 1100ms; /* the connection data-flow dash */
+
+  --ease-standard: cubic-bezier(0.2, 0, 0.2, 1); /* default in/out */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* entrances settle */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1); /* exits accelerate */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* toggles, playful lift */
+
+  /* ───────────────────────── SCALE · Z-INDEX ─────────────────────────
+     Named layers, no magic numbers. */
+  --z-base: 0;
+  --z-canvas-window: 10;
+  --z-canvas-window-active: 20;
+  --z-rail: 40;
+  --z-nav: 50;
+  --z-sticky: 80;
+  --z-dropdown: 100;
+  --z-overlay: 200; /* scrim + sheets/drawers */
+  --z-modal: 300;
+  --z-popover: 400;
+  --z-toast: 500;
+  --z-tooltip: 600;
+
+  /* ───────────────────────── SCALE · BREAKPOINTS ─────────────────────
+     Named viewport thresholds. 900px is the existing layout reflow; the
+     rest frame mobile→ultrawide. (Custom properties can't drive @media
+     conditions directly — these are the canonical reference the media
+     queries mirror, so the numbers live in one place.) */
+  --bp-xs: 480px;
+  --bp-sm: 640px;
+  --bp-md: 768px;
+  --bp-lg: 900px;
+  --bp-xl: 1200px;
+  --bp-2xl: 1536px;
+
+  /* ───────────────────────── SCALE · DENSITY ─────────────────────────
+     Comfortable is the default; [data-density="compact"] (end of file)
+     tightens control sizing for data-dense screens. Components read these,
+     so one attribute reflows the whole surface. */
+  --control-height: 34px;
+  --control-height-sm: 28px;
+  --control-height-lg: 40px;
+  --control-pad-x: 14px;
+  --row-pad-y: 9px;
+  --row-pad-x: 12px;
+
+  /* ════════════════════════════════════════════════════════════════════
+     SEMANTIC TOKENS  — the layer product code should consume.
+     All resolve to mode-aware primitives, so they are correct in
+     dark · light · dark+HC · light+HC without restatement.
+     ════════════════════════════════════════════════════════════════════ */
+
+  /* background — the room the app sits in */
+  --background-primary: var(--bg);
+  --background-secondary: var(--surface);
+
+  /* surface — raised material */
+  --surface-primary: var(--card);
+  --surface-secondary: var(--card-2);
+  --surface-elevated: var(--card-2);
+  --surface-inset: var(--inset);
+  --surface-overlay: var(--surface);
+  --surface-accent-subtle: var(
+    --accent-dim
+  ); /* tinted accent fill — badges, selected rows, rail active */
+  --surface-accent-glow: var(--accent-glow); /* focus ring fill, selection */
+
+  /* text */
+  --text-primary: var(--fg);
+  --text-secondary: var(--fg-muted);
+  --text-tertiary: var(--fg-dim);
+  --text-faint: var(--fg-faint);
+  --text-disabled: var(--fg-faint); /* pair with --opacity-disabled */
+  --text-inverse: var(--ink-inverse);
+  --text-accent: var(--accent-text);
+  --text-on-accent: var(--ink-inverse); /* text sitting on the green fill */
+
+  /* border */
+  --border-subtle: var(--line-soft);
+  --border-default: var(--line);
+  --border-strong: var(--line-strong);
+  --border-accent: var(--accent-line);
+
+  /* action — interactive intent */
+  --action-primary: var(--accent);
+  --action-primary-text: var(--accent-text);
+  --action-secondary-surface: var(--card);
+  --action-secondary-border: var(--line);
+  --action-tertiary-text: var(--fg-muted);
+
+  /* feedback — status, always paired with icon + word in components */
+  --feedback-success: var(--ok);
+  --feedback-warning: var(--warn);
+  --feedback-danger: var(--danger);
+  --feedback-info: var(--info);
+  --feedback-success-surface: color-mix(in oklch, var(--ok) 12%, transparent);
+  --feedback-warning-surface: color-mix(in oklch, var(--warn) 12%, transparent);
+  --feedback-danger-surface: color-mix(in oklch, var(--danger) 12%, transparent);
+  --feedback-info-surface: color-mix(in oklch, var(--info) 12%, transparent);
+
+  /* focus / selection */
+  --focus-ring: var(--accent-text);
+  --focus-width: var(--focus-w);
+  --selection-surface: var(--accent-glow);
+
+  /* overlays */
+  --overlay-scrim: oklch(0 0 0 / var(--opacity-scrim));
+  --overlay-scrim-strong: oklch(0 0 0 / var(--opacity-scrim-strong));
+
+  /* skeleton / loading */
+  --skeleton-base: var(--inset);
+  --skeleton-highlight: var(--card-2);
+
+  /* ════════════════════════════════════════════════════════════════════
+     COMPONENT TOKENS  — one resolved name per component decision.
+     Representative coverage of the highest-traffic components; new
+     components follow the same pattern (component.part.property.state).
+     ════════════════════════════════════════════════════════════════════ */
+
+  /* Button · primary (the single green fill) */
+  --button-primary-surface: var(--accent);
+  --button-primary-surface-hover: var(--accent-bright);
+  --button-primary-text: var(--ink-inverse);
+  --button-primary-disabled-surface: var(--card-2);
+  --button-primary-disabled-text: var(--fg-faint);
+
+  /* Button · secondary (bordered) */
+  --button-secondary-surface: var(--card);
+  --button-secondary-surface-hover: var(--card-2);
+  --button-secondary-border: var(--line);
+  --button-secondary-text: var(--fg);
+
+  /* Button · ghost / destructive accents */
+  --button-ghost-surface-hover: var(--inset);
+  --button-danger-surface: var(--danger);
+  --button-danger-text: var(--ink-inverse);
+
+  /* Input / field */
+  --input-surface: var(--inset);
+  --input-border: var(--line);
+  --input-border-hover: var(--line-strong);
+  --input-border-focus: var(--accent-line);
+  --input-border-error: var(--danger);
+  --input-text: var(--fg);
+  --input-placeholder: var(--fg-muted);
+  --input-ring-focus: var(--accent-glow);
+
+  /* Card / window */
+  --card-surface: var(--card);
+  --card-border: var(--line);
+  --card-shadow: var(--shadow-card);
+  --card-shadow-raised: var(--shadow-pop);
+
+  /* Modal / sheet / drawer */
+  --modal-surface: var(--card);
+  --modal-border: var(--line);
+  --modal-backdrop: var(--overlay-scrim);
+  --modal-shadow: var(--shadow-pop);
+
+  /* Popover / tooltip / menu */
+  --popover-surface: var(--surface);
+  --popover-border: var(--line);
+  --popover-shadow: var(--shadow-pop);
+  --tooltip-surface: var(--card-2);
+  --tooltip-text: var(--fg);
+  --menu-item-surface-hover: var(--card);
+
+  /* Toast / banner */
+  --toast-surface: var(--card);
+  --toast-border: var(--line);
+  --toast-shadow: var(--shadow-pop);
+
+  /* AI / agent surfaces */
+  --ai-response-surface: var(--surface);
+  --ai-response-border: var(--line-soft);
+  --ai-thinking-indicator: var(--accent-text);
+  --ai-streaming-cursor: var(--accent);
+  --ai-source-border: var(--accent-line);
+  --ai-source-surface: var(--accent-dim);
+  --ai-tool-surface: var(--inset);
+  --ai-tool-border: var(--line);
+  --ai-confidence-high: var(--ok);
+  --ai-confidence-medium: var(--warn);
+  --ai-confidence-low: var(--danger);
+  --ai-permission-surface: var(--feedback-warning-surface);
+  --ai-permission-border: color-mix(in oklch, var(--warn) 40%, transparent);
+
+  /* Table / data */
+  --table-header-text: var(--fg-faint);
+  --table-header-surface: var(--card-2);
+  --table-row-border: var(--line-soft);
+  --table-row-surface-hover: var(--card);
+  --table-row-surface-selected: var(--accent-dim);
+  --table-foot-surface: var(--card-2);
+  --table-sort-indicator: var(--accent-text);
+  --table-num-text: var(--fg);
+
+  /* Navigation */
+  --nav-surface: var(--surface);
+  --nav-item-text: var(--fg-muted);
+  --nav-item-text-active: var(--fg);
+  --nav-item-surface-active: var(--card);
+  --nav-item-indicator: var(--accent-text);
+
+  /* Checkbox / radio */
+  --checkbox-surface: var(--inset);
+  --checkbox-border: var(--line);
+  --checkbox-surface-selected: var(--accent-solid);
+  --checkbox-mark: var(--accent-solid-ink);
+  --radio-surface: var(--inset);
+  --radio-border: var(--line);
+  --radio-border-selected: var(--accent);
+  --radio-dot: var(--accent-solid);
+
+  /* Slider */
+  --slider-track: var(--inset);
+  --slider-fill: var(--accent-solid);
+  --slider-thumb: var(--accent-bright);
+  --slider-thumb-ring: var(--accent-line);
+  --slider-thumb-border: var(--bg);
+
+  /* Stepper / number */
+  --stepper-surface: var(--card);
+  --stepper-border: var(--line);
+  --stepper-button-text: var(--fg-muted);
+  --stepper-button-surface-hover: var(--card-2);
+  --stepper-input-surface: var(--inset);
+
+  /* Combobox */
+  --combobox-surface: var(--card);
+  --combobox-border: var(--line);
+  --combobox-list-surface: var(--surface);
+  --combobox-list-border: var(--line);
+  --combobox-option-surface-hover: var(--card);
+  --combobox-option-selected-mark: var(--accent-text);
+
+  /* Tag input */
+  --tag-surface: var(--accent-dim);
+  --tag-border: var(--accent-line);
+  --tag-text: var(--accent-on-tint);
+
+  /* File upload */
+  --file-dropzone-surface: var(--inset);
+  --file-dropzone-border: var(--line);
+  --file-dropzone-border-active: var(--accent-line);
+  --file-progress: var(--accent);
+  --file-item-surface: var(--card);
+
+  /* Date field */
+  --date-surface: var(--inset);
+  --date-border: var(--line);
+  --date-segment-surface-active: var(--accent-dim);
+  --date-segment-text-active: var(--accent-text);
+
+  /* Breadcrumb / pagination / context menu / steps */
+  --breadcrumb-text: var(--fg-muted);
+  --breadcrumb-text-current: var(--fg);
+  --breadcrumb-surface-hover: var(--card-2);
+  --pagination-text: var(--fg-muted);
+  --pagination-surface-hover: var(--card-2);
+  --pagination-surface-current: var(--accent-dim);
+  --pagination-text-current: var(--accent-on-tint);
+  --pagination-border-current: var(--accent-line);
+  --tab-underline-indicator: var(--accent-text);
+  --context-item-text: var(--fg-muted);
+  --context-item-surface-hover: var(--card);
+  --context-item-text-danger: var(--danger);
+  --step-dot-surface: var(--card);
+  --step-dot-border: var(--line);
+  --step-dot-surface-done: var(--accent-solid);
+  --step-dot-text-done: var(--accent-solid-ink);
+  --step-dot-border-active: var(--accent);
+  --step-line: var(--line);
+  --step-line-done: var(--accent);
+
+  /* Data-viz structure (palette lives in keiko-dataviz.css) */
+  --viz-gridline: var(--line-soft);
+  --viz-axis-text: var(--fg-faint);
+  --viz-tooltip-surface: var(--card-2);
+  --viz-tooltip-value: var(--fg);
+}
+
+/* ───────────── density · compact — tightened control sizing ───────────── */
+[data-density="compact"] {
+  --control-height: 30px;
+  --control-height-sm: 24px;
+  --control-height-lg: 34px;
+  --control-pad-x: 11px;
+  --row-pad-y: 6px;
+  --row-pad-x: 10px;
+}

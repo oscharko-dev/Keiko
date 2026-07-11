@@ -7,7 +7,7 @@ import {
   prepareFeedbackReportV1,
   type PreparedFeedbackReportV1,
 } from "@oscharko-dev/keiko-security/feedback-report";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { startHostedFeedbackIntake } from "./runtime.js";
 import type { PgClientLike, PgPoolLike, PgQueryResult } from "./postgres.js";
 
@@ -72,6 +72,33 @@ function env(): Record<string, string> {
   };
 }
 
+function maintainerEnv(): Record<string, string> {
+  return {
+    ...env(),
+    KEIKO_FEEDBACK_MAINTAINER_ENABLED: "true",
+    KEIKO_FEEDBACK_MAINTAINER_HOST: "127.0.0.1",
+    KEIKO_FEEDBACK_MAINTAINER_PORT: "12347",
+    KEIKO_FEEDBACK_MAINTAINER_PUBLIC_ORIGIN: "https://maintainer.example",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_ISSUER: "https://idp.example/tenant/",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_CLIENT_ID: "keiko",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_CLIENT_SECRET_FILE: "/run/secrets/oidc",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_CLIENT_AUTH_METHOD: "client_secret_basic",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_ID_TOKEN_ALG: "RS256",
+    KEIKO_FEEDBACK_MAINTAINER_OIDC_REDIRECT_URI:
+      "https://maintainer.example/v1/maintainer/auth/callback",
+    KEIKO_FEEDBACK_MAINTAINER_PERMISSION_CLAIM: "groups",
+    KEIKO_FEEDBACK_MAINTAINER_PERMISSION_RULES_JSON: '{"reviewers":["feedback.review"]}',
+    KEIKO_FEEDBACK_MAINTAINER_PERMISSION_POLICY_VERSION: "policy-v1",
+    KEIKO_FEEDBACK_MAINTAINER_LEGAL_HOLD_POLICIES_JSON: "[]",
+    KEIKO_FEEDBACK_MAINTAINER_SESSION_IDLE_MS: "60000",
+    KEIKO_FEEDBACK_MAINTAINER_SESSION_ABSOLUTE_MS: "120000",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_PER_SOURCE_LIMIT: "5",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_GLOBAL_LIMIT: "20",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_WINDOW_MS: "60000",
+    KEIKO_FEEDBACK_MAINTAINER_LOGIN_CONCURRENCY_LIMIT: "4",
+  };
+}
+
 function prepared(): PreparedFeedbackReportV1 {
   const result = prepareFeedbackReportV1({
     schemaVersion: "1",
@@ -96,17 +123,14 @@ class RuntimeClient implements PgClientLike {
   receiptExpiry: Date | undefined;
   failPurge = false;
   failAttempt = false;
+  failMaintainer = false;
   query<Row extends object>(
     text: string,
     values: readonly unknown[] = [],
   ): Promise<PgQueryResult<Row>> {
     this.calls.push(text);
-    if (this.failPurge && text.startsWith("DELETE FROM feedback_receipts")) {
-      return Promise.reject(new Error("database unavailable"));
-    }
-    if (this.failAttempt && text.includes("feedback_abuse_buckets")) {
-      return Promise.reject(new Error("database unavailable"));
-    }
+    const failure = this.failure(text);
+    if (failure !== undefined) return Promise.reject(failure);
     const selected = this.selected<Row>(text, values);
     if (selected !== undefined) return selected;
     if (text.startsWith("INSERT INTO feedback_receipts")) {
@@ -122,6 +146,17 @@ class RuntimeClient implements PgClientLike {
             ] as Row[]),
       );
     return result([{} as Row]);
+  }
+  private failure(text: string): Error | undefined {
+    if (this.failPurge && text.startsWith("DELETE FROM feedback_receipts")) {
+      return new Error("database unavailable");
+    }
+    if (this.failAttempt && text.includes("feedback_abuse_buckets")) {
+      return new Error("database unavailable");
+    }
+    return this.failMaintainer && text.includes("feedback_oidc_transactions")
+      ? new Error("PRIVATE_DATABASE_SENTINEL")
+      : undefined;
   }
   private selected<Row extends object>(
     text: string,
@@ -146,6 +181,137 @@ function result<Row extends object>(rows: readonly Row[]): Promise<PgQueryResult
 }
 
 describe("hosted production runtime composition", () => {
+  it("starts and stops three isolated listeners when the maintainer plane is enabled", async () => {
+    const client = new RuntimeClient();
+    const origins = new Map<number, string>();
+    let closed = 0;
+    let ended = 0;
+    const runtime = await startHostedFeedbackIntake({
+      env: maintainerEnv(),
+      now: () => new Date("2026-07-11T12:00:00Z"),
+      poolFactory: () => ({
+        connect: (): Promise<PgClientLike> => Promise.resolve(client),
+        end: (): Promise<void> => {
+          ended += 1;
+          return Promise.resolve();
+        },
+      }),
+      migrationSources: () =>
+        Promise.resolve([
+          { version: 1, source: "MIGRATION-1" },
+          { version: 2, source: "MIGRATION-2" },
+        ]),
+      maintainerOidcClient: {
+        begin: () =>
+          Promise.resolve({
+            state: "s".repeat(32),
+            nonce: "n".repeat(32),
+            verifier: "v".repeat(43),
+            authorizationUrl: new URL("https://idp.example/authorize"),
+          }),
+        exchange: () => Promise.reject(new Error("not exercised")),
+      },
+      serverFactory: (handler) => {
+        const instance = createServer(handler);
+        return {
+          listen: (port, _host, callback): void => {
+            instance.listen(0, "127.0.0.1", () => {
+              origins.set(
+                port,
+                `http://127.0.0.1:${String((instance.address() as AddressInfo).port)}`,
+              );
+              callback();
+            });
+          },
+          close: (callback): void => {
+            instance.close((error) => {
+              closed += 1;
+              callback(error ?? undefined);
+            });
+          },
+          closeAllConnections: (): void => {
+            instance.closeAllConnections();
+          },
+        };
+      },
+      timer: { setInterval: () => "timer", clearInterval: (): void => undefined },
+    });
+    const intake = origins.get(12345);
+    const management = origins.get(12346);
+    const maintainer = origins.get(12347);
+    if (intake === undefined || management === undefined || maintainer === undefined) {
+      throw new Error("Expected three listeners");
+    }
+    expect((await fetch(`${intake}/v1/maintainer/auth/login`)).status).toBe(404);
+    expect((await fetch(`${management}/v1/maintainer/auth/login`)).status).toBe(404);
+    expect((await fetch(`${maintainer}/v1/feedback/reports`)).status).toBe(404);
+    expect((await fetch(`${maintainer}/live`)).status).toBe(404);
+    expect(
+      (await fetch(`${maintainer}/v1/maintainer/auth/login`, { redirect: "manual" })).status,
+    ).toBe(302);
+    const diagnosticLines: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk): boolean => {
+      diagnosticLines.push(String(chunk));
+      return true;
+    });
+    client.failMaintainer = true;
+    const unavailable = await fetch(`${maintainer}/v1/maintainer/auth/login`, {
+      redirect: "manual",
+    });
+    const correlationId = unavailable.headers.get("x-correlation-id");
+    expect(unavailable.status).toBe(503);
+    expect(correlationId).toEqual(expect.any(String));
+    expect(diagnosticLines).toEqual([
+      `${JSON.stringify({
+        event: "maintainer-failure",
+        category: "dependency-unavailable",
+        correlationId,
+      })}\n`,
+    ]);
+    expect(diagnosticLines.join("")).not.toContain("PRIVATE_DATABASE_SENTINEL");
+    stderr.mockRestore();
+    await runtime.stop();
+    expect(closed).toBe(3);
+    expect(ended).toBe(1);
+  });
+
+  it("rejects a maintainer listener port collision before creating the pool", async () => {
+    const runtimeEnv = maintainerEnv();
+    runtimeEnv.KEIKO_FEEDBACK_MAINTAINER_PORT = runtimeEnv.KEIKO_FEEDBACK_PORT;
+    let pools = 0;
+    await expect(
+      startHostedFeedbackIntake({
+        env: runtimeEnv,
+        poolFactory: () => {
+          pools += 1;
+          throw new Error("must not create pool");
+        },
+      }),
+    ).rejects.toThrow("Invalid maintainer port");
+    expect(pools).toBe(0);
+  });
+
+  it("rejects maintainer startup with the legacy v1-only migration adapter before resources", async () => {
+    let pools = 0;
+    let listeners = 0;
+    await expect(
+      startHostedFeedbackIntake({
+        env: maintainerEnv(),
+        migrationSource: () => Promise.resolve("MIGRATION-1"),
+        poolFactory: () => {
+          pools += 1;
+          throw new Error("must not create pool");
+        },
+        serverFactory: () => {
+          listeners += 1;
+          throw new Error("must not create listener");
+        },
+      }),
+    ).rejects.toThrow("requires ordered migration sources");
+    expect(pools).toBe(0);
+    expect(listeners).toBe(0);
+  });
+
   it("routes POST and receipt GET through PostgreSQL, runs retention, and shuts down", async () => {
     const client = new RuntimeClient();
     const runtimeEnv = env();

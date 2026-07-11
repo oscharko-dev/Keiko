@@ -25,6 +25,33 @@ export const KEIKO_CONTRACTS_VERSION = "0.2.14" as const;
 // with the root package.json "version" field as part of every release.
 export const KEIKO_PRODUCT_VERSION = "0.2.14" as const;
 
+export * from "./feedback-maintainer.js";
+
+export type {
+  FeedbackApprovalBindingV1,
+  FeedbackLegalHoldPolicyKeyV1,
+  FeedbackRejectionReasonV1,
+  FeedbackReviewActionV1,
+  FeedbackReviewActorV1,
+  FeedbackReviewStateV1,
+  FeedbackReviewTransitionDecisionV1,
+} from "./feedback-review.js";
+export {
+  FEEDBACK_REVIEW_ACTOR_ISSUER_MAX_LENGTH_V1,
+  FEEDBACK_REVIEW_ACTOR_SUBJECT_MAX_LENGTH_V1,
+  FEEDBACK_REVIEW_PERMISSION_POLICY_MAX_LENGTH_V1,
+  FEEDBACK_LEGAL_HOLD_POLICY_KEY_MAX_COUNT_V1,
+  FEEDBACK_LEGAL_HOLD_POLICY_KEY_MAX_LENGTH_V1,
+  FEEDBACK_REJECTION_REASONS_V1,
+  FEEDBACK_REVIEW_ACTIONS_V1,
+  FEEDBACK_REVIEW_STATES_V1,
+  feedbackReviewTransitionV1,
+  isFeedbackLegalHoldPolicyAllowlistV1,
+  isFeedbackLegalHoldPolicyKeyV1,
+  isFeedbackReviewActionV1,
+  isFeedbackReviewActorV1,
+} from "./feedback-review.js";
+
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
 

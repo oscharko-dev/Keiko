@@ -16,7 +16,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b tsconfig.json",
+    "build": "tsc -b tsconfig.json && node scripts/copy-maintainer-assets.mjs",
     "typecheck": "tsc -b tsconfig.json",
     "test": "vitest run"
   },
@@ -24,9 +24,27 @@
     "dist/config.*",
     "dist/crypto.*",
     "dist/file-secret-provider.*",
+    "dist/feedback-review-command.*",
+    "dist/feedback-review-persistence.*",
+    "dist/feedback-review-store.*",
+    "dist/feedback-review-types.*",
+    "dist/feedback-review-query.*",
     "dist/http.*",
     "dist/index.*",
     "dist/main.*",
+    "dist/maintainer-action.*",
+    "dist/maintainer-auth.*",
+    "dist/maintainer-config.*",
+    "dist/maintainer-http.*",
+    "dist/maintainer-http-body.*",
+    "dist/maintainer-http-error.*",
+    "dist/maintainer-http-response.*",
+    "dist/maintainer-login-limiter.*",
+    "dist/maintainer-oidc.*",
+    "dist/maintainer-runtime.*",
+    "dist/maintainer-store.*",
+    "dist/maintainer-ui.*",
+    "dist/migrations.*",
     "dist/postgres-client.*",
     "dist/postgres-live-key-snapshot.*",
     "dist/postgres-retention.*",
@@ -36,9 +54,11 @@
     "dist/proxy.*",
     "dist/runtime-config.*",
     "dist/runtime-key-custody.*",
+    "dist/runtime-timer.*",
     "dist/runtime.*",
     "dist/types.*",
-    "migrations"
+    "migrations",
+    "assets"
   ],
   "sideEffects": false,
   "engines": {
@@ -47,6 +67,7 @@
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.2.14",
     "@oscharko-dev/keiko-security": "0.2.14",
+    "openid-client": "6.8.4",
     "pg": "8.22.0"
   },
   "devDependencies": {

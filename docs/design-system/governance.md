@@ -53,6 +53,7 @@ records whether each family has full, partial, or worked-example coverage agains
 | Data Visualisation             | Ready      | @data-ui  | v0.4                            | #1297       | Done         |
 | Update experience window       | Draft      | @core-ui  | v0.2.11 candidate               | #1696       | In Progress  |
 | Coding Workbench               | Draft      | @agent-ux | v0.2.12 candidate               | #1990-#1994 | In Progress  |
+| Hosted maintainer review queue | Draft      | @core-ui  | v0.2.14 candidate               | #2075       | In Progress  |
 | Legacy 2-way theme toggle      | Deprecated | @core-ui  | migration target: theme-control | replaced    | Done         |
 
 **Draft** is a defined status, but no current component uses it — every shipped family is Ready, and the one
@@ -60,6 +61,19 @@ retired family is Deprecated. Register status labels must agree with the **Keiko
 component shown Ready here must not sit in a board state that contradicts shipped delivery, and vice versa.
 This is a Stop Condition — status labels must not conflict with delivery-board states. When the two disagree,
 reconcile before treating either as authoritative (the data-viz reconciliation above is the worked example).
+
+The hosted maintainer review queue is a deployment-boundary adapter, not a second theme engine. Its npm
+package emits byte-for-byte copies of the canonical `design-system/keiko-tokens.css` and
+`design-system/keiko-semantic-tokens.css`; canonical ownership stays with the Design System. The hosted
+component CSS consumes only those existing semantic/component names and defines no token namespace or visual
+value. The focused hosted-token sync test fails on any copied-byte drift.
+
+Hosted structural-literal exceptions are closed and layout-only: `320px` minimum document width,
+`240px` filter minimum, `720px` table scroll floor, `1200px` content measure, `420px` payload scroll
+ceiling, the `640px` media-query mirror of canonical `--bp-sm` (custom properties cannot drive media
+queries), and `1px` hairline borders. Percentages and zero remain CSS structure. All applicable
+spacing, control height, radius, type, line-height, weight, colour and state values consume Tier-2/3/4
+tokens; the canonical token sheet owns reduced-motion behavior.
 
 ## Per-component documentation template
 

@@ -46,7 +46,10 @@ function secretProvider(fill: number): IntakeSecretProvider {
   return { snapshot: () => ({ active: key, predecessors: [] }) };
 }
 
-export function preparedReport(title = "PostgreSQL integration"): PreparedFeedbackReportV1 {
+export function preparedReport(
+  title = "PostgreSQL integration",
+  diagnostics?: { readonly errors: number; readonly warnings: number; readonly infos: number },
+): PreparedFeedbackReportV1 {
   const prepared = prepareFeedbackReportV1({
     schemaVersion: "1",
     category: "defect",
@@ -59,6 +62,7 @@ export function preparedReport(title = "PostgreSQL integration"): PreparedFeedba
     platform: "Linux",
     featureArea: "model-configuration",
     impact: "Degrades core workflow",
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   });
   if (!prepared.ok) throw new Error("Invalid integration fixture");
   return prepared.value;

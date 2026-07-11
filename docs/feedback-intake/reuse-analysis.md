@@ -14,6 +14,13 @@ governed pull-request gateway. The normative outcomes are in the [privacy contra
 [threat model](threat-model.md), and
 [ADR-0125](../adr/ADR-0125-governed-feedback-intake.md).
 
+The hosted maintainer HTML cannot import the local product `globals.css` across this deployment boundary.
+Its package therefore emits byte-for-byte copies of the canonical Design System token artifacts
+`design-system/keiko-tokens.css` and `design-system/keiko-semantic-tokens.css`. This is a deployment adapter,
+not a fork: canonical ownership remains in `design-system/`, the copy step adds no values or namespace, and a
+focused byte-sync test fails if either emitted file drifts. The hosted component stylesheet consumes only the
+existing semantic/component tokens.
+
 ## Capability map
 
 | Existing capability                            | Evidence                                                                                                                                                                                                                                                                                                                                                                             | Decision                                                                                                                                                                                                                                          | Constraint or required extension                                                                                                                                                                                                                                                                                                             |

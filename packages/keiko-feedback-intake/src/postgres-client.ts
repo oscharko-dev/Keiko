@@ -5,7 +5,7 @@ export function isRetryablePostgresError(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "code" in error &&
-    ["40001", "23505"].includes(String((error as { readonly code?: unknown }).code))
+    ["40001", "40P01", "23505"].includes(String((error as { readonly code?: unknown }).code))
   );
 }
 

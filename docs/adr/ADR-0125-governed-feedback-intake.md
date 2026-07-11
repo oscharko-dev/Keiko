@@ -190,6 +190,13 @@ and its complete transition rules; later children must not invent parallel state
 The OIDC client secret, session/signing keys, storage credentials, and GitHub App material exist only
 in the hosted service's secret boundary. None are accepted by or returned through `keiko-server`.
 
+The hosted maintainer UI cannot import the loopback product's `globals.css` across this deployment
+boundary. Its package emits byte-for-byte copies of canonical `design-system/keiko-tokens.css` and
+`design-system/keiko-semantic-tokens.css`. Canonical ownership remains with the Design System; this
+adapter introduces no namespace, visual value, or theme engine, and a focused byte-sync test fails
+closed on drift. Maintainer responses emit `Strict-Transport-Security: max-age=31536000`; an operator
+edge may strengthen it with `includeSubDomains` only after verifying control of every subdomain.
+
 ### D6 - Rate-limit with a daily keyed identity and retain no raw network address
 
 The service normalizes the client IP into canonical network-order address bytes and derives the abuse
