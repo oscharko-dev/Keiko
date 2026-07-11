@@ -908,20 +908,7 @@ export const DE_MESSAGES = {
   "relationships.health.show": "Graph Health",
   "relationships.create.aria": "Neue Relationship erstellen",
   "relationships.create.button": "+ Neue Relationship",
-  "editorSourceControl.diff.hunkHeader": "Diff-Abschnitt",
-  "editorSourceControl.diff.hunkHeaderWithValue": "Diff-Abschnitt {header}",
-  "editorSourceControl.diff.addedLine": "Hinzugefügte Zeile",
-  "editorSourceControl.diff.deletedLine": "Gelöschte Zeile",
-  "editorSourceControl.diff.contextLine": "Kontextzeile",
-  "editorSourceControl.diff.metadata": "Diff-Metadaten",
-  "editorSourceControl.diff.hunkTruncated":
-    "Dieser Abschnitt ist unvollständig, da der begrenzte Diff gekürzt wurde.",
-  "editorSourceControl.diff.previousPath": " (zuvor {path})",
-  "editorSourceControl.diff.fileStatus": "Datei mit Status {status}",
-  "editorSourceControl.diff.elevatedReview": "Erweiterte Überprüfung",
-  "editorSourceControl.diff.binaryFile": "Binärdatei — kein Text-Diff verfügbar.",
-  "editorSourceControl.diff.fileTruncated":
-    "Dieser Datei-Diff ist unvollständig, da der begrenzte Diff gekürzt wurde.",
+  // Epic #2093 source-control copy is intentionally feature-local so the editor remains lazy.
   // Issue #2150: Workspace.tsx/WindowFrame.tsx changed but added no new
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to

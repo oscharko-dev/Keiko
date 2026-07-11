@@ -8,7 +8,7 @@
 // Behavior is preserved verbatim from ReviewWidget's prior local definitions; only the home moved.
 
 import type { ReactNode } from "react";
-import { useTranslate } from "../../../../../../lib/i18n";
+import type { I18nTranslate } from "../../../../../../lib/i18n";
 import type { ChangedFile } from "../../../../../../lib/types";
 import { langOf, highlightLines } from "./syntaxHighlight";
 import type { Token } from "./syntaxHighlight";
@@ -19,13 +19,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 export function lineKindLabel(kind: DiffLine["kind"]): string {
-  const map: Record<DiffLine["kind"], string> = {
-    add: "Added line",
-    del: "Deleted line",
-    ctx: "Context line",
-    meta: "Diff metadata",
-  };
-  return map[kind];
+  if (kind === "add") return "Added line";
+  if (kind === "del") return "Deleted line";
+  return kind === "ctx" ? "Context line" : "Diff metadata";
 }
 
 interface TokensProps {
@@ -93,29 +89,18 @@ interface DiffHunkViewProps {
 }
 
 export function DiffHunkView({ hunk, lang, labels }: DiffHunkViewProps): ReactNode {
-  const t = useTranslate();
-  const translatedLabels: DiffHunkViewLabels = labels ?? {
-    header: t("editorSourceControl.diff.hunkHeader"),
-    add: t("editorSourceControl.diff.addedLine"),
-    del: t("editorSourceControl.diff.deletedLine"),
-    ctx: t("editorSourceControl.diff.contextLine"),
-    meta: t("editorSourceControl.diff.metadata"),
-  };
   return (
     <>
-      <div
-        className="rv-hunk mono"
-        aria-label={t("editorSourceControl.diff.hunkHeaderWithValue", { header: hunk.header })}
-      >
-        <span className="rv-sr-only">{translatedLabels.header}</span>
+      <div className="rv-hunk mono" aria-label={`Hunk header ${hunk.header}`}>
+        <span className="rv-sr-only">{labels?.header ?? "Hunk header"}</span>
         {hunk.header}
       </div>
       {hunk.lines.map((line, idx) => (
-        <DiffLineView key={idx} line={line} lang={lang} kindLabel={translatedLabels[line.kind]} />
+        <DiffLineView key={idx} line={line} lang={lang} kindLabel={labels?.[line.kind]} />
       ))}
       {hunk.truncated ? (
         <p className="rv-truncated" role="status">
-          {t("editorSourceControl.diff.hunkTruncated")}
+          This hunk is incomplete because the bounded diff was truncated.
         </p>
       ) : null}
     </>
@@ -127,6 +112,7 @@ interface DiffFileSectionProps {
   readonly index: number;
   readonly changedFiles?: readonly ChangedFile[] | undefined;
   readonly sectionRef: (el: HTMLElement | null) => void;
+  readonly translate?: I18nTranslate | undefined;
 }
 
 export function DiffFileSection({
@@ -134,8 +120,8 @@ export function DiffFileSection({
   index,
   changedFiles = [],
   sectionRef,
+  translate,
 }: DiffFileSectionProps): ReactNode {
-  const t = useTranslate();
   const cf = changedFiles.find((c) => c.path === file.path);
   const ext = file.path.includes(".") ? (file.path.split(".").pop() ?? "code") : "code";
 
@@ -143,32 +129,28 @@ export function DiffFileSection({
     <section id={`rv-file-${index}`} aria-labelledby={`rv-file-${index}-h`} ref={sectionRef}>
       <h3 id={`rv-file-${index}-h`} className="rv-file mono">
         <span className="rv-path">{file.path}</span>
-        {file.oldPath !== undefined && (
-          <span className="rv-oldpath">
-            {t("editorSourceControl.diff.previousPath", { path: file.oldPath })}
-          </span>
-        )}
+        {file.oldPath !== undefined && <span className="rv-oldpath"> (was {file.oldPath})</span>}
         <span className="rv-sr-only">
-          {t("editorSourceControl.diff.fileStatus", { status: file.status })}
+          {file.status} {translate?.("chat.repository.role.file") ?? "file"}
         </span>
         <span className="spacer" />
         <span className="rv-stat add">+{file.addedLines}</span>
         <span className="rv-stat del">−{file.removedLines}</span>
         {cf?.elevatedReview === true && (
-          <span className="rv-elevated" aria-label={t("editorSourceControl.diff.elevatedReview")}>
+          <span className="rv-elevated" aria-label="Elevated review">
             !
           </span>
         )}
       </h3>
       <div className="rv-code mono">
         {file.binary ? (
-          <p className="rv-empty-p">{t("editorSourceControl.diff.binaryFile")}</p>
+          <p className="rv-empty-p">Binary file — no text diff to display.</p>
         ) : (
           file.hunks.map((hunk, hi) => <DiffHunkView key={hi} hunk={hunk} lang={ext} />)
         )}
         {file.truncated && !file.hunks.some((hunk) => hunk.truncated) ? (
           <p className="rv-truncated" role="status">
-            {t("editorSourceControl.diff.fileTruncated")}
+            This file diff is incomplete because the bounded diff was truncated.
           </p>
         ) : null}
       </div>

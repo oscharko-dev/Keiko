@@ -146,8 +146,6 @@ import {
   validateGitSyncExecuteResponse,
   validateGitSyncPreview,
   validateCodingWorkbenchCodexSubscriptionProfile,
-  parseGitEditorBlameResponse,
-  parseGitEditorDiffResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
@@ -207,16 +205,6 @@ function validateBffResponse<T>(path: string, value: unknown, validator: Respons
 
 function validateCodexSubscriptionProfileResponse(value: unknown): GitRepositoryValidation {
   const result = validateCodingWorkbenchCodexSubscriptionProfile(value);
-  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
-}
-
-function validateGitEditorDiffResponse(value: unknown): GitRepositoryValidation {
-  const result = parseGitEditorDiffResponse(value);
-  return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
-}
-
-function validateGitEditorBlameResponse(value: unknown): GitRepositoryValidation {
-  const result = parseGitEditorBlameResponse(value);
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
@@ -1661,10 +1649,14 @@ export async function fetchGitStructuredDiff(input: {
   params.set("root", input.root);
   params.set("scope", input.scope);
   if (input.path !== undefined) params.set("path", input.path);
-  return fetchJson(
-    `/api/git/diff/structured?${params.toString()}`,
-    undefined,
-    validateGitEditorDiffResponse,
+  const path = `/api/git/diff/structured?${params.toString()}`;
+  const [value, contracts] = await Promise.all([
+    fetchJson<unknown>(path),
+    import("@oscharko-dev/keiko-contracts/git-editor"),
+  ]);
+  const result = contracts.parseGitEditorDiffResponse(value);
+  return validateBffResponse<GitEditorDiffResponse>(path, value, () =>
+    result.ok ? { ok: true } : { ok: false, reasons: result.errors },
   );
 }
 
@@ -1679,10 +1671,14 @@ export async function fetchGitBlame(input: {
   params.set("path", input.path);
   params.set("startLine", input.startLine.toString());
   params.set("maxLines", input.maxLines.toString());
-  return fetchJson(
-    `/api/git/blame?${params.toString()}`,
-    undefined,
-    validateGitEditorBlameResponse,
+  const path = `/api/git/blame?${params.toString()}`;
+  const [value, contracts] = await Promise.all([
+    fetchJson<unknown>(path),
+    import("@oscharko-dev/keiko-contracts/git-editor"),
+  ]);
+  const result = contracts.parseGitEditorBlameResponse(value);
+  return validateBffResponse<GitEditorBlameResponse>(path, value, () =>
+    result.ok ? { ok: true } : { ok: false, reasons: result.errors },
   );
 }
 
