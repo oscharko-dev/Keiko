@@ -764,6 +764,29 @@ export {
   validateCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-validation.js";
 export type {
+  CodingWorkbenchLifecycleCommand,
+  CodingWorkbenchRuntimeAdapterPort,
+  CodingWorkbenchRuntimeAdapterStartRequest,
+  CodingWorkbenchRuntimeAuthorityEnvelope,
+  CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchRuntimeExecutionBinding,
+  CodingWorkbenchRuntimeFailureCode,
+  CodingWorkbenchRuntimeIntent,
+  CodingWorkbenchRuntimeMintConfirmation,
+  CodingWorkbenchRuntimeState,
+  CodingWorkbenchRuntimeStateName,
+} from "./coding-workbench-runtime.js";
+export {
+  CODING_WORKBENCH_LIFECYCLE_COMMANDS,
+  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
+  CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+  CODING_WORKBENCH_TASK_INTENT_MAX_CHARS,
+  isLegalCodingWorkbenchRuntimeTransition,
+  validateCodingWorkbenchRuntimeAuthorityEnvelope,
+  validateCodingWorkbenchRuntimeIntent,
+} from "./coding-workbench-runtime.js";
+export type {
   CodingWorkbenchCodexAuthCommandLabel,
   CodingWorkbenchCodexAuthMethod,
   CodingWorkbenchCodexAuthSetupPlan,
