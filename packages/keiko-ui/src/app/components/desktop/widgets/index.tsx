@@ -303,9 +303,17 @@ registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
-registerWindowRender("settings", (_cfg, ctx) => (
-  <SettingsPanel openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })} />
-));
+function SettingsPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
+  const { activeProject } = useChatSessionContext();
+  return (
+    <SettingsPanel
+      root={ctx.activeRoot ?? ctx.linkedRoot ?? activeProject?.path ?? undefined}
+      openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })}
+    />
+  );
+}
+
+registerWindowRender("settings", (_cfg, ctx) => <SettingsPanelSessionHost ctx={ctx} />);
 registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 // Issue #2213 (Epic #2092, ADR-0126) — workspace Problems panel; jump-to-line via ctx.openEditorFile.

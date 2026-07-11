@@ -15,9 +15,9 @@
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, isAbsolute, join, resolve as resolvePath } from "node:path";
+import { delimiter, extname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { isCommandAllowed, buildSandboxEnv } from "@oscharko-dev/keiko-tools";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
@@ -51,6 +51,11 @@ export type LspSpawnFn = (
 };
 
 export interface EphemeralHome {
+  readonly path: string;
+  cleanup(): void;
+}
+
+export interface ApprovedExecutablePath {
   readonly path: string;
   cleanup(): void;
 }
@@ -158,6 +163,43 @@ export function createEphemeralHome(): EphemeralHome {
       }
     },
   };
+}
+
+function privateExecutableName(name: string, resolved: string): string {
+  return process.platform === "win32" ? `${name}${extname(resolved)}` : name;
+}
+
+// Builds a private PATH containing only reviewed, workspace-external executable links. This closes
+// the descendant-tool gap left by resolving only the top-level language server: a managed server
+// can launch an approved helper by name, but cannot discover a planted workspace binary or an
+// unrelated executable that happens to share the operator tool directory.
+export function createApprovedExecutablePath(
+  names: readonly string[],
+  rules: readonly CommandRule[],
+  workspace: WorkspaceInfo,
+  processEnv: NodeJS.ProcessEnv,
+): ApprovedExecutablePath {
+  const path = mkdtempSync(join(tmpdir(), "keiko-lsp-tools-"));
+  const cleanup = (): void => {
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; process containment does not depend on retaining the directory.
+    }
+  };
+  try {
+    for (const name of names) {
+      if (!isCommandAllowed(rules, name, []).allowed) {
+        throw new LspProcessError("EXECUTABLE_NOT_FOUND");
+      }
+      const resolved = resolveExecutableOutsideWorkspace(name, workspace, processEnv);
+      symlinkSync(resolved, join(path, privateExecutableName(name, resolved)), "file");
+    }
+    return { path, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 // POSIX group kill: signals the whole process group (`-pid`) so the LSP server's grandchildren are

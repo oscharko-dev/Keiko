@@ -612,7 +612,7 @@ async function launchUiFromDeps(
     await startUiServer(staticRoot, csp, parsed, handlerDeps, io, deps);
     return 0;
   } finally {
-    if (deps.createServer === undefined) handlerDeps.dispose?.();
+    if (deps.createServer === undefined) await handlerDeps.dispose?.();
   }
 }
 

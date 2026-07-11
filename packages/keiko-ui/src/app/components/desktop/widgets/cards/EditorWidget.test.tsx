@@ -29,6 +29,7 @@ import {
   requestEditorImplementation,
   requestEditorCallHierarchy,
   requestEditorInlayHints,
+  requestEditorSemanticTokens,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -85,6 +86,7 @@ vi.mock("../../../../../lib/api", async () => {
     requestEditorImplementation: vi.fn(),
     requestEditorCallHierarchy: vi.fn(),
     requestEditorInlayHints: vi.fn(),
+    requestEditorSemanticTokens: vi.fn(),
     requestEditorReferences: vi.fn(),
     requestEditorRenamePrepare: vi.fn(),
     requestEditorRenameApply: vi.fn(),
@@ -365,6 +367,10 @@ beforeEach(() => {
   vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
   vi.mocked(saveFilesContent).mockResolvedValue(fileResponse());
   vi.mocked(requestEditorSymbols).mockResolvedValue({ symbols: [], truncated: false });
+  vi.mocked(requestEditorSemanticTokens).mockResolvedValue({
+    schemaVersion: "1",
+    supported: false,
+  });
   vi.mocked(postEditorAgentSessionSnapshot).mockReset();
   vi.mocked(postEditorAgentSessionSnapshot).mockImplementation(
     async (_snapshot, currentCapability) => ({
@@ -2145,6 +2151,57 @@ describe("EditorWidget language intelligence (Issue #1201 / #2104)", () => {
         unavailableReason: "Required host language tool is blocked by host execution policy.",
       });
     });
+  });
+
+  it("wires Rust semantic tokens and preserves syntax fallback when the server declines", async () => {
+    vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValueOnce({
+      schemaVersion: "1",
+      providers: [
+        {
+          id: "rust-lsp",
+          languages: ["rust"],
+          operations: ["diagnostics", "hover"],
+          availability: "available",
+        },
+      ],
+    });
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        path: "src/lib.rs",
+        name: "lib.rs",
+        extension: "rs",
+        content: "struct Value;\n",
+      }),
+    );
+
+    render(<EditorRuntimeWidget root="/repo" file="src/lib.rs" />);
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => expect(surface.props?.semanticTokens).toBeDefined());
+    const semantic = surface.props?.semanticTokens;
+    expect(semantic?.provider.getLegend().tokenTypes).toContain("struct");
+    const uri = surface.props?.fileModel.identity.uri ?? "";
+    const result = await semantic?.provider.provideDocumentSemanticTokens(
+      {
+        getValue: () => "struct Value;\n",
+        getVersionId: () => 3,
+        getLineCount: () => 1,
+        getLineMaxColumn: () => 14,
+        uri: { toString: () => uri },
+      },
+      null,
+      { isCancellationRequested: false, onCancellationRequested: () => ({ dispose: () => {} }) },
+    );
+
+    expect(result).toBeNull();
+    expect(requestEditorSemanticTokens).toHaveBeenCalledWith(
+      {
+        root: "/repo",
+        path: "src/lib.rs",
+        text: "struct Value;\n",
+        version: 3,
+      },
+      expect.any(AbortSignal),
+    );
   });
 });
 

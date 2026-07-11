@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { isSaveChord, wireEditorOnMount } from "./on-mount.js";
-import type { MountEditor, MountMonaco, WireEditorOnMountArgs } from "./on-mount.js";
+import type {
+  MonacoDocumentSemanticTokensProvider,
+  MountEditor,
+  MountMonaco,
+  WireEditorOnMountArgs,
+} from "./on-mount.js";
 import type {
   MonacoCompletionItemProvider,
   MonacoCancellationToken,
@@ -1119,6 +1124,55 @@ describe("wireEditorOnMount navigation/action/signature providers (#2104)", () =
     });
     dispose();
     expect(languages.disposeCount()).toBe(8);
+  });
+});
+
+describe("wireEditorOnMount semantic tokens (#2280)", () => {
+  it("registers and disposes the full-document provider for the selected language", () => {
+    const fakes = buildFakes();
+    const disposeProvider = vi.fn();
+    const providers: MonacoDocumentSemanticTokensProvider[] = [];
+    const languages = {
+      registerDocumentSemanticTokensProvider(
+        language: string,
+        provider: MonacoDocumentSemanticTokensProvider,
+      ): FakeDisposable {
+        expect(language).toBe("rust");
+        providers.push(provider);
+        return { dispose: disposeProvider };
+      },
+    };
+    const disposeHost = vi.fn();
+    const provider = {} as MonacoDocumentSemanticTokensProvider;
+    const dispose = wire(fakes, {
+      monaco: { ...fakes.monaco, languages: languages as unknown as MonacoLanguagesRegistrar },
+      semanticTokens: {
+        languages: ["rust"],
+        provider,
+        legendVersion: 1,
+        dispose: disposeHost,
+      },
+    });
+
+    expect(providers).toHaveLength(1);
+    dispose();
+    expect(disposeProvider).toHaveBeenCalledOnce();
+    expect(disposeHost).toHaveBeenCalledOnce();
+  });
+
+  it("keeps syntax fallback when Monaco has no semantic-token registration API", () => {
+    const fakes = buildFakes();
+    expect(() =>
+      wire(fakes, {
+        monaco: { ...fakes.monaco, languages: {} as MonacoLanguagesRegistrar },
+        semanticTokens: {
+          languages: ["rust"],
+          provider: {} as MonacoDocumentSemanticTokensProvider,
+          legendVersion: 1,
+          dispose: (): void => undefined,
+        },
+      }),
+    ).not.toThrow();
   });
 });
 

@@ -102,6 +102,7 @@ export interface EditorSurfaceProps {
   readonly onRevealCallHierarchyLocation?:
     KeikoCodeEditorProps["onRevealCallHierarchyLocation"] | undefined;
   readonly provideInlayHints?: KeikoCodeEditorProps["provideInlayHints"] | undefined;
+  readonly semanticTokens?: KeikoCodeEditorProps["semanticTokens"] | undefined;
   readonly uriForPath?: KeikoCodeEditorProps["uriForPath"] | undefined;
   readonly provideReferences?: EditorReferencesResolver | undefined;
   readonly provideCodeActions?: EditorCodeActionsResolver | undefined;
@@ -202,6 +203,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
         callHierarchyLabels={props.callHierarchyLabels}
         onRevealCallHierarchyLocation={props.onRevealCallHierarchyLocation}
         provideInlayHints={props.provideInlayHints}
+        semanticTokens={props.semanticTokens}
         uriForPath={props.uriForPath}
         provideReferences={props.provideReferences}
         provideCodeActions={props.provideCodeActions}

@@ -133,6 +133,11 @@ import type {
   WorkspaceSymbolSearchResponse,
   LanguageCallHierarchyResult,
   LanguageInlayHintsResult,
+  ManagedLspActivationResolution,
+  ManagedLspLanguage,
+  ManagedLspProcessHealthSnapshot,
+  ManagedLspRuntimeConfiguration,
+  ManagedLspSemanticTokenResponse,
   GitEditorBlameResponse,
   GitEditorDiffResponse,
   GitEditorDiffScope,
@@ -1957,6 +1962,66 @@ export async function fetchEditorLanguageCapabilities(
   return fetchJson(`/api/editor/language/capabilities${query}`);
 }
 
+export interface ManagedLspConfigurationSummary {
+  readonly language: ManagedLspLanguage;
+  readonly workspaceActivation: "enabled" | "disabled" | "unset";
+  readonly configured: boolean;
+  readonly restartRequired: boolean;
+  readonly restartFields: readonly ("runtime" | "settings")[];
+  readonly provenance: ManagedLspRuntimeConfiguration["provenance"] | null;
+}
+
+export interface ManagedLspSettingsResponse {
+  readonly storeState: "absent" | "ready" | "unavailable";
+  readonly revision: number;
+  readonly etag: string;
+  readonly evidenceCount: number;
+  readonly languages: readonly ManagedLspActivationResolution[];
+  readonly settings: readonly ManagedLspConfigurationSummary[];
+  readonly configurations: readonly ManagedLspRuntimeConfiguration[];
+  readonly health: readonly ManagedLspProcessHealthSnapshot[];
+  readonly providerMetadata?:
+    | readonly {
+        readonly language: ManagedLspLanguage;
+        readonly configurationSource: string;
+      }[]
+    | undefined;
+}
+
+export type ManagedLspSettingsAction =
+  "activate" | "deactivate" | "configure" | "reset" | "rollback" | "restart";
+
+export interface ManagedLspSettingsMutationInput {
+  readonly root: string;
+  readonly language: ManagedLspLanguage;
+  readonly action: ManagedLspSettingsAction;
+  readonly expectedRevision: number;
+  readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
+}
+
+export function fetchManagedLspSettings(
+  root: string,
+  signal?: AbortSignal,
+): Promise<ManagedLspSettingsResponse> {
+  return fetchJson(`/api/editor/lsp/settings?root=${encodeURIComponent(root)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateManagedLspSettings(
+  input: ManagedLspSettingsMutationInput,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<{ readonly kind: "ok"; readonly revision: number; readonly etag: string }> {
+  return fetchJson("/api/editor/lsp/settings", {
+    method: "PUT",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
 export async function requestEditorDiagnostics(
   input: EditorLanguageRequestInput,
   signal?: AbortSignal,
@@ -2140,6 +2205,31 @@ export async function requestEditorInlayHints(
     },
   );
   return envelope.result;
+}
+
+export async function requestEditorSemanticTokens(
+  input: {
+    readonly root: string;
+    readonly path: string;
+    readonly text: string;
+    readonly version: number;
+  },
+  signal?: AbortSignal,
+): Promise<ManagedLspSemanticTokenResponse> {
+  return fetchJson("/api/editor/language/semantic-tokens", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      root: input.root,
+      document: {
+        path: input.path,
+        languageId: "rust",
+        text: input.text,
+        version: input.version,
+      },
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 export async function requestEditorReferences(

@@ -33,7 +33,20 @@ export class LspRpcDisposedError extends Error {
   }
 }
 
+export type LspServerRequestErrorCode = -32601 | -32602 | -32603 | -32000;
+
+export class LspServerRequestError extends Error {
+  public readonly code: LspServerRequestErrorCode;
+
+  public constructor(code: LspServerRequestErrorCode, message: string) {
+    super(message);
+    this.name = "LspServerRequestError";
+    this.code = code;
+  }
+}
+
 export type LspNotificationHandler = (method: string, params: unknown) => void;
+export type LspServerRequestHandler = (method: string, params: unknown) => unknown;
 
 export interface LspRequestOptions {
   readonly signal?: AbortSignal | undefined;
@@ -44,8 +57,10 @@ export interface LspRequestOptions {
 export interface LspJsonRpcClient {
   request<T>(method: string, params: unknown, options: LspRequestOptions): Promise<T>;
   notify(method: string, params: unknown): void;
-  onNotification(handler: LspNotificationHandler): void;
+  onNotification(handler: LspNotificationHandler): () => void;
+  onRequest(handler: LspServerRequestHandler): void;
   pendingCount(): number;
+  activeServerRequestCount(): number;
   dispose(): void;
 }
 
@@ -60,12 +75,21 @@ export interface LspJsonRpcClientDeps {
   readonly source: LspByteSource;
   readonly sendFrame: (body: string) => void;
   readonly scheduler?: LspRpcScheduler | undefined;
+  readonly maxConcurrentServerRequests?: number | undefined;
 }
 
 interface PendingRequest {
   readonly resolve: (value: unknown) => void;
   readonly reject: (error: Error) => void;
   settle(): void;
+}
+
+interface RpcRuntimeState {
+  readonly notificationHandlers: Set<LspNotificationHandler>;
+  serverRequestHandler: LspServerRequestHandler | undefined;
+  nextId: number;
+  disposed: boolean;
+  activeServerRequests: number;
 }
 
 const defaultScheduler: LspRpcScheduler = {
@@ -78,47 +102,161 @@ const defaultScheduler: LspRpcScheduler = {
 export function createLspJsonRpcClient(deps: LspJsonRpcClientDeps): LspJsonRpcClient {
   const scheduler = deps.scheduler ?? defaultScheduler;
   const pending = new Map<number, PendingRequest>();
-  let notificationHandler: LspNotificationHandler | undefined;
-  let nextId = 1;
-  let disposed = false;
+  const state: RpcRuntimeState = {
+    notificationHandlers: new Set(),
+    serverRequestHandler: undefined,
+    nextId: 1,
+    disposed: false,
+    activeServerRequests: 0,
+  };
 
   const send = (payload: Record<string, unknown>): void => {
     deps.sendFrame(JSON.stringify(payload));
   };
 
+  const maxServerRequests = boundedServerRequestLimit(deps.maxConcurrentServerRequests);
   void consume(deps.source, (body) => {
-    dispatch(body, pending, (m, p) => notificationHandler?.(m, p));
+    dispatchIncoming(body, pending, state, send, maxServerRequests);
   });
+  return clientApi(state, pending, scheduler, send);
+}
 
-  const request = <T>(method: string, params: unknown, options: LspRequestOptions): Promise<T> => {
-    if (disposed) {
-      return Promise.reject(new LspRpcDisposedError());
-    }
-    const id = nextId++;
-    return new Promise<T>((resolve, reject) => {
-      registerPending(id, pending, scheduler, send, options, {
-        resolve: resolve as (value: unknown) => void,
-        reject,
-      });
-      send({ jsonrpc: "2.0", id, method, params });
-    });
-  };
-
+function clientApi(
+  state: RpcRuntimeState,
+  pending: Map<number, PendingRequest>,
+  scheduler: LspRpcScheduler,
+  send: (payload: Record<string, unknown>) => void,
+): LspJsonRpcClient {
   return {
-    request,
+    request: <T>(method: string, params: unknown, options: LspRequestOptions): Promise<T> =>
+      requestFromRuntime(state, pending, scheduler, send, method, params, options),
     notify: (method, params): void => {
-      if (!disposed) send({ jsonrpc: "2.0", method, params });
+      if (!state.disposed) send({ jsonrpc: "2.0", method, params });
     },
-    onNotification: (handler): void => {
-      notificationHandler = handler;
+    onNotification: (handler): (() => void) => {
+      state.notificationHandlers.add(handler);
+      return (): void => {
+        state.notificationHandlers.delete(handler);
+      };
+    },
+    onRequest: (handler): void => {
+      state.serverRequestHandler = handler;
     },
     pendingCount: (): number => pending.size,
+    activeServerRequestCount: (): number => state.activeServerRequests,
     dispose: (): void => {
-      if (disposed) return;
-      disposed = true;
+      if (state.disposed) return;
+      state.disposed = true;
       rejectAll(pending, new LspRpcDisposedError());
     },
   };
+}
+
+function requestFromRuntime<T>(
+  state: RpcRuntimeState,
+  pending: Map<number, PendingRequest>,
+  scheduler: LspRpcScheduler,
+  send: (payload: Record<string, unknown>) => void,
+  method: string,
+  params: unknown,
+  options: LspRequestOptions,
+): Promise<T> {
+  if (state.disposed) return Promise.reject(new LspRpcDisposedError());
+  const id = state.nextId++;
+  return new Promise<T>((resolve, reject) => {
+    registerPending(id, pending, scheduler, send, options, {
+      resolve: resolve as (value: unknown) => void,
+      reject,
+    });
+    send({ jsonrpc: "2.0", id, method, params });
+  });
+}
+
+function dispatchIncoming(
+  body: LspBytes,
+  pending: Map<number, PendingRequest>,
+  state: RpcRuntimeState,
+  send: (payload: Record<string, unknown>) => void,
+  maximum: number,
+): void {
+  dispatch(
+    body,
+    pending,
+    (method, params) => {
+      for (const handler of state.notificationHandlers) handler(method, params);
+    },
+    (id, method, params) => {
+      handleInboundRequest(state, send, maximum, id, method, params);
+    },
+  );
+}
+
+function handleInboundRequest(
+  state: RpcRuntimeState,
+  send: (payload: Record<string, unknown>) => void,
+  maximum: number,
+  id: ServerRequestId,
+  method: string,
+  params: unknown,
+): void {
+  if (state.disposed) return;
+  if (state.activeServerRequests >= maximum) {
+    sendServerError(send, id, -32000, "Server request limit exceeded");
+    return;
+  }
+  state.activeServerRequests += 1;
+  void answerServerRequest(
+    state.serverRequestHandler,
+    id,
+    method,
+    params,
+    send,
+    () => state.disposed,
+  ).finally(() => {
+    state.activeServerRequests -= 1;
+  });
+}
+
+function boundedServerRequestLimit(value: number | undefined): number {
+  return value === undefined || !Number.isSafeInteger(value) || value < 1 || value > 64
+    ? 16
+    : value;
+}
+
+type ServerRequestId = number | string;
+
+async function answerServerRequest(
+  handler: LspServerRequestHandler | undefined,
+  id: ServerRequestId,
+  method: string,
+  params: unknown,
+  send: (payload: Record<string, unknown>) => void,
+  disposed: () => boolean,
+): Promise<void> {
+  try {
+    if (handler === undefined) throw new LspServerRequestError(-32601, "Server request denied");
+    const result = await handler(method, params);
+    if (!disposed()) send({ jsonrpc: "2.0", id, result });
+  } catch (error: unknown) {
+    if (disposed()) return;
+    const safe = safeServerRequestError(error);
+    sendServerError(send, id, safe.code, safe.message);
+  }
+}
+
+function safeServerRequestError(error: unknown): LspServerRequestError {
+  return error instanceof LspServerRequestError
+    ? error
+    : new LspServerRequestError(-32603, "Server request failed");
+}
+
+function sendServerError(
+  send: (payload: Record<string, unknown>) => void,
+  id: ServerRequestId,
+  code: LspServerRequestErrorCode,
+  message: string,
+): void {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
 interface ResolveReject {
@@ -176,10 +314,15 @@ function dispatch(
   body: LspBytes,
   pending: Map<number, PendingRequest>,
   notify: (method: string, params: unknown) => void,
+  request: (id: ServerRequestId, method: string, params: unknown) => void,
 ): void {
   const message = parseMessage(body);
   if (message === null) return;
   const id = message.id;
+  if ((typeof id === "number" || typeof id === "string") && typeof message.method === "string") {
+    request(id, message.method, message.params);
+    return;
+  }
   if (typeof id === "number") {
     settleResponse(id, message, pending);
     return;
