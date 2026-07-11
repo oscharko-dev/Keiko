@@ -21,6 +21,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { ManualCrawlDenyReason, ManualCrawlResult } from "./crawl/index.js";
+import { diffFingerprintSets, type FingerprintSetDelta } from "./fingerprint-diff.js";
 import type { IndexingResult } from "./indexing/index.js";
 import {
   computeManualCrawlRunFingerprint,
@@ -41,64 +42,24 @@ export interface ManualRefreshChangeInput {
   readonly refreshedAt: number;
 }
 
-interface PageDelta {
-  readonly added: number;
-  readonly changed: number;
-  readonly removed: number;
-  readonly moved: number;
-  readonly unchanged: number;
-}
+type PageDelta = FingerprintSetDelta;
 
-// Paths present in `prior` but absent from the new page set, keyed by their content fingerprint —
-// the candidate set a same-fingerprint added path can be correlated against to detect a move.
-function removedFingerprints(
-  prior: ReadonlyMap<string, ManualPageFingerprint>,
-  newPaths: ReadonlySet<string>,
-): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const [path, fingerprint] of prior) {
-    if (newPaths.has(path)) continue;
-    const key = fingerprint.contentFingerprint;
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return counts;
-}
-
+// Delegates to the SHARED fingerprint-diff engine (`fingerprint-diff.ts`) — the same
+// implementation the connector sync lane uses with `detectMoves: false` (Issue #2242). Manual
+// pages are keyed by resolved paths, so move detection stays on here.
 function diffPages(
   prior: ReadonlyMap<string, ManualPageFingerprint>,
   newPages: readonly ManualPageFingerprint[],
 ): PageDelta {
-  const newPaths = new Set(newPages.map((page) => page.relativePath));
-  const availableMoveSources = removedFingerprints(prior, newPaths);
-  let added = 0;
-  let changed = 0;
-  let moved = 0;
-  let unchanged = 0;
+  const priorByPath = new Map<string, string>();
+  for (const [path, fingerprint] of prior) {
+    priorByPath.set(path, fingerprint.contentFingerprint);
+  }
+  const nextByPath = new Map<string, string>();
   for (const page of newPages) {
-    const previous = prior.get(page.relativePath);
-    if (previous === undefined) {
-      // A same-content page whose old path was removed this run is a move, not an unrelated
-      // remove+add pair — correlate by content fingerprint and consume one source per match so
-      // two new paths sharing a fingerprint cannot both claim the same removed page as a move.
-      const available = availableMoveSources.get(page.contentFingerprint) ?? 0;
-      if (available > 0) {
-        availableMoveSources.set(page.contentFingerprint, available - 1);
-        moved += 1;
-      } else {
-        added += 1;
-      }
-    } else if (previous.contentFingerprint === page.contentFingerprint) {
-      unchanged += 1;
-    } else {
-      changed += 1;
-    }
+    nextByPath.set(page.relativePath, page.contentFingerprint);
   }
-  let removed = 0;
-  for (const path of prior.keys()) {
-    if (!newPaths.has(path)) removed += 1;
-  }
-  removed -= moved;
-  return { added, changed, removed, moved, unchanged };
+  return diffFingerprintSets(priorByPath, nextByPath, { detectMoves: true });
 }
 
 // Crawl-runtime bookkeeping entries tallied when the crawl loop stops because it hit a governed

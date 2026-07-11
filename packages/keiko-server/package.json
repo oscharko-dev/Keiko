@@ -29,6 +29,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@oscharko-dev/keiko-connectors": "0.2.15",
     "@oscharko-dev/keiko-contracts": "0.2.15",
     "@oscharko-dev/keiko-git": "0.2.15",
     "@oscharko-dev/keiko-security": "0.2.15",

@@ -30,7 +30,7 @@ import {
   PORTABLE_TARGET_NAMES,
   portableVerificationSummaryForManifest,
   sha256File,
-  validatePortableManifest,
+  validatePortableStagingManifest,
   verifySha256File,
 } from "./portable-runtime.mjs";
 
@@ -91,10 +91,12 @@ function parseArgs(argv) {
     nodeSha256: undefined,
     nodeVersion: undefined,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
-    releaseId: Number(process.env.GITHUB_RUN_ID ?? 0),
+    releaseId: 0,
     releaseTag: `v${rootPackage.version}`,
     sidecarRuntimeSpecs: [],
     target: undefined,
+    workflowRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 0),
+    workflowRunId: Number(process.env.GITHUB_RUN_ID ?? 0),
   };
   for (let index = 0; index < argv.length; index += 1) {
     index = applyArg(argv, index, options);
@@ -132,11 +134,15 @@ function applyArg(argv, index, options) {
     ["--release-id", "releaseId"],
     ["--release-tag", "releaseTag"],
     ["--target", "target"],
+    ["--workflow-run-attempt", "workflowRunAttempt"],
+    ["--workflow-run-id", "workflowRunId"],
   ]);
   const field = fields.get(arg);
   if (field === undefined) fail(`unsupported argument: ${arg}`);
   const value = requiredArgValue(argv, index, arg);
-  options[field] = field === "releaseId" ? Number(value) : value;
+  options[field] = ["releaseId", "workflowRunAttempt", "workflowRunId"].includes(field)
+    ? Number(value)
+    : value;
   return index + 1;
 }
 
@@ -183,11 +189,21 @@ function validateReleaseOptions(options) {
   if (!Number.isSafeInteger(options.releaseId) || options.releaseId < 0) {
     fail("--release-id must be a non-negative safe integer");
   }
+  validateWorkflowIdentityOptions(options);
   if (typeof options.releaseTag !== "string" || options.releaseTag.length === 0) {
     fail("--release-tag must be a non-empty release tag");
   }
   if (rootPackage.version.includes("-") || options.releaseTag !== `v${rootPackage.version}`) {
     fail("--release-tag must match the stable package version for portable v1");
+  }
+}
+
+function validateWorkflowIdentityOptions(options) {
+  if (!Number.isSafeInteger(options.workflowRunId) || options.workflowRunId < 0) {
+    fail("--workflow-run-id must be a non-negative safe integer");
+  }
+  if (!Number.isSafeInteger(options.workflowRunAttempt) || options.workflowRunAttempt < 0) {
+    fail("--workflow-run-attempt must be a non-negative safe integer");
   }
 }
 
@@ -1201,7 +1217,8 @@ function provenanceStatementFor(options, target, digests, sidecarRuntimes) {
   return (
     JSON.stringify({
       artifact: target.assetName,
-      buildWorkflowRunId: options.releaseId,
+      buildWorkflowAttempt: options.workflowRunAttempt ?? 0,
+      buildWorkflowRunId: options.workflowRunId ?? 0,
       packageVersion: rootPackage.version,
       sourceCommitSha: options.commitSha,
       sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
@@ -1451,8 +1468,8 @@ function manifestProvenance(options, digests) {
     rootPackageVersion: rootPackage.version,
     rootPackageTarballSha256: digests.tarballSha256,
     packagedAppTreeSha256: digests.appTreeSha256,
-    buildWorkflowRunId: options.releaseId,
-    buildWorkflowAttempt: 1,
+    buildWorkflowRunId: options.workflowRunId ?? 0,
+    buildWorkflowAttempt: options.workflowRunAttempt ?? 0,
     provenanceStatementPath: "evidence/provenance.intoto.jsonl",
     provenanceStatementSha256: digests.provenanceSha256,
   };
@@ -1765,7 +1782,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
 }
 
 function validateGeneratedManifest(manifest) {
-  const failures = validatePortableManifest(manifest, { allowUnverified: true });
+  const failures = validatePortableStagingManifest(manifest);
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
 }
 

@@ -356,6 +356,31 @@ export class EditorAgentAuthorityRegistry {
     return resolved;
   }
 
+  // Issue #2244 (ADR-0128 D4): budget reservation for one governed CONNECTOR action. Charges
+  // exactly one toolCall (connector actions carry no patch) against the same envelope budget the
+  // editor lane charges, after the same resolve-time revalidation. An envelope bound to a
+  // local-bridge action (one-shot editor binding) is refused fail-closed: that authority was
+  // minted for exactly one editor action and must not be consumable by a connector call.
+  public reserveForConnector(
+    reference: EditorAgentGovernedAuthorityReference,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ): EditorAgentAuthorityResolution {
+    const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
+    if (!resolved.ok) return resolved;
+    const record = this.records.get(recordKey(reference));
+    if (record === undefined || record.localActionBinding !== undefined) {
+      return { ok: false, reason: "invalid" };
+    }
+    const nextToolCalls = record.usage.toolCalls + 1;
+    if (nextToolCalls > record.envelope.budget.maxToolCalls) {
+      return { ok: false, reason: "budget-exceeded" };
+    }
+    record.usage.toolCalls = nextToolCalls;
+    return resolved;
+  }
+
   public revoke(reference: EditorAgentGovernedAuthorityReference): void {
     const record = this.records.get(recordKey(reference));
     if (record !== undefined) record.revoked = true;

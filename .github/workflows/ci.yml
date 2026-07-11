@@ -13,6 +13,7 @@ on:
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
       - epic/coding-workbench-runtime-readiness
+      - epic/coding-workbench-opencode-codex
       - "release/**"
   pull_request:
     branches:
@@ -26,6 +27,7 @@ on:
       - feat/keiko-colleague-like-voice-dialogue-mode
       - feat/keiko-repository-centered-desktop-workflow
       - epic/coding-workbench-runtime-readiness
+      - epic/coding-workbench-opencode-codex
       - "release/**"
   workflow_dispatch:
 
@@ -39,8 +41,8 @@ jobs:
     steps:
       - name: Confirm dev branch gate
         run: |
-          case "${{ github.ref }}:${{ github.base_ref }}" in
-            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/epic/coding-workbench-runtime-readiness: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:epic/coding-workbench-runtime-readiness | *:release/*)
+          case "${GITHUB_REF}:${GITHUB_BASE_REF}" in
+            refs/heads/dev: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/epic/coding-workbench-runtime-readiness: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:epic/coding-workbench-runtime-readiness | *:epic/coding-workbench-opencode-codex | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)
@@ -57,6 +59,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
@@ -162,6 +165,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Download and verify actionlint
         run: |
           curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" -o actionlint.tar.gz
@@ -178,6 +183,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: Assert all action references are pinned to 40-hex SHAs
         run: |
           set -euo pipefail
@@ -192,6 +199,22 @@ jobs:
           fi
           echo "All action references are pinned to full commit SHAs."
 
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@192e21d79ab29983730a13d1382995c2307fbcaa # v0.5.7
+        with:
+          version: "1.26.1"
+          advanced-security: false
+          annotations: true
+
   build-scan-sbom-smoke:
     name: Build, scan, SBOM, smoke
     # Keep early feature-branch PRs fast. These release/package gates still run on merges to
@@ -199,13 +222,17 @@ jobs:
     if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
-          cache: "npm"
+          package-manager-cache: false
       - run: npm ci
       - name: Build
         run: npm run build
@@ -245,12 +272,27 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cdx.json
           retention-days: 90
+      # Build-provenance (not SBOM-predicate) attestation: this job has no single packed artifact
+      # to bind an SBOM-attestation subject to (no `npm pack` runs here), so this proves the SBOM
+      # document itself was produced by this exact workflow run/commit, not tampered or fabricated.
+      # Scoped to `push` only (dev/release branches) so PR and workflow_dispatch runs stay
+      # unverified-staging and do not add attestation noise for commits that never ship.
+      - name: Attest build provenance for root SBOM
+        if: github.event_name == 'push'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: sbom.cdx.json
       - name: Upload workspace SBOMs (Issue #169 AC4)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: workspace-sboms-cyclonedx
           path: sbom/
           retention-days: 90
+      - name: Attest build provenance for workspace SBOMs
+        if: github.event_name == 'push'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: sbom/workspace-*.cdx.json
 
   cross-platform-smoke:
     name: Cross-platform smoke (${{ matrix.os }})
@@ -272,6 +314,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
@@ -299,13 +343,17 @@ jobs:
     name: ui
     runs-on: ubuntu-latest
     permissions:
+      attestations: write
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
-          cache: "npm"
+          package-manager-cache: false
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci
       - name: Build internal packages so contracts dist resolves for UI tsc
@@ -372,3 +420,11 @@ jobs:
           name: ui-sbom-cyclonedx
           path: ui-sbom.cdx.json
           retention-days: 90
+      # Same build-provenance-of-the-document rationale as the root/workspace SBOM attestations in
+      # the build-scan-sbom-smoke job: no single packed UI artifact exists to bind an SBOM-predicate
+      # attestation subject to at this point, so this attests the SBOM document's own provenance.
+      - name: Attest build provenance for UI SBOM
+        if: github.event_name == 'push'
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ui-sbom.cdx.json

@@ -235,6 +235,17 @@ const editorStateContextEntry: EditorContextEntry = {
   truncated: false,
 };
 
+const gitContextEntry: EditorContextEntry = {
+  sourceKind: "git-context",
+  sourceTier: "first-party-workspace",
+  id: "git-context-1",
+  score: 1,
+  rank: 0,
+  citationRef: "workspace",
+  byteCount: 64,
+  truncated: false,
+};
+
 const contextOmission: EditorContextOmission = {
   sourceKind: "memory",
   reason: "not-ready",
@@ -242,7 +253,7 @@ const contextOmission: EditorContextOmission = {
 
 const contextPack: EditorContextPack = {
   request: requestIdentity,
-  entries: [contextEntry],
+  entries: [contextEntry, gitContextEntry],
   usedBytes: 256,
   budgetBytes: 16384,
   droppedForBudget: 0,

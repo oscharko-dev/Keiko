@@ -40,6 +40,7 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "navigateSymbol",
   "searchWorkspace",
   "requestVerification",
+  "queryGit",
 ];
 
 const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
@@ -59,6 +60,7 @@ const NON_MUTATING: readonly EditorAgentActionType[] = [
   "navigateSymbol",
   "searchWorkspace",
   "requestVerification",
+  "queryGit",
 ];
 
 function ctx(over: Partial<EditorAgentActionPolicyContext> = {}): EditorAgentActionPolicyContext {
@@ -97,6 +99,7 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.setSelection).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.navigateSymbol).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.searchWorkspace).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.queryGit).toBe("workspace-read");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.moveTab).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.splitPane).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.requestVerification).toBe("execution");
@@ -183,6 +186,7 @@ describe("Authority Envelope composition (Issue #2121)", () => {
     expect(EDITOR_AGENT_WORKBENCH_ACTION_CLASS).toEqual({
       navigation: null,
       layout: null,
+      "workspace-read": "workspace-read",
       "content-mutation": "workspace-write",
       "external-effect": "delivery-substrate",
       execution: "verification",
@@ -190,6 +194,7 @@ describe("Authority Envelope composition (Issue #2121)", () => {
     expect(EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE).toEqual({
       navigation: null,
       layout: null,
+      "workspace-read": "workspace-contained",
       "content-mutation": "workspace-contained",
       "external-effect": "delivery",
       execution: "workspace-contained",
@@ -292,6 +297,44 @@ describe("Authority Envelope composition (Issue #2121)", () => {
     );
     expect(decision.disposition).toBe("denied");
     expect(decision.denyReason).toBe("mode-policy-denied");
+  });
+
+  it("gates low-risk queryGit reads through workspace-read authority without mutation or delivery", () => {
+    const baseline = classifyEditorAgentAction("queryGit", ctx());
+    const granted = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: ["workspace-read"] }),
+      EDITOR_AGENT_ACTION_APPROVAL_RISK.queryGit,
+    );
+    expect(granted).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+    expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.queryGit).toBe("low");
+    expect(isMutatingEditorAgentAction("queryGit")).toBe(false);
+
+    const withheld = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: [] }),
+      EDITOR_AGENT_ACTION_APPROVAL_RISK.queryGit,
+    );
+    expect(withheld).toMatchObject({
+      disposition: "denied",
+      effectClass: "workspace-read",
+      denyReason: "mode-policy-denied",
+    });
+  });
+
+  it("denies queryGit reads for escaping and sensitive targets before envelope composition", () => {
+    expect(
+      classifyEditorAgentAction("queryGit", ctx({ targetPath: "../escape.ts" })),
+    ).toMatchObject({
+      disposition: "denied",
+      effectClass: "workspace-read",
+      denyReason: "workspace-boundary-escape",
+    });
+    expect(classifyEditorAgentAction("queryGit", ctx({ targetSensitive: true }))).toMatchObject({
+      disposition: "denied",
+      effectClass: "workspace-read",
+      denyReason: "denied-sensitive-path",
+    });
   });
 });
 
@@ -417,6 +460,23 @@ describe("audit record builder (Issue #1395 AC1, AC3)", () => {
     expect(JSON.stringify(record)).not.toContain(fingerprint);
     expect(record.patchByteLength).toBe(4096);
   });
+
+  it("uses bounded basename/hash-only target metadata for queryGit", () => {
+    const targetPathHash = "a".repeat(64);
+    const record = buildEditorAgentActionAuditRecord({
+      ...auditInput(),
+      actionType: "queryGit",
+      decision: classifyEditorAgentAction("queryGit", ctx()),
+      targetPath: "src/private/repository-name.ts",
+      targetBasename: "repository-name.ts",
+      targetPathHash,
+    });
+    expect(record.targetBasename).toBe("repository-name.ts");
+    expect(record.targetPathHash).toBe(targetPathHash);
+    expect(record.targetPath).toBeUndefined();
+    expect(record.summary).not.toContain("src/private");
+    expect(isEditorAgentActionAuditRecord(record)).toBe(true);
+  });
 });
 
 describe("audit record guard", () => {
@@ -432,6 +492,25 @@ describe("audit record guard", () => {
     ).toBe(false);
     expect(isEditorAgentActionAuditRecord({ ...valid, disposition: "nope" })).toBe(false);
     expect(isEditorAgentActionAuditRecord({ ...valid, origin: "automation" })).toBe(false);
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetBasename: "x".repeat(256) })).toBe(
+      false,
+    );
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetPathHash: "not-a-sha256" })).toBe(
+      false,
+    );
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetBasename: "src/a.ts" })).toBe(false);
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetPathHash: "A".repeat(64) })).toBe(
+      false,
+    );
+    expect(isEditorAgentActionAuditRecord({ ...valid, effectClass: "workspace-read" })).toBe(false);
+    expect(
+      isEditorAgentActionAuditRecord({
+        ...valid,
+        actionType: "queryGit",
+        effectClass: "workspace-read",
+        targetPath: "src/a.ts",
+      }),
+    ).toBe(false);
     expect(isEditorAgentActionAuditRecord(null)).toBe(false);
   });
 });

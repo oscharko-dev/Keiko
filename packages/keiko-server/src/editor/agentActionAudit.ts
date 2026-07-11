@@ -33,6 +33,8 @@ export interface EditorAgentAuditInput {
   readonly conflictCode?: EditorAgentConflictCode | undefined;
   readonly failureCode?: EditorAgentFailureCode | undefined;
   readonly targetPath?: string | null | undefined;
+  readonly targetBasename?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   readonly editCount?: number | undefined;
   readonly patchByteLength?: number | undefined;
 }
@@ -75,7 +77,9 @@ export function recordEditorAgentActionAudit(
   input: EditorAgentAuditInput,
 ): EditorAgentActionAuditRecord | null {
   const serverResolved =
-    input.actionType === "navigateSymbol" || input.actionType === "searchWorkspace";
+    input.actionType === "navigateSymbol" ||
+    input.actionType === "searchWorkspace" ||
+    input.actionType === "queryGit";
   if (
     !isMutatingEditorAgentAction(input.actionType) &&
     input.decision.effectClass !== "execution" &&
@@ -97,6 +101,8 @@ export function recordEditorAgentActionAudit(
       conflictCode: input.conflictCode,
       failureCode: input.failureCode,
       targetPath: input.targetPath,
+      targetBasename: input.targetBasename,
+      targetPathHash: input.targetPathHash,
       editCount: input.editCount,
       patchByteLength: input.patchByteLength,
     });

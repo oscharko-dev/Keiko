@@ -58,7 +58,13 @@ function resolveCommitSha(env) {
   return sha;
 }
 
-export function stageArgumentsForTarget(options, approvals, commitSha, packageVersion) {
+export function stageArgumentsForTarget(
+  options,
+  approvals,
+  commitSha,
+  packageVersion,
+  workflow = { runAttempt: 0, runId: 0 },
+) {
   const node = approvedNodeStageArguments(approvals, options.target);
   const args = [
     "scripts/stage-portable-runtime.mjs",
@@ -78,6 +84,10 @@ export function stageArgumentsForTarget(options, approvals, commitSha, packageVe
     `v${packageVersion}`,
     "--commit-sha",
     commitSha,
+    "--workflow-run-id",
+    String(workflow.runId),
+    "--workflow-run-attempt",
+    String(workflow.runAttempt),
   ];
   for (const specPath of collectSidecarSpecPaths(options.payloadRoot, options.target)) {
     args.push("--sidecar-runtime-spec", specPath);
@@ -85,11 +95,25 @@ export function stageArgumentsForTarget(options, approvals, commitSha, packageVe
   return args;
 }
 
+function workflowIdentity(env) {
+  const runId = Number(env.GITHUB_RUN_ID ?? 0);
+  const runAttempt = Number(env.GITHUB_RUN_ATTEMPT ?? 0);
+  if (!Number.isSafeInteger(runId) || runId < 0) fail("GITHUB_RUN_ID is invalid");
+  if (!Number.isSafeInteger(runAttempt) || runAttempt < 0) fail("GITHUB_RUN_ATTEMPT is invalid");
+  return { runAttempt, runId };
+}
+
 export function runPortableAssetsStage(argv, env = process.env) {
   const options = parseArgs(argv);
   const approvals = loadPortableRuntimeApprovals(repoRoot);
   const packageVersion = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version;
-  const args = stageArgumentsForTarget(options, approvals, resolveCommitSha(env), packageVersion);
+  const args = stageArgumentsForTarget(
+    options,
+    approvals,
+    resolveCommitSha(env),
+    packageVersion,
+    workflowIdentity(env),
+  );
   const specCount = args.filter((arg) => arg === "--sidecar-runtime-spec").length;
   console.log(
     `portable-assets-stage: staging ${options.target} with node ${approvals.node.version} and ${String(specCount)} sidecar spec(s)`,

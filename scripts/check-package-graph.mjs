@@ -26,6 +26,15 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-memory-vault",
     ],
   ],
+  // Governed Atlassian connector domain leaf (ADR-0128 D1): credential custody over the shared
+  // secret vault, the injectable AtlassianHttpPort seam, and the bounded verification probe. It
+  // may depend only on keiko-contracts and keiko-security — never on keiko-model-gateway,
+  // keiko-local-knowledge, or the server; keiko-server is the sole composition root that
+  // implements its ports (vault, metadata store, gatewayFetch-backed transport).
+  [
+    "@oscharko-dev/keiko-connectors",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
   ["@oscharko-dev/keiko-contracts", []],
   // Reusable OS/container egress-isolation strategy (ADR-0043). A near-leaf: its only workspace
   // dependency is keiko-contracts (for the SandboxPolicy/attestation types). Spawning stays in
@@ -131,6 +140,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
   [
     "@oscharko-dev/keiko-server",
     [
+      "@oscharko-dev/keiko-connectors",
       "@oscharko-dev/keiko-contracts",
       "@oscharko-dev/keiko-git",
       "@oscharko-dev/keiko-security",

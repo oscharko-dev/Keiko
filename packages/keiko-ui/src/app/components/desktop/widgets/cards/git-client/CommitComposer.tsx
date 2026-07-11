@@ -87,10 +87,10 @@ export function CommitComposer({
 
   // Live, secondary policy preview: re-validate the draft against the current staged set, debounced.
   useEffect(() => {
-    if (!hasRepository || !hasStaged) return;
+    if (!hasRepository || !hasStaged || subjectEmpty) return;
     const handle = setTimeout(() => onPreviewRef.current(message), PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(handle);
-  }, [hasRepository, hasStaged, message, stagedFileCount]);
+  }, [hasRepository, hasStaged, message, stagedFileCount, subjectEmpty]);
 
   const visiblePreview = preview !== null && previewDraft === message ? preview : null;
   // The single hard gate. Warnings never disable; an unmet policy (validation.ok === false) does.

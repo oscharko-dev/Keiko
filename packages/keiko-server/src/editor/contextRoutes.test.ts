@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_AGENT_SCHEMA_VERSION,
+  type EditorAgentSessionSnapshot,
+  type KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   createCapsule,
@@ -14,6 +18,7 @@ import {
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { UiStore } from "../store/index.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
@@ -59,6 +64,24 @@ function capsuleId(value: string): KnowledgeCapsuleId {
   return value as KnowledgeCapsuleId;
 }
 
+function editorSnapshot(): EditorAgentSessionSnapshot {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    sessionId: "editor-session-route",
+    windowId: "window-route",
+    workspaceRoot: root,
+    activePaneId: "pane-route",
+    panes: [{ paneId: "pane-route", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+    dirtyFiles: [],
+    activeFile: "src/a.ts",
+    cursor: null,
+    selection: null,
+    diagnosticsSummary: null,
+    textMode: "none",
+    updatedAt: 1_700_000_000_000,
+  };
+}
+
 function seedIndexingCapsule(): KnowledgeCapsuleId {
   const capId = capsuleId("cap-indexing");
   const knowledgeStore = openKnowledgeStore({
@@ -101,6 +124,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  editorAgentRegistry.reset();
   store.close();
   await rm(root, { recursive: true, force: true });
   await rm(stateRoot, { recursive: true, force: true });
@@ -131,6 +155,25 @@ describe("POST /api/editor/context", () => {
     expect(JSON.stringify(body.pack)).not.toContain("value.trim");
     // audit record persisted
     expect(d.evidenceStore.get(body.evidenceRunId)).toBeDefined();
+  });
+
+  it("preserves editorSessionId for same-root context assembly", async () => {
+    editorAgentRegistry.registerSnapshot(editorSnapshot());
+    const result = await handleEditorContext(
+      postContext({
+        schemaVersion: "1",
+        purpose: "completion",
+        editorSessionId: "editor-session-route",
+        root,
+        documentPath: "src/a.ts",
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const serialized = JSON.stringify(result.body);
+    expect(serialized).toContain('"sourceKind":"editor-state"');
+    expect(serialized).not.toContain("editor-session-route");
   });
 
   it("rejects an invalid request body with 400 INVALID_REQUEST", async () => {

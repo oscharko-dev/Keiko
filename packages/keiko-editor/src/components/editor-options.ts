@@ -144,9 +144,10 @@ function buildAssistanceOptions(
   };
 }
 
-function buildChromeOptions(): EditorConstructionOptions {
+function buildChromeOptions(degraded: boolean): EditorConstructionOptions {
   return {
     lineNumbers: "on",
+    glyphMargin: !degraded,
     find: { addExtraSpaceOnTop: false, seedSearchStringFromSelection: "always" },
     minimap: { enabled: false },
     scrollbar: {
@@ -196,7 +197,7 @@ export function buildEditorOptions(
       signatureHelpEnabled,
       inlayHintsEnabled,
     ),
-    ...buildChromeOptions(),
+    ...buildChromeOptions(degraded),
     multiCursorModifier: "alt",
     readOnly: args.readOnly,
     domReadOnly: false,

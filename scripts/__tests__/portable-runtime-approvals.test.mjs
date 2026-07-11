@@ -554,6 +554,7 @@ describe("portable assets stage helper", () => {
       approvals,
       "a".repeat(40),
       "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
     );
     expect(args).toContain("--node-version");
     expect(args[args.indexOf("--node-version") + 1]).toBe(approvals.node.version);
@@ -562,6 +563,8 @@ describe("portable assets stage helper", () => {
     );
     expect(args[args.indexOf("--release-tag") + 1]).toBe("v0.2.14");
     expect(args[args.indexOf("--release-id") + 1]).toBe("0");
+    expect(args[args.indexOf("--workflow-run-id") + 1]).toBe("987654321");
+    expect(args[args.indexOf("--workflow-run-attempt") + 1]).toBe("3");
     expect(args.filter((arg) => arg === "--sidecar-runtime-spec")).toHaveLength(1);
   });
 });
@@ -573,7 +576,7 @@ describe("assemble portable release assets", () => {
     const bundleRoot = tempRoot();
     mkdirSync(join(bundleRoot, "artifacts", "portable-stage-windows-x64"), { recursive: true });
     await expect(assemblePortableReleaseAssets(["--bundle-root", bundleRoot])).rejects.toThrow(
-      /missing windows-x64 archive/u,
+      /downloaded artifacts must be exactly the three canonical target names/u,
     );
   });
 });

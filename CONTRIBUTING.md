@@ -16,16 +16,17 @@ npm run typecheck  # strict type-checking for src + tests
 
 ## Pull requests
 
-All eight required CI status checks must pass before a change can merge into `dev`:
+All nine required CI status checks must pass before a change can merge into `dev`:
 
 1. `ci`
 2. `actionlint`
 3. `Verify pinned action SHAs`
-4. `Analyze (actions)`
-5. `Analyze (javascript-typescript)`
-6. `Build, scan, SBOM, smoke`
-7. `Review dependency diff (dev/main)`
-8. `ui`
+4. `zizmor`
+5. `Analyze (actions)`
+6. `Analyze (javascript-typescript)`
+7. `Build, scan, SBOM, smoke`
+8. `Review dependency diff (dev/main)`
+9. `ui`
 
 The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
 [ADR-0019](docs/adr/ADR-0019-modular-package-architecture.md),

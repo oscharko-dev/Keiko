@@ -46,13 +46,15 @@ It does not perform production signing, macOS notarization, release upload, nati
 implementation, first-run setup, updater swap, sidecar launch, permission bridging, or model
 routing.
 
-Generated #1948 staging manifests therefore use `verificationPolicy: "staging"`,
+Manifest schema v1 has three explicit validation contexts. Staging manifests use
+`verificationPolicy: "staging"`,
 `verificationStatus: "unverified-staging"`, `signatureVerified: false`,
 `notarizationVerified: false`, target-specific `verificationChecks` set to `false`, and
 `platformSignatureLocallyVerified: false`. They also use `artifact.assetId: 0` because GitHub
-Release asset ids do not exist until #1952 uploads the artifacts. Those artifacts are manual-only
-staging outputs until #1951 replaces the metadata with verified signing/notarization evidence and
-#1952 binds real GitHub Release asset ids. The manifest example below remains the
+Release asset ids do not exist before upload. Unverified staging and verified unpublished candidates
+must use `release.releaseId: 0`, `artifact.assetId: 0`, and matching zero-id release-impact bindings;
+any positive pre-upload identity is rejected. After upload, the published context requires positive
+ids that exactly match the GitHub API release/asset snapshot. The manifest example below remains the
 production-complete contract for artifacts that may be promoted as portable release assets.
 
 ## Archive And Evidence Layout
@@ -572,8 +574,10 @@ Validation rules:
   `approvalSchemaVersion: 2`; schema-v1 sidecar approval and compatibility claims are rejected.
 - `artifact.platformTarget` is one of `windows-x64`, `macos-arm64`, or `macos-x64`.
 - `artifact.assetName` must match the platform matrix exactly.
-- `artifact.assetId` must be a real non-zero GitHub Release asset id for production manifests.
-  `0` is reserved for #1948 unverified staging manifests only.
+- `artifact.assetId` and `release.releaseId` are exactly `0` for staging and verified unpublished
+  candidates. API-bound published manifests require positive values matching the remote snapshot.
+- `provenance.buildWorkflowRunId` and `provenance.buildWorkflowAttempt` are the actual GitHub Actions
+  run identity, independent of the zero pre-upload Release Asset identity.
 - `artifact.sha256`, `runtime.nodeArchiveSha256`, and `release.commitSha` are digests, not paths.
 - `provenance.sourceCommitSha`, `provenance.rootPackageTarballSha256`,
   `provenance.packagedAppTreeSha256`, and `provenance.provenanceStatementSha256` bind the packaged

@@ -60,6 +60,7 @@
     "test:e2e:editor-chat-2119": "playwright test tests/e2e/editor-chat-roundtrip-2119.spec.ts --config tests/e2e/config/playwright.config.ts --project=chromium",
     "test:e2e:editor-agent-docking-2122": "playwright test --config tests/e2e/config/playwright.issue-2122-editor-agent-docking.config.ts --project=chromium",
     "test:e2e:editor-run-verification-2215": "playwright test --config tests/e2e/config/playwright.issue-2215-editor-run-verification.config.ts --project=chromium",
+    "test:e2e:editor-source-control-2235": "playwright test --config tests/e2e/config/playwright.issue-2235-editor-source-control.config.ts --project=chromium",
     "test:e2e:editor-governance-1395": "playwright test --config tests/e2e/config/playwright.issue-1395-editor-agent.config.ts --project=chromium",
     "test:e2e:editor-layout-1375": "playwright test --config tests/e2e/config/playwright.issue-1375-editor-layout.config.ts --project=chromium",
     "test:e2e:editor-baseline-1377": "playwright test --config tests/e2e/config/playwright.issue-1377-editor-baseline.config.ts --project=chromium",
@@ -175,6 +176,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-cli": "0.2.15",
+    "@oscharko-dev/keiko-connectors": "0.2.15",
     "@oscharko-dev/keiko-contracts": "0.2.15",
     "@oscharko-dev/keiko-evaluations": "0.2.15",
     "@oscharko-dev/keiko-git": "0.2.15",
@@ -202,6 +204,7 @@
     "yauzl": "^3.4.0"
   },
   "bundleDependencies": [
+    "@oscharko-dev/keiko-connectors",
     "@oscharko-dev/keiko-contracts",
     "@oscharko-dev/keiko-git",
     "@oscharko-dev/keiko-security",

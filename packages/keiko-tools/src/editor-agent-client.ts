@@ -1,5 +1,6 @@
 import {
   isEditorAgentActionResult,
+  parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
   isEditorAgentVerificationResult,
   type EditorAgentAction,
@@ -16,6 +17,8 @@ type EditorAgentConflictDetail = NonNullable<EditorAgentActionResult["conflict"]
 type EditorAgentFileActionResult = NonNullable<EditorAgentActionResult["files"]>[number];
 
 export const DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS = 2_000;
+// Issue #2298: allow a 5-second client margin over the bounded 20-second server worst case.
+export const DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS = 25_000;
 export const DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES = 256 * 1024;
 // Issue #2214 (AC7) — a verification run's own wall-time ceiling is DEFAULT_VERIFICATION_LIMITS.wallTimeMs
 // (120_000 ms). The synchronous, single-shot verification route holds its POST open until the run
@@ -124,6 +127,10 @@ function isPositiveInteger(value: number): boolean {
   return Number.isInteger(value) && value > 0;
 }
 
+function isAborted(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -228,6 +235,16 @@ function parseActionResult(value: unknown): EditorAgentActionQueuedResponse | nu
   return isEditorAgentActionResult(result) ? { result: redactActionResult(result) } : null;
 }
 
+function parseQueryGitActionResult(value: unknown): EditorAgentActionQueuedResponse | null {
+  const parsed = parseActionResult(value);
+  if (parsed === null) return null;
+  if (parsed.result.status !== "succeeded") {
+    return parsed.result.data === undefined ? parsed : null;
+  }
+  const data = parseEditorAgentQueryGitData(parsed.result.data);
+  return data.ok ? { result: { ...parsed.result, data: { ...data.value } } } : null;
+}
+
 // Issue #2214 — the verification route's response is content-free BY CONSTRUCTION (the redacted report
 // type has no field for raw output), so the client validates its shape rather than re-redacting it.
 function parseVerificationResult(value: unknown): EditorAgentVerificationResult | null {
@@ -321,6 +338,7 @@ export class EditorAgentHttpClient {
   private readonly origin: URL;
   private readonly transport: EditorAgentHttpTransport;
   private readonly timeoutMs: number;
+  private readonly queryGitTimeoutMs: number;
   private readonly verificationTimeoutMs: number;
   private readonly maxResponseBytes: number;
   private readonly scheduler: EditorAgentTimeoutScheduler;
@@ -329,6 +347,7 @@ export class EditorAgentHttpClient {
     readonly baseUrl: string;
     readonly transport: EditorAgentHttpTransport;
     readonly timeoutMs?: number | undefined;
+    readonly queryGitTimeoutMs?: number | undefined;
     readonly verificationTimeoutMs?: number | undefined;
     readonly maxResponseBytes?: number | undefined;
     readonly scheduler?: EditorAgentTimeoutScheduler | undefined;
@@ -336,12 +355,14 @@ export class EditorAgentHttpClient {
     this.origin = parseLoopbackOrigin(deps.baseUrl);
     this.transport = deps.transport;
     this.timeoutMs = deps.timeoutMs ?? DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS;
+    this.queryGitTimeoutMs = deps.queryGitTimeoutMs ?? DEFAULT_EDITOR_AGENT_QUERY_GIT_TIMEOUT_MS;
     this.verificationTimeoutMs =
       deps.verificationTimeoutMs ?? DEFAULT_EDITOR_AGENT_VERIFICATION_TIMEOUT_MS;
     this.maxResponseBytes = deps.maxResponseBytes ?? DEFAULT_EDITOR_AGENT_MAX_RESPONSE_BYTES;
     this.scheduler = deps.scheduler ?? scheduler;
     if (
       !isPositiveInteger(this.timeoutMs) ||
+      !isPositiveInteger(this.queryGitTimeoutMs) ||
       !isPositiveInteger(this.verificationTimeoutMs) ||
       !isPositiveInteger(this.maxResponseBytes)
     ) {
@@ -385,9 +406,9 @@ export class EditorAgentHttpClient {
       "POST",
       body,
       signal,
-      [200, 202, 409, 429],
-      parseActionResult,
-      this.timeoutMs,
+      [200, 202, 403, 409, 429],
+      body.type === "queryGit" ? parseQueryGitActionResult : parseActionResult,
+      body.type === "queryGit" ? this.queryGitTimeoutMs : this.timeoutMs,
     );
   }
 
@@ -436,6 +457,12 @@ export class EditorAgentHttpClient {
     signal: AbortSignal,
     timeoutMs: number,
   ): Promise<TransportOutcome> {
+    if (isAborted(signal)) {
+      return {
+        ok: false,
+        error: error("cancelled", "CANCELLED", "Editor agent call cancelled."),
+      };
+    }
     const controller = new AbortController();
     const boundedRequest = { ...request, signal: controller.signal };
     let stop: ((outcome: TransportOutcome) => void) | undefined;
@@ -447,7 +474,7 @@ export class EditorAgentHttpClient {
       stop?.({ ok: false, error: error("cancelled", "CANCELLED", "Editor agent call cancelled.") });
     };
     signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) onAbort();
+    if (isAborted(signal)) onAbort();
     const handle = this.scheduler.set(() => {
       controller.abort();
       stop?.(transportError("TIMED_OUT", "The editor agent route timed out."));

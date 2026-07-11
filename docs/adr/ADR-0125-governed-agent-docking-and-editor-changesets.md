@@ -28,6 +28,16 @@ risk, and composes the baseline editor security decision with the central matrix
 stricter-wins. The registry also enforces elapsed runtime, cumulative tool-call, and cumulative
 patch-byte budgets atomically for admitted editor actions.
 
+Issue #2298 (2026-07-11) amends that mapping for bounded, local repository queries. `queryGit` uses
+a dedicated editor `workspace-read` effect mapped to the existing Workbench `workspace-read` /
+`workspace-contained` vocabulary at low risk. It is therefore non-exempt: a valid Authority
+Envelope is required and the existing tool-call and elapsed-runtime budgets are reserved. The read
+remains workspace-contained and sensitive-path-gated, performs no Git mutation, is not an external
+or delivery effect, and requires no delivery approval. Its additive audit target metadata is a
+bounded basename and server-computed SHA-256 path hash; the full path is omitted and contracts do
+not compute the digest. The shared action-class mapping is consistent with ADR-0129's product-wide
+authority rule and introduces no parallel editor-local envelope.
+
 Epic #2091 closeout makes registration of the same run-id/envelope-digest pair idempotent without
 resetting registration time or cumulative usage. Runtime- or usage-exhausted records remain denied
 until envelope expiry or explicit revocation, so re-confirming identical authority cannot restart a
@@ -217,8 +227,9 @@ central policy effects as follows:
 
 `applyChangeset` maps to `content-mutation` and deterministic high risk. Issue #2121 maps
 `content-mutation` to `workspace-write` / `workspace-contained`, while pure editor navigation and
-layout remain outside the envelope and future `external-effect` maps to `delivery-substrate` /
-`delivery`. Closed reason codes cover missing/invalid/expired
+layout remain outside the envelope. Issue #2298 maps bounded local repository reads to
+`workspace-read` / `workspace-contained` at low risk; future `external-effect` maps to
+`delivery-substrate` / `delivery`. Closed reason codes cover missing/invalid/expired
 authority, invalid/expired/consumed approval references, unsupported actions, secret exfiltration,
 platform restrictions, mode/risk approval, and separately approved delivery. The existing
 classifier supplies the immutable containment/sensitivity baseline. The existing server decision
@@ -228,9 +239,10 @@ server transaction can commit, while allowed changesets confirm directly. The Au
 is resolved again immediately before that transaction, and every declared changeset target
 participates in policy and audit classification.
 
-Each non-exempt admitted action atomically reserves one Authority Envelope tool call and its patch
-body or inserted text-edit bytes. Reservations are cumulative per server-owned authority record; exceeding
-`maxToolCalls`, `maxPatchBytes`, or elapsed `maxRuntimeMs` fails as
+Each non-exempt admitted action, including `queryGit`, atomically reserves one Authority Envelope
+tool call and its patch body or inserted text-edit bytes when applicable. Reservations are
+cumulative per server-owned authority record; exceeding `maxToolCalls`, `maxPatchBytes`, or elapsed
+`maxRuntimeMs` fails as
 `authority-budget-exceeded`. Idempotent replay returns the retained result before reservation and
 therefore does not double-charge. Editor actions carry no prompt body, so this route consumes zero
 of `maxPromptTokens`.
@@ -249,6 +261,11 @@ required shape. This includes the optional Issue #2119 action/audit origin and t
 `requiresReview` hint; builders resolve an omitted action origin to `agent`, while browsers treat an
 omitted review hint as review-required. Existing V1 snapshots, actions, results, and context
 contracts continue to validate. Every new editor-agent wire shape has a runtime guard.
+
+Issue #2298's optional audit `targetBasename` and `targetPathHash` fields are additive V1 metadata.
+Runtime guards bound the basename and require a lowercase SHA-256 hex digest when present;
+`queryGit` records reject a full `targetPath`. The producing server, not the contracts leaf,
+computes the digest.
 
 ## Human-control invariant
 

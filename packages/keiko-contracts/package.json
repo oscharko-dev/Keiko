@@ -59,6 +59,10 @@
       "types": "./dist/editor-agent.d.ts",
       "import": "./dist/editor-agent.js"
     },
+    "./git-editor": {
+      "types": "./dist/git-editor.d.ts",
+      "import": "./dist/git-editor.js"
+    },
     "./memory": {
       "types": "./dist/memory-barrel.d.ts",
       "import": "./dist/memory-barrel.js"

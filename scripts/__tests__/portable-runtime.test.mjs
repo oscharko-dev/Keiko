@@ -9,6 +9,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,9 +20,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   hashDirectoryTree,
   PORTABLE_TARGETS,
+  findPortableMetadataRedactionFailures,
+  hashDirectoryTree,
+  portableVerificationSummaryForManifest,
   safeArchiveEntryPath,
   sha256File,
+  validatePortableCandidateManifest,
   validatePortableManifest,
+  validatePortablePublishedManifest,
+  validatePortableStagingManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
 import {
@@ -30,6 +37,10 @@ import {
   isCrossDeviceError,
   moveStagedDirectory,
 } from "../stage-portable-runtime.mjs";
+import {
+  assemblePortableReleaseAssets,
+  validatePortableReleaseSet,
+} from "../assemble-portable-release-assets.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -45,8 +56,117 @@ const VERIFY_SIGNING_SCRIPT = "scripts/verify-portable-runtime-signing.mjs";
 const ROOT_MANIFEST = JSON.parse(readFileSync("package.json", "utf8"));
 const ROOT_PACKAGE_VERSION = ROOT_MANIFEST.version;
 const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
+const LIFECYCLE_CONTEXTS = ["staging", "candidate", "published", "published-contract"];
+const VERIFICATION_POLICIES = ["staging", "development", "pull-request", "production"];
+const VERIFICATION_STATUSES = [
+  "unverified-staging",
+  "unsigned-non-production",
+  "verified-non-production",
+  "verified-production",
+  "verification-failed",
+];
+const INVALID_LIFECYCLE_STATES = LIFECYCLE_CONTEXTS.flatMap((context) => {
+  const expected =
+    context === "staging"
+      ? ["staging", "unverified-staging"]
+      : ["production", "verified-production"];
+  return VERIFICATION_POLICIES.flatMap((policy) =>
+    VERIFICATION_STATUSES.filter((status) => policy !== expected[0] || status !== expected[1]).map(
+      (status) => [context, policy, status],
+    ),
+  );
+});
 const PORTABLE_RELEASE_IMPACT_ENTRY_ID = `2026-07-06-keiko-${ROOT_PACKAGE_VERSION}-portable-runtime-staging-contract`;
 let packageSurfacePreparedForTest = false;
+
+describe("findPortableMetadataRedactionFailures", () => {
+  it.each([
+    [{ password: "correct-horse-battery-staple" }],
+    [{ passwd: "correct-horse-battery-staple" }],
+    [{ secret: "correct-horse-battery-staple" }],
+    [{ token: "sensitive-but-not-prefix-shaped" }],
+    [{ "access-token": "sensitive-but-not-prefix-shaped" }],
+    [{ "api-key": "sensitive-but-not-prefix-shaped" }],
+    [{ Authorization: "Bearer sensitive-value" }],
+    [{ authorization: "Basic c2Vuc2l0aXZlOnZhbHVl" }],
+    [{ client_secret: "correct-horse-battery-staple" }],
+    [{ privateKey: "correct-horse-battery-staple" }],
+    [{ api_token: "opaque" }],
+    [{ authToken: "opaque" }],
+    [{ refresh_token: "opaque" }],
+    [{ "proxy-authorization": "opaque" }],
+    [{ "client-password": "opaque" }],
+    [{ properties: [{ name: "api_token", value: "opaque" }] }],
+    [{ properties: [{ key: "client-password", value: "opaque" }] }],
+  ])("rejects credential-bearing metadata %#", (value) => {
+    expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+    expect(findPortableMetadataRedactionFailures(JSON.stringify(value))).not.toEqual([]);
+  });
+
+  it("allows benign documented evidence metadata", () => {
+    const evidence = {
+      bomFormat: "CycloneDX",
+      component: { name: "@oscharko-dev/keiko", version: ROOT_PACKAGE_VERSION },
+      descriptions: [
+        "Basic authentication utilities for local testing",
+        "The bearer must retain this notice.",
+      ],
+      subjectDigest: DIGEST_A,
+    };
+
+    expect(findPortableMetadataRedactionFailures(evidence)).toEqual([]);
+    expect(findPortableMetadataRedactionFailures(JSON.stringify(evidence))).toEqual([]);
+  });
+
+  it("rejects embedded credential URLs and explicit authorization syntax", () => {
+    expect(
+      findPortableMetadataRedactionFailures("mirror https://user:password@example.invalid/npm/"),
+    ).not.toEqual([]);
+    expect(findPortableMetadataRedactionFailures("Authorization: Bearer opaque-value")).not.toEqual(
+      [],
+    );
+    expect(
+      findPortableMetadataRedactionFailures(
+        "metadata auth=Bearer opaque-value proxy_authorization=Basic c2Vuc2l0aXZlOnZhbHVl",
+      ),
+    ).not.toEqual([]);
+  });
+
+  it.each([`github_pat_${"x".repeat(82)}`, `npm_${"a".repeat(36)}`])(
+    "rejects unlabelled modern registry credentials",
+    (value) => {
+      expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+      expect(
+        findPortableMetadataRedactionFailures(JSON.stringify({ evidence: value })),
+      ).not.toEqual([]);
+    },
+  );
+
+  it("detects terminal credential labels and inline authorization syntax without rejecting qualified metadata", () => {
+    for (const value of [
+      "request header Authorization: Bearer opaque-value",
+      "request Proxy-Authorization: Basic c2Vuc2l0aXZlOnZhbHVl",
+      { apitoken: "opaque" },
+      { authtoken: "opaque" },
+      { refreshtoken: "opaque" },
+      { clientPassword: "opaque" },
+      { proxyAuthorization: "opaque" },
+    ]) {
+      expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+    }
+
+    for (const value of [
+      { tokenCount: 123 },
+      { authorizationPolicy: "release-owner-reviewed" },
+      { authenticationMode: "mTLS" },
+      { bearerDescription: "documents bearer semantics" },
+      { packageVariable: "npm_package_name" },
+      { documentation: "github_pat_ is the fine-grained PAT prefix" },
+    ]) {
+      expect(findPortableMetadataRedactionFailures(value)).toEqual([]);
+    }
+  });
+});
 
 const BASE_MANIFEST = {
   schemaVersion: 1,
@@ -385,12 +505,131 @@ function setVerificationState(candidate, options = {}) {
 }
 
 function writeManifestFixture(candidate, dir) {
+  candidate.release.releaseId = 0;
+  candidate.artifact.assetId = 0;
+  syncReviewedBinding(candidate);
+  candidate.releaseImpact.reviewedBinding.releaseId = 0;
   const stageRoot = join(dir, "portable-runtime");
   const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
   mkdirSync(join(stageRoot, "manifest"), { recursive: true });
   mkdirSync(join(stageRoot, "evidence"), { recursive: true });
   writeFileSync(manifestPath, JSON.stringify(candidate, null, 2) + "\n");
   return { manifestPath, stageRoot };
+}
+
+function crc32Zeros(size) {
+  let crc = 0xffffffff;
+  for (let index = 0; index < size; index += 1) {
+    crc ^= 0;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function storedZipFixture(payloadSize) {
+  const name = Buffer.from("payload.bin");
+  const crc = crc32Zeros(payloadSize);
+  const local = Buffer.alloc(30 + name.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(payloadSize, 18);
+  local.writeUInt32LE(payloadSize, 22);
+  local.writeUInt16LE(name.length, 26);
+  name.copy(local, 30);
+  const central = Buffer.alloc(46 + name.length);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(payloadSize, 20);
+  central.writeUInt32LE(payloadSize, 24);
+  central.writeUInt16LE(name.length, 28);
+  name.copy(central, 46);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12);
+  end.writeUInt32LE(local.length + payloadSize, 16);
+  return Buffer.concat([local, Buffer.alloc(payloadSize), central, end]);
+}
+
+function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKind) {
+  const artifactsRoot = join(bundleRoot, "artifacts");
+  for (const [index, target] of PORTABLE_TARGETS.entries()) {
+    const stageRoot = join(artifactsRoot, `portable-stage-${target.platformTarget}`);
+    mkdirSync(join(stageRoot, "manifest"), { recursive: true });
+    mkdirSync(join(stageRoot, "evidence"), { recursive: true });
+    const archivePath = join(stageRoot, target.assetName);
+    writeFileSync(
+      archivePath,
+      storedZipFixture(largeArchive && index === 0 ? 17 * 1024 * 1024 : 1),
+    );
+    const candidate = manifest();
+    setManifestTarget(candidate, target.platformTarget);
+    setVerificationState(candidate);
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    candidate.artifact.sizeBytes = statSync(archivePath).size;
+    candidate.artifact.sha256 = digestFor(readFileSync(archivePath));
+    if (index === 0 && unsafeSidecarKind !== undefined) {
+      addSidecarRuntime(candidate, target.platformTarget);
+      const sidecar = candidate.sidecarRuntimes[0];
+      const resourceRoot = join(stageRoot, "payload", "Keiko");
+      const sidecarRoot = join(resourceRoot, sidecar.payloadRootPath);
+      mkdirSync(join(sidecarRoot, "evidence"), { recursive: true });
+      writeFileSync(join(resourceRoot, sidecar.executablePath), "sidecar executable\n");
+      writeFileSync(
+        join(sidecarRoot, "LICENSE.txt"),
+        unsafeSidecarKind === "license" ? "token=forbidden-secret\n" : "Sidecar license.\n",
+      );
+      writeFileSync(
+        join(sidecarRoot, "evidence", "sbom.cdx.json"),
+        unsafeSidecarKind === "sbom"
+          ? '{"bomFormat":"CycloneDX","rawOutput":"secret"}\n'
+          : '{"bomFormat":"CycloneDX"}\n',
+      );
+      sidecar.licenseEvidence.sha256 = digestFor(readFileSync(join(sidecarRoot, "LICENSE.txt")));
+      sidecar.sbomEvidence.sha256 = digestFor(
+        readFileSync(join(sidecarRoot, "evidence", "sbom.cdx.json")),
+      );
+      sidecar.payloadSha256 = hashDirectoryTree(sidecarRoot);
+      sidecar.sizeBytes =
+        statSync(join(resourceRoot, sidecar.executablePath)).size +
+        statSync(join(sidecarRoot, "LICENSE.txt")).size +
+        statSync(join(sidecarRoot, "evidence", "sbom.cdx.json")).size;
+    }
+    const provenance = `${JSON.stringify({
+      artifact: target.assetName,
+      buildWorkflowAttempt: 1,
+      buildWorkflowRunId: 123456789,
+      packageVersion: ROOT_PACKAGE_VERSION,
+      sourceCommitSha: COMMIT_SHA,
+      subjectDigest: candidate.artifact.sha256,
+      target: target.platformTarget,
+    })}\n`;
+    candidate.provenance.provenanceStatementSha256 = digestFor(provenance);
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    writeFileSync(
+      join(stageRoot, "manifest", "portable-manifest.json"),
+      `${JSON.stringify(candidate, null, 2)}\n`,
+    );
+    writeFileSync(
+      join(stageRoot, "evidence", "SHA256SUMS.txt"),
+      `${candidate.artifact.sha256}  ${target.assetName}\n`,
+    );
+    writeFileSync(join(stageRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
+    writeFileSync(join(stageRoot, "evidence", "third-party-notices.txt"), "Notices.\n");
+    writeFileSync(
+      join(stageRoot, "evidence", "signing-verification.json"),
+      `${JSON.stringify(portableVerificationSummaryForManifest(candidate))}\n`,
+    );
+    writeFileSync(join(stageRoot, "evidence", "provenance.intoto.jsonl"), provenance);
+  }
 }
 
 function writeVerificationInput(dir, input) {
@@ -417,10 +656,12 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
       nodeSha256: nodeArchive.sha256,
       nodeVersion: NODE_VERSION,
       outDir,
-      releaseId: 123456789,
+      releaseId: 0,
       releaseTag: ROOT_RELEASE_TAG,
       sidecarRuntimeSpecs,
       target,
+      workflowRunAttempt: 1,
+      workflowRunId: 123456789,
     },
     {
       buildPrimaryLauncher: writePrimaryLauncherFixture,
@@ -681,7 +922,7 @@ function stageArgs(dir, platformTarget, nodeArchive, sidecarSpec) {
     "--commit-sha",
     COMMIT_SHA,
     "--release-id",
-    "123456789",
+    "0",
     "--release-tag",
     ROOT_RELEASE_TAG,
     "--node-cache-dir",
@@ -736,6 +977,119 @@ describe("verifySha256File", () => {
 });
 
 describe("validatePortableManifest", () => {
+  it("separates staging, unpublished candidate, and API-bound published identities", () => {
+    const candidate = manifest();
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+
+    expect(validatePortableCandidateManifest(candidate)).toEqual([]);
+    expect(validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 })).toEqual(
+      expect.arrayContaining([
+        "release.releaseId: must be greater than 0",
+        "artifact.assetId: must be greater than 0",
+      ]),
+    );
+
+    candidate.release.releaseId = 123;
+    candidate.artifact.assetId = 456;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 123;
+    expect(validatePortableCandidateManifest(candidate).join("\n")).toContain(
+      "artifact.assetId: must be 0 before GitHub Release upload",
+    );
+    expect(validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 })).toEqual(
+      [],
+    );
+    expect(validatePortablePublishedManifest(candidate, undefined)).toContain(
+      "validation.apiIdentity: must be a positive GitHub API snapshot",
+    );
+    expect(
+      validatePortablePublishedManifest(candidate, { assetId: 999, releaseId: 123 }),
+    ).toContain("artifact.assetId: does not match the GitHub API snapshot");
+
+    setVerificationState(candidate, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate)).toEqual([]);
+  });
+
+  it.each([
+    ["staging", "production", "verified-production"],
+    ["candidate", "pull-request", "verified-non-production"],
+    ["published", "pull-request", "verified-non-production"],
+  ])("rejects %s manifests with %s/%s verification", (context, policy, status) => {
+    const candidate = manifest();
+    if (context === "staging") {
+      candidate.release.releaseId = 0;
+      candidate.artifact.assetId = 0;
+    } else if (context === "candidate") {
+      candidate.release.releaseId = 0;
+      candidate.artifact.assetId = 0;
+      setVerificationState(candidate, {
+        verificationPolicy: policy,
+        verificationReasonCodes: ["non-production-artifact"],
+        verificationStatus: status,
+      });
+    } else {
+      setVerificationState(candidate, {
+        verificationPolicy: policy,
+        verificationReasonCodes: ["non-production-artifact"],
+        verificationStatus: status,
+      });
+    }
+    syncReviewedBinding(candidate);
+    if (context !== "published") candidate.releaseImpact.reviewedBinding.releaseId = 0;
+
+    const failures =
+      context === "staging"
+        ? validatePortableStagingManifest(candidate)
+        : context === "candidate"
+          ? validatePortableCandidateManifest(candidate)
+          : validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 });
+    expect(failures.join("\n")).toContain(`verification must match ${context} lifecycle context`);
+  });
+
+  it.each(INVALID_LIFECYCLE_STATES)(
+    "rejects invalid root lifecycle state %s/%s/%s",
+    (context, policy, status) => {
+      const candidate = manifest();
+      candidate.security.verificationPolicy = policy;
+      candidate.security.verificationStatus = status;
+      syncReviewedBinding(candidate);
+
+      expect(validatePortableManifest(candidate, { context }).join("\n")).toContain(
+        `verification must match ${context} lifecycle context`,
+      );
+    },
+  );
+
+  it.each(INVALID_LIFECYCLE_STATES)(
+    "rejects invalid sidecar lifecycle state %s/%s/%s",
+    (context, policy, status) => {
+      const candidate = manifest();
+      addSidecarRuntime(candidate, "windows-x64");
+      candidate.sidecarRuntimes[0].signing.verificationPolicy = policy;
+      candidate.sidecarRuntimes[0].signing.verificationStatus = status;
+      syncReviewedBinding(candidate);
+
+      expect(validatePortableManifest(candidate, { context }).join("\n")).toContain(
+        `sidecarRuntimes[0].signing.verificationStatus: verification must match ${context} lifecycle context`,
+      );
+    },
+  );
+
   it("accepts a complete production manifest", () => {
     expect(validatePortableManifest(manifest())).toEqual([]);
   });
@@ -886,7 +1240,11 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(candidate).join("\n")).toContain(
       "security.signatureVerified: must be true",
     );
-    expect(validatePortableManifest(candidate, { allowUnverified: true })).toEqual([]);
+    candidate.release.releaseId = 0;
+    candidate.artifact.assetId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate)).toEqual([]);
   });
 
   it("reserves missing release asset ids for explicit unverified staging mode", () => {
@@ -905,7 +1263,10 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(candidate).join("\n")).toContain(
       "artifact.assetId: must be greater than 0",
     );
-    expect(validatePortableManifest(candidate, { allowUnverified: true })).toEqual([]);
+    candidate.release.releaseId = 0;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = 0;
+    expect(validatePortableStagingManifest(candidate)).toEqual([]);
   });
 
   it("requires explicit verification policy metadata for production manifests", () => {
@@ -943,6 +1304,174 @@ describe("validatePortableManifest", () => {
     expect(failures).toContain("releaseImpact.reviewedBinding.releaseId");
     expect(failures).toContain("releaseImpact.reviewedBinding.checksumsPath");
     expect(failures).toContain("releaseImpact.reviewedBinding.signatureKind");
+  });
+});
+
+describe("validatePortableReleaseSet", () => {
+  function candidateSet() {
+    return PORTABLE_TARGETS.map((target) => {
+      const candidate = manifest();
+      setManifestTarget(candidate, target.platformTarget);
+      setVerificationState(candidate);
+      candidate.release.releaseId = 0;
+      candidate.artifact.assetId = 0;
+      syncReviewedBinding(candidate);
+      candidate.releaseImpact.reviewedBinding.releaseId = 0;
+      return candidate;
+    });
+  }
+
+  const expected = {
+    commitSha: COMMIT_SHA,
+    releaseTag: ROOT_RELEASE_TAG,
+    runAttempt: 1,
+    runId: 123456789,
+    version: ROOT_PACKAGE_VERSION,
+  };
+
+  it("accepts exactly the three canonical verified candidates", () => {
+    expect(validatePortableReleaseSet(candidateSet(), expected)).toEqual([]);
+  });
+
+  it("rejects a verified non-production target during assembly qualification", () => {
+    const set = candidateSet();
+    setVerificationState(set[0], {
+      verificationPolicy: "pull-request",
+      verificationReasonCodes: ["non-production-artifact"],
+      verificationStatus: "verified-non-production",
+    });
+
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "verification must match candidate lifecycle context",
+    );
+  });
+
+  it.each([
+    ["missing", (set) => set.slice(1), "exactly three"],
+    ["extra", (set) => [...set, manifest()], "exactly three"],
+    ["duplicate", (set) => [...set.slice(0, 2), set[0]], "duplicate portable target"],
+    [
+      "case collision",
+      (set) => {
+        set[0].artifact.platformTarget = "Windows-X64";
+        return set;
+      },
+      "unsupported or relabelled",
+    ],
+    [
+      "relabelled",
+      (set) => {
+        set[0].artifact.platformTarget = "linux-x64";
+        return set;
+      },
+      "unsupported or relabelled",
+    ],
+    [
+      "architecture drift",
+      (set) => {
+        set[2].runtime.nodeArchitecture = "arm64";
+        return set;
+      },
+      "runtime.nodeArchitecture",
+    ],
+    [
+      "SHA drift",
+      (set) => {
+        set[2].release.commitSha = "f".repeat(40);
+        return set;
+      },
+      "release.commitSha",
+    ],
+    [
+      "version drift",
+      (set) => {
+        set[2].product.packageVersion = "9.9.9";
+        return set;
+      },
+      "product.packageVersion",
+    ],
+    [
+      "tag drift",
+      (set) => {
+        set[2].release.releaseTag = "v9.9.9";
+        return set;
+      },
+      "release.releaseTag",
+    ],
+    [
+      "run id drift",
+      (set) => {
+        set[2].provenance.buildWorkflowRunId = 222;
+        return set;
+      },
+      "buildWorkflowRunId",
+    ],
+    [
+      "run drift",
+      (set) => {
+        set[2].provenance.buildWorkflowAttempt = 2;
+        return set;
+      },
+      "buildWorkflowAttempt",
+    ],
+  ])("rejects %s target sets", (_name, mutate, message) => {
+    expect(validatePortableReleaseSet(mutate(candidateSet()), expected).join("\n")).toContain(
+      message,
+    );
+  });
+});
+
+describe("assemblePortableReleaseAssets bounds", () => {
+  const args = (bundleRoot) => [
+    "--bundle-root",
+    bundleRoot,
+    "--commit-sha",
+    COMMIT_SHA,
+    "--release-tag",
+    ROOT_RELEASE_TAG,
+    "--run-attempt",
+    "1",
+    "--run-id",
+    "123456789",
+    "--version",
+    ROOT_PACKAGE_VERSION,
+  ];
+
+  it("assembles a valid ZIP larger than the evidence limit", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, true);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
+      schemaVersion: 1,
+    });
+  });
+
+  it("rejects evidence larger than 16 MiB", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    truncateSync(
+      join(
+        bundleRoot,
+        "artifacts",
+        "portable-stage-windows-x64",
+        "evidence",
+        "third-party-notices.txt",
+      ),
+      16 * 1024 * 1024 + 1,
+    );
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "license evidence has an invalid bounded size",
+    );
+  });
+
+  it.each(["license", "sbom"])("rejects unsafe sidecar %s evidence", async (kind) => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, kind);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "sidecar evidence contains forbidden metadata",
+    );
   });
 });
 
@@ -1045,7 +1574,7 @@ describe("verify-portable-runtime-signing", () => {
 
     const result = runSigningVerify(["--manifest", manifestPath, "--policy", "pull-request"]);
 
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
     const summary = JSON.parse(
       readFileSync(join(stageRoot, "evidence", "signing-verification.json"), "utf8"),
@@ -1097,7 +1626,9 @@ describe("verify-portable-runtime-signing", () => {
     ]);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("unsupported verification input key: rawLog");
+    expect(result.stderr).toContain("verification input contains unsupported keys");
+    expect(result.stderr).not.toContain("rawLog");
+    expect(result.stderr).not.toContain("codesign output");
   });
 
   it("applies the same production notarization checks to both macOS architectures", () => {
@@ -1184,7 +1715,7 @@ describe("verify-portable-runtime-signing", () => {
       "verified-production",
       "verified-production",
     ]);
-    expect(validatePortableManifest(manifestAfter)).toEqual([]);
+    expect(validatePortableCandidateManifest(manifestAfter)).toEqual([]);
   });
 
   it("fails production verification when a sidecar remains unverifiable", () => {
@@ -1218,7 +1749,7 @@ describe("verify-portable-runtime-signing", () => {
     const manifestAfter = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifestAfter.security.verificationStatus).toBe("verified-production");
     expect(manifestAfter.sidecarRuntimes[0].signing.verificationStatus).toBe("verification-failed");
-    expect(validatePortableManifest(manifestAfter).join("\n")).toContain(
+    expect(validatePortableCandidateManifest(manifestAfter).join("\n")).toContain(
       "sidecarRuntimes[0].signing.signatureVerified: must be true",
     );
   });
@@ -1268,7 +1799,7 @@ describe("verify-portable-runtime-signing", () => {
         "--verification-input",
         duplicateInput,
       ]).stderr,
-    ).toContain("duplicate sidecar verification input: opencode-compatible");
+    ).toContain("sidecar verification input is duplicated");
     const unknownInput = writeVerificationInput(dir, {
       verificationChecks: windowsVerificationChecks(),
       sidecarRuntimes: [
@@ -1284,7 +1815,89 @@ describe("verify-portable-runtime-signing", () => {
         "--verification-input",
         unknownInput,
       ]).stderr,
-    ).toContain("unknown sidecar verification input: unknown-sidecar");
+    ).toContain("sidecar verification input is unknown");
+  });
+
+  it("redacts secret-shaped keys, values, malformed JSON excerpts, and private paths", () => {
+    const dir = tempDir();
+    const candidate = manifest();
+    const { manifestPath } = writeManifestFixture(candidate, dir);
+    const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    const privateDir = join(dir, `private-${secret}`);
+    mkdirSync(privateDir, { recursive: true });
+    const malformedPath = join(privateDir, "verification-input.json");
+    writeFileSync(malformedPath, `{"${secret}":`);
+
+    const malformed = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      malformedPath,
+    ]);
+    expect(malformed.status).not.toBe(0);
+    expect(malformed.stderr).toContain("verification input could not be read");
+    expect(malformed.stderr).not.toContain(secret);
+    expect(malformed.stderr).not.toContain(privateDir);
+
+    const nestedInput = writeVerificationInput(dir, {
+      verificationChecks: {
+        publisherChainVerified: true,
+        timestampVerified: true,
+        [secret]: false,
+      },
+    });
+    const nested = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      nestedInput,
+    ]);
+    expect(nested.stderr).toContain("verification checks contain unsupported keys");
+    expect(nested.stderr).not.toContain(secret);
+
+    const topLevelInput = writeVerificationInput(dir, {
+      [secret]: `value-${secret}`,
+      verificationChecks: windowsVerificationChecks(),
+    });
+    const topLevel = runSigningVerify([
+      "--manifest",
+      manifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      topLevelInput,
+    ]);
+    expect(topLevel.stderr).toContain("verification input contains unsupported keys");
+    expect(topLevel.stderr).not.toContain(secret);
+
+    const sidecarDir = tempDir();
+    const sidecarManifest = manifest();
+    addSidecarRuntime(sidecarManifest, "windows-x64");
+    const { manifestPath: sidecarManifestPath } = writeManifestFixture(sidecarManifest, sidecarDir);
+    const sidecarInput = writeVerificationInput(sidecarDir, {
+      verificationChecks: windowsVerificationChecks(),
+      sidecarRuntimes: [
+        {
+          name: "opencode-compatible",
+          [secret]: `value-${secret}`,
+          verificationChecks: windowsVerificationChecks(),
+        },
+      ],
+    });
+    const sidecarResult = runSigningVerify([
+      "--manifest",
+      sidecarManifestPath,
+      "--policy",
+      "production",
+      "--verification-input",
+      sidecarInput,
+    ]);
+    expect(sidecarResult.stderr).toContain("sidecar verification input contains unsupported keys");
+    expect(sidecarResult.stderr).not.toContain(secret);
   });
 });
 
@@ -1780,7 +2393,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1811,7 +2424,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1842,7 +2455,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1874,7 +2487,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       ROOT_RELEASE_TAG,
       "--node-cache-dir",
@@ -1903,7 +2516,7 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "--commit-sha",
       COMMIT_SHA,
       "--release-id",
-      "123456789",
+      "0",
       "--release-tag",
       `${ROOT_RELEASE_TAG}-beta.1`,
       "--node-cache-dir",

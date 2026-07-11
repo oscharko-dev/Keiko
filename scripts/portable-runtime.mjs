@@ -4,6 +4,15 @@ import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
 
+// Shared bounds for the platform-specific bounded payload-tree walkers (Windows PE and macOS
+// Mach-O inventory). Kept in one place so the two walkers cannot drift to different limits.
+export const PORTABLE_PAYLOAD_MAX_FILES = 50_000;
+export const PORTABLE_PAYLOAD_MAX_DEPTH = 32;
+
+export function portablePayloadRelativePath(root, path) {
+  return relative(root, path).replaceAll("\\", "/");
+}
+
 export const PORTABLE_TARGETS = Object.freeze([
   Object.freeze({
     assetName: "keiko-windows-x64.zip",
@@ -56,6 +65,13 @@ export const PORTABLE_VERIFICATION_STATUSES = Object.freeze([
   "verified-production",
   "verification-failed",
 ]);
+export const PORTABLE_MANIFEST_VALIDATION_CONTEXTS = Object.freeze([
+  "staging",
+  "non-production",
+  "candidate",
+  "published",
+  "published-contract",
+]);
 export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
   "credential-unavailable",
   "macos-assessment-unverified",
@@ -72,8 +88,10 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
 ]);
 
 const SECRET_PATTERN =
-  /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
-const CREDENTIAL_URL_PATTERN = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;
+  /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{82}|npm_[A-Za-z0-9]{36}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
+const CREDENTIAL_VALUE_PATTERN =
+  /(?:(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization)\s*:\s*|(?<![A-Za-z0-9_])(?:proxy[-_ ]authorization|authorization|auth)\s*=\s*)(?:bearer|basic)\s+\S+/iu;
+const CREDENTIAL_URL_PATTERN = /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/u;
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
@@ -123,6 +141,29 @@ const FORBIDDEN_KEY_PARTS = [
   "secretValue",
   "tokenValue",
 ];
+const CREDENTIAL_METADATA_KEYS = new Set([
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "accesstoken",
+  "apikey",
+  "authorization",
+  "auth",
+  "credential",
+  "privatekey",
+  "clientsecret",
+]);
+const CREDENTIAL_METADATA_WORDS = new Set([
+  "password",
+  "passwd",
+  "secret",
+  "token",
+  "authorization",
+  "credential",
+]);
+const NORMALIZED_COMPOUND_CREDENTIAL_KEY_PATTERN =
+  /^(?:api|auth|refresh|access|client|proxy|private)(?:token|password|passwd|secret|authorization|credential|key)$/u;
 const FORBIDDEN_PATH_PARTS = [
   ".env",
   ".keiko",
@@ -136,6 +177,14 @@ const FORBIDDEN_PATH_PARTS = [
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function usesZeroReleaseIdentity(options) {
+  return new Set(["staging", "non-production", "candidate"]).has(options.context);
+}
+
+function requiresProductionVerification(options) {
+  return !new Set(["staging", "non-production"]).has(options.context);
 }
 
 function push(failures, path, message) {
@@ -263,9 +312,10 @@ function validateProduct(manifest, failures) {
   stringAt(product, "packageVersion", "product", failures);
 }
 
-function validateRelease(manifest, failures) {
+function validateRelease(manifest, failures, options) {
   const release = recordAt(manifest, "release", "manifest", failures);
-  numberAt(release, "releaseId", "release", failures);
+  const releaseId = numberAt(release, "releaseId", "release", failures);
+  validateReleaseIdentity(releaseId, failures, options);
   stringAt(release, "releaseTag", "release", failures);
   if (!booleanAt(release, "stable", "release", failures)) {
     push(failures, "release.stable", "must be true for portable v1");
@@ -274,15 +324,25 @@ function validateRelease(manifest, failures) {
   if (!COMMIT_PATTERN.test(commitSha)) push(failures, "release.commitSha", "must be a commit SHA");
 }
 
+function validateReleaseIdentity(releaseId, failures, options) {
+  if (usesZeroReleaseIdentity(options)) {
+    if (releaseId !== 0)
+      push(failures, "release.releaseId", "must be 0 before GitHub Release upload");
+    return;
+  }
+  if (releaseId === 0) push(failures, "release.releaseId", "must be greater than 0");
+  if (options.apiIdentity !== undefined && releaseId !== options.apiIdentity.releaseId) {
+    push(failures, "release.releaseId", "does not match the GitHub API snapshot");
+  }
+}
+
 function validateArtifact(manifest, failures, options) {
   const artifact = recordAt(manifest, "artifact", "manifest", failures);
   const targetName = stringAt(artifact, "platformTarget", "artifact", failures);
   const target = portableTargetByName(targetName);
   if (target === undefined) push(failures, "artifact.platformTarget", "is unsupported");
   const assetId = numberAt(artifact, "assetId", "artifact", failures);
-  if (assetId === 0 && !options.allowUnverified) {
-    push(failures, "artifact.assetId", "must be greater than 0");
-  }
+  validateAssetIdentity(assetId, failures, options);
   if (numberAt(artifact, "sizeBytes", "artifact", failures) === 0) {
     push(failures, "artifact.sizeBytes", "must be greater than 0");
   }
@@ -298,6 +358,17 @@ function validateArtifact(manifest, failures, options) {
   }
 }
 
+function validateAssetIdentity(assetId, failures, options) {
+  if (usesZeroReleaseIdentity(options)) {
+    if (assetId !== 0) push(failures, "artifact.assetId", "must be 0 before GitHub Release upload");
+    return;
+  }
+  if (assetId === 0) push(failures, "artifact.assetId", "must be greater than 0");
+  if (options.apiIdentity !== undefined && assetId !== options.apiIdentity.assetId) {
+    push(failures, "artifact.assetId", "does not match the GitHub API snapshot");
+  }
+}
+
 function validateProvenance(manifest, failures, options) {
   const provenance = recordAt(manifest, "provenance", "manifest", failures);
   const commitSha = stringAt(provenance, "sourceCommitSha", "provenance", failures);
@@ -306,8 +377,14 @@ function validateProvenance(manifest, failures, options) {
   stringAt(provenance, "rootPackageVersion", "provenance", failures);
   digestAt(provenance, "rootPackageTarballSha256", "provenance", failures, options);
   digestAt(provenance, "packagedAppTreeSha256", "provenance", failures, options);
-  numberAt(provenance, "buildWorkflowRunId", "provenance", failures);
-  numberAt(provenance, "buildWorkflowAttempt", "provenance", failures);
+  const runId = numberAt(provenance, "buildWorkflowRunId", "provenance", failures);
+  const runAttempt = numberAt(provenance, "buildWorkflowAttempt", "provenance", failures);
+  if (requiresProductionVerification(options) && runId === 0) {
+    push(failures, "provenance.buildWorkflowRunId", "must be greater than 0");
+  }
+  if (requiresProductionVerification(options) && runAttempt === 0) {
+    push(failures, "provenance.buildWorkflowAttempt", "must be greater than 0");
+  }
   relativePathAt(provenance, "provenanceStatementPath", "provenance", failures);
   digestAt(provenance, "provenanceStatementSha256", "provenance", failures, options);
 }
@@ -655,10 +732,11 @@ function validateSecurity(manifest, failures, options) {
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, "security.signatureKind", `must be ${target.signatureKind}`);
   }
-  if (!options.allowUnverified && !signatureVerified) {
+  if (requiresProductionVerification(options) && !signatureVerified) {
     push(failures, "security.signatureVerified", "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures);
+  validateLifecycleVerificationContext(policy, status, "security", options, failures);
   validateVerificationCheckConsistency(
     target,
     signatureVerified,
@@ -749,10 +827,11 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, `${signingPath}.signatureKind`, `must be ${target.signatureKind}`);
   }
-  if (!options.allowUnverified && !verified) {
+  if (requiresProductionVerification(options) && !verified) {
     push(failures, `${signingPath}.signatureVerified`, "must be true");
   }
   validateVerificationPolicy(policy, status, reasonCodes, failures, signingPath);
+  validateLifecycleVerificationContext(policy, status, signingPath, options, failures);
   validateVerificationCheckConsistency(
     target,
     signatureVerified,
@@ -770,6 +849,30 @@ function validateSidecarSigning(runtime, target, path, failures, options) {
     options,
     path,
   );
+}
+
+function validateLifecycleVerificationContext(policy, status, path, options, failures) {
+  if (options.context === "non-production") {
+    if (!new Set(["development", "pull-request"]).has(policy)) {
+      push(
+        failures,
+        `${path}.verificationPolicy`,
+        "must be development or pull-request in non-production lifecycle context",
+      );
+    }
+    return;
+  }
+  const expected =
+    options.context === "staging"
+      ? { policy: "staging", status: "unverified-staging" }
+      : { policy: "production", status: "verified-production" };
+  if (policy !== expected.policy || status !== expected.status) {
+    push(
+      failures,
+      `${path}.verificationStatus`,
+      `verification must match ${options.context} lifecycle context (${expected.policy}/${expected.status})`,
+    );
+  }
 }
 
 function validateSidecarVerificationChecks(signing, target, path, failures) {
@@ -835,7 +938,7 @@ function validateSidecarNotarization(target, required, verified, failures, optio
   if (required !== macosTarget) {
     push(failures, `${path}.signing.notarizationRequired`, `must be ${String(macosTarget)}`);
   }
-  if (macosTarget && !options.allowUnverified && !verified) {
+  if (macosTarget && requiresProductionVerification(options) && !verified) {
     push(failures, `${path}.signing.notarizationVerified`, "must be true for macOS targets");
   }
   if (!macosTarget && verified) {
@@ -907,7 +1010,7 @@ function validateTargetNotarization(target, required, verified, failures, option
   if (required !== macosTarget) {
     push(failures, "security.notarizationRequired", `must be ${String(macosTarget)}`);
   }
-  if (macosTarget && !options.allowUnverified && !verified) {
+  if (macosTarget && requiresProductionVerification(options) && !verified) {
     push(failures, "security.notarizationVerified", "must be true for macOS targets");
   }
   if (!macosTarget && verified) {
@@ -1062,7 +1165,7 @@ function validateUpdatePredicates(manifest, update, failures, options) {
       );
     }
   }
-  if (!options.allowUnverified && !verified) {
+  if (requiresProductionVerification(options) && !verified) {
     push(
       failures,
       "updateEligibility.requiredPredicates.platformSignatureLocallyVerified",
@@ -1138,6 +1241,7 @@ function scanForbidden(value, path, failures) {
   if (Array.isArray(value))
     value.forEach((entry, index) => scanForbidden(entry, `${path}[${String(index)}]`, failures));
   if (isRecord(value)) {
+    scanSemanticCredentialProperty(value, path, failures);
     for (const [key, entry] of Object.entries(value)) {
       if (isForbiddenManifestKey(key, path)) {
         push(failures, `${path}.${key}`, "uses a forbidden manifest key");
@@ -1150,12 +1254,53 @@ function scanForbidden(value, path, failures) {
 function isForbiddenManifestKey(key, path) {
   if (path === "manifest.stateExclusion" && key.startsWith("excludes")) return false;
   const normalizedKey = key.toLowerCase();
-  return FORBIDDEN_KEY_PARTS.some((part) => normalizedKey.includes(part.toLowerCase()));
+  return (
+    CREDENTIAL_METADATA_KEYS.has(normalizeCredentialMetadataKey(key)) ||
+    isCompoundCredentialMetadataKey(key) ||
+    FORBIDDEN_KEY_PARTS.some((part) => normalizedKey.includes(part.toLowerCase()))
+  );
+}
+
+function normalizeCredentialMetadataKey(key) {
+  return key.toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
+}
+
+function credentialMetadataWords(key) {
+  return key
+    .replaceAll(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replaceAll(/([A-Z]+)([A-Z][a-z])/gu, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/u)
+    .filter((word) => word.length > 0);
+}
+
+function isCompoundCredentialMetadataKey(key) {
+  const words = credentialMetadataWords(key);
+  const terminalWord = words.at(-1);
+  if (terminalWord === undefined) return false;
+  if (CREDENTIAL_METADATA_WORDS.has(terminalWord)) return true;
+  if (terminalWord === "key" && (words.at(-2) === "api" || words.at(-2) === "private")) {
+    return true;
+  }
+  return NORMALIZED_COMPOUND_CREDENTIAL_KEY_PATTERN.test(normalizeCredentialMetadataKey(key));
+}
+
+function scanSemanticCredentialProperty(value, path, failures) {
+  for (const semanticKey of ["name", "key"]) {
+    if (
+      typeof value[semanticKey] === "string" &&
+      Object.hasOwn(value, "value") &&
+      isForbiddenManifestKey(value[semanticKey], path)
+    ) {
+      push(failures, `${path}.${semanticKey}`, "names a forbidden credential property");
+    }
+  }
 }
 
 function scanForbiddenString(value, path, failures) {
   if (
     SECRET_PATTERN.test(value) ||
+    CREDENTIAL_VALUE_PATTERN.test(value) ||
     PRIVATE_PATH_PATTERN.test(value) ||
     CREDENTIAL_URL_PATTERN.test(value)
   ) {
@@ -1166,32 +1311,78 @@ function scanForbiddenString(value, path, failures) {
   }
 }
 
+function normalizedValidationOptions(options) {
+  const context = options.context ?? "published-contract";
+  return { ...options, context };
+}
+
+function validateApiIdentity(options, failures) {
+  if (options.context !== "published") return;
+  if (
+    !isRecord(options.apiIdentity) ||
+    !Number.isSafeInteger(options.apiIdentity.releaseId) ||
+    options.apiIdentity.releaseId <= 0 ||
+    !Number.isSafeInteger(options.apiIdentity.assetId) ||
+    options.apiIdentity.assetId <= 0
+  ) {
+    push(failures, "validation.apiIdentity", "must be a positive GitHub API snapshot");
+  }
+}
+
 export function validatePortableManifest(manifest, options = {}) {
+  const normalized = normalizedValidationOptions(options);
   const failures = [];
   if (!isRecord(manifest)) return ["manifest: must be an object"];
+  if (!PORTABLE_MANIFEST_VALIDATION_CONTEXTS.includes(normalized.context)) {
+    return ["validation.context: is unsupported"];
+  }
+  validateApiIdentity(normalized, failures);
   if (manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION)
     push(failures, "schemaVersion", "must be 1");
   validateProduct(manifest, failures);
-  validateRelease(manifest, failures);
-  validateArtifact(manifest, failures, options);
-  validateProvenance(manifest, failures, options);
-  validateRuntime(manifest, failures, options);
-  validateSidecarRuntimes(manifest, failures, options);
+  validateRelease(manifest, failures, normalized);
+  validateArtifact(manifest, failures, normalized);
+  validateProvenance(manifest, failures, normalized);
+  validateRuntime(manifest, failures, normalized);
+  validateSidecarRuntimes(manifest, failures, normalized);
   validatePackageSurface(manifest, failures);
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
   validateStateExclusion(manifest, failures);
-  validateSecurity(manifest, failures, options);
+  validateSecurity(manifest, failures, normalized);
   validateEvidence(manifest, failures);
   validateReleaseImpact(manifest, failures);
-  validateUpdateEligibility(manifest, failures, options);
+  validateUpdateEligibility(manifest, failures, normalized);
   scanForbidden(manifest, "manifest", failures);
   return failures;
+}
+
+export function validatePortableStagingManifest(manifest, options = {}) {
+  return validatePortableManifest(manifest, { ...options, context: "staging" });
+}
+
+export function validatePortableCandidateManifest(manifest, options = {}) {
+  return validatePortableManifest(manifest, { ...options, context: "candidate" });
+}
+
+export function validatePortablePublishedManifest(manifest, apiIdentity, options = {}) {
+  return validatePortableManifest(manifest, {
+    ...options,
+    apiIdentity,
+    context: "published",
+  });
 }
 
 export function findPortableMetadataRedactionFailures(value, path = "metadata") {
   const failures = [];
   scanForbidden(value, path, failures);
+  if (typeof value === "string") {
+    try {
+      scanForbidden(JSON.parse(value), path, failures);
+    } catch {
+      // Non-JSON evidence is scanned as text above.
+    }
+  }
   return failures;
 }
 

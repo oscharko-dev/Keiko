@@ -98,6 +98,25 @@ describe("createGitProcessRunner", () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "neutralizes a repository-local executable fsmonitor for local reads",
+    async () => {
+      const marker = join(root, "fsmonitor-executed.marker");
+      const hook = join(root, "hostile-fsmonitor.sh");
+      writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+      execFileSync("chmod", ["+x", hook]);
+      execFileSync("git", ["config", "core.fsmonitor", hook], { cwd: root });
+
+      const result = await defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "-C", root, "status", "--porcelain=v1"],
+        { cwd: root, maxBytes: 4096, timeoutMs: 10_000 },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "kills a wedged process at the timeout and flags timedOut",
     async () => {
       const fifo = join(root, "wedge.fifo");
@@ -110,6 +129,30 @@ describe("createGitProcessRunner", () => {
       expect(result.timedOut).toBe(true);
       expect(result.truncated).toBe(true);
       expect(result.exitCode === null || result.exitCode !== 0).toBe(true);
+    },
+    15_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "kills a wedged process when the bounded caller aborts",
+    async () => {
+      const fifo = join(root, "abort.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const controller = new AbortController();
+      const pending = defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "config", "--file", fifo, "--list"],
+        {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+          abortSignal: controller.signal,
+        },
+      );
+      controller.abort();
+      const result = await pending;
+      expect(result.signal).toBe("SIGTERM");
+      expect(result.truncated).toBe(true);
+      expect(result.timedOut).toBe(false);
     },
     15_000,
   );

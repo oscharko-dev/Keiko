@@ -74,6 +74,8 @@ describe("coding-context purpose + tiering", () => {
     expect(tierForCodingContextSource("repo-search")).toBe("first-party-workspace");
     expect(CODING_CONTEXT_SOURCE_KINDS).toContain("editor-state");
     expect(tierForCodingContextSource("editor-state")).toBe("first-party-workspace");
+    expect(CODING_CONTEXT_SOURCE_KINDS).toContain("git-context");
+    expect(tierForCodingContextSource("git-context")).toBe("first-party-workspace");
     expect(tierForCodingContextSource("local-knowledge")).toBe("indexed-knowledge");
     expect(tierForCodingContextSource("memory")).toBe("retained-memory");
     expect(tierForCodingContextSource("quality-intelligence")).toBe("derived-evidence");

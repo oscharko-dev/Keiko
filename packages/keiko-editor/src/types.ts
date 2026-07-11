@@ -785,7 +785,8 @@ export type EditorContextSourceKind =
   | "quality-intelligence"
   | "workflow-context"
   | "files-focus"
-  | "editor-state";
+  | "editor-state"
+  | "git-context";
 
 export type EditorContextSourceTier =
   "first-party-workspace" | "indexed-knowledge" | "retained-memory" | "derived-evidence";
