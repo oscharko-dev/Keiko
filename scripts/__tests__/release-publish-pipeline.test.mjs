@@ -31,6 +31,10 @@
 //      pointing at the wrong version -> verifyPackage MUST fail the release (exit 1).
 //      Red-on-defect: if the dist-tag comparison were dropped, the release would
 //      falsely report PASS.
+//   D. No npm registry token configured (the OIDC trusted-publishing CI shape) — a fresh
+//      publish must still succeed end-to-end on `npm publish` alone, and a dist-tag repair
+//      needed on an idempotent re-run must fail with an actionable error rather than a bare
+//      npm 401, because npm Trusted Publishing does not authorize `npm dist-tag add`.
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -1205,6 +1209,73 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stderr).toContain(`${RELEASE_NAME}@latest points to 9.9.9-wrong`);
       expect(lastRun.stderr).toContain(`expected ${RELEASE_VERSION}`);
       // It must not have reported success.
+      expect(lastRun.stdout).not.toContain("PASS -");
+    });
+
+    it("publishes with no npm registry token configured, matching OIDC trusted publishing in CI", () => {
+      // Unlike the shared npmStub() factory, model `publish` as ALSO fixing the dist-tag —
+      // that is what real `npm publish --tag <tag>` does atomically on first publish. This
+      // proves the actual CI shape: a fresh publish with zero registry credentials never
+      // needs a separate `npm dist-tag add`, because trusted publishing authenticates
+      // `npm publish` via OIDC and the tag is already correct once that call returns.
+      const npmBody = [
+        'log("npm");',
+        "const sub = argv[0];",
+        'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
+        'if (sub === "run") { process.exit(0); }',
+        'if (sub === "view") {',
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
+        '    process.stdout.write(VERSION + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+        '    process.stdout.write((s.tagged ? VERSION : "0.0.0-stale") + "\\n");',
+        "    process.exit(0);",
+        "  }",
+        "}",
+        'if (sub === "publish") { setState({ published: true, tagged: true }); process.exit(0); }',
+        'process.stderr.write("stub npm: unhandled " + JSON.stringify(argv) + "\\n");',
+        "process.exit(3);",
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody,
+        initState: { published: false },
+        qualificationEnv: { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: undefined },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+      // The whole point of this scenario: no dist-tag WRITE was needed or attempted.
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
+    });
+
+    it("fails with an actionable error, and never attempts an unauthenticated write, when a dist-tag repair needs a token that is not configured", () => {
+      // Already published (idempotent re-run) with a stale dist-tag, and no token: this is
+      // exactly the path npm Trusted Publishing does not cover (it authorizes `npm publish`
+      // only). The orchestrator must fail before attempting `npm dist-tag add`, not after a
+      // bare npm 401.
+      const viewBody = [
+        "  const s = state();",
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write("0.0.0-stale\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: false },
+        qualificationEnv: { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: undefined },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(`${RELEASE_NAME}@latest points to 0.0.0-stale`);
+      expect(lastRun.stderr).toContain("Trusted Publishing does not cover");
+      expect(lastRun.stderr).toContain("NODE_AUTH_TOKEN");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
       expect(lastRun.stdout).not.toContain("PASS -");
     });
   },
