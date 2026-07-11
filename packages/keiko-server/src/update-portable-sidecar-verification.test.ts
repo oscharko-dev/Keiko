@@ -36,6 +36,7 @@ function verifiedSidecar(): PortableSidecarRuntimeVerification {
       runtimeVersionVerified: true,
       protocolSchemaVerified: true,
       signatureVerified: true,
+      qualificationVerified: true,
     },
   };
 }
@@ -87,5 +88,36 @@ describe("portable sidecar runtime availability", () => {
         qualificationVerified: true,
       }),
     ).toEqual({ available: true });
+  });
+
+  it.each([
+    ["redistributionApproved", "redistribution-unapproved"],
+    ["payloadPresent", "payload-missing"],
+    ["archiveDigestVerified", "archive-digest-mismatch"],
+    ["executableTreeDigestVerified", "executable-tree-digest-mismatch"],
+    ["runtimeVersionVerified", "runtime-version-mismatch"],
+    ["protocolSchemaVerified", "protocol-schema-mismatch"],
+    ["signatureVerified", "signature-unverified"],
+    ["qualificationVerified", "qualification-missing"],
+  ] as const)("does not let caller true override stored %s=false", (field, reason) => {
+    const verified = verifiedSidecar();
+    const sidecar: PortableSidecarRuntimeVerification = {
+      ...verified,
+      availability: { ...verified.availability, [field]: false },
+    };
+
+    expect(
+      evaluatePortableSidecarAvailability(sidecar, {
+        target: "macos-arm64",
+        redistributionApproved: true,
+        payloadPresent: true,
+        archiveDigestVerified: true,
+        executableTreeDigestVerified: true,
+        runtimeVersionVerified: true,
+        protocolSchemaVerified: true,
+        signatureVerified: true,
+        qualificationVerified: true,
+      }),
+    ).toEqual({ available: false, reason });
   });
 });

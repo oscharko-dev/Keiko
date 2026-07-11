@@ -26,6 +26,7 @@ import {
   type PortableSidecarAvailabilityInput,
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
+import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
@@ -175,6 +176,15 @@ export interface CodingRuntimeManagerDeps {
   readonly approvalStore?: SupervisedCodingApprovalStore | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly portableRuntimeResolver?:
+    | ((request: CodingRuntimeLaunchRequest) =>
+        | {
+            readonly verification: PortableSidecarRuntimeVerification;
+            readonly resourceRoot: string;
+            readonly target: PortableSidecarAvailabilityInput["target"];
+          }
+        | undefined)
+    | undefined;
   readonly revokeRuntime: (runId: string) => boolean | Promise<boolean>;
   readonly abortInFlightActions: (runId: string) => boolean | Promise<boolean>;
   readonly markRuntimeRecoveryRequired: (runId: string) => boolean | Promise<boolean>;
@@ -202,6 +212,15 @@ interface NormalizedCodingRuntimeManagerDeps {
   readonly approvalStore: SupervisedCodingApprovalStore;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly portableRuntimeResolver:
+    | ((request: CodingRuntimeLaunchRequest) =>
+        | {
+            readonly verification: PortableSidecarRuntimeVerification;
+            readonly resourceRoot: string;
+            readonly target: PortableSidecarAvailabilityInput["target"];
+          }
+        | undefined)
+    | undefined;
   readonly revokeRuntime: (runId: string) => boolean | Promise<boolean>;
   readonly abortInFlightActions: (runId: string) => boolean | Promise<boolean>;
   readonly markRuntimeRecoveryRequired: (runId: string) => boolean | Promise<boolean>;
@@ -264,6 +283,14 @@ interface SupervisedRuntimeEvidenceContext {
   readonly modelSource: CodingWorkbenchModelSource;
 }
 
+interface ResolvedPortableRuntime {
+  readonly verification: PortableSidecarRuntimeVerification;
+  readonly resourceRoot: string;
+  readonly target: PortableSidecarAvailabilityInput["target"];
+  readonly managedRoot: string;
+  readonly executablePath: string;
+}
+
 const MAX_SIDECAR_EVENT_LINE_BYTES = 8192;
 const SECRET_ENV_NAME = /(AUTH|CREDENTIAL|KEY|PASSWORD|SECRET|TOKEN)/iu;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
@@ -301,6 +328,7 @@ function normalizeDeps(deps: CodingRuntimeManagerDeps): NormalizedCodingRuntimeM
     approvalStore: deps.approvalStore ?? createInMemorySupervisedCodingApprovalStore(),
     onRuntimeEvent: deps.onRuntimeEvent ?? ((): void => undefined),
     diagnostics: deps.diagnostics,
+    portableRuntimeResolver: deps.portableRuntimeResolver,
     revokeRuntime: deps.revokeRuntime,
     abortInFlightActions: deps.abortInFlightActions,
     markRuntimeRecoveryRequired: deps.markRuntimeRecoveryRequired,
@@ -335,13 +363,19 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     const cancelled = cancellationFailure(request, this.deps);
     if (cancelled !== undefined) return cancelled;
+    const portable = resolvePortableRuntime(request, this.deps);
+    if (!portable.ok) return this.recordLaunchFailure(request, portable);
     const adapter = validateAdapterSelection(request);
     if (!adapter.ok) return this.recordLaunchFailure(request, adapter);
-    const preflight = preflightExecutable(request);
+    const preflight = preflightExecutable(
+      request,
+      portable.value?.managedRoot,
+      portable.value?.executablePath,
+    );
     if (!preflight.ok) return this.recordLaunchFailure(request, preflight);
     const env = buildRuntimeEnv(request, this.deps.processEnv);
     if (!env.ok) return this.recordLaunchFailure(request, env);
-    return this.spawnRuntime(request, preflight.executablePath, env.value);
+    return this.spawnRuntime(request, preflight.executablePath, env.value, portable.value);
   }
 
   public async stop(runId: string): Promise<CodingRuntimeStopResult> {
@@ -450,7 +484,12 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     request: CodingRuntimeLaunchRequest,
     executablePath: string,
     env: Record<string, string>,
+    portable: ResolvedPortableRuntime | undefined,
   ): CodingRuntimeStartResult {
+    const portableAvailability = portableAvailabilityFailure(portable);
+    if (portableAvailability !== undefined) {
+      return this.recordLaunchFailure(request, portableAvailability);
+    }
     const launched = this.deps.supervisor.spawnOwnedTree(
       supervisorLaunchRequest(request, executablePath, env),
     );
@@ -636,6 +675,38 @@ function emitInvalidRuntimeEventDiagnostic(
   });
 }
 
+function resolvePortableRuntime(
+  request: CodingRuntimeLaunchRequest,
+  deps: Pick<NormalizedCodingRuntimeManagerDeps, "portableRuntimeResolver">,
+): { readonly ok: true; readonly value: ResolvedPortableRuntime | undefined } | FailureResult {
+  if (request.runtimeSource === "codex-cli-adapter") {
+    return failure("redistribution-unapproved", false);
+  }
+  if (request.runtimeSource !== "keiko-sidecar") return { ok: true, value: undefined };
+  const resolved = deps.portableRuntimeResolver?.(request);
+  if (resolved === undefined) return failure("qualification-missing", false);
+  return {
+    ok: true,
+    value: {
+      ...resolved,
+      managedRoot: join(resolved.resourceRoot, resolved.verification.payloadRootPath),
+      executablePath: join(resolved.resourceRoot, resolved.verification.executablePath),
+    },
+  };
+}
+
+function portableAvailabilityFailure(
+  resolved: ResolvedPortableRuntime | undefined,
+): FailureResult | undefined {
+  if (resolved === undefined) return undefined;
+  const disk = inspectStagedSidecarPayload(resolved.resourceRoot, resolved.verification);
+  const availability = evaluatePortableSidecarAvailability(resolved.verification, {
+    target: resolved.target,
+    ...disk,
+  });
+  return availability.available ? undefined : failure(availability.reason, false);
+}
+
 function cancellationFailure(
   request: CodingRuntimeLaunchRequest,
   deps: NormalizedCodingRuntimeManagerDeps,
@@ -732,10 +803,14 @@ function inertTree(): RuntimeProcessTree {
   };
 }
 
-function preflightExecutable(request: CodingRuntimeLaunchRequest): PreflightOk | FailureResult {
-  const managedRoot = realPath(request.managedRoot);
+function preflightExecutable(
+  request: CodingRuntimeLaunchRequest,
+  resolvedManagedRoot?: string,
+  resolvedExecutablePath?: string,
+): PreflightOk | FailureResult {
+  const managedRoot = realPath(resolvedManagedRoot ?? request.managedRoot);
   const workspaceRoot = realPath(request.workspaceRoot);
-  const executablePath = executableRealPath(request.executablePath);
+  const executablePath = executableRealPath(resolvedExecutablePath ?? request.executablePath);
   if (managedRoot === undefined || workspaceRoot === undefined || executablePath === undefined) {
     return failure("sidecar-missing", false);
   }

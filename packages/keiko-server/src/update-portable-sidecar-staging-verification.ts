@@ -88,6 +88,39 @@ function hashExecutableTree(executablePath: string, payloadRoot: string): string
     .digest("hex");
 }
 
+export interface PortableSidecarDiskEvidence {
+  readonly payloadPresent: boolean;
+  readonly archiveDigestVerified: boolean;
+  readonly executableTreeDigestVerified: boolean;
+}
+
+const MISSING_DISK_EVIDENCE: PortableSidecarDiskEvidence = {
+  payloadPresent: false,
+  archiveDigestVerified: false,
+  executableTreeDigestVerified: false,
+};
+
+/** Recomputes launch-critical payload evidence synchronously at the point of use. */
+export function inspectStagedSidecarPayload(
+  resourceRoot: string,
+  sidecar: PortableSidecarRuntimeVerification,
+): PortableSidecarDiskEvidence {
+  try {
+    const payloadRoot = resolvedContainedPath(resourceRoot, sidecar.payloadRootPath, sidecar);
+    const executablePath = resolvedContainedPath(resourceRoot, sidecar.executablePath, sidecar);
+    assertFile(executablePath, sidecar, "sidecar-payload-missing");
+    return {
+      payloadPresent: true,
+      archiveDigestVerified:
+        hashDirectoryTree(payloadRoot, sidecar) === sidecar.summary.payloadSha256,
+      executableTreeDigestVerified:
+        hashExecutableTree(executablePath, payloadRoot) === sidecar.executableTreeSha256,
+    };
+  } catch {
+    return MISSING_DISK_EVIDENCE;
+  }
+}
+
 function verifySidecarFiles(
   resourceRoot: string,
   sidecar: PortableSidecarRuntimeVerification,

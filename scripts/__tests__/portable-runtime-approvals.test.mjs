@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   APPROVED_SIDECAR_ARCHIVE_HOSTS,
@@ -372,6 +372,20 @@ describe("prepare approved sidecar payloads", () => {
     expect(() => extractApprovedExecutable(multiPath, "opencode", destination)).toThrow(
       /exactly one entry/u,
     );
+  });
+
+  it("extracts an approved executable through the platform ZIP adapter seam", () => {
+    const destination = join(tempRoot(), "bin", "opencode.exe");
+    const list = vi.fn(() => ["opencode.exe"]);
+    const extract = vi.fn((_archivePath, extractRoot) => {
+      writeFileSync(join(extractRoot, "opencode.exe"), "approved executable\n");
+    });
+
+    extractApprovedExecutable("approved.zip", "opencode.exe", destination, { list, extract });
+
+    expect(list).toHaveBeenCalledWith("approved.zip");
+    expect(extract).toHaveBeenCalledWith("approved.zip", expect.any(String));
+    expect(readFileSync(destination, "utf8")).toBe("approved executable\n");
   });
 
   it("rejects an extracted executable tree that differs from the independent approval", async () => {

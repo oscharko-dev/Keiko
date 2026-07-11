@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   linkSync,
   mkdirSync,
@@ -11,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   catalogForInventory,
@@ -22,6 +23,7 @@ import {
   rebindArchive,
 } from "../windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "../windows-portable-verification-input.mjs";
+import { hashDirectoryTree } from "../portable-runtime.mjs";
 
 const roots = [];
 
@@ -43,6 +45,10 @@ function portableExecutable(marker = 0) {
 function write(path, bytes = portableExecutable()) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, bytes);
+}
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function validPayload() {
@@ -114,24 +120,101 @@ describe("Windows portable PE signing inventory", () => {
     expect(inventoryPathsMatch(before, after)).toBe(false);
   });
 
-  it("rebinds the signed archive, provenance, application tree, sidecar tree, and checksum", async () => {
+  it("rebinds the signed archive, provenance, application tree, and checksum", async () => {
     const stage = root();
     const payload = join(stage, "payload", "Keiko");
     write(join(payload, "app", "index.js"), Buffer.from("signed app"));
-    write(join(payload, "runtime", "sidecars", "worker", "worker.exe"), portableExecutable(8));
     mkdirSync(join(stage, "evidence"), { recursive: true });
     writeFileSync(
       join(stage, "evidence", "provenance.intoto.jsonl"),
       `${JSON.stringify({ artifact: "Keiko-windows-x64.zip", subjectDigest: "0".repeat(64) })}\n`,
     );
+    const manifest = {
+      artifact: { assetName: "Keiko-windows-x64.zip", sha256: "0".repeat(64), sizeBytes: 0 },
+      provenance: {
+        packagedAppTreeSha256: "0".repeat(64),
+        provenanceStatementSha256: "0".repeat(64),
+      },
+      releaseImpact: { reviewedBinding: {} },
+    };
+
+    await rebindArchive(stage, manifest, {
+      create(_sourceRoot, _entryName, archivePath) {
+        writeFileSync(archivePath, "signed archive fixture");
+      },
+    });
+
+    expect(manifest.artifact.sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(manifest.artifact.sha256).not.toBe("0".repeat(64));
+    expect(manifest.provenance.packagedAppTreeSha256).not.toBe("0".repeat(64));
+    expect(manifest.releaseImpact.reviewedBinding.archiveSha256).toBe(manifest.artifact.sha256);
+  });
+
+  it("rebinds signed sidecar bytes through SBOM, payload, archive, provenance, and review impact", async () => {
+    const stage = root();
+    const payload = join(stage, "payload", "Keiko");
+    const sidecarRoot = join(payload, "runtime", "sidecars", "worker");
+    const executablePath = join(sidecarRoot, "bin", "worker.exe");
+    const sbomPath = join(sidecarRoot, "evidence", "sbom.cdx.json");
+    const unsignedBytes = portableExecutable(3);
+    const signedBytes = Buffer.concat([portableExecutable(9), Buffer.from("native-signature")]);
+    write(join(payload, "app", "index.js"), Buffer.from("signed app"));
+    write(executablePath, unsignedBytes);
+    write(
+      sbomPath,
+      `${JSON.stringify({
+        bomFormat: "CycloneDX",
+        metadata: { component: { name: "worker", version: "1.2.3" } },
+        components: [
+          {
+            name: "worker-upstream",
+            version: "1.2.3",
+            purl: "pkg:github/example/worker@v1.2.3",
+            licenses: [{ license: { id: "MIT" } }],
+            hashes: [{ alg: "SHA-256", content: sha256(unsignedBytes) }],
+            externalReferences: [
+              {
+                type: "distribution",
+                url: "https://github.com/example/worker/releases/download/v1.2.3/worker.zip",
+                hashes: [{ alg: "SHA-256", content: "a".repeat(64) }],
+              },
+            ],
+          },
+        ],
+      })}\n`,
+    );
+    const upstreamTreeSha256 = createHash("sha256")
+      .update(`bin/worker.exe\0${sha256(unsignedBytes)}\0`)
+      .digest("hex");
     const sidecar = {
       name: "worker",
+      upstream: {
+        owner: "example",
+        repository: "worker",
+        name: "worker-upstream",
+        version: "1.2.3",
+        tag: "v1.2.3",
+      },
+      license: { spdxId: "MIT" },
+      archive: {
+        url: "https://github.com/example/worker/releases/download/v1.2.3/worker.zip",
+        sha256: "a".repeat(64),
+      },
+      executablePath: "runtime/sidecars/worker/bin/worker.exe",
+      executableSha256: sha256(unsignedBytes),
+      executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+      executableTreeSha256: upstreamTreeSha256,
       payloadRootPath: "runtime/sidecars/worker",
       payloadSha256: "0".repeat(64),
       sizeBytes: 0,
+      sbomEvidence: {
+        path: "runtime/sidecars/worker/evidence/sbom.cdx.json",
+        sha256: "0".repeat(64),
+      },
+      signing: {},
     };
     const manifest = {
-      artifact: { assetName: "Keiko-windows-x64.zip", sha256: "0".repeat(64), sizeBytes: 0 },
+      artifact: { assetName: "keiko-windows-x64.zip", sha256: "0".repeat(64), sizeBytes: 0 },
       provenance: {
         packagedAppTreeSha256: "0".repeat(64),
         provenanceStatementSha256: "0".repeat(64),
@@ -139,14 +222,37 @@ describe("Windows portable PE signing inventory", () => {
       sidecarRuntimes: [sidecar],
       releaseImpact: { reviewedBinding: { sidecarRuntimes: [] } },
     };
+    mkdirSync(join(stage, "evidence"), { recursive: true });
+    writeFileSync(
+      join(stage, "evidence", "provenance.intoto.jsonl"),
+      `${JSON.stringify({ subjectDigest: "0".repeat(64) })}\n`,
+    );
+    write(executablePath, signedBytes);
+    const create = vi.fn((_sourceRoot, _entryName, archivePath) => {
+      writeFileSync(
+        archivePath,
+        Buffer.concat([readFileSync(executablePath), readFileSync(sbomPath)]),
+      );
+    });
 
-    await rebindArchive(stage, manifest);
+    await rebindArchive(stage, manifest, { create });
 
-    expect(manifest.artifact.sha256).toMatch(/^[a-f0-9]{64}$/u);
-    expect(manifest.artifact.sha256).not.toBe("0".repeat(64));
-    expect(manifest.provenance.packagedAppTreeSha256).not.toBe("0".repeat(64));
-    expect(sidecar.payloadSha256).not.toBe("0".repeat(64));
-    expect(manifest.releaseImpact.reviewedBinding.archiveSha256).toBe(manifest.artifact.sha256);
+    const shippedSha256 = sha256(signedBytes);
+    const sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+    expect(create).toHaveBeenCalledWith(
+      join(stage, "payload"),
+      "Keiko",
+      join(stage, manifest.artifact.assetName),
+    );
+    expect(sidecar.executableSha256).toBe(sha256(unsignedBytes));
+    expect(sidecar.executableTreeSha256).toBe(upstreamTreeSha256);
+    expect(sidecar.signing.shippedExecutableSha256).toBe(shippedSha256);
+    expect(sidecar.signing.shippedExecutableTreeSha256).toBe(
+      createHash("sha256").update(`bin/worker.exe\0${shippedSha256}\0`).digest("hex"),
+    );
+    expect(sbom.components[0].hashes).toEqual([{ alg: "SHA-256", content: shippedSha256 }]);
+    expect(sidecar.sbomEvidence.sha256).toBe(sha256(readFileSync(sbomPath)));
+    expect(sidecar.payloadSha256).toBe(hashDirectoryTree(sidecarRoot));
     expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual([sidecar]);
   });
 

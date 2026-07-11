@@ -8,6 +8,8 @@ import {
   activationIdFor,
   beginPortableActivationRecovery,
   clearPortableActivationRecovery,
+  capturePortableRegistration,
+  cleanupPortableRegistrationSnapshot,
   cleanupPortableActivation,
   PortableUpdateActivationError,
   promotePortableInstall,
@@ -16,6 +18,7 @@ import {
   refreshPortableRegistration,
   refreshPortableShortcut,
   restorePortableActivation,
+  restorePortableRegistration,
   type PortableActivationRecovery,
   type PortableActivationLayout,
   type PortablePromotionResult,
@@ -219,7 +222,14 @@ function settleInterruptedActivation(input: {
     activationId: recovery.activationId,
   });
   if (recovery.phase === "verified") cleanupPortableActivation(paths);
-  else restorePortableActivation(paths);
+  else {
+    restorePortableRegistration({ stateDir: input.stateDir, activationId: recovery.activationId });
+    restorePortableActivation(paths);
+  }
+  cleanupPortableRegistrationSnapshot({
+    stateDir: input.stateDir,
+    activationId: recovery.activationId,
+  });
   clearPortableActivationRecovery(input.stateDir);
 }
 
@@ -304,6 +314,7 @@ function preparePortablePromotion(
     recovery: recoveryRecord(context, "promoted"),
   });
   progress.recoveryPhase = "promoted";
+  capturePortableRegistration({ stateDir: context.stateDir, activationId: context.activationId });
   const prepared = finishPreparedActivation(
     { options: context.options, request: context.request },
     promoted,
@@ -332,6 +343,10 @@ async function verifyAndCommitPromotion(
   });
   progress.recoveryPhase = "verified";
   cleanupPortableActivation(prepared.promotion.paths);
+  cleanupPortableRegistrationSnapshot({
+    stateDir: context.stateDir,
+    activationId: context.activationId,
+  });
   clearPortableActivationRecovery(context.stateDir);
   progress.recoveryPhase = undefined;
 }
@@ -348,6 +363,11 @@ function restoreFailedPromotion(context: ActivationContext, progress: Activation
         activationId: context.activationId,
       });
     restorePortableActivation(paths);
+    restorePortableRegistration({ stateDir: context.stateDir, activationId: context.activationId });
+    cleanupPortableRegistrationSnapshot({
+      stateDir: context.stateDir,
+      activationId: context.activationId,
+    });
     clearPortableActivationRecovery(context.stateDir);
   } catch {
     // The recovery marker remains authoritative and blocks further promotion until restart recovery.

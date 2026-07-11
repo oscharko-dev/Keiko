@@ -65,6 +65,8 @@ export interface PortableActivationRecovery {
 }
 
 const REGISTRATION_FILE = "portable-install-state.json";
+const REGISTRATION_SNAPSHOT_SUFFIX = ".registration-backup";
+const REGISTRATION_ABSENT_SUFFIX = ".registration-absent";
 const RECOVERY_FILE = "portable-activation-recovery.json";
 const UPDATES_DIR = "updates";
 const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()/\\:-]+$/u;
@@ -331,6 +333,81 @@ function recoveryPath(stateDir: string): string {
   return join(stateDir, UPDATES_DIR, RECOVERY_FILE);
 }
 
+function registrationPath(stateDir: string): string {
+  return join(stateDir, REGISTRATION_FILE);
+}
+
+function registrationSnapshotPaths(
+  stateDir: string,
+  activationId: string,
+): {
+  readonly content: string;
+  readonly absent: string;
+} {
+  const root = join(stateDir, UPDATES_DIR);
+  return {
+    content: join(root, `${activationId}${REGISTRATION_SNAPSHOT_SUFFIX}`),
+    absent: join(root, `${activationId}${REGISTRATION_ABSENT_SUFFIX}`),
+  };
+}
+
+function writeExclusiveFile(path: string, content: Uint8Array | string): void {
+  writeFileSync(path, content, { mode: 0o600, flag: "wx" });
+}
+
+export function capturePortableRegistration(input: {
+  readonly stateDir: string;
+  readonly activationId: string;
+}): void {
+  assertNoSymlinkAncestor(input.stateDir);
+  mkdirSync(join(input.stateDir, UPDATES_DIR), { recursive: true, mode: 0o700 });
+  const registration = registrationPath(input.stateDir);
+  const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
+  if (existsSync(snapshot.content) || existsSync(snapshot.absent)) {
+    throw activationFailed("portable registration recovery is pending");
+  }
+  if (!existsSync(registration)) {
+    writeExclusiveFile(snapshot.absent, "");
+    return;
+  }
+  if (lstatSync(registration).isSymbolicLink()) {
+    throw activationFailed("portable registration path is unsafe");
+  }
+  writeExclusiveFile(snapshot.content, readFileSync(registration));
+}
+
+export function restorePortableRegistration(input: {
+  readonly stateDir: string;
+  readonly activationId: string;
+}): void {
+  assertNoSymlinkAncestor(input.stateDir);
+  const registration = registrationPath(input.stateDir);
+  const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
+  if (existsSync(snapshot.absent)) {
+    if (lstatSync(snapshot.absent).isSymbolicLink()) {
+      throw activationFailed("portable registration recovery path is unsafe");
+    }
+    if (existsSync(registration)) rmSync(registration, { force: true });
+    return;
+  }
+  if (!existsSync(snapshot.content)) return;
+  if (lstatSync(snapshot.content).isSymbolicLink()) {
+    throw activationFailed("portable registration recovery path is unsafe");
+  }
+  const temporary = `${registration}.${String(process.pid)}.restore`;
+  writeExclusiveFile(temporary, readFileSync(snapshot.content));
+  renameSync(temporary, registration);
+}
+
+export function cleanupPortableRegistrationSnapshot(input: {
+  readonly stateDir: string;
+  readonly activationId: string;
+}): void {
+  const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
+  rmSync(snapshot.content, { force: true });
+  rmSync(snapshot.absent, { force: true });
+}
+
 function isRecoveryTarget(value: unknown): value is UpdatePortableTarget {
   return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
 }
@@ -459,7 +536,7 @@ export function refreshPortableRegistration(input: {
 }): void {
   assertNoSymlinkAncestor(input.stateDir);
   mkdirSync(input.stateDir, { recursive: true, mode: 0o700 });
-  const path = join(input.stateDir, REGISTRATION_FILE);
+  const path = registrationPath(input.stateDir);
   if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
     throw activationFailed("portable registration path is unsafe");
   }
@@ -482,10 +559,9 @@ export function refreshPortableRegistration(input: {
     launcherIdentitySha256: sha256File(input.layout.launcherPath),
     updatedAt: new Date(input.now).toISOString(),
   };
-  writeFileSync(path, `${JSON.stringify(registration, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
+  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
+  writeExclusiveFile(temporaryPath, `${JSON.stringify(registration, null, 2)}\n`);
+  renameSync(temporaryPath, path);
   try {
     chmodSync(path, 0o600);
   } catch {

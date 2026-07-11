@@ -19,6 +19,7 @@ import { spawnSync } from "node:child_process";
 
 import { loadPortableRuntimeApprovals } from "./portable-runtime-approvals.mjs";
 import { hashDirectoryTree, PORTABLE_TARGET_NAMES, sha256File } from "./portable-runtime.mjs";
+import { createPortableZipAdapter } from "./stage-portable-runtime.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_TIMEOUT_MS = 300_000;
@@ -194,33 +195,22 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
-function listZipEntries(archivePath) {
-  const probe = spawnSync("unzip", ["-Z1", archivePath], { encoding: "utf8" });
-  const output =
-    probe.error === undefined && probe.status === 0 ? probe : run("tar", ["-tf", archivePath], {});
-  return output.stdout
-    .split(/\r?\n/u)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function extractZip(archivePath, extractRoot) {
-  const probe = spawnSync("unzip", ["-q", archivePath, "-d", extractRoot], { encoding: "utf8" });
-  if (probe.error === undefined && probe.status === 0) return;
-  run("tar", ["-xf", archivePath, "-C", extractRoot], {});
-}
-
 function assertSafeSingleExecutableEntry(entries, executableName) {
   if (entries.length !== 1 || entries[0] !== executableName) {
     fail(`approved archive must contain exactly one entry named ${executableName}`);
   }
 }
 
-export function extractApprovedExecutable(archivePath, executableName, destination) {
-  assertSafeSingleExecutableEntry(listZipEntries(archivePath), executableName);
+export function extractApprovedExecutable(
+  archivePath,
+  executableName,
+  destination,
+  archiveAdapter = createPortableZipAdapter(process.platform, run),
+) {
+  assertSafeSingleExecutableEntry(archiveAdapter.list(archivePath), executableName);
   const extractRoot = mkdtempSync(join(tmpdir(), "keiko-sidecar-extract-"));
   try {
-    extractZip(archivePath, extractRoot);
+    archiveAdapter.extract(archivePath, extractRoot);
     const extracted = join(extractRoot, executableName);
     if (!existsSync(extracted) || !statSync(extracted).isFile()) {
       fail("approved archive did not produce the expected executable");

@@ -21,7 +21,6 @@ import {
   hashDirectoryTree,
   PORTABLE_TARGETS,
   findPortableMetadataRedactionFailures,
-  hashDirectoryTree,
   portableVerificationSummaryForManifest,
   safeArchiveEntryPath,
   sha256File,

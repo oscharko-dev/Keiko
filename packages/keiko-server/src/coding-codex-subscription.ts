@@ -105,7 +105,7 @@ export function codexSubscriptionProfileForEnv(
     stateScope: stateScopeForStore(credentialStore),
     stateRoot: stateRootForStore(credentialStore),
     usesGlobalCodexHome: false,
-    runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
+    runtimeBinarySources: ["managed-sidecar-runtime"],
     supportsBrowserLogin: !headless,
     supportsDeviceCode: true,
     supportsAccessToken: true,

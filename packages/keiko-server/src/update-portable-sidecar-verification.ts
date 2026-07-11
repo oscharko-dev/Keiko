@@ -46,6 +46,7 @@ export interface PortableSidecarAvailabilityEvidence {
   readonly runtimeVersionVerified: boolean;
   readonly protocolSchemaVerified: boolean;
   readonly signatureVerified: boolean;
+  readonly qualificationVerified: boolean;
 }
 
 export interface PortableSidecarAvailabilityInput {
@@ -57,7 +58,7 @@ export interface PortableSidecarAvailabilityInput {
   readonly runtimeVersionVerified?: boolean | undefined;
   readonly protocolSchemaVerified?: boolean | undefined;
   readonly signatureVerified?: boolean | undefined;
-  readonly qualificationVerified: boolean;
+  readonly qualificationVerified?: boolean | undefined;
 }
 
 export type PortableSidecarAvailability =
@@ -119,31 +120,44 @@ function availabilityChecks(
   return [
     {
       reason: "redistribution-unapproved",
-      verified: input.redistributionApproved ?? evidence.redistributionApproved,
+      verified: remainsVerified(evidence.redistributionApproved, input.redistributionApproved),
     },
-    { reason: "payload-missing", verified: input.payloadPresent ?? evidence.payloadPresent },
+    {
+      reason: "payload-missing",
+      verified: remainsVerified(evidence.payloadPresent, input.payloadPresent),
+    },
     {
       reason: "archive-digest-mismatch",
-      verified: input.archiveDigestVerified ?? evidence.archiveDigestVerified,
+      verified: remainsVerified(evidence.archiveDigestVerified, input.archiveDigestVerified),
     },
     {
       reason: "executable-tree-digest-mismatch",
-      verified: input.executableTreeDigestVerified ?? evidence.executableTreeDigestVerified,
+      verified: remainsVerified(
+        evidence.executableTreeDigestVerified,
+        input.executableTreeDigestVerified,
+      ),
     },
     {
       reason: "runtime-version-mismatch",
-      verified: input.runtimeVersionVerified ?? evidence.runtimeVersionVerified,
+      verified: remainsVerified(evidence.runtimeVersionVerified, input.runtimeVersionVerified),
     },
     {
       reason: "protocol-schema-mismatch",
-      verified: input.protocolSchemaVerified ?? evidence.protocolSchemaVerified,
+      verified: remainsVerified(evidence.protocolSchemaVerified, input.protocolSchemaVerified),
     },
     {
       reason: "signature-unverified",
-      verified: input.signatureVerified ?? evidence.signatureVerified,
+      verified: remainsVerified(evidence.signatureVerified, input.signatureVerified),
     },
-    { reason: "qualification-missing", verified: input.qualificationVerified },
+    {
+      reason: "qualification-missing",
+      verified: remainsVerified(evidence.qualificationVerified, input.qualificationVerified),
+    },
   ];
+}
+
+function remainsVerified(stored: boolean, requested: boolean | undefined): boolean {
+  return stored && requested !== false;
 }
 
 function unavailable(reason: PortableSidecarAvailabilityReason): PortableSidecarAvailability {
@@ -408,6 +422,7 @@ function parseNamedRuntime(
       runtimeVersionVerified: true,
       protocolSchemaVerified: true,
       signatureVerified: true,
+      qualificationVerified: true,
     },
   };
 }

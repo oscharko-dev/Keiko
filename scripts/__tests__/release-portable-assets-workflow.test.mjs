@@ -39,6 +39,29 @@ function productionStepPolicies() {
   });
 }
 
+function workflowJob(start, end) {
+  return portableWorkflow.slice(
+    portableWorkflow.indexOf(start),
+    end === undefined ? undefined : portableWorkflow.indexOf(end),
+  );
+}
+
+function preinstalledArchiveToolStep(job) {
+  const name = "Verify preinstalled 7z capability for staging";
+  const start = job.indexOf(`      - name: ${name}`);
+  const end = job.indexOf("\n      - name:", start + 1);
+  return job.slice(start, end === -1 ? undefined : end);
+}
+
+function assertFailsClosedWhenArchiveToolIsMissing(step) {
+  expect(step).toContain(
+    'Get-Command -Name "7z" -CommandType Application -ErrorAction SilentlyContinue',
+  );
+  expect(step).toContain(
+    "Required preinstalled Windows staging tool '7z' is unavailable; refusing to install or download tooling.",
+  );
+}
+
 function simulateProviderRejection() {
   let failed = false;
   return productionStepPolicies().map((step) => {
@@ -230,6 +253,32 @@ describe("portable asset workflow run resolution", () => {
 });
 
 describe("Windows portable production signing workflow", () => {
+  it("uses only preinstalled archive tools and fails closed in both Windows paths", () => {
+    const stagingJob = workflowJob("  stage:", "\n  stage-windows-production:");
+    const productionJob = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
+    const stagingWindows = preinstalledArchiveToolStep(stagingJob);
+    const productionWindows = preinstalledArchiveToolStep(productionJob);
+
+    expect(portableWorkflow.match(/Verify preinstalled 7z capability for staging/gu)).toHaveLength(
+      2,
+    );
+    expect(portableWorkflow).not.toMatch(/\bchoco\s+install\b/iu);
+    expect(portableWorkflow).not.toMatch(/\b(?:winget|msiexec)\b/iu);
+
+    for (const step of [stagingWindows, productionWindows]) {
+      expect(step).toContain("@(& $command.Path i 2>&1)");
+      expect(step).toContain("Select-Object -First 6");
+      expect(step).toContain("$versionExitCode -ne 0");
+      expect(step).toContain("did not provide version evidence");
+      expect(step).toContain("Windows staging capability:");
+      assertFailsClosedWhenArchiveToolIsMissing(step);
+    }
+
+    expect(productionJob.indexOf("Verify preinstalled 7z capability for staging")).toBeLessThan(
+      productionJob.indexOf("Install dependencies"),
+    );
+  });
+
   it("keeps manual staging outside the protected Windows production job", () => {
     expect(portableWorkflow).toContain("production-signing-preflight:");
     expect(portableWorkflow).toContain("stage-windows-production:");

@@ -281,7 +281,7 @@ function sidecarMetadataForSpec(spec, target, payloadRootPath, payloadSha256, fi
     payloadSha256,
     sizeBytes: sidecarTreeSize(files),
     ...evidence,
-    signing: sidecarStagingSigning(target),
+    signing: sidecarStagingSigning(target, executable),
   };
 }
 
@@ -587,7 +587,7 @@ function sidecarEvidence(sourceRoot, sourcePath, payloadPath) {
   };
 }
 
-function sidecarStagingSigning(target) {
+function sidecarStagingSigning(target, executable) {
   return {
     verificationPolicy: "staging",
     verificationStatus: "unverified-staging",
@@ -597,6 +597,9 @@ function sidecarStagingSigning(target) {
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified: false,
     verificationChecks: createPortableVerificationChecks(target.platformTarget, false),
+    shippedExecutableSha256: executable.executableSha256,
+    shippedExecutableTreeAlgorithm: executable.executableTreeAlgorithm,
+    shippedExecutableTreeSha256: executable.executableTreeSha256,
   };
 }
 
@@ -845,7 +848,7 @@ function extractArchiveRoot(
 
 function extractArchive(archivePath, archiveKind, extractRoot, entries) {
   if (archiveKind === "zip") {
-    run("unzip", ["-q", archivePath, "-d", extractRoot]);
+    createPortableZipAdapter().extract(archivePath, extractRoot);
     return;
   }
   const includeFile = join(extractRoot, "portable-runtime-tar-include.txt");
@@ -855,27 +858,37 @@ function extractArchive(archivePath, archiveKind, extractRoot, entries) {
 }
 
 function safeExtractionEntries(archivePath, archiveKind, expectedRoot, policy) {
-  const entries = archiveEntries(archivePath, archiveKind);
+  if (archiveKind === "zip") {
+    return safeZipExtractionEntries(archivePath, expectedRoot, createPortableZipAdapter());
+  }
+  const entries = archiveEntries(archivePath);
   if (!entries.some((entry) => archiveEntryInsideRoot(entry, expectedRoot))) {
     fail(`archive must contain ${expectedRoot}`);
   }
   for (const entry of entries) {
     if (!archiveEntryInsideRoot(entry, expectedRoot)) fail(`archive entry escapes ${expectedRoot}`);
   }
-  if (archiveKind === "zip") {
-    assertZipEntryTypesSafe(archivePath);
-    return entries;
-  }
   return tarExtractionEntries(archivePath, entries, expectedRoot, policy.tarLinkPolicy);
 }
 
-function archiveEntries(archivePath, archiveKind) {
-  const result =
-    archiveKind === "zip" ? run("unzip", ["-Z1", archivePath]) : run("tar", ["-tzf", archivePath]);
-  return result.stdout
-    .split(/\r?\n/u)
+function archiveEntries(archivePath) {
+  return run("tar", ["-tzf", archivePath])
+    .stdout.split(/\r?\n/u)
     .map((entry) => entry.trim())
     .filter(Boolean);
+}
+
+export function safeZipExtractionEntries(archivePath, expectedRoot, adapter) {
+  const entries = adapter.list(archivePath);
+  if (!entries.some((entry) => archiveEntryInsideRoot(entry, expectedRoot))) {
+    throw new Error(`archive must contain ${expectedRoot}`);
+  }
+  for (const entry of entries) {
+    if (!archiveEntryInsideRoot(entry, expectedRoot)) {
+      throw new Error(`archive entry escapes ${expectedRoot}`);
+    }
+  }
+  return entries;
 }
 
 function archiveEntryInsideRoot(entry, expectedRoot) {
@@ -928,15 +941,111 @@ function assertTarSymlinkTargetSafe(entry, line, expectedRoot) {
   }
 }
 
-function assertZipEntryTypesSafe(archivePath) {
-  for (const line of run("unzip", ["-Z", "-l", archivePath])
-    .stdout.split(/\r?\n/u)
-    .filter(Boolean)) {
+export function createPortableZipAdapter(platform = process.platform, commandRunner = run) {
+  return platform === "win32"
+    ? createSevenZipAdapter(commandRunner)
+    : createInfoZipAdapter(commandRunner);
+}
+
+function createSevenZipAdapter(commandRunner) {
+  return {
+    list(archivePath) {
+      const result = commandRunner("7z", ["l", "-slt", "-ba", archivePath]);
+      return parseSevenZipEntries(result.stdout);
+    },
+    extract(archivePath, extractRoot) {
+      commandRunner("7z", ["x", "-y", `-o${extractRoot}`, archivePath]);
+    },
+    create(sourceRoot, entryName, archivePath) {
+      commandRunner("7z", ["a", "-tzip", "-mx=9", archivePath, entryName], {
+        cwd: sourceRoot,
+      });
+    },
+  };
+}
+
+function createInfoZipAdapter(commandRunner) {
+  return {
+    list(archivePath) {
+      assertInfoZipEntryTypesSafe(archivePath, commandRunner);
+      return commandRunner("unzip", ["-Z1", archivePath])
+        .stdout.split(/\r?\n/u)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+    },
+    extract(archivePath, extractRoot) {
+      commandRunner("unzip", ["-q", archivePath, "-d", extractRoot]);
+    },
+    create(sourceRoot, entryName, archivePath) {
+      commandRunner("zip", ["-qr", archivePath, entryName], { cwd: sourceRoot });
+    },
+  };
+}
+
+function assertInfoZipEntryTypesSafe(archivePath, commandRunner) {
+  const lines = commandRunner("unzip", ["-Z", "-l", archivePath]).stdout.split(/\r?\n/u);
+  for (const line of lines) {
     if (!/^[dl-][rwx-]/u.test(line)) continue;
     const type = line[0];
     if (type === "d" || type === "-") continue;
-    fail("archive contains unsupported special-file entries");
+    throw new Error("archive contains unsupported special-file entries");
   }
+}
+
+function parseSevenZipEntries(output) {
+  const records = sevenZipTechnicalRecords(output).filter((record) => "Folder" in record);
+  if (records.length === 0) throw new Error("7z did not report ZIP entries");
+  for (const record of records) assertSevenZipEntrySafe(record);
+  return records.map((record) => record.Path);
+}
+
+function sevenZipTechnicalRecords(output) {
+  return output
+    .split(/\r?\n\s*\r?\n/u)
+    .map(sevenZipTechnicalRecord)
+    .filter((record) => typeof record.Path === "string" && record.Path.length > 0);
+}
+
+function sevenZipTechnicalRecord(block) {
+  const record = {};
+  for (const line of block.split(/\r?\n/u)) {
+    const separator = line.indexOf(" = ");
+    if (separator <= 0) continue;
+    record[line.slice(0, separator)] = line.slice(separator + 3);
+  }
+  return record;
+}
+
+function assertSevenZipEntrySafe(record) {
+  const folder = record.Folder;
+  const unixType = sevenZipUnixEntryType(record.Attributes);
+  if (
+    (folder !== "+" && folder !== "-") ||
+    record.Encrypted === "+" ||
+    sevenZipTypeUnsupported(unixType) ||
+    sevenZipHasLinkMetadata(record) ||
+    sevenZipFolderTypeMismatch(folder, unixType)
+  ) {
+    throw new Error("archive contains unsupported special-file entries");
+  }
+}
+
+function sevenZipUnixEntryType(attributes) {
+  if (typeof attributes !== "string") return undefined;
+  return attributes.match(/(?:^|\s)([dlbcps-])[rwxStTs-]{9}(?:\s|$)/u)?.[1];
+}
+
+function sevenZipTypeUnsupported(unixType) {
+  return unixType !== undefined && unixType !== "-" && unixType !== "d";
+}
+
+function sevenZipHasLinkMetadata(record) {
+  return "Symbolic Link" in record || "Hard Link" in record || "Alternate Stream" in record;
+}
+
+function sevenZipFolderTypeMismatch(folder, unixType) {
+  if (folder === "+") return unixType !== undefined && unixType !== "d";
+  return folder === "-" && unixType === "d";
 }
 
 function copySafeTreeContents(sourceRoot, destinationRoot) {
@@ -1234,7 +1343,7 @@ function sha256Text(text) {
 
 function createZipArchive(payloadContainer, assetName, outRoot) {
   const assetPath = join(outRoot, assetName);
-  run("zip", ["-qr", assetPath, "Keiko"], { cwd: payloadContainer });
+  createPortableZipAdapter().create(payloadContainer, "Keiko", assetPath);
   if (!existsSync(assetPath)) fail(`expected ZIP asset at ${assetPath}`);
   return assetPath;
 }

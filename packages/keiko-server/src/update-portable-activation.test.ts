@@ -14,7 +14,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdatePortableStagingSummary } from "@oscharko-dev/keiko-contracts";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
 import { createPortableUpdateActivator } from "./update-portable-activation.js";
-import { activationIdFor } from "./update-portable-activation-files.js";
+import {
+  activationIdFor,
+  capturePortableRegistration,
+} from "./update-portable-activation-files.js";
 
 const TARGET_VERSION = "0.2.12";
 const OLD_VERSION = "0.2.11";
@@ -150,6 +153,9 @@ describe("portable update activation", () => {
 
   it("restores the previously working install and retains staging when relaunch version is not verified", async () => {
     const install = await makeInstall();
+    const registrationPath = join(install.stateDir, "portable-install-state.json");
+    mkdirSync(install.stateDir, { recursive: true });
+    writeFileSync(registrationPath, '{"packageVersion":"0.2.14"}\n', "utf8");
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
     const activator = createPortableUpdateActivator({
       env: {
@@ -173,6 +179,7 @@ describe("portable update activation", () => {
     ).rejects.toMatchObject({ reason: "portable-version-verification-failed" });
     expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
     expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
+    expect(readFileSync(registrationPath, "utf8")).toBe('{"packageVersion":"0.2.14"}\n');
     expect(readFileSync(join(install.stageRoot, "app", "package.json"), "utf8")).toContain(
       TARGET_VERSION,
     );
@@ -251,6 +258,7 @@ describe("portable update activation", () => {
     ).rejects.toMatchObject({ reason: "portable-activation-failed" });
     expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
     expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
+    expect(existsSync(join(install.stateDir, "portable-install-state.json"))).toBe(false);
   });
 
   it("restores the active install when registration refresh fails before relaunch", async () => {
@@ -285,6 +293,9 @@ describe("portable update activation", () => {
 
   it("restores the active install when relaunch cannot be started", async () => {
     const install = await makeInstall();
+    const registrationPath = join(install.stateDir, "portable-install-state.json");
+    mkdirSync(install.stateDir, { recursive: true });
+    writeFileSync(registrationPath, '{"packageVersion":"0.2.14"}\n', "utf8");
     const activator = createPortableUpdateActivator({
       env: { KEIKO_STATE_DIR: install.stateDir },
       homedir: () => install.home,
@@ -304,6 +315,7 @@ describe("portable update activation", () => {
     ).rejects.toMatchObject({ reason: "portable-relaunch-failed" });
     expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
     expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
+    expect(readFileSync(registrationPath, "utf8")).toBe('{"packageVersion":"0.2.14"}\n');
     expect(readFileSync(join(install.stageRoot, "app", "package.json"), "utf8")).toContain(
       TARGET_VERSION,
     );
@@ -377,5 +389,44 @@ describe("portable update activation", () => {
     expect(existsSync(join(install.stateDir, "updates", "portable-activation-recovery.json"))).toBe(
       false,
     );
+  });
+
+  it("restores prior registration for an interrupted registered candidate before failing safely", async () => {
+    const install = await makeInstall();
+    const request = {
+      sessionId: "session-registered-recovery",
+      targetVersion: TARGET_VERSION,
+      stage: stageSummary(),
+      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    };
+    const registrationPath = join(install.stateDir, "portable-install-state.json");
+    const oldRegistration = '{"packageVersion":"0.2.14"}\n';
+    mkdirSync(install.stateDir, { recursive: true });
+    writeFileSync(registrationPath, oldRegistration, "utf8");
+    const activationId = activationIdFor(request);
+    capturePortableRegistration({ stateDir: install.stateDir, activationId });
+    const backupRoot = join(dirname(install.managedRoot), `.keiko-previous-${activationId}`);
+    renameSync(install.managedRoot, backupRoot);
+    renameSync(install.stageRoot, install.managedRoot);
+    writeFileSync(registrationPath, '{"packageVersion":"0.2.12"}\n', "utf8");
+    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
+    writeFileSync(
+      join(install.stateDir, "updates", "portable-activation-recovery.json"),
+      JSON.stringify({ activationId, stageId: "stage-1", target: TARGET, phase: "registered" }),
+      "utf8",
+    );
+    await rm(join(install.managedRoot, "Keiko.exe"), { force: true });
+    const activator = createPortableUpdateActivator({
+      env: { KEIKO_STATE_DIR: install.stateDir },
+      homedir: () => install.home,
+      spawnFn: () => childProcess(),
+      versionVerifier: () => Promise.resolve(true),
+    });
+
+    await expect(activator.activate(request)).rejects.toMatchObject({
+      reason: "portable-activation-failed",
+    });
+    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
+    expect(readFileSync(registrationPath, "utf8")).toBe(oldRegistration);
   });
 });

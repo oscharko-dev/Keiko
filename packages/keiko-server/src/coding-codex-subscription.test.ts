@@ -54,7 +54,7 @@ describe("coding Codex subscription profile routes", () => {
         stateScope: "keiko-owned-state",
         stateRoot: "keiko-codex-runtime-state",
         usesGlobalCodexHome: false,
-        runtimeBinarySources: ["managed-sidecar-runtime", "policy-allowed-local-install"],
+        runtimeBinarySources: ["managed-sidecar-runtime"],
       },
     });
     expect(JSON.stringify(result)).not.toContain("auth.json");
