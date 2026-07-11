@@ -9,6 +9,7 @@ describe("canonicalizeWindowsPath", () => {
     canonicalizeWindowsPath(environment, "win32");
 
     expect(environment.PATH).toBe("C:\\node;C:\\npm");
+    expect(environment.Path).toBeUndefined();
   });
 
   it("does not replace an explicit PATH value", () => {
@@ -17,6 +18,7 @@ describe("canonicalizeWindowsPath", () => {
     canonicalizeWindowsPath(environment, "win32");
 
     expect(environment.PATH).toBe("trusted");
+    expect(environment.Path).toBeUndefined();
   });
 
   it("does not add PATH on POSIX hosts", () => {
@@ -36,10 +38,14 @@ describe("canonicalizeWindowsPath", () => {
   });
 
   it("replaces a stale stub path with the captured Windows worker path", () => {
-    const environment: NodeJS.ProcessEnv = { PATH: "C:\\temporary-fake-bin" };
+    const environment: NodeJS.ProcessEnv = {
+      PATH: "C:\\temporary-fake-bin",
+      Path: "C:\\stale-system-bin",
+    };
 
     restoreWindowsPath(environment, "C:\\node;C:\\npm", "win32");
 
     expect(environment.PATH).toBe("C:\\node;C:\\npm");
+    expect(environment.Path).toBeUndefined();
   });
 });

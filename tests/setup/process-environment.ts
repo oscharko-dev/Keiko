@@ -11,10 +11,16 @@ export function canonicalizeWindowsPath(
   platform: NodeJS.Platform = process.platform,
   fallbackPath?: string,
 ): void {
-  if (platform !== "win32" || environment.PATH !== undefined) return;
-  const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === "path");
-  const pathValue = pathKey === undefined ? fallbackPath : environment[pathKey];
+  if (platform !== "win32") return;
+  const pathKeys = Object.keys(environment).filter((key) => key.toLowerCase() === "path");
+  const pathValue =
+    environment.PATH ??
+    pathKeys.map((key) => environment[key]).find((value) => value !== undefined);
+  for (const key of pathKeys) {
+    if (key !== "PATH") Reflect.deleteProperty(environment, key);
+  }
   if (pathValue !== undefined) environment.PATH = pathValue;
+  else if (fallbackPath !== undefined) environment.PATH = fallbackPath;
 }
 
 export function restoreWindowsPath(
@@ -22,7 +28,11 @@ export function restoreWindowsPath(
   originalPath: string | undefined,
   platform: NodeJS.Platform = process.platform,
 ): void {
-  if (platform === "win32" && originalPath !== undefined) environment.PATH = originalPath;
+  if (platform !== "win32" || originalPath === undefined) return;
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === "path") Reflect.deleteProperty(environment, key);
+  }
+  environment.PATH = originalPath;
 }
 
 canonicalizeWindowsPath(process.env);
