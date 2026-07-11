@@ -4,9 +4,11 @@ Pull requests targeting `dev` are mergeable only when evidence for the exact cur
 passes every independent control. Human-review bypasses for the two repository maintainers do not
 bypass this technical gate.
 
-The base-controlled `pull_request_target` workflow never checks out or executes pull-request code.
-It publishes a custom `Banking Quality Gate` check on the untrusted head SHA and reads only GitHub
-check/review metadata. This prevents a pull request from weakening the aggregator that evaluates it.
+The base-controlled `workflow_run` workflow starts only after the protected `CI` workflow completes.
+It checks out the repository default branch, never checks out or executes pull-request code, and
+rejects triggers that are not bound to the exact head of a pull request targeting `dev`. It publishes
+a custom `Banking Quality Gate` check on that untrusted head SHA and reads only GitHub check/review
+metadata. This prevents a pull request from weakening the aggregator that evaluates it.
 
 The aggregate requires app-bound success from:
 

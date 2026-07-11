@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { evaluateBankingEvidence, normalizeComments } from "../check-banking-quality-gate.mjs";
+import {
+  evaluateBankingEvidence,
+  normalizeComments,
+  triggeringPullRequest,
+} from "../check-banking-quality-gate.mjs";
 
 const headSha = "a".repeat(40);
 const requiredChecks = [
@@ -111,5 +115,29 @@ describe("Banking Quality Gate", () => {
       },
     ]);
     expect(comments.map((comment) => comment.findingCount)).toEqual([2, 1]);
+  });
+
+  it("accepts only an exact-head CI workflow run for a dev pull request", () => {
+    const event = {
+      workflow_run: {
+        event: "pull_request",
+        head_sha: headSha,
+        pull_requests: [{ base: { ref: "dev" }, head: { sha: headSha }, number: 2316 }],
+      },
+    };
+    expect(triggeringPullRequest(event).number).toBe(2316);
+    expect(() =>
+      triggeringPullRequest({
+        workflow_run: {
+          ...event.workflow_run,
+          pull_requests: [{ base: { ref: "main" }, head: { sha: headSha }, number: 2316 }],
+        },
+      }),
+    ).toThrow("must target dev");
+    expect(() =>
+      triggeringPullRequest({
+        workflow_run: { ...event.workflow_run, head_sha: "b".repeat(40) },
+      }),
+    ).toThrow("not bound to the pull request head commit");
   });
 });

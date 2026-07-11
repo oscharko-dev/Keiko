@@ -8,10 +8,10 @@ const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
 
 describe("Banking Grade workflows", () => {
-  it("runs the trusted aggregator only for pull requests targeting dev", () => {
-    expect(banking).toMatch(/pull_request_target:\n\s+branches:\n\s+- dev/u);
-    expect(banking).toContain("ref: ${{ github.event.pull_request.base.sha }}");
-    expect(banking).not.toContain("github.event.pull_request.head.sha");
+  it("runs the trusted aggregator only after the protected CI workflow", () => {
+    expect(banking).toMatch(/workflow_run:\n\s+workflows:\n\s+- CI/u);
+    expect(banking).toContain("ref: ${{ github.event.repository.default_branch }}");
+    expect(banking).not.toContain("pull_request_target");
     expect(banking).toMatch(/checks: write/u);
   });
 

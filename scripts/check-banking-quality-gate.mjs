@@ -218,14 +218,27 @@ function runtimeConfig() {
   if (eventPath === undefined || repository === undefined || token === undefined)
     throw new Error("GitHub runtime variables are required.");
   const event = JSON.parse(readFileSync(eventPath, "utf8"));
+  const pullRequest = triggeringPullRequest(event);
   const [owner, repo] = repository.split("/", 2);
   return {
-    headSha: event.pull_request.head.sha,
+    headSha: pullRequest.head.sha,
     owner,
-    pullRequest: event.pull_request.number,
+    pullRequest: pullRequest.number,
     repo,
     token,
   };
+}
+
+export function triggeringPullRequest(event) {
+  const workflowRun = event.workflow_run;
+  if (workflowRun?.event !== "pull_request")
+    throw new Error("The triggering CI run must belong to a pull request.");
+  const pullRequest = workflowRun.pull_requests?.[0];
+  if (pullRequest === undefined || pullRequest.base?.ref !== "dev")
+    throw new Error("The triggering CI run must target dev.");
+  if (pullRequest.head?.sha !== workflowRun.head_sha)
+    throw new Error("The triggering CI run is not bound to the pull request head commit.");
+  return pullRequest;
 }
 
 async function main() {
