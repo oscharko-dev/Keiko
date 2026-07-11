@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from "react";
+import type { ReactNode } from "react";
 import {
   ApiError,
   applyRun,
@@ -25,7 +25,6 @@ import type {
   EvidenceManifest,
   HarnessEvent,
   RunReport,
-  SseStatus,
 } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 
@@ -337,27 +336,6 @@ function renderTextCard(title: string, value: string | undefined): ReactNode {
   );
 }
 
-// Same focusable-<pre> shape as renderTextCard, but keyed on presence (`!== undefined`)
-// rather than non-empty length — matches the dry-run preview / proposed-diff call sites,
-// which must render an (empty) region rather than disappear when the value is "".
-function renderPreCard(title: string, value: string | undefined): ReactNode {
-  if (value === undefined) return null;
-  return (
-    <div className="arun-result-card">
-      <div className="arun-result-title">{title}</div>
-      {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
-      <pre
-        role="region"
-        aria-label={title}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-        tabIndex={0}
-      >
-        {value}
-      </pre>
-    </div>
-  );
-}
-
 function renderListCard(title: string, values: readonly string[] | undefined): ReactNode {
   if (values === undefined || values.length === 0) return null;
   return (
@@ -438,402 +416,6 @@ function renderHypothesis(report: RunReport): ReactNode {
   );
 }
 
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — mirrors the
-// report?.durationMs ?? evidence?.run.durationMs ?? (…elapsed fallback) chain. Every
-// field on this path is optional-number-or-undefined, never null, so the `!== undefined`
-// checks below are behaviour-identical to the original `??` chain.
-function computeElapsedMs(
-  report: RunReport | null,
-  evidence: EvidenceManifest | null,
-  events: readonly HarnessEvent[],
-): number {
-  if (report?.durationMs !== undefined) return report.durationMs;
-  if (evidence?.run.durationMs !== undefined) return evidence.run.durationMs;
-  if (events.length === 0) return 0;
-  return Math.max(0, Date.now() - Number(new Date(events[0]?.ts ?? Date.now())));
-}
-
-// Extracted from loadReport's 404 branch (SonarCloud S3776) — the run report is gone,
-// so fall back to the redacted evidence manifest.
-async function loadEvidenceFallback(
-  runId: string,
-  setEvidence: Dispatch<SetStateAction<EvidenceManifest | null>>,
-  setReport: Dispatch<SetStateAction<RunReport | null>>,
-  setError: Dispatch<SetStateAction<string | null>>,
-): Promise<void> {
-  try {
-    const response = await fetchEvidenceManifest(runId);
-    setEvidence(response.manifest);
-    setReport(null);
-  } catch (evidenceError: unknown) {
-    setError(evidenceError instanceof Error ? evidenceError.message : "Unable to load evidence.");
-  }
-}
-
-interface AgentRunHeaderProps {
-  readonly workflow: AgentWorkflowId;
-  readonly modelId: string;
-  readonly costClass: CostClass | null;
-  readonly status: string;
-  readonly statusLabel: string;
-  readonly running: boolean;
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the "arun-head" row.
-function AgentRunHeader({
-  workflow,
-  modelId,
-  costClass,
-  status,
-  statusLabel,
-  running,
-}: AgentRunHeaderProps): ReactNode {
-  return (
-    <div className="arun-head">
-      <span className="arun-role">{WORKFLOW_LABELS[workflow]}</span>
-      {/* uiux-fix F054 C385: cfg.model is optional — skip the pill entirely so no
-          empty bordered artefact renders between the workflow label and status. */}
-      {modelId.length > 0 ? <span className="ag-model mono">{modelId}</span> : null}
-      {/* uiux-fix F054 C382: human-readable cost class ("Low cost") instead of the
-          raw enum, plus a title explaining what the pill refers to. */}
-      {costClass !== null ? (
-        <span className="arun-gov" title="Model cost class">
-          {costClassLabel(costClass)}
-        </span>
-      ) : null}
-      <span className="spacer" />
-      <span className="arun-status">
-        {/* uiux-fix F018 C265: data-status feeds the idle/terminal dot colours in
-            globals.css — the bare .dot class paints no background at all. */}
-        <span className="dot" data-live={running} data-status={status} />
-        {statusLabel}
-      </span>
-    </div>
-  );
-}
-
-interface AgentRunMetersProps {
-  readonly elapsedMs: number;
-  readonly usage: UsageTotals;
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the elapsed/usage/latency
-// meter row.
-function AgentRunMeters({ elapsedMs, usage }: AgentRunMetersProps): ReactNode {
-  return (
-    <div className="arun-meters">
-      <div className="arun-meter">
-        <span className="arun-mk">Elapsed</span>
-        <span className="arun-mv mono">{formatMs(elapsedMs)}</span>
-      </div>
-      <div className="arun-meter">
-        <span className="arun-mk">Usage</span>
-        <span className="arun-mv mono">
-          {usage.requestCount === 0
-            ? "No model usage"
-            : `${formatTokens(usage.promptTokens + usage.completionTokens)} tok`}
-        </span>
-      </div>
-      <div className="arun-meter">
-        <span className="arun-mk">Latency</span>
-        <span className="arun-mv mono">
-          {usage.requestCount === 0 ? "—" : formatMs(usage.latencyMs)}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-interface AgentRunPermsProps {
-  readonly linkedRoot: string | null;
-  readonly workspaceRoot: string | undefined;
-  readonly linkedFilePath: string | undefined;
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the workspace/linked-file
-// permission chips.
-function AgentRunPerms({
-  linkedRoot,
-  workspaceRoot,
-  linkedFilePath,
-}: AgentRunPermsProps): ReactNode {
-  // uiux-fix F018 C266: absolute paths are single unbreakable words — wrap them in a
-  // truncating span and expose the full path via title so the end stays reachable.
-  return (
-    <div className="arun-perms">
-      <span
-        className="arun-perm"
-        data-on={linkedRoot !== null}
-        title={linkedRoot !== null ? linkedRoot : workspaceRoot}
-      >
-        <Icons.files size={11} />
-        <span className="arun-perm-path">
-          {linkedRoot !== null ? linkedRoot : (workspaceRoot ?? "no workspace")}
-        </span>
-      </span>
-      {linkedFilePath !== undefined ? (
-        <span className="arun-perm" data-on={true} title={linkedFilePath}>
-          <Icons.files size={11} />
-          <span className="arun-perm-path">{linkedFilePath}</span>
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the collapsible run-input
-// JSON block.
-function AgentRunInputDetails({
-  input,
-}: {
-  readonly input: Record<string, unknown> | null;
-}): ReactNode {
-  if (input === null) return null;
-  return (
-    <details className="arun-input">
-      <summary>Run input</summary>
-      {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container exposed as a focusable
-          named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
-      <pre
-        role="region"
-        aria-label="Run input"
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-        tabIndex={0}
-      >
-        {JSON.stringify(input, null, 2)}
-      </pre>
-    </details>
-  );
-}
-
-interface AgentRunLogProps {
-  readonly sseStatus: SseStatus;
-  readonly sseError: string | null;
-  readonly visibleLogEvents: readonly HarnessEvent[];
-  readonly runBusy: boolean;
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the role="log" event feed.
-// `visibleLogEvents.length === 0` is equivalent to the original `sse.events.length === 0`:
-// visibleLogEvents is a pure slice/reverse/slice(0, 50) of sse.events, so one is empty iff
-// the other is.
-function AgentRunLog({
-  sseStatus,
-  sseError,
-  visibleLogEvents,
-  runBusy,
-}: AgentRunLogProps): ReactNode {
-  return (
-    <div
-      className="arun-log"
-      role="log"
-      aria-live="polite"
-      aria-label="Run events"
-      aria-busy={runBusy ? "true" : undefined}
-    >
-      {sseStatus === "error" && sseError !== null ? (
-        // uiux-fix F018 C026: a dropped stream froze the log without any hint;
-        // useSSE clears the error again once the auto-reconnect succeeds.
-        <div className="arun-log-row">
-          <span className="arun-log-ico">
-            <Icons.reset size={12} />
-          </span>
-          <span className="arun-log-text">{sseError}</span>
-        </div>
-      ) : null}
-      {visibleLogEvents.length === 0 ? (
-        sseStatus === "error" ? null : (
-          <div className="arun-log-row">
-            <span className="arun-log-ico">
-              <Icons.reset size={12} />
-            </span>
-            <span className="arun-log-text">
-              {sseStatus === "connecting" ? "Connecting to run events…" : "Waiting for run events…"}
-            </span>
-          </div>
-        )
-      ) : (
-        visibleLogEvents.map((event) => (
-          <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
-            <span className="arun-log-ico">
-              <Icons.spark size={12} />
-            </span>
-            <span className="arun-log-text">{eventLabel(event)}</span>
-            <span className="arun-log-t mono">{eventTime(event)}</span>
-          </div>
-        ))
-      )}
-    </div>
-  );
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the report-backed results
-// panel (live run).
-function AgentRunReportResults({ report }: { readonly report: RunReport }): ReactNode {
-  return (
-    <div className="arun-results">
-      {renderExplainReport(report)}
-      {renderVerifyReport(report)}
-      {renderTextCard("Failure", report.failureReason)}
-      {renderTextCard("Covered behavior", report.coveredBehavior)}
-      {renderTextCard("Known gaps", report.knownGaps)}
-      {renderTextCard("Verification note", report.verificationSkipReason)}
-      {renderHypothesis(report)}
-      {renderListCard("Next actions", report.nextActions)}
-      {renderPreCard("Dry-run preview", report.dryRunPreview)}
-      {renderPreCard("Proposed diff", report.proposedDiff)}
-      {renderVerification(report)}
-      {report.applyReport !== undefined ? (
-        <div className="arun-result-card arun-applied">
-          <div className="arun-result-title">Applied</div>
-          {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
-          <pre
-            role="region"
-            aria-label="Applied"
-            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
-            tabIndex={0}
-          >
-            {JSON.stringify(report.applyReport, null, 2)}
-          </pre>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the evidence-backed results
-// panel (report gone, evidence manifest loaded instead).
-function AgentRunEvidenceResults({ evidence }: { readonly evidence: EvidenceManifest }): ReactNode {
-  return (
-    <div className="arun-results">
-      <div className="arun-result-card">
-        <div className="arun-result-title">Evidence</div>
-        <div className="arun-kv">
-          <span>Outcome</span>
-          <strong>{evidence.run.outcome}</strong>
-        </div>
-        <div className="arun-kv">
-          <span>Duration</span>
-          <strong>{formatMs(evidence.run.durationMs)}</strong>
-        </div>
-        {evidence.patch !== undefined ? (
-          <>
-            <div className="arun-kv">
-              <span>Changed files</span>
-              <strong>{evidence.patch.changedFiles.toString()}</strong>
-            </div>
-            <div className="arun-kv">
-              <span>Patch size</span>
-              <strong>{formatBytes(evidence.patch.patchBytes)}</strong>
-            </div>
-          </>
-        ) : null}
-      </div>
-      {renderPreCard("Proposed diff", evidence.patch?.redactedDiff)}
-    </div>
-  );
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — picks the report vs.
-// evidence results panel, mirroring the original `report !== null ? … : evidence !== null
-// ? … : null` ternary chain.
-function AgentRunResults({
-  report,
-  evidence,
-}: {
-  readonly report: RunReport | null;
-  readonly evidence: EvidenceManifest | null;
-}): ReactNode {
-  if (report !== null) return <AgentRunReportResults report={report} />;
-  if (evidence !== null) return <AgentRunEvidenceResults evidence={evidence} />;
-  return null;
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the load/apply error
-// announcements (WCAG 4.1.3).
-function AgentRunErrors({
-  error,
-  applyError,
-}: {
-  readonly error: string | null;
-  readonly applyError: string | null;
-}): ReactNode {
-  return (
-    <>
-      {error !== null ? (
-        <div className="arun-error" role="alert">
-          {error}
-        </div>
-      ) : null}
-      {applyError !== null ? (
-        <div className="arun-error" role="alert">
-          {applyError}
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-interface AgentRunControlsProps {
-  readonly runId: string;
-  readonly evidenceLinkRef: MutableRefObject<HTMLAnchorElement | null>;
-  readonly showApply: boolean;
-  readonly applying: boolean;
-  readonly confirmApply: boolean;
-  readonly applyFileCount: number;
-  readonly onApplyClick: () => void;
-  readonly appliedAt: number | undefined;
-  readonly showCancel: boolean;
-  readonly onCancelClick: () => void;
-}
-
-// Extracted from the AgentRunWidget render (SonarCloud S3776) — the Evidence/Apply/Cancel
-// control row.
-function AgentRunControls({
-  runId,
-  evidenceLinkRef,
-  showApply,
-  applying,
-  confirmApply,
-  applyFileCount,
-  onApplyClick,
-  appliedAt,
-  showCancel,
-  onCancelClick,
-}: AgentRunControlsProps): ReactNode {
-  return (
-    <div className="arun-controls">
-      <a
-        className="arun-btn ghost"
-        href={`/api/evidence/${encodeURIComponent(runId)}`}
-        target="_blank"
-        rel="noreferrer"
-        ref={evidenceLinkRef}
-      >
-        Evidence
-      </a>
-      {showApply ? (
-        // uiux-fix F018 C124: aria-disabled + click guard instead of HTML disabled
-        // so the focused button does not throw focus to <body> while applying.
-        <button type="button" className="arun-btn" aria-disabled={applying} onClick={onApplyClick}>
-          {applying
-            ? "Applying…"
-            : confirmApply
-              ? `Confirm apply (${applyFileCount.toString()} file${applyFileCount === 1 ? "" : "s"})`
-              : "Apply"}
-        </button>
-      ) : appliedAt !== undefined ? (
-        <span className="arun-final mono">Applied</span>
-      ) : null}
-      {showCancel ? (
-        <button type="button" className="arun-btn danger" onClick={onCancelClick}>
-          Cancel
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
 export function AgentRunWidget({
   cfg = {},
   linkedRoot = null,
@@ -865,7 +447,15 @@ export function AgentRunWidget({
       setEvidence(null);
     } catch (loadError: unknown) {
       if (loadError instanceof ApiError && loadError.status === 404) {
-        await loadEvidenceFallback(runId, setEvidence, setReport, setError);
+        try {
+          const response = await fetchEvidenceManifest(runId);
+          setEvidence(response.manifest);
+          setReport(null);
+        } catch (evidenceError: unknown) {
+          setError(
+            evidenceError instanceof Error ? evidenceError.message : "Unable to load evidence.",
+          );
+        }
         return;
       }
       setError(loadError instanceof Error ? loadError.message : "Unable to load run report.");
@@ -901,7 +491,12 @@ export function AgentRunWidget({
   // entry) buffer; inline in JSX it re-ran on every unrelated widget render. Memoized on
   // the buffer identity it runs once per event batch.
   const visibleLogEvents = useMemo(() => sse.events.slice().reverse().slice(0, 50), [sse.events]);
-  const elapsedMs = computeElapsedMs(report, evidence, sse.events);
+  const elapsedMs =
+    report?.durationMs ??
+    evidence?.run.durationMs ??
+    (sse.events.length > 0
+      ? Math.max(0, Date.now() - Number(new Date(sse.events[0]?.ts ?? Date.now())))
+      : 0);
   const status = reportStatus(report, evidence);
   const statusLabel = reportStatusLabel(report, evidence);
   const terminal = report !== null && TERMINAL_REPORT_STATUSES.has(report.status);
@@ -958,35 +553,23 @@ export function AgentRunWidget({
     }
   };
 
-  // uiux-fix F018 C258: arms the "Confirm apply" state and its 6s auto-reset timer.
-  // Kept as a component-local closure (not module-scope) so confirmTimerRef's mutation
-  // stays visible to react-hooks/exhaustive-deps for the unmount-cleanup effect above.
-  const armApplyConfirmation = (): void => {
-    setConfirmApply(true);
-    if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
-    confirmTimerRef.current = window.setTimeout(() => {
-      setConfirmApply(false);
-      confirmTimerRef.current = null;
-    }, 6000);
-  };
-
-  // uiux-fix F018 C258: cancels a pending auto-reset timer (see armApplyConfirmation).
-  const clearApplyConfirmation = (): void => {
-    if (confirmTimerRef.current !== null) {
-      window.clearTimeout(confirmTimerRef.current);
-      confirmTimerRef.current = null;
-    }
-  };
-
   // uiux-fix F018 C258: first click arms the confirm state (auto-resets after 6 s),
   // the second click actually applies.
   const onApplyClick = (): void => {
     if (applying) return;
     if (!confirmApply) {
-      armApplyConfirmation();
+      setConfirmApply(true);
+      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = window.setTimeout(() => {
+        setConfirmApply(false);
+        confirmTimerRef.current = null;
+      }, 6000);
       return;
     }
-    clearApplyConfirmation();
+    if (confirmTimerRef.current !== null) {
+      window.clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = null;
+    }
     setConfirmApply(false);
     void doApply();
   };
@@ -1002,14 +585,26 @@ export function AgentRunWidget({
 
   return (
     <div className="arun arun-real" aria-busy={runBusy ? "true" : undefined}>
-      <AgentRunHeader
-        workflow={workflow}
-        modelId={modelId}
-        costClass={costClass}
-        status={status}
-        statusLabel={statusLabel}
-        running={report?.status === "running"}
-      />
+      <div className="arun-head">
+        <span className="arun-role">{WORKFLOW_LABELS[workflow]}</span>
+        {/* uiux-fix F054 C385: cfg.model is optional — skip the pill entirely so no
+            empty bordered artefact renders between the workflow label and status. */}
+        {modelId.length > 0 ? <span className="ag-model mono">{modelId}</span> : null}
+        {/* uiux-fix F054 C382: human-readable cost class ("Low cost") instead of the
+            raw enum, plus a title explaining what the pill refers to. */}
+        {costClass !== null ? (
+          <span className="arun-gov" title="Model cost class">
+            {costClassLabel(costClass)}
+          </span>
+        ) : null}
+        <span className="spacer" />
+        <span className="arun-status">
+          {/* uiux-fix F018 C265: data-status feeds the idle/terminal dot colours in
+              globals.css — the bare .dot class paints no background at all. */}
+          <span className="dot" data-live={report?.status === "running"} data-status={status} />
+          {statusLabel}
+        </span>
+      </div>
 
       {/* uiux-fix F018 C109: announce run completion (shortSummary changes) to AT.
           title carries the full run id, which is otherwise unobtainable (C110). */}
@@ -1020,43 +615,252 @@ export function AgentRunWidget({
         </span>
       </div>
 
-      <AgentRunMeters elapsedMs={elapsedMs} usage={usage} />
+      <div className="arun-meters">
+        <div className="arun-meter">
+          <span className="arun-mk">Elapsed</span>
+          <span className="arun-mv mono">{formatMs(elapsedMs)}</span>
+        </div>
+        <div className="arun-meter">
+          <span className="arun-mk">Usage</span>
+          <span className="arun-mv mono">
+            {usage.requestCount === 0
+              ? "No model usage"
+              : `${formatTokens(usage.promptTokens + usage.completionTokens)} tok`}
+          </span>
+        </div>
+        <div className="arun-meter">
+          <span className="arun-mk">Latency</span>
+          <span className="arun-mv mono">
+            {usage.requestCount === 0 ? "—" : formatMs(usage.latencyMs)}
+          </span>
+        </div>
+      </div>
 
-      <AgentRunPerms
-        linkedRoot={linkedRoot}
-        workspaceRoot={cfg.workspaceRoot}
-        linkedFilePath={linkedFilePath}
-      />
+      {/* uiux-fix F018 C266: absolute paths are single unbreakable words — wrap them in a
+          truncating span and expose the full path via title so the end stays reachable. */}
+      <div className="arun-perms">
+        <span
+          className="arun-perm"
+          data-on={linkedRoot !== null}
+          title={linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? undefined)}
+        >
+          <Icons.files size={11} />
+          <span className="arun-perm-path">
+            {linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? "no workspace")}
+          </span>
+        </span>
+        {linkedFilePath !== undefined ? (
+          <span className="arun-perm" data-on={true} title={linkedFilePath}>
+            <Icons.files size={11} />
+            <span className="arun-perm-path">{linkedFilePath}</span>
+          </span>
+        ) : null}
+      </div>
 
-      <AgentRunInputDetails input={input} />
+      {input !== null ? (
+        <details className="arun-input">
+          <summary>Run input</summary>
+          {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container exposed as a focusable
+              named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
+          <pre
+            role="region"
+            aria-label="Run input"
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+            tabIndex={0}
+          >
+            {JSON.stringify(input, null, 2)}
+          </pre>
+        </details>
+      ) : null}
 
       {/* uiux-fix F018 C109: role=log announces appended entries (TerminalWidget
           pattern). The C026 disconnect row below lives inside this live region, so
           it needs no role of its own. */}
-      <AgentRunLog
-        sseStatus={sse.status}
-        sseError={sse.error}
-        visibleLogEvents={visibleLogEvents}
-        runBusy={runBusy}
-      />
+      <div
+        className="arun-log"
+        role="log"
+        aria-live="polite"
+        aria-label="Run events"
+        aria-busy={runBusy ? "true" : undefined}
+      >
+        {sse.status === "error" && sse.error !== null ? (
+          // uiux-fix F018 C026: a dropped stream froze the log without any hint;
+          // useSSE clears the error again once the auto-reconnect succeeds.
+          <div className="arun-log-row">
+            <span className="arun-log-ico">
+              <Icons.reset size={12} />
+            </span>
+            <span className="arun-log-text">{sse.error}</span>
+          </div>
+        ) : null}
+        {sse.events.length === 0 ? (
+          sse.status === "error" ? null : (
+            <div className="arun-log-row">
+              <span className="arun-log-ico">
+                <Icons.reset size={12} />
+              </span>
+              <span className="arun-log-text">
+                {sse.status === "connecting"
+                  ? "Connecting to run events…"
+                  : "Waiting for run events…"}
+              </span>
+            </div>
+          )
+        ) : (
+          visibleLogEvents.map((event) => (
+            <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
+              <span className="arun-log-ico">
+                <Icons.spark size={12} />
+              </span>
+              <span className="arun-log-text">{eventLabel(event)}</span>
+              <span className="arun-log-t mono">{eventTime(event)}</span>
+            </div>
+          ))
+        )}
+      </div>
 
-      <AgentRunResults report={report} evidence={evidence} />
+      {report !== null ? (
+        <div className="arun-results">
+          {renderExplainReport(report)}
+          {renderVerifyReport(report)}
+          {renderTextCard("Failure", report.failureReason)}
+          {renderTextCard("Covered behavior", report.coveredBehavior)}
+          {renderTextCard("Known gaps", report.knownGaps)}
+          {renderTextCard("Verification note", report.verificationSkipReason)}
+          {renderHypothesis(report)}
+          {renderListCard("Next actions", report.nextActions)}
+          {report.dryRunPreview !== undefined ? (
+            <div className="arun-result-card">
+              <div className="arun-result-title">Dry-run preview</div>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Dry-run preview"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {report.dryRunPreview}
+              </pre>
+            </div>
+          ) : null}
+          {report.proposedDiff !== undefined ? (
+            <div className="arun-result-card">
+              <div className="arun-result-title">Proposed diff</div>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Proposed diff"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {report.proposedDiff}
+              </pre>
+            </div>
+          ) : null}
+          {renderVerification(report)}
+          {report.applyReport !== undefined ? (
+            <div className="arun-result-card arun-applied">
+              <div className="arun-result-title">Applied</div>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Applied"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {JSON.stringify(report.applyReport, null, 2)}
+              </pre>
+            </div>
+          ) : null}
+        </div>
+      ) : evidence !== null ? (
+        <div className="arun-results">
+          <div className="arun-result-card">
+            <div className="arun-result-title">Evidence</div>
+            <div className="arun-kv">
+              <span>Outcome</span>
+              <strong>{evidence.run.outcome}</strong>
+            </div>
+            <div className="arun-kv">
+              <span>Duration</span>
+              <strong>{formatMs(evidence.run.durationMs)}</strong>
+            </div>
+            {evidence.patch !== undefined ? (
+              <>
+                <div className="arun-kv">
+                  <span>Changed files</span>
+                  <strong>{evidence.patch.changedFiles.toString()}</strong>
+                </div>
+                <div className="arun-kv">
+                  <span>Patch size</span>
+                  <strong>{formatBytes(evidence.patch.patchBytes)}</strong>
+                </div>
+              </>
+            ) : null}
+          </div>
+          {evidence.patch?.redactedDiff !== undefined ? (
+            <div className="arun-result-card">
+              <div className="arun-result-title">Proposed diff</div>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Proposed diff"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {evidence.patch.redactedDiff}
+              </pre>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* uiux-fix F018 C109: async failures must be announced (WCAG 4.1.3) */}
-      <AgentRunErrors error={error} applyError={applyError} />
+      {error !== null ? (
+        <div className="arun-error" role="alert">
+          {error}
+        </div>
+      ) : null}
+      {applyError !== null ? (
+        <div className="arun-error" role="alert">
+          {applyError}
+        </div>
+      ) : null}
 
-      <AgentRunControls
-        runId={runId}
-        evidenceLinkRef={evidenceLinkRef}
-        showApply={showApply}
-        applying={applying}
-        confirmApply={confirmApply}
-        applyFileCount={applyFileCount}
-        onApplyClick={onApplyClick}
-        appliedAt={report?.appliedAt}
-        showCancel={showCancel}
-        onCancelClick={() => void doCancel()}
-      />
+      <div className="arun-controls">
+        <a
+          className="arun-btn ghost"
+          href={`/api/evidence/${encodeURIComponent(runId)}`}
+          target="_blank"
+          rel="noreferrer"
+          ref={evidenceLinkRef}
+        >
+          Evidence
+        </a>
+        {showApply ? (
+          // uiux-fix F018 C124: aria-disabled + click guard instead of HTML disabled
+          // so the focused button does not throw focus to <body> while applying.
+          <button
+            type="button"
+            className="arun-btn"
+            aria-disabled={applying}
+            onClick={onApplyClick}
+          >
+            {applying
+              ? "Applying…"
+              : confirmApply
+                ? `Confirm apply (${applyFileCount.toString()} file${applyFileCount === 1 ? "" : "s"})`
+                : "Apply"}
+          </button>
+        ) : report?.appliedAt !== undefined ? (
+          <span className="arun-final mono">Applied</span>
+        ) : null}
+        {showCancel ? (
+          <button type="button" className="arun-btn danger" onClick={() => void doCancel()}>
+            Cancel
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
