@@ -84,6 +84,34 @@ Commit, push, pull-request create/update, merge, and Authority Envelope widening
 own action-bound, one-use human approval in addition to runtime authority. No mode, connector scope,
 or earlier start confirmation pre-approves those delivery actions.
 
+### D5 — Process-tree ownership and platform qualification are fail-closed invariants
+
+The BFF process supervisor owns the complete spawned runtime process tree from the first spawn until
+it has observed and recorded that every descendant is reaped. Stop, takeover, runtime crash, Keiko
+shutdown, and product update first revoke the run's Authority Envelope and block new delegations,
+then terminate the complete tree. A run reaches a terminal/reusable slot only after the supervisor
+proves tree exit. If complete exit cannot be proven, state becomes `recovery-required`; the active-run
+slot remains occupied and no replacement run may start until reconciliation proves reap.
+
+Supported platform names are not sufficient evidence that confinement exists. Runtime availability
+uses this release-qualified matrix:
+
+| Platform | Availability requirement | Prohibited assumption |
+| --- | --- | --- |
+| Windows x64 | The release-qualified Windows confinement and process-tree termination backend passes its qualification evidence. | Killing only the immediate parent process is not descendant termination. |
+| macOS arm64 | The release-qualified macOS arm64 confinement and process-tree termination backend passes its qualification evidence. | Shell or inherited session/process-group membership is not proof of containment or descendant ownership. |
+| macOS x64 | The release-qualified macOS x64 confinement and process-tree termination backend passes its qualification evidence. | Shell or inherited session/process-group membership is not proof of containment or descendant ownership. |
+
+An unsupported platform, missing backend, unenforceable confinement primitive, stale qualification,
+or failed process-tree termination proof makes the runtime source `unavailable` before spawn. Keiko
+must not attempt a best-effort launch, downgrade to parent-only termination, or infer support from a
+nearby architecture or operating-system family.
+
+Issue #2251 implements the confinement, supervision, revocation-before-termination, and observed-reap
+enforcement defined here. Issue #2258 release-qualifies each platform/backend pair and supplies the
+evidence that permits availability. This ADR owns the invariant; those issues may implement and prove
+it but may not weaken or reinterpret it.
+
 ## Reconciliation with accepted decisions
 
 | Existing decision | Treatment in this ADR |
@@ -104,8 +132,9 @@ or earlier start confirmation pre-approves those delivery actions.
   exposing adapter or process details to the browser.
 - Existing incomplete live runs are not migrated; operators start a new governed run.
 - The initial authority service is intentionally in-memory and single-run. Recovery persistence,
-  process-tree revocation, transport/backpressure, and real-binary execution belong to ordered
-  corrective children and cannot be inferred from these contracts.
+  transport/backpressure, and real-binary execution belong to ordered corrective children and cannot
+  be inferred from these contracts. Process-tree ownership and revocation-before-termination are
+  normative here; #2251 implements them and #2258 qualifies the platform backends before activation.
 - No production traffic is migrated by Issue #2252. Issue #2256 owns route replacement and
   orchestrator wiring because this issue expressly forbids browser-route implementation.
 
