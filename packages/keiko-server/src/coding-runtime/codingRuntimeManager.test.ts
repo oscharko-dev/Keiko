@@ -416,10 +416,20 @@ describe("coding runtime manager", () => {
     const sidecar: PortableSidecarRuntimeVerification = {
       payloadRootPath: "runtime/sidecars/opencode-adapter",
       executablePath: "runtime/sidecars/opencode-adapter/opencode-sidecar",
+      executableTreeSha256: "d".repeat(64),
       licenseEvidencePath: "runtime/sidecars/opencode-adapter/LICENSE.evidence.json",
       licenseEvidenceSha256: "a".repeat(64),
       sbomEvidencePath: "runtime/sidecars/opencode-adapter/sbom.evidence.json",
       sbomEvidenceSha256: "b".repeat(64),
+      availability: {
+        redistributionApproved: true,
+        payloadPresent: true,
+        archiveDigestVerified: true,
+        executableTreeDigestVerified: true,
+        runtimeVersionVerified: true,
+        protocolSchemaVerified: true,
+        signatureVerified: true,
+      },
       summary: {
         name: "opencode-adapter",
         kind: "opencode-compatible",
@@ -436,7 +446,10 @@ describe("coding runtime manager", () => {
       },
     };
 
-    const result = resolveCodingRuntimeSidecarLaunchTarget(managedInstallRoot, sidecar);
+    const result = resolveCodingRuntimeSidecarLaunchTarget(managedInstallRoot, sidecar, {
+      target: "macos-arm64",
+      qualificationVerified: true,
+    });
 
     expect(result).toEqual({
       ok: true,

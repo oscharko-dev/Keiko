@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -56,7 +57,16 @@ export interface PortablePromotionResult {
   readonly paths: PortableActivationPaths;
 }
 
+export interface PortableActivationRecovery {
+  readonly activationId: string;
+  readonly stageId: string;
+  readonly target: UpdatePortableTarget;
+  readonly phase: "prepared" | "promoted" | "registered" | "verified";
+}
+
 const REGISTRATION_FILE = "portable-install-state.json";
+const RECOVERY_FILE = "portable-activation-recovery.json";
+const UPDATES_DIR = "updates";
 const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()/\\:-]+$/u;
 
 export class PortableUpdateActivationError extends Error {
@@ -206,14 +216,13 @@ function assertNoSymlinkAncestor(path: string): void {
   }
 }
 
-function activationPaths(
-  input: PortableActivationFileInput,
+function activationPathsFor(
+  target: UpdatePortableTarget,
+  runtimeFacts: UpdateRuntimeFacts | undefined,
+  stageId: string,
   activationId: string,
 ): PortableActivationPaths {
-  const managedRoot = managedRootFromPackageRoot(
-    input.stage.target,
-    input.runtimeFacts?.packageRoot,
-  );
+  const managedRoot = managedRootFromPackageRoot(target, runtimeFacts?.packageRoot);
   if (
     managedRoot === undefined ||
     !existsSync(managedRoot) ||
@@ -226,9 +235,9 @@ function activationPaths(
   }
   assertNoSymlinkAncestor(managedRoot);
   const parent = realpathSync(dirname(managedRoot));
-  const stageRoot = join(parent, PORTABLE_STAGE_DIR_PREFIX, input.stage.stageId);
+  const stageRoot = join(parent, PORTABLE_STAGE_DIR_PREFIX, stageId);
   const candidateRoot =
-    input.stage.target === "windows-x64"
+    target === "windows-x64"
       ? join(stageRoot, PORTABLE_PAYLOAD_ROOT)
       : join(stageRoot, PORTABLE_PAYLOAD_ROOT, "Keiko.app");
   assertNoSymlinkAncestor(stageRoot);
@@ -240,11 +249,27 @@ function activationPaths(
   };
 }
 
-function restoreManagedRoot(paths: PortableActivationPaths, promoted: boolean): void {
-  if (promoted) rmSync(paths.managedRoot, { recursive: true, force: true });
-  if (existsSync(paths.backupRoot) && !existsSync(paths.managedRoot)) {
-    renameSync(paths.backupRoot, paths.managedRoot);
+function activationPaths(
+  input: PortableActivationFileInput,
+  activationId: string,
+): PortableActivationPaths {
+  return activationPathsFor(
+    input.stage.target,
+    input.runtimeFacts,
+    input.stage.stageId,
+    activationId,
+  );
+}
+
+function restoreManagedRoot(paths: PortableActivationPaths): void {
+  if (!existsSync(paths.backupRoot)) return;
+  if (existsSync(paths.managedRoot)) {
+    if (existsSync(paths.candidateRoot)) {
+      throw activationFailed("portable activation recovery is incomplete");
+    }
+    renameSync(paths.managedRoot, paths.candidateRoot);
   }
+  renameSync(paths.backupRoot, paths.managedRoot);
 }
 
 function promote(
@@ -257,15 +282,13 @@ function promote(
   }
   validateLayout(target, paths.candidateRoot, targetVersion);
   let moved = false;
-  let promoted = false;
   try {
     renameSync(paths.managedRoot, paths.backupRoot);
     moved = true;
     renameSync(paths.candidateRoot, paths.managedRoot);
-    promoted = true;
     return validateLayout(target, paths.managedRoot, targetVersion);
   } catch (error) {
-    if (moved) restoreManagedRoot(paths, promoted);
+    if (moved) restoreManagedRoot(paths);
     if (error instanceof PortableUpdateActivationError) throw error;
     throw activationFailed("portable activation swap failed");
   }
@@ -302,6 +325,128 @@ export function promotePortableInstall(
     paths,
     layout: promote(paths, input.stage.target, input.targetVersion),
   };
+}
+
+function recoveryPath(stateDir: string): string {
+  return join(stateDir, UPDATES_DIR, RECOVERY_FILE);
+}
+
+function isRecoveryTarget(value: unknown): value is UpdatePortableTarget {
+  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
+}
+
+function isRecoveryPhase(value: unknown): value is PortableActivationRecovery["phase"] {
+  return (
+    value === "prepared" || value === "promoted" || value === "registered" || value === "verified"
+  );
+}
+
+function hasExactRecoveryKeys(record: Record<string, unknown>): boolean {
+  const keys = Object.keys(record);
+  return (
+    keys.length === 4 &&
+    keys.every((key) => ["activationId", "stageId", "target", "phase"].includes(key))
+  );
+}
+
+function isPortableActivationRecovery(value: unknown): value is PortableActivationRecovery {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return !hasExactRecoveryKeys(record)
+    ? false
+    : typeof record.activationId === "string" &&
+        /^[a-f0-9]{32}$/u.test(record.activationId) &&
+        typeof record.stageId === "string" &&
+        record.stageId.length > 0 &&
+        isRecoveryTarget(record.target) &&
+        isRecoveryPhase(record.phase);
+}
+
+function assertRecovery(value: unknown): PortableActivationRecovery {
+  if (!isPortableActivationRecovery(value)) {
+    throw activationFailed("portable activation recovery metadata is malformed");
+  }
+  return value;
+}
+
+export function readPortableActivationRecovery(
+  stateDir: string,
+): PortableActivationRecovery | undefined {
+  assertNoSymlinkAncestor(stateDir);
+  const path = recoveryPath(stateDir);
+  if (!existsSync(path)) return undefined;
+  if (lstatSync(path).isSymbolicLink()) {
+    throw activationFailed("portable activation recovery path is unsafe");
+  }
+  return assertRecovery(parseJsonRecord(readFileSync(path, "utf8")));
+}
+
+export function writePortableActivationRecovery(input: {
+  readonly stateDir: string;
+  readonly recovery: PortableActivationRecovery;
+}): void {
+  assertNoSymlinkAncestor(input.stateDir);
+  const path = recoveryPath(input.stateDir);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+    throw activationFailed("portable activation recovery path is unsafe");
+  }
+  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
+  if (existsSync(temporaryPath)) {
+    throw activationFailed("portable activation recovery is pending");
+  }
+  writeFileSync(temporaryPath, `${JSON.stringify(input.recovery)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
+  renameSync(temporaryPath, path);
+}
+
+export function beginPortableActivationRecovery(input: {
+  readonly stateDir: string;
+  readonly recovery: PortableActivationRecovery;
+}): void {
+  assertNoSymlinkAncestor(input.stateDir);
+  const path = recoveryPath(input.stateDir);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  if (existsSync(path)) {
+    throw activationFailed("portable activation recovery is pending");
+  }
+  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
+  if (existsSync(temporaryPath)) {
+    throw activationFailed("portable activation recovery is pending");
+  }
+  try {
+    writeFileSync(temporaryPath, `${JSON.stringify(input.recovery)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    linkSync(temporaryPath, path);
+  } finally {
+    if (existsSync(temporaryPath) && !lstatSync(temporaryPath).isSymbolicLink()) {
+      rmSync(temporaryPath, { force: true });
+    }
+  }
+}
+
+export function clearPortableActivationRecovery(stateDir: string): void {
+  const path = recoveryPath(stateDir);
+  if (!existsSync(path)) return;
+  if (lstatSync(path).isSymbolicLink()) {
+    throw activationFailed("portable activation recovery path is unsafe");
+  }
+  rmSync(path, { force: true });
+}
+
+export function recoveryPaths(input: {
+  readonly target: UpdatePortableTarget;
+  readonly stageId: string;
+  readonly runtimeFacts?: UpdateRuntimeFacts | undefined;
+  readonly activationId: string;
+}): PortableActivationPaths {
+  return activationPathsFor(input.target, input.runtimeFacts, input.stageId, input.activationId);
 }
 
 export function refreshPortableRegistration(input: {
@@ -374,5 +519,5 @@ export function cleanupPortableActivation(paths: PortableActivationPaths): void 
 }
 
 export function restorePortableActivation(paths: PortableActivationPaths): void {
-  restoreManagedRoot(paths, true);
+  restoreManagedRoot(paths);
 }

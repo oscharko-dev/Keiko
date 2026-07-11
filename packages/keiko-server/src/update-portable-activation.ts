@@ -6,14 +6,20 @@ import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
 import {
   activationIdFor,
+  beginPortableActivationRecovery,
+  clearPortableActivationRecovery,
   cleanupPortableActivation,
   PortableUpdateActivationError,
   promotePortableInstall,
+  readPortableActivationRecovery,
+  recoveryPaths,
   refreshPortableRegistration,
   refreshPortableShortcut,
   restorePortableActivation,
+  type PortableActivationRecovery,
   type PortableActivationLayout,
   type PortablePromotionResult,
+  writePortableActivationRecovery,
 } from "./update-portable-activation-files.js";
 import type { UpdatePortableStagingSummary } from "@oscharko-dev/keiko-contracts";
 
@@ -51,6 +57,7 @@ export { PortableUpdateActivationError } from "./update-portable-activation-file
 
 const DEFAULT_RELAUNCH_TIMEOUT_MS = 30_000;
 const HEALTH_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
+const activePortableStateDirs = new Set<string>();
 
 function assertAbort(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) {
@@ -192,19 +199,35 @@ async function verifyRelaunch(
   }
 }
 
+function portableStateDir(
+  options: PortableUpdateActivatorOptions,
+  request: PortableUpdateActivateInput,
+): string {
+  return request.runtimeFacts?.portableStateDir ?? options.env.KEIKO_STATE_DIR ?? ".keiko";
+}
+
+function settleInterruptedActivation(input: {
+  readonly stateDir: string;
+  readonly request: PortableUpdateActivateInput;
+}): void {
+  const recovery = readPortableActivationRecovery(input.stateDir);
+  if (recovery === undefined) return;
+  const paths = recoveryPaths({
+    target: recovery.target,
+    stageId: recovery.stageId,
+    runtimeFacts: input.request.runtimeFacts,
+    activationId: recovery.activationId,
+  });
+  if (recovery.phase === "verified") cleanupPortableActivation(paths);
+  else restorePortableActivation(paths);
+  clearPortableActivationRecovery(input.stateDir);
+}
+
 function prepareActivation(input: {
-  readonly options: PortableUpdateActivatorOptions;
   readonly request: PortableUpdateActivateInput;
   readonly activationId: string;
-}): { readonly shortcutRefreshed: boolean; readonly layout: PortableActivationLayout } {
-  let promoted: PortablePromotionResult | undefined;
-  try {
-    promoted = promotePortableInstall(input.request, input.activationId);
-    return finishPreparedActivation(input, promoted);
-  } catch (error) {
-    if (promoted !== undefined) restorePortableActivation(promoted.paths);
-    throw error;
-  }
+}): PortablePromotionResult {
+  return promotePortableInstall(input.request, input.activationId);
 }
 
 function finishPreparedActivation(
@@ -216,8 +239,7 @@ function finishPreparedActivation(
 ): { readonly shortcutRefreshed: boolean; readonly layout: PortableActivationLayout } {
   const home = input.options.homedir?.() ?? homedir();
   refreshPortableRegistration({
-    stateDir:
-      input.request.runtimeFacts?.portableStateDir ?? input.options.env.KEIKO_STATE_DIR ?? ".keiko",
+    stateDir: portableStateDir(input.options, input.request),
     layout: promoted.layout,
     target: input.request.stage.target,
     env: input.options.env,
@@ -230,24 +252,132 @@ function finishPreparedActivation(
     env: input.options.env,
     home,
   });
-  cleanupPortableActivation(promoted.paths);
   return { shortcutRefreshed, layout: promoted.layout };
+}
+
+interface ActivationContext {
+  readonly options: PortableUpdateActivatorOptions;
+  readonly request: PortableUpdateActivateInput;
+  readonly activationId: string;
+  readonly stateDir: string;
+}
+
+interface ActivationProgress {
+  promoted?: PortablePromotionResult | undefined;
+  recoveryPhase?: PortableActivationRecovery["phase"] | undefined;
+}
+
+function recoveryRecord(
+  context: ActivationContext,
+  phase: PortableActivationRecovery["phase"],
+): PortableActivationRecovery {
+  return {
+    activationId: context.activationId,
+    stageId: context.request.stage.stageId,
+    target: context.request.stage.target,
+    phase,
+  };
+}
+
+function preparePortablePromotion(
+  context: ActivationContext,
+  progress: ActivationProgress,
+): {
+  readonly shortcutRefreshed: boolean;
+  readonly layout: PortableActivationLayout;
+  readonly promotion: PortablePromotionResult;
+} {
+  assertAbort(context.request.signal);
+  settleInterruptedActivation({ stateDir: context.stateDir, request: context.request });
+  beginPortableActivationRecovery({
+    stateDir: context.stateDir,
+    recovery: recoveryRecord(context, "prepared"),
+  });
+  progress.recoveryPhase = "prepared";
+  const promoted = prepareActivation({
+    request: context.request,
+    activationId: context.activationId,
+  });
+  progress.promoted = promoted;
+  writePortableActivationRecovery({
+    stateDir: context.stateDir,
+    recovery: recoveryRecord(context, "promoted"),
+  });
+  progress.recoveryPhase = "promoted";
+  const prepared = finishPreparedActivation(
+    { options: context.options, request: context.request },
+    promoted,
+  );
+  writePortableActivationRecovery({
+    stateDir: context.stateDir,
+    recovery: recoveryRecord(context, "registered"),
+  });
+  progress.recoveryPhase = "registered";
+  return { ...prepared, promotion: promoted };
+}
+
+async function verifyAndCommitPromotion(
+  context: ActivationContext,
+  progress: ActivationProgress,
+  prepared: {
+    readonly layout: PortableActivationLayout;
+    readonly promotion: PortablePromotionResult;
+  },
+): Promise<void> {
+  requestRelaunch(prepared.layout, context.options.spawnFn ?? spawn);
+  await verifyRelaunch(context.options, context.request);
+  writePortableActivationRecovery({
+    stateDir: context.stateDir,
+    recovery: recoveryRecord(context, "verified"),
+  });
+  progress.recoveryPhase = "verified";
+  cleanupPortableActivation(prepared.promotion.paths);
+  clearPortableActivationRecovery(context.stateDir);
+  progress.recoveryPhase = undefined;
+}
+
+function restoreFailedPromotion(context: ActivationContext, progress: ActivationProgress): void {
+  if (progress.recoveryPhase === undefined || progress.recoveryPhase === "verified") return;
+  try {
+    const paths =
+      progress.promoted?.paths ??
+      recoveryPaths({
+        target: context.request.stage.target,
+        stageId: context.request.stage.stageId,
+        runtimeFacts: context.request.runtimeFacts,
+        activationId: context.activationId,
+      });
+    restorePortableActivation(paths);
+    clearPortableActivationRecovery(context.stateDir);
+  } catch {
+    // The recovery marker remains authoritative and blocks further promotion until restart recovery.
+  }
+}
+
+function activationError(error: unknown): PortableUpdateActivationError {
+  if (error instanceof PortableUpdateActivationError) return error;
+  return new PortableUpdateActivationError(
+    "portable-activation-failed",
+    "portable activation failed",
+  );
 }
 
 async function activatePortableUpdate(
   options: PortableUpdateActivatorOptions,
   input: PortableUpdateActivateInput,
 ): Promise<UpdatePortableActivationSummary> {
-  const activationId = activationIdFor(input);
+  const context: ActivationContext = {
+    options,
+    request: input,
+    activationId: activationIdFor(input),
+    stateDir: portableStateDir(options, input),
+  };
+  const progress: ActivationProgress = {};
   try {
-    assertAbort(input.signal);
-    const prepared = prepareActivation({ options, request: input, activationId });
-    requestRelaunch(prepared.layout, options.spawnFn ?? spawn);
-    // Promotion is already committed here. A verify miss means "new install is live but
-    // unconfirmed", so Keiko surfaces a retryable failure instead of rolling back.
-    await verifyRelaunch(options, input);
+    const prepared = preparePortablePromotion(context, progress);
+    await verifyAndCommitPromotion(context, progress, prepared);
     const summary = buildSummary({
-      activationId,
+      activationId: context.activationId,
       stage: input.stage,
       targetVersion: input.targetVersion,
       shortcutRefreshed: prepared.shortcutRefreshed,
@@ -255,12 +385,9 @@ async function activatePortableUpdate(
     recordActivation(options, summary);
     return summary;
   } catch (error) {
-    recordFailure(options, input, activationId);
-    if (error instanceof PortableUpdateActivationError) throw error;
-    throw new PortableUpdateActivationError(
-      "portable-activation-failed",
-      "portable activation failed",
-    );
+    restoreFailedPromotion(context, progress);
+    recordFailure(options, input, context.activationId);
+    throw activationError(error);
   }
 }
 
@@ -269,7 +396,19 @@ export function createPortableUpdateActivator(
 ): PortableUpdateActivator {
   return {
     activate(input): Promise<UpdatePortableActivationSummary> {
-      return activatePortableUpdate(options, input);
+      const stateDir = portableStateDir(options, input);
+      if (activePortableStateDirs.has(stateDir)) {
+        return Promise.reject(
+          new PortableUpdateActivationError(
+            "portable-activation-failed",
+            "portable activation recovery is pending",
+          ),
+        );
+      }
+      activePortableStateDirs.add(stateDir);
+      return activatePortableUpdate(options, input).finally(() => {
+        activePortableStateDirs.delete(stateDir);
+      });
     },
   };
 }

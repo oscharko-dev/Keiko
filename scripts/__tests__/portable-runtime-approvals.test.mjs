@@ -16,6 +16,7 @@ import {
   extractApprovedExecutable,
   sidecarSbomDocument,
   sidecarSpecDocument,
+  validateProtocolSchemaBytes,
 } from "../prepare-approved-sidecar-payloads.mjs";
 import { updatePortableRuntimeApprovals } from "../update-portable-runtime-approvals.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
@@ -98,9 +99,57 @@ function sha256Hex(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
-function approvedFixture(overrides = {}) {
+function executableTreeSha256(executableName, binary) {
+  return sha256Hex(Buffer.from(`bin/${executableName}\0${sha256Hex(binary)}\0`, "utf8"));
+}
+
+function committedFixture(overrides = {}) {
   const base = JSON.parse(readFileSync(join(repoRoot, "portable-runtime-approvals.json"), "utf8"));
   return { ...base, ...overrides };
+}
+
+function schemaV2Fixture() {
+  const approvals = committedFixture();
+  approvals.schemaVersion = 2;
+  const runtime = approvals.sidecarRuntimes[0];
+  runtime.upstream = {
+    owner: "anomalyco",
+    repository: "opencode",
+    name: "opencode",
+    version: "1.17.17",
+    tag: "v1.17.17",
+    commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+  };
+  runtime.protocolSchema = {
+    path: "packages/sdk/openapi.json",
+    url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+    sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+    hashAlgorithm: "sha256",
+    hashEncoding: "lowercase-hex",
+    digestInput: "upstream-raw-bytes",
+    transport: "http-sse",
+  };
+  runtime.releaseApproval = {
+    redistribution: {
+      status: "approved",
+      reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+    },
+    subscriptionAuth: {
+      status: "not-applicable",
+      reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
+    },
+  };
+  runtime.executableTreeAlgorithm = "keiko-directory-tree-sha256-v1";
+  delete runtime.adapterCompatibility.protocolVersion;
+  runtime.adapterCompatibility.transport = "http-sse";
+  for (const archive of Object.values(runtime.archives)) {
+    archive.executableTreeSha256 = "a".repeat(64);
+  }
+  return approvals;
+}
+
+function approvedFixture(overrides = {}) {
+  return { ...schemaV2Fixture(), ...overrides };
 }
 
 function fixtureRepoRoot(approvals) {
@@ -124,6 +173,70 @@ describe("approved sidecar archive redirect hosts", () => {
 });
 
 describe("portable runtime approvals validation", () => {
+  it("accepts closed schema v2 OpenCode provenance and release approvals", () => {
+    const approvals = validatePortableRuntimeApprovals(schemaV2Fixture());
+    const runtime = approvals.sidecarRuntimes[0];
+    expect(approvals.schemaVersion).toBe(2);
+    expect(runtime.upstream.commit).toBe("474abdd7ee60f4b67476cfcef7e5311beff4a824");
+    expect(runtime.protocolSchema.digestInput).toBe("upstream-raw-bytes");
+    expect(runtime.releaseApproval.redistribution.status).toBe("approved");
+    expect(runtime.releaseApproval.subscriptionAuth.status).toBe("not-applicable");
+  });
+
+  it("rejects unknown keys and all self-update metadata", () => {
+    const unknown = approvedFixture();
+    unknown.sidecarRuntimes[0].selfUpdate = { enabled: false };
+    expect(() => validatePortableRuntimeApprovals(unknown)).toThrow(/unknown key selfUpdate/u);
+
+    const nested = approvedFixture();
+    nested.sidecarRuntimes[0].archives["windows-x64"].updateUrl =
+      "https://github.com/anomalyco/opencode/releases/latest";
+    expect(() => validatePortableRuntimeApprovals(nested)).toThrow(/unknown key updateUrl/u);
+
+    const license = approvedFixture();
+    license.sidecarRuntimes[0].license.sourceText = "forbidden content";
+    expect(() => validatePortableRuntimeApprovals(license)).toThrow(/unknown key sourceText/u);
+  });
+
+  it("rejects provenance drift and mutable source URLs", () => {
+    const owner = approvedFixture();
+    owner.sidecarRuntimes[0].upstream.owner = "lookalike";
+    expect(() => validatePortableRuntimeApprovals(owner)).toThrow(/upstream.owner/u);
+
+    const commit = approvedFixture();
+    commit.sidecarRuntimes[0].upstream.commit = "b".repeat(40);
+    expect(() => validatePortableRuntimeApprovals(commit)).toThrow(/upstream.commit/u);
+
+    const schemaPath = approvedFixture();
+    schemaPath.sidecarRuntimes[0].protocolSchema.path = "openapi.json";
+    expect(() => validatePortableRuntimeApprovals(schemaPath)).toThrow(/protocolSchema.path/u);
+
+    const mutable = approvedFixture();
+    mutable.sidecarRuntimes[0].protocolSchema.url =
+      "https://raw.githubusercontent.com/anomalyco/opencode/main/packages/sdk/openapi.json";
+    expect(() => validatePortableRuntimeApprovals(mutable)).toThrow(/protocolSchema.url/u);
+  });
+
+  it("rejects schema digest semantics and release approval drift", () => {
+    for (const [key, value] of [
+      ["hashAlgorithm", "sha512"],
+      ["hashEncoding", "base64"],
+      ["digestInput", "canonical-json"],
+      ["transport", "stdio-jsonl"],
+    ]) {
+      const approvals = approvedFixture();
+      approvals.sidecarRuntimes[0].protocolSchema[key] = value;
+      expect(() => validatePortableRuntimeApprovals(approvals)).toThrow(
+        new RegExp(`protocolSchema\\.${key}`, "u"),
+      );
+    }
+    const redistribution = approvedFixture();
+    redistribution.sidecarRuntimes[0].releaseApproval.redistribution.status = "pending";
+    expect(() => validatePortableRuntimeApprovals(redistribution)).toThrow(
+      /redistribution.status/u,
+    );
+  });
+
   it("accepts the committed approvals file", () => {
     const approvals = loadPortableRuntimeApprovals(repoRoot);
     expect(approvals.node.version).toMatch(/^\d+\.\d+\.\d+$/u);
@@ -142,13 +255,13 @@ describe("portable runtime approvals validation", () => {
     const hostile = approvedFixture();
     hostile.sidecarRuntimes[0].archives["windows-x64"].url =
       "https://evil.example.com/opencode-windows-x64.zip";
-    expect(() => validatePortableRuntimeApprovals(hostile)).toThrow(/not an approved host/u);
+    expect(() => validatePortableRuntimeApprovals(hostile)).toThrow(/host is not approved/u);
   });
 
   it("rejects missing targets, bad digests, and embedded credentials", () => {
     const missing = approvedFixture();
     delete missing.node.archives["macos-arm64"];
-    expect(() => validatePortableRuntimeApprovals(missing)).toThrow(/missing target macos-arm64/u);
+    expect(() => validatePortableRuntimeApprovals(missing)).toThrow(/missing key macos-arm64/u);
     const badDigest = approvedFixture();
     badDigest.sidecarRuntimes[0].archives["macos-x64"].sha256 = "not-hex";
     expect(() => validatePortableRuntimeApprovals(badDigest)).toThrow(/sha256/u);
@@ -161,10 +274,10 @@ describe("portable runtime approvals validation", () => {
   it("rejects mismatched node version, unknown targets, and unsafe executable names", () => {
     const drift = approvedFixture();
     drift.node.version = "22.99.0";
-    expect(() => validatePortableRuntimeApprovals(drift)).toThrow(/reference version v22.99.0/u);
+    expect(() => validatePortableRuntimeApprovals(drift)).toThrow(/node-v22\.99\.0/u);
     const unknown = approvedFixture();
     unknown.node.archives["linux-x64"] = unknown.node.archives["windows-x64"];
-    expect(() => validatePortableRuntimeApprovals(unknown)).toThrow(/unknown target linux-x64/u);
+    expect(() => validatePortableRuntimeApprovals(unknown)).toThrow(/unknown key linux-x64/u);
     const traversal = approvedFixture();
     traversal.sidecarRuntimes[0].archives["windows-x64"].executableName = "../opencode.exe";
     expect(() => validatePortableRuntimeApprovals(traversal)).toThrow(/plain file name/u);
@@ -172,6 +285,18 @@ describe("portable runtime approvals validation", () => {
 });
 
 describe("prepare approved sidecar payloads", () => {
+  it("hashes upstream raw schema bytes before attempting to parse JSON", () => {
+    const rawBytes = Buffer.from("not-json", "utf8");
+    const schema = { sha256: "0".repeat(64) };
+    expect(() => validateProtocolSchemaBytes(rawBytes, schema)).toThrow(
+      /protocol schema digest mismatch/u,
+    );
+    schema.sha256 = sha256Hex(rawBytes);
+    expect(() => validateProtocolSchemaBytes(rawBytes, schema)).toThrow(
+      /protocol schema is not valid JSON/u,
+    );
+  });
+
   function localInputs(binaryContent = "#!/bin/sh\nexit 0\n") {
     const inputRoot = tempRoot();
     const binary = Buffer.from(binaryContent, "utf8");
@@ -181,24 +306,25 @@ describe("prepare approved sidecar payloads", () => {
     const license = Buffer.from("MIT License\n", "utf8");
     const licensePath = join(inputRoot, "LICENSE");
     writeFileSync(licensePath, license);
-    return { archivePath, licensePath, zip, license };
+    return { archivePath, binary, licensePath, zip, license };
   }
 
-  function approvalsForLocal(zip, license) {
+  function approvalsForLocal(zip, license, binary) {
     const approvals = approvedFixture();
     const runtime = approvals.sidecarRuntimes[0];
     runtime.archives["macos-arm64"] = {
       ...runtime.archives["macos-arm64"],
       sha256: sha256Hex(zip),
       sizeBytes: zip.length,
+      executableTreeSha256: executableTreeSha256("opencode", binary),
     };
     runtime.license = { ...runtime.license, sha256: sha256Hex(license) };
     return approvals;
   }
 
   it("stages payload, license, sbom, and spec from verified local inputs", async () => {
-    const { archivePath, licensePath, zip, license } = localInputs();
-    const approvals = approvalsForLocal(zip, license);
+    const { archivePath, binary, licensePath, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
     const fakeRepoRoot = fixtureRepoRoot(approvals);
     const outputRoot = join(tempRoot(), "out");
     const summary = await prepareApprovedSidecarPayloadsForTest(
@@ -224,8 +350,8 @@ describe("prepare approved sidecar payloads", () => {
   });
 
   it("fails closed on digest mismatch and multi-entry archives", async () => {
-    const { archivePath, licensePath, zip, license } = localInputs();
-    const approvals = approvalsForLocal(zip, license);
+    const { archivePath, binary, licensePath, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
     approvals.sidecarRuntimes[0].archives["macos-arm64"].sha256 = "0".repeat(64);
     const fakeRepoRoot = fixtureRepoRoot(approvals);
     await expect(
@@ -248,6 +374,103 @@ describe("prepare approved sidecar payloads", () => {
     );
   });
 
+  it("rejects an extracted executable tree that differs from the independent approval", async () => {
+    const { archivePath, binary, licensePath, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
+    approvals.sidecarRuntimes[0].archives["macos-arm64"].executableTreeSha256 = "0".repeat(64);
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+    await expect(
+      prepareApprovedSidecarPayloadsForTest(
+        ["--target", "macos-arm64", "--output-root", join(tempRoot(), "out")],
+        { archivePath, licensePath },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/executable tree digest mismatch/u);
+  });
+
+  it("streams downloads and enforces the approval cap before buffering the response", async () => {
+    const { binary, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+    const fetchFn = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        url: "https://release-assets.githubusercontent.com/approved-asset",
+        body: (async function* streamTooMuch() {
+          yield zip;
+          yield Buffer.from("overflow");
+        })(),
+        arrayBuffer: () => Promise.reject(new Error("response buffering is forbidden")),
+      });
+    const { prepareApprovedSidecarPayloads } =
+      await import("../prepare-approved-sidecar-payloads.mjs");
+    await expect(
+      prepareApprovedSidecarPayloads(
+        ["--target", "macos-arm64", "--output-root", join(tempRoot(), "out")],
+        { fetchFn },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/size is outside limits/u);
+  });
+
+  it("rejects an archive redirect to a host approved only for raw evidence", async () => {
+    const { binary, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+    const fetchFn = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        url: "https://raw.githubusercontent.com/anomalyco/opencode/immutable/archive.zip",
+        body: (async function* body() {
+          yield zip;
+        })(),
+      });
+    const { prepareApprovedSidecarPayloads } =
+      await import("../prepare-approved-sidecar-payloads.mjs");
+    await expect(
+      prepareApprovedSidecarPayloads(
+        ["--target", "macos-arm64", "--output-root", join(tempRoot(), "out")],
+        { fetchFn },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/redirect target host is not approved for archive/u);
+  });
+
+  it("rejects protocol schema redirects to mutable raw paths", async () => {
+    const { archivePath, binary, licensePath, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+    const fetchFn = () =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        url: "https://raw.githubusercontent.com/anomalyco/opencode/main/packages/sdk/openapi.json",
+        body: (async function* body() {
+          yield Buffer.from("{}", "utf8");
+        })(),
+      });
+    const { prepareApprovedSidecarPayloads } =
+      await import("../prepare-approved-sidecar-payloads.mjs");
+    await expect(
+      prepareApprovedSidecarPayloads(
+        [
+          "--target",
+          "macos-arm64",
+          "--output-root",
+          join(tempRoot(), "out"),
+          "--archive",
+          `opencode-compatible=${archivePath}`,
+          "--license",
+          licensePath,
+        ],
+        { fetchFn },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/protocol schema redirect target must remain commit-addressed/u);
+  });
+
   it("produces deterministic sbom and spec documents", () => {
     const approvals = loadPortableRuntimeApprovals(repoRoot);
     const runtime = approvals.sidecarRuntimes[0];
@@ -255,7 +478,41 @@ describe("prepare approved sidecar payloads", () => {
     expect(JSON.stringify(sbom)).not.toMatch(/timestamp|serialNumber/u);
     expect(sbom.components[0].purl).toContain(runtime.upstream.version);
     const spec = sidecarSpecDocument(runtime, "windows-x64", "/tmp/does-not-matter", "bin/x.exe");
+    expect(Object.keys(spec).sort()).toEqual(
+      [
+        "approvalSchemaVersion",
+        "name",
+        "kind",
+        "sourceRoot",
+        "executablePath",
+        "licenseEvidencePath",
+        "sbomEvidencePath",
+        "upstream",
+        "adapterCompatibility",
+        "protocolSchema",
+        "releaseApproval",
+        "license",
+        "archive",
+        "platformTarget",
+        "executableTreeAlgorithm",
+        "expectedExecutableTreeSha256",
+        "expectedPayloadSha256",
+      ].sort(),
+    );
+    expect(spec.approvalSchemaVersion).toBe(2);
+    expect(spec.license).toEqual(runtime.license);
+    expect(spec.archive).toEqual({
+      platformTarget: "windows-x64",
+      url: runtime.archives["windows-x64"].url,
+      sizeBytes: runtime.archives["windows-x64"].sizeBytes,
+      sha256: runtime.archives["windows-x64"].sha256,
+    });
     expect(spec.adapterCompatibility.adapterName).toBe("keiko-coding-sidecar");
+    expect(spec.protocolSchema.sha256).toBe(runtime.protocolSchema.sha256);
+    expect(spec.releaseApproval).toEqual(runtime.releaseApproval);
+    expect(spec.expectedExecutableTreeSha256).toBe(
+      runtime.archives["windows-x64"].executableTreeSha256,
+    );
   });
 });
 
@@ -269,7 +526,10 @@ async function prepareApprovedSidecarPayloadsForTest(argv, inputs, fakeRepoRoot)
       "--license",
       inputs.licensePath,
     ],
-    { fetchFn: () => Promise.reject(new Error("network is forbidden in tests")) },
+    {
+      fetchFn: () => Promise.reject(new Error("network is forbidden in tests")),
+      protocolSchemaVerifier: () => Promise.resolve(),
+    },
     fakeRepoRoot,
   );
 }
@@ -319,8 +579,32 @@ describe("assemble portable release assets", () => {
 });
 
 describe("update portable runtime approvals", () => {
+  it("refuses to promote a new OpenCode version without independently reviewed provenance", async () => {
+    const fakeRepoRoot = fixtureRepoRoot(approvedFixture());
+    let fetchCalled = false;
+    await expect(
+      updatePortableRuntimeApprovals(
+        ["--opencode-version", "9.9.9"],
+        {
+          fetchFn: () => {
+            fetchCalled = true;
+            return Promise.reject(new Error("network must not be reached"));
+          },
+        },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/only the independently approved OpenCode version 1\.17\.17/u);
+    expect(fetchCalled).toBe(false);
+  });
+
   it("updates node and opencode pins from fake verified sources", async () => {
     const approvals = approvedFixture();
+    const treePins = Object.fromEntries(
+      Object.entries(approvals.sidecarRuntimes[0].archives).map(([target, archive]) => [
+        target,
+        archive.executableTreeSha256,
+      ]),
+    );
     const fakeRepoRoot = fixtureRepoRoot(approvals);
     const zipByName = new Map([
       ["opencode-darwin-arm64.zip", storeOnlyZip([["opencode", Buffer.from("m1")]])],
@@ -345,20 +629,31 @@ describe("update portable runtime approvals", () => {
         ok: true,
         status: 200,
         url: String(url),
-        arrayBuffer: () => Promise.resolve(body),
+        body: (async function* streamBody() {
+          yield body;
+        })(),
+        arrayBuffer: () => Promise.reject(new Error("response buffering is forbidden")),
       });
     };
     const summary = await updatePortableRuntimeApprovals(
-      ["--node-version", "23.1.0", "--opencode-version", "9.9.9"],
+      ["--node-version", "23.1.0", "--opencode-version", "1.17.17"],
       { fetchFn },
       fakeRepoRoot,
     );
     expect(summary.nodeVersion).toBe("23.1.0");
-    expect(summary.opencodeVersion).toBe("9.9.9");
+    expect(summary.opencodeVersion).toBe("1.17.17");
     const updated = loadPortableRuntimeApprovals(fakeRepoRoot);
     expect(updated.node.archives["windows-x64"].sha256).toBe("1".repeat(64));
     expect(updated.sidecarRuntimes[0].archives["windows-x64"].sha256).toBe(
       sha256Hex(zipByName.get("opencode-windows-x64.zip")),
     );
+    expect(
+      Object.fromEntries(
+        Object.entries(updated.sidecarRuntimes[0].archives).map(([target, archive]) => [
+          target,
+          archive.executableTreeSha256,
+        ]),
+      ),
+    ).toEqual(treePins);
   });
 });

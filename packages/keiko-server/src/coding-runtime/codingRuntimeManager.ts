@@ -21,7 +21,11 @@ import type {
 import { buildSandboxEnv, collectSensitiveEnvValues } from "@oscharko-dev/keiko-tools";
 
 import { createDeadlineCancellation, isCancellation } from "../editor/languageCancellation.js";
-import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
+import {
+  evaluatePortableSidecarAvailability,
+  type PortableSidecarAvailabilityInput,
+  type PortableSidecarRuntimeVerification,
+} from "../update-portable-sidecar-verification.js";
 import {
   decideSupervisedFileEdit,
   decideSupervisedMutation,
@@ -55,8 +59,16 @@ export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
 export type CodingRuntimeFailureCode =
   | "adapter-profile-mismatch"
+  | "archive-digest-mismatch"
   | "env-secret-denied"
+  | "executable-tree-digest-mismatch"
   | "gateway-non-loopback"
+  | "payload-missing"
+  | "platform-unsupported"
+  | "protocol-schema-mismatch"
+  | "qualification-missing"
+  | "redistribution-unapproved"
+  | "runtime-version-mismatch"
   | "runtime-already-running"
   | "runtime-crashed"
   | "runtime-run-mismatch"
@@ -64,6 +76,7 @@ export type CodingRuntimeFailureCode =
   | "runtime-unqualified"
   | "sidecar-missing"
   | "sidecar-unmanaged"
+  | "signature-unverified"
   | "spawn-failed"
   | "start-aborted"
   | "start-timeout";
@@ -262,8 +275,11 @@ export function createCodingRuntimeManager(deps: CodingRuntimeManagerDeps): Codi
 export function resolveCodingRuntimeSidecarLaunchTarget(
   managedInstallRoot: string,
   sidecar: PortableSidecarRuntimeVerification,
+  availabilityInput: PortableSidecarAvailabilityInput,
 ): CodingRuntimeSidecarLaunchTargetResult {
-  if (sidecar.summary.status !== "verified") return failure("sidecar-missing", false);
+  const availability = evaluatePortableSidecarAvailability(sidecar, availabilityInput);
+  if (!availability.available) return failure(availability.reason, false);
+  if (sidecar.summary.status !== "verified") return failure("payload-missing", false);
   return {
     ok: true,
     target: {

@@ -190,14 +190,39 @@ function sidecarRuntime(
   payloadSha256 = sidecarPayloadSha256(files),
 ): Record<string, unknown> {
   return {
+    approvalSchemaVersion: 2,
     name: "opencode-compatible",
     kind: "coding-runtime",
-    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    upstream: {
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.17.17",
+      tag: "v1.17.17",
+      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "1",
-      protocolVersion: "coding-sidecar-v1",
+      transport: "http-sse",
     },
+    protocolSchema: {
+      path: "packages/sdk/openapi.json",
+      sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+      hashAlgorithm: "sha256",
+      hashEncoding: "lowercase-hex",
+      digestInput: "upstream-raw-bytes",
+      transport: "http-sse",
+    },
+    releaseApproval: { redistribution: { status: "approved" } },
+    archive: {
+      platformTarget: TARGET,
+      sha256: "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85",
+    },
+    executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
+    executableTreeSha256: createHash("sha256")
+      .update(`opencode.cmd\0${sidecarFileSha256(files, "opencode.cmd")}\0`)
+      .digest("hex"),
     platformTarget: TARGET,
     payloadRootPath: SIDECAR_ROOT,
     executablePath: `${SIDECAR_ROOT}/opencode.cmd`,
@@ -562,7 +587,7 @@ describe("portable update staging", () => {
 
     expect(summary.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "1.0.0",
+      upstreamVersion: "1.17.17",
       payloadSha256: sidecarPayloadSha256(files),
       payloadSha256Prefix: sidecarPayloadSha256(files).slice(0, 12),
       status: "verified",

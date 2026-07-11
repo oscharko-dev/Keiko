@@ -81,6 +81,13 @@ function hashDirectoryTree(root: string, sidecar: PortableSidecarRuntimeVerifica
   return hash.digest("hex");
 }
 
+function hashExecutableTree(executablePath: string, payloadRoot: string): string {
+  const relativePath = relative(payloadRoot, executablePath).split(sep).join("/");
+  return createHash("sha256")
+    .update(`${relativePath}\0${sha256File(executablePath)}\0`)
+    .digest("hex");
+}
+
 function verifySidecarFiles(
   resourceRoot: string,
   sidecar: PortableSidecarRuntimeVerification,
@@ -97,6 +104,9 @@ function verifySidecarFiles(
   }
   if (sha256File(sbomPath) !== sidecar.sbomEvidenceSha256) {
     fail("sidecar-sbom-evidence-incomplete", "sidecar SBOM digest mismatch", sidecar);
+  }
+  if (hashExecutableTree(executablePath, payloadRoot) !== sidecar.executableTreeSha256) {
+    fail("sidecar-digest-mismatch", "sidecar executable tree digest mismatch", sidecar);
   }
   if (hashDirectoryTree(payloadRoot, sidecar) !== sidecar.summary.payloadSha256) {
     fail("sidecar-digest-mismatch", "sidecar payload digest mismatch", sidecar);
