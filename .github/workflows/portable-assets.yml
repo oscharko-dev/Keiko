@@ -480,6 +480,15 @@ jobs:
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
           subject-path: "portable-release-assets/artifacts/*/keiko-*.zip"
+      # The SBOM-attestation steps below bind each SBOM as the *predicate* of an attestation whose
+      # *subject* is the matching ZIP — that does not create an attestation whose subject is the
+      # SBOM file itself. Attest the SBOM documents' own build provenance too, so a consumer who
+      # only has the downloaded SBOM (for example a compliance review with no archive on hand) can
+      # still run `gh attestation verify <sbom-file>` directly instead of only via the archive.
+      - name: Attest build provenance for portable SBOM documents
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: "portable-release-assets/artifacts/*/evidence/sbom.cdx.json"
       - name: Attest SBOM for windows-x64 portable artifact
         uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
         with:
