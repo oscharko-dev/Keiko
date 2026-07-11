@@ -122,6 +122,38 @@ This page keeps only the product decisions needed by reviewers. It is not an imp
 
 | npm Trusted Publishing for the release pipeline | [ADR-0130](ADR-0130-npm-trusted-publishing-for-release-pipeline.md) replaces the long-lived `NPM_TOKEN` GitHub secret with npm OIDC Trusted Publishing for the release `publish` job's `npm publish` call, pins npm CLI `>=11.5.1` (11.18.0) scoped to that job only, and keeps a narrow classic-token fallback — failing closed with an actionable error, never a bare 401 — for the one operation trusted publishing does not cover: repairing a stale dist-tag on an idempotent re-run (Status: Accepted). |
 
+| CI-based SonarCloud analysis and the Keiko Banking Grade quality gate | [ADR-0131](ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md) replaces SonarCloud Automatic Analysis (structurally incompatible with the npm-workspaces monorepo and unable to import JS/TS coverage) with CI-based analysis embedded in the existing required `ci` job (Sonar Scanner CLI, downloaded and checksum-verified directly rather than via the LGPL-3.0-licensed `SonarSource/sonarqube-scan-action`), reusing the ADR-0020 embed-in-existing-job precedent to make the Quality Gate merge-blocking via `sonar.qualitygate.wait=true` without a branch-protection change; wires `lcov` coverage reporting and a resolved `sonar.projectVersion` (fixing the New Code Definition's `previous_version` data defect); adds `new_violations > 0` as a zero-tolerance condition (any new finding of any severity fails the gate), tightens New Code coverage to 85%, keeps New Code duplication at the Sonar-way default of 3% (superseded by the `new_violations` zero-tolerance condition), and adds an overall security-hotspots-reviewed floor, while deliberately not gating on overall (legacy) ratings; and records the explicit maintainer decision that the pre-existing 3,558-issue backlog is accepted legacy debt, not a blocking condition (Status: Accepted). |
+
+## Foundational Decisions (ADR-0001–ADR-0018 lineage)
+
+The following records predate the ADR-0019 modular-package-architecture migration and originally
+described a single-package (`src/`) layout. A 2026-07-11 audit confirmed 16 of the original 18 still
+describe substantively live, actively-cited architecture — just under different file paths — and
+restored them with an added note pointing at the superseding/relocating ADR and the current module
+location. ADR-0014 (workspace shell architecture) and ADR-0016 (Files explorer BFF surface) were
+**not** restored: their core decisions are actively contradicted by later code (ADR-0026–ADR-0030
+replaced the shell layout; ADR-0097 added the mutation routes ADR-0016 said would never exist), so a
+supersession note would still mislead a reader rather than inform them.
+
+| Area | Record |
+| --- | --- |
+| Project foundation and toolchain | [ADR-0001](ADR-0001-project-foundation-and-toolchain.md) — superseded by ADR-0019/0020/0021 for package topology; toolchain choices (npm, ESM, strict TypeScript, Vitest, ESLint) remain live. |
+| CI and supply-chain security baseline | [ADR-0002](ADR-0002-ci-and-supply-chain-security-baseline.md) — superseded in part by ADR-0020 (ci job scope); SHA-pinning and deny-all-permissions mechanism remains live. |
+| Model gateway boundary | [ADR-0003](ADR-0003-model-gateway-boundary.md) — superseded by ADR-0019 for module location (`packages/keiko-model-gateway/`); gateway/registry/resilience/redaction design remains live. |
+| Agent harness boundary and state machine | [ADR-0004](ADR-0004-agent-harness-boundary-and-state-machine.md) — module location superseded by ADR-0019 (`packages/keiko-harness/`); D1–D10 design remains live. |
+| Repository context and workspace access | [ADR-0005](ADR-0005-repository-context-and-workspace-access.md) — module location superseded by ADR-0019 (`packages/keiko-workspace/`); D1–D5 remain live, cited by ADR-0023. |
+| Safe tool execution and sandbox boundary | [ADR-0006](ADR-0006-safe-tool-execution-and-sandbox-boundary.md) — module location superseded by ADR-0019 (`packages/keiko-tools/`); network isolation superseded by ADR-0043 (OS-enforced `network:"none"`). |
+| Verification orchestrator and resource limits | [ADR-0007](ADR-0007-verification-orchestrator-and-resource-limits.md) — network-enforcement claim superseded in part by ADR-0043; remaining classification/limits design is live, cited by ADR-0126. |
+| Unit test generation workflow | [ADR-0008](ADR-0008-unit-test-generation-workflow.md) — module-layout details superseded by ADR-0019/ADR-0025 (`packages/keiko-workflows/src/unit-tests/**`); D2–D8/D10–D12 remain live. |
+| Bug investigation and regression test workflow | [ADR-0009](ADR-0009-bug-investigation-and-regression-test-workflow.md) — module layout superseded by ADR-0019/ADR-0025; D2–D11/D13–D16 remain live. |
+| Audit ledger and evidence manifests | [ADR-0010](ADR-0010-audit-ledger-and-evidence-manifests.md) — package location superseded by ADR-0019 (`packages/keiko-evidence`); confidentiality posture refined by ADR-0048; cited by ADR-0022/ADR-0048/ADR-0107/ADR-0108. |
+| Wave-1 user interface and packaging | [ADR-0011](ADR-0011-wave-1-user-interface-and-packaging.md) — packaging shape (D3/D4/D6) superseded by ADR-0019/0020/0021/0025; D1/D2/D5/D7–D12 remain live, cited by ADR-0023/ADR-0035/ADR-0126. |
+| Wave-1 evaluation harness and model benchmarks | [ADR-0012](ADR-0012-wave-1-evaluation-harness-and-model-benchmarks.md) — module location superseded by ADR-0019 (`packages/keiko-evaluations/`); D2–D13 remain live. |
+| UI local persistence for projects and chats | [ADR-0013](ADR-0013-ui-local-persistence-for-projects-and-chats.md) — module location superseded by ADR-0019 (`packages/keiko-server/src/store/**`); storage/migration pattern (D1, D2, D4, D5, D9) remains live, cited by ADR-0022/ADR-0035/ADR-0090/ADR-0091. |
+| Chat as thin view of run and evidence | [ADR-0015](ADR-0015-chat-as-thin-view-of-run-and-evidence.md) — paths superseded by ADR-0019; PATCH-not-append/polling/evidence-fallback decisions remain live and enforced. |
+| Browser tool boundary and BYO Chrome integration | [ADR-0017](ADR-0017-browser-tool-boundary-and-byo-chrome-integration.md) — package/file layout superseded by ADR-0019; D1–D11 security/protocol decisions remain live, cited by ADR-0100/ADR-0113. |
+| Terminal tool boundary and permitted commands | [ADR-0018](ADR-0018-terminal-tool-boundary-and-permitted-commands.md) — not superseded; still the live, unchanged terminal-allowlist boundary cited by ADR-0080/ADR-0081/ADR-0084/ADR-0085/ADR-0088. |
+
 ## Historical Records
 
 | Area                                        | Record                                                                                                                                                                                                                                  |
