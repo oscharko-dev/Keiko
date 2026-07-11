@@ -35,7 +35,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build:packages": "npm run check:typescript-toolchain && node node_modules/@typescript/native/bin/tsc -b tsconfig.packages.json --force",
+    "build:packages": "npm run check:typescript-toolchain && node scripts/build-packages.mjs",
     "build": "npm run build:packages && node node_modules/@typescript/native/bin/tsc -p tsconfig.build.json",
     "keiko:start": "node dist/cli/index.js start",
     "keiko:stop": "node dist/cli/index.js stop",

@@ -48,8 +48,7 @@ function writeCleanRoot(root) {
     private: true,
     workspaces: ["packages/*"],
     scripts: {
-      "build:packages":
-        "npm run check:typescript-toolchain && node node_modules/@typescript/native/bin/tsc -b tsconfig.packages.json --force",
+      "build:packages": "npm run check:typescript-toolchain && node scripts/build-packages.mjs",
       typecheck:
         "npm run build:packages && npm run check:package-graph && node node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit",
     },

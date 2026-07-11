@@ -145,7 +145,12 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
 
       expect(statuses).toContain(200);
       expect(statuses).not.toContain(500);
-      expect(await statusOf(publicPort, "/api/health")).toBe(200);
+      let healthStatus = await statusOf(publicPort, "/api/health");
+      while (healthStatus !== 200 && Date.now() < deadline) {
+        await sleep(PUBLIC_READY_POLL_MS);
+        healthStatus = await statusOf(publicPort, "/api/health");
+      }
+      expect(healthStatus).toBe(200);
     },
     DEV_RUNNER_TEST_TIMEOUT_MS,
   );

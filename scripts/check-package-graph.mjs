@@ -5,7 +5,8 @@ import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
 const UI_PACKAGE = "@oscharko-dev/keiko-ui";
 const NATIVE_TSC = "node node_modules/@typescript/native/bin/tsc";
-const BUILD_PACKAGES_SCRIPT = `npm run check:typescript-toolchain && ${NATIVE_TSC} -b tsconfig.packages.json --force`;
+const BUILD_PACKAGES_SCRIPT =
+  "npm run check:typescript-toolchain && node scripts/build-packages.mjs";
 const TYPECHECK_SCRIPT = `npm run build:packages && npm run check:package-graph && ${NATIVE_TSC} -p tsconfig.json --noEmit`;
 const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
   [

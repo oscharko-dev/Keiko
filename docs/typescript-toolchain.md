@@ -39,6 +39,11 @@ npm's collision resolution for the two packages' `tsc` bin names. Workspace-loca
 their own compiler selection. The toolchain guard runs before every root package build, which also
 covers root typecheck, test, release-check, prepack, and publish preparation paths.
 
+`npm run build:packages` forces every referenced package emit, rejects zero-byte files anywhere in
+a package `dist` tree, and retries an incomplete native emit up to two times. A persistent incomplete
+emit fails closed with repository-relative paths, so runtime and release gates cannot consume a
+partially written package graph.
+
 The UI additionally runs `npm run typecheck:native --workspace @oscharko-dev/keiko-ui`. This checks
 every Keiko-owned UI TypeScript surface with the native 7.0 compiler while leaving the supported
 Next.js build and plugin integration on the workspace's TypeScript 5.7.3 package. Web API boundaries
