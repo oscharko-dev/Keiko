@@ -20,6 +20,14 @@ export const GIT_EDITOR_BLAME_MAX_LINES = 2_000;
 export const GIT_EDITOR_BLAME_AUTHOR_MAX_CHARS = 256;
 export const GIT_EDITOR_BLAME_SUMMARY_MAX_CHARS = 512;
 
+// Shared agent-context projection limits (Issues #2234/#2298). The passive CodingContextPack and
+// active editor_git_context tool use one policy so an on-demand read cannot bypass the model-facing
+// file/hunk/blame ceilings merely by choosing the tool path.
+export const GIT_AGENT_CONTEXT_MAX_FILES = 8;
+export const GIT_AGENT_CONTEXT_MAX_HUNKS = 16;
+export const GIT_AGENT_CONTEXT_MAX_BLAME_LINES = 32;
+export const GIT_AGENT_CONTEXT_MAX_RESULT_BYTES = 192 * 1024;
+
 export type GitEditorDiffScope = "staged" | "unstaged";
 export type GitEditorDiffLayer = "staged" | "worktree";
 export type GitEditorDiffLineKind = "ctx" | "add" | "del" | "meta";

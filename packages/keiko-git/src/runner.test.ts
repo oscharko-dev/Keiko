@@ -132,4 +132,28 @@ describe("createGitProcessRunner", () => {
     },
     15_000,
   );
+
+  it.skipIf(process.platform === "win32")(
+    "kills a wedged process when the bounded caller aborts",
+    async () => {
+      const fifo = join(root, "abort.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const controller = new AbortController();
+      const pending = defaultGitProcessRunner(
+        [...GIT_BASE_ARGS, "config", "--file", fifo, "--list"],
+        {
+          cwd: root,
+          maxBytes: 1024,
+          timeoutMs: 10_000,
+          abortSignal: controller.signal,
+        },
+      );
+      controller.abort();
+      const result = await pending;
+      expect(result.signal).toBe("SIGTERM");
+      expect(result.truncated).toBe(true);
+      expect(result.timedOut).toBe(false);
+    },
+    15_000,
+  );
 });
