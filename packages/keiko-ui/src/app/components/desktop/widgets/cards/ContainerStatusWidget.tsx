@@ -8,17 +8,7 @@
 // is available AND the server-frozen catalog is non-empty (AC2). The browser only ever names a
 // catalog task id — no free-form image, argv, or docker flags ever leave the UI.
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type Dispatch,
-  type FormEvent,
-  type MutableRefObject,
-  type ReactNode,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError } from "../../../../../lib/api";
 import {
   cancelContainerRun,
@@ -150,146 +140,6 @@ function resultSummary(result: ContainerRunResult): string {
   return `Run finished: ${parts.join(", ")}`;
 }
 
-// Extracted from the ContainerStatusWidget render (SonarCloud S3776) — the persistent sr-only
-// live region must render regardless of `result`, so this stays a plain string helper rather
-// than a conditional render component.
-function resultAnnouncement(result: ContainerRunResult | null): string {
-  return result === null ? "" : resultSummary(result);
-}
-
-// Extracted from the ContainerStatusWidget capability-probe effect (SonarCloud S3776) — probes
-// the container capability for a project path and wires up the capability/error state. Returns
-// the effect cleanup. `root` is optional for the capability route (capability is host-level), so
-// this always probes even with no project path.
-function loadContainerCapability(
-  projectInput: string,
-  setCapability: Dispatch<SetStateAction<ContainerCapabilityResponse | null>>,
-  setError: Dispatch<SetStateAction<ErrorState | null>>,
-): () => void {
-  let cancelled = false;
-  void fetchContainerCapability(projectInput)
-    .then((cap) => {
-      if (cancelled) return;
-      setCapability(cap);
-    })
-    .catch((err: unknown) => {
-      if (!cancelled) {
-        setCapability(null);
-        setError(errorFromUnknown(err));
-      }
-    });
-  return (): void => {
-    cancelled = true;
-  };
-}
-
-// Extracted from the ContainerStatusWidget catalog effect (SonarCloud S3776) — loads the
-// allowlisted diagnostic task catalog once an engine is available and a project is bound. With no
-// engine the catalog route 503s by contract, so this never calls it. Returns the effect cleanup,
-// or undefined for the early-exit branch (matching the original bare `return;`).
-function loadContainerCatalog(
-  anyAvailable: boolean,
-  projectInput: string,
-  setTasks: Dispatch<SetStateAction<readonly ContainerTask[]>>,
-  setTaskId: Dispatch<SetStateAction<string>>,
-  setError: Dispatch<SetStateAction<ErrorState | null>>,
-): (() => void) | undefined {
-  if (!anyAvailable || projectInput.length === 0) {
-    setTasks([]);
-    setTaskId("");
-    return undefined;
-  }
-  let cancelled = false;
-  void fetchContainerCatalog(projectInput)
-    .then((catalog) => {
-      if (cancelled) return;
-      setTasks(catalog.tasks);
-      setTaskId((current) => (current.length > 0 ? current : (catalog.tasks[0]?.id ?? "")));
-    })
-    .catch((err: unknown) => {
-      if (!cancelled) {
-        setTasks([]);
-        setError(errorFromUnknown(err));
-      }
-    });
-  return (): void => {
-    cancelled = true;
-  };
-}
-
-// Extracted from the ContainerStatusWidget SSE handler (SonarCloud S3776) — safely parse an
-// incoming event frame, mirroring the original try/catch-and-drop-on-failure behavior.
-function parseContainerRunnerEvent(raw: string): ContainerRunnerEvent | null {
-  try {
-    return JSON.parse(raw) as ContainerRunnerEvent;
-  } catch {
-    return null;
-  }
-}
-
-// Extracted from the ContainerStatusWidget SSE handler (SonarCloud S3776) — applies one parsed
-// event to the in-flight-run and event-log state. Cancel is only armed for the run that echoes
-// the current requestId, so a foreign run-started on the shared channel can never hijack
-// ownership.
-function applyContainerEvent(
-  event: ContainerRunnerEvent,
-  runningNow: boolean,
-  requestId: string | null,
-  setInFlightRunId: Dispatch<SetStateAction<string | null>>,
-  setEvents: Dispatch<SetStateAction<readonly ContainerRunnerEvent[]>>,
-): void {
-  if (event.kind === "run-started" && runningNow && isOwnEvent(event, requestId)) {
-    setInFlightRunId((current) => current ?? event.runId);
-  }
-  if (event.kind !== "run-started" && isOwnEvent(event, requestId)) {
-    setInFlightRunId((current) => (current === event.runId ? null : current));
-  }
-  setEvents((current) => [event, ...current].slice(0, MAX_EVENT_LOG));
-}
-
-// Extracted from the ContainerStatusWidget focus-return effect (SonarCloud S3776) — named
-// predicate mirroring the original inline `&&` chain.
-function shouldRestoreRunFocus(wasRunning: boolean, isRunning: boolean): boolean {
-  return wasRunning && !isRunning && document.activeElement === document.body;
-}
-
-// Extracted from ContainerStatusWidget's onSubmit (SonarCloud S3776) — the try/catch/finally
-// around the run POST, taking explicit refs/setters instead of closing over the whole component.
-async function executeContainerRun(
-  input: Parameters<typeof createContainerRun>[0],
-  runningRef: MutableRefObject<boolean>,
-  pendingRequestIdRef: MutableRefObject<string | null>,
-  setResult: Dispatch<SetStateAction<ContainerRunResult | null>>,
-  setError: Dispatch<SetStateAction<ErrorState | null>>,
-  setRunning: Dispatch<SetStateAction<boolean>>,
-  setInFlightRunId: Dispatch<SetStateAction<string | null>>,
-): Promise<void> {
-  try {
-    const next = await createContainerRun(input);
-    setResult(next);
-  } catch (err: unknown) {
-    setError(errorFromUnknown(err));
-  } finally {
-    runningRef.current = false;
-    setRunning(false);
-    pendingRequestIdRef.current = null;
-    setInFlightRunId(null);
-  }
-}
-
-// Extracted from ContainerStatusWidget's onAbort (SonarCloud S3776) — the try/catch around the
-// cancel POST.
-async function cancelInFlightRun(
-  runId: string,
-  setError: Dispatch<SetStateAction<ErrorState | null>>,
-): Promise<void> {
-  try {
-    await cancelContainerRun(runId);
-  } catch (err: unknown) {
-    setError(errorFromUnknown(err));
-  }
-}
-
 // The structured unavailable / status panel. ALWAYS rendered for every engine in the capability
 // response (graceful degradation): each engine shows its localized state label and, when present,
 // the server's single static remediation hint line. No raw error text is ever shown here.
@@ -338,193 +188,6 @@ function EngineStatusList({
   );
 }
 
-// Extracted from the ContainerStatusWidget render (SonarCloud S3776) — the engine status
-// content: checking / no-engine-detected / per-engine list. ALWAYS rendered (graceful
-// degradation, never an error boundary).
-function EngineStatusPanel({
-  capability,
-}: {
-  readonly capability: ContainerCapabilityResponse | null;
-}): ReactNode {
-  if (capability === null) {
-    return (
-      <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
-        Checking for a container engine…
-      </p>
-    );
-  }
-  if (capability.engines.length === 0) {
-    return (
-      <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
-        No container engine was detected. Container diagnostics are unavailable; the rest of Keiko
-        is unaffected.
-      </p>
-    );
-  }
-  return <EngineStatusList engines={capability.engines} />;
-}
-
-interface ContainerRunFormProps {
-  readonly tasks: readonly ContainerTask[];
-  readonly taskId: string;
-  readonly setTaskId: (next: string) => void;
-  readonly running: boolean;
-  readonly inFlightRunId: string | null;
-  readonly runBtnRef: MutableRefObject<HTMLButtonElement | null>;
-  readonly onSubmit: (e: FormEvent<HTMLFormElement>) => void;
-  readonly onAbort: () => void;
-}
-
-// Extracted from the ContainerStatusWidget render (SonarCloud S3776) — the diagnostic task
-// select plus Run/Cancel action row, present only when an engine is available and the catalog is
-// non-empty (AC2).
-function ContainerRunForm({
-  tasks,
-  taskId,
-  setTaskId,
-  running,
-  inFlightRunId,
-  runBtnRef,
-  onSubmit,
-  onAbort,
-}: ContainerRunFormProps): ReactNode {
-  return (
-    <form className="tm-form" onSubmit={onSubmit}>
-      <div className="tm-field">
-        <span>Diagnostic task</span>
-        <KeikoSelect
-          value={taskId}
-          ariaLabel="Diagnostic task"
-          disabled={tasks.length === 0}
-          menuTitle="Allowlisted tasks"
-          mono
-          sections={[
-            {
-              options: tasks.map((task) => ({ value: task.id, label: taskLabel(task) })),
-            },
-          ]}
-          onValueChange={setTaskId}
-        />
-      </div>
-      <div className="tm-actions">
-        {/* GEN-UI-FOCUS-014: aria-disabled instead of HTML disabled while running —
-            disabling the focused submit button throws keyboard focus to <body>.
-            onSubmit already guards re-entry; the no-selection condition stays
-            hard-disabled (pre-interaction state), mirroring TerminalWidget. */}
-        <button
-          type="submit"
-          className="tm-action"
-          data-primary="true"
-          ref={runBtnRef}
-          disabled={tasks.length === 0 || taskId.length === 0}
-          aria-disabled={running || tasks.length === 0 || taskId.length === 0}
-        >
-          {running ? "Running…" : "Run diagnostic"}
-        </button>
-        {running ? (
-          <button
-            type="button"
-            className="tm-action"
-            disabled={inFlightRunId === null}
-            aria-disabled={inFlightRunId === null}
-            onClick={onAbort}
-          >
-            Cancel
-          </button>
-        ) : null}
-      </div>
-    </form>
-  );
-}
-
-interface ContainerErrorBannerProps {
-  readonly error: ErrorState | null;
-  readonly onDismiss: () => void;
-}
-
-// Extracted from the ContainerStatusWidget render (SonarCloud S3776) — the dismissible error
-// banner.
-function ContainerErrorBanner({ error, onDismiss }: ContainerErrorBannerProps): ReactNode {
-  if (error === null) return null;
-  return (
-    <div className="tm-error" role="alert">
-      <span className="tm-error-text">
-        {error.message} <span className="err-code mono">({error.code})</span>
-      </span>
-      <button
-        type="button"
-        className="tm-error-dismiss"
-        aria-label="Dismiss error"
-        onClick={onDismiss}
-      >
-        ✕
-      </button>
-    </div>
-  );
-}
-
-// Extracted from the ContainerStatusWidget render (SonarCloud S3776) — the exit-code/engine
-// badges plus the truncated/timed-out warning badges for a finished run.
-function ContainerResultBadges({ result }: { readonly result: ContainerRunResult }): ReactNode {
-  return (
-    <div className="tm-badges">
-      <span className="tm-badge">{result.engine}</span>
-      <span className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}>
-        exit {result.exitCode === null ? "n/a" : String(result.exitCode)}
-      </span>
-      <span className="tm-badge">{result.durationMs} ms</span>
-      <span className="tm-badge">{result.failureReason}</span>
-      <span className="tm-badge">run {result.runId}</span>
-      <span className="tm-badge">task {result.taskId}</span>
-      {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
-      {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
-    </div>
-  );
-}
-
-// Extracted from the ContainerStatusWidget render (SonarCloud S3776) — the finished-run result
-// panel.
-function ContainerResultPanel({
-  result,
-}: {
-  readonly result: ContainerRunResult | null;
-}): ReactNode {
-  if (result === null) return null;
-  return (
-    <div className="tm-result">
-      <ContainerResultBadges result={result} />
-      {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
-      {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
-    </div>
-  );
-}
-
-// Extracted from the ContainerStatusWidget render (SonarCloud S3776) — the recent run-events log.
-function ContainerRunEventLog({
-  events,
-}: {
-  readonly events: readonly ContainerRunnerEvent[];
-}): ReactNode {
-  return (
-    <div
-      role="log"
-      aria-live="polite"
-      aria-relevant="additions text"
-      aria-atomic="false"
-      aria-label="Recent container run events"
-    >
-      <ul className="tm-events">
-        {events.map((event, idx) => (
-          <li key={`${event.runId}-${String(idx)}-${event.kind}`} className="tm-event">
-            <span className="tm-event-kind">{eventLabel(event.kind)}</span>
-            <span className="tm-event-detail">{eventDetail(event)}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactNode {
   const projectInput = props.projectPath ?? "";
   const [capability, setCapability] = useState<ContainerCapabilityResponse | null>(null);
@@ -548,32 +211,73 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
   // renders. `root` is optional for the capability route (capability is host-level), so we always
   // probe even with no project path.
   useEffect(() => {
+    let cancelled = false;
     setError(null);
-    return loadContainerCapability(projectInput, setCapability, setError);
+    void fetchContainerCapability(projectInput)
+      .then((cap) => {
+        if (cancelled) return;
+        setCapability(cap);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setCapability(null);
+          setError(errorFromUnknown(err));
+        }
+      });
+    return (): void => {
+      cancelled = true;
+    };
   }, [projectInput]);
 
   // Load the allowlisted catalog only when an engine is available AND a project is bound. With no
   // engine the catalog route 503s by contract, so we never call it — the unavailable panel stands
   // on its own (graceful degradation).
-  useEffect(
-    () => loadContainerCatalog(anyAvailable, projectInput, setTasks, setTaskId, setError),
-    [anyAvailable, projectInput],
-  );
+  useEffect(() => {
+    if (!anyAvailable || projectInput.length === 0) {
+      setTasks([]);
+      setTaskId("");
+      return;
+    }
+    let cancelled = false;
+    void fetchContainerCatalog(projectInput)
+      .then((catalog) => {
+        if (cancelled) return;
+        setTasks(catalog.tasks);
+        setTaskId((current) => (current.length > 0 ? current : (catalog.tasks[0]?.id ?? "")));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setTasks([]);
+          setError(errorFromUnknown(err));
+        }
+      });
+    return (): void => {
+      cancelled = true;
+    };
+  }, [anyAvailable, projectInput]);
 
   // Subscribe to the shared container run event channel. Ownership is gated on the echoed requestId
   // so a foreign run-started can never arm this card's Cancel.
   useEffect(() => {
     if (!running) return;
     const onMessage = (ev: MessageEvent<string>): void => {
-      const parsed = parseContainerRunnerEvent(ev.data);
-      if (parsed === null) return;
-      applyContainerEvent(
-        parsed,
-        runningRef.current,
-        pendingRequestIdRef.current,
-        setInFlightRunId,
-        setEvents,
-      );
+      let parsed: ContainerRunnerEvent;
+      try {
+        parsed = JSON.parse(ev.data) as ContainerRunnerEvent;
+      } catch {
+        return;
+      }
+      if (
+        parsed.kind === "run-started" &&
+        runningRef.current &&
+        isOwnEvent(parsed, pendingRequestIdRef.current)
+      ) {
+        setInFlightRunId((current) => current ?? parsed.runId);
+      }
+      if (parsed.kind !== "run-started" && isOwnEvent(parsed, pendingRequestIdRef.current)) {
+        setInFlightRunId((current) => (current === parsed.runId ? null : current));
+      }
+      setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
     };
     return subscribeSharedEventSource(
       containerEventsUrl(),
@@ -584,7 +288,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
 
   // Return focus to Run when the Cancel button unmounts at run end so keyboard users keep their place.
   useEffect(() => {
-    if (shouldRestoreRunFocus(prevRunningRef.current, running)) {
+    if (prevRunningRef.current && !running && document.activeElement === document.body) {
       runBtnRef.current?.focus();
     }
     prevRunningRef.current = running;
@@ -601,22 +305,28 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       pendingRequestIdRef.current = requestId;
       runningRef.current = true;
       setRunning(true);
-      await executeContainerRun(
-        { projectId: projectInput, taskId, requestId },
-        runningRef,
-        pendingRequestIdRef,
-        setResult,
-        setError,
-        setRunning,
-        setInFlightRunId,
-      );
+      try {
+        const next = await createContainerRun({ projectId: projectInput, taskId, requestId });
+        setResult(next);
+      } catch (err: unknown) {
+        setError(errorFromUnknown(err));
+      } finally {
+        runningRef.current = false;
+        setRunning(false);
+        pendingRequestIdRef.current = null;
+        setInFlightRunId(null);
+      }
     },
     [hasRunControl, projectInput, running, taskId],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {
     if (inFlightRunId === null) return;
-    await cancelInFlightRun(inFlightRunId, setError);
+    try {
+      await cancelContainerRun(inFlightRunId);
+    } catch (err: unknown) {
+      setError(errorFromUnknown(err));
+    }
   }, [inFlightRunId]);
 
   return (
@@ -624,33 +334,129 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       {/* Graceful-degradation status panel — ALWAYS rendered (never an error boundary, never
           blocks). polite live region carrying the structured engine state + remediation hint. */}
       <section role="status" aria-live="polite" aria-label="Container engine status">
-        <EngineStatusPanel capability={capability} />
+        {capability === null ? (
+          <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
+            Checking for a container engine…
+          </p>
+        ) : capability.engines.length === 0 ? (
+          <p className="tm-limits" style={{ color: "var(--fg-faint)" }}>
+            No container engine was detected. Container diagnostics are unavailable; the rest of
+            Keiko is unaffected.
+          </p>
+        ) : (
+          <EngineStatusList engines={capability.engines} />
+        )}
       </section>
 
       {/* Run control — present ONLY when an engine is available AND the catalog is non-empty (AC2).
           With no engine the user sees the status panel above and nothing else. */}
       {hasRunControl ? (
-        <ContainerRunForm
-          tasks={tasks}
-          taskId={taskId}
-          setTaskId={setTaskId}
-          running={running}
-          inFlightRunId={inFlightRunId}
-          runBtnRef={runBtnRef}
-          onSubmit={(e) => void onSubmit(e)}
-          onAbort={() => void onAbort()}
-        />
+        <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
+          <div className="tm-field">
+            <span>Diagnostic task</span>
+            <KeikoSelect
+              value={taskId}
+              ariaLabel="Diagnostic task"
+              disabled={tasks.length === 0}
+              menuTitle="Allowlisted tasks"
+              mono
+              sections={[
+                {
+                  options: tasks.map((task) => ({ value: task.id, label: taskLabel(task) })),
+                },
+              ]}
+              onValueChange={setTaskId}
+            />
+          </div>
+          <div className="tm-actions">
+            {/* GEN-UI-FOCUS-014: aria-disabled instead of HTML disabled while running —
+                disabling the focused submit button throws keyboard focus to <body>.
+                onSubmit already guards re-entry; the no-selection condition stays
+                hard-disabled (pre-interaction state), mirroring TerminalWidget. */}
+            <button
+              type="submit"
+              className="tm-action"
+              data-primary="true"
+              ref={runBtnRef}
+              disabled={tasks.length === 0 || taskId.length === 0}
+              aria-disabled={running || tasks.length === 0 || taskId.length === 0}
+            >
+              {running ? "Running…" : "Run diagnostic"}
+            </button>
+            {running ? (
+              <button
+                type="button"
+                className="tm-action"
+                disabled={inFlightRunId === null}
+                aria-disabled={inFlightRunId === null}
+                onClick={() => void onAbort()}
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        </form>
       ) : null}
 
-      <ContainerErrorBanner error={error} onDismiss={() => setError(null)} />
+      {error !== null ? (
+        <div className="tm-error" role="alert">
+          <span className="tm-error-text">
+            {error.message} <span className="err-code mono">({error.code})</span>
+          </span>
+          <button
+            type="button"
+            className="tm-error-dismiss"
+            aria-label="Dismiss error"
+            onClick={() => setError(null)}
+          >
+            ✕
+          </button>
+        </div>
+      ) : null}
 
       <p className="sr-only" role="status" aria-live="polite">
-        {resultAnnouncement(result)}
+        {result !== null ? resultSummary(result) : ""}
       </p>
 
-      <ContainerResultPanel result={result} />
+      {result !== null ? (
+        <div className="tm-result">
+          <div className="tm-badges">
+            <span className="tm-badge">{result.engine}</span>
+            <span
+              className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}
+            >
+              exit {result.exitCode === null ? "n/a" : String(result.exitCode)}
+            </span>
+            <span className="tm-badge">{result.durationMs} ms</span>
+            <span className="tm-badge">{result.failureReason}</span>
+            <span className="tm-badge">run {result.runId}</span>
+            <span className="tm-badge">task {result.taskId}</span>
+            {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
+            {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
+          </div>
+          {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
+          {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
+        </div>
+      ) : null}
 
-      {hasRunControl ? <ContainerRunEventLog events={events} /> : null}
+      {hasRunControl ? (
+        <div
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions text"
+          aria-atomic="false"
+          aria-label="Recent container run events"
+        >
+          <ul className="tm-events">
+            {events.map((event, idx) => (
+              <li key={`${event.runId}-${String(idx)}-${event.kind}`} className="tm-event">
+                <span className="tm-event-kind">{eventLabel(event.kind)}</span>
+                <span className="tm-event-detail">{eventDetail(event)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

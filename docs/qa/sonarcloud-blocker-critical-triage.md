@@ -174,25 +174,27 @@ All 31 `S2699` findings are therefore Won't Fix. PR 1 (see the implementation PR
 2 genuine, low-risk code fixes found in this review round outside the sort/nesting/complexity
 buckets: `Web:S7930` duplicate ids and `javascript:S2819` service-worker origin check.
 
-## 5. Six `S3776` findings deferred out of this PR — pre-existing i18n gap, not an architecture risk
+## 5. Fifteen `S3776` findings deferred out of this PR — pre-existing i18n gap, not an architecture risk
 
 Distinct from the two `codeIntelligence.ts`/`EditorRuntimeWidget.tsx` hotspots in
-[`sonarcloud-complexity-followup-epic.md`](sonarcloud-complexity-followup-epic.md), six more `S3776`
-findings were deferred for an unrelated reason: `AgentRunWidget.tsx`, `FilePreview.tsx`,
-`FilesWidget.tsx`, `PdfCitationPreviewWindow.tsx`, `ReviewWidget.tsx`, and `FigmaSnapshotWindow.tsx`
-had **zero i18n coverage** on `dev` before this cleanup — every user-facing string was hardcoded
-English. Their complexity extraction reflows enough JSX that `check:ui-i18n` treats the diff as
-i18n-relevant, and since none of these files used the i18n API at all, the guard correctly failed.
+[`sonarcloud-complexity-followup-epic.md`](sonarcloud-complexity-followup-epic.md), fifteen more
+`S3776` findings were deferred for an unrelated reason. The affected files had **zero i18n
+coverage** on `dev` before this cleanup — every user-facing string was hardcoded English. Their
+complexity extractions reflow enough JSX that `check:ui-i18n` treats the diffs as i18n-relevant,
+and since none of these files used the i18n API at all, the guard correctly failed.
 
-Rather than bolt on a token i18n usage just to satisfy the guard, a full retrofit was done as its own
-change on `claude/i18n-retrofit-quality-widgets`
+The first six are `AgentRunWidget.tsx`, `FilePreview.tsx`, `FilesWidget.tsx`,
+`PdfCitationPreviewWindow.tsx`, `ReviewWidget.tsx`, and `FigmaSnapshotWindow.tsx`. The remaining
+nine are `BrowserWidget.tsx`, `CommandsWidget.tsx`, `ContainerStatusWidget.tsx`,
+`DocumentationBrowserWidget.tsx`, `GitDeliveryActionSheetCard.tsx`,
+`UnifiedQuickAccessPalette.tsx`, `PromptEnhancerPanel.tsx`, `CommitComposer.tsx`, and
+`GitClientWindow.tsx`. None of the nine carried a separate `S2871` sort fix or another change that
+needed to remain in this PR, so their complexity refactors were restored to the `dev` baseline.
+
+Rather than bolt on a token i18n usage just to satisfy the guard, a full retrofit of the first six
+was done as its own change on `claude/i18n-retrofit-quality-widgets`
 ([PR #2315](https://github.com/oscharko-dev/Keiko/pull/2315)): all six files now wrap every
 user-facing string with `useTranslate()`/`t()`, with matching English/German catalog entries (419 new
-keys). Once that lands, the `S3776` extraction for these six files will be reapplied on top of it in
-a follow-up (tracked as its own step, not bundled into this PR) — `FigmaSnapshotWindow.tsx` also
-needs its already-fixed `S2004` nesting extraction (kept in this PR, see the interim-revert commit)
-merged in first so the two don't conflict.
-
-`GitClientWindow.tsx` was also touched (dev has zero i18n coverage there too) but its `S3776` finding
-was left as a partial, low-footprint extraction — see the audit note in the implementation commit —
-since its diff never grew large enough to trip the guard.
+keys). Its `S3776` extractions are reapplied on that i18n-covered branch. The remaining nine will be
+retrofitted and refactored together in a separate follow-up after #2315 lands. This sequence keeps
+the i18n invariant intact without weakening the guard or hiding user-facing copy from the catalogs.

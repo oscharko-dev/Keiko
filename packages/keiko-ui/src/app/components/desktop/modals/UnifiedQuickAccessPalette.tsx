@@ -96,122 +96,6 @@ function symbolResults(response: WorkspaceSymbolSearchResponse): readonly Symbol
   }));
 }
 
-async function runQuickAccessSearch(
-  root: string,
-  query: string,
-  signal: AbortSignal,
-): Promise<readonly SearchResult[]> {
-  const [fileNames, text, symbols] = await Promise.all([
-    fetchFilesSearch(root, query, SEARCH_LIMIT, { signal }),
-    fetchWorkspaceSearch(
-      {
-        root,
-        query,
-        mode: "literal",
-        caseSensitive: false,
-        includeGlobs: [],
-        excludeGlobs: [],
-        maxResults: SEARCH_LIMIT,
-      },
-      { signal },
-    ),
-    fetchWorkspaceSymbols({ root, query, maxResults: SEARCH_LIMIT }, { signal }),
-  ]);
-  const files = dedupeFileResults([...fileNameResults(fileNames), ...textFileResults(text)]);
-  return [...files, ...symbolResults(symbols)].slice(0, SEARCH_LIMIT);
-}
-
-function getEmptyText(mode: QuickAccessMode, root: string | undefined, query: string): string {
-  if (mode === "commands") return "No matching commands.";
-  if (root === undefined) return "No active workspace root.";
-  if (query.trim().length === 0) return "Type to search workspace files and symbols.";
-  return "No matching files or symbols.";
-}
-
-interface PaletteKeyHandlerParams {
-  readonly itemCount: number;
-  readonly selected: number;
-  readonly setSelected: (updater: (current: number) => number) => void;
-  readonly activate: (index: number) => void;
-  readonly onClose: () => void;
-  readonly focusInput: () => void;
-}
-
-function buildPaletteKeyHandlers(params: PaletteKeyHandlerParams): Record<string, () => void> {
-  const { itemCount, selected, setSelected, activate, onClose, focusInput } = params;
-  return {
-    ArrowDown: () => {
-      if (itemCount > 0) setSelected((current) => (current + 1) % itemCount);
-    },
-    ArrowUp: () => {
-      if (itemCount > 0) setSelected((current) => (current - 1 + itemCount) % itemCount);
-    },
-    Enter: () => activate(selected),
-    Escape: onClose,
-    Tab: focusInput,
-  };
-}
-
-function renderCommandOptions(
-  commands: readonly QuickAccessCommand[],
-  selected: number,
-  optionId: (index: number) => string,
-  onHover: (index: number) => void,
-  onActivate: (index: number) => void,
-): ReactNode {
-  return commands.map((command, index) => (
-    <button
-      key={command.id}
-      type="button"
-      id={optionId(index)}
-      role="option"
-      aria-selected={index === selected}
-      className="cmdk-row"
-      data-sel={index === selected}
-      tabIndex={-1}
-      onPointerEnter={() => onHover(index)}
-      onClick={() => onActivate(index)}
-    >
-      <span className="cmdk-label">{command.label}</span>
-      <span className="spacer" />
-      {command.shortcut !== undefined ? <span className="kbd">{command.shortcut}</span> : null}
-      <span className="cmdk-group mono">{command.group}</span>
-    </button>
-  ));
-}
-
-function renderResultOptions(
-  results: readonly SearchResult[],
-  selected: number,
-  optionId: (index: number) => string,
-  onHover: (index: number) => void,
-  onActivate: (index: number) => void,
-): ReactNode {
-  return results.map((result, index) => (
-    <button
-      key={`${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
-      type="button"
-      id={optionId(index)}
-      role="option"
-      aria-selected={index === selected}
-      className="cmdk-row"
-      data-sel={index === selected}
-      tabIndex={-1}
-      onPointerEnter={() => onHover(index)}
-      onClick={() => onActivate(index)}
-    >
-      <span className="cmdk-ico">
-        <FileIcon name={result.path} />
-      </span>
-      <span className="cmdk-label">{result.kind === "symbol" ? result.symbol : result.path}</span>
-      <span className="spacer" />
-      <span className="cmdk-group mono">
-        {result.path}:{String(result.line)}
-      </span>
-    </button>
-  ));
-}
-
 export function UnifiedQuickAccessPalette({
   initialMode,
   root,
@@ -247,8 +131,34 @@ export function UnifiedQuickAccessPalette({
     const controller = new AbortController();
     const trimmed = query.trim();
     const handle = setTimeout(() => {
-      void runQuickAccessSearch(root, trimmed, controller.signal)
-        .then((results) => setSearchResults(results))
+      void Promise.all([
+        fetchFilesSearch(root, trimmed, SEARCH_LIMIT, { signal: controller.signal }),
+        fetchWorkspaceSearch(
+          {
+            root,
+            query: trimmed,
+            mode: "literal",
+            caseSensitive: false,
+            includeGlobs: [],
+            excludeGlobs: [],
+            maxResults: SEARCH_LIMIT,
+          },
+          { signal: controller.signal },
+        ),
+        fetchWorkspaceSymbols(
+          { root, query: trimmed, maxResults: SEARCH_LIMIT },
+          {
+            signal: controller.signal,
+          },
+        ),
+      ])
+        .then(([fileNames, text, symbols]) => {
+          const files = dedupeFileResults([
+            ...fileNameResults(fileNames),
+            ...textFileResults(text),
+          ]);
+          setSearchResults([...files, ...symbolResults(symbols)].slice(0, SEARCH_LIMIT));
+        })
         .catch(() => {
           if (!controller.signal.aborted) setSearchResults([]);
         });
@@ -295,22 +205,33 @@ export function UnifiedQuickAccessPalette({
   );
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
-    const handlers = buildPaletteKeyHandlers({
-      itemCount,
-      selected,
-      setSelected,
-      activate,
-      onClose,
-      focusInput: () => inputRef.current?.focus(),
-    });
-    const handler = handlers[event.key];
-    if (handler === undefined) return;
-    event.preventDefault();
-    handler();
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (itemCount > 0) setSelected((current) => (current + 1) % itemCount);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (itemCount > 0) setSelected((current) => (current - 1 + itemCount) % itemCount);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      activate(selected);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+    } else if (event.key === "Tab") {
+      event.preventDefault();
+      inputRef.current?.focus();
+    }
   };
 
   const optionId = (index: number): string => `${listId}-option-${String(index)}`;
-  const emptyText = getEmptyText(mode, root, query);
+  const emptyText =
+    mode === "commands"
+      ? "No matching commands."
+      : root === undefined
+        ? "No active workspace root."
+        : query.trim().length === 0
+          ? "Type to search workspace files and symbols."
+          : "No matching files or symbols.";
 
   return (
     <div className="cmdk-overlay" onPointerDown={onClose}>
@@ -362,9 +283,53 @@ export function UnifiedQuickAccessPalette({
           {itemCount === 0 ? (
             <div className="cmdk-empty">{emptyText}</div>
           ) : mode === "commands" ? (
-            renderCommandOptions(commandResults, selected, optionId, setSelected, activate)
+            commandResults.map((command, index) => (
+              <button
+                key={command.id}
+                type="button"
+                id={optionId(index)}
+                role="option"
+                aria-selected={index === selected}
+                className="cmdk-row"
+                data-sel={index === selected}
+                tabIndex={-1}
+                onPointerEnter={() => setSelected(index)}
+                onClick={() => activate(index)}
+              >
+                <span className="cmdk-label">{command.label}</span>
+                <span className="spacer" />
+                {command.shortcut !== undefined ? (
+                  <span className="kbd">{command.shortcut}</span>
+                ) : null}
+                <span className="cmdk-group mono">{command.group}</span>
+              </button>
+            ))
           ) : (
-            renderResultOptions(searchResults, selected, optionId, setSelected, activate)
+            searchResults.map((result, index) => (
+              <button
+                key={`${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
+                type="button"
+                id={optionId(index)}
+                role="option"
+                aria-selected={index === selected}
+                className="cmdk-row"
+                data-sel={index === selected}
+                tabIndex={-1}
+                onPointerEnter={() => setSelected(index)}
+                onClick={() => activate(index)}
+              >
+                <span className="cmdk-ico">
+                  <FileIcon name={result.path} />
+                </span>
+                <span className="cmdk-label">
+                  {result.kind === "symbol" ? result.symbol : result.path}
+                </span>
+                <span className="spacer" />
+                <span className="cmdk-group mono">
+                  {result.path}:{String(result.line)}
+                </span>
+              </button>
+            ))
           )}
         </div>
       </div>

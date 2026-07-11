@@ -12,7 +12,7 @@
 // CSP (frame-ancestors 'none') blocks embedding and is not widened here.
 
 import { useCallback, useRef, useState } from "react";
-import type { ReactNode, RefObject } from "react";
+import type { ReactNode } from "react";
 import styles from "./DocumentationBrowserWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
 import {
@@ -339,96 +339,6 @@ function ApprovedPanel({
   );
 }
 
-function statusDotColor(result: DocumentationNavigationResult | null): string {
-  if (result === null) return "var(--line-strong)";
-  if (result.severity === "ready") return "var(--ok)";
-  if (result.severity === "error") return "var(--danger)";
-  return "var(--line-strong)";
-}
-
-function DocumentationViewPanel({
-  working,
-  copy,
-  result,
-}: {
-  readonly working: boolean;
-  readonly copy: ReasonCopy | null;
-  readonly result: DocumentationNavigationResult | null;
-}): ReactNode {
-  if (working) {
-    return (
-      <>
-        <div className="ph-stripes" aria-hidden="true" />
-        <div className="db-overlay mono">Opening documentation…</div>
-      </>
-    );
-  }
-  if (copy !== null && result !== null) {
-    return (
-      <div className={`db-state ${severityClass(result.severity)}`}>
-        <h3 className="db-state-title">{copy.title}</h3>
-        <p className="db-state-detail">{copy.detail}</p>
-        {copy.action !== null ? <p className="db-state-action">{copy.action}</p> : null}
-      </div>
-    );
-  }
-  return (
-    <>
-      <div className="ph-stripes" aria-hidden="true" />
-      <div className="db-overlay mono">
-        Enter a local or intranet documentation address and press Open
-      </div>
-    </>
-  );
-}
-
-function IndexingWorkflowPanel(props: {
-  readonly indexing: IndexingPhase;
-  readonly indexingBusy: boolean;
-  readonly onApprove: () => void;
-  readonly onCancel: () => void;
-  readonly onOpenKnowledgePods?: (() => void) | undefined;
-}): ReactNode {
-  const { indexing } = props;
-  if (indexing.kind === "proposing" || indexing.kind === "approving") {
-    return (
-      <div className="db-indexing" role="status" aria-live="polite">
-        <span className="mono">
-          {indexing.kind === "proposing" ? "Checking for a manual…" : "Recording your consent…"}
-        </span>
-      </div>
-    );
-  }
-  if (indexing.kind === "proposed") {
-    return (
-      <div className="db-indexing" role="region" aria-label="Indexing proposal">
-        <ProposalPanel
-          proposal={indexing.proposal}
-          busy={props.indexingBusy}
-          onApprove={props.onApprove}
-          onCancel={props.onCancel}
-          onOpenKnowledgePods={props.onOpenKnowledgePods}
-        />
-      </div>
-    );
-  }
-  if (indexing.kind === "approved") {
-    return (
-      <div className="db-indexing" role="region" aria-label="Indexing proposal">
-        <ApprovedPanel approval={indexing.approval} />
-      </div>
-    );
-  }
-  if (indexing.kind === "error") {
-    return (
-      <div className="db-indexing db-error" role="alert">
-        {indexing.error.message} <span className="err-code mono">({indexing.error.code})</span>
-      </div>
-    );
-  }
-  return null;
-}
-
 function useDocumentationNavigation(initialTarget: string): {
   readonly targetInput: string;
   readonly setTargetInput: (value: string) => void;
@@ -467,32 +377,48 @@ function useDocumentationNavigation(initialTarget: string): {
   return { targetInput, setTargetInput, working, result, error, lastTarget, runNavigate };
 }
 
-function useIndexingWorkflow(
-  lastTarget: string | null,
-  lastResult: DocumentationNavigationResult | null,
-): {
-  readonly indexing: IndexingPhase;
-  readonly indexingBusy: boolean;
-  // Exposes the synchronous re-entry guard so callers outside this hook (nav open/reload) can bail
-  // out immediately on an in-flight propose/approve call, regardless of render timing — see the ref's
-  // own comment below.
-  readonly indexingBusyRef: RefObject<boolean>;
-  readonly resetIndexing: () => void;
-  readonly handlePrepare: () => void;
-  readonly handleApprove: () => void;
-  readonly handleCancel: () => void;
-} {
+function announce(
+  working: boolean,
+  targetInput: string,
+  error: ErrorState | null,
+  copy: ReasonCopy | null,
+): string {
+  if (working && targetInput.trim().length > 0) return "Opening documentation…";
+  if (error !== null) return error.message;
+  return copy !== null ? `${copy.title}. ${copy.detail}` : "";
+}
+
+export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProps): ReactNode {
+  const nav = useDocumentationNavigation(props.target ?? "");
   const [indexing, setIndexing] = useState<IndexingPhase>({ kind: "idle" });
   // Synchronous re-entry guard: a rapid double-click can fire an indexing handler again before the
   // "proposing"/"approving" state has flushed and disabled the button, which would send a second
   // propose/approve request. The ref bails out immediately regardless of render timing.
   const indexingBusyRef = useRef<boolean>(false);
-  // Mirrors lastTarget for synchronous reads inside an in-flight propose/approve continuation. A
-  // stale closure over lastTarget would keep pointing at the target the call was started for; this
-  // ref always reflects the currently displayed target so a late-resolving call can detect that the
-  // user has since navigated away (#1868 cross-target race).
-  const navTargetRef = useRef<string | null>(lastTarget);
-  navTargetRef.current = lastTarget;
+  // Mirrors nav.lastTarget for synchronous reads inside an in-flight propose/approve continuation.
+  // A stale closure over nav.lastTarget would keep pointing at the target the call was started for;
+  // this ref always reflects the currently displayed target so a late-resolving call can detect that
+  // the user has since navigated away (#1868 cross-target race).
+  const navTargetRef = useRef<string | null>(nav.lastTarget);
+  navTargetRef.current = nav.lastTarget;
+
+  const runNavigate = useCallback(
+    async (raw: string): Promise<void> => {
+      setIndexing({ kind: "idle" });
+      await nav.runNavigate(raw);
+    },
+    [nav],
+  );
+
+  const handleOpen = useCallback((): void => {
+    if (nav.working || indexingBusyRef.current) return;
+    void runNavigate(nav.targetInput);
+  }, [nav.working, nav.targetInput, runNavigate]);
+
+  const handleReload = useCallback((): void => {
+    if (nav.working || nav.lastTarget === null || indexingBusyRef.current) return;
+    void runNavigate(nav.lastTarget);
+  }, [nav.working, nav.lastTarget, runNavigate]);
 
   const runIndexingCall = useCallback(
     async <T,>(
@@ -503,15 +429,15 @@ function useIndexingWorkflow(
       onOk: (value: T) => IndexingPhase,
       pending: IndexingPhase,
     ): Promise<void> => {
-      if (lastTarget === null || indexingBusyRef.current) return;
+      if (nav.lastTarget === null || indexingBusyRef.current) return;
       // Capture the target this call was started for. A navigation to a different target while the
       // call is in flight must not let its result resurrect a stale proposal/approval for the
       // manual that is no longer displayed as the current target (#1868 cross-target race).
-      const callTarget = lastTarget;
+      const callTarget = nav.lastTarget;
       indexingBusyRef.current = true;
       setIndexing(pending);
       try {
-        const value = await call(callTarget, lastResult?.reason ?? null);
+        const value = await call(callTarget, nav.result?.reason ?? null);
         if (navTargetRef.current === callTarget) {
           setIndexing(onOk(value));
         }
@@ -523,7 +449,7 @@ function useIndexingWorkflow(
         indexingBusyRef.current = false;
       }
     },
-    [lastTarget, lastResult],
+    [nav.lastTarget, nav.result],
   );
 
   const handlePrepare = useCallback((): void => {
@@ -543,56 +469,10 @@ function useIndexingWorkflow(
   }, [runIndexingCall]);
 
   const handleCancel = useCallback((): void => setIndexing({ kind: "idle" }), []);
-  const resetIndexing = useCallback((): void => setIndexing({ kind: "idle" }), []);
 
   const indexingBusy = indexing.kind === "proposing" || indexing.kind === "approving";
-
-  return {
-    indexing,
-    indexingBusy,
-    indexingBusyRef,
-    resetIndexing,
-    handlePrepare,
-    handleApprove,
-    handleCancel,
-  };
-}
-
-function announce(
-  working: boolean,
-  targetInput: string,
-  error: ErrorState | null,
-  copy: ReasonCopy | null,
-): string {
-  if (working && targetInput.trim().length > 0) return "Opening documentation…";
-  if (error !== null) return error.message;
-  return copy !== null ? `${copy.title}. ${copy.detail}` : "";
-}
-
-export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProps): ReactNode {
-  const nav = useDocumentationNavigation(props.target ?? "");
-  const indexingWorkflow = useIndexingWorkflow(nav.lastTarget, nav.result);
-
-  const runNavigate = useCallback(
-    async (raw: string): Promise<void> => {
-      indexingWorkflow.resetIndexing();
-      await nav.runNavigate(raw);
-    },
-    [nav, indexingWorkflow],
-  );
-
-  const handleOpen = useCallback((): void => {
-    if (nav.working || indexingWorkflow.indexingBusyRef.current) return;
-    void runNavigate(nav.targetInput);
-  }, [nav.working, nav.targetInput, runNavigate, indexingWorkflow.indexingBusyRef]);
-
-  const handleReload = useCallback((): void => {
-    if (nav.working || nav.lastTarget === null || indexingWorkflow.indexingBusyRef.current) return;
-    void runNavigate(nav.lastTarget);
-  }, [nav.working, nav.lastTarget, runNavigate, indexingWorkflow.indexingBusyRef]);
-
-  const openDisabled = nav.working || indexingWorkflow.indexingBusy;
-  const reloadDisabled = nav.working || nav.lastTarget === null || indexingWorkflow.indexingBusy;
+  const openDisabled = nav.working || indexingBusy;
+  const reloadDisabled = nav.working || nav.lastTarget === null || indexingBusy;
   const copy = nav.result === null ? null : REASON_COPY[nav.result.reason];
   const proposalEligible =
     (nav.result?.capability.indexingProposalAvailable ?? false) &&
@@ -604,7 +484,16 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
       <div className="db-bar">
         <span
           className="db-dot"
-          style={{ background: statusDotColor(nav.result) }}
+          style={{
+            background:
+              nav.result === null
+                ? "var(--line-strong)"
+                : nav.result.severity === "ready"
+                  ? "var(--ok)"
+                  : nav.result.severity === "error"
+                    ? "var(--danger)"
+                    : "var(--line-strong)",
+          }}
           aria-hidden="true"
         />
         <label className="db-field db-field-target">
@@ -659,7 +548,25 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
       ) : null}
 
       <div className="db-view">
-        <DocumentationViewPanel working={nav.working} copy={copy} result={nav.result} />
+        {nav.working ? (
+          <>
+            <div className="ph-stripes" aria-hidden="true" />
+            <div className="db-overlay mono">Opening documentation…</div>
+          </>
+        ) : copy !== null && nav.result !== null ? (
+          <div className={`db-state ${severityClass(nav.result.severity)}`}>
+            <h3 className="db-state-title">{copy.title}</h3>
+            <p className="db-state-detail">{copy.detail}</p>
+            {copy.action !== null ? <p className="db-state-action">{copy.action}</p> : null}
+          </div>
+        ) : (
+          <>
+            <div className="ph-stripes" aria-hidden="true" />
+            <div className="db-overlay mono">
+              Enter a local or intranet documentation address and press Open
+            </div>
+          </>
+        )}
       </div>
 
       {/* Indexing is explicit and consent-gated. The affordance is enabled only for a proposal-eligible
@@ -668,9 +575,9 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
         <button
           type="button"
           className="db-btn db-btn-ghost"
-          onClick={indexingWorkflow.handlePrepare}
-          aria-disabled={!proposalEligible || indexingWorkflow.indexingBusy}
-          disabled={!proposalEligible || indexingWorkflow.indexingBusy}
+          onClick={handlePrepare}
+          aria-disabled={!proposalEligible || indexingBusy}
+          disabled={!proposalEligible || indexingBusy}
         >
           Prepare for indexing
         </button>
@@ -681,13 +588,37 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
         </span>
       </div>
 
-      <IndexingWorkflowPanel
-        indexing={indexingWorkflow.indexing}
-        indexingBusy={indexingWorkflow.indexingBusy}
-        onApprove={indexingWorkflow.handleApprove}
-        onCancel={indexingWorkflow.handleCancel}
-        onOpenKnowledgePods={props.onOpenKnowledgePods}
-      />
+      {indexing.kind === "proposing" || indexing.kind === "approving" ? (
+        <div className="db-indexing" role="status" aria-live="polite">
+          <span className="mono">
+            {indexing.kind === "proposing" ? "Checking for a manual…" : "Recording your consent…"}
+          </span>
+        </div>
+      ) : null}
+
+      {indexing.kind === "proposed" ? (
+        <div className="db-indexing" role="region" aria-label="Indexing proposal">
+          <ProposalPanel
+            proposal={indexing.proposal}
+            busy={indexingBusy}
+            onApprove={handleApprove}
+            onCancel={handleCancel}
+            onOpenKnowledgePods={props.onOpenKnowledgePods}
+          />
+        </div>
+      ) : null}
+
+      {indexing.kind === "approved" ? (
+        <div className="db-indexing" role="region" aria-label="Indexing proposal">
+          <ApprovedPanel approval={indexing.approval} />
+        </div>
+      ) : null}
+
+      {indexing.kind === "error" ? (
+        <div className="db-indexing db-error" role="alert">
+          {indexing.error.message} <span className="err-code mono">({indexing.error.code})</span>
+        </div>
+      ) : null}
     </div>
   );
 }

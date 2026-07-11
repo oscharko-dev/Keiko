@@ -23,14 +23,10 @@ import type {
   GitDeliveryBlockReason,
   GitDeliveryBlockerSeverity,
   GitDeliveryBlockerSource,
-  GitDeliveryBranchProtection,
-  GitDeliveryChecksState,
   GitDeliveryConstraint,
   GitDeliveryExpectedBlocker,
-  GitDeliveryMergeReadiness,
   GitDeliveryPolicyExplanation,
   GitDeliveryPreviewManifest,
-  GitDeliveryPullRequestState,
   GitDeliveryRecoveryActionHint,
   GitDeliveryRecoveryHint,
   GitDeliveryRecoveryStrategyHint,
@@ -144,138 +140,13 @@ function formatError(err: unknown): string {
 
 // ─── Preview manifest (AC2) ────────────────────────────────────────────────────────────
 
-function buildRemoteImpact(preview: GitDeliveryPreviewManifest): readonly string[] {
-  return [
+function PreviewSection({ preview }: { readonly preview: GitDeliveryPreviewManifest }): ReactNode {
+  const remoteImpact: readonly string[] = [
     preview.touchesRemote ? "Touches the remote" : "Local only",
     ...(preview.wouldCreateRemoteBranch ? ["Would create a remote branch"] : []),
     ...(preview.wouldForcePublish ? ["Would force-publish"] : []),
     ...(preview.wouldTriggerChecks ? ["Would trigger checks"] : []),
   ];
-}
-
-// The optional identity/sizing fields (AC2): each renders only when the manifest carries it.
-function PreviewOptionalFields({
-  preview,
-}: {
-  readonly preview: GitDeliveryPreviewManifest;
-}): ReactNode {
-  return (
-    <>
-      {preview.affectedBranchName !== undefined ? (
-        <div className="gdas-kv">
-          <dt>Affected branch</dt>
-          <dd className="gdas-mono">{preview.affectedBranchName}</dd>
-        </div>
-      ) : null}
-      {preview.baseBranchName !== undefined ? (
-        <div className="gdas-kv">
-          <dt>Base branch</dt>
-          <dd className="gdas-mono">{preview.baseBranchName}</dd>
-        </div>
-      ) : null}
-      {preview.remoteBranchName !== undefined ? (
-        <div className="gdas-kv">
-          <dt>Remote branch</dt>
-          <dd className="gdas-mono">{preview.remoteBranchName}</dd>
-        </div>
-      ) : null}
-      {preview.estimatedFileCount !== undefined ? (
-        <div className="gdas-kv">
-          <dt>Files affected</dt>
-          <dd>{preview.estimatedFileCount.toString()}</dd>
-        </div>
-      ) : null}
-      {preview.estimatedBytesDelta !== undefined ? (
-        <div className="gdas-kv">
-          <dt>Bytes delta</dt>
-          <dd>{preview.estimatedBytesDelta.toString()}</dd>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-function PullRequestLine({
-  pullRequest,
-}: {
-  readonly pullRequest: GitDeliveryPullRequestState;
-}): ReactNode {
-  return (
-    <p className="gdas-preview-line" data-testid="gdas-preview-pr">
-      Pull request: {pullRequest.status}
-      {pullRequest.isDraft ? " (draft)" : ""} ·{" "}
-      {pullRequest.mergeReadiness.receivedApprovalCount.toString()} of{" "}
-      {pullRequest.mergeReadiness.requiredApprovalCount.toString()} approvals
-    </p>
-  );
-}
-
-function MergeReadinessLine({
-  mergeReadiness,
-}: {
-  readonly mergeReadiness: GitDeliveryMergeReadiness;
-}): ReactNode {
-  return (
-    <p className="gdas-preview-line" data-testid="gdas-preview-merge">
-      Merge readiness: {mergeReadiness.ready ? "Ready to merge" : "Not ready to merge"}
-      {mergeReadiness.blockingReason !== undefined
-        ? ` (${mergeReadiness.blockingReason})`
-        : ""} · {mergeReadiness.receivedApprovalCount.toString()} of{" "}
-      {mergeReadiness.requiredApprovalCount.toString()} approvals
-    </p>
-  );
-}
-
-function BranchProtectionLine({
-  branchProtection,
-}: {
-  readonly branchProtection: GitDeliveryBranchProtection;
-}): ReactNode {
-  return (
-    <p className="gdas-preview-line" data-testid="gdas-preview-protection">
-      Branch protection: {branchProtection.requiredReviewCount.toString()} required review
-      {branchProtection.requiredReviewCount === 1 ? "" : "s"},{" "}
-      {branchProtection.requiredStatusCheckCount.toString()} required check
-      {branchProtection.requiredStatusCheckCount === 1 ? "" : "s"}
-    </p>
-  );
-}
-
-function ChecksLine({ checks }: { readonly checks: GitDeliveryChecksState }): ReactNode {
-  return (
-    <p className="gdas-preview-line" data-testid="gdas-preview-checks">
-      Checks: {checks.overallStatus} ({checks.passing.toString()} passing,{" "}
-      {checks.failing.toString()} failing, {checks.pending.toString()} pending of{" "}
-      {checks.total.toString()})
-    </p>
-  );
-}
-
-// The optional provider-state lines (AC2): pull request, merge readiness, branch protection, and
-// checks each render only when the manifest carries that provider state.
-function PreviewProviderLines({
-  preview,
-}: {
-  readonly preview: GitDeliveryPreviewManifest;
-}): ReactNode {
-  return (
-    <>
-      {preview.pullRequest !== undefined ? (
-        <PullRequestLine pullRequest={preview.pullRequest} />
-      ) : null}
-      {preview.mergeReadiness !== undefined ? (
-        <MergeReadinessLine mergeReadiness={preview.mergeReadiness} />
-      ) : null}
-      {preview.branchProtection !== undefined ? (
-        <BranchProtectionLine branchProtection={preview.branchProtection} />
-      ) : null}
-      {preview.checks !== undefined ? <ChecksLine checks={preview.checks} /> : null}
-    </>
-  );
-}
-
-function PreviewSection({ preview }: { readonly preview: GitDeliveryPreviewManifest }): ReactNode {
-  const remoteImpact = buildRemoteImpact(preview);
   return (
     <section className="gdas-section" aria-label="Action preview">
       <h4 className="gdas-section-title">Preview</h4>
@@ -290,13 +161,74 @@ function PreviewSection({ preview }: { readonly preview: GitDeliveryPreviewManif
             {RISK_CLASS_LABEL[preview.riskClass]} (severity {preview.riskSeverity.toString()})
           </dd>
         </div>
-        <PreviewOptionalFields preview={preview} />
+        {preview.affectedBranchName !== undefined ? (
+          <div className="gdas-kv">
+            <dt>Affected branch</dt>
+            <dd className="gdas-mono">{preview.affectedBranchName}</dd>
+          </div>
+        ) : null}
+        {preview.baseBranchName !== undefined ? (
+          <div className="gdas-kv">
+            <dt>Base branch</dt>
+            <dd className="gdas-mono">{preview.baseBranchName}</dd>
+          </div>
+        ) : null}
+        {preview.remoteBranchName !== undefined ? (
+          <div className="gdas-kv">
+            <dt>Remote branch</dt>
+            <dd className="gdas-mono">{preview.remoteBranchName}</dd>
+          </div>
+        ) : null}
+        {preview.estimatedFileCount !== undefined ? (
+          <div className="gdas-kv">
+            <dt>Files affected</dt>
+            <dd>{preview.estimatedFileCount.toString()}</dd>
+          </div>
+        ) : null}
+        {preview.estimatedBytesDelta !== undefined ? (
+          <div className="gdas-kv">
+            <dt>Bytes delta</dt>
+            <dd>{preview.estimatedBytesDelta.toString()}</dd>
+          </div>
+        ) : null}
         <div className="gdas-kv">
           <dt>Remote impact</dt>
           <dd>{remoteImpact.join(" · ")}</dd>
         </div>
       </dl>
-      <PreviewProviderLines preview={preview} />
+      {preview.pullRequest !== undefined ? (
+        <p className="gdas-preview-line" data-testid="gdas-preview-pr">
+          Pull request: {preview.pullRequest.status}
+          {preview.pullRequest.isDraft ? " (draft)" : ""} ·{" "}
+          {preview.pullRequest.mergeReadiness.receivedApprovalCount.toString()} of{" "}
+          {preview.pullRequest.mergeReadiness.requiredApprovalCount.toString()} approvals
+        </p>
+      ) : null}
+      {preview.mergeReadiness !== undefined ? (
+        <p className="gdas-preview-line" data-testid="gdas-preview-merge">
+          Merge readiness: {preview.mergeReadiness.ready ? "Ready to merge" : "Not ready to merge"}
+          {preview.mergeReadiness.blockingReason !== undefined
+            ? ` (${preview.mergeReadiness.blockingReason})`
+            : ""}{" "}
+          · {preview.mergeReadiness.receivedApprovalCount.toString()} of{" "}
+          {preview.mergeReadiness.requiredApprovalCount.toString()} approvals
+        </p>
+      ) : null}
+      {preview.branchProtection !== undefined ? (
+        <p className="gdas-preview-line" data-testid="gdas-preview-protection">
+          Branch protection: {preview.branchProtection.requiredReviewCount.toString()} required
+          review{preview.branchProtection.requiredReviewCount === 1 ? "" : "s"},{" "}
+          {preview.branchProtection.requiredStatusCheckCount.toString()} required check
+          {preview.branchProtection.requiredStatusCheckCount === 1 ? "" : "s"}
+        </p>
+      ) : null}
+      {preview.checks !== undefined ? (
+        <p className="gdas-preview-line" data-testid="gdas-preview-checks">
+          Checks: {preview.checks.overallStatus} ({preview.checks.passing.toString()} passing,{" "}
+          {preview.checks.failing.toString()} failing, {preview.checks.pending.toString()} pending
+          of {preview.checks.total.toString()})
+        </p>
+      ) : null}
     </section>
   );
 }

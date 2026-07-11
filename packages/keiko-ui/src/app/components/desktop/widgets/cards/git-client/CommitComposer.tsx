@@ -57,40 +57,6 @@ export function composeCommitMessage(summary: string, body: string): string {
   return detail === "" ? subject : `${subject}\n\n${detail}`;
 }
 
-/** The commit-gate preconditions, in the same priority order the hint and disabled state use. */
-interface CommitGateFlags {
-  readonly hasRepository: boolean;
-  readonly hasStaged: boolean;
-  readonly subjectEmpty: boolean;
-  readonly missingFreshPreview: boolean;
-  readonly policyBlocked: boolean;
-}
-
-/** Human-readable status line for the commit gate, in priority order. */
-function computeCommitHint(flags: CommitGateFlags): string {
-  const { hasRepository, hasStaged, subjectEmpty, missingFreshPreview, policyBlocked } = flags;
-  if (!hasRepository) return "Select a repository to commit.";
-  if (!hasStaged) return "Stage changes to commit them to the current branch.";
-  if (subjectEmpty) return "Enter a commit summary.";
-  if (missingFreshPreview) return "Wait for commit policy preview.";
-  if (policyBlocked) return "Resolve the commit-policy issues below to commit.";
-  return "Commits the staged changes to the current branch.";
-}
-
-/** The single hard gate plus the busy/staging preconditions that keep the commit button inert. */
-function isCommitDisabled(flags: CommitGateFlags & { readonly busy: boolean }): boolean {
-  const { busy, hasRepository, hasStaged, subjectEmpty, missingFreshPreview, policyBlocked } =
-    flags;
-  return (
-    busy || !hasRepository || !hasStaged || subjectEmpty || missingFreshPreview || policyBlocked
-  );
-}
-
-/** "Commit to <branch>" once a branch is known, otherwise the generic label. */
-function commitButtonLabel(branchName: string | undefined): string {
-  return branchName !== undefined && branchName !== "" ? `Commit to ${branchName}` : "Commit";
-}
-
 export function CommitComposer({
   projectId,
   branchName,
@@ -132,16 +98,19 @@ export function CommitComposer({
   // drive the commit button for the wrong draft.
   const policyBlocked = visiblePreview !== null && !visiblePreview.messageValidation.ok;
   const missingFreshPreview = !subjectEmpty && visiblePreview === null;
-  const gateFlags: CommitGateFlags = {
-    hasRepository,
-    hasStaged,
-    subjectEmpty,
-    missingFreshPreview,
-    policyBlocked,
-  };
-  const hint = computeCommitHint(gateFlags);
-  const commitDisabled = isCommitDisabled({ ...gateFlags, busy });
-  const commitLabel = commitButtonLabel(branchName);
+  const commitDisabled =
+    busy || !hasRepository || !hasStaged || subjectEmpty || missingFreshPreview || policyBlocked;
+
+  let hint: string;
+  if (!hasRepository) hint = "Select a repository to commit.";
+  else if (!hasStaged) hint = "Stage changes to commit them to the current branch.";
+  else if (subjectEmpty) hint = "Enter a commit summary.";
+  else if (missingFreshPreview) hint = "Wait for commit policy preview.";
+  else if (policyBlocked) hint = "Resolve the commit-policy issues below to commit.";
+  else hint = "Commits the staged changes to the current branch.";
+
+  const commitLabel =
+    branchName !== undefined && branchName !== "" ? `Commit to ${branchName}` : "Commit";
 
   return (
     <section style={COMMIT_PANEL_STYLE} aria-label="Commit">
@@ -181,78 +150,36 @@ export function CommitComposer({
       >
         <Icons.commit size={16} /> {commitLabel}
       </button>
-      <GitFlowRow
-        hasRepository={hasRepository}
-        onCreatePullRequest={onCreatePullRequest}
-        onMerge={onMerge}
-      />
-      <CommitPreviewSection
-        previewId={previewId}
-        previewError={previewError}
-        visiblePreview={visiblePreview}
-      />
-      <MutationOutcome outcome={outcome} error={error} testid="git-commit-outcome" />
-    </section>
-  );
-}
-
-// The PR/Merge flow row: each button renders only when its handler is wired, and the row itself
-// renders only when at least one of them is.
-function GitFlowRow({
-  hasRepository,
-  onCreatePullRequest,
-  onMerge,
-}: {
-  readonly hasRepository: boolean;
-  readonly onCreatePullRequest: (() => void) | undefined;
-  readonly onMerge: (() => void) | undefined;
-}): ReactNode {
-  if (onCreatePullRequest === undefined && onMerge === undefined) return null;
-  return (
-    <div style={FLOW_ROW_STYLE}>
-      {onCreatePullRequest !== undefined ? (
-        <button
-          type="button"
-          style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
-          disabled={!hasRepository}
-          onClick={onCreatePullRequest}
-        >
-          <span style={{ color: "var(--fg-dim)" }}>
-            <Icons.pullRequest size={16} />
-          </span>
-          Create pull request
-        </button>
+      {onCreatePullRequest !== undefined || onMerge !== undefined ? (
+        <div style={FLOW_ROW_STYLE}>
+          {onCreatePullRequest !== undefined ? (
+            <button
+              type="button"
+              style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
+              disabled={!hasRepository}
+              onClick={onCreatePullRequest}
+            >
+              <span style={{ color: "var(--fg-dim)" }}>
+                <Icons.pullRequest size={16} />
+              </span>
+              Create pull request
+            </button>
+          ) : null}
+          {onMerge !== undefined ? (
+            <button
+              type="button"
+              style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
+              disabled={!hasRepository}
+              onClick={onMerge}
+            >
+              <span style={{ color: "var(--fg-dim)" }}>
+                <Icons.merge size={16} />
+              </span>
+              Merge…
+            </button>
+          ) : null}
+        </div>
       ) : null}
-      {onMerge !== undefined ? (
-        <button
-          type="button"
-          style={{ ...SECONDARY_BTN, flex: 1, ...disabledStyle(!hasRepository) }}
-          disabled={!hasRepository}
-          onClick={onMerge}
-        >
-          <span style={{ color: "var(--fg-dim)" }}>
-            <Icons.merge size={16} />
-          </span>
-          Merge…
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-// The preview-error alert and the policy preview are independent — either, both, or neither may
-// render depending on the current preview/error state handed down from the seam.
-function CommitPreviewSection({
-  previewId,
-  previewError,
-  visiblePreview,
-}: {
-  readonly previewId: string;
-  readonly previewError: string | null;
-  readonly visiblePreview: GitDeliveryCommitPreviewResponse | null;
-}): ReactNode {
-  return (
-    <>
       {previewError !== null ? (
         <div
           role="alert"
@@ -270,7 +197,8 @@ function CommitPreviewSection({
       {visiblePreview !== null ? (
         <CommitPolicyPreview id={previewId} preview={visiblePreview} />
       ) : null}
-    </>
+      <MutationOutcome outcome={outcome} error={error} testid="git-commit-outcome" />
+    </section>
   );
 }
 
