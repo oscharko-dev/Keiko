@@ -14,6 +14,8 @@ export default tseslint.config(
       "ui/**",
       ".claude/**",
       ".keiko/**",
+      ".stryker-tmp/**",
+      "reports/mutation/**",
       "sandbox/**",
       "only-for-internal-use/**",
       "Only for Internal Use/**",

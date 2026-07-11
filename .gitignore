@@ -194,3 +194,7 @@ packages/*/src/**/*.d.ts.map
 /Only for Internal Use/
 ui/
 tests/memory-eval/scorecard.json
+
+# Stryker mutation-testing sandboxes and local HTML evidence are generated and never committed.
+/.stryker-tmp/
+/reports/mutation/

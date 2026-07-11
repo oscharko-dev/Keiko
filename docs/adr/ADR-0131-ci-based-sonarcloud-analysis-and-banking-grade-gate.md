@@ -51,12 +51,20 @@ step runs after
 "Coverage quality gates" so the lcov reports it consumes already exist, and is skipped under the
 same condition as that step (PRs targeting `feat/keiko-editor`).
 
-### D2 — The Quality Gate blocks the merge via the existing `ci` check
+### D2 — The Quality Gate and commit-bound verifier block via the existing `ci` check
 
 The scan step passes `-Dsonar.qualitygate.wait=true`, which makes the scanner poll the
 server-computed Quality Gate result and exit non-zero when it is red. Because `ci` is already a
 required status check on `dev`'s branch protection, this makes the SonarCloud Quality Gate
 merge-blocking without any branch-protection configuration change.
+
+The built-in gate is not sufficient on the current plan: it can remain green when a lower-severity
+finding exists, and a stale or missing analysis must never be interpreted as success. Therefore
+`scripts/check-sonar-pr-quality-gate.mjs` runs immediately after the scanner for every pull request
+targeting `dev`. It fails closed unless SonarCloud reports an analysis for the exact current PR head,
+zero unresolved issues, zero new violations, at least 85% New Code coverage when coverable lines
+exist, no more than 3% New Code duplication, 100% review of New Code security hotspots, and an OK
+native gate. Missing metrics, API failures, and stale commit evidence fail the required `ci` job.
 
 ### D3 — lcov coverage wiring
 
@@ -114,13 +122,13 @@ security_hotspots_reviewed       LT  100
 new_violations                   GT  0
 ```
 
-**Known limitation at authoring time**: assigning "Keiko Banking Grade" to the project (via
+**Plan limitation and compensating control**: assigning "Keiko Banking Grade" to the project (via
 `qualitygates/select`) and setting it as the organization default (via `qualitygates/set_as_default`)
 both failed with `HTTP 403 "Organization ... is not allowed to modify Quality gates"` — a SonarCloud
 plan/tier restriction on activating a non-built-in gate, not a permissions or configuration error.
 Gate creation and condition management are unrestricted on the current plan; gate activation is
-not. Resolving this requires either a SonarCloud plan change or confirming via the SonarCloud UI
-whether it permits what the API currently rejects — both are human-executed follow-ups (D7).
+not. The repository-owned verifier in D2 enforces the same conditions independently, so this plan
+restriction cannot make a pull request mergeable with findings or insufficient coverage.
 
 ### D6 — The 3,558 pre-existing issues are accepted legacy debt, not blocking
 
@@ -138,11 +146,8 @@ corresponding public API action on this SonarCloud plan** — these are not mere
 like the Quality Gate activation in D5, the endpoints do not exist at all for this org/plan, so
 there is no API path to automate them even with an admin token:
 
-- **Disable Automatic Analysis.** `sonar.autoscan.enabled` currently reads `true` at the project
-  level, inherited from the organization default (`api/settings/values`); no project-level override
-  exists yet and no API action can set one. Human action: Project → Administration → Analysis
-  Method → deactivate Automatic Analysis, once a CI-based analysis run has completed successfully
-  (avoids two conflicting analysis sources running in parallel).
+- **Automatic Analysis was disabled on 2026-07-11.** CI-based analysis is now the sole analysis
+  authority, avoiding conflicting results and allowing LCOV import.
 - **AI Code Assurance activation** (`contains_ai_code` project flag + qualifying gate assignment).
   No `set_contains_ai_code`-equivalent action exists in this instance's public API (only a read-only
   `api/project_badges/ai_code_assurance` badge-image endpoint was found). Human action: Project

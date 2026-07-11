@@ -170,7 +170,7 @@ jobs:
           curl --proto '=https' -sSfL -o sonar-scanner-cli.zip "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-8.1.0.6389-linux-x64.zip"
           echo "bb8f709f9cb73352f8d1260a3b3c506c0f41146754bc630762c126d795499d0b  sonar-scanner-cli.zip" | sha256sum --check
           unzip -q sonar-scanner-cli.zip
-      - name: SonarCloud CI-based analysis (ADR-0128)
+      - name: SonarCloud CI-based analysis (ADR-0131)
         # Embedded in the existing required "ci" job rather than a new job/check, per the
         # ADR-0020 precedent (Alternative 4): avoids a branch-protection admin change while still
         # making the Quality Gate merge-blocking. sonar.qualitygate.wait=true fails this step (and
@@ -184,6 +184,13 @@ jobs:
           ./sonar-scanner-8.1.0.6389-linux-x64/bin/sonar-scanner \
             -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
             -Dsonar.qualitygate.wait=true
+      - name: Verify SonarCloud Banking Grade PR evidence
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
+        env:
+          SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: node scripts/check-sonar-pr-quality-gate.mjs
 
   actionlint:
     name: actionlint
@@ -228,6 +235,7 @@ jobs:
 
   zizmor:
     name: zizmor
+    if: ${{ (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

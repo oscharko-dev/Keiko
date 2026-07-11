@@ -287,7 +287,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
   commit signing is configured before you commit.
 - **`dev` is the integration branch** and the base for PRs (not `main`). It is protected: linear
-  history, signed squash merges, zero self-merge by autonomous agents.
+  history and signed squash merges. `oscharko` and `Niko4417` may bypass only the second-human
+  approval rule after explicit delivery authorization; no actor may bypass required quality checks.
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -295,9 +296,11 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **All required CI checks must be green before merge.** As of today (verify against
   [`CONTRIBUTING.md`](CONTRIBUTING.md), which is authoritative):
 
-  `ci` · `actionlint` · `Verify pinned action SHAs` · `Analyze (actions)` ·
+  `ci` · `actionlint` · `Verify pinned action SHAs` · `zizmor` · `Analyze (actions)` ·
   `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
-  `Review dependency diff (dev/main)` · `ui`
+  `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
+  `Mutation quality gate` · `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
+  `Socket Security: Pull Request Alerts` · `Gitar` · `Banking Quality Gate`
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.

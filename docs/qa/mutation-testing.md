@@ -32,7 +32,7 @@ full-repo run.
 
 ## How to run
 
-Stryker and the vitest runner are fetched on demand via `npx`; no committed dependency is required:
+Stryker and the Vitest runner are exact-pinned development dependencies in the root lockfile:
 
 ```sh
 npm run test:mutation:security
@@ -41,7 +41,7 @@ npm run test:mutation:security
 The underlying command is:
 
 ```sh
-npx --yes @stryker-mutator/core@9 @stryker-mutator/vitest-runner@9 stryker run stryker.security.conf.json
+stryker run stryker.security.conf.json
 ```
 
 An HTML report is written to `reports/mutation/security/index.html`. Open it in any browser to
@@ -51,20 +51,26 @@ inspect surviving mutants file-by-file.
 
 | Level          | Score |
 | -------------- | ----- |
-| `high`         | 80 %  |
-| `low`          | 65 %  |
-| `break` (fail) | 50 %  |
+| `high`         | 90 %  |
+| `low`          | 80 %  |
+| `break` (fail) | 80 %  |
 
 `coverageAnalysis: "perTest"` is used so Stryker only runs the tests that cover each mutated file,
 keeping the wall-clock time reasonable.
 
-## Why this is on-demand, not a gating CI step
+## Pull-request and scheduled enforcement
 
-Mutation runs are long (minutes to tens of minutes even for a scoped subset) and require executing
-the full test suite for every injected mutation. Adding them to the CI gate would block every PR
-with an impractically long feedback loop. The correct workflow is:
+The `Mutation security` workflow always emits the required `Mutation quality gate` check for pull
+requests targeting `dev`. It computes the diff against the immutable PR base and runs mutation
+testing only when governed or security-critical production TypeScript changed. The changed files
+override the static mutation list, so the test proves the exact changed logic rather than an
+unrelated security fixture. Documentation-only and test-only changes produce an explicit
+not-applicable success. A daily scheduled run continues to exercise the complete static list.
 
-- Run mutation testing locally or in a scheduled job when touching any of the covered modules.
+Mutation runs are intentionally risk-scoped because they execute the relevant tests for every
+injected mutation and a full-monorepo run would take hours. The operating policy is:
+
+- Run mutation testing locally before pushing changes to covered modules; CI repeats it on the PR.
 - Review surviving mutants before merging a change to a security-critical file.
 - Raise the threshold values in `stryker.security.conf.json` after eliminating surviving mutants.
 

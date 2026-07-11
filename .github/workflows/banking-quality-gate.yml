@@ -1,0 +1,33 @@
+name: Banking Quality Gate
+
+on:
+  pull_request_target:
+    branches:
+      - dev
+    types:
+      - opened
+      - ready_for_review
+      - reopened
+      - synchronize
+
+permissions: {}
+
+jobs:
+  publish-banking-gate:
+    name: Publish Banking gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out trusted gate implementation from protected base
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Publish commit-bound Banking Quality Gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-banking-quality-gate.mjs
