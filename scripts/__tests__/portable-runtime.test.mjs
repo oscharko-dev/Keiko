@@ -131,13 +131,15 @@ describe("findPortableMetadataRedactionFailures", () => {
     ).not.toEqual([]);
   });
 
-  it.each([
-    `github_pat_${"x".repeat(82)}`,
-    `npm_${"a".repeat(36)}`,
-  ])("rejects unlabelled modern registry credentials", (value) => {
-    expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
-    expect(findPortableMetadataRedactionFailures(JSON.stringify({ evidence: value }))).not.toEqual([]);
-  });
+  it.each([`github_pat_${"x".repeat(82)}`, `npm_${"a".repeat(36)}`])(
+    "rejects unlabelled modern registry credentials",
+    (value) => {
+      expect(findPortableMetadataRedactionFailures(value)).not.toEqual([]);
+      expect(
+        findPortableMetadataRedactionFailures(JSON.stringify({ evidence: value })),
+      ).not.toEqual([]);
+    },
+  );
 
   it("detects terminal credential labels and inline authorization syntax without rejecting qualified metadata", () => {
     for (const value of [

@@ -779,7 +779,11 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         '{"bomFormat":"CycloneDX","description":"request header Authorization: Bearer opaque"}\n',
       ],
       ["SBOM terminal credential", "evidence/sbom.cdx.json", '{"apitoken":"opaque"}\n'],
-      ["SBOM GitHub PAT", "evidence/sbom.cdx.json", `{"component":"github_pat_${"x".repeat(82)}"}\n`],
+      [
+        "SBOM GitHub PAT",
+        "evidence/sbom.cdx.json",
+        `{"component":"github_pat_${"x".repeat(82)}"}\n`,
+      ],
       ["license", "evidence/third-party-notices.txt", "https://user:pass@example.com/private\n"],
       ["signing", "evidence/signing-verification.json", '{"rawOutput":"secret"}\n'],
       ["provenance", "evidence/provenance.intoto.jsonl", '{"privatePath":"/Users/customer"}\n'],
