@@ -1,6 +1,8 @@
 import type { FileContent, VerificationKind } from "@oscharko-dev/keiko-contracts";
 
 import type { EditorLanguageId } from "./languages.js";
+import type { EditorGitGutterResolver } from "./components/git-gutter-bridge.js";
+import type { EditorBlameHost } from "./components/blame-bridge.js";
 import type {
   EditorCompletionRequest,
   EditorCompletionResponse,
@@ -98,4 +100,8 @@ export interface EditorHostPort {
   // the cross-boundary cancellation convention, not a bare AbortSignal (see the header note above).
   readonly runWorkspaceVerification?: (intent: EditorVerificationRunIntent) => void;
   readonly cancelVerification?: () => void;
+  /** Read-only, host-owned structured Git changes for the active editor buffer (ADR-0127). */
+  readonly fetchGitChanges?: EditorGitGutterResolver;
+  /** On-demand, read-only blame capability for a saved active file (ADR-0127). */
+  readonly fetchGitBlame?: EditorBlameHost["resolve"];
 }

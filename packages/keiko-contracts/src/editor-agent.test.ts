@@ -1444,6 +1444,50 @@ describe("languageCapability snapshot field (Issue #1379 AC4)", () => {
   });
 });
 
+describe("gitContextSummary snapshot field (Issue #2234)", () => {
+  it("accepts a content-free summary and remains backward compatible", () => {
+    const legacy = snapshot();
+    expect("gitContextSummary" in legacy).toBe(false);
+    expect(isEditorAgentSessionSnapshot(legacy)).toBe(true);
+    expect(isEditorAgentSessionSnapshot({ ...legacy, gitContextSummary: null })).toBe(true);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...legacy,
+        gitContextSummary: {
+          hasConflictMarkers: true,
+          changedFileCount: 7,
+          truncated: false,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects malformed or content-bearing summaries", () => {
+    const legacy = snapshot();
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...legacy,
+        gitContextSummary: {
+          hasConflictMarkers: true,
+          changedFileCount: -1,
+          truncated: false,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isEditorAgentSessionSnapshot({
+        ...legacy,
+        gitContextSummary: {
+          hasConflictMarkers: false,
+          changedFileCount: 1,
+          truncated: false,
+          diff: "raw repository content",
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("requestVerification action type (Issue #2210, ADR-0126 D5)", () => {
   it("is a recognized action type but not a write or active-buffer action", () => {
     // The type is a member of the action union, so the bare envelope validates...

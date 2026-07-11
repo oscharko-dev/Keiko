@@ -25,6 +25,7 @@ import type {
   ProjectWithAvailability,
 } from "@/lib/types";
 import type { WindowCfgValue } from "../../../windows/types";
+import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam } from "./git-client-seam";
 import { GovernedMergeCard } from "../GovernedMergeCard";
@@ -53,8 +54,11 @@ const EMPTY_BRANCHES: readonly GitBranchListEntry[] = [];
 export interface GitClientWindowProps {
   /** Repository path to preselect when opened from Files, Editor, or Runtime (resolveBoundRoot). */
   readonly projectId?: string | undefined;
+  readonly initialPath?: string | undefined;
+  readonly initialCommit?: string | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
+  readonly onOpenEditorFile?: ((request: OpenEditorFileRequest) => void) | undefined;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
   readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
   /** DI seam; defaults to the real BFF client. */
@@ -124,8 +128,11 @@ function inferBaseBranch(
 
 export function GitClientWindow({
   projectId,
+  initialPath,
+  initialCommit,
   onOpenFiles,
   onOpenEditor,
+  onOpenEditorFile,
   updateCfg,
   client = DEFAULT_GIT_CLIENT,
 }: GitClientWindowProps): ReactNode {
@@ -156,6 +163,7 @@ export function GitClientWindow({
   const [statusRevision, setStatusRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
+  const [revealRequestId, setRevealRequestId] = useState(0);
   const [diffScope, setDiffScope] = useState<GitDiffScope>("worktree");
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -170,6 +178,9 @@ export function GitClientWindow({
   const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
   const rightPaneRef = useRef<HTMLDivElement | null>(null);
   const diffPaneRef = useRef<HTMLDivElement | null>(null);
+  const landedPathRef = useRef<string | null>(null);
+  const landedCommitRef = useRef<string | null>(null);
+  const completedCommitLandingRef = useRef<string | null>(null);
 
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
@@ -358,8 +369,22 @@ export function GitClientWindow({
         setHistory(res);
         setHistoryProjectKey(selectedPath);
         setHistoryLoading(false);
+        const commitLandingKey =
+          initialCommit === undefined ? null : `${selectedPath}\u0000${initialCommit}`;
+        const requestedCommit =
+          commitLandingKey !== null && completedCommitLandingRef.current !== commitLandingKey
+            ? initialCommit
+            : undefined;
+        const hasRequestedCommit =
+          requestedCommit === undefined ||
+          res.entries.some((entry) => entry.sha === requestedCommit);
+        if (commitLandingKey !== null) completedCommitLandingRef.current = commitLandingKey;
+        setHistoryError(
+          hasRequestedCommit ? null : "The requested commit is not available in bounded history.",
+        );
         setSelectedCommitSha((current) => {
           if (res.entries.length === 0) return null;
+          if (requestedCommit !== undefined) return hasRequestedCommit ? requestedCommit : null;
           if (current !== null && res.entries.some((entry) => entry.sha === current))
             return current;
           return res.entries[0]?.sha ?? null;
@@ -376,7 +401,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath, statusRevision, tab]);
+  }, [client, initialCommit, selectedPath, statusRevision, tab]);
 
   // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
   // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
@@ -467,13 +492,49 @@ export function GitClientWindow({
   const selectedCommit: GitHistoryEntry | null =
     activeHistory?.entries.find((entry) => entry.sha === selectedCommitSha) ?? null;
 
+  useEffect(() => {
+    if (selectedPath === null || initialPath === undefined || activeStatus === null) return;
+    const landingKey = `${selectedPath}\u0000${initialPath}`;
+    if (landedPathRef.current === landingKey) return;
+    const change = activeStatus.changes.find((entry) => entry.path === initialPath);
+    if (change === undefined) return;
+    landedPathRef.current = landingKey;
+    setTab("changes");
+    setSelectedCommitSha(null);
+    setSelectedChangePath(change.path);
+    setDiffScope(preferredDiffScopeForChange(change));
+  }, [activeStatus, initialPath, selectedPath]);
+
+  useEffect(() => {
+    if (selectedPath === null || initialCommit === undefined) return;
+    const landingKey = `${selectedPath}\u0000${initialCommit}`;
+    if (landedCommitRef.current === landingKey) return;
+    landedCommitRef.current = landingKey;
+    setTab("history");
+    setSelectedCommitSha(initialCommit);
+  }, [initialCommit, selectedPath]);
+
   const selectChange = useCallback(
     (path: string): void => {
       setSelectedChangePath(path);
+      setRevealRequestId((value) => value + 1);
       const change = activeStatus?.changes.find((c) => c.path === path);
       if (change !== undefined) setDiffScope(preferredDiffScopeForChange(change));
     },
     [activeStatus],
+  );
+
+  const revealEditorFile = useCallback(
+    (path: string, line: number): void => {
+      if (selectedPath === null || onOpenEditorFile === undefined) return;
+      onOpenEditorFile({
+        root: selectedPath,
+        path,
+        lineStart: line,
+        lineEnd: line,
+      });
+    },
+    [onOpenEditorFile, selectedPath],
   );
 
   const stageFile = useCallback(
@@ -796,6 +857,8 @@ export function GitClientWindow({
                   selectedCommit={tab === "history" ? selectedCommit : null}
                   scope={diffScope}
                   onScopeChange={setDiffScope}
+                  revealRequestId={revealRequestId}
+                  onRevealFile={revealEditorFile}
                   revision={statusRevision}
                 />
               </div>

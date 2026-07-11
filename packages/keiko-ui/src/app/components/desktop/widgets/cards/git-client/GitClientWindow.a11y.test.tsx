@@ -174,6 +174,16 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       truncated: false,
       maxBytes: 131072,
     })),
+    getStructuredDiff: vi.fn(async () => ({
+      schemaVersion: "1" as const,
+      scope: "unstaged" as const,
+      files: [],
+      truncated: false,
+      totalFiles: 0,
+      totalBytes: 0,
+      maxBytes: 524288 as const,
+      maxFiles: 400 as const,
+    })),
     // Carry-forward mutation stubs — not exercised by the shell; typed against the real seam
     // method signatures so the stubs satisfy TS without `any`.
     branchCreate: vi.fn<GitClientSeam["branchCreate"]>(async () => ({

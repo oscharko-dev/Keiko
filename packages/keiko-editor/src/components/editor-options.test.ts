@@ -22,6 +22,7 @@ describe("buildEditorOptions", () => {
 
   it("turns line numbers on", () => {
     expect(options.lineNumbers).toBe("on");
+    expect(options.glyphMargin).toBe(true);
   });
 
   it("enables auto folding", () => {
@@ -249,6 +250,7 @@ describe("buildEditorOptions large-file degraded mode (Issue #1207, ADR-0042 D3.
     expect(degraded.folding).toBe(false);
     expect(degraded.occurrencesHighlight).toBe("off");
     expect(degraded.renderWhitespace).toBe("none");
+    expect(degraded.glyphMargin).toBe(false);
   });
 
   it("keeps large-file optimizations and core affordances on in degraded mode", () => {

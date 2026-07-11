@@ -316,6 +316,7 @@ describe("useGitActions", () => {
         truncated: false,
         maxBytes: 131072,
       })),
+      getStructuredDiff: vi.fn<GitClientSeam["getStructuredDiff"]>(),
       // Carry-forward mutation stubs — not exercised here; typed against the real seam
       // method signatures so the fixtures stay sound without `any`.
       branchCreate: vi.fn<GitClientSeam["branchCreate"]>(async () => ({

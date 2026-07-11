@@ -221,6 +221,8 @@ vi.mock("./cards/EditorWidget", () => ({
     revealRequestId,
     onWorkspaceChange,
     onAskSelection,
+    onOpenGitCommit,
+    onOpenGitDiff,
   }: {
     readonly root?: string;
     readonly file?: string;
@@ -240,6 +242,8 @@ vi.mock("./cards/EditorWidget", () => ({
       layoutJson?: string;
     }) => void;
     readonly onAskSelection?: ((handoff: EditorSelectionHandoff) => boolean) | undefined;
+    readonly onOpenGitCommit?: ((root: string, commit: string) => void) | undefined;
+    readonly onOpenGitDiff?: ((root: string, path: string) => void) | undefined;
   }) => (
     <div data-testid="editor-widget">
       <span>{`${root ?? ""}:${file ?? ""}:${(openFiles ?? []).join("|")}:${layoutJson ?? ""}:${linkedRoot ?? ""}:${linkedFilePath ?? ""}:${(linkedCapsuleIds ?? []).join(",")}:${(linkedCapsuleSetIds ?? []).join(",")}:${String(revealLineStart ?? "")}:${String(revealLineEnd ?? "")}:${revealRequestId ?? ""}`}</span>
@@ -268,6 +272,12 @@ vi.mock("./cards/EditorWidget", () => ({
         }
       >
         Ask editor selection
+      </button>
+      <button type="button" onClick={() => onOpenGitCommit?.("/repo", "a".repeat(40))}>
+        Open blame commit
+      </button>
+      <button type="button" onClick={() => onOpenGitDiff?.("/repo", "src/app.ts")}>
+        Open file diff
       </button>
     </div>
   ),
@@ -839,6 +849,16 @@ describe("workspace widget renderer registry", () => {
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent(
       "/repo:src/app.ts:src/app.ts|package.json::/repo:src/app.ts:cap-1:set-1:7:10:reveal-1",
     );
+    fireEvent.click(screen.getByRole("button", { name: "Open blame commit" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo",
+      commit: "a".repeat(40),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open file diff" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      projectPath: "/repo",
+      path: "src/app.ts",
+    });
     fireEvent.click(screen.getByRole("button", { name: "Change editor workspace" }));
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       root: "/next-root",

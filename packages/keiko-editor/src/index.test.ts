@@ -244,6 +244,13 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "exceedsLineCount",
       "LARGE_FILE_DEGRADED_BYTES",
       "LARGE_FILE_DEGRADED_LINES",
+      // Source-control read integrations and conflict grammar (#2229-#2231, ADR-0127).
+      "registerEditorGitGutter",
+      "registerEditorBlame",
+      "MAX_CONFLICT_CHARS",
+      "MAX_TRACKED_CONFLICTS",
+      "conflictReplacement",
+      "parseConflictMarkers",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });

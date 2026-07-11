@@ -44,6 +44,8 @@ import {
   ensureMonacoRuntime,
   isMonacoLanguageReady,
 } from "./editorMonacoRuntime";
+import conflictStyles from "./EditorConflicts.module.css";
+import styles from "./EditorGitHunkPeek.module.css";
 
 export interface EditorSurfaceProps {
   readonly buffer: EditorBuffer;
@@ -120,6 +122,10 @@ export interface EditorSurfaceProps {
    * `false` because it renders the unified {@link EditorStatusBar} as the single status surface.
    */
   readonly showStatusFooter?: boolean | undefined;
+  readonly editorGitGutter?: KeikoCodeEditorProps["editorGitGutter"] | undefined;
+  readonly editorBlame?: KeikoCodeEditorProps["editorBlame"] | undefined;
+  readonly gitGutterRefreshNonce?: number | undefined;
+  readonly editorConflicts?: KeikoCodeEditorProps["editorConflicts"] | undefined;
 }
 
 function EditorSurface(props: EditorSurfaceProps): ReactElement {
@@ -163,50 +169,56 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
     : { status: "error", message: runtime.message };
 
   return (
-    <KeikoCodeEditor
-      buffer={props.buffer}
-      fileModel={props.fileModel}
-      loadState={loadState}
-      saveStatus={props.saveStatus}
-      saveError={props.saveError}
-      modifiedAt={props.modifiedAt}
-      maxSizeBytes={props.maxSizeBytes}
-      themeVariant={props.themeVariant}
-      ariaLabel={props.ariaLabel}
-      onContentChange={props.onContentChange}
-      onSaveRequested={props.onSaveRequested}
-      onSelectionChange={props.onSelectionChange}
-      onCursorChange={props.onCursorChange}
-      revealRequest={props.revealRequest}
-      hostEditRequest={props.hostEditRequest}
-      onRuntimeError={onRuntimeError}
-      provideCompletions={props.provideCompletions}
-      completionTriggerCharacters={props.completionTriggerCharacters}
-      provideInlineCompletions={props.provideInlineCompletions}
-      onInlineCompletionTelemetry={props.onInlineCompletionTelemetry}
-      provideDiagnostics={props.provideDiagnostics}
-      provideHover={props.provideHover}
-      provideSymbols={props.provideSymbols}
-      provideFormatting={props.provideFormatting}
-      provideDefinition={props.provideDefinition}
-      provideTypeDefinition={props.provideTypeDefinition}
-      provideImplementation={props.provideImplementation}
-      provideCallHierarchy={props.provideCallHierarchy}
-      callHierarchyLabels={props.callHierarchyLabels}
-      onRevealCallHierarchyLocation={props.onRevealCallHierarchyLocation}
-      provideInlayHints={props.provideInlayHints}
-      uriForPath={props.uriForPath}
-      provideReferences={props.provideReferences}
-      provideCodeActions={props.provideCodeActions}
-      provideSignatureHelp={props.provideSignatureHelp}
-      formatRequestNonce={props.formatRequestNonce}
-      onDiagnosticsSummary={props.onDiagnosticsSummary}
-      onDiagnostics={props.onDiagnostics}
-      onGenerateTests={props.onGenerateTests}
-      onAskKeikoAboutSelection={props.onAskKeikoAboutSelection}
-      onRenameSymbol={props.onRenameSymbol}
-      showStatusFooter={props.showStatusFooter}
-    />
+    <div className={`${styles.editorSurface} ${conflictStyles.editorSurface}`}>
+      <KeikoCodeEditor
+        buffer={props.buffer}
+        fileModel={props.fileModel}
+        loadState={loadState}
+        saveStatus={props.saveStatus}
+        saveError={props.saveError}
+        modifiedAt={props.modifiedAt}
+        maxSizeBytes={props.maxSizeBytes}
+        themeVariant={props.themeVariant}
+        ariaLabel={props.ariaLabel}
+        onContentChange={props.onContentChange}
+        onSaveRequested={props.onSaveRequested}
+        onSelectionChange={props.onSelectionChange}
+        onCursorChange={props.onCursorChange}
+        revealRequest={props.revealRequest}
+        hostEditRequest={props.hostEditRequest}
+        onRuntimeError={onRuntimeError}
+        provideCompletions={props.provideCompletions}
+        completionTriggerCharacters={props.completionTriggerCharacters}
+        provideInlineCompletions={props.provideInlineCompletions}
+        onInlineCompletionTelemetry={props.onInlineCompletionTelemetry}
+        provideDiagnostics={props.provideDiagnostics}
+        provideHover={props.provideHover}
+        provideSymbols={props.provideSymbols}
+        provideFormatting={props.provideFormatting}
+        provideDefinition={props.provideDefinition}
+        provideTypeDefinition={props.provideTypeDefinition}
+        provideImplementation={props.provideImplementation}
+        provideCallHierarchy={props.provideCallHierarchy}
+        callHierarchyLabels={props.callHierarchyLabels}
+        onRevealCallHierarchyLocation={props.onRevealCallHierarchyLocation}
+        provideInlayHints={props.provideInlayHints}
+        uriForPath={props.uriForPath}
+        provideReferences={props.provideReferences}
+        provideCodeActions={props.provideCodeActions}
+        provideSignatureHelp={props.provideSignatureHelp}
+        formatRequestNonce={props.formatRequestNonce}
+        onDiagnosticsSummary={props.onDiagnosticsSummary}
+        onDiagnostics={props.onDiagnostics}
+        onGenerateTests={props.onGenerateTests}
+        onAskKeikoAboutSelection={props.onAskKeikoAboutSelection}
+        onRenameSymbol={props.onRenameSymbol}
+        showStatusFooter={props.showStatusFooter}
+        editorGitGutter={props.editorGitGutter}
+        editorBlame={props.editorBlame}
+        gitGutterRefreshNonce={props.gitGutterRefreshNonce}
+        editorConflicts={props.editorConflicts}
+      />
+    </div>
   );
 }
 

@@ -1,4 +1,5 @@
 import dynamic from "next/dynamic";
+import { gitObjectId } from "./gitObjectId";
 import type { ReactNode } from "react";
 import { useTranslate } from "@/lib/i18n";
 import { registerWindowRender } from "../windows/WindowsRegistry";
@@ -499,11 +500,17 @@ registerWindowRender("governedGit", (cfg, ctx) => {
   // governed PR/merge windows run scoped to the active worktree and can never execute against the
   // previous workspace after a switch.
   const projectId = resolveBoundRoot(ctx, str(cfg, "projectPath") ?? str(cfg, "workspaceRoot"));
+  const initialCommit = gitObjectId(str(cfg, "commit"));
+  const initialPath = str(cfg, "path");
   return (
     <GitClientWindow
+      key={projectId ?? ""}
       projectId={projectId}
+      initialPath={initialPath}
+      initialCommit={initialCommit}
       onOpenFiles={(root) => ctx.openWindow("files", { root })}
       onOpenEditor={(root) => ctx.openWindow("editor", { root })}
+      onOpenEditorFile={ctx.openEditorFile}
       updateCfg={(patch) => ctx.updateCfg(patch)}
     />
   );

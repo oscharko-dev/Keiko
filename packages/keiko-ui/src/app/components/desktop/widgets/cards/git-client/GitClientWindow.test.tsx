@@ -32,6 +32,7 @@ import type {
 import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
+import { parseUnifiedDiff } from "../shared/diffParser";
 
 // ─── ResizeObserver stub (no global shim in vitest.setup.ts) ──────────────────
 
@@ -362,6 +363,16 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     })),
     getStatus: vi.fn(async () => makeStatus()),
     getDiff: vi.fn(async () => makeDiffResponse("")),
+    getStructuredDiff: vi.fn(async () => ({
+      schemaVersion: "1" as const,
+      scope: "unstaged" as const,
+      files: [],
+      truncated: false,
+      totalFiles: 0,
+      totalBytes: 0,
+      maxBytes: 524288 as const,
+      maxFiles: 400 as const,
+    })),
     // Carry-forward mutation refs — not called by the shell; typed against the real seam
     // method signatures so the stubs satisfy TS without `any`.
     branchCreate: vi.fn<GitClientSeam["branchCreate"]>(async () => ({
@@ -426,6 +437,23 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       merged: true,
     })),
     ...overrides,
+  };
+}
+
+function makeStructuredDiffResponse(diff = "", scope: "staged" | "unstaged" = "unstaged") {
+  const parsed = parseUnifiedDiff(diff);
+  return {
+    schemaVersion: "1" as const,
+    scope,
+    files: parsed.files.map((file) => ({
+      ...file,
+      layer: scope === "staged" ? ("staged" as const) : ("worktree" as const),
+    })),
+    truncated: parsed.truncated,
+    totalFiles: parsed.files.length,
+    totalBytes: parsed.totalBytes,
+    maxBytes: 524288 as const,
+    maxFiles: 400 as const,
   };
 }
 
@@ -1343,10 +1371,10 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     expect(screen.getByText("README.md")).toBeInTheDocument();
   });
 
-  it("selecting a changed file triggers getDiff with root and path", async () => {
+  it("selecting a changed file triggers the structured diff read with root and path", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusWithChanges()),
-      getDiff: vi.fn(async () => makeDiffResponse("")),
+      getStructuredDiff: vi.fn(async () => makeStructuredDiffResponse("", "staged")),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
@@ -1355,7 +1383,7 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
 
     // src/index.ts is staged-only, so the pane defaults its scope to "staged".
     await waitFor(() =>
-      expect(client.getDiff).toHaveBeenCalledWith({
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
         root: REPO_A.path,
         path: "src/index.ts",
         scope: "staged",
@@ -1383,7 +1411,7 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     ].join("\n");
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusWithChanges()),
-      getDiff: vi.fn(async () => makeDiffResponse(multiFileDiff)),
+      getStructuredDiff: vi.fn(async () => makeStructuredDiffResponse(multiFileDiff, "staged")),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
@@ -1393,6 +1421,89 @@ describe("GitClientWindow — changed-files list and diff selection", () => {
     // Both file headings from the diff must be present — the second file is the regression guard.
     await waitFor(() => expect(screen.getByText("src/first.ts")).toBeInTheDocument());
     expect(screen.getByText("src/second.ts")).toBeInTheDocument();
+  });
+
+  it("opens a clicked change in the editor at its first changed line", async () => {
+    const onOpenEditorFile = vi.fn();
+    const structured = [
+      "diff --git a/src/index.ts b/src/index.ts",
+      "--- a/src/index.ts",
+      "+++ b/src/index.ts",
+      "@@ -12,1 +12,1 @@",
+      "-old",
+      "+new",
+      "",
+    ].join("\n");
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusWithChanges()),
+      getStructuredDiff: vi.fn(async () => makeStructuredDiffResponse(structured, "staged")),
+    });
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        client={client}
+        onOpenEditorFile={onOpenEditorFile}
+      />,
+    );
+
+    fireEvent.click((await screen.findByText("index.ts")).closest("button")!);
+
+    await waitFor(() =>
+      expect(onOpenEditorFile).toHaveBeenCalledWith({
+        root: REPO_A.path,
+        path: "src/index.ts",
+        lineStart: 12,
+        lineEnd: 12,
+      }),
+    );
+  });
+
+  it("focuses an editor-originated path without bouncing back to the editor", async () => {
+    const onOpenEditorFile = vi.fn();
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusWithChanges()),
+    });
+    render(
+      <GitClientWindow
+        projectId={REPO_A.path}
+        initialPath="README.md"
+        client={client}
+        onOpenEditorFile={onOpenEditorFile}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
+        root: REPO_A.path,
+        path: "README.md",
+        scope: "unstaged",
+      }),
+    );
+    expect(onOpenEditorFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitClientWindow — internal commit landing", () => {
+  it("selects a validated blame commit in bounded history", async () => {
+    const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
+    render(
+      <GitClientWindow projectId={REPO_A.path} initialCommit={"b".repeat(40)} client={client} />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "fix: repair sync" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "History" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("fails closed when a validated commit is outside bounded history", async () => {
+    const client = makeClient({ getHistory: vi.fn(async () => makeHistory()) });
+    render(
+      <GitClientWindow projectId={REPO_A.path} initialCommit={"c".repeat(40)} client={client} />,
+    );
+
+    expect(
+      await screen.findByText("The requested commit is not available in bounded history."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "feat: add history" })).not.toBeInTheDocument();
   });
 });
 
@@ -1749,7 +1860,7 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
   it("toggling to the Staged scope refetches the diff with scope: staged", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusRich()),
-      getDiff: vi.fn(async () => makeDiffResponse("")),
+      getStructuredDiff: vi.fn(async (input) => makeStructuredDiffResponse("", input.scope)),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
@@ -1757,17 +1868,17 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
     // README.md is unstaged-only, so the pane opens in the Worktree scope.
     fireEvent.click(screen.getByText("README.md").closest("button")!);
     await waitFor(() =>
-      expect(client.getDiff).toHaveBeenCalledWith({
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
         root: REPO_A.path,
         path: "README.md",
-        scope: "worktree",
+        scope: "unstaged",
       }),
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Staged" }));
 
     await waitFor(() =>
-      expect(client.getDiff).toHaveBeenCalledWith({
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
         root: REPO_A.path,
         path: "README.md",
         scope: "staged",
@@ -1794,24 +1905,24 @@ describe("GitClientWindow — diff scope (Issue #1575)", () => {
       .mockResolvedValueOnce(after);
     const client = makeClient({
       getStatus,
-      getDiff: vi.fn(async () => makeDiffResponse("")),
+      getStructuredDiff: vi.fn(async (input) => makeStructuredDiffResponse("", input.scope)),
     });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(screen.getByText("README.md")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("README.md").closest("button")!);
     await waitFor(() =>
-      expect(client.getDiff).toHaveBeenCalledWith({
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
         root: REPO_A.path,
         path: "README.md",
-        scope: "worktree",
+        scope: "unstaged",
       }),
     );
 
     fireEvent.click(screen.getByLabelText("Stage README.md"));
 
     await waitFor(() =>
-      expect(client.getDiff).toHaveBeenCalledWith({
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
         root: REPO_A.path,
         path: "README.md",
         scope: "staged",

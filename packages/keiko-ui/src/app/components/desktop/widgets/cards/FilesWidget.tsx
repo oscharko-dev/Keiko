@@ -30,6 +30,12 @@ import type {
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
+import {
+  useFilesWidgetTranslate,
+  type FilesWidgetMessageKey,
+  type FilesWidgetTranslate,
+} from "./files-widget-i18n";
+import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationRoot } from "./workspace-file-events";
 
 interface FilesWidgetProps {
   root?: string;
@@ -114,6 +120,18 @@ interface GitDiffState {
   readonly loading: boolean;
   readonly response: GitRepositoryDiffResponse | null;
   readonly error: string | null;
+}
+
+interface GitDirectoryAggregate {
+  readonly count: number;
+  readonly conflicted: boolean;
+  readonly deleted: boolean;
+}
+
+interface GitDecoration {
+  readonly badge: string;
+  readonly labelKey: FilesWidgetMessageKey;
+  readonly state: "changed" | "conflicted";
 }
 
 // The inline editor reused for all three create/rename flows. `parentPath` is the root-relative
@@ -343,11 +361,70 @@ function gitStatusSummary(state: GitStatusState): string | null {
   return `Git ${branch} ${String(count)} changed ${count === 1 ? "file" : "files"}`;
 }
 
-function gitChangeLabel(change: GitChangedFile): string {
-  if (change.conflicted) return "U";
-  if (change.untracked) return "?";
-  if (change.indexStatus !== " ") return change.indexStatus;
-  return change.worktreeStatus;
+function isIgnoredGitChange(change: GitChangedFile): boolean {
+  return change.indexStatus === "!" || change.worktreeStatus === "!";
+}
+
+function gitChangeDecoration(change: GitChangedFile): GitDecoration {
+  if (change.conflicted) {
+    return { badge: "U", labelKey: "git.change.conflicted", state: "conflicted" };
+  }
+  if (change.untracked) {
+    return { badge: "?", labelKey: "git.change.untracked", state: "changed" };
+  }
+  const status = change.indexStatus !== " " ? change.indexStatus : change.worktreeStatus;
+  if (status === "M") return { badge: "M", labelKey: "git.change.modified", state: "changed" };
+  if (status === "A") return { badge: "A", labelKey: "git.change.added", state: "changed" };
+  if (status === "D") return { badge: "D", labelKey: "git.change.deleted", state: "changed" };
+  if (status === "R") return { badge: "R", labelKey: "git.change.renamed", state: "changed" };
+  if (status === "C") return { badge: "C", labelKey: "git.change.copied", state: "changed" };
+  return { badge: status, labelKey: "git.change.unknown", state: "changed" };
+}
+
+function addDirectoryAggregate(
+  aggregates: Map<string, GitDirectoryAggregate>,
+  directoryPath: string,
+  change: GitChangedFile,
+): void {
+  const current = aggregates.get(directoryPath);
+  aggregates.set(directoryPath, {
+    count: (current?.count ?? 0) + 1,
+    conflicted: (current?.conflicted ?? false) || change.conflicted,
+    deleted:
+      (current?.deleted ?? false) || change.indexStatus === "D" || change.worktreeStatus === "D",
+  });
+}
+
+function aggregateGitDirectories(
+  changes: readonly GitChangedFile[],
+): Map<string, GitDirectoryAggregate> {
+  // Deleted paths have no tree row, so their nearest visible parent carries the decoration.
+  // Renames affect both old and new ancestor chains; a Set avoids double-counting shared parents.
+  const aggregates = new Map<string, GitDirectoryAggregate>();
+  for (const change of changes) {
+    const affectedDirectories = new Set<string>();
+    for (const path of [change.path, change.oldPath]) {
+      if (path === undefined) continue;
+      let parent = entryParent(path);
+      while (parent !== null) {
+        affectedDirectories.add(parent);
+        parent = entryParent(parent);
+      }
+    }
+    for (const parent of affectedDirectories) {
+      addDirectoryAggregate(aggregates, parent, change);
+    }
+  }
+  return aggregates;
+}
+
+function gitDirectoryLabel(aggregate: GitDirectoryAggregate, t: FilesWidgetTranslate): string {
+  const key = aggregate.conflicted
+    ? "git.folder.conflicted"
+    : aggregate.deleted
+      ? "git.folder.deleted"
+      : "git.folder.changed";
+  return t(key, { count: aggregate.count });
 }
 
 const filesTreeRequests = new Map<string, Promise<FilesTreeResponse>>();
@@ -367,7 +444,7 @@ function readSharedFilesTree(root: string, path: string): Promise<FilesTreeRespo
 function readSharedGitStatus(root: string): Promise<GitRepositoryStatusResponse> {
   const existing = gitStatusRequests.get(root);
   if (existing !== undefined) return existing;
-  const request = fetchGitStatus(root).finally(() => {
+  const request = fetchGitStatus(root, { includeIgnored: true }).finally(() => {
     gitStatusRequests.delete(root);
   });
   gitStatusRequests.set(root, request);
@@ -384,6 +461,7 @@ export function FilesWidget({
   onOpenGitDelivery,
   onFilesMutated,
 }: FilesWidgetProps): ReactNode {
+  const t = useFilesWidgetTranslate();
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
   const [fallbackRoot, setFallbackRoot] = useState<string | null>(null);
@@ -429,7 +507,7 @@ export function FilesWidget({
     error: null,
   });
   const gitStatusRootRef = useRef<string | null>(null);
-  const gitStatusSettledRootRef = useRef<string | null>(null);
+  const [gitStatusRevision, setGitStatusRevision] = useState(0);
   const [gitDiffState, setGitDiffState] = useState<GitDiffState | null>(null);
   // File-operation state (new file/folder, rename, delete). `pendingEntry` drives the single inline
   // input reused for all three create/rename flows; `menu` is the right-click context menu; `confirm`
@@ -451,6 +529,10 @@ export function FilesWidget({
   const [draggedPath, setDraggedPath] = useState<string | null>(null);
   const onFilesMutatedRef = useRef(onFilesMutated);
   onFilesMutatedRef.current = onFilesMutated;
+
+  const invalidateGitStatus = useCallback((): void => {
+    setGitStatusRevision((revision) => revision + 1);
+  }, []);
 
   const clearTreeTooltipTimer = useCallback((): void => {
     if (treeTooltipTimerRef.current === null) return;
@@ -626,19 +708,11 @@ export function FilesWidget({
   useEffect(() => {
     if (gitStatusTargetRoot === null) {
       gitStatusRootRef.current = null;
-      gitStatusSettledRootRef.current = null;
       setGitStatusState({ loading: false, status: null, error: null });
-      return;
-    }
-    if (
-      gitStatusRootRef.current === gitStatusTargetRoot &&
-      gitStatusSettledRootRef.current === gitStatusTargetRoot
-    ) {
       return;
     }
     const previousRoot = gitStatusRootRef.current;
     gitStatusRootRef.current = gitStatusTargetRoot;
-    gitStatusSettledRootRef.current = null;
     let cancelled = false;
     setGitStatusState((current) => ({
       loading: true,
@@ -648,13 +722,11 @@ export function FilesWidget({
     void readSharedGitStatus(gitStatusTargetRoot)
       .then((status) => {
         if (!cancelled) {
-          gitStatusSettledRootRef.current = gitStatusTargetRoot;
           setGitStatusState({ loading: false, status, error: null });
         }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
-          gitStatusSettledRootRef.current = gitStatusTargetRoot;
           setGitStatusState({
             loading: false,
             status: null,
@@ -665,7 +737,24 @@ export function FilesWidget({
     return () => {
       cancelled = true;
     };
-  }, [gitStatusTargetRoot]);
+  }, [gitStatusRevision, gitStatusTargetRoot]);
+
+  useEffect(() => {
+    const onFocus = (): void => invalidateGitStatus();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [invalidateGitStatus]);
+
+  useEffect(() => {
+    const onMutation = (event: Event): void => {
+      const boundRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
+      if (boundRoot !== null && workspaceFileMutationRoot(event) === boundRoot) {
+        invalidateGitStatus();
+      }
+    };
+    window.addEventListener(WORKSPACE_FILE_MUTATED_EVENT, onMutation);
+    return () => window.removeEventListener(WORKSPACE_FILE_MUTATED_EVENT, onMutation);
+  }, [apiRoot, invalidateGitStatus, resolvedRoot]);
 
   // Keep the root-bar input showing where we actually are (resolved root + current folder).
   useEffect(() => {
@@ -694,8 +783,9 @@ export function FilesWidget({
 
   const refreshCurrentDirectory = useCallback((): void => {
     setSelectedPath(null);
+    invalidateGitStatus();
     void loadDirectory(currentDirectoryPath ?? "");
-  }, [currentDirectoryPath, loadDirectory]);
+  }, [currentDirectoryPath, invalidateGitStatus, loadDirectory]);
 
   // The root every mutation targets — the resolved real root, or the configured one before it loads.
   const mutationRoot = resolvedRoot ?? apiRoot;
@@ -757,6 +847,7 @@ export function FilesWidget({
         setEntryDraft("");
         if (selectedPath === pendingEntry.path) setSelectedPath(result.path);
         await loadDirectory(parent ?? "");
+        invalidateGitStatus();
         onFilesMutatedRef.current?.({ op: "rename", mutation: result });
       } else {
         const result = await createFilesEntry({
@@ -767,6 +858,7 @@ export function FilesWidget({
         setPendingEntry(null);
         setEntryDraft("");
         await loadDirectory(pendingEntry.parentPath ?? "");
+        invalidateGitStatus();
         if (result.kind === "directory") {
           setExpanded((current) => new Set(current).add(result.path));
         } else if (onOpenFile !== undefined) {
@@ -784,6 +876,7 @@ export function FilesWidget({
   }, [
     cancelPendingEntry,
     entryDraft,
+    invalidateGitStatus,
     loadDirectory,
     mutationRoot,
     onOpenFile,
@@ -802,6 +895,7 @@ export function FilesWidget({
         setConfirmDelete(null);
         if (selectedPath === entry.path) setSelectedPath(null);
         await loadDirectory(entryParent(entry.path) ?? "");
+        invalidateGitStatus();
         onFilesMutatedRef.current?.({ op: "delete", mutation: result });
       } catch (error: unknown) {
         setOpError(errorMessage(error));
@@ -809,7 +903,7 @@ export function FilesWidget({
         setOpBusy(false);
       }
     },
-    [loadDirectory, mutationRoot, opBusy, selectedPath],
+    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy, selectedPath],
   );
 
   const duplicateEntry = useCallback(
@@ -828,6 +922,7 @@ export function FilesWidget({
           destPath,
         });
         await loadDirectory(parent ?? "");
+        invalidateGitStatus();
         // A copy adds a new entry — the host treats it like a create (no open tab to re-home).
         onFilesMutatedRef.current?.({ op: "create", mutation: result });
       } catch (error: unknown) {
@@ -836,7 +931,7 @@ export function FilesWidget({
         setOpBusy(false);
       }
     },
-    [directories, loadDirectory, mutationRoot, opBusy],
+    [directories, invalidateGitStatus, loadDirectory, mutationRoot, opBusy],
   );
 
   // Drag-move: dropping an entry onto a folder renames it into that folder (move = rename).
@@ -854,6 +949,7 @@ export function FilesWidget({
         const result = await renameFilesEntry({ root: mutationRoot, path: sourcePath, newPath });
         await loadDirectory(entryParent(sourcePath) ?? "");
         await loadDirectory(targetDir ?? "");
+        invalidateGitStatus();
         onFilesMutatedRef.current?.({ op: "rename", mutation: result });
       } catch (error: unknown) {
         setOpError(errorMessage(error));
@@ -861,7 +957,7 @@ export function FilesWidget({
         setOpBusy(false);
       }
     },
-    [loadDirectory, mutationRoot, opBusy],
+    [invalidateGitStatus, loadDirectory, mutationRoot, opBusy],
   );
 
   const openContextMenu = useCallback(
@@ -1052,8 +1148,22 @@ export function FilesWidget({
   // Memoize the conditional so its identity is stable across renders (keeps the gitChangeByPath
   // Map memo below from rebuilding every render), and satisfies react-hooks/exhaustive-deps.
   const gitChanges: readonly GitChangedFile[] = useMemo(
-    () => (gitStatusState.status?.available === true ? gitStatusState.status.changes : []),
+    () =>
+      gitStatusState.status?.available === true
+        ? gitStatusState.status.changes.filter((change) => !isIgnoredGitChange(change))
+        : [],
     [gitStatusState.status],
+  );
+  const ignoredGitPaths = useMemo(
+    () =>
+      new Set(
+        gitStatusState.status?.available === true
+          ? gitStatusState.status.changes
+              .filter(isIgnoredGitChange)
+              .map((change) => treePathFromGitPath(currentDirectoryPath, change.path))
+          : [],
+      ),
+    [currentDirectoryPath, gitStatusState.status],
   );
   // GEN-PERF-WIDGET-004 — memoize the path->change Map on [gitChanges] so it is not rebuilt
   // over all (up to 500) git changes on every render (incl. every pointermove-driven one).
@@ -1067,6 +1177,15 @@ export function FilesWidget({
       ),
     [currentDirectoryPath, gitChanges],
   );
+  const gitDirectoryByPath = useMemo(() => {
+    const relativeAggregates = aggregateGitDirectories(gitChanges);
+    return new Map(
+      Array.from(relativeAggregates, ([path, aggregate]) => [
+        treePathFromGitPath(currentDirectoryPath, path),
+        aggregate,
+      ]),
+    );
+  }, [currentDirectoryPath, gitChanges]);
   const gitSummary = gitStatusSummary(gitStatusState);
   const gitDeliveryRoot =
     gitStatusState.status?.available === true
@@ -1164,6 +1283,7 @@ export function FilesWidget({
     const entryTip = entry.readable ? entry.path : unreadableTitle;
     if (entry.kind === "directory") {
       const state = directories[entry.path];
+      const gitAggregate = gitDirectoryByPath.get(entry.path);
       return (
         <div className="tr-row-wrap" key={entry.path}>
           <div className="tr-dir-line" style={{ paddingLeft: pad }}>
@@ -1223,6 +1343,21 @@ export function FilesWidget({
               </span>
               <span className="tr-name tr-folder">{entry.name}</span>
               {entry.symlink ? <span className="tr-badge">link</span> : null}
+              {gitAggregate !== undefined ? (
+                <span
+                  className="tr-badge tr-git"
+                  data-git-state={gitAggregate.conflicted ? "conflicted" : "aggregate"}
+                  aria-label={gitDirectoryLabel(gitAggregate, t)}
+                  title={gitDirectoryLabel(gitAggregate, t)}
+                  style={
+                    gitAggregate.conflicted
+                      ? { outline: "1px solid currentColor", fontWeight: 700 }
+                      : undefined
+                  }
+                >
+                  {gitAggregate.conflicted ? "U" : "Δ"}
+                </span>
+              ) : null}
             </button>
           </div>
           {open ? renderDirectory(entry.path, depth + 1, state) : null}
@@ -1231,14 +1366,22 @@ export function FilesWidget({
     }
 
     const change = gitChangeByPath.get(entry.path);
+    const ignored = ignoredGitPaths.has(entry.path);
+    const decoration = change === undefined ? null : gitChangeDecoration(change);
     return (
-      <div className="tr-row-wrap tr-file-wrap" key={entry.path}>
+      <div
+        className="tr-row-wrap tr-file-wrap"
+        key={entry.path}
+        data-git-ignored={ignored || undefined}
+        style={ignored ? { opacity: 0.55 } : undefined}
+      >
         <button
           className="tr-row tr-file"
           onContextMenu={(event) => openContextMenu(event, entry)}
           role="treeitem"
           aria-level={depth + 1}
           aria-selected={activeTreePath === entry.path}
+          aria-label={ignored ? `${entry.name}, ${t("git.ignored")}` : undefined}
           data-active={activeTreePath === entry.path}
           data-readable={entry.readable}
           data-path={entry.path}
@@ -1276,8 +1419,20 @@ export function FilesWidget({
           <FileIcon name={entry.name} />
           <span className="tr-name">{entry.name}</span>
           {entry.symlink ? <span className="tr-badge">link</span> : null}
-          {change !== undefined ? (
-            <span className="tr-badge tr-git">{gitChangeLabel(change)}</span>
+          {decoration !== null ? (
+            <span
+              className="tr-badge tr-git"
+              data-git-state={decoration.state}
+              aria-label={t(decoration.labelKey, { path: entry.path })}
+              title={t(decoration.labelKey, { path: entry.path })}
+              style={
+                decoration.state === "conflicted"
+                  ? { outline: "1px solid currentColor", fontWeight: 700 }
+                  : undefined
+              }
+            >
+              {decoration.badge}
+            </span>
           ) : null}
           <span className="tr-meta mono">{formatBytes(entry.sizeBytes)}</span>
         </button>
@@ -1528,6 +1683,11 @@ export function FilesWidget({
               <Icons.branch size={13} />
             </button>
           ) : null}
+        </div>
+      ) : null}
+      {gitStatusState.status?.available === true && gitStatusState.status.truncated ? (
+        <div className="files-note files-warning" role="status">
+          {t("git.decorationsIncomplete", { count: gitStatusState.status.maxChanges })}
         </div>
       ) : null}
       <button
