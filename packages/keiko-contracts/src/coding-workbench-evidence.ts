@@ -81,6 +81,13 @@ const APPROVED_EVIDENCE_TOKENS = new Set<string>([
   "allowlisted",
   "access",
   "adapter",
+  // Issue #2244 (ADR-0128 D4): the `knowledge-base.read|write` connector scope labels split into
+  // ["knowledge", "base", "read|write"] under the segment rule, and "read"/"write" are already
+  // approved. Both segments are inert vocabulary words: neither can compose into a secret, URL,
+  // path, or command fragment, and every label still passes the secret/URL/path detectors in
+  // `isCodingWorkbenchEvidenceSafeText` regardless of token approval.
+  "base",
+  "knowledge",
   "branch",
   "browser",
   "busy",

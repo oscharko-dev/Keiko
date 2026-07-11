@@ -1,0 +1,32 @@
+{
+  "name": "@oscharko-dev/keiko-connectors",
+  "version": "0.2.15",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal connectors package: governed Atlassian (Confluence/Jira) connector domain logic — encrypted credential custody over the shared secret vault, opaque authRef resolution, the injectable AtlassianHttpPort transport seam, and the bounded connection-verification probe (ADR-0128, ADR-0019). No direct network or filesystem capability; keiko-server is the sole composition root. Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json",
+    "test": "npm run build && vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "0.2.15",
+    "@oscharko-dev/keiko-security": "0.2.15"
+  },
+  "private": true
+}
