@@ -44,6 +44,10 @@ a package `dist` tree, and retries an incomplete native emit up to two times. A 
 emit fails closed with repository-relative paths, so runtime and release gates cannot consume a
 partially written package graph.
 
+Root tests and package coverage run the same validated package build again after Vitest completes.
+This restores and verifies the shared `dist` graph if a hermetic build fixture overlaps a parallel
+native emit, so subsequent package, SonarCloud, and release gates never consume test-time drift.
+
 The UI additionally runs `npm run typecheck:native --workspace @oscharko-dev/keiko-ui`. This checks
 every Keiko-owned UI TypeScript surface with the native 7.0 compiler while leaving the supported
 Next.js build and plugin integration on the workspace's TypeScript 5.7.3 package. Web API boundaries

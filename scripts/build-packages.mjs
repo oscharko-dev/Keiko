@@ -12,7 +12,9 @@ function collectEmptyFiles(directory, root, results) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) collectEmptyFiles(path, root, results);
-    else if (entry.isFile() && statSync(path).size === 0) results.push(relative(root, path));
+    else if (entry.isFile() && statSync(path).size === 0) {
+      results.push(relative(root, path).replaceAll("\\", "/"));
+    }
   }
 }
 

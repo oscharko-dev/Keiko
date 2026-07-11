@@ -382,8 +382,10 @@ jobs:
   cross-platform-smoke:
     name: Cross-platform smoke (${{ matrix.os }})
     if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-    # The Node.js 24 baseline must execute, typecheck, test, build, and install on every supported
-    # desktop OS. Keep fail-fast:false so one platform result never masks another.
+    # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
+    # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
+    # intentionally model POSIX paths, Bash, and symlinks. Keep fail-fast:false so one platform
+    # result never masks another.
     strategy:
       fail-fast: false
       matrix:
@@ -410,8 +412,6 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Typecheck the complete package graph
         run: npm run typecheck
-      - name: Test the complete package graph
-        run: npm test
       - name: Build
         run: npm run build
       # Two separate steps (not one multi-line run): on the Windows runner the default shell is

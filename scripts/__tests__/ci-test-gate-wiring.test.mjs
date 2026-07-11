@@ -109,11 +109,15 @@ describe("CI test/gate wiring guard", () => {
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
   });
 
-  it("executes install, typecheck, tests, and optional-native smoke on every desktop OS", () => {
-    expect(ci).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
-    expect(ci).toContain("Typecheck the complete package graph");
-    expect(ci).toContain("Test the complete package graph");
-    expect(ci).toContain("Installable-package smoke with native optional dependencies");
+  it("executes typecheck, build, and install smokes on every desktop OS", () => {
+    const start = ci.indexOf("  cross-platform-smoke:");
+    const end = ci.indexOf("\n  ui:", start);
+    const crossPlatform = ci.slice(start, end);
+    expect(crossPlatform).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(crossPlatform).toContain("Typecheck the complete package graph");
+    expect(crossPlatform).toContain("- name: Build");
+    expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
+    expect(crossPlatform).not.toContain("npm test");
   });
 
   for (const command of REQUIRED_CI_COMMANDS) {

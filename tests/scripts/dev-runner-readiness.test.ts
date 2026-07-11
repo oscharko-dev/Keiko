@@ -123,7 +123,9 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
           KEIKO_DEV_BFF_PORT: String(bffPort),
           KEIKO_DEV_NEXT_PORT: String(nextPort),
           KEIKO_DEV_PID_FILE: join(stateDir, "dev-ui.pid.json"),
+          KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH: "1",
           KEIKO_STATE_DIR: stateDir,
+          NODE_ENV: "test",
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
