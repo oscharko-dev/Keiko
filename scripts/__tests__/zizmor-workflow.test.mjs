@@ -32,13 +32,13 @@ describe("zizmor workflow job", () => {
     expect(jobBlock).toContain("persist-credentials: false");
   });
 
-  it("documents the cache-poisoning ignore with why ci.yml has no privileged cache consumer", () => {
-    expect(config).toMatch(/cache-poisoning:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- ci\.yml:\d+/u);
+  it("does not suppress cache-poisoning findings", () => {
+    expect(config).not.toContain("cache-poisoning:");
   });
 
   it("documents the misfeature ignore with the Windows MSVC toolchain constraint", () => {
     expect(config).toMatch(
-      /misfeature:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- portable-assets\.yml:\d+/u,
+      /misfeature:\n\s+ignore:\n(\s+#[^\n]+\n)+\s+- portable-assets\.yml:115\n\s+- portable-assets\.yml:181/u,
     );
   });
 

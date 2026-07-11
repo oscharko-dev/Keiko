@@ -6,16 +6,6 @@
 # lines, re-run `zizmor .` locally: a shifted line either drops the ignore (the gate fails
 # loudly) or, rarely, points at different code (re-verify the reasoning still applies).
 rules:
-  cache-poisoning:
-    ignore:
-      # Neither job publishes, signs, or attests anything: `ci` is build/lint/test only, and
-      # `cross-platform-smoke` is a read-only smoke matrix with no attestations/id-token
-      # permission. Every ci.yml job that DOES hold signing-relevant permissions (currently
-      # build-scan-sbom-smoke and ui, both attestations: write / id-token: write for artifact
-      # attestations) has package-manager-cache: false instead, same as release.yml and
-      # portable-assets.yml - so there is no privileged consumer for a cache poisoned here.
-      - ci.yml:61
-      - ci.yml:317
   misfeature:
     ignore:
       # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
@@ -24,8 +14,8 @@ rules:
       # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
       # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
       # build and cannot be verified on this platform.
-      - portable-assets.yml:111
-      - portable-assets.yml:170
+      - portable-assets.yml:115
+      - portable-assets.yml:181
   adhoc-packages:
     ignore:
       # npm Trusted Publishing requires npm CLI >= 11.5.1, which Node 22.x does not bundle;
