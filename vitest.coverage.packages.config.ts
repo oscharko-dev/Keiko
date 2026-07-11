@@ -22,7 +22,9 @@ export default defineConfig({
     testTimeout: 15_000,
     coverage: {
       provider: "v8",
-      reporter: ["text", "json", "json-summary"],
+      // "lcov" feeds SonarCloud CI-based analysis (ADR-0128, sonar.javascript.lcov.reportPaths);
+      // the other reporters are unchanged and keep serving the local coverage-baseline ratchet.
+      reporter: ["text", "json", "json-summary", "lcov"],
       // Emit the coverage summary even when some tests fail, so the ratchet gate can still be
       // computed and regenerated (the reality-guard tests depend on a fresh summary existing).
       reportOnFailure: true,
