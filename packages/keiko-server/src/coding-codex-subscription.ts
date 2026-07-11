@@ -92,7 +92,7 @@ export function codexSubscriptionProfileForEnv(
   runtimeApprovedVerified = false,
 ): CodingWorkbenchCodexSubscriptionProfile {
   const credentialStore = credentialStoreForEnv(env);
-  const status = runtimeApprovedVerified ? authStatusForEnv(env) : "missing";
+  const status = runtimeApprovedVerified ? authStatusForEnv(env) : "redistribution-unapproved";
   const headless = isHeadless(env);
   const authMethod = authMethodForStatus(status, env);
   return {
@@ -106,7 +106,7 @@ export function codexSubscriptionProfileForEnv(
     stateScope: stateScopeForStore(credentialStore),
     stateRoot: stateRootForStore(credentialStore),
     usesGlobalCodexHome: false,
-    runtimeBinarySources: ["managed-sidecar-runtime"],
+    runtimeBinarySources: runtimeApprovedVerified ? ["managed-sidecar-runtime"] : [],
     supportsBrowserLogin: runtimeApprovedVerified && !headless,
     supportsDeviceCode: runtimeApprovedVerified,
     supportsAccessToken: runtimeApprovedVerified,
@@ -192,7 +192,11 @@ function redistributionUnapproved(): RouteResult {
     status: 409,
     body: {
       ...errorBody("CODEX_SUBSCRIPTION_UNAVAILABLE", "Codex runtime is unavailable."),
+      status: "redistribution-unapproved",
       reasonCode: "redistribution-unapproved",
+      codexSubscriptionAllowed: false,
+      runtimeBinarySources: [],
+      setupMethods: [],
     },
   };
 }

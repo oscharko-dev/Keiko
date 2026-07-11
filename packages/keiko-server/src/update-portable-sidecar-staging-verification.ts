@@ -72,20 +72,26 @@ function listFiles(root: string, sidecar: PortableSidecarRuntimeVerification): r
   return files.sort();
 }
 
-function hashDirectoryTree(root: string, sidecar: PortableSidecarRuntimeVerification): string {
+function hashDirectoryTree(
+  root: string,
+  sidecar: PortableSidecarRuntimeVerification,
+  cachedDigests: ReadonlyMap<string, string> = new Map(),
+): string {
   const hash = createHash("sha256");
   for (const file of listFiles(root, sidecar)) {
     const rel = relative(root, file).split(sep).join("/");
-    hash.update(`${rel}\0${sha256File(file)}\0`);
+    hash.update(`${rel}\0${cachedDigests.get(file) ?? sha256File(file)}\0`);
   }
   return hash.digest("hex");
 }
 
-function hashExecutableTree(executablePath: string, payloadRoot: string): string {
+function hashExecutableTree(
+  executablePath: string,
+  payloadRoot: string,
+  executableSha256: string,
+): string {
   const relativePath = relative(payloadRoot, executablePath).split(sep).join("/");
-  return createHash("sha256")
-    .update(`${relativePath}\0${sha256File(executablePath)}\0`)
-    .digest("hex");
+  return createHash("sha256").update(`${relativePath}\0${executableSha256}\0`).digest("hex");
 }
 
 export interface PortableSidecarDiskEvidence {
@@ -109,12 +115,16 @@ export function inspectStagedSidecarPayload(
     const payloadRoot = resolvedContainedPath(resourceRoot, sidecar.payloadRootPath, sidecar);
     const executablePath = resolvedContainedPath(resourceRoot, sidecar.executablePath, sidecar);
     assertFile(executablePath, sidecar, "sidecar-payload-missing");
+    const executableSha256 = sha256File(executablePath);
+    const executableTreeSha256 = hashExecutableTree(executablePath, payloadRoot, executableSha256);
     return {
       payloadPresent: true,
       archiveDigestVerified:
-        hashDirectoryTree(payloadRoot, sidecar) === sidecar.summary.payloadSha256,
+        hashDirectoryTree(payloadRoot, sidecar, new Map([[executablePath, executableSha256]])) ===
+        sidecar.summary.payloadSha256,
       executableTreeDigestVerified:
-        hashExecutableTree(executablePath, payloadRoot) === sidecar.executableTreeSha256,
+        executableSha256 === sidecar.shippedExecutableSha256 &&
+        executableTreeSha256 === sidecar.executableTreeSha256,
     };
   } catch {
     return MISSING_DISK_EVIDENCE;
@@ -132,16 +142,33 @@ function verifySidecarFiles(
   assertFile(executablePath, sidecar, "sidecar-payload-missing");
   assertFile(licensePath, sidecar, "sidecar-license-evidence-incomplete");
   assertFile(sbomPath, sidecar, "sidecar-sbom-evidence-incomplete");
-  if (sha256File(licensePath) !== sidecar.licenseEvidenceSha256) {
+  const executableSha256 = sha256File(executablePath);
+  const licenseSha256 = sha256File(licensePath);
+  const sbomSha256 = sha256File(sbomPath);
+  if (licenseSha256 !== sidecar.licenseEvidenceSha256) {
     fail("sidecar-license-evidence-incomplete", "sidecar license digest mismatch", sidecar);
   }
-  if (sha256File(sbomPath) !== sidecar.sbomEvidenceSha256) {
+  if (sbomSha256 !== sidecar.sbomEvidenceSha256) {
     fail("sidecar-sbom-evidence-incomplete", "sidecar SBOM digest mismatch", sidecar);
   }
-  if (hashExecutableTree(executablePath, payloadRoot) !== sidecar.executableTreeSha256) {
+  if (
+    executableSha256 !== sidecar.shippedExecutableSha256 ||
+    hashExecutableTree(executablePath, payloadRoot, executableSha256) !==
+      sidecar.executableTreeSha256
+  ) {
     fail("sidecar-digest-mismatch", "sidecar executable tree digest mismatch", sidecar);
   }
-  if (hashDirectoryTree(payloadRoot, sidecar) !== sidecar.summary.payloadSha256) {
+  if (
+    hashDirectoryTree(
+      payloadRoot,
+      sidecar,
+      new Map([
+        [executablePath, executableSha256],
+        [licensePath, licenseSha256],
+        [sbomPath, sbomSha256],
+      ]),
+    ) !== sidecar.summary.payloadSha256
+  ) {
     fail("sidecar-digest-mismatch", "sidecar payload digest mismatch", sidecar);
   }
 }

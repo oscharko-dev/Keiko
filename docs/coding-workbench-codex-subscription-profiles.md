@@ -21,7 +21,8 @@ ChatGPT/Codex subscription access is represented by the separate
 profile exposes only content-free status and policy metadata:
 
 - auth status such as `connected`, `missing`, `expired`, `revoked`,
-  `disabled-by-deployment`, `unsupported-headless`, or `failed-login`;
+  `disabled-by-deployment`, `unsupported-headless`, `failed-login`, or the fail-closed
+  `redistribution-unapproved`;
 - auth method labels for browser login, device-code login, or access-token setup;
 - state scope, state-root label, and whether deployment policy disables the profile;
 - supported runtime binary provenance labels.
@@ -37,20 +38,26 @@ deployment uses an OS credential store, the profile reports `os-credential-store
 pin `usesGlobalCodexHome: false` so global Codex auth cache use cannot be silently introduced by a
 caller.
 
-Codex runtime binary provenance is restricted to two labels:
+Codex runtime binary provenance has one approved label:
 
 - `managed-sidecar-runtime` for a bundled, product-owned runtime staged through the portable
-  sidecar payload mechanism;
-- `policy-allowed-local-install` for individual/open-source deployments where policy explicitly
-  permits a local user-provided Codex install.
+  sidecar payload mechanism after the server verifies its approved redistribution and provenance.
 
-This issue defines the profile, setup/status flow, state policy, binary provenance vocabulary, and
-adapter selection seam. Runtime process lifecycle, health, kill, and restart behavior remains owned
-by the Coding runtime manager child issue.
+Until that verification is available, the shared selector fails closed: Codex is not allowed, offers
+no runtime binary source, and exposes no setup or login action. The Coding Workbench may show an
+informational unavailable card, but it must state that Codex subscriptions are not supported in the
+release. A local or global Codex installation never restores availability.
+
+The server-owned approved-and-verified runtime capability is the only future enablement seam. This
+issue defines the profile, setup/status flow, state policy, binary provenance vocabulary, and adapter
+selection seam. Runtime process lifecycle, health, kill, and restart behavior remains owned by the
+Coding runtime manager child issue.
 
 ## Regulated Deployments
 
 Regulated deployments can disable ChatGPT/Codex subscription login entirely with deployment policy.
 The server projection reports `disabled-by-deployment`, and setup calls return
-`CODEX_SUBSCRIPTION_UNAVAILABLE`. In that posture, users must use managed Gateway profiles such as
-LiteLLM, Azure, or other approved providers instead of local ChatGPT/Codex subscription auth.
+`CODEX_SUBSCRIPTION_UNAVAILABLE`. Missing redistribution or subscription-auth approval instead
+reports `redistribution-unapproved` and also returns `CODEX_SUBSCRIPTION_UNAVAILABLE`; neither
+posture permits a local or global install fallback. Users must use managed Gateway profiles such as
+LiteLLM, Azure, or other approved providers.

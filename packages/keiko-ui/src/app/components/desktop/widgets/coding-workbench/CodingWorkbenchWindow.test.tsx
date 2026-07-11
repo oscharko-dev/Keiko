@@ -50,6 +50,17 @@ function codexProfile(): CodingWorkbenchCodexSubscriptionProfile {
   };
 }
 
+function unavailableCodexProfile(): CodingWorkbenchCodexSubscriptionProfile {
+  return {
+    ...codexProfile(),
+    status: "redistribution-unapproved",
+    runtimeBinarySources: [],
+    supportsBrowserLogin: false,
+    supportsDeviceCode: false,
+    supportsAccessToken: false,
+  };
+}
+
 function api(): CodingWorkbenchWindowApi {
   return {
     fetchSidecarGatewayProfile: vi.fn(async () => sidecarProfile()),
@@ -345,6 +356,27 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByText("OpenAI API key through Gateway")).toBeInTheDocument();
     expect(screen.getByText("ChatGPT/Codex subscription profile")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Connected")).toBeInTheDocument());
+  });
+
+  it("keeps an unapproved Codex subscription unavailable without setup or local-install controls", async () => {
+    render(
+      <CodingWorkbenchWindow
+        api={{
+          fetchSidecarGatewayProfile: vi.fn(async () => sidecarProfile()),
+          fetchCodexSubscriptionProfile: vi.fn(async () => unavailableCodexProfile()),
+        }}
+        projection={CODING_WORKBENCH_PROJECTIONS.running}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Unavailable in this release")).toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("Codex subscriptions are not supported in this release."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Needs setup")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /login|local install/u })).not.toBeInTheDocument();
   });
 
   it("passes axe for the running workbench surface", async () => {

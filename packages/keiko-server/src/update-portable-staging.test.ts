@@ -634,6 +634,36 @@ describe("portable update staging", () => {
     expect(audit).not.toContain(install.root);
   });
 
+  it("fails closed when the shipped executable digest is stale", async () => {
+    const files = sidecarFiles();
+    const sidecar = sidecarRuntime(files);
+    const signing = sidecar.signing as Record<string, unknown>;
+    signing.shippedExecutableSha256 = "9".repeat(64);
+    const archive = portableArchive(sidecarArchiveEntries(files));
+    const install = makeManagedInstall();
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    const stager = createPortableUpdateStager({
+      env: {},
+      localState,
+      fetchImpl: responseFor(archive, portableManifest(archive, sha256(archive), [sidecar])),
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        sessionId: "session-sidecar-stale-executable-digest",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-sidecar-verification-failed" });
+    expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
+    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
+    expect(audit).toContain("sidecar-digest-mismatch");
+    expect(audit).not.toContain(SIDECAR_ROOT);
+    expect(audit).not.toContain(install.root);
+  });
+
   it("fails closed when the archive hash no longer matches the verified manifest", async () => {
     const archive = portableArchive();
     const install = makeManagedInstall();

@@ -15,6 +15,7 @@ export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
   readonly payloadRootPath: string;
   readonly executablePath: string;
+  readonly shippedExecutableSha256: string;
   readonly executableTreeSha256: string;
   readonly licenseEvidencePath: string;
   readonly licenseEvidenceSha256: string;
@@ -403,6 +404,22 @@ function parsePayload(runtime: Record<string, unknown>, name: string): ParsedSid
   return { payloadRootPath, payloadSha256, sizeBytes, executablePath };
 }
 
+function requiredShippedExecutableDigests(
+  runtime: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): { readonly sha256: string; readonly treeSha256: string } {
+  const signing = recordAt(runtime, "signing");
+  if (signing === undefined || !signingVerified(signing, target)) {
+    fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
+  }
+  const sha256 = digestFieldRequired(signing, "shippedExecutableSha256");
+  const treeSha256 = digestFieldRequired(signing, "shippedExecutableTreeSha256");
+  if (sha256 === undefined || treeSha256 === undefined) {
+    fail("sidecar-metadata-malformed", "sidecar shipped executable tree digest is invalid");
+  }
+  return { sha256, treeSha256 };
+}
+
 function requiredEvidence(
   runtime: Record<string, unknown>,
   key: "licenseEvidence" | "sbomEvidence",
@@ -431,24 +448,15 @@ function parseNamedRuntime(
     fail("sidecar-metadata-malformed", "sidecar executable tree digest is invalid");
   }
   const evidence = requiredRuntimeEvidence(runtime, payload.payloadRootPath);
-  const signing = recordAt(runtime, "signing");
-  if (signing === undefined) {
-    fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
-  }
-  if (!signingVerified(signing, target)) {
-    fail("sidecar-signing-unverified", "sidecar signing evidence is not verified");
-  }
-  const shippedExecutableTreeSha256 = digestFieldRequired(signing, "shippedExecutableTreeSha256");
-  if (shippedExecutableTreeSha256 === undefined) {
-    fail("sidecar-metadata-malformed", "sidecar shipped executable tree digest is invalid");
-  }
+  const shipped = requiredShippedExecutableDigests(runtime, target);
   const summary = baseSummary(runtime, target, payload.payloadSha256, payload.sizeBytes);
   if (summary === undefined) fail("sidecar-metadata-malformed", "sidecar metadata is incomplete");
   return {
     summary,
     payloadRootPath: payload.payloadRootPath,
     executablePath: payload.executablePath,
-    executableTreeSha256: shippedExecutableTreeSha256,
+    shippedExecutableSha256: shipped.sha256,
+    executableTreeSha256: shipped.treeSha256,
     licenseEvidencePath: evidence.license.path,
     licenseEvidenceSha256: evidence.license.sha256,
     sbomEvidencePath: evidence.sbom.path,

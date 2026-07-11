@@ -9,6 +9,7 @@ function verifiedSidecar(): PortableSidecarRuntimeVerification {
   return {
     payloadRootPath: "runtime/sidecars/opencode-compatible",
     executablePath: "runtime/sidecars/opencode-compatible/opencode",
+    shippedExecutableSha256: "e".repeat(64),
     executableTreeSha256: "d".repeat(64),
     licenseEvidencePath: "runtime/sidecars/opencode-compatible/LICENSE",
     licenseEvidenceSha256: "a".repeat(64),

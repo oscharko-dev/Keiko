@@ -354,6 +354,7 @@ function createPortableRuntimeFixture(): {
     verification: {
       payloadRootPath,
       executablePath: `${payloadRootPath}/opencode-sidecar`,
+      shippedExecutableSha256: executableDigest,
       executableTreeSha256,
       licenseEvidencePath: `${payloadRootPath}/LICENSE`,
       licenseEvidenceSha256: licenseDigest,
@@ -484,6 +485,7 @@ describe("coding runtime manager", () => {
     const sidecar: PortableSidecarRuntimeVerification = {
       payloadRootPath: "runtime/sidecars/opencode-adapter",
       executablePath: "runtime/sidecars/opencode-adapter/opencode-sidecar",
+      shippedExecutableSha256: "e".repeat(64),
       executableTreeSha256: "d".repeat(64),
       licenseEvidencePath: "runtime/sidecars/opencode-adapter/LICENSE.evidence.json",
       licenseEvidenceSha256: "a".repeat(64),
@@ -630,6 +632,35 @@ describe("coding runtime manager", () => {
     ).toEqual({
       ok: false,
       failureCode: "archive-digest-mismatch",
+      retryable: false,
+    });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("rejects a stale shipped executable digest immediately before spawn", () => {
+    const fixture = createManagedFixture();
+    const portable = createPortableRuntimeFixture();
+    const harness = createSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      portableRuntimeResolver: () => ({
+        verification: {
+          ...portable.verification,
+          shippedExecutableSha256: "9".repeat(64),
+        },
+        resourceRoot: portable.resourceRoot,
+        target: "windows-x64",
+      }),
+    });
+
+    expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).toEqual({
+      ok: false,
+      failureCode: "executable-tree-digest-mismatch",
       retryable: false,
     });
     expect(harness.children).toHaveLength(0);

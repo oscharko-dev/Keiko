@@ -94,15 +94,28 @@ function codexCard(
   profiles: CodingWorkbenchProfileState,
   t: I18nTranslate,
 ): ModelCard {
-  const status = profiles.status === "ready" ? profiles.codexProfile.status : profiles.status;
+  const status = codexStatusFor(profiles);
   return {
     source: "chatgpt-codex-subscription-profile",
     label: modelSourceLabel("chatgpt-codex-subscription-profile"),
-    detail: t("codingWorkbench.runtime.codexDetail"),
+    detail:
+      status === "redistribution-unapproved"
+        ? t("codingWorkbench.runtime.codexUnavailableDetail")
+        : t("codingWorkbench.runtime.codexDetail"),
     status: codexStatusLabel(status),
     tone: status === "connected" ? "success" : status === "loading" ? "neutral" : "warning",
     active: active === "chatgpt-codex-subscription-profile",
   };
+}
+
+function codexStatusFor(profiles: CodingWorkbenchProfileState): string {
+  if (profiles.status !== "ready") return profiles.status;
+  const profile = profiles.codexProfile;
+  const setupUnsupported =
+    !profile.supportsBrowserLogin && !profile.supportsDeviceCode && !profile.supportsAccessToken;
+  return profile.status === "missing" && setupUnsupported
+    ? "redistribution-unapproved"
+    : profile.status;
 }
 
 function gatewayDetail(

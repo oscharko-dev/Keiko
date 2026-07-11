@@ -87,6 +87,8 @@ export const EN_MESSAGES = {
   "codingWorkbench.runtime.gatewayApiKeyDetail": "API key routed through Keiko Gateway",
   "codingWorkbench.runtime.codexDetail":
     "Subscription profile executes through the Codex runtime adapter",
+  "codingWorkbench.runtime.codexUnavailableDetail":
+    "Codex subscriptions are not supported in this release.",
   "newWindow.chat.title": "New Chat window",
   "newWindow.chat.description": "Talk to Keiko",
   "newWindow.chat.fieldTitle": "Title",

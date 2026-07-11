@@ -46,19 +46,22 @@ function ctx(body: unknown = {}): RouteContext {
 }
 
 describe("coding Codex subscription profile routes", () => {
-  it("reports a missing subscription profile without leaking CODEX_HOME or auth paths", () => {
+  it("reports explicit unapproved redistribution without claiming runtime or setup support", () => {
     const result = handleCodingCodexSubscriptionProfile(ctx(), deps());
 
     expect(result).toMatchObject({
       status: 200,
       body: {
-        status: "missing",
+        status: "redistribution-unapproved",
         modelSource: "chatgpt-codex-subscription-profile",
         runtimeSource: "codex-cli-adapter",
         stateScope: "keiko-owned-state",
         stateRoot: "keiko-codex-runtime-state",
         usesGlobalCodexHome: false,
-        runtimeBinarySources: ["managed-sidecar-runtime"],
+        runtimeBinarySources: [],
+        supportsBrowserLogin: false,
+        supportsDeviceCode: false,
+        supportsAccessToken: false,
       },
     });
     expect(JSON.stringify(result)).not.toContain("auth.json");
@@ -161,7 +164,16 @@ describe("coding Codex subscription profile routes", () => {
       deps({ env: { CODEX_ACCESS_TOKEN: "secret-token" } }),
     );
 
-    expect(result).toMatchObject({ status: 200, body: { status: "missing" } });
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        status: "redistribution-unapproved",
+        runtimeBinarySources: [],
+        supportsBrowserLogin: false,
+        supportsDeviceCode: false,
+        supportsAccessToken: false,
+      },
+    });
     expect(JSON.stringify(result)).not.toContain("secret-token");
   });
 
@@ -172,7 +184,13 @@ describe("coding Codex subscription profile routes", () => {
 
       expect(result).toMatchObject({
         status: 409,
-        body: { reasonCode: "redistribution-unapproved" },
+        body: {
+          status: "redistribution-unapproved",
+          reasonCode: "redistribution-unapproved",
+          codexSubscriptionAllowed: false,
+          runtimeBinarySources: [],
+          setupMethods: [],
+        },
       });
     },
   );
