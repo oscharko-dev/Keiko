@@ -894,6 +894,8 @@ export const EN_MESSAGES = {
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to
   // satisfy that fail-closed gate with no new keys.
+  // The voice-dialogue composer motion update adds no user-facing copy; this
+  // catalog touch records the required English-copy review for ChatWindow.tsx.
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

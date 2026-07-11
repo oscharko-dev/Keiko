@@ -913,4 +913,6 @@ export const DE_MESSAGES = {
   // user-facing strings — check:ui-i18n flags any edit to a file that uses
   // useTranslate() regardless of the diff, so this file is touched to
   // satisfy that fail-closed gate with no new keys.
+  // The voice-dialogue composer motion update adds no user-facing copy; this
+  // catalog touch records the required German-copy review for ChatWindow.tsx.
 } satisfies MessageCatalog;
