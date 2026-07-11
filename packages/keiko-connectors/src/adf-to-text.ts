@@ -38,6 +38,14 @@ const MAX_UNKNOWN_TYPE_NAMES = 20;
 const MAX_UNKNOWN_TYPE_NAME_CHARS = 60;
 const MAX_LINK_HREF_CHARS = 2_048;
 
+// Deterministic, locale-independent string order (UTF-16 code units), matching the default
+// `Array.prototype.sort()` order this converter has always produced. A locale-aware comparator
+// (`String.localeCompare`) would make the output depend on the host locale and must not be used —
+// the converter's output is required to be byte-identical for the same input.
+function compareByCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 export type AdfTruncationReason =
   "depth-exceeded" | "node-budget-exceeded" | "output-budget-exceeded";
 
@@ -424,7 +432,7 @@ export function convertAdfToText(value: unknown): AdfConversionOutcome {
     text,
     docShape,
     truncated: state.truncationReasons.size > 0,
-    truncationReasons: [...state.truncationReasons].sort(),
-    unknownNodeTypes: [...state.unknownNodeTypes].sort(),
+    truncationReasons: [...state.truncationReasons].sort(compareByCodeUnit),
+    unknownNodeTypes: [...state.unknownNodeTypes].sort(compareByCodeUnit),
   };
 }

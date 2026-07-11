@@ -42,7 +42,11 @@ export function computeConnectorRunFingerprint(items: readonly ConnectorItemFing
   const FIELD_SEPARATOR = "\u0001";
   const canonical = [...items]
     .map((item) => `${item.itemKey}${FIELD_SEPARATOR}${item.contentFingerprint}`)
-    .sort()
+    // Deterministic, locale-independent UTF-16 code-unit order (identical to the default
+    // `Array.prototype.sort()` this digest has always used). `String.localeCompare` must NOT be used
+    // here: locale-aware collation would make the fingerprint depend on the host locale and break
+    // byte-identical re-sync comparisons.
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
     .join("\n");
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }

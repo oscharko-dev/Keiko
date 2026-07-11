@@ -122,24 +122,25 @@ function strictestModeDecision(
   actionType: AtlassianConnectorActionType,
   envelope: CodingWorkbenchAuthorityEnvelope,
 ): AtlassianConnectorActionDecision {
-  const modes: readonly CodingWorkbenchMode[] = [
-    envelope.requestedMode,
-    envelope.deploymentCeiling,
-    envelope.effectiveMode,
-  ];
-  return modes
-    .map((mode) =>
-      decideAtlassianConnectorAction(
-        actionType,
-        mode,
-        envelope.connectorScopes,
-        envelope.actionClasses,
-      ),
-    )
-    .reduce((strictest, candidate) =>
-      DISPOSITION_STRICTNESS[candidate.disposition] > DISPOSITION_STRICTNESS[strictest.disposition]
-        ? candidate
-        : strictest,
+  const decide = (mode: CodingWorkbenchMode): AtlassianConnectorActionDecision =>
+    decideAtlassianConnectorAction(
+      actionType,
+      mode,
+      envelope.connectorScopes,
+      envelope.actionClasses,
+    );
+  // Strictest-wins across the three fixed mode facets. The requested-mode decision seeds the
+  // reduce (an explicit initial value; the accumulator is never over an empty array), and the
+  // ceiling and effective-mode decisions can only make it stricter.
+  return [envelope.deploymentCeiling, envelope.effectiveMode]
+    .map(decide)
+    .reduce(
+      (strictest, candidate) =>
+        DISPOSITION_STRICTNESS[candidate.disposition] >
+        DISPOSITION_STRICTNESS[strictest.disposition]
+          ? candidate
+          : strictest,
+      decide(envelope.requestedMode),
     );
 }
 
