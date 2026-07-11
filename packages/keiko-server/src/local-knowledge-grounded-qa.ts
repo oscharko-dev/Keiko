@@ -2311,6 +2311,23 @@ function stateFailureRoute(
   return { status: 200, body: answer };
 }
 
+function mapGroundedAskError(error: unknown, deps: UiHandlerDeps): RouteResult {
+  if (error instanceof CancelledError) {
+    return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
+  }
+  if (error instanceof GatewayError) {
+    const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
+    const message = redact(error.message, currentRedactionSecrets(deps));
+    return { status, body: errorBody(error.code, message) };
+  }
+  // Issue #154 (GAP-B) — this catch-all surfaces an arbitrary dynamic error message (a gateway
+  // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
+  // same redactor the content path uses before it reaches the wire; the fixed fallback is static.
+  const message =
+    error instanceof Error ? redactText(deps, error.message) : "Local knowledge ask failed.";
+  return internalError(message);
+}
+
 export async function handleLocalKnowledgeGroundedAsk(
   chat: Chat,
   input: AskInput,
@@ -2329,20 +2346,7 @@ export async function handleLocalKnowledgeGroundedAsk(
     if ("status" in answer) return answer;
     return { status: 200, body: answer };
   } catch (error) {
-    if (error instanceof CancelledError) {
-      return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
-    }
-    if (error instanceof GatewayError) {
-      const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
-      const message = redact(error.message, currentRedactionSecrets(deps));
-      return { status, body: errorBody(error.code, message) };
-    }
-    // Issue #154 (GAP-B) — this catch-all surfaces an arbitrary dynamic error message (a gateway
-    // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
-    // same redactor the content path uses before it reaches the wire; the fixed fallback is static.
-    const message =
-      error instanceof Error ? redactText(deps, error.message) : "Local knowledge ask failed.";
-    return internalError(message);
+    return mapGroundedAskError(error, deps);
   } finally {
     env.close();
   }

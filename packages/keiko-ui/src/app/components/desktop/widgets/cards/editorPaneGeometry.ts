@@ -336,6 +336,21 @@ export function tabOrderWithInsertion(
   return [...without.slice(0, clamped), file, ...without.slice(clamped)];
 }
 
+// Roving tab-stop target for plain (Alt-less) ArrowLeft/ArrowRight/Home/End within a pane's visible
+// tab order (WCAG 2.1.1 + APG tablist automatic activation). `order.length > 0` is a precondition
+// enforced by the caller; every branch below then indexes within bounds.
+export function rovingTabTargetFile(
+  order: readonly string[],
+  path: string,
+  key: "ArrowLeft" | "ArrowRight" | "Home" | "End",
+): string | undefined {
+  const index = order.indexOf(path);
+  if (key === "ArrowLeft") return order[index <= 0 ? order.length - 1 : index - 1];
+  if (key === "ArrowRight") return order[index < 0 || index >= order.length - 1 ? 0 : index + 1];
+  if (key === "Home") return order[0];
+  return order[order.length - 1];
+}
+
 interface TabNodeRect {
   readonly node: HTMLElement;
   readonly rect: DOMRect;

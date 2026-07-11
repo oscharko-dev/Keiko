@@ -203,27 +203,45 @@ function resolvePointedGitdir(
   return isAllowedExternalGitdir(canonical) ? canonical : undefined;
 }
 
+function isAsciiDigitCode(code: number): boolean {
+  return code >= 48 && code <= 57;
+}
+
+// Scan forward from `start` while characters are ASCII digits; returns the exclusive end index
+// of the digit run (equal to `start` when `line.charAt(start)` is not itself a digit).
+function scanDigitRunEnd(line: string, start: number): number {
+  let j = start;
+  const len = line.length;
+  while (j < len && isAsciiDigitCode(line.charCodeAt(j))) {
+    j += 1;
+  }
+  return j;
+}
+
+// A candidate timestamp is a run of exactly 10 digits that is not immediately preceded by '<'
+// (which would indicate it is part of an email address like `<user@1234567890.example>`).
+function isUnprefixedTenDigitRun(line: string, start: number, end: number): boolean {
+  if (end - start !== 10) {
+    return false;
+  }
+  const prev = start === 0 ? "" : line.charAt(start - 1);
+  return prev !== "<";
+}
+
 // Find the first 10-digit run that is not preceded by '<'. Avoids regex backtracking.
 function firstUnixTimestamp(line: string): number | undefined {
   let i = 0;
   const len = line.length;
   while (i < len) {
-    const code = line.charCodeAt(i);
-    if (code >= 48 && code <= 57) {
-      let j = i;
-      while (j < len && line.charCodeAt(j) >= 48 && line.charCodeAt(j) <= 57) {
-        j += 1;
-      }
-      if (j - i === 10) {
-        const prev = i === 0 ? "" : line.charAt(i - 1);
-        if (prev !== "<") {
-          return Number.parseInt(line.slice(i, j), 10);
-        }
-      }
-      i = j;
-    } else {
+    if (!isAsciiDigitCode(line.charCodeAt(i))) {
       i += 1;
+      continue;
     }
+    const end = scanDigitRunEnd(line, i);
+    if (isUnprefixedTenDigitRun(line, i, end)) {
+      return Number.parseInt(line.slice(i, end), 10);
+    }
+    i = end;
   }
   return undefined;
 }

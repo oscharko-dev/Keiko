@@ -903,6 +903,190 @@ function chatWindowIdInPair(a: AppWindow | undefined, b: AppWindow | undefined):
   return null;
 }
 
+/** The id of the endpoint on the other side of `c` from `id`, or null when `id` isn't in `c`. */
+function otherEndpointId(c: Connection, id: string): string | null {
+  return c.a === id ? c.b : c.b === id ? c.a : null;
+}
+
+// Resolves whether a Files↔Chat / Connector↔Chat bind was ACCEPTED by the composition root's
+// veto callback. Extracted from confirmConnect (cognitive-complexity cleanup): isolates the
+// nested accept/veto decision tree so confirmConnect itself stays a linear sequence of steps.
+function resolveBindAcceptance(
+  chatWindowId: string | null,
+  boundScope: ChatConnectedScope | null,
+  connectorScope: ChatLocalKnowledgeScope | null,
+  onScopeBind: ConnectArgs["onScopeBind"],
+  onConnectorBind: ConnectArgs["onConnectorBind"],
+): boolean | Promise<boolean> {
+  try {
+    if (boundScope !== null && chatWindowId !== null) {
+      return onScopeBind?.(chatWindowId, boundScope) ?? true;
+    }
+    if (connectorScope !== null) {
+      return chatWindowId !== null
+        ? (onConnectorBind?.(chatWindowId, connectorScope) ?? true)
+        : false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The bind-time snapshot fields a new Connection carries, derived from what confirmConnect just
+// bound. Kept separate from confirmConnect so the nested per-scope-kind object shape doesn't add
+// to its cognitive complexity.
+function connectionScopeFields(
+  chatWindowId: string | null,
+  boundScope: ChatConnectedScope | null,
+  connectorScope: ChatLocalKnowledgeScope | null,
+): Partial<
+  Pick<
+    Connection,
+    | "boundChatWindowId"
+    | "boundRoot"
+    | "boundScopeKind"
+    | "boundRelativePath"
+    | "boundConnectorKind"
+    | "boundConnectorId"
+  >
+> {
+  return {
+    ...(chatWindowId !== null ? { boundChatWindowId: chatWindowId } : {}),
+    ...(boundScope !== null
+      ? {
+          boundRoot: boundScope.root,
+          boundScopeKind: boundScope.kind,
+          boundRelativePath: boundScope.relativePaths[0],
+        }
+      : {}),
+    ...(connectorScope !== null
+      ? connectorScope.kind === "capsule"
+        ? {
+            boundConnectorKind: "capsule" as const,
+            boundConnectorId: connectorScope.capsuleId as string,
+          }
+        : {
+            boundConnectorKind: "capsule-set" as const,
+            boundConnectorId: connectorScope.capsuleSetId as string,
+          }
+      : {}),
+  };
+}
+
+/** Connector-selection id from `w` when it's a connector window matching `selectedKind`. */
+function connectorSelectionIdFor(w: AppWindow, selectedKind: string): string | null {
+  if (w.type !== "connector" || w.cfg["selectedKind"] !== selectedKind) return null;
+  const selectedId = w.cfg["selectedId"];
+  // Skip a missing, empty, OR whitespace-only selectedId. The server trims before validating and
+  // rejects a blank capsule id with QI_BAD_REQUEST (400); treating a whitespace-only id as "no
+  // selection" here keeps the binding a silent skip (parity with the server guard) instead of
+  // surfacing an unhelpful 400 on Generate.
+  return typeof selectedId === "string" && selectedId.trim().length > 0 ? selectedId : null;
+}
+
+/** Legacy whole-snapshot run id from `w` when it is an unscoped figma window. */
+function figmaSnapshotRunIdFor(w: AppWindow): string | null {
+  if (w.type !== "figma") return null;
+  const runId = w.cfg["snapshotRunId"];
+  return typeof runId === "string" && runId.trim().length > 0 ? runId : null;
+}
+
+// Trim → drop empties → dedupe → sort so the scope is canonical: two windows that selected the
+// same screens in a different order (or with duplicates) dedupe to one source, and the server
+// envelope id derived from the scope is stable.
+function parseSelectedScreenIds(raw: unknown): readonly string[] {
+  if (typeof raw !== "string" || raw.trim().length === 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const cleaned = parsed
+      .filter((value): value is string => typeof value === "string" && value.trim() !== "")
+      .map((value) => value.trim());
+    return [...new Set(cleaned)].sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
+function selectedScreenIdsForFigmaWindow(w: AppWindow): readonly string[] {
+  const parsed = parseSelectedScreenIds(w.cfg["selectedScreenIdsJson"]);
+  if (parsed.length > 0) return parsed;
+  const screenId = w.cfg["screenId"];
+  return typeof screenId === "string" && screenId.trim().length > 0 ? [screenId.trim()] : [];
+}
+
+// A figmaView/figmaJson window is SCOPED — it carries selectedScreenIdsJson and/or
+// selectedScreenName. If such a window's scope cannot be resolved (missing, corrupt, or over-cap
+// persisted JSON the persistence layer dropped on reload), it must contribute NOTHING — never
+// silently widen to the whole board. Only a genuinely unscoped figma window (no scope marker at
+// all) ingests the full snapshot. This is the UI half of the no-leak guarantee; the server
+// enforces the same invariant on the wire.
+function isScopedFigmaWindow(w: AppWindow): boolean {
+  const rawScreenIdsJson = w.cfg["selectedScreenIdsJson"];
+  const screenName = w.cfg["selectedScreenName"];
+  return (
+    w.type === "figmaJson" ||
+    w.type === "figmaView" ||
+    rawScreenIdsJson !== undefined ||
+    (typeof screenName === "string" && screenName.trim().length > 0)
+  );
+}
+
+function figmaSnapshotLabel(w: AppWindow, runId: string, screenIds: readonly string[]): string {
+  const screenName = w.cfg["selectedScreenName"];
+  if (screenIds.length === 0 || typeof screenName !== "string" || screenName.trim().length === 0) {
+    return runId;
+  }
+  return w.type === "figmaJson" ? `JSON · ${screenName}` : screenName;
+}
+
+/** Figma-snapshot QI source candidate from `w`, keyed for dedup, or null when `w` doesn't qualify. */
+function figmaSnapshotSourceFor(
+  w: AppWindow,
+): { key: string; source: QualityIntelligenceFigmaSnapshotSource } | null {
+  if (w.type !== "figma" && w.type !== "figmaView" && w.type !== "figmaJson") return null;
+  const runId = w.cfg["snapshotRunId"];
+  if (typeof runId !== "string" || runId.trim().length === 0) return null;
+  const screenIds = selectedScreenIdsForFigmaWindow(w);
+  if (isScopedFigmaWindow(w) && screenIds.length === 0) return null;
+  return {
+    key: `${runId}:${screenIds.join(",") || "*"}`,
+    source: {
+      kind: "figma-snapshot",
+      label: figmaSnapshotLabel(w, runId, screenIds),
+      snapshotRunId: runId,
+      ...(screenIds.length > 0 ? { screenIds } : {}),
+    },
+  };
+}
+
+/** Standalone Figma-image QI source candidate from `w`, keyed for dedup, or null when it doesn't qualify. */
+function imageSourceFor(
+  w: AppWindow,
+): { key: string; source: QualityIntelligenceImageSource } | null {
+  if (w.type !== "figmaImage") return null;
+  const runId = w.cfg["snapshotRunId"];
+  const screenId = w.cfg["screenId"];
+  if (typeof runId !== "string" || runId.trim().length === 0) return null;
+  if (typeof screenId !== "string" || screenId.trim().length === 0) return null;
+  const screenName = w.cfg["selectedScreenName"];
+  const label =
+    typeof screenName === "string" && screenName.trim().length > 0
+      ? `Image · ${screenName}`
+      : `Image · ${screenId}`;
+  return {
+    key: `${runId}:${screenId}`,
+    source: {
+      kind: "image",
+      label,
+      sourceKind: "figma-snapshot-screen",
+      snapshotRunId: runId,
+      screenId,
+    },
+  };
+}
+
 type ConnectApi = Omit<
   Pick<
     WorkspaceApi,
@@ -959,6 +1143,12 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     connsByIdRef?.current.get(id) ?? connsRef.current.find((c) => c.id === id);
   const connectionsFor = (id: string): readonly Connection[] =>
     connsByEndpointRef?.current.get(id) ?? connsRef.current.filter((c) => c.a === id || c.b === id);
+  // The window on the other end of `c` from `id`, resolved through winById, or null when the
+  // connection doesn't touch `id` or the other endpoint no longer exists.
+  const connectedWindow = (c: Connection, id: string): AppWindow | null => {
+    const otherId = otherEndpointId(c, id);
+    return otherId === null ? null : (winById(otherId) ?? null);
+  };
 
   const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
     if (connectCleanupRef.current !== null) {
@@ -967,6 +1157,40 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     }
     connectingRef.current = null;
     setConnecting(null);
+  };
+
+  // Applies a confirmed connect gesture once the bind veto has resolved: re-checks both endpoints
+  // are still live, appends the Connection (with its bind-time scope snapshot) unless it's a
+  // duplicate, and focuses the target. Split out of confirmConnect so the promise continuation
+  // doesn't add nested branches to confirmConnect's own complexity.
+  const applyConfirmedConnection = (
+    wasAccepted: boolean,
+    fromId: string,
+    toId: string,
+    chatWindowId: string | null,
+    boundScope: ChatConnectedScope | null,
+    connectorScope: ChatLocalKnowledgeScope | null,
+  ): void => {
+    if (!wasAccepted) return;
+    const stillLive = winById(fromId) !== undefined && winById(toId) !== undefined;
+    if (!stillLive) return;
+    // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown) must
+    // use this snapshot: re-deriving from the window's current cfg unbinds the wrong source after
+    // the user navigated the Files window or re-selected another capsule.
+    setConns((cs) =>
+      isDuplicate(cs, fromId, toId)
+        ? cs
+        : [
+            ...cs,
+            {
+              id: `${fromId}~${toId}`,
+              a: fromId,
+              b: toId,
+              ...connectionScopeFields(chatWindowId, boundScope, connectorScope),
+            },
+          ],
+    );
+    focus(toId);
   };
 
   const confirmConnect: WorkspaceApi["confirmConnect"] = (toId, e) => {
@@ -987,60 +1211,24 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       const connectorScope = boundScope === null ? connectorChatBind(from, to) : null;
       const chatWindowId =
         boundScope !== null || connectorScope !== null ? chatWindowIdInPair(from, to) : null;
-      let accepted: boolean | Promise<boolean>;
-      try {
-        accepted =
-          boundScope !== null && chatWindowId !== null
-            ? (onScopeBind?.(chatWindowId, boundScope) ?? true)
-            : connectorScope !== null
-              ? chatWindowId !== null
-                ? (onConnectorBind?.(chatWindowId, connectorScope) ?? true)
-                : false
-              : true;
-      } catch {
-        accepted = false;
-      }
+      const accepted = resolveBindAcceptance(
+        chatWindowId,
+        boundScope,
+        connectorScope,
+        onScopeBind,
+        onConnectorBind,
+      );
       void Promise.resolve(accepted)
-        .then((wasAccepted) => {
-          if (!wasAccepted) return;
-          const stillLive = winById(c.from) !== undefined && winById(toId) !== undefined;
-          if (!stillLive) return;
-          // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown)
-          // must use this snapshot: re-deriving from the window's current cfg unbinds the wrong
-          // source after the user navigated the Files window or re-selected another capsule.
-          setConns((cs) =>
-            isDuplicate(cs, c.from, toId)
-              ? cs
-              : [
-                  ...cs,
-                  {
-                    id: `${c.from}~${toId}`,
-                    a: c.from,
-                    b: toId,
-                    ...(chatWindowId !== null ? { boundChatWindowId: chatWindowId } : {}),
-                    ...(boundScope !== null
-                      ? {
-                          boundRoot: boundScope.root,
-                          boundScopeKind: boundScope.kind,
-                          boundRelativePath: boundScope.relativePaths[0],
-                        }
-                      : {}),
-                    ...(connectorScope !== null
-                      ? connectorScope.kind === "capsule"
-                        ? {
-                            boundConnectorKind: "capsule" as const,
-                            boundConnectorId: connectorScope.capsuleId as string,
-                          }
-                        : {
-                            boundConnectorKind: "capsule-set" as const,
-                            boundConnectorId: connectorScope.capsuleSetId as string,
-                          }
-                      : {}),
-                  },
-                ],
-          );
-          focus(toId);
-        })
+        .then((wasAccepted) =>
+          applyConfirmedConnection(
+            wasAccepted,
+            c.from,
+            toId,
+            chatWindowId,
+            boundScope,
+            connectorScope,
+          ),
+        )
         .catch(() => undefined);
     }
     cancelConnect();
@@ -1220,18 +1408,9 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const ids: string[] = [];
     for (const c of connectionsFor(id)) {
       if (ids.length >= MAX_SCOPES) break;
-      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-      if (otherId === null) continue;
-      const w = winById(otherId);
-      if (w === undefined || w.type !== "connector") continue;
-      if (w.cfg["selectedKind"] !== selectedKind) continue;
-      const selectedId = w.cfg["selectedId"];
-      // Skip a missing, empty, OR whitespace-only selectedId. The server trims before validating and
-      // rejects a blank capsule id with QI_BAD_REQUEST (400); treating a whitespace-only id as "no
-      // selection" here keeps the binding a silent skip (parity with the server guard) instead of
-      // surfacing an unhelpful 400 on Generate.
-      if (typeof selectedId !== "string" || selectedId.trim().length === 0) continue;
-      if (seen.has(selectedId)) continue;
+      const w = connectedWindow(c, id);
+      const selectedId = w === null ? null : connectorSelectionIdFor(w, selectedKind);
+      if (selectedId === null || seen.has(selectedId)) continue;
       seen.add(selectedId);
       ids.push(selectedId);
     }
@@ -1254,41 +1433,13 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const ids: string[] = [];
     for (const c of connectionsFor(id)) {
       if (ids.length >= MAX_SCOPES) break;
-      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-      if (otherId === null) continue;
-      const w = winById(otherId);
-      if (w === undefined || w.type !== "figma") continue;
-      const runId = w.cfg["snapshotRunId"];
-      if (typeof runId !== "string" || runId.trim().length === 0) continue;
-      if (seen.has(runId)) continue;
+      const w = connectedWindow(c, id);
+      const runId = w === null ? null : figmaSnapshotRunIdFor(w);
+      if (runId === null || seen.has(runId)) continue;
       seen.add(runId);
       ids.push(runId);
     }
     return ids;
-  };
-
-  const parseSelectedScreenIds = (raw: unknown): readonly string[] => {
-    if (typeof raw !== "string" || raw.trim().length === 0) return [];
-    try {
-      const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      // Trim → drop empties → dedupe → sort so the scope is canonical: two windows that selected the
-      // same screens in a different order (or with duplicates) dedupe to one source, and the server
-      // envelope id derived from the scope is stable.
-      const cleaned = parsed
-        .filter((value): value is string => typeof value === "string" && value.trim() !== "")
-        .map((value) => value.trim());
-      return [...new Set(cleaned)].sort((a, b) => a.localeCompare(b));
-    } catch {
-      return [];
-    }
-  };
-
-  const selectedScreenIdsForFigmaWindow = (w: AppWindow): readonly string[] => {
-    const parsed = parseSelectedScreenIds(w.cfg["selectedScreenIdsJson"]);
-    if (parsed.length > 0) return parsed;
-    const screenId = w.cfg["screenId"];
-    return typeof screenId === "string" && screenId.trim().length > 0 ? [screenId.trim()] : [];
   };
 
   const linkedFigmaSnapshotSources: NonNullable<WorkspaceApi["linkedFigmaSnapshotSources"]> = (
@@ -1298,47 +1449,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const sources: QualityIntelligenceFigmaSnapshotSource[] = [];
     for (const c of connectionsFor(id)) {
       if (sources.length >= MAX_SCOPES) break;
-      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-      if (otherId === null) continue;
-      const w = winById(otherId);
-      if (
-        w === undefined ||
-        (w.type !== "figma" && w.type !== "figmaView" && w.type !== "figmaJson")
-      ) {
-        continue;
-      }
-      const runId = w.cfg["snapshotRunId"];
-      if (typeof runId !== "string" || runId.trim().length === 0) continue;
-      const rawScreenIdsJson = w.cfg["selectedScreenIdsJson"];
-      const screenName = w.cfg["selectedScreenName"];
-      const screenIds = selectedScreenIdsForFigmaWindow(w);
-      // A figmaView/figmaJson window is SCOPED — it carries selectedScreenIdsJson and/or
-      // selectedScreenName. If such a window's scope cannot be resolved (missing, corrupt, or
-      // over-cap persisted JSON the persistence layer dropped on reload), it must contribute NOTHING —
-      // never silently widen to the whole board. Only a genuinely unscoped figma window (no scope
-      // marker at all) ingests the full snapshot. This is the UI half of the no-leak guarantee; the
-      // server enforces the same invariant on the wire.
-      const isScopedWindow =
-        w.type === "figmaJson" ||
-        w.type === "figmaView" ||
-        rawScreenIdsJson !== undefined ||
-        (typeof screenName === "string" && screenName.trim().length > 0);
-      if (isScopedWindow && screenIds.length === 0) continue;
-      const key = `${runId}:${screenIds.join(",") || "*"}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const label =
-        screenIds.length > 0 && typeof screenName === "string" && screenName.trim().length > 0
-          ? w.type === "figmaJson"
-            ? `JSON · ${screenName}`
-            : screenName
-          : runId;
-      sources.push({
-        kind: "figma-snapshot",
-        label,
-        snapshotRunId: runId,
-        ...(screenIds.length > 0 ? { screenIds } : {}),
-      });
+      const w = connectedWindow(c, id);
+      const candidate = w === null ? null : figmaSnapshotSourceFor(w);
+      if (candidate === null || seen.has(candidate.key)) continue;
+      seen.add(candidate.key);
+      sources.push(candidate.source);
     }
     return sources;
   };
@@ -1348,29 +1463,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const sources: QualityIntelligenceImageSource[] = [];
     for (const c of connectionsFor(id)) {
       if (sources.length >= MAX_SCOPES) break;
-      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
-      if (otherId === null) continue;
-      const w = winById(otherId);
-      if (w === undefined || w.type !== "figmaImage") continue;
-      const runId = w.cfg["snapshotRunId"];
-      const screenId = w.cfg["screenId"];
-      if (typeof runId !== "string" || runId.trim().length === 0) continue;
-      if (typeof screenId !== "string" || screenId.trim().length === 0) continue;
-      const key = `${runId}:${screenId}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const screenName = w.cfg["selectedScreenName"];
-      const label =
-        typeof screenName === "string" && screenName.trim().length > 0
-          ? `Image · ${screenName}`
-          : `Image · ${screenId}`;
-      sources.push({
-        kind: "image",
-        label,
-        sourceKind: "figma-snapshot-screen",
-        snapshotRunId: runId,
-        screenId,
-      });
+      const w = connectedWindow(c, id);
+      const candidate = w === null ? null : imageSourceFor(w);
+      if (candidate === null || seen.has(candidate.key)) continue;
+      seen.add(candidate.key);
+      sources.push(candidate.source);
     }
     return sources;
   };

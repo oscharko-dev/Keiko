@@ -124,41 +124,68 @@ function filesScopeLabel(cfg: Record<string, unknown> | undefined, root: string)
   return `${root.split(/[/\\]/u).filter(Boolean).pop() ?? root}/`;
 }
 
-export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
+// Files-context edge: one side is a Files window whose bound partner (chat, agents, quality,
+// editor, promptEnhancer) consumes its folder scope. Returns null when the pair isn't a
+// files-context edge so relLabel can fall through to the generic pair classifier below.
+function filesRelLabel(a: WinSnapshot, b: WinSnapshot): string | null {
   const filesSide: WinSnapshot | null = a.type === "files" ? a : b.type === "files" ? b : null;
   const other = filesSide === null ? null : filesSide === a ? b : a;
-  if (filesSide !== null && other !== null && receivesFilesContext(other.type)) {
-    const root = configRoot(filesSide.cfg);
-    // Honest empty state: nothing is bound yet, so the badge must not claim a folder.
-    if (root === null) return "no folder selected";
-    // Show only the basename — full absolute paths blew the badge up to hundreds of pixels
-    // of destructive (remove) click area on the canvas.
-    return `uses ${filesScopeLabel(filesSide.cfg, root)}`;
-  }
-  const pair: readonly [string, string] = [a.type, b.type];
+  if (filesSide === null || other === null || !receivesFilesContext(other.type)) return null;
+  const root = configRoot(filesSide.cfg);
+  // Honest empty state: nothing is bound yet, so the badge must not claim a folder.
+  if (root === null) return "no folder selected";
+  // Show only the basename — full absolute paths blew the badge up to hundreds of pixels
+  // of destructive (remove) click area on the canvas.
+  return `uses ${filesScopeLabel(filesSide.cfg, root)}`;
+}
+
+// Epic #750 #756 — a Figma edge means the QI hub will generate from the captured snapshot,
+// unless a specific screen was selected on the Figma Snapshot window, in which case the edge
+// reads as "uses view".
+function figmaRelLabel(a: WinSnapshot, b: WinSnapshot): string {
+  const figmaSide = a.type === "figma" ? a : b.type === "figma" ? b : null;
+  const selectedScreenName = figmaSide?.cfg?.["selectedScreenName"];
+  return typeof selectedScreenName === "string" && selectedScreenName.trim().length > 0
+    ? "uses view"
+    : "uses snapshot";
+}
+
+type PairLabelResolver = (a: WinSnapshot, b: WinSnapshot) => string;
+
+// Ordered classifier for non-files edges: the first entry whose type is present in the pair
+// wins, so entry order matters whenever a pair could match more than one entry. None of these
+// types is "agents", so this list is independent of (and order-neutral with) the agents↔agents
+// check in pairRelLabel below.
+const PAIR_LABEL_RESOLVERS: readonly (readonly [WindowType, PairLabelResolver])[] = [
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
   // connector's selected capsule / capsule-set as knowledge (Epic #189 / Epic #710, Issue #718).
-  if (pair.includes("connector")) return "uses knowledge";
-  if (pair.includes("figmaJson")) return "uses JSON";
-  if (pair.includes("figmaImage")) return "uses image";
-  if (pair.includes("figmaView")) return "uses view";
-  // Epic #750 #756 — a Figma edge means the QI hub will generate from the captured snapshot.
-  if (pair.includes("figma")) {
-    const figmaSide = a.type === "figma" ? a : b.type === "figma" ? b : null;
-    const selectedScreenName = figmaSide?.cfg?.["selectedScreenName"];
-    return typeof selectedScreenName === "string" && selectedScreenName.trim().length > 0
-      ? "uses view"
-      : "uses snapshot";
-  }
-  if (pair.includes("keiko")) return "governed by";
-  if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
-  if (pair.includes("terminal")) return "runs in";
+  ["connector", () => "uses knowledge"],
+  ["figmaJson", () => "uses JSON"],
+  ["figmaImage", () => "uses image"],
+  ["figmaView", () => "uses view"],
+  ["figma", figmaRelLabel],
+  ["keiko", () => "governed by"],
+  ["terminal", () => "runs in"],
   // Every label must read as a mini-sentence predicate ("Chat uses tools Plugins");
   // bare "tools" / "linked" carried no relationship meaning (uiux-fix F048, C409).
-  if (pair.includes("plugins")) return "uses tools";
-  if (pair.includes("review")) return "reviews";
-  if (pair.includes("browser")) return "browses";
+  ["plugins", () => "uses tools"],
+  ["review", () => "reviews"],
+  ["browser", () => "browses"],
+];
+
+function pairRelLabel(a: WinSnapshot, b: WinSnapshot, pair: readonly [string, string]): string {
+  if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
+  for (const [type, resolve] of PAIR_LABEL_RESOLVERS) {
+    if (pair.includes(type)) return resolve(a, b);
+  }
   return "connected";
+}
+
+export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
+  const filesLabel = filesRelLabel(a, b);
+  if (filesLabel !== null) return filesLabel;
+  const pair: readonly [string, string] = [a.type, b.type];
+  return pairRelLabel(a, b, pair);
 }
 
 export interface BezierPath {

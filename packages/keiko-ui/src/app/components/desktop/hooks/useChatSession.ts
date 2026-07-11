@@ -38,7 +38,12 @@ import {
 import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
 import { sortProjects } from "@/lib/sidebar-sort";
-import { classifyRunReport, formatRunSummaryFromManifest } from "@/lib/run-summary";
+import {
+  classifyRunReport,
+  formatRunSummaryFromManifest,
+  type RunSummaryFallbackKind,
+  type TerminalRunSummary,
+} from "@/lib/run-summary";
 import type {
   Chat,
   ChatMessage,
@@ -705,6 +710,52 @@ function runSummarySharedSyncKey(chat: Chat, projectPath: string, message: ChatM
   return `${chat.id}:${projectPath}:${message.id}:${message.runId ?? ""}`;
 }
 
+// GEN-PERF-CHAT-011 — outcome of a single poll attempt: a terminal summary was found, the run is
+// still in flight (keep polling), or the fetch failed in a way that should stop the poll
+// outright. Splitting this out of pollRunSummaryPatch keeps each fetch/fallback path
+// independently readable (Sonar S3776).
+type RunSummaryAttemptResult =
+  | { readonly kind: "summary"; readonly summary: TerminalRunSummary }
+  | { readonly kind: "retry" }
+  | { readonly kind: "abort" };
+
+async function runSummaryFromManifestFallback(
+  runId: string,
+  fallbackKind: RunSummaryFallbackKind,
+): Promise<RunSummaryAttemptResult> {
+  try {
+    const response = await fetchEvidenceManifest(runId);
+    const manifestSummary = formatRunSummaryFromManifest(response.manifest, fallbackKind);
+    const workflowStatus =
+      manifestSummary.workflowStatus === "failed" || manifestSummary.workflowStatus === "cancelled"
+        ? manifestSummary.workflowStatus
+        : "completed";
+    return {
+      kind: "summary",
+      summary: { workflowStatus, shortResult: manifestSummary.shortResult },
+    };
+  } catch {
+    // Evidence may not exist yet while the worker is still settling; keep polling.
+    return { kind: "retry" };
+  }
+}
+
+async function attemptRunSummaryFetch(
+  runId: string,
+  fallbackKind: RunSummaryFallbackKind,
+): Promise<RunSummaryAttemptResult> {
+  try {
+    const response = await fetchRunReport(runId);
+    const outcome = classifyRunReport(response.report, fallbackKind);
+    return outcome.kind === "terminal"
+      ? { kind: "summary", summary: outcome.summary }
+      : { kind: "retry" };
+  } catch (caught) {
+    if (!(caught instanceof ApiError) || caught.status !== 404) return { kind: "abort" };
+    return runSummaryFromManifestFallback(runId, fallbackKind);
+  }
+}
+
 async function pollRunSummaryPatch(
   chat: Chat,
   projectPath: string,
@@ -719,40 +770,17 @@ async function pollRunSummaryPatch(
     // GEN-PERF-CHAT-011 — abort at the fetch edge: once the owning hook unmounts, stop issuing
     // network requests instead of running out the remaining attempts.
     if (signal?.aborted === true) return undefined;
-    let summary:
-      | {
-          readonly workflowStatus: "completed" | "failed" | "cancelled";
-          readonly shortResult: string;
-        }
-      | undefined;
 
-    try {
-      const response = await fetchRunReport(runId);
-      const outcome = classifyRunReport(response.report, fallbackKind);
-      if (outcome.kind === "terminal") summary = outcome.summary;
-    } catch (caught) {
-      if (caught instanceof ApiError && caught.status === 404) {
-        try {
-          const response = await fetchEvidenceManifest(runId);
-          const manifestSummary = formatRunSummaryFromManifest(response.manifest, fallbackKind);
-          summary = {
-            workflowStatus:
-              manifestSummary.workflowStatus === "failed" ||
-              manifestSummary.workflowStatus === "cancelled"
-                ? manifestSummary.workflowStatus
-                : "completed",
-            shortResult: manifestSummary.shortResult,
-          };
-        } catch {
-          // Evidence may not exist yet while the worker is still settling; keep polling.
-        }
-      } else {
-        return undefined;
-      }
-    }
+    const attemptResult = await attemptRunSummaryFetch(runId, fallbackKind);
+    if (attemptResult.kind === "abort") return undefined;
 
-    if (summary !== undefined) {
-      const patched = await patchChatMessage(message.id, chat.id, projectPath, summary);
+    if (attemptResult.kind === "summary") {
+      const patched = await patchChatMessage(
+        message.id,
+        chat.id,
+        projectPath,
+        attemptResult.summary,
+      );
       return { chatId: chat.id, messageId: message.id, message: patched.message };
     }
 

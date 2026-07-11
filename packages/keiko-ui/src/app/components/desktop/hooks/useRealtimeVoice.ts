@@ -670,6 +670,97 @@ function shouldFlushOnAssistantTranscript(
   );
 }
 
+// Promotes a buffered (uncommitted) user transcript delta to the active voice turn and, when one
+// was recovered, hands it to the client-side grounded-turn executor. Shared by the `error`,
+// `response-done`, `response-cancelled`, and `user-transcript-failed` events in
+// `handleRealtimeEvent` — each of them reacts to the provider abandoning a turn before a final
+// user transcript arrived, and all four need the same "recover it, then execute" step.
+function settlePendingGroundedTurn(
+  promoteUserTranscriptFallback: (itemId?: string) => VoiceTurnDraft | undefined,
+  executeClientGroundedTurn: (turn: VoiceTurnDraft) => void,
+  itemId?: string,
+): void {
+  const turn = promoteUserTranscriptFallback(itemId);
+  if (turn !== undefined) {
+    executeClientGroundedTurn(turn);
+  }
+}
+
+interface RealtimeResponseSettlementDeps {
+  readonly promoteUserTranscriptFallback: (itemId?: string) => VoiceTurnDraft | undefined;
+  readonly executeClientGroundedTurn: (turn: VoiceTurnDraft) => void;
+  readonly commitBufferedAssistantTranscript: (responseId: string | undefined) => void;
+  readonly flushVoiceTurn: (options: {
+    readonly allowAssistantFallback: boolean;
+    readonly force?: boolean;
+  }) => void;
+  readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
+  readonly latencyRef: MutableRefObject<VoiceLatencyObserver | undefined>;
+}
+
+// Settles a `response.done` event: recovers any pending user-transcript fallback, then commits the
+// buffered assistant transcript and applies the turn signal that matches the response's terminal
+// status. Extracted so `handleRealtimeEvent`'s switch holds one call per case instead of a
+// three-way status branch nested inside the case body.
+function handleResponseDoneEvent(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "response-done" }>,
+  deps: RealtimeResponseSettlementDeps,
+): void {
+  settlePendingGroundedTurn(deps.promoteUserTranscriptFallback, deps.executeClientGroundedTurn);
+  if (event.status === "cancelled") {
+    deps.latencyRef.current?.mark("interrupt_ack");
+    deps.commitBufferedAssistantTranscript(event.responseId);
+    deps.flushVoiceTurn({ allowAssistantFallback: true });
+    deps.applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+    return;
+  }
+  if (event.status === "failed" || event.status === "incomplete") {
+    deps.commitBufferedAssistantTranscript(event.responseId);
+    deps.flushVoiceTurn({ allowAssistantFallback: true });
+    deps.applyTurnSignal({ kind: "provider-failure", recoverable: true });
+    return;
+  }
+  deps.commitBufferedAssistantTranscript(event.responseId);
+  deps.flushVoiceTurn({ allowAssistantFallback: true });
+  deps.applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+}
+
+// Settles a `response.cancelled` event (a provider-acknowledged barge-in): marks the interrupt,
+// recovers any pending user-transcript fallback, then commits and flushes the turn as stopped.
+function handleResponseCancelledEvent(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "response-cancelled" }>,
+  deps: RealtimeResponseSettlementDeps,
+): void {
+  deps.latencyRef.current?.mark("interrupt_ack");
+  settlePendingGroundedTurn(deps.promoteUserTranscriptFallback, deps.executeClientGroundedTurn);
+  deps.commitBufferedAssistantTranscript(event.responseId);
+  deps.flushVoiceTurn({ allowAssistantFallback: true });
+  deps.applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+}
+
+interface RealtimeErrorSettlementDeps {
+  readonly promoteUserTranscriptFallback: (itemId?: string) => VoiceTurnDraft | undefined;
+  readonly executeClientGroundedTurn: (turn: VoiceTurnDraft) => void;
+  readonly flushVoiceTurn: (options: {
+    readonly allowAssistantFallback: boolean;
+    readonly force?: boolean;
+  }) => void;
+  readonly applyTurnSignal: (signal: Parameters<VoiceTurnManagerEngine["apply"]>[0]) => void;
+  readonly dispatch: Dispatch<RealtimeVoiceAction>;
+}
+
+// Settles a provider `error` event: recovers any pending user-transcript fallback, flushes the
+// turn, then surfaces the failure both to the turn manager and to the connection-state reducer.
+function handleRealtimeErrorEvent(
+  event: Extract<ParsedRealtimeVoiceEvent, { kind: "error" }>,
+  deps: RealtimeErrorSettlementDeps,
+): void {
+  settlePendingGroundedTurn(deps.promoteUserTranscriptFallback, deps.executeClientGroundedTurn);
+  deps.flushVoiceTurn({ allowAssistantFallback: true });
+  deps.applyTurnSignal({ kind: "provider-failure", recoverable: true });
+  deps.dispatch({ type: "error", reason: "connection-failed", message: event.message });
+}
+
 export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoiceController {
   const [state, dispatch] = useReducer(realtimeVoiceReducer, INITIAL_STATE);
   const turnManagerRef = useRef<VoiceTurnManagerEngine>(
@@ -1423,12 +1514,11 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           appendUserTranscriptDelta(event);
           return;
         case "user-transcript-failed":
-          {
-            const turn = promoteUserTranscriptFallback(event.itemId);
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
+          settlePendingGroundedTurn(
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            event.itemId,
+          );
           return;
         case "assistant-output-start":
           latencyRef.current?.mark("first_assistant_audio");
@@ -1458,51 +1548,33 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           executeGroundedFunctionCall(event);
           return;
         case "response-done":
-          {
-            const turn = promoteUserTranscriptFallback();
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
-          if (event.status === "cancelled") {
-            latencyRef.current?.mark("interrupt_ack");
-            commitBufferedAssistantTranscript(event.responseId);
-            flushVoiceTurn({ allowAssistantFallback: true });
-            applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
-            return;
-          }
-          if (event.status === "failed" || event.status === "incomplete") {
-            commitBufferedAssistantTranscript(event.responseId);
-            flushVoiceTurn({ allowAssistantFallback: true });
-            applyTurnSignal({ kind: "provider-failure", recoverable: true });
-            return;
-          }
-          commitBufferedAssistantTranscript(event.responseId);
-          flushVoiceTurn({ allowAssistantFallback: true });
-          applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+          handleResponseDoneEvent(event, {
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            commitBufferedAssistantTranscript,
+            flushVoiceTurn,
+            applyTurnSignal,
+            latencyRef,
+          });
           return;
         case "response-cancelled":
-          latencyRef.current?.mark("interrupt_ack");
-          {
-            const turn = promoteUserTranscriptFallback();
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
-          commitBufferedAssistantTranscript(event.responseId);
-          flushVoiceTurn({ allowAssistantFallback: true });
-          applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
+          handleResponseCancelledEvent(event, {
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            commitBufferedAssistantTranscript,
+            flushVoiceTurn,
+            applyTurnSignal,
+            latencyRef,
+          });
           return;
         case "error":
-          {
-            const turn = promoteUserTranscriptFallback();
-            if (turn !== undefined) {
-              executeClientGroundedTurn(turn);
-            }
-          }
-          flushVoiceTurn({ allowAssistantFallback: true });
-          applyTurnSignal({ kind: "provider-failure", recoverable: true });
-          dispatch({ type: "error", reason: "connection-failed", message: event.message });
+          handleRealtimeErrorEvent(event, {
+            promoteUserTranscriptFallback,
+            executeClientGroundedTurn,
+            flushVoiceTurn,
+            applyTurnSignal,
+            dispatch,
+          });
           return;
       }
     },

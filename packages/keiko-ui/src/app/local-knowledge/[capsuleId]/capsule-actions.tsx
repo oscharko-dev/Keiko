@@ -109,6 +109,28 @@ function confirmButtonLabel(kind: ActionKind, busy: boolean, t: I18nTranslate): 
   return t("localKnowledge.detail.actions.repair.confirm");
 }
 
+interface CapsuleActionImpls {
+  readonly deleteCapsuleImpl: typeof deleteCapsule;
+  readonly refreshCapsuleImpl: typeof refreshCapsuleChangedFiles;
+  readonly reembedCapsuleImpl: typeof reembedCapsuleForCurrentModel;
+  readonly rebuildCapsuleImpl: typeof rebuildCapsuleIndex;
+  readonly repairCapsuleImpl: typeof repairCapsuleFailedFiles;
+}
+
+// Mirrors the actionTitle/actionDescription/confirmButtonLabel dispatch-by-kind shape above,
+// but resolves to the API call the confirmed action should run.
+function actionRunnerFor(
+  kind: ActionKind,
+  capsuleId: KnowledgeCapsuleId,
+  impls: CapsuleActionImpls,
+): () => Promise<CapsuleActionResponse> {
+  if (kind === "delete") return () => impls.deleteCapsuleImpl(capsuleId);
+  if (kind === "refresh") return () => impls.refreshCapsuleImpl(capsuleId);
+  if (kind === "reembed") return () => impls.reembedCapsuleImpl(capsuleId);
+  if (kind === "rebuild") return () => impls.rebuildCapsuleImpl(capsuleId);
+  return () => impls.repairCapsuleImpl(capsuleId);
+}
+
 function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100).toString()}%`;
@@ -125,6 +147,75 @@ function progressStyle(value: number): { readonly width: string } {
 
 function initialProgressState(now = Date.now()): ProgressState {
   return { detail: null, startedAt: now, now, pollError: null };
+}
+
+// progressAfter* — pure state transitions for the polling effect below. Kept as small,
+// individually testable functions instead of inline ternaries inside the effect closure.
+
+function progressAfterTick(current: ProgressState | null): ProgressState | null {
+  return current === null ? current : { ...current, now: Date.now() };
+}
+
+function progressAfterFetch(current: ProgressState | null, detail: CapsuleDetail): ProgressState {
+  return current === null
+    ? { detail, startedAt: Date.now(), now: Date.now(), pollError: null }
+    : { ...current, detail, now: Date.now(), pollError: null };
+}
+
+function progressAfterPollError(
+  current: ProgressState | null,
+  message: string,
+): ProgressState | null {
+  return current === null ? current : { ...current, now: Date.now(), pollError: message };
+}
+
+// Named module-scope helper (rather than a closure captured inside the effect) so the poll
+// effect stays a thin wire-up: create the timer, delegate the fetch/error handling here.
+async function pollCapsuleProgress(
+  capsuleId: KnowledgeCapsuleId,
+  fetchDetail: typeof fetchCapsuleDetail,
+  t: I18nTranslate,
+  isCancelled: () => boolean,
+  setProgress: (updater: (current: ProgressState | null) => ProgressState | null) => void,
+): Promise<void> {
+  try {
+    const detail = await fetchDetail(capsuleId);
+    if (isCancelled()) return;
+    setProgress((current) => progressAfterFetch(current, detail));
+  } catch (error) {
+    if (isCancelled()) return;
+    setProgress((current) => progressAfterPollError(current, formatError(error, t)));
+  }
+}
+
+function isProgressActive(
+  progress: ProgressState | null,
+  indexBusy: boolean,
+  busy: boolean,
+  confirm: ConfirmState | null,
+): boolean {
+  if (progress === null) return false;
+  if (indexBusy) return true;
+  return busy && confirm !== null && confirm.kind !== "delete";
+}
+
+// Delete can return affected Knowledge Pod Sets (AUDIT-E1821-001); routes the completion to
+// the acknowledgement notice, the caller's onDeleted hook, or the default reload, in that order.
+function resolveDeleteCompletion(
+  response: CapsuleActionResponse,
+  onDeleted: ((response: CapsuleActionResponse) => void) | undefined,
+  onActionComplete: () => void,
+  onAffectedSets: (response: CapsuleActionResponse) => void,
+): void {
+  if ((response.affectedCapsuleSetIds?.length ?? 0) > 0) {
+    onAffectedSets(response);
+    return;
+  }
+  if (onDeleted !== undefined) {
+    onDeleted(response);
+    return;
+  }
+  onActionComplete();
 }
 
 function formatLimitDuration(ms: number): string {
@@ -589,6 +680,160 @@ function ProgressBar({ value, label }: { value: number; label: string }): ReactN
   );
 }
 
+// ---------------------------------------------------------------------------
+// IndexActionRow — Issue #189/#682 "Index now" button + its own error/progress
+// ---------------------------------------------------------------------------
+
+interface IndexActionRowProps {
+  readonly indexBusy: boolean;
+  readonly indexError: string | null;
+  readonly progress: ProgressState | null;
+  readonly onIndex: () => void;
+  readonly t: I18nTranslate;
+}
+
+function IndexActionRow({
+  indexBusy,
+  indexError,
+  progress,
+  onIndex,
+  t,
+}: IndexActionRowProps): ReactNode {
+  return (
+    <div className={`lkd-index-row ${detailStyles.indexPrompt}`}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-primary"
+        aria-label={t("localKnowledge.detail.actions.index.aria")}
+        aria-busy={indexBusy}
+        disabled={indexBusy}
+        title={t("localKnowledge.detail.help.indexNow")}
+        onClick={onIndex}
+      >
+        {indexBusy
+          ? t("localKnowledge.detail.actions.index.busy")
+          : t("localKnowledge.detail.actions.index.button")}
+      </button>
+      {indexError !== null ? (
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          {indexError}
+        </div>
+      ) : null}
+      {indexBusy && progress !== null ? (
+        <ActionProgress kind="index" progress={progress} t={t} />
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MaintenanceActionsGroup — re-embed / rebuild / refresh / repair / delete row
+// ---------------------------------------------------------------------------
+
+interface MaintenanceActionsGroupProps {
+  readonly capsuleDisplayName: string;
+  readonly showReembedButton: boolean;
+  readonly showRebuildButton: boolean;
+  readonly reembedRecommended: boolean;
+  readonly contextualRebuildRequired: boolean;
+  readonly actionDisabled: boolean;
+  readonly onReembed: () => void;
+  readonly onRebuild: () => void;
+  readonly onRefresh: () => void;
+  readonly onRepair: () => void;
+  readonly onDelete: () => void;
+  readonly t: I18nTranslate;
+}
+
+function MaintenanceActionsGroup({
+  capsuleDisplayName,
+  showReembedButton,
+  showRebuildButton,
+  reembedRecommended,
+  contextualRebuildRequired,
+  actionDisabled,
+  onReembed,
+  onRebuild,
+  onRefresh,
+  onRepair,
+  onDelete,
+  t,
+}: MaintenanceActionsGroupProps): ReactNode {
+  return (
+    <div
+      role="group"
+      aria-label={t("localKnowledge.detail.actions.group", { name: capsuleDisplayName })}
+      className="lkd-actions-group"
+    >
+      {showReembedButton ? (
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          data-recommended={reembedRecommended ? "true" : "false"}
+          aria-label={t("localKnowledge.detail.actions.reembed.aria", {
+            name: capsuleDisplayName,
+          })}
+          title={t("localKnowledge.detail.help.actionReembed")}
+          disabled={actionDisabled}
+          onClick={onReembed}
+        >
+          {t("localKnowledge.detail.actions.reembed.button")}
+        </button>
+      ) : null}
+      {showRebuildButton ? (
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          data-recommended={contextualRebuildRequired ? "true" : "false"}
+          aria-label={t("localKnowledge.detail.actions.rebuild.aria", {
+            name: capsuleDisplayName,
+          })}
+          title={t("localKnowledge.detail.help.actionRebuild")}
+          disabled={actionDisabled}
+          onClick={onRebuild}
+        >
+          {t("localKnowledge.detail.actions.rebuild.button")}
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        aria-label={t("localKnowledge.detail.actions.refresh.aria", {
+          name: capsuleDisplayName,
+        })}
+        title={t("localKnowledge.detail.help.actionRefresh")}
+        disabled={actionDisabled}
+        onClick={onRefresh}
+      >
+        {t("localKnowledge.detail.actions.refresh.button")}
+      </button>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        aria-label={t("localKnowledge.detail.actions.repair.aria", {
+          name: capsuleDisplayName,
+        })}
+        title={t("localKnowledge.detail.help.actionRepair")}
+        disabled={actionDisabled}
+        onClick={onRepair}
+      >
+        {t("localKnowledge.detail.actions.repair.button")}
+      </button>
+      <button
+        type="button"
+        className="lk-btn lk-btn-danger"
+        aria-label={t("localKnowledge.detail.actions.delete.aria", {
+          name: capsuleDisplayName,
+        })}
+        title={t("localKnowledge.detail.help.actionDelete")}
+        onClick={onDelete}
+      >
+        {t("common.delete")}
+      </button>
+    </div>
+  );
+}
+
 function ConfirmModal({
   kind,
   capsuleDisplayName,
@@ -837,13 +1082,12 @@ export function CapsuleActions({
   const [indexBusy, setIndexBusy] = useState(false);
   const [indexError, setIndexError] = useState<string | null>(null);
   const [progress, setProgress] = useState<ProgressState | null>(null);
-  const progressActive =
-    progress !== null && (indexBusy || (busy && confirm !== null && confirm.kind !== "delete"));
+  const progressActive = isProgressActive(progress, indexBusy, busy, confirm);
 
   useEffect(() => {
     if (!progressActive) return undefined;
     const tick = window.setInterval(() => {
-      setProgress((current) => (current === null ? current : { ...current, now: Date.now() }));
+      setProgress(progressAfterTick);
     }, 1_000);
     return () => window.clearInterval(tick);
   }, [progressActive]);
@@ -851,32 +1095,9 @@ export function CapsuleActions({
   useEffect(() => {
     if (!progressActive) return undefined;
     let cancelled = false;
-    async function poll(): Promise<void> {
-      try {
-        const detail = await fetchCapsuleDetailImpl(capsuleId);
-        if (cancelled) return;
-        setProgress((current) =>
-          current === null
-            ? {
-                detail,
-                startedAt: Date.now(),
-                now: Date.now(),
-                pollError: null,
-              }
-            : { ...current, detail, now: Date.now(), pollError: null },
-        );
-      } catch (error) {
-        if (cancelled) return;
-        setProgress((current) =>
-          current === null
-            ? current
-            : { ...current, now: Date.now(), pollError: formatError(error, t) },
-        );
-      }
-    }
-    void poll();
+    void pollCapsuleProgress(capsuleId, fetchCapsuleDetailImpl, t, () => cancelled, setProgress);
     const timer = window.setInterval(() => {
-      void poll();
+      void pollCapsuleProgress(capsuleId, fetchCapsuleDetailImpl, t, () => cancelled, setProgress);
     }, 2_000);
     return () => {
       cancelled = true;
@@ -929,13 +1150,7 @@ export function CapsuleActions({
       setProgress(null);
       setConfirm(null);
       if (kind === "delete") {
-        if ((response.affectedCapsuleSetIds?.length ?? 0) > 0) {
-          setPendingDeleteResponse(response);
-        } else if (onDeleted !== undefined) {
-          onDeleted(response);
-        } else {
-          onActionComplete();
-        }
+        resolveDeleteCompletion(response, onDeleted, onActionComplete, setPendingDeleteResponse);
       } else {
         onActionComplete();
       }
@@ -957,17 +1172,16 @@ export function CapsuleActions({
   function handleConfirm(): void {
     if (confirm === null || busy) return;
     const { kind } = confirm;
-    if (kind === "delete") {
-      void runAction(kind, () => deleteCapsuleImpl(capsuleId));
-    } else if (kind === "refresh") {
-      void runAction(kind, () => refreshCapsuleImpl(capsuleId));
-    } else if (kind === "reembed") {
-      void runAction(kind, () => reembedCapsuleImpl(capsuleId));
-    } else if (kind === "rebuild") {
-      void runAction(kind, () => rebuildCapsuleImpl(capsuleId));
-    } else {
-      void runAction(kind, () => repairCapsuleImpl(capsuleId));
-    }
+    void runAction(
+      kind,
+      actionRunnerFor(kind, capsuleId, {
+        deleteCapsuleImpl,
+        refreshCapsuleImpl,
+        reembedCapsuleImpl,
+        rebuildCapsuleImpl,
+        repairCapsuleImpl,
+      }),
+    );
   }
 
   const showIndexButton = sourceCount > 0 && lifecycleState !== "ready";
@@ -1003,29 +1217,13 @@ export function CapsuleActions({
       />
 
       {showIndexButton ? (
-        <div className={`lkd-index-row ${detailStyles.indexPrompt}`}>
-          <button
-            type="button"
-            className="lk-btn lk-btn-primary"
-            aria-label={t("localKnowledge.detail.actions.index.aria")}
-            aria-busy={indexBusy}
-            disabled={indexBusy}
-            title={t("localKnowledge.detail.help.indexNow")}
-            onClick={() => void handleIndex()}
-          >
-            {indexBusy
-              ? t("localKnowledge.detail.actions.index.busy")
-              : t("localKnowledge.detail.actions.index.button")}
-          </button>
-          {indexError !== null ? (
-            <div role="alert" aria-live="assertive" className="lk-alert">
-              {indexError}
-            </div>
-          ) : null}
-          {indexBusy && progress !== null ? (
-            <ActionProgress kind="index" progress={progress} t={t} />
-          ) : null}
-        </div>
+        <IndexActionRow
+          indexBusy={indexBusy}
+          indexError={indexError}
+          progress={progress}
+          onIndex={() => void handleIndex()}
+          t={t}
+        />
       ) : null}
 
       <details className={detailStyles.maintenanceDisclosure}>
@@ -1041,77 +1239,20 @@ export function CapsuleActions({
         <p className="lkd-limit-note" title={t("localKnowledge.detail.help.maintenanceLimits")}>
           {localKnowledgeLimitSummary(t, locale)}
         </p>
-        <div
-          role="group"
-          aria-label={t("localKnowledge.detail.actions.group", { name: capsuleDisplayName })}
-          className="lkd-actions-group"
-        >
-          {showReembedButton ? (
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost"
-              data-recommended={reembedRecommended ? "true" : "false"}
-              aria-label={t("localKnowledge.detail.actions.reembed.aria", {
-                name: capsuleDisplayName,
-              })}
-              title={t("localKnowledge.detail.help.actionReembed")}
-              disabled={actionDisabled}
-              onClick={() => openModal("reembed")}
-            >
-              {t("localKnowledge.detail.actions.reembed.button")}
-            </button>
-          ) : null}
-          {showRebuildButton ? (
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost"
-              data-recommended={contextualRebuildRequired ? "true" : "false"}
-              aria-label={t("localKnowledge.detail.actions.rebuild.aria", {
-                name: capsuleDisplayName,
-              })}
-              title={t("localKnowledge.detail.help.actionRebuild")}
-              disabled={actionDisabled}
-              onClick={() => openModal("rebuild")}
-            >
-              {t("localKnowledge.detail.actions.rebuild.button")}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="lk-btn lk-btn-ghost"
-            aria-label={t("localKnowledge.detail.actions.refresh.aria", {
-              name: capsuleDisplayName,
-            })}
-            title={t("localKnowledge.detail.help.actionRefresh")}
-            disabled={actionDisabled}
-            onClick={() => openModal("refresh")}
-          >
-            {t("localKnowledge.detail.actions.refresh.button")}
-          </button>
-          <button
-            type="button"
-            className="lk-btn lk-btn-ghost"
-            aria-label={t("localKnowledge.detail.actions.repair.aria", {
-              name: capsuleDisplayName,
-            })}
-            title={t("localKnowledge.detail.help.actionRepair")}
-            disabled={actionDisabled}
-            onClick={() => openModal("repair")}
-          >
-            {t("localKnowledge.detail.actions.repair.button")}
-          </button>
-          <button
-            type="button"
-            className="lk-btn lk-btn-danger"
-            aria-label={t("localKnowledge.detail.actions.delete.aria", {
-              name: capsuleDisplayName,
-            })}
-            title={t("localKnowledge.detail.help.actionDelete")}
-            onClick={() => openModal("delete")}
-          >
-            {t("common.delete")}
-          </button>
-        </div>
+        <MaintenanceActionsGroup
+          capsuleDisplayName={capsuleDisplayName}
+          showReembedButton={showReembedButton}
+          showRebuildButton={showRebuildButton}
+          reembedRecommended={reembedRecommended}
+          contextualRebuildRequired={contextualRebuildRequired}
+          actionDisabled={actionDisabled}
+          onReembed={() => openModal("reembed")}
+          onRebuild={() => openModal("rebuild")}
+          onRefresh={() => openModal("refresh")}
+          onRepair={() => openModal("repair")}
+          onDelete={() => openModal("delete")}
+          t={t}
+        />
       </details>
 
       {confirm !== null ? (

@@ -1126,7 +1126,7 @@ const CANONICAL_MANIFEST_SUFFIXES: readonly string[] = Object.freeze([
 // injection path in the grounded orchestrator. Path-shaped entries (e.g. ".mvn/wrapper/...") are
 // kept verbatim; the orchestrator joins them to a metadata root.
 export const CANONICAL_MANIFEST_BASENAMES: readonly string[] = Object.freeze(
-  [...new Set(ECOSYSTEMS.flatMap((eco) => eco.manifestNames))].sort((a, b) => a.localeCompare(b)),
+  [...new Set(ECOSYSTEMS.flatMap((eco) => eco.manifestNames))].sort(),
 );
 
 const ECOSYSTEM_SOURCE_EXTENSIONS: ReadonlySet<string> = freezeSet(
@@ -1473,5 +1473,5 @@ export function allRegisteredFilePatterns(): readonly string[] {
   const suffixes = ECOSYSTEMS.flatMap((eco) =>
     eco.manifestSuffixes.map((suffix) => `manifest${suffix}`),
   );
-  return [...new Set([...names, ...suffixes])].sort((a, b) => a.localeCompare(b));
+  return [...new Set([...names, ...suffixes])].sort();
 }

@@ -27,6 +27,67 @@ function getTreeItems(container: HTMLDivElement): HTMLButtonElement[] {
   return Array.from(container.querySelectorAll<HTMLButtonElement>("button[role='treeitem']"));
 }
 
+interface TreeKeyContext {
+  readonly items: HTMLButtonElement[];
+  readonly index: number;
+  readonly btn: HTMLButtonElement;
+}
+
+function focusNextTreeItem({ items, index }: TreeKeyContext): void {
+  items[index + 1]?.focus();
+}
+
+function focusPreviousTreeItem({ items, index }: TreeKeyContext): void {
+  items[index - 1]?.focus();
+}
+
+function focusFirstTreeItem({ items }: TreeKeyContext): void {
+  items[0]?.focus();
+}
+
+function focusLastTreeItem({ items }: TreeKeyContext): void {
+  items[items.length - 1]?.focus();
+}
+
+function focusParentTreeItem({ items, index }: TreeKeyContext): void {
+  const level = Number(items[index]?.getAttribute("aria-level") ?? "1");
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (Number(items[i]?.getAttribute("aria-level") ?? "1") < level) {
+      items[i]?.focus();
+      break;
+    }
+  }
+}
+
+function expandOrFocusNextTreeItem(context: TreeKeyContext): void {
+  // Expand if collapsed, else move to first child.
+  const { btn } = context;
+  if (btn.getAttribute("aria-expanded") === "false") {
+    btn.click();
+  } else if (btn.getAttribute("aria-expanded") === "true") {
+    focusNextTreeItem(context);
+  }
+}
+
+function collapseOrFocusParentTreeItem(context: TreeKeyContext): void {
+  // Collapse if expanded; otherwise move to parent (lower aria-level).
+  if (context.btn.getAttribute("aria-expanded") === "true") {
+    context.btn.click();
+  } else {
+    focusParentTreeItem(context);
+  }
+}
+
+// Key-to-handler registry — keeps handleTreeKey a flat dispatch instead of a branchy chain.
+const TREE_KEY_HANDLERS: Record<string, (context: TreeKeyContext) => void> = {
+  ArrowDown: focusNextTreeItem,
+  ArrowUp: focusPreviousTreeItem,
+  Home: focusFirstTreeItem,
+  End: focusLastTreeItem,
+  ArrowRight: expandOrFocusNextTreeItem,
+  ArrowLeft: collapseOrFocusParentTreeItem,
+};
+
 function handleTreeKey(event: ReactKeyboardEvent<HTMLDivElement>, container: HTMLDivElement): void {
   const items = getTreeItems(container);
   const target = event.target;
@@ -36,36 +97,7 @@ function handleTreeKey(event: ReactKeyboardEvent<HTMLDivElement>, container: HTM
   const index = items.indexOf(btn);
   if (index < 0) return;
   event.preventDefault();
-  const key = event.key;
-  if (key === "ArrowDown") {
-    items[index + 1]?.focus();
-  } else if (key === "ArrowUp") {
-    items[index - 1]?.focus();
-  } else if (key === "Home") {
-    items[0]?.focus();
-  } else if (key === "End") {
-    items[items.length - 1]?.focus();
-  } else if (key === "ArrowRight") {
-    // Expand if collapsed, else move to first child.
-    if (btn.getAttribute("aria-expanded") === "false") {
-      btn.click();
-    } else if (btn.getAttribute("aria-expanded") === "true") {
-      items[index + 1]?.focus();
-    }
-  } else if (key === "ArrowLeft") {
-    // Collapse if expanded; otherwise move to parent (lower aria-level).
-    if (btn.getAttribute("aria-expanded") === "true") {
-      btn.click();
-    } else {
-      const level = Number(btn.getAttribute("aria-level") ?? "1");
-      for (let i = index - 1; i >= 0; i -= 1) {
-        if (Number(items[i]?.getAttribute("aria-level") ?? "1") < level) {
-          items[i]?.focus();
-          break;
-        }
-      }
-    }
-  }
+  TREE_KEY_HANDLERS[event.key]?.({ items, index, btn });
 }
 
 function ProjectRow({

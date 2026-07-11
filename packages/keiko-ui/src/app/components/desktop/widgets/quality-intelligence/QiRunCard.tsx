@@ -786,18 +786,14 @@ export function QiRunCard({
   const seqRef = useRef(0);
 
   const loadDetail = useCallback(async (): Promise<void> => {
-    const seq = seqRef.current + 1;
-    seqRef.current = seq;
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetchDetailImpl(runId);
-      if (seqRef.current === seq) setDetail(res);
-    } catch (err) {
-      if (seqRef.current === seq) setError(formatError(err));
-    } finally {
-      if (seqRef.current === seq) setLoading(false);
-    }
+    await loadRunDetail({
+      runId,
+      fetchDetailImpl,
+      seqRef,
+      setLoading,
+      setError,
+      setDetail,
+    });
   }, [fetchDetailImpl, runId]);
 
   useEffect(() => {
@@ -821,36 +817,20 @@ export function QiRunCard({
     (candidateId: string, action: QiReviewAction): void => {
       if (!governanceEnabled || pendingReview !== null) return;
       setPendingReview({ candidateId, action });
-      void (async (): Promise<void> => {
-        setActionError(null);
-        try {
-          await reviewImpl(runId, action, candidateId, trimmedReviewerLabel);
-          await loadDetail();
-          // Issue #282 A11y-1: announce the review outcome via a dedicated live region.
-          // The shared contracts projection maps the action to the resulting review state
-          // ("reopen" → "open", "withdraw" → "withdrawn", …) and REVIEW_LABEL renders its human
-          // label. A monotonic nonce guarantees the string differs on identical repeat actions so AT
-          // always re-reads it (AT suppresses byte-identical repeated announcements).
-          const resultLabel = reviewLabel(reviewActionResultState(action), t);
-          // Look up the candidate title from the last-loaded detail snapshot (best effort: the
-          // reload above may have updated state but setDetail is async; use the snapshot we had
-          // at the time of the call — the title is immutable so this is always correct).
-          const candidateTitle =
-            detail?.candidates.find((c) => c.id === candidateId)?.title ?? candidateId;
-          announceNonceRef.current += 1;
-          setReviewAnnounce(
-            t("qi.review.announce", {
-              title: candidateTitle,
-              state: resultLabel,
-              nonce: announceNonceRef.current,
-            }),
-          );
-        } catch (err) {
-          setActionError(formatError(err));
-        } finally {
-          setPendingReview(null);
-        }
-      })();
+      void runReviewAction({
+        runId,
+        action,
+        candidateId,
+        trimmedReviewerLabel,
+        reviewImpl,
+        loadDetail,
+        detail,
+        t,
+        announceNonceRef,
+        setActionError,
+        setReviewAnnounce,
+        setPendingReview,
+      });
     },
     // detail is included so the announcement always resolves the candidate title from the current
     // loaded snapshot (title is immutable per run so the lookup is always correct).
@@ -901,11 +881,7 @@ export function QiRunCard({
           candidate after each review/edit reload, and interactive controls inside a live region
           are an anti-pattern. Load errors announce via ErrorState's own role="alert". */}
       <p className="sr-only" role="status" aria-live="polite">
-        {loading
-          ? t("qi.run.loading")
-          : error === null && detail !== null
-            ? t("qi.run.loaded", { count: detail.totals.candidates })
-            : ""}
+        {computeStatusText(loading, error, detail, t)}
       </p>
       {/* Issue #282 A11y-1 (WCAG 4.1.3): dedicated review-outcome live region, separate from the
           load-status region above. The load region announces "Run loaded: N test cases" on every
@@ -916,96 +892,30 @@ export function QiRunCard({
         {reviewAnnounce}
       </p>
       <div className="qi-run-card-body" aria-busy={loading}>
-        {loading && detail === null ? (
-          <LoadingSkeleton />
-        ) : error !== null ? (
-          <ErrorState message={error} onRetry={() => void loadDetail()} />
-        ) : detail === null ? (
-          <div className="lk-empty">
-            <p className="lk-empty-body">{t("qi.run.notFound")}</p>
-          </div>
-        ) : (
-          <>
-            {actionError !== null ? (
-              <div className="lk-alert qi-action-error" role="alert" data-testid="qi-action-error">
-                {actionError}
-                <button
-                  type="button"
-                  className="lk-alert-retry"
-                  onClick={() => {
-                    setActionError(null);
-                  }}
-                >
-                  {t("common.dismiss")}
-                </button>
-              </div>
-            ) : null}
-            <section className="qi-run-governance" aria-label={t("qi.governance.title")}>
-              <label className="qi-field" htmlFor={`qi-reviewer-label-${runId}`}>
-                <span className="qi-field-label">{t("qi.governance.auditLabel")}</span>
-                <input
-                  id={`qi-reviewer-label-${runId}`}
-                  className="qi-input qi-run-governance-input"
-                  value={reviewerLabel}
-                  placeholder={t("qi.governance.auditPlaceholder")}
-                  aria-invalid={!governanceEnabled}
-                  aria-describedby={
-                    governanceEnabled ? reviewerHelpId : `${reviewerHelpId} ${reviewerWarningId}`
-                  }
-                  onChange={(event) => {
-                    setReviewerLabel(event.target.value);
-                  }}
-                />
-              </label>
-              <p id={reviewerHelpId} className="qi-run-governance-help">
-                {t("qi.governance.help")}
-              </p>
-              {/* Persistent live region (a11y M-02): always mounted so AT announces when the user
-                  clears the reviewer label and governance turns off. role="note" carries no implicit
-                  aria-live, and a conditionally-inserted region is unreliably announced. Empty (and
-                  visually nothing — the class has no box) while governance is enabled. */}
-              <p
-                id={reviewerWarningId}
-                className="qi-run-governance-warning"
-                role="status"
-                aria-live="polite"
-              >
-                {!governanceEnabled ? t("qi.governance.required") : ""}
-              </p>
-            </section>
-            <SummaryStrip detail={detail} t={t} />
-            <FindingsList detail={detail} t={t} />
-            <CoveragePanel detail={detail} t={t} />
-            {connectedSources !== undefined && connectedSources.length > 0 ? (
-              <DriftPanel
-                runId={runId}
-                connectedSources={connectedSources}
-                onRegenerated={onRegenerated}
-                reCheckImpl={reCheckImpl}
-                regenerateImpl={regenerateImpl}
-              />
-            ) : (
-              <DriftUnavailablePanel detail={detail} t={t} />
-            )}
-            <section className="qi-run-cases" aria-label={t("qi.run.generatedTestCases")}>
-              <div className="qi-run-cases-head">
-                <h3 className="qi-col-subtitle">
-                  {t("qi.run.testCases")}
-                  <span className="qi-col-count">{detail.candidates.length.toString()}</span>
-                </h3>
-                {detail.candidates.length > 0 ? <ExportBar runId={runId} /> : null}
-              </div>
-              <CandidatesPane
-                candidates={detail.candidates}
-                onReview={handleReview}
-                pendingReview={pendingReview}
-                onEdit={handleEdit}
-                actionsDisabled={!governanceEnabled}
-                actionsDisabledReason={t("qi.governance.required")}
-              />
-            </section>
-          </>
-        )}
+        <RunCardBody
+          runId={runId}
+          loading={loading}
+          error={error}
+          detail={detail}
+          onRetry={() => void loadDetail()}
+          t={t}
+          actionError={actionError}
+          onDismissActionError={() => {
+            setActionError(null);
+          }}
+          reviewerLabel={reviewerLabel}
+          onReviewerLabelChange={setReviewerLabel}
+          governanceEnabled={governanceEnabled}
+          reviewerHelpId={reviewerHelpId}
+          reviewerWarningId={reviewerWarningId}
+          connectedSources={connectedSources}
+          onRegenerated={onRegenerated}
+          reCheckImpl={reCheckImpl}
+          regenerateImpl={regenerateImpl}
+          onReview={handleReview}
+          pendingReview={pendingReview}
+          onEdit={handleEdit}
+        />
       </div>
     </div>
   );

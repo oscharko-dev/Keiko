@@ -19,9 +19,16 @@
 // (scope resolution, embedding identity check, strictest-policy floor, answer-grounding
 // rejection) is enforced by the underlying retrieval layer; the runner merely composes.
 
-import { assembleGroundedContext } from "../retrieval/context-pack-assembler.js";
+import type { RetrievalReference } from "@oscharko-dev/keiko-contracts";
+import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+
+import {
+  assembleGroundedContext,
+  type LocalKnowledgeGroundedContextPack,
+} from "../retrieval/context-pack-assembler.js";
 import { runLocalKnowledgeRetrieval } from "../retrieval/retrieval-runner.js";
 import type { RetrievalDependencies } from "../retrieval/retrieval-runner.js";
+import type { RetrievalQuery, RetrievalResult } from "../retrieval/types.js";
 
 import {
   attachCitationsToAnswer,
@@ -30,6 +37,7 @@ import {
 } from "./citation-attacher.js";
 import type {
   AnswerGenerator,
+  AnswerGeneratorInput,
   ConversationGroundedAnswer,
   ConversationGroundedQuery,
   ReferenceReranker,
@@ -65,83 +73,135 @@ function shouldRepairMissingCitations(
   return !NO_EVIDENCE_REPAIR_SKIP_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity
-export async function runGroundedAnswer(
-  deps: GroundedAnswerDependencies,
-  query: ConversationGroundedQuery,
-): Promise<ConversationGroundedAnswer> {
-  const retrieval = await runLocalKnowledgeRetrieval(
-    {
-      store: deps.retrieval.store,
-      embeddingAdapter: deps.retrieval.embeddingAdapter,
-      ...(deps.retrieval.queryTransformer !== undefined
-        ? { queryTransformer: deps.retrieval.queryTransformer }
-        : {}),
-      ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
-    },
-    {
-      text: query.text,
-      ...(query.capsuleId !== undefined ? { capsuleId: query.capsuleId } : {}),
-      ...(query.capsuleSetId !== undefined ? { capsuleSetId: query.capsuleSetId } : {}),
-      ...(query.topK !== undefined ? { topK: query.topK } : {}),
-      ...(query.minScore !== undefined ? { minScore: query.minScore } : {}),
-      ...(query.strategy !== undefined ? { strategy: query.strategy } : {}),
-    },
-  );
-
-  if (retrieval.noEvidence) {
-    const pack = assembleGroundedContext(retrieval.references);
-    return {
-      answer: "",
-      references: retrieval.references,
-      citations: [],
-      pack,
-      noEvidence: true,
-      ...(retrieval.reason !== undefined ? { reason: retrieval.reason } : {}),
-      ...(retrieval.diagnostics !== undefined
-        ? { retrievalDiagnostics: retrieval.diagnostics }
-        : {}),
-      ...(retrieval.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
-    };
-  }
-
-  const reranked =
-    deps.referenceReranker === undefined
-      ? undefined
-      : await deps.referenceReranker.rerank({
-          query,
-          references: retrieval.references,
-          ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
-        });
-  const references = reranked?.references ?? retrieval.references;
-  const pack = assembleGroundedContext(references);
-  const answerInput = {
-    query,
-    pack,
-    references,
+// ─── Retrieval wiring ─────────────────────────────────────────────────────────
+function buildRetrievalDependencies(deps: GroundedAnswerDependencies): RetrievalDependencies {
+  return {
+    store: deps.retrieval.store,
+    embeddingAdapter: deps.retrieval.embeddingAdapter,
+    ...(deps.retrieval.queryTransformer !== undefined
+      ? { queryTransformer: deps.retrieval.queryTransformer }
+      : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   };
-  const answerText = await deps.answerGenerator.generate(answerInput);
+}
 
-  let attached = attachCitationsToAnswer(answerText, references, deps.citationFaithfulness);
-  if (
-    deps.signal?.aborted !== true &&
-    shouldRepairMissingCitations(answerText, references, attached)
-  ) {
-    const repairedText = await deps.answerGenerator.generate({
-      ...answerInput,
-      citationRepair: true,
-    });
-    attached = attachCitationsToAnswer(repairedText, references, deps.citationFaithfulness);
+function buildRetrievalQuery(query: ConversationGroundedQuery): RetrievalQuery {
+  return {
+    text: query.text,
+    ...(query.capsuleId !== undefined ? { capsuleId: query.capsuleId } : {}),
+    ...(query.capsuleSetId !== undefined ? { capsuleSetId: query.capsuleSetId } : {}),
+    ...(query.topK !== undefined ? { topK: query.topK } : {}),
+    ...(query.minScore !== undefined ? { minScore: query.minScore } : {}),
+    ...(query.strategy !== undefined ? { strategy: query.strategy } : {}),
+  };
+}
+
+// ─── No-evidence short-circuit ────────────────────────────────────────────────
+function buildNoEvidenceAnswer(
+  retrieval: RetrievalResult,
+  pack: LocalKnowledgeGroundedContextPack,
+): ConversationGroundedAnswer {
+  return {
+    answer: "",
+    references: retrieval.references,
+    citations: [],
+    pack,
+    noEvidence: true,
+    ...(retrieval.reason !== undefined ? { reason: retrieval.reason } : {}),
+    ...(retrieval.diagnostics !== undefined ? { retrievalDiagnostics: retrieval.diagnostics } : {}),
+    ...(retrieval.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
+  };
+}
+
+// ─── Optional pre-answer reranking ────────────────────────────────────────────
+interface RerankOutcome {
+  readonly references: readonly RetrievalReference[];
+  readonly diagnostics: GroundedRerankerDiagnostics | undefined;
+}
+
+async function rerankReferences(
+  deps: GroundedAnswerDependencies,
+  query: ConversationGroundedQuery,
+  retrieval: RetrievalResult,
+): Promise<RerankOutcome> {
+  if (deps.referenceReranker === undefined) {
+    return { references: retrieval.references, diagnostics: undefined };
   }
+  const reranked = await deps.referenceReranker.rerank({
+    query,
+    references: retrieval.references,
+    ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+  });
+  return { references: reranked.references, diagnostics: reranked.diagnostics };
+}
+
+// ─── Answer generation + citation-repair retry ────────────────────────────────
+async function generateGroundedAnswerText(
+  deps: GroundedAnswerDependencies,
+  answerInput: AnswerGeneratorInput,
+  references: readonly RetrievalReference[],
+): Promise<AttachCitationsResult> {
+  const answerText = await deps.answerGenerator.generate(answerInput);
+  const attached = attachCitationsToAnswer(answerText, references, deps.citationFaithfulness);
+  if (
+    deps.signal?.aborted === true ||
+    !shouldRepairMissingCitations(answerText, references, attached)
+  ) {
+    return attached;
+  }
+  const repairedText = await deps.answerGenerator.generate({
+    ...answerInput,
+    citationRepair: true,
+  });
+  return attachCitationsToAnswer(repairedText, references, deps.citationFaithfulness);
+}
+
+// ─── Final answer assembly ─────────────────────────────────────────────────────
+function buildGroundedAnswer(
+  attached: AttachCitationsResult,
+  references: readonly RetrievalReference[],
+  pack: LocalKnowledgeGroundedContextPack,
+  retrieval: RetrievalResult,
+  rerankerDiagnostics: GroundedRerankerDiagnostics | undefined,
+): ConversationGroundedAnswer {
   return {
     answer: attached.text,
     references,
     citations: attached.citations,
     pack,
     noEvidence: false,
-    ...(reranked?.diagnostics === undefined ? {} : { reranker: reranked.diagnostics }),
+    ...(rerankerDiagnostics === undefined ? {} : { reranker: rerankerDiagnostics }),
     ...(retrieval.diagnostics !== undefined ? { retrievalDiagnostics: retrieval.diagnostics } : {}),
     ...(retrieval.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
   };
+}
+
+export async function runGroundedAnswer(
+  deps: GroundedAnswerDependencies,
+  query: ConversationGroundedQuery,
+): Promise<ConversationGroundedAnswer> {
+  const retrieval = await runLocalKnowledgeRetrieval(
+    buildRetrievalDependencies(deps),
+    buildRetrievalQuery(query),
+  );
+
+  if (retrieval.noEvidence) {
+    return buildNoEvidenceAnswer(retrieval, assembleGroundedContext(retrieval.references));
+  }
+
+  const { references, diagnostics: rerankerDiagnostics } = await rerankReferences(
+    deps,
+    query,
+    retrieval,
+  );
+  const pack = assembleGroundedContext(references);
+  const answerInput: AnswerGeneratorInput = {
+    query,
+    pack,
+    references,
+    ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+  };
+
+  const attached = await generateGroundedAnswerText(deps, answerInput, references);
+  return buildGroundedAnswer(attached, references, pack, retrieval, rerankerDiagnostics);
 }

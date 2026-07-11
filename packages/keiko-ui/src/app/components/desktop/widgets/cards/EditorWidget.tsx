@@ -74,6 +74,7 @@ import {
   normalizeEditorOpenFiles,
   openFilesPatchValue,
   paneIdFromPoint,
+  rovingTabTargetFile,
   sameStringList,
   tabInsertionTargetFromPoint,
   type DraggedTab,
@@ -235,6 +236,73 @@ function renderPaneActions(
         </button>
       ) : null}
     </span>
+  );
+}
+
+// Plain ArrowLeft/ArrowRight/Home/End (no Alt) roam the roving tab-stop within the pane's visible
+// tab order and activate the target (automatic activation, WCAG 2.1.1 + APG tablist). Split out of
+// handleTabKeyDown (GEN-MAINT-COMPLEXITY-002) so the alt/non-alt key paths are independently
+// readable; takes its callbacks as explicit params rather than closing over component state.
+function handleRovingTabKey(
+  paneId: string,
+  path: string,
+  order: readonly string[],
+  event: KeyboardEvent<HTMLButtonElement>,
+  selectOpenFile: (paneId: string, file: string) => void,
+  focusTabButton: (paneId: string, file: string) => void,
+): void {
+  if (order.length === 0) return;
+  const key = event.key;
+  if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") return;
+  const targetFile = rovingTabTargetFile(order, path, key);
+  event.preventDefault();
+  if (targetFile === undefined || targetFile === path) {
+    focusTabButton(paneId, path);
+    return;
+  }
+  selectOpenFile(paneId, targetFile);
+  focusTabButton(paneId, targetFile);
+}
+
+// Alt+Arrow tab-key handling: Alt+Shift+Arrow moves the tab to the adjacent pane, plain Alt+Arrow
+// reorders it within the pane. Split out of handleTabKeyDown (GEN-MAINT-COMPLEXITY-002) alongside
+// handleRovingTabKey; takes the layout snapshot and commitLayout as explicit params.
+function handleAltArrowTabKey(
+  paneId: string,
+  path: string,
+  pane: EditorPaneStateV2,
+  event: KeyboardEvent<HTMLButtonElement>,
+  layout: EditorLayoutStateV2,
+  commitLayout: (nextLayout: EditorLayoutStateV2) => void,
+): void {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const paneIds = editorLayoutPaneIds(layout);
+  if (event.shiftKey) {
+    const paneIndex = paneIds.indexOf(paneId);
+    const targetPaneId =
+      event.key === "ArrowLeft" ? paneIds[paneIndex - 1] : paneIds[paneIndex + 1];
+    if (targetPaneId !== undefined) {
+      commitLayout(
+        editorLayoutReducer(layout, {
+          type: "move-tab",
+          fromPaneId: paneId,
+          toPaneId: targetPaneId,
+          file: path,
+        }),
+      );
+    }
+    return;
+  }
+  const index = pane.tabOrder.indexOf(path);
+  const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1;
+  commitLayout(
+    editorLayoutReducer(layout, {
+      type: "reorder-tab",
+      paneId,
+      file: path,
+      targetIndex: nextIndex,
+    }),
   );
 }
 
@@ -948,64 +1016,13 @@ export function EditorWidget({
     (paneId: string, path: string, event: KeyboardEvent<HTMLButtonElement>): void => {
       const pane = layoutRef.current.panes[paneId];
       if (pane === undefined) return;
-      // Plain ArrowLeft/ArrowRight/Home/End (no Alt) roam the roving tab-stop within the pane's
-      // visible tab order and activate the target (automatic activation, WCAG 2.1.1 + APG tablist).
-      // Alt+Arrow keeps its existing reorder/move-across-pane behavior (handled below).
+      // Alt-less navigation roams the roving tab-stop; Alt+Arrow reorders/moves the tab across
+      // panes (handleRovingTabKey / handleAltArrowTabKey, GEN-MAINT-COMPLEXITY-002).
       if (!event.altKey) {
-        const order = pane.tabOrder;
-        if (order.length === 0) return;
-        const index = order.indexOf(path);
-        let targetFile: string | undefined;
-        if (event.key === "ArrowLeft") {
-          targetFile = order[index <= 0 ? order.length - 1 : index - 1];
-        } else if (event.key === "ArrowRight") {
-          targetFile = order[index < 0 || index >= order.length - 1 ? 0 : index + 1];
-        } else if (event.key === "Home") {
-          targetFile = order[0];
-        } else if (event.key === "End") {
-          targetFile = order[order.length - 1];
-        } else {
-          return;
-        }
-        event.preventDefault();
-        if (targetFile === undefined || targetFile === path) {
-          focusTabButton(paneId, path);
-          return;
-        }
-        selectOpenFile(paneId, targetFile);
-        focusTabButton(paneId, targetFile);
+        handleRovingTabKey(paneId, path, pane.tabOrder, event, selectOpenFile, focusTabButton);
         return;
       }
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault();
-        const paneIds = editorLayoutPaneIds(layoutRef.current);
-        if (event.shiftKey) {
-          const paneIndex = paneIds.indexOf(paneId);
-          const targetPaneId =
-            event.key === "ArrowLeft" ? paneIds[paneIndex - 1] : paneIds[paneIndex + 1];
-          if (targetPaneId !== undefined) {
-            commitLayout(
-              editorLayoutReducer(layoutRef.current, {
-                type: "move-tab",
-                fromPaneId: paneId,
-                toPaneId: targetPaneId,
-                file: path,
-              }),
-            );
-          }
-          return;
-        }
-        const index = pane.tabOrder.indexOf(path);
-        const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1;
-        commitLayout(
-          editorLayoutReducer(layoutRef.current, {
-            type: "reorder-tab",
-            paneId,
-            file: path,
-            targetIndex: nextIndex,
-          }),
-        );
-      }
+      handleAltArrowTabKey(paneId, path, pane, event, layoutRef.current, commitLayout);
     },
     [commitLayout, focusTabButton, selectOpenFile],
   );

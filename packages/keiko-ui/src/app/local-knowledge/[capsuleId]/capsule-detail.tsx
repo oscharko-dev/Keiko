@@ -287,33 +287,102 @@ function partialIndexMessage(
   return t("localKnowledge.detail.index.aligned");
 }
 
+function discoveryProgressRatio(total: number, completed: number): number {
+  if (total <= 0) return 0;
+  return completed / total;
+}
+
+function retrievalCoverageRatio(data: CapsuleDetailData): number {
+  if (data.health.chunkCount <= 0) return 0;
+  return data.health.vectorCount / data.health.chunkCount;
+}
+
+function jobDurationLabel(job: IndexingJobRecord | undefined, t: I18nTranslate): string {
+  if (job === undefined) return t("localKnowledge.detail.index.noJobRecorded");
+  return formatDuration((job.finishedAt ?? Date.now()) - job.startedAt);
+}
+
+function jobElapsedMs(job: IndexingJobRecord | undefined): number {
+  if (job === undefined) return 0;
+  return Math.max(Date.now() - job.startedAt, 1);
+}
+
+function indexEtaMs(job: IndexingJobRecord | undefined, total: number, completed: number): number {
+  const elapsedMs = jobElapsedMs(job);
+  const docsPerMs = completed > 0 ? completed / elapsedMs : 0;
+  if (docsPerMs <= 0) return 0;
+  return Math.max(0, total - completed) / docsPerMs;
+}
+
+function indexRemainingLabel(
+  job: IndexingJobRecord | undefined,
+  total: number,
+  completed: number,
+  t: I18nTranslate,
+): string {
+  if (job?.status === "running" && total > 0 && completed > 0) {
+    return t("localKnowledge.detail.index.eta", {
+      duration: formatDuration(indexEtaMs(job, total, completed)),
+    });
+  }
+  return jobDurationLabel(job, t);
+}
+
+function indexIssueTone(
+  missingVectors: number,
+  data: CapsuleDetailData,
+  job: IndexingJobRecord | undefined,
+): "ok" | "warn" | "danger" {
+  if (missingVectors <= 0 && data.health.failedDocuments <= 0) return "ok";
+  if (job?.lastError !== undefined) return "danger";
+  return "warn";
+}
+
+function indexLiveNoteLabel(job: IndexingJobRecord | undefined, t: I18nTranslate): string {
+  if (job?.status === "running") return t("localKnowledge.detail.index.updating");
+  return t("localKnowledge.detail.index.latestRun");
+}
+
+function indexedDocumentsTone(data: CapsuleDetailData): "ok" | "warn" | "danger" {
+  if (data.health.failedDocuments > 0) return "danger";
+  if (data.health.skippedDocuments > 0) return "warn";
+  return "ok";
+}
+
+function missingVectorsMetaLabel(missingVectors: number, t: I18nTranslate): string {
+  if (missingVectors > 0) {
+    return t("localKnowledge.detail.index.chunksMissingVectors", { count: missingVectors });
+  }
+  return t("localKnowledge.detail.index.allChunksEmbedded");
+}
+
+function missingVectorsTone(missingVectors: number): "ok" | "danger" {
+  if (missingVectors > 0) return "danger";
+  return "ok";
+}
+
+function latestJobValueLabel(job: IndexingJobRecord | undefined, t: I18nTranslate): string {
+  if (job === undefined) return t("localKnowledge.detail.index.notIndexed");
+  return jobStatusLabel(job.status, t);
+}
+
+function latestJobTone(job: IndexingJobRecord | undefined): "neutral" | "warn" | "danger" {
+  if (job?.status === "failed") return "danger";
+  if (job?.status === "running") return "warn";
+  return "neutral";
+}
+
 function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode {
   const t = useTranslate();
   const job = latestJob(data);
   const total = job?.totalDocuments ?? data.health.documentCount;
   const completed = completedDocuments(job);
   const indexedDocumentCount = indexedDocuments(data);
-  const documentProgress = total > 0 ? completed / total : 0;
-  const indexedProgress =
-    data.health.chunkCount > 0 ? data.health.vectorCount / data.health.chunkCount : 0;
+  const documentProgress = discoveryProgressRatio(total, completed);
+  const indexedProgress = retrievalCoverageRatio(data);
   const missingVectors = Math.max(0, data.health.chunkCount - data.health.vectorCount);
-  const jobDuration =
-    job !== undefined
-      ? formatDuration((job.finishedAt ?? Date.now()) - job.startedAt)
-      : t("localKnowledge.detail.index.noJobRecorded");
-  const elapsedMs = job !== undefined ? Math.max(Date.now() - job.startedAt, 1) : 0;
-  const docsPerMs = completed > 0 ? completed / elapsedMs : 0;
-  const etaMs = docsPerMs > 0 ? Math.max(0, total - completed) / docsPerMs : 0;
-  const remainingLabel =
-    job?.status === "running" && total > 0 && completed > 0
-      ? t("localKnowledge.detail.index.eta", { duration: formatDuration(etaMs) })
-      : jobDuration;
-  const issueTone =
-    missingVectors > 0 || data.health.failedDocuments > 0
-      ? job?.lastError !== undefined
-        ? "danger"
-        : "warn"
-      : "ok";
+  const remainingLabel = indexRemainingLabel(job, total, completed, t);
+  const issueTone = indexIssueTone(missingVectors, data, job);
 
   return (
     <section aria-labelledby="lkd-index-status-heading" className="lkd-status-section">
@@ -322,9 +391,7 @@ function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode
           <span id="lkd-index-status-heading">{t("localKnowledge.detail.index.title")}</span>
         </SectionHeading>
         <span className="lkd-live-note" aria-live="polite">
-          {job?.status === "running"
-            ? t("localKnowledge.detail.index.updating")
-            : t("localKnowledge.detail.index.latestRun")}
+          {indexLiveNoteLabel(job, t)}
         </span>
       </div>
       <div className="lkd-metric-grid">
@@ -336,37 +403,21 @@ function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode
             failed: data.health.failedDocuments,
             skipped: data.health.skippedDocuments,
           })}
-          tone={
-            data.health.failedDocuments > 0
-              ? "danger"
-              : data.health.skippedDocuments > 0
-                ? "warn"
-                : "ok"
-          }
+          tone={indexedDocumentsTone(data)}
         />
         <MetricCard
           label={t("localKnowledge.detail.index.vectors")}
           help={t("localKnowledge.detail.help.vectors")}
           value={`${data.health.vectorCount.toString()} / ${data.health.chunkCount.toString()}`}
-          meta={
-            missingVectors > 0
-              ? t("localKnowledge.detail.index.chunksMissingVectors", { count: missingVectors })
-              : t("localKnowledge.detail.index.allChunksEmbedded")
-          }
-          tone={missingVectors > 0 ? "danger" : "ok"}
+          meta={missingVectorsMetaLabel(missingVectors, t)}
+          tone={missingVectorsTone(missingVectors)}
         />
         <MetricCard
           label={t("localKnowledge.detail.index.latestJob")}
           help={t("localKnowledge.detail.help.latestJob")}
-          value={
-            job !== undefined
-              ? jobStatusLabel(job.status, t)
-              : t("localKnowledge.detail.index.notIndexed")
-          }
+          value={latestJobValueLabel(job, t)}
           meta={remainingLabel}
-          tone={
-            job?.status === "failed" ? "danger" : job?.status === "running" ? "warn" : "neutral"
-          }
+          tone={latestJobTone(job)}
         />
       </div>
       <div className="lkd-status-bars">
@@ -379,7 +430,7 @@ function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode
           label={t("localKnowledge.detail.index.retrievalCoverage")}
           value={indexedProgress}
           help={t("localKnowledge.detail.help.retrievalCoverage")}
-          tone={missingVectors > 0 ? "danger" : "ok"}
+          tone={missingVectorsTone(missingVectors)}
         />
       </div>
       <Explainable as="div" block={true} description={t("localKnowledge.detail.help.indexMessage")}>

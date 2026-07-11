@@ -24,12 +24,14 @@ import {
   useState,
   type ChangeEvent,
   type CSSProperties,
+  type Dispatch,
   type KeyboardEvent,
   type MutableRefObject,
   type PointerEvent,
   type ReactNode,
   type Ref,
   type RefObject,
+  type SetStateAction,
   type SyntheticEvent,
 } from "react";
 import type {
@@ -91,7 +93,7 @@ import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./Voi
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
-import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
+import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
 import {
   usePdfCitationPreviewController,
   type CitationPreviewController,
@@ -102,6 +104,9 @@ import {
   deriveVoiceAuraState,
   deriveVoiceDialogState,
   voiceAuraStateHeadline,
+  type VoiceAuraIntensity,
+  type VoiceAuraState,
+  type VoiceAuraStateSnapshot,
 } from "./hooks/voice-dialog-state";
 import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import styles from "./ChatWindow.module.css";
@@ -129,6 +134,7 @@ import type {
   GroundedAnswer as GroundedAnswerWire,
   GroundedAnswerContextSummary as GroundedAnswerContextSummaryWire,
   ModelCapability,
+  VoiceCapabilityResolution,
 } from "@/lib/types";
 
 interface ChatWindowProps {
@@ -2159,6 +2165,375 @@ interface ComposerCoreProps {
   readonly barCompact?: boolean;
 }
 
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — attachment intake: adds each dropped or
+// picked file via the session API and reports only the first rejection encountered, matching the
+// original loop's behavior (later rejections in the same batch don't overwrite the first).
+async function collectFirstAttachmentRejection(
+  files: readonly File[],
+  addPendingAttachment: ChatSessionComposerApi["addPendingAttachment"],
+): Promise<{
+  readonly reason: AttachmentRejectionReason | undefined;
+  readonly mime: string | undefined;
+}> {
+  let reason: AttachmentRejectionReason | undefined;
+  let mime: string | undefined;
+  for (const file of files) {
+    const result = await addPendingAttachment(file);
+    if (!result.ok && reason === undefined) {
+      reason = result.reason;
+      mime = file.type;
+    }
+  }
+  return { reason, mime };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the realtime voice session's chat context
+// payload: undefined with no active chat, otherwise the chat id, memory settings, and (if the
+// chat has grounding enabled) the grounding context. Same conditional shape as the original.
+function composerRealtimeVoiceChatContext(
+  activeChat: Chat | undefined,
+  memoryEnabled: boolean,
+  memoryBudgetTokens: number,
+  grounding: VoiceSessionGroundingContext | undefined,
+): VoiceSessionChatContext | undefined {
+  if (activeChat === undefined) return undefined;
+  return {
+    chatId: activeChat.id,
+    memory: { enabled: memoryEnabled, budgetTokens: memoryBudgetTokens },
+    ...(grounding === undefined ? {} : { grounding }),
+  };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — when the active voice composer layer
+// (normal vs. voice dialogue) actually changes, move focus to the switch in the newly active
+// layer so a keyboard user is not dropped onto <body> (WCAG 2.4.3). Runs only for a user-driven
+// toggle — programmatic auto-leave never sets `restoreFocusRef`.
+function syncVoiceDialogLayerFocus(params: {
+  readonly active: boolean;
+  readonly previousActiveRef: MutableRefObject<boolean>;
+  readonly restoreFocusRef: MutableRefObject<boolean>;
+  readonly voiceDialogButton: HTMLButtonElement | null;
+  readonly normalVoiceDialogButton: HTMLButtonElement | null;
+}): void {
+  const { active, previousActiveRef, restoreFocusRef, voiceDialogButton, normalVoiceDialogButton } =
+    params;
+  if (previousActiveRef.current === active) return;
+  previousActiveRef.current = active;
+  if (!restoreFocusRef.current) return;
+  restoreFocusRef.current = false;
+  const target = active ? voiceDialogButton : normalVoiceDialogButton;
+  target?.focus();
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — two independent effects that keep Voice
+// Dialogue honest about its own preconditions: auto-leave when it becomes unavailable mid-session
+// (e.g. the active chat is cleared), and stop the realtime transport once the dialogue layer is no
+// longer active. Same two effects and dependency arrays as the original, just relocated.
+function useVoiceDialogAutoLeaveEffects(
+  voiceDialogActive: boolean,
+  voiceDialogAvailable: boolean,
+  realtimeVoice: RealtimeVoiceController,
+  leaveVoiceDialog: () => void,
+): void {
+  useEffect(() => {
+    if (voiceDialogActive && !voiceDialogAvailable) {
+      leaveVoiceDialog();
+    }
+  }, [leaveVoiceDialog, voiceDialogActive, voiceDialogAvailable]);
+  useEffect(() => {
+    if (!voiceDialogActive && realtimeVoice.phase !== "idle") {
+      realtimeVoice.stop();
+    }
+  }, [voiceDialogActive, realtimeVoice]);
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the @-mention repository picker's
+// keyboard navigation: Escape closes it, arrow keys move the highlight, and Enter/Tab accept
+// the highlighted (or first) result. Returns true when the key was handled so the caller skips
+// the default composer key-down flow, matching the original if-chain's fall-through behavior.
+function handleRepositoryPickerKeyDown(
+  event: KeyboardEvent<HTMLTextAreaElement>,
+  params: {
+    readonly results: readonly FilesSearchResult[];
+    readonly highlightedIndex: number;
+    readonly setHighlightedIndex: Dispatch<SetStateAction<number>>;
+    readonly closeMention: () => void;
+    readonly pickResult: (result: FilesSearchResult) => void;
+  },
+): boolean {
+  const { results, highlightedIndex, setHighlightedIndex, closeMention, pickResult } = params;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeMention();
+    return true;
+  }
+  if (event.key === "ArrowDown" && results.length > 0) {
+    event.preventDefault();
+    setHighlightedIndex((current) => Math.min(results.length - 1, current + 1));
+    return true;
+  }
+  if (event.key === "ArrowUp" && results.length > 0) {
+    event.preventDefault();
+    setHighlightedIndex((current) => Math.max(0, current - 1));
+    return true;
+  }
+  if ((event.key === "Enter" || event.key === "Tab") && results.length > 0) {
+    event.preventDefault();
+    const picked = results[highlightedIndex] ?? results[0];
+    if (picked !== undefined) pickResult(picked);
+    return true;
+  }
+  return false;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — resolves where an accepted repository
+// file result lands in the draft: appended at the end when there is no active @-mention, or
+// substituted into the mention range when there is one. Same two-branch shape as the original
+// inline ternary/IIFE.
+function resolveRepositoryMentionInsertion(
+  draft: string,
+  mention: RepositoryMentionRange | null,
+  path: string,
+): { readonly value: string; readonly cursor: number } {
+  if (mention === null) {
+    const value = appendRepositoryReference(draft, path);
+    return { value, cursor: value.length };
+  }
+  return replaceRepositoryMention(draft, mention, path);
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer box's outer className: the
+// base class plus the compact and voice-dialog-active modifiers, filtered and joined.
+function composerBoxClassNameFor(compact: boolean, voiceDialogActive: boolean): string {
+  return [
+    "cmp-box",
+    compact ? "cmp-box-compact" : "",
+    voiceDialogActive ? styles.voiceDialogBox : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+interface ComposerRepositoryComboboxAria {
+  readonly role: "combobox" | undefined;
+  readonly ariaLabel: string | undefined;
+  readonly ariaExpanded: true | undefined;
+  readonly ariaHaspopup: "listbox" | undefined;
+  readonly ariaControls: string | undefined;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the @-mention combobox wrapper's ARIA
+// attributes, active only while the repository file picker is open (aria-controls further
+// guarded on results existing, so the idref stays resolvable — aria-valid-attr-value).
+function composerRepositoryComboboxAria(
+  repositoryPickerOpen: boolean,
+  resultsCount: number,
+  t: I18nTranslate,
+): ComposerRepositoryComboboxAria {
+  return {
+    role: repositoryPickerOpen ? "combobox" : undefined,
+    ariaLabel: repositoryPickerOpen ? t("chat.messageLabel") : undefined,
+    ariaExpanded: repositoryPickerOpen ? true : undefined,
+    ariaHaspopup: repositoryPickerOpen ? "listbox" : undefined,
+    ariaControls:
+      repositoryPickerOpen && resultsCount > 0 ? REPO_FILE_PICKER_LISTBOX_ID : undefined,
+  };
+}
+
+interface ComposerTextareaAutocompleteAria {
+  readonly ariaAutocomplete: "list" | undefined;
+  readonly ariaActivedescendant: string | undefined;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the textarea's autocomplete ARIA pair:
+// only present while the repository picker is open, with the active-descendant further guarded
+// on results existing.
+function composerTextareaAutocompleteAria(
+  repositoryPickerOpen: boolean,
+  resultsCount: number,
+  highlightedIndex: number,
+): ComposerTextareaAutocompleteAria {
+  return {
+    ariaAutocomplete: repositoryPickerOpen ? "list" : undefined,
+    ariaActivedescendant:
+      repositoryPickerOpen && resultsCount > 0
+        ? repositoryFilePickerOptionId(highlightedIndex)
+        : undefined,
+  };
+}
+
+interface ComposerVoiceAuraDataAttributes {
+  readonly dataVoiceAura: "on" | undefined;
+  readonly dataVoiceAuraState: VoiceAuraState | undefined;
+  readonly dataVoiceAuraIntensity: VoiceAuraIntensity | undefined;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the voice-aura `data-*` attributes on the
+// composer box, present only while the aura is active.
+function composerVoiceAuraDataAttributes(
+  voiceAura: VoiceAuraStateSnapshot,
+): ComposerVoiceAuraDataAttributes {
+  if (!voiceAura.active) {
+    return {
+      dataVoiceAura: undefined,
+      dataVoiceAuraState: undefined,
+      dataVoiceAuraIntensity: undefined,
+    };
+  }
+  return {
+    dataVoiceAura: "on",
+    dataVoiceAuraState: voiceAura.state,
+    dataVoiceAuraIntensity: voiceAura.intensity,
+  };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the inline @-mention repository picker: a
+// status live-region plus the picker panel, rendered only while a mention is active.
+function ComposerRepositoryPickerInline(props: RepositoryFilePickerPanelProps): ReactNode {
+  return (
+    <div className="repo-focus repo-focus-inline">
+      <span className="sr-only" role="status" aria-live="polite">
+        {props.pickError ?? props.search.error ?? props.search.message}
+      </span>
+      <RepositoryFilePickerPanel {...props} />
+    </div>
+  );
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — whether the attachment drop zone /
+// picker is enabled: only once a model is selected and it supports at least one attachment kind.
+function composerAttachEnabled(selectedModelCapability: ModelCapability | undefined): boolean {
+  return (
+    selectedModelCapability !== undefined &&
+    (selectedModelCapability.supportsImageInput || selectedModelCapability.supportsDocumentInput)
+  );
+}
+
+interface ComposerDictationVisibility {
+  readonly voiceDictationVisible: boolean;
+  readonly liveDictationEnabled: boolean;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — Issue #495's capability gate: the mic
+// affordance appears once the deployment advertises speech-to-text AND the browser can capture
+// audio; live (realtime) dictation further requires realtime voice + transport support.
+function composerDictationVisibility(
+  voiceCapability: VoiceCapabilityResolution | undefined,
+): ComposerDictationVisibility {
+  const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  const liveDictationEnabled =
+    voiceDictationVisible &&
+    supportsRealtimeVoice(voiceCapability) &&
+    realtimeVoiceTransportSupported();
+  return { voiceDictationVisible, liveDictationEnabled };
+}
+
+interface ComposerVoiceToolAvailability {
+  readonly voiceGroundingToolAvailable: boolean;
+  readonly voiceMemoryToolAvailable: boolean;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — whether the realtime voice session may
+// call the grounded-retrieval / memory tools, gated on the relevant feature being active plus the
+// deployment's realtime tool-calling support.
+function composerVoiceToolAvailability(
+  voiceGroundingActive: boolean,
+  memoryEnabled: boolean,
+  voiceCapability: VoiceCapabilityResolution | undefined,
+): ComposerVoiceToolAvailability {
+  return {
+    voiceGroundingToolAvailable:
+      voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability),
+    voiceMemoryToolAvailable: memoryEnabled && supportsRealtimeToolCalling(voiceCapability),
+  };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer's post-textarea status row:
+// the send-lifecycle announcement (hidden during Voice Dialogue) and the dictation transcript
+// preview (hidden during Voice Dialogue or when dictation isn't available).
+function ComposerStatusRow({
+  voiceDialogActive,
+  sendStatus,
+  voiceDictationVisible,
+  dictation,
+  onAfterDictationDiscard,
+}: {
+  readonly voiceDialogActive: boolean;
+  readonly sendStatus: SendStatus;
+  readonly voiceDictationVisible: boolean;
+  readonly dictation: DictationController;
+  readonly onAfterDictationDiscard: () => void;
+}): ReactNode {
+  return (
+    <>
+      {voiceDialogActive ? null : <SendLifecycleStatus status={sendStatus} />}
+      {!voiceDialogActive && voiceDictationVisible ? (
+        <VoiceDictationPreviewFromController
+          controller={dictation}
+          onAfterDiscard={onAfterDictationDiscard}
+        />
+      ) : null}
+    </>
+  );
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the voice-dialogue overlay: the announced
+// headline live region (only while the aura is active) and the Voice Dialogue control layer
+// (only while available), each independently gated.
+function ComposerVoiceOverlay({
+  voiceAuraActive,
+  announcedVoiceHeadline,
+  voiceDialogAvailable,
+  voiceLayerRef,
+  voiceDialogActive,
+  realtimeVoiceMuted,
+  onToggleVoiceMute,
+  playbackButtonRef,
+  onToggleVoiceDialog,
+  voiceDialogButtonRef,
+  compact,
+}: {
+  readonly voiceAuraActive: boolean;
+  readonly announcedVoiceHeadline: string;
+  readonly voiceDialogAvailable: boolean;
+  readonly voiceLayerRef: Ref<HTMLDivElement>;
+  readonly voiceDialogActive: boolean;
+  readonly realtimeVoiceMuted: boolean;
+  readonly onToggleVoiceMute: () => void;
+  readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  readonly onToggleVoiceDialog: () => void;
+  readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+  readonly compact: boolean;
+}): ReactNode {
+  return (
+    <>
+      {voiceAuraActive ? (
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {announcedVoiceHeadline}
+        </span>
+      ) : null}
+      {voiceDialogAvailable ? (
+        <div
+          ref={voiceLayerRef}
+          className={`${styles.composerLayer} ${styles.voiceLayer}`}
+          data-composer-layer="voice"
+          aria-hidden={voiceDialogActive ? undefined : true}
+        >
+          <VoiceDialogComposerControls
+            voiceMuted={realtimeVoiceMuted}
+            onToggleVoiceMute={onToggleVoiceMute}
+            playbackButtonRef={playbackButtonRef}
+            voiceDialogActive={voiceDialogActive}
+            onToggleVoiceDialog={onToggleVoiceDialog}
+            voiceDialogButtonRef={voiceDialogButtonRef}
+            compact={compact}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function ComposerCoreImpl({
   ready,
   placeholder,
@@ -2211,24 +2586,13 @@ function ComposerCoreImpl({
   const selectedModelCapability = models.find((m) => m.id === selectedModel);
 
   // Derive whether any attachment kinds are supported by the selected model.
-  const attachEnabled =
-    selectedModelCapability !== undefined &&
-    (selectedModelCapability.supportsImageInput || selectedModelCapability.supportsDocumentInput);
+  const attachEnabled = composerAttachEnabled(selectedModelCapability);
 
   const handleFiles = useCallback(
     async (files: readonly File[]) => {
-      // Process each file; show the first rejection encountered.
-      let firstRejectionReason: AttachmentRejectionReason | undefined;
-      let firstRejectionMime: string | undefined;
-      for (const file of files) {
-        const result = await addPendingAttachment(file);
-        if (!result.ok && firstRejectionReason === undefined) {
-          firstRejectionReason = result.reason;
-          firstRejectionMime = file.type;
-        }
-      }
-      setRejectionReason(firstRejectionReason);
-      setRejectionMime(firstRejectionMime);
+      const { reason, mime } = await collectFirstAttachmentRejection(files, addPendingAttachment);
+      setRejectionReason(reason);
+      setRejectionMime(mime);
     },
     [addPendingAttachment],
   );
@@ -2238,11 +2602,8 @@ function ComposerCoreImpl({
   // deployment advertises speech-to-text AND the browser can capture audio. A no-voice / unsupported
   // environment shows no voice control at all, so the composer stays clean and fully text-capable.
   const voiceCapability = useVoiceCapability();
-  const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
-  const liveDictationEnabled =
-    voiceDictationVisible &&
-    supportsRealtimeVoice(voiceCapability) &&
-    realtimeVoiceTransportSupported();
+  const { voiceDictationVisible, liveDictationEnabled } =
+    composerDictationVisibility(voiceCapability);
   // Issue #501 — assistant speech-output gate: reuse the already-fetched voiceCapability probe (no
   // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
   // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
@@ -2277,23 +2638,19 @@ function ComposerCoreImpl({
   });
   const voiceGrounding = voiceSessionGroundingContext(activeChat);
   const voiceGroundingActive = voiceGrounding?.enabled === true;
-  const voiceGroundingToolAvailable =
-    voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability);
-  const voiceMemoryToolAvailable =
-    session.memoryEnabled && supportsRealtimeToolCalling(voiceCapability);
+  const { voiceGroundingToolAvailable, voiceMemoryToolAvailable } = composerVoiceToolAvailability(
+    voiceGroundingActive,
+    session.memoryEnabled,
+    voiceCapability,
+  );
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
-    chatContext:
-      activeChat === undefined
-        ? undefined
-        : {
-            chatId: activeChat.id,
-            memory: {
-              enabled: session.memoryEnabled,
-              budgetTokens: session.memoryBudgetTokens,
-            },
-            ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
-          },
+    chatContext: composerRealtimeVoiceChatContext(
+      activeChat,
+      session.memoryEnabled,
+      session.memoryBudgetTokens,
+      voiceGrounding,
+    ),
     groundingActive: voiceGroundingActive,
     groundingToolActive: voiceGroundingToolAvailable,
     memoryToolActive: voiceMemoryToolAvailable,
@@ -2361,32 +2718,23 @@ function ComposerCoreImpl({
       enterVoiceDialog();
     }
   }, [voiceDialog.active, enterVoiceDialog, leaveVoiceDialog]);
-  useEffect(() => {
-    if (voiceDialog.active && !voiceDialogAvailable) {
-      leaveVoiceDialog();
-    }
-  }, [leaveVoiceDialog, voiceDialog.active, voiceDialogAvailable]);
-  useEffect(() => {
-    if (!voiceDialog.active && realtimeVoice.phase !== "idle") {
-      realtimeVoice.stop();
-    }
-  }, [voiceDialog.active, realtimeVoice]);
+  useVoiceDialogAutoLeaveEffects(
+    voiceDialog.active,
+    voiceDialogAvailable,
+    realtimeVoice,
+    leaveVoiceDialog,
+  );
   const previousVoiceDialogActiveRef = useRef(voiceDialog.active);
   useEffect(() => {
-    if (previousVoiceDialogActiveRef.current === voiceDialog.active) {
-      return undefined;
-    }
-    previousVoiceDialogActiveRef.current = voiceDialog.active;
     // The previously active layer becomes inert; move focus to the switch in the newly active
     // layer so a keyboard user is not dropped onto <body>. Runs only for a user-driven toggle.
-    if (restoreVoiceDialogFocusRef.current) {
-      restoreVoiceDialogFocusRef.current = false;
-      const target = voiceDialog.active
-        ? voiceDialogButtonRef.current
-        : normalVoiceDialogButtonRef.current;
-      target?.focus();
-    }
-    return undefined;
+    syncVoiceDialogLayerFocus({
+      active: voiceDialog.active,
+      previousActiveRef: previousVoiceDialogActiveRef,
+      restoreFocusRef: restoreVoiceDialogFocusRef,
+      voiceDialogButton: voiceDialogButtonRef.current,
+      normalVoiceDialogButton: normalVoiceDialogButtonRef.current,
+    });
   }, [voiceDialog.active]);
 
   const repositoryRoots = useMemo(
@@ -2464,13 +2812,7 @@ function ComposerCoreImpl({
         }
         const fallbackCursor = taRef.current?.selectionStart ?? draft.length;
         const mention = repositoryMention ?? repositoryMentionAtCursor(draft, fallbackCursor);
-        const next =
-          mention === null
-            ? (() => {
-                const value = appendRepositoryReference(draft, result.path);
-                return { value, cursor: value.length };
-              })()
-            : replaceRepositoryMention(draft, mention, result.path);
+        const next = resolveRepositoryMentionInsertion(draft, mention, result.path);
         setRepositoryReferences((current) =>
           mergeComposerRepositoryReference(current, repositoryReferenceFromResult(result)),
         );
@@ -2526,30 +2868,16 @@ function ComposerCoreImpl({
   const handleDraftKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): void => {
       if (repositoryPickerOpen) {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          setRepositoryMention(null);
-          return;
-        }
-        if (event.key === "ArrowDown" && repositorySearch.results.length > 0) {
-          event.preventDefault();
-          setRepositoryHighlightedIndex((current) =>
-            Math.min(repositorySearch.results.length - 1, current + 1),
-          );
-          return;
-        }
-        if (event.key === "ArrowUp" && repositorySearch.results.length > 0) {
-          event.preventDefault();
-          setRepositoryHighlightedIndex((current) => Math.max(0, current - 1));
-          return;
-        }
-        if ((event.key === "Enter" || event.key === "Tab") && repositorySearch.results.length > 0) {
-          event.preventDefault();
-          const picked =
-            repositorySearch.results[repositoryHighlightedIndex] ?? repositorySearch.results[0];
-          if (picked !== undefined) void insertRepositoryFileReference(picked);
-          return;
-        }
+        const handled = handleRepositoryPickerKeyDown(event, {
+          results: repositorySearch.results,
+          highlightedIndex: repositoryHighlightedIndex,
+          setHighlightedIndex: setRepositoryHighlightedIndex,
+          closeMention: () => setRepositoryMention(null),
+          pickResult: (picked) => {
+            void insertRepositoryFileReference(picked);
+          },
+        });
+        if (handled) return;
       }
       onComposerKeyDown(sendMessage)(event);
     },
@@ -2562,13 +2890,7 @@ function ComposerCoreImpl({
     ],
   );
 
-  const composerBoxClassName = [
-    "cmp-box",
-    compact ? "cmp-box-compact" : "",
-    voiceDialog.active ? styles.voiceDialogBox : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const composerBoxClassName = composerBoxClassNameFor(compact, voiceDialog.active);
   // React 18 treats `inert` as an unknown non-boolean attribute. Toggle the native attribute in
   // the commit ref so each fading layer becomes non-interactive synchronously, without rendering
   // duplicate accessibility targets or emitting a runtime warning.
@@ -2585,12 +2907,24 @@ function ComposerCoreImpl({
     [voiceDialog.active],
   );
 
+  const voiceAuraDataAttributes = composerVoiceAuraDataAttributes(voiceAura);
+  const comboboxAria = composerRepositoryComboboxAria(
+    repositoryPickerOpen,
+    repositorySearch.results.length,
+    t,
+  );
+  const textareaAutocompleteAria = composerTextareaAutocompleteAria(
+    repositoryPickerOpen,
+    repositorySearch.results.length,
+    repositoryHighlightedIndex,
+  );
+
   return (
     <div
       className={composerBoxClassName}
-      data-voice-aura={voiceAura.active ? "on" : undefined}
-      data-voice-aura-state={voiceAura.active ? voiceAura.state : undefined}
-      data-voice-aura-intensity={voiceAura.active ? voiceAura.intensity : undefined}
+      data-voice-aura={voiceAuraDataAttributes.dataVoiceAura}
+      data-voice-aura-state={voiceAuraDataAttributes.dataVoiceAuraState}
+      data-voice-aura-intensity={voiceAuraDataAttributes.dataVoiceAuraIntensity}
     >
       <div
         ref={normalLayerRef}
@@ -2611,17 +2945,13 @@ function ComposerCoreImpl({
             textarea is a plain textbox. */}
           <div
             className="cmp-input-combobox"
-            role={repositoryPickerOpen ? "combobox" : undefined}
-            aria-label={repositoryPickerOpen ? t("chat.messageLabel") : undefined}
-            aria-expanded={repositoryPickerOpen ? true : undefined}
-            aria-haspopup={repositoryPickerOpen ? "listbox" : undefined}
+            role={comboboxAria.role}
+            aria-label={comboboxAria.ariaLabel}
+            aria-expanded={comboboxAria.ariaExpanded}
+            aria-haspopup={comboboxAria.ariaHaspopup}
             // aria-controls references the listbox, which only exists once results
             // have loaded — guarding keeps the idref resolvable (aria-valid-attr-value).
-            aria-controls={
-              repositoryPickerOpen && repositorySearch.results.length > 0
-                ? REPO_FILE_PICKER_LISTBOX_ID
-                : undefined
-            }
+            aria-controls={comboboxAria.ariaControls}
           >
             <textarea
               className="cmp-input"
@@ -2633,12 +2963,8 @@ function ComposerCoreImpl({
               // aria-autocomplete + aria-activedescendant are valid on the textbox
               // and communicate the autocomplete behavior and highlighted option
               // without moving DOM focus off the textarea.
-              aria-autocomplete={repositoryPickerOpen ? "list" : undefined}
-              aria-activedescendant={
-                repositoryPickerOpen && repositorySearch.results.length > 0
-                  ? repositoryFilePickerOptionId(repositoryHighlightedIndex)
-                  : undefined
-              }
+              aria-autocomplete={textareaAutocompleteAria.ariaAutocomplete}
+              aria-activedescendant={textareaAutocompleteAria.ariaActivedescendant}
               onChange={handleDraftChange}
               onSelect={handleDraftSelect}
               onKeyDown={handleDraftKeyDown}
@@ -2649,27 +2975,22 @@ function ComposerCoreImpl({
             />
           </div>
           {repositoryPickerOpen ? (
-            <div className="repo-focus repo-focus-inline">
-              <span className="sr-only" role="status" aria-live="polite">
-                {repositoryPickError ?? repositorySearch.error ?? repositorySearch.message}
-              </span>
-              <RepositoryFilePickerPanel
-                roots={repositoryRoots}
-                selectedRoot={selectedRepositoryRoot}
-                onRootChange={(next) => {
-                  setSelectedRepositoryRoot(next);
-                  setRepositoryHighlightedIndex(0);
-                }}
-                search={repositorySearch}
-                pickingPath={repositoryPickingPath}
-                highlightedIndex={repositoryHighlightedIndex}
-                pickError={repositoryPickError}
-                onPick={(result) => {
-                  void insertRepositoryFileReference(result);
-                }}
-                onClose={() => setRepositoryMention(null)}
-              />
-            </div>
+            <ComposerRepositoryPickerInline
+              roots={repositoryRoots}
+              selectedRoot={selectedRepositoryRoot}
+              onRootChange={(next) => {
+                setSelectedRepositoryRoot(next);
+                setRepositoryHighlightedIndex(0);
+              }}
+              search={repositorySearch}
+              pickingPath={repositoryPickingPath}
+              highlightedIndex={repositoryHighlightedIndex}
+              pickError={repositoryPickError}
+              onPick={(result) => {
+                void insertRepositoryFileReference(result);
+              }}
+              onClose={() => setRepositoryMention(null)}
+            />
           ) : null}
           <RepositoryReferenceStrip
             references={repositoryReferences}
@@ -2681,17 +3002,17 @@ function ComposerCoreImpl({
           <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
           {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
             adjacent to the textarea so SR users hear the state without losing
-            composer focus. Hidden when there is nothing to announce. */}
-          {voiceDialog.active ? null : <SendLifecycleStatus status={sendStatus} />}
-          {/* Issue #495 — dictation transcript review / transcribing status / error. Lives in the input
-            stack so it is contextually adjacent to the textarea and announced to assistive tech. It
-            renders live capture feedback while recording and stays hidden only when idle. */}
-          {!voiceDialog.active && voiceDictationVisible ? (
-            <VoiceDictationPreviewFromController
-              controller={dictation}
-              onAfterDiscard={() => micButtonRef.current?.focus()}
-            />
-          ) : null}
+            composer focus. Hidden when there is nothing to announce.
+            Issue #495 — dictation transcript review / transcribing status / error. Lives in the
+            input stack so it is contextually adjacent to the textarea and announced to assistive
+            tech. It renders live capture feedback while recording and stays hidden only when idle. */}
+          <ComposerStatusRow
+            voiceDialogActive={voiceDialog.active}
+            sendStatus={sendStatus}
+            voiceDictationVisible={voiceDictationVisible}
+            dictation={dictation}
+            onAfterDictationDiscard={() => micButtonRef.current?.focus()}
+          />
         </div>
         <div className="cmp-footer-row">
           <ComposerBar
@@ -2715,29 +3036,19 @@ function ComposerCoreImpl({
           />
         </div>
       </div>
-      {voiceAura.active ? (
-        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {announcedVoiceHeadline}
-        </span>
-      ) : null}
-      {voiceDialogAvailable ? (
-        <div
-          ref={voiceLayerRef}
-          className={`${styles.composerLayer} ${styles.voiceLayer}`}
-          data-composer-layer="voice"
-          aria-hidden={voiceDialog.active ? undefined : true}
-        >
-          <VoiceDialogComposerControls
-            voiceMuted={realtimeVoice.muted}
-            onToggleVoiceMute={realtimeVoice.toggleMute}
-            playbackButtonRef={playbackButtonRef}
-            voiceDialogActive={voiceDialog.active}
-            onToggleVoiceDialog={toggleVoiceDialog}
-            voiceDialogButtonRef={voiceDialogButtonRef}
-            compact={controlsNarrow}
-          />
-        </div>
-      ) : null}
+      <ComposerVoiceOverlay
+        voiceAuraActive={voiceAura.active}
+        announcedVoiceHeadline={announcedVoiceHeadline}
+        voiceDialogAvailable={voiceDialogAvailable}
+        voiceLayerRef={voiceLayerRef}
+        voiceDialogActive={voiceDialog.active}
+        realtimeVoiceMuted={realtimeVoice.muted}
+        onToggleVoiceMute={realtimeVoice.toggleMute}
+        playbackButtonRef={playbackButtonRef}
+        onToggleVoiceDialog={toggleVoiceDialog}
+        voiceDialogButtonRef={voiceDialogButtonRef}
+        compact={controlsNarrow}
+      />
     </div>
   );
 }

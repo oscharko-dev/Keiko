@@ -1813,10 +1813,13 @@ export function deriveOrphanWorktreeHealthEntry(input: {
   };
 }
 
-// eslint-disable-next-line complexity
-export function validateWorkspaceHealthEntry(input: unknown): TaskWorkspaceValidation {
-  if (!isRecord(input)) return { ok: false, reasons: ["entry must be an object"] };
-  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_HEALTH_ENTRY_ALLOWED_KEYS);
+// The kind-independent field checks (schemaVersion, kind, classification, driftMarkers,
+// recoveryHints, cleanupEligible). Split out of validateWorkspaceHealthEntry to keep it within the
+// complexity budget while preserving the exact same checks in the same order.
+function validateWorkspaceHealthEntryCoreFields(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
   if (input.schemaVersion !== TASK_WORKSPACE_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isWorkspaceHealthEntryKind(input.kind)) reasons.push("kind invalid");
   if (!isWorkspaceHealthClassification(input.classification))
@@ -1826,20 +1829,45 @@ export function validateWorkspaceHealthEntry(input: unknown): TaskWorkspaceValid
   }
   validateRecoveryHints(input.recoveryHints, reasons);
   if (!isBoolean(input.cleanupEligible)) reasons.push("cleanupEligible must be a boolean");
+}
+
+// Kind-specific field checks for an `instance` entry: only checked when input.kind === "instance".
+// Split out of validateWorkspaceHealthEntry to keep it within the complexity budget while preserving
+// the exact same checks in the same order.
+function validateWorkspaceHealthEntryInstanceFields(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  for (const key of ["workspaceId", "taskId"] as const) {
+    if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
+  }
+  if (!isTaskWorkspaceLifecycleState(input.lifecycleState)) reasons.push("lifecycleState invalid");
+  if (!isTaskWorkspaceHealth(input.health)) reasons.push("health invalid");
+  if (input.orphanId !== undefined) reasons.push("orphanId not allowed for an instance entry");
+}
+
+// Kind-specific field checks for an `orphan-worktree` entry: only checked when
+// input.kind === "orphan-worktree". Split out of validateWorkspaceHealthEntry alongside
+// validateWorkspaceHealthEntryInstanceFields for the same reason.
+function validateWorkspaceHealthEntryOrphanFields(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  if (!isNonEmptyString(input.orphanId)) reasons.push("orphanId must be a non-empty string");
+  if (input.classification !== "orphaned") reasons.push("orphan entry must classify as orphaned");
+  for (const key of ["workspaceId", "taskId", "lifecycleState", "health"] as const) {
+    if (input[key] !== undefined) reasons.push(`${key} not allowed for an orphan entry`);
+  }
+}
+
+export function validateWorkspaceHealthEntry(input: unknown): TaskWorkspaceValidation {
+  if (!isRecord(input)) return { ok: false, reasons: ["entry must be an object"] };
+  const reasons: string[] = unknownKeyReasons(input, WORKSPACE_HEALTH_ENTRY_ALLOWED_KEYS);
+  validateWorkspaceHealthEntryCoreFields(input, reasons);
   if (input.kind === "instance") {
-    for (const key of ["workspaceId", "taskId"] as const) {
-      if (!isNonEmptyString(input[key])) reasons.push(`${key} must be a non-empty string`);
-    }
-    if (!isTaskWorkspaceLifecycleState(input.lifecycleState))
-      reasons.push("lifecycleState invalid");
-    if (!isTaskWorkspaceHealth(input.health)) reasons.push("health invalid");
-    if (input.orphanId !== undefined) reasons.push("orphanId not allowed for an instance entry");
+    validateWorkspaceHealthEntryInstanceFields(input, reasons);
   } else if (input.kind === "orphan-worktree") {
-    if (!isNonEmptyString(input.orphanId)) reasons.push("orphanId must be a non-empty string");
-    if (input.classification !== "orphaned") reasons.push("orphan entry must classify as orphaned");
-    for (const key of ["workspaceId", "taskId", "lifecycleState", "health"] as const) {
-      if (input[key] !== undefined) reasons.push(`${key} not allowed for an orphan entry`);
-    }
+    validateWorkspaceHealthEntryOrphanFields(input, reasons);
   }
   if (input.lastVerifiedAt !== undefined && !isNonEmptyString(input.lastVerifiedAt)) {
     reasons.push("lastVerifiedAt must be a non-empty string when present");

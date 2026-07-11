@@ -10,7 +10,7 @@
 // secret, raw private log, or hidden system prompt is shown (the server redacts on the wire, AC4).
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { enhancePrompt, fetchModels } from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type {
@@ -142,6 +142,17 @@ async function writeTextWithFallback(text: string): Promise<void> {
     textarea.remove();
     previousFocus?.focus();
   }
+}
+
+// The fetch-models effect's own cleanup flag (`cancelled`) is read at the point the async
+// response resolves; passing its value through keeps the same "ignore late responses" behavior
+// while moving the branch out of the effect's nested closure.
+function applyChatModels(
+  models: readonly ModelCapability[],
+  cancelled: boolean,
+  setModels: Dispatch<SetStateAction<readonly ModelCapability[]>>,
+): void {
+  if (!cancelled) setModels(models.filter((model) => model.kind === "chat"));
 }
 
 function StringList({
@@ -478,6 +489,184 @@ function EnhancedPromptSections({
   );
 }
 
+function PromptEnhancerResult({
+  result,
+  copyState,
+  copyStatus,
+  resultTitleRef,
+  onCopy,
+}: {
+  readonly result: PromptEnhancementWireResponse;
+  readonly copyState: CopyState;
+  readonly copyStatus: string | null;
+  readonly resultTitleRef: RefObject<HTMLHeadingElement>;
+  readonly onCopy: () => void;
+}): ReactNode {
+  return (
+    <div className="pe-result" data-testid="pe-result">
+      <div className="pe-result-head">
+        <div>
+          <p className="pe-eyebrow">Review artifact</p>
+          <h4 className="pe-result-title" ref={resultTitleRef} tabIndex={-1}>
+            Enhanced prompt
+          </h4>
+        </div>
+        <ModelRoutingBanner routing={result.modelRouting} />
+      </div>
+      <AnalysisSummary result={result} />
+
+      <Section title="Rendered prompt">
+        <pre className="pe-rendered" aria-label="Rendered prompt text" data-text-selectable="true">
+          {result.renderedPrompt}
+        </pre>
+        <div className="pe-actions">
+          {copyStatus !== null ? (
+            <p
+              className={`pe-copy-status pe-copy-status-${copyState}`}
+              role={copyState === "failed" ? "alert" : "status"}
+              aria-live="polite"
+            >
+              {copyStatus}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className="pe-button pe-button-secondary pe-copy"
+            disabled={copyState === "copying"}
+            onClick={onCopy}
+          >
+            <Icons.file size={15} />
+            <span>{copyState === "copying" ? "Copying..." : "Copy rendered prompt"}</span>
+          </button>
+        </div>
+      </Section>
+
+      <div className="pe-review-grid">
+        <SafetyPanel safety={result.safety} />
+        <GroundingPanel
+          plan={result.enhancedPrompt.groundingPlan}
+          readiness={result.groundingReadiness}
+        />
+      </div>
+      <EnhancedPromptSections result={result} />
+      <CandidateScorecards candidates={result.candidates} />
+      <EvidencePanel evidence={result.evidence} fingerprint={result.inputFingerprintSha256} />
+    </div>
+  );
+}
+
+// ── Enhance & copy orchestration ─────────────────────────────────────────────
+// These helpers hold the async request/response and clipboard flows that used to live inline in
+// the component's useCallback bodies. The guard checks and the AbortController creation stay in
+// the component (see handleEnhance) so the abort ref keeps a single, statically visible write
+// site there; everything downstream of that is expressed as an explicit-params function.
+
+function describeDraftStatus(loading: boolean, draftLength: number): string {
+  if (loading) return "Enhancing prompt...";
+  if (draftLength === 0) return "Waiting for draft";
+  return "Ready";
+}
+
+function buildEnhanceRequestBody(inputs: {
+  readonly text: string;
+  readonly strategy: string;
+  readonly groundingContext: GroundingContextSummary;
+  readonly profile: string;
+  readonly modelId: string;
+}): PromptEnhancementWireRequest {
+  const { text, strategy, groundingContext, profile, modelId } = inputs;
+  return {
+    text,
+    missingInformationStrategy: strategy === "assume" ? "assume" : "clarify",
+    ...(groundingContext.hasConnectedContext
+      ? {
+          hasConnectedContext: true,
+          attachmentCount: groundingContext.attachmentCount,
+        }
+      : {}),
+    ...(profile === "auto"
+      ? {}
+      : {
+          profilePreference: profile as NonNullable<
+            PromptEnhancementWireRequest["profilePreference"]
+          >,
+        }),
+    ...(modelId === NO_MODEL ? {} : { modelId }),
+  };
+}
+
+interface EnhanceRunParams {
+  readonly text: string;
+  readonly strategy: string;
+  readonly groundingContext: GroundingContextSummary;
+  readonly profile: string;
+  readonly modelId: string;
+  readonly controller: AbortController;
+  readonly enhanceImpl: typeof enhancePrompt;
+  readonly setLoading: Dispatch<SetStateAction<boolean>>;
+  readonly setError: Dispatch<SetStateAction<string | null>>;
+  readonly setCopyState: Dispatch<SetStateAction<CopyState>>;
+  readonly setCopyStatus: Dispatch<SetStateAction<string | null>>;
+  readonly setResult: Dispatch<SetStateAction<PromptEnhancementWireResponse | null>>;
+  readonly setResultGroundingSignature: Dispatch<SetStateAction<string | null>>;
+}
+
+async function runPromptEnhance(params: EnhanceRunParams): Promise<void> {
+  const {
+    text,
+    strategy,
+    groundingContext,
+    profile,
+    modelId,
+    controller,
+    enhanceImpl,
+    setLoading,
+    setError,
+    setCopyState,
+    setCopyStatus,
+    setResult,
+    setResultGroundingSignature,
+  } = params;
+  setLoading(true);
+  setError(null);
+  setCopyState("idle");
+  setCopyStatus(null);
+  const body = buildEnhanceRequestBody({ text, strategy, groundingContext, profile, modelId });
+  try {
+    const response = await enhanceImpl(body, controller.signal);
+    if (!controller.signal.aborted) {
+      setResult(response);
+      setResultGroundingSignature(groundingContext.signature);
+    }
+  } catch (caught) {
+    if (!controller.signal.aborted) setError(describeError(caught));
+  } finally {
+    if (!controller.signal.aborted) setLoading(false);
+  }
+}
+
+interface CopyRunParams {
+  readonly text: string;
+  readonly setError: Dispatch<SetStateAction<string | null>>;
+  readonly setCopyState: Dispatch<SetStateAction<CopyState>>;
+  readonly setCopyStatus: Dispatch<SetStateAction<string | null>>;
+}
+
+async function runClipboardCopy(params: CopyRunParams): Promise<void> {
+  const { text, setError, setCopyState, setCopyStatus } = params;
+  setError(null);
+  setCopyState("copying");
+  setCopyStatus("Copying rendered prompt...");
+  try {
+    await writeTextWithFallback(text);
+    setCopyState("copied");
+    setCopyStatus("Copied to clipboard.");
+  } catch {
+    setCopyState("failed");
+    setCopyStatus("Clipboard access failed. Select text manually and use Cmd/Ctrl+C.");
+  }
+}
+
 export function PromptEnhancerPanel({
   connectedRoot = null,
   connectedFilePath = null,
@@ -508,7 +697,7 @@ export function PromptEnhancerPanel({
     let cancelled = false;
     void fetchModelsImpl()
       .then((response) => {
-        if (!cancelled) setModels(response.models.filter((model) => model.kind === "chat"));
+        applyChatModels(response.models, cancelled, setModels);
       })
       .catch(() => {
         // Enhancement model selection is optional; a config-less workspace simply offers no models.
@@ -559,54 +748,31 @@ export function PromptEnhancerPanel({
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-    setLoading(true);
-    setError(null);
-    setCopyState("idle");
-    setCopyStatus(null);
-    const body: PromptEnhancementWireRequest = {
+    await runPromptEnhance({
       text,
-      missingInformationStrategy: strategy === "assume" ? "assume" : "clarify",
-      ...(groundingContext.hasConnectedContext
-        ? {
-            hasConnectedContext: true,
-            attachmentCount: groundingContext.attachmentCount,
-          }
-        : {}),
-      ...(profile === "auto"
-        ? {}
-        : {
-            profilePreference: profile as NonNullable<
-              PromptEnhancementWireRequest["profilePreference"]
-            >,
-          }),
-      ...(modelId === NO_MODEL ? {} : { modelId }),
-    };
-    try {
-      const response = await enhanceImpl(body, controller.signal);
-      if (!controller.signal.aborted) {
-        setResult(response);
-        setResultGroundingSignature(groundingContext.signature);
-      }
-    } catch (caught) {
-      if (!controller.signal.aborted) setError(describeError(caught));
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
+      strategy,
+      groundingContext,
+      profile,
+      modelId,
+      controller,
+      enhanceImpl,
+      setLoading,
+      setError,
+      setCopyState,
+      setCopyStatus,
+      setResult,
+      setResultGroundingSignature,
+    });
   }, [draft, strategy, groundingContext, profile, modelId, enhanceImpl]);
 
   const handleCopy = useCallback(async (): Promise<void> => {
     if (result === null) return;
-    setError(null);
-    setCopyState("copying");
-    setCopyStatus("Copying rendered prompt...");
-    try {
-      await writeTextWithFallback(result.renderedPrompt);
-      setCopyState("copied");
-      setCopyStatus("Copied to clipboard.");
-    } catch {
-      setCopyState("failed");
-      setCopyStatus("Clipboard access failed. Select text manually and use Cmd/Ctrl+C.");
-    }
+    await runClipboardCopy({
+      text: result.renderedPrompt,
+      setError,
+      setCopyState,
+      setCopyStatus,
+    });
   }, [result]);
 
   const handleClear = useCallback((): void => {
@@ -769,7 +935,7 @@ export function PromptEnhancerPanel({
             </button>
           </div>
           <p className="pe-status" role="status" aria-live="polite">
-            {loading ? "Enhancing prompt..." : draftLength === 0 ? "Waiting for draft" : "Ready"}
+            {describeDraftStatus(loading, draftLength)}
           </p>
         </aside>
       </form>
@@ -781,61 +947,15 @@ export function PromptEnhancerPanel({
       ) : null}
 
       {result !== null ? (
-        <div className="pe-result" data-testid="pe-result">
-          <div className="pe-result-head">
-            <div>
-              <p className="pe-eyebrow">Review artifact</p>
-              <h4 className="pe-result-title" ref={resultTitleRef} tabIndex={-1}>
-                Enhanced prompt
-              </h4>
-            </div>
-            <ModelRoutingBanner routing={result.modelRouting} />
-          </div>
-          <AnalysisSummary result={result} />
-
-          <Section title="Rendered prompt">
-            <pre
-              className="pe-rendered"
-              aria-label="Rendered prompt text"
-              data-text-selectable="true"
-            >
-              {result.renderedPrompt}
-            </pre>
-            <div className="pe-actions">
-              {copyStatus !== null ? (
-                <p
-                  className={`pe-copy-status pe-copy-status-${copyState}`}
-                  role={copyState === "failed" ? "alert" : "status"}
-                  aria-live="polite"
-                >
-                  {copyStatus}
-                </p>
-              ) : null}
-              <button
-                type="button"
-                className="pe-button pe-button-secondary pe-copy"
-                disabled={copyState === "copying"}
-                onClick={() => {
-                  void handleCopy();
-                }}
-              >
-                <Icons.file size={15} />
-                <span>{copyState === "copying" ? "Copying..." : "Copy rendered prompt"}</span>
-              </button>
-            </div>
-          </Section>
-
-          <div className="pe-review-grid">
-            <SafetyPanel safety={result.safety} />
-            <GroundingPanel
-              plan={result.enhancedPrompt.groundingPlan}
-              readiness={result.groundingReadiness}
-            />
-          </div>
-          <EnhancedPromptSections result={result} />
-          <CandidateScorecards candidates={result.candidates} />
-          <EvidencePanel evidence={result.evidence} fingerprint={result.inputFingerprintSha256} />
-        </div>
+        <PromptEnhancerResult
+          result={result}
+          copyState={copyState}
+          copyStatus={copyStatus}
+          resultTitleRef={resultTitleRef}
+          onCopy={() => {
+            void handleCopy();
+          }}
+        />
       ) : (
         <div className="pe-empty-state" aria-label="Prompt enhancement empty state">
           <Icons.layers size={18} />

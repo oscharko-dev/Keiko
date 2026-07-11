@@ -199,17 +199,12 @@ function buildCoverageRefsByCandidate(
   return refs;
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity
-function buildFindingRefsByCandidate(
+/** Maps each evidence atom id to the candidate ids derived from it or covering it. */
+function buildCandidateIdsByAtom(
   manifest: QualityIntelligenceEvidenceManifest,
   candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
-  diagnostics: Set<string>,
-): ReadonlyMap<string, ReadonlySet<QI.QualityIntelligenceValidationFindingId>> {
-  const refs = new Map<string, Set<QI.QualityIntelligenceValidationFindingId>>();
-  if (manifest.findings.length === 0) {
-    return refs;
-  }
-  const candidateIds = new Set<string>(candidates.map((candidate) => candidate.id));
+  candidateIds: ReadonlySet<string>,
+): ReadonlyMap<string, Set<string>> {
   const byAtom = new Map<string, Set<string>>();
   for (const candidate of candidates) {
     for (const atomId of candidate.derivedFromAtomIds) {
@@ -223,20 +218,50 @@ function buildFindingRefsByCandidate(
       }
     }
   }
+  return byAtom;
+}
+
+/** Resolves the candidate ids a finding links to, via its direct candidateId and its atoms. */
+function findingTargetCandidateIds(
+  finding: QualityIntelligenceEvidenceManifest["findings"][number],
+  candidateIds: ReadonlySet<string>,
+  candidateIdsByAtom: ReadonlyMap<string, Set<string>>,
+  diagnostics: Set<string>,
+): Set<string> {
+  const targetCandidateIds = new Set<string>();
+  if (finding.candidateId !== undefined) {
+    if (candidateIds.has(finding.candidateId)) {
+      targetCandidateIds.add(finding.candidateId);
+    } else {
+      diagnostics.add("export:finding-ref-candidate-missing");
+    }
+  }
+  for (const atomId of finding.evidenceAtomIds ?? []) {
+    for (const candidateId of candidateIdsByAtom.get(atomId) ?? []) {
+      targetCandidateIds.add(candidateId);
+    }
+  }
+  return targetCandidateIds;
+}
+
+function buildFindingRefsByCandidate(
+  manifest: QualityIntelligenceEvidenceManifest,
+  candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
+  diagnostics: Set<string>,
+): ReadonlyMap<string, ReadonlySet<QI.QualityIntelligenceValidationFindingId>> {
+  const refs = new Map<string, Set<QI.QualityIntelligenceValidationFindingId>>();
+  if (manifest.findings.length === 0) {
+    return refs;
+  }
+  const candidateIds = new Set<string>(candidates.map((candidate) => candidate.id));
+  const candidateIdsByAtom = buildCandidateIdsByAtom(manifest, candidates, candidateIds);
   for (const finding of manifest.findings) {
-    const targetCandidateIds = new Set<string>();
-    if (finding.candidateId !== undefined) {
-      if (candidateIds.has(finding.candidateId)) {
-        targetCandidateIds.add(finding.candidateId);
-      } else {
-        diagnostics.add("export:finding-ref-candidate-missing");
-      }
-    }
-    for (const atomId of finding.evidenceAtomIds ?? []) {
-      for (const candidateId of byAtom.get(atomId) ?? []) {
-        targetCandidateIds.add(candidateId);
-      }
-    }
+    const targetCandidateIds = findingTargetCandidateIds(
+      finding,
+      candidateIds,
+      candidateIdsByAtom,
+      diagnostics,
+    );
     if (targetCandidateIds.size === 0) {
       diagnostics.add("export:finding-ref-unlinked");
       continue;

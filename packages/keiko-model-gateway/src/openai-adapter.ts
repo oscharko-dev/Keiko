@@ -403,6 +403,61 @@ function mapOutboundEgressError(
   );
 }
 
+// Appends a chunk's content delta onto the accumulated response and the
+// held-back suffix buffer, then yields the prefix that is now provably safe
+// to emit (i.e. no longer a possible prefix of a configured secret).
+function* emitRedactedDelta(
+  content: string,
+  buffer: { pending: string },
+  activeSecrets: readonly string[],
+  secrets: readonly string[],
+  acc: { content: string },
+): Generator<string> {
+  acc.content += content;
+  buffer.pending += content;
+  const holdLength = longestSecretPrefixSuffix(buffer.pending, activeSecrets);
+  if (buffer.pending.length <= holdLength) {
+    return;
+  }
+  const emitLength = buffer.pending.length - holdLength;
+  const emitNow = buffer.pending.slice(0, emitLength);
+  buffer.pending = buffer.pending.slice(emitLength);
+  const redacted = redact(emitNow, secrets);
+  if (redacted.length > 0) {
+    yield redacted;
+  }
+}
+
+// Records the finish-reason/usage carried on a streaming chunk onto the
+// in-flight response accumulator, when present.
+function applyChunkMetadata(
+  chunk: unknown,
+  acc: { finishReason: FinishReason; prompt: number; completion: number },
+): void {
+  const finish = finishReasonFromChunk(chunk);
+  if (finish !== undefined) acc.finishReason = finish;
+  const usage = usageFromChunk(chunk);
+  if (usage !== undefined) {
+    acc.prompt = usage.prompt;
+    acc.completion = usage.completion;
+  }
+}
+
+// Emits whatever content is still held in the buffer once the stream ends —
+// nothing further can arrive to complete a held-back secret prefix.
+function* flushPendingBuffer(
+  buffer: { pending: string },
+  secrets: readonly string[],
+): Generator<string> {
+  if (buffer.pending.length === 0) {
+    return;
+  }
+  const redacted = redact(buffer.pending, secrets);
+  if (redacted.length > 0) {
+    yield redacted;
+  }
+}
+
 export class OpenAiAdapter implements ProviderAdapter {
   private readonly now: () => number;
 
@@ -484,35 +539,17 @@ export class OpenAiAdapter implements ProviderAdapter {
     secrets: readonly string[],
     acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
   ): AsyncGenerator<string> {
-    let pending = "";
+    const buffer = { pending: "" };
     const activeSecrets = configuredSecrets(secrets);
     try {
       for await (const chunk of readSseStream(response, undefined, STREAM_IDLE_TIMEOUT_MS)) {
         const content = deltaFromChunk(chunk);
         if (content !== undefined) {
-          acc.content += content;
-          pending += content;
-          const holdLength = longestSecretPrefixSuffix(pending, activeSecrets);
-          if (pending.length > holdLength) {
-            const emitLength = pending.length - holdLength;
-            const emitNow = pending.slice(0, emitLength);
-            pending = pending.slice(emitLength);
-            const redacted = redact(emitNow, secrets);
-            if (redacted.length > 0) yield redacted;
-          }
+          yield* emitRedactedDelta(content, buffer, activeSecrets, secrets, acc);
         }
-        const finish = finishReasonFromChunk(chunk);
-        if (finish !== undefined) acc.finishReason = finish;
-        const usage = usageFromChunk(chunk);
-        if (usage !== undefined) {
-          acc.prompt = usage.prompt;
-          acc.completion = usage.completion;
-        }
+        applyChunkMetadata(chunk, acc);
       }
-      if (pending.length > 0) {
-        const redacted = redact(pending, secrets);
-        if (redacted.length > 0) yield redacted;
-      }
+      yield* flushPendingBuffer(buffer, secrets);
     } catch (error) {
       throw this.withPartialUsage(this.mapStreamError(error, config, secrets), acc);
     }
