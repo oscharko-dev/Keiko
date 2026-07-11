@@ -524,7 +524,10 @@ function validateStateShape(value: Record<string, unknown>, errors: string[]): v
   ];
   if (unbound && bindings.some((entry) => entry !== undefined))
     errors.push("unbound state must not carry run binding");
-  if (!unbound && bindings.some((entry) => !isNonEmpty(entry)))
+  const recoveryHasBinding =
+    value.state === "recovery-required" && bindings.some((entry) => entry !== undefined);
+  const requiresBinding = !unbound && value.state !== "recovery-required";
+  if ((requiresBinding || recoveryHasBinding) && bindings.some((entry) => !isNonEmpty(entry)))
     errors.push("run-bound state requires complete binding");
   validateStateFailureShape(value, errors);
 }
