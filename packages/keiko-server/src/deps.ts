@@ -36,6 +36,7 @@ import {
   type UpdatePreflightReport,
 } from "@oscharko-dev/keiko-contracts";
 import type { IncomingMessage } from "node:http";
+import { createFeedbackSubmissionHttpPort } from "./feedback-submission-http.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -1850,6 +1851,17 @@ function autonomousDeliveryFields(
   };
 }
 
+function feedbackSubmissionFields(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<UiHandlerDeps, "feedbackSubmission"> | Record<string, never> {
+  const feedbackSubmission = createFeedbackSubmissionHttpPort({
+    origin: args.options.env.KEIKO_FEEDBACK_INTAKE_ORIGIN,
+    timeoutMs: 5_000,
+    egress: args.egress,
+  });
+  return feedbackSubmission === undefined ? {} : { feedbackSubmission };
+}
+
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   return {
     ...gatewayConfigFields(args.config, args.configPresent),
@@ -1864,6 +1876,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     codingWorkbenchEvidenceStore: args.codingWorkbenchEvidenceStore,
     ...autonomousDeliveryFields(args.options),
     redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
+    ...feedbackSubmissionFields(args),
     store: args.bundle.uiStore,
     uiDbPath: args.resolvedUiDbPath,
     preferredProjectPath: args.bundle.preferredProjectPath,

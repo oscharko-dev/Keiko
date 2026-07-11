@@ -1,0 +1,230 @@
+{
+  "issue": 2074,
+  "epic": 2070,
+  "verdict": "PASS",
+  "harness": "tests/e2e/config/playwright.issue-2074-feedback-ui.config.ts",
+  "appPath": "packaged-cli-ui",
+  "globalsCssSha256": "e499ef56bec6dc2619bd7fe7ce9c2ab5b855d2b9e9004f36144255e867163ec6",
+  "captures": [
+    {
+      "file": "01-dark-accepted-copied.png",
+      "state": "accepted-copied",
+      "mode": "dark",
+      "locale": "en",
+      "focusText": "Receipt copied. Keiko cleared it from this feedback window.",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "lab(96.5608 -0.958711 0.381434)",
+        "warning": "lab(74.4048% 16.5655 55.5067)",
+        "warningSurface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+      }
+    },
+    {
+      "file": "01-dark-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "dark",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "oklch(0.780003 0.130007 75.0049 / 0.12)",
+        "borderColor": "lab(74.4048 16.5655 55.5067)",
+        "warning": "lab(74.4048% 16.5655 55.5067)",
+        "warningSurface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+      }
+    },
+    {
+      "file": "02-light-accepted-copied.png",
+      "state": "accepted-copied",
+      "mode": "light",
+      "locale": "en",
+      "focusText": "Receipt copied. Keiko cleared it from this feedback window.",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "lab(14.3222 -3.86415 1.53382)",
+        "warning": "lab(33.5217% 22.3139 76.2583)",
+        "warningSurface": "color-mix(in oklch, lab(33.5217% 22.3139 76.2583) 12%, transparent)"
+      }
+    },
+    {
+      "file": "02-light-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "light",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "oklch(0.430003 0.139995 75.0015 / 0.12)",
+        "borderColor": "lab(33.5217 22.3139 76.2583)",
+        "warning": "lab(33.5217% 22.3139 76.2583)",
+        "warningSurface": "color-mix(in oklch, lab(33.5217% 22.3139 76.2583) 12%, transparent)"
+      }
+    },
+    {
+      "file": "03-dark-hc-accepted-copied.png",
+      "state": "accepted-copied",
+      "mode": "dark-high-contrast",
+      "locale": "en",
+      "focusText": "Receipt copied. Keiko cleared it from this feedback window.",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "lab(96.5608 -0.958711 0.381434)",
+        "warning": "lab(74.4048% 16.5655 55.5067)",
+        "warningSurface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+      }
+    },
+    {
+      "file": "03-dark-hc-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "dark-high-contrast",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "oklch(0.780003 0.130007 75.0049 / 0.12)",
+        "borderColor": "lab(74.4048 16.5655 55.5067)",
+        "warning": "lab(74.4048% 16.5655 55.5067)",
+        "warningSurface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+      }
+    },
+    {
+      "file": "04-light-hc-accepted-copied.png",
+      "state": "accepted-copied",
+      "mode": "light-high-contrast",
+      "locale": "en",
+      "focusText": "Receipt copied. Keiko cleared it from this feedback window.",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "lab(14.3222 -3.86415 1.53382)",
+        "warning": "lab(33.5217% 22.3139 76.2583)",
+        "warningSurface": "color-mix(in oklch, lab(33.5217% 22.3139 76.2583) 12%, transparent)"
+      }
+    },
+    {
+      "file": "04-light-hc-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "light-high-contrast",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "oklch(0.430003 0.139995 75.0015 / 0.12)",
+        "borderColor": "lab(33.5217 22.3139 76.2583)",
+        "warning": "lab(33.5217% 22.3139 76.2583)",
+        "warningSurface": "color-mix(in oklch, lab(33.5217% 22.3139 76.2583) 12%, transparent)"
+      }
+    },
+    {
+      "file": "05-prefers-contrast-accepted-copied.png",
+      "state": "accepted-copied",
+      "mode": "prefers-contrast",
+      "locale": "en",
+      "focusText": "Receipt copied. Keiko cleared it from this feedback window.",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "lab(100 0 0)",
+        "warning": "lab(86.1646% 13.6748 60.3065)",
+        "warningSurface": "color-mix(in oklch, lab(86.1646% 13.6748 60.3065) 12%, transparent)"
+      }
+    },
+    {
+      "file": "05-prefers-contrast-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "prefers-contrast",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "oklch(0.880003 0.140009 80.0045 / 0.12)",
+        "borderColor": "lab(86.1646 13.6748 60.3065)",
+        "warning": "lab(86.1646% 13.6748 60.3065)",
+        "warningSurface": "color-mix(in oklch, lab(86.1646% 13.6748 60.3065) 12%, transparent)"
+      }
+    },
+    {
+      "file": "06-forced-colors-accepted-copied.png",
+      "state": "accepted-copied",
+      "mode": "forced-colors",
+      "locale": "en",
+      "focusText": "Receipt copied. Keiko cleared it from this feedback window.",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "rgb(255, 255, 255)",
+        "warning": "ButtonText",
+        "warningSurface": "Canvas"
+      }
+    },
+    {
+      "file": "06-forced-colors-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "forced-colors",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgb(0, 0, 0)",
+        "borderColor": "rgb(255, 255, 255)",
+        "warning": "ButtonText",
+        "warningSurface": "Canvas"
+      }
+    },
+    {
+      "file": "07-reduced-motion-accepted-copied.png",
+      "state": "accepted-copied",
+      "mode": "reduced-motion",
+      "locale": "en",
+      "focusText": "Receipt copied. Keiko cleared it from this feedback window.",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "rgba(0, 0, 0, 0)",
+        "borderColor": "lab(96.5608 -0.958711 0.381434)",
+        "warning": "lab(74.4048% 16.5655 55.5067)",
+        "warningSurface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+      }
+    },
+    {
+      "file": "07-reduced-motion-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "reduced-motion",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "oklch(0.780003 0.130007 75.0049 / 0.12)",
+        "borderColor": "lab(74.4048 16.5655 55.5067)",
+        "warning": "lab(74.4048% 16.5655 55.5067)",
+        "warningSurface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+      }
+    },
+    {
+      "file": "08-responsive-500-rate-limited.png",
+      "state": "rate-limited",
+      "mode": "responsive-500",
+      "locale": "en",
+      "focusText": "WarningFeedback submission pausedKeiko cannot accept another submission right now. Try again later or use the public GitHub form.Edit feedback",
+      "seriousOrCritical": [],
+      "style": {
+        "background": "oklch(0.780003 0.130007 75.0049 / 0.12)",
+        "borderColor": "lab(74.4048 16.5655 55.5067)",
+        "warning": "lab(74.4048% 16.5655 55.5067)",
+        "warningSurface": "color-mix(in oklch, lab(74.4048% 16.5655 55.5067) 12%, transparent)"
+      }
+    }
+  ],
+  "assertions": {
+    "canonicalModeCoverage": 7,
+    "acceptedCopyStateInEveryMode": 7,
+    "rateLimitedConflictStateInEveryMode": 8,
+    "receiptSecretRendered": false,
+    "rateLimitThresholdRendered": false,
+    "receiptCopySuccessFocusMoved": true,
+    "rateLimitIconAndWordPresent": true,
+    "forcedColorsActionReadability": "ButtonFace/ButtonText, text fill, and forced-color-adjust are asserted in real Chromium."
+  }
+}

@@ -79,6 +79,24 @@ module.exports = {
       },
     },
     {
+      name: "adr-0125-feedback-intake-hosted-boundary",
+      comment:
+        "ADR-0125: hosted feedback intake may depend only on contracts and security; it must stay independent of the local BFF and UI planes. The dedicated negative fixture proves this boundary remains live.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-feedback-intake/src/|tests/architecture/fixtures/feedback-intake-hosted-boundary/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|feedback-intake)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|feedback-intake)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|feedback-intake)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
+      },
+    },
+    {
       name: "adr-0019-direction-2b-git-only-contracts",
       comment:
         "Governed git core boundary: keiko-git holds the shared git process runner, hardened " +

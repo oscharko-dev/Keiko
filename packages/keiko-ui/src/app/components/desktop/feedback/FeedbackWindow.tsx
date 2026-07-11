@@ -9,6 +9,7 @@ import {
   revalidateFeedbackReportV1,
   submitFeedbackReportV1,
   type FeedbackBrowserDraftV1,
+  type FeedbackReceiptV1,
   type PreparedFeedbackSnapshotV1,
 } from "@/lib/feedback-api";
 import { useFeedbackTranslate } from "./feedback-i18n";
@@ -41,6 +42,7 @@ import {
   type FeedbackTextControlElement,
   type FeedbackTextField,
 } from "./feedback-options";
+import { useFeedbackReceipt } from "./use-feedback-receipt";
 
 function withoutOptionalField(
   draft: FeedbackBrowserDraftV1,
@@ -86,6 +88,7 @@ export function FeedbackWindow({
   const [reviewed, setReviewed] = useState(false);
   const [submissionStep, setSubmissionStep] = useState<FeedbackSubmissionStep>("review");
   const [submissionBusy, setSubmissionBusy] = useState(false);
+  const receiptState = useFeedbackReceipt(writeClipboard);
   const [optionalRemovalStatus, setOptionalRemovalStatus] = useState<
     FeedbackOptionalTextField | undefined
   >();
@@ -93,6 +96,7 @@ export function FeedbackWindow({
   const previewHeadingRef = useRef<HTMLHeadingElement>(null);
   const confirmationHeadingRef = useRef<HTMLHeadingElement>(null);
   const acceptedStatusRef = useRef<HTMLParagraphElement>(null);
+  const copiedStatusRef = useRef<HTMLParagraphElement>(null);
   const securityAlertRef = useRef<HTMLElement>(null);
   const submissionResultRef = useRef<HTMLElement>(null);
   const submissionInFlightRef = useRef(false);
@@ -139,16 +143,24 @@ export function FeedbackWindow({
   useEffect(() => {
     if (submissionStep === "confirm") confirmationHeadingRef.current?.focus();
     if (submissionStep === "accepted") acceptedStatusRef.current?.focus();
-    if (isRetryableSubmissionStep(submissionStep) || submissionStep === "rejected") {
+    if (
+      isRetryableSubmissionStep(submissionStep) ||
+      submissionStep === "rejected" ||
+      submissionStep === "rate-limited"
+    ) {
       submissionResultRef.current?.focus();
     }
   }, [submissionStep]);
+  useEffect(() => {
+    if (receiptState.copyState === "copied") copiedStatusRef.current?.focus();
+  }, [receiptState.copyState]);
   useEffect(() => {
     if (securityRouted) securityAlertRef.current?.focus();
   }, [securityRouted]);
   if (!ordinary) return <FeedbackSecurityGate onContinue={() => setOrdinary(true)} />;
 
   const clearPreviewState = (): void => {
+    receiptState.clear();
     setPrepared(undefined);
     setError(undefined);
     setErrorTarget(undefined);
@@ -274,6 +286,11 @@ export function FeedbackWindow({
       exactBodySha256: prepared.exactBodySha256,
     })
       .then((outcome) => {
+        if (outcome.outcome === "accepted") {
+          receiptState.accept(outcome.receipt);
+        } else {
+          receiptState.clear();
+        }
         setSubmissionStep(outcome.outcome);
       })
       .catch(() => setSubmissionStep("error"))
@@ -345,11 +362,18 @@ export function FeedbackWindow({
             busy: submissionBusy,
             confirmationHeadingRef,
             acceptedStatusRef,
+            copiedStatusRef,
             resultRef: submissionResultRef,
+            receipt: receiptState.receipt as FeedbackReceiptV1,
+            receiptCopyState: receiptState.copyState,
             onReviewedChange: setReviewed,
             onContinue: continueToSubmission,
             onSubmit: submitPrepared,
-            onEditAndRescan: () => focusField("title"),
+            onEditAndRescan: () => {
+              invalidatePreparedState();
+              focusField("title");
+            },
+            onCopyReceipt: receiptState.copy,
           }}
           onEditField={focusField}
           onEditAndRescan={() => headingRef.current?.focus()}

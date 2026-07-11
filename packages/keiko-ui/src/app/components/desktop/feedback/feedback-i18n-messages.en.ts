@@ -88,6 +88,16 @@ export const FEEDBACK_EN_MESSAGES = {
   "feedback.submission.submit": "Submit feedback",
   "feedback.submission.submitting": "Submitting feedback...",
   "feedback.submission.accepted": "Feedback was submitted for maintainer review.",
+  "feedback.submission.receipt.instructions":
+    "Copy this one-time receipt now. Keiko keeps it only in this open feedback window; the secret is included in the copied text.",
+  "feedback.submission.receipt.id": "Receipt ID",
+  "feedback.submission.receipt.expires": "Receipt expires",
+  "feedback.submission.receipt.copy": "Copy one-time receipt",
+  "feedback.submission.receipt.copying": "Copying receipt...",
+  "feedback.submission.receipt.copied":
+    "Receipt copied. Keiko cleared it from this feedback window.",
+  "feedback.submission.receipt.copyError":
+    "Keiko could not copy the receipt. It remains available in this feedback window.",
   "feedback.submission.unavailable.title": "Feedback intake unavailable",
   "feedback.submission.unavailable.message":
     "Keiko intake is currently unavailable. Try again or use the public GitHub form.",
@@ -95,6 +105,11 @@ export const FEEDBACK_EN_MESSAGES = {
   "feedback.submission.rejected.message":
     "Keiko did not accept this feedback for maintainer review.",
   "feedback.submission.rejected.editAndRescan": "Edit and rescan feedback",
+  "feedback.submission.rateLimited.title": "Feedback submission paused",
+  "feedback.submission.rateLimited.label": "Warning",
+  "feedback.submission.rateLimited.message":
+    "Keiko cannot accept another submission right now. Try again later or use the public GitHub form.",
+  "feedback.submission.rateLimited.editAndRescan": "Edit feedback",
   "feedback.submission.error.title": "Feedback submission could not be confirmed",
   "feedback.submission.error.message":
     "Keiko could not confirm the submission outcome. Retry only to make another attempt.",

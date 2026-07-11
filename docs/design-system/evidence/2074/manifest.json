@@ -1,0 +1,33 @@
+{
+  "issue": "#2074",
+  "epic": "#2070",
+  "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:feedback-2074 -- --grep \"fidelity evidence\"",
+  "playwrightCommand": "npm run test:e2e:feedback-2074 -- --grep \"fidelity evidence\"",
+  "artifacts": [
+    "01-dark-accepted-copied.png",
+    "01-dark-rate-limited.png",
+    "02-light-accepted-copied.png",
+    "02-light-rate-limited.png",
+    "03-dark-hc-accepted-copied.png",
+    "03-dark-hc-rate-limited.png",
+    "04-light-hc-accepted-copied.png",
+    "04-light-hc-rate-limited.png",
+    "05-prefers-contrast-accepted-copied.png",
+    "05-prefers-contrast-rate-limited.png",
+    "06-forced-colors-accepted-copied.png",
+    "06-forced-colors-rate-limited.png",
+    "07-reduced-motion-accepted-copied.png",
+    "07-reduced-motion-rate-limited.png",
+    "08-responsive-500-rate-limited.png",
+    "feedback-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json",
+    "README.md"
+  ],
+  "captureCount": 15,
+  "notes": [
+    "All captures use the packaged CLI UI and a deterministic browser-level submit adapter.",
+    "Receipt secrets are asserted absent from the DOM and evidence while the exact clipboard tuple is verified.",
+    "Rate-limited conflict presentation uses the governed warning token pair plus a visible icon and word."
+  ]
+}

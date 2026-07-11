@@ -21,14 +21,19 @@ const RAW_SENTINEL = "raw-draft-outcome-sentinel";
 async function reachConfirmation(
   submitReport: typeof submitFeedbackReportV1,
   prepared: PreparedFeedbackSnapshotV1 = preparedSnapshot(),
+  writeClipboard: (text: string) => Promise<void> = () => Promise.resolve(),
 ) {
   const previewReport = vi
     .fn<(draft: FeedbackBrowserDraftV1) => Promise<PreparedFeedbackSnapshotV1>>()
     .mockResolvedValue(prepared);
   const user = userEvent.setup();
-  render(
+  const rendered = render(
     <I18nProvider>
-      <FeedbackWindow previewReport={previewReport} submitReport={submitReport} />
+      <FeedbackWindow
+        previewReport={previewReport}
+        submitReport={submitReport}
+        writeClipboard={writeClipboard}
+      />
     </I18nProvider>,
   );
   await user.click(screen.getByRole("button", { name: "Continue with ordinary feedback" }));
@@ -51,10 +56,17 @@ async function reachConfirmation(
     user,
     preview,
     submit: within(confirmation).getByRole("button", { name: "Submit feedback" }),
+    unmount: rendered.unmount,
   };
 }
 
 describe("FeedbackWindow exact submission", () => {
+  const receipt = {
+    receiptId: "A".repeat(22),
+    receiptSecret: "A".repeat(43),
+    expiresAt: "2026-08-10T00:00:00.000Z",
+  };
+
   it("requires review and confirmation before submitting only the exact prepared pair", async () => {
     const prepared = preparedSnapshot();
     const previewReport = vi
@@ -62,7 +74,7 @@ describe("FeedbackWindow exact submission", () => {
       .mockResolvedValue(prepared);
     const submitReport = vi
       .fn<typeof submitFeedbackReportV1>()
-      .mockResolvedValue({ outcome: "accepted" });
+      .mockResolvedValue({ outcome: "accepted", receipt });
     const user = userEvent.setup();
     render(
       <I18nProvider>
@@ -182,10 +194,90 @@ describe("FeedbackWindow exact submission", () => {
     expect(submitReport).toHaveBeenCalledOnce();
   });
 
+  it("offers one receipt copy, then clears the in-memory capability", async () => {
+    const receipt = {
+      receiptId: "A".repeat(22),
+      receiptSecret: "A".repeat(43),
+      expiresAt: "2026-08-10T00:00:00.000Z",
+    };
+    const submitReport = vi
+      .fn<typeof submitFeedbackReportV1>()
+      .mockResolvedValue({ outcome: "accepted", receipt });
+    const writeClipboard = vi.fn<(text: string) => Promise<void>>().mockResolvedValue();
+    const { user, submit } = await reachConfirmation(
+      submitReport,
+      preparedSnapshot(),
+      writeClipboard,
+    );
+
+    await user.click(submit);
+    expect(await screen.findByText(receipt.receiptId)).toBeVisible();
+    expect(screen.getByText(receipt.expiresAt)).toBeVisible();
+    expect(screen.queryByText(receipt.receiptSecret)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Copy one-time receipt" }));
+
+    expect(writeClipboard).toHaveBeenCalledWith(
+      `Receipt ID: ${receipt.receiptId}\nReceipt secret: ${receipt.receiptSecret}\nExpires at: ${receipt.expiresAt}`,
+    );
+    expect(await screen.findByText(/Receipt copied.*cleared/iu)).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByText(/Receipt copied.*cleared/iu, { selector: "p" })).toHaveFocus(),
+    );
+    expect(screen.queryByText(receipt.receiptId)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy one-time receipt" })).toBeNull();
+  });
+
+  it("retains a receipt after clipboard failure and clears it on draft edit", async () => {
+    const receipt = {
+      receiptId: "A".repeat(22),
+      receiptSecret: "A".repeat(43),
+      expiresAt: "2026-08-10T00:00:00.000Z",
+    };
+    const submitReport = vi
+      .fn<typeof submitFeedbackReportV1>()
+      .mockResolvedValue({ outcome: "accepted", receipt });
+    const writeClipboard = vi.fn<(text: string) => Promise<void>>().mockRejectedValue(new Error());
+    const { user, submit } = await reachConfirmation(
+      submitReport,
+      preparedSnapshot(),
+      writeClipboard,
+    );
+
+    await user.click(submit);
+    await user.click(await screen.findByRole("button", { name: "Copy one-time receipt" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("remains available");
+    expect(screen.getByText(receipt.receiptId)).toBeVisible();
+
+    await user.type(screen.getByLabelText("Title"), " changed");
+    expect(screen.queryByText(receipt.receiptId)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Copy one-time receipt" })).toBeNull();
+  });
+
+  it("renders a focused throttled recovery without disclosing policy details", async () => {
+    const submitReport = vi
+      .fn<typeof submitFeedbackReportV1>()
+      .mockResolvedValue({ outcome: "rate-limited" });
+    const { user, submit } = await reachConfirmation(submitReport);
+
+    await user.click(submit);
+    const result = await screen.findByRole("region", { name: "Feedback submission paused" });
+    expect(within(result).getByText("Warning")).toBeVisible();
+    expect(result.querySelector("svg")).toBeInTheDocument();
+    expect(result).toHaveTextContent(
+      "Keiko cannot accept another submission right now. Try again later or use the public GitHub form.",
+    );
+    expect(result).not.toHaveTextContent(/limit|threshold|class|minute|hour/iu);
+    expect(within(result).queryByRole("button", { name: "Retry submission" })).toBeNull();
+    await waitFor(() => expect(result).toHaveFocus());
+    await user.click(within(result).getByRole("button", { name: "Edit feedback" }));
+    expect(screen.getByLabelText("Title")).toHaveFocus();
+    expect(screen.queryByRole("region", { name: "Sanitized preview" })).toBeNull();
+  });
+
   it("permits explicit submission after optional quarantine and omission", async () => {
     const submitReport = vi
       .fn<typeof submitFeedbackReportV1>()
-      .mockResolvedValue({ outcome: "accepted" });
+      .mockResolvedValue({ outcome: "accepted", receipt });
     const { user, preview, submit } = await reachConfirmation(
       submitReport,
       preparedSnapshotWithOptionalDispositions(),
@@ -225,7 +317,7 @@ describe("FeedbackWindow exact submission", () => {
     expect(screen.getByRole("region", { name: "Confirm feedback submission" })).toBeInTheDocument();
     await user.click(submit);
     expect(submitReport).toHaveBeenCalledOnce();
-    resolveSubmission?.({ outcome: "accepted" });
+    resolveSubmission?.({ outcome: "accepted", receipt });
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Feedback was submitted for maintainer review.",
     );
@@ -252,7 +344,7 @@ describe("FeedbackWindow exact submission", () => {
       within(notices).getByRole("button", { name: "Remove browser description" }),
     ).toBeDisabled();
     expect(within(preview).getByRole("button", { name: "Edit and rescan" })).toBeDisabled();
-    resolveSubmission?.({ outcome: "accepted" });
+    resolveSubmission?.({ outcome: "accepted", receipt });
     expect(await screen.findByRole("status")).toHaveTextContent(
       "Feedback was submitted for maintainer review.",
     );

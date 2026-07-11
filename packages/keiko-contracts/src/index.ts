@@ -1491,6 +1491,7 @@ export {
   parseFeedbackReportDraftV1,
   parseFeedbackReportV1,
 } from "./feedback-report.js";
+export * from "./feedback-intake.js";
 
 // ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
 export type {

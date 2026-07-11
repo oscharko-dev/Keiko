@@ -2,6 +2,11 @@ import { Buffer } from "node:buffer";
 
 import { FEEDBACK_REPORT_LIMITS } from "@oscharko-dev/keiko-contracts/feedback-report";
 import {
+  isFeedbackReceiptExpiryV1,
+  isFeedbackReceiptIdV1,
+  isFeedbackReceiptSecretV1,
+} from "@oscharko-dev/keiko-contracts/feedback-intake";
+import {
   prepareFeedbackReportV1,
   verifyCanonicalFeedbackReportBodyV1,
 } from "@oscharko-dev/keiko-security/feedback-report";
@@ -10,7 +15,10 @@ import { feedbackSecurityRoutingDecisionV1 } from "@oscharko-dev/keiko-security/
 import { currentRedactionSecrets, type UiHandlerDeps } from "./deps.js";
 import { decodeFeedbackDraftAttachmentEnvelopes } from "./feedback-attachment-envelope.js";
 import { readStrictFeedbackJsonObject } from "./feedback-request-decoder.js";
-import type { FeedbackSubmissionUiOutcome } from "./feedback-submission.js";
+import type {
+  FeedbackSubmissionReceipt,
+  FeedbackSubmissionUiOutcome,
+} from "./feedback-submission.js";
 import { errorBody, type RouteContext, type RouteDefinition, type RouteResult } from "./routes.js";
 
 const MAX_FEEDBACK_PREVIEW_REQUEST_BYTES = FEEDBACK_REPORT_LIMITS.canonicalBodyBytes * 2;
@@ -68,8 +76,8 @@ function feedbackSubmitEnvelope(
   };
 }
 
-function submissionOutcome(outcome: FeedbackSubmissionUiOutcome["outcome"]): RouteResult {
-  return { status: 200, body: { outcome } satisfies FeedbackSubmissionUiOutcome };
+function submissionOutcome(outcome: FeedbackSubmissionUiOutcome): RouteResult {
+  return { status: 200, body: outcome };
 }
 
 type FeedbackRevalidationOutcome = "valid" | "rejected" | "security";
@@ -89,6 +97,51 @@ function uncertainSubmissionOutcome(): RouteResult {
     status: 502,
     body: errorBody("FEEDBACK_SUBMIT_FAILED", "Feedback submission could not be confirmed."),
   };
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Reflect.ownKeys(value);
+  return (
+    keys.length === expected.length &&
+    keys.every((key) => typeof key === "string" && expected.includes(key))
+  );
+}
+
+function acceptedReceipt(value: unknown): FeedbackSubmissionReceipt | undefined {
+  const fields = record(value);
+  if (fields === undefined) return undefined;
+  if (!hasExactKeys(fields, ["receiptId", "receiptSecret", "expiresAt"])) return undefined;
+  if (
+    !isFeedbackReceiptIdV1(fields.receiptId) ||
+    !isFeedbackReceiptSecretV1(fields.receiptSecret) ||
+    !isFeedbackReceiptExpiryV1(fields.expiresAt)
+  ) {
+    return undefined;
+  }
+  return {
+    receiptId: fields.receiptId,
+    receiptSecret: fields.receiptSecret,
+    expiresAt: fields.expiresAt,
+  };
+}
+
+function acceptedSubmissionOutcome(value: unknown): FeedbackSubmissionUiOutcome | undefined {
+  const outcome = record(value);
+  if (outcome === undefined || !hasExactKeys(outcome, ["outcome", "receipt"])) return undefined;
+  const receipt = acceptedReceipt(outcome.receipt);
+  return outcome.outcome === "accepted" && receipt !== undefined
+    ? { outcome: "accepted", receipt }
+    : undefined;
+}
+
+function contentFreeSubmissionOutcome(value: unknown): value is "rejected" | "rate-limited" {
+  return value === "rejected" || value === "rate-limited";
 }
 
 async function handleFeedbackPreview(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
@@ -155,14 +208,15 @@ async function handleFeedbackSubmit(ctx: RouteContext, deps: UiHandlerDeps): Pro
     claimedDigest: envelope.exactBodySha256,
     policy: feedbackRedactionPolicy(deps),
   });
-  if (!verified.ok) return submissionOutcome("rejected");
-  if (routesToPrivateSecurity(verified.value.report)) return submissionOutcome("rejected");
-  if (deps.feedbackSubmission === undefined) return submissionOutcome("unavailable");
+  if (!verified.ok) return submissionOutcome({ outcome: "rejected" });
+  if (routesToPrivateSecurity(verified.value.report))
+    return submissionOutcome({ outcome: "rejected" });
+  if (deps.feedbackSubmission === undefined) return submissionOutcome({ outcome: "unavailable" });
   try {
     const outcome: unknown = await deps.feedbackSubmission.submit(verified.value);
-    return outcome === "accepted" || outcome === "rejected"
-      ? submissionOutcome(outcome)
-      : uncertainSubmissionOutcome();
+    if (contentFreeSubmissionOutcome(outcome)) return submissionOutcome({ outcome });
+    const accepted = acceptedSubmissionOutcome(outcome);
+    return accepted === undefined ? uncertainSubmissionOutcome() : submissionOutcome(accepted);
   } catch {
     return uncertainSubmissionOutcome();
   }

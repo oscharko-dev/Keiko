@@ -65,6 +65,18 @@
         "functions": 95.32
       }
     },
+    "keiko-feedback-intake": {
+      "files": 16,
+      "uncoveredFiles": 1,
+      "uncoveredLines": 98,
+      "totalLines": 802,
+      "coverage": {
+        "lines": 87.78,
+        "statements": 84.59,
+        "branches": 74.92,
+        "functions": 86.73
+      }
+    },
     "keiko-git": {
       "files": 6,
       "uncoveredFiles": 0,
@@ -301,6 +313,7 @@
     "packages/keiko-contracts/src/workspace-ui.ts": 2.73,
     "packages/keiko-contracts/src/qualityIntelligence/assertNever.ts": 49.5,
     "packages/keiko-editor/src/monaco/worker-entries.ts": 49.5,
+    "packages/keiko-feedback-intake/src/main.ts": 0,
     "packages/keiko-harness/src/tasks/verify.ts": 0,
     "packages/keiko-memory-capture/src/version.ts": 0,
     "packages/keiko-model-gateway/src/readiness-probe.ts": 0,

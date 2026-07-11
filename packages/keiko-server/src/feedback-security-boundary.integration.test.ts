@@ -16,6 +16,7 @@ import {
   type UiHandlerDeps,
 } from "./index.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import type { FeedbackSubmissionPortOutcome } from "./feedback-submission.js";
 
 let server: Server;
 let staticRoot: string;
@@ -51,9 +52,16 @@ function handlerDeps(): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
     feedbackSubmission: {
-      submit: (): Promise<"accepted"> => {
+      submit: (): Promise<FeedbackSubmissionPortOutcome> => {
         portCalls += 1;
-        return Promise.resolve("accepted");
+        return Promise.resolve({
+          outcome: "accepted" as const,
+          receipt: {
+            receiptId: "A".repeat(22),
+            receiptSecret: "A".repeat(43),
+            expiresAt: "2026-08-10T00:00:00.000Z",
+          },
+        });
       },
     },
     store: createInMemoryUiStore(),

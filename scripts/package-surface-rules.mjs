@@ -18,6 +18,13 @@ export const FORBIDDEN_TARBALL_PATH_RULES = [
       /\.(test|spec)\.d\.ts$/.test(p),
     label: "compiled test or spec artifact",
   },
+  {
+    test: (p) =>
+      /^node_modules\/@oscharko-dev\/keiko-feedback-intake\/dist\/(?:intake|keys|memory-store|postgres-integration-helpers)\.(?:js|d\.ts)(?:\.map)?$/.test(
+        p,
+      ),
+    label: "a feedback-intake test or in-memory-only module",
+  },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
   {
     test: (p) => p === "packages/keiko-ui" || p.startsWith("packages/keiko-ui/"),

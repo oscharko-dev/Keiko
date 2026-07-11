@@ -90,6 +90,16 @@ export const FEEDBACK_DE_MESSAGES = {
   "feedback.submission.submit": "Feedback uebermitteln",
   "feedback.submission.submitting": "Feedback wird uebermittelt...",
   "feedback.submission.accepted": "Feedback wurde zur Maintainer-Pruefung uebermittelt.",
+  "feedback.submission.receipt.instructions":
+    "Kopiere diesen einmaligen Beleg jetzt. Keiko behaelt ihn nur in diesem geoeffneten Feedback-Fenster; das Geheimnis ist im kopierten Text enthalten.",
+  "feedback.submission.receipt.id": "Beleg-ID",
+  "feedback.submission.receipt.expires": "Beleg laeuft ab",
+  "feedback.submission.receipt.copy": "Einmaligen Beleg kopieren",
+  "feedback.submission.receipt.copying": "Beleg wird kopiert...",
+  "feedback.submission.receipt.copied":
+    "Beleg kopiert. Keiko hat ihn aus diesem Feedback-Fenster entfernt.",
+  "feedback.submission.receipt.copyError":
+    "Keiko konnte den Beleg nicht kopieren. Er bleibt in diesem Feedback-Fenster verfuegbar.",
   "feedback.submission.unavailable.title": "Feedback-Annahme nicht verfuegbar",
   "feedback.submission.unavailable.message":
     "Keikos Annahmestelle ist derzeit nicht verfuegbar. Versuche es erneut oder nutze das oeffentliche GitHub-Formular.",
@@ -97,6 +107,11 @@ export const FEEDBACK_DE_MESSAGES = {
   "feedback.submission.rejected.message":
     "Keiko hat dieses Feedback nicht zur Maintainer-Pruefung angenommen.",
   "feedback.submission.rejected.editAndRescan": "Feedback bearbeiten und erneut pruefen",
+  "feedback.submission.rateLimited.title": "Feedback-Uebermittlung pausiert",
+  "feedback.submission.rateLimited.label": "Warnung",
+  "feedback.submission.rateLimited.message":
+    "Keiko kann derzeit keine weitere Uebermittlung annehmen. Versuche es spaeter erneut oder nutze das oeffentliche GitHub-Formular.",
+  "feedback.submission.rateLimited.editAndRescan": "Feedback bearbeiten",
   "feedback.submission.error.title": "Feedback-Uebermittlung konnte nicht bestaetigt werden",
   "feedback.submission.error.message":
     "Keiko konnte das Ergebnis der Uebermittlung nicht bestaetigen. Wiederhole nur, um einen weiteren Versuch zu starten.",

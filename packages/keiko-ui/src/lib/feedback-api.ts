@@ -21,6 +21,12 @@ import {
   FeedbackSecurityRoutingError,
   isFeedbackSecurityRoutingResponse,
 } from "./feedback-api-security";
+import {
+  parseFeedbackSubmitOutcomeV1,
+  type FeedbackSubmitOutcomeV1,
+} from "./feedback-submit-response";
+export type { FeedbackSubmitOutcomeV1 } from "./feedback-submit-response";
+export type { FeedbackReceiptV1 } from "./feedback-submit-response";
 
 export { FeedbackApiError } from "./feedback-api-errors";
 export {
@@ -39,7 +45,6 @@ const SIDECAR_KEYS = new Set(["exactBodySha256", "records"]);
 const DISPOSITION_KEYS = new Set(["action", "reason", "unitKind", "target"]);
 const DRAFT_TARGET_KEYS = new Set(["kind", "field"]);
 const ATTACHMENT_TARGET_KEYS = new Set(["kind", "ordinal"]);
-const SUBMIT_RESPONSE_KEYS = new Set(["outcome"]);
 const PREPARATION_RESPONSE_KEYS = new Set(["error", "errors"]);
 const ERROR_ENVELOPE_KEYS = new Set(["code", "message"]);
 const REPORT_ERROR_KEYS = new Set(["code", "field"]);
@@ -51,7 +56,6 @@ const DISPOSITION_ACTIONS = new Set<unknown>(FEEDBACK_DISPOSITION_ACTIONS_V1);
 const DISPOSITION_REASONS = new Set<unknown>(FEEDBACK_DISPOSITION_REASONS_V1);
 const DISPOSITION_UNIT_KINDS = new Set<unknown>(FEEDBACK_DISPOSITION_UNIT_KINDS_V1);
 const DRAFT_FIELD_IDS = new Set<unknown>(FEEDBACK_DRAFT_FIELD_IDS_V1);
-const SUBMIT_OUTCOMES = new Set<unknown>(["unavailable", "accepted", "rejected"]);
 const REPORT_ERROR_CODES = new Set<unknown>([
   "invalid-shape",
   "unknown-field",
@@ -111,11 +115,6 @@ export interface PreparedFeedbackSnapshotV1 {
   readonly exactBodySha256: string;
   readonly dispositionSidecar: FeedbackDispositionSidecarV1;
 }
-
-export type FeedbackSubmitOutcomeV1 =
-  | { readonly outcome: "unavailable" }
-  | { readonly outcome: "accepted" }
-  | { readonly outcome: "rejected" };
 
 export class FeedbackPreviewPreparationError extends FeedbackApiError {
   public readonly errors: readonly FeedbackReportPreparationError[];
@@ -361,13 +360,7 @@ export async function submitFeedbackReportV1(
     exactBodySha256: prepared.exactBodySha256,
   });
   if (!response.ok) throw new FeedbackApiError();
-  const value = response.value;
-  if (
-    !isPlainRecord(value) ||
-    !hasExactKeys(value, SUBMIT_RESPONSE_KEYS) ||
-    !SUBMIT_OUTCOMES.has(value.outcome)
-  ) {
-    throw new FeedbackApiError();
-  }
-  return Object.freeze({ outcome: value.outcome }) as FeedbackSubmitOutcomeV1;
+  const outcome = parseFeedbackSubmitOutcomeV1(response.value);
+  if (outcome === undefined) throw new FeedbackApiError();
+  return outcome;
 }

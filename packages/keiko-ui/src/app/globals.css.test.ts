@@ -4972,11 +4972,26 @@ describe("Issue #2073 — governed feedback intake styling", () => {
       "var(--card-border)",
       "var(--text-primary)",
       "var(--feedback-danger)",
+      "var(--feedback-warning)",
+      "var(--feedback-warning-surface)",
       "var(--focus-ring)",
       "var(--radius-control)",
     ]) {
       expect(block.includes(token), `feedback styling must consume ${token}`).toBe(true);
     }
     expect(block).not.toMatch(/border:\s*1px/);
+  });
+
+  it("maps rate-limited conflict feedback to warning tokens with icon-plus-word treatment", () => {
+    const rateLimited = cssBlock('.feedback-submission-result[data-outcome="rate-limited"]');
+    const outcome = cssBlock(".feedback-submission-outcome {");
+    const forcedColors = cssBlock("@media (forced-colors: active) {");
+    expect(rateLimited).toContain("border-color: var(--feedback-warning)");
+    expect(rateLimited).toContain("background: var(--feedback-warning-surface)");
+    expect(outcome).toContain("color: var(--feedback-warning)");
+    expect(outcome).toContain("gap: var(--space-2)");
+    expect(rateLimited).not.toMatch(/#[0-9a-f]|var\(--warn\)/iu);
+    expect(forcedColors).toContain("--button-primary-surface: ButtonFace");
+    expect(forcedColors).toContain("--button-primary-text: ButtonText");
   });
 });

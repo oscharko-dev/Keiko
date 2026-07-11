@@ -106,7 +106,16 @@ describe("feedback browser API", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonOk(preparedResponse()))
-      .mockResolvedValueOnce(jsonOk({ outcome: "accepted" }));
+      .mockResolvedValueOnce(
+        jsonOk({
+          outcome: "accepted",
+          receipt: {
+            receiptId: "A".repeat(22),
+            receiptSecret: "A".repeat(43),
+            expiresAt: "2026-08-10T00:00:00.000Z",
+          },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     const prepared = await previewFeedbackReportV1(draft());
@@ -119,7 +128,7 @@ describe("feedback browser API", () => {
     expect(Object.isFrozen(prepared)).toBe(true);
     expect(Object.isFrozen(prepared.report.summary)).toBe(true);
     expect(Object.isFrozen(prepared.dispositionSidecar.records)).toBe(true);
-    expect(outcome).toEqual({ outcome: "accepted" });
+    expect(outcome).toMatchObject({ outcome: "accepted" });
 
     const [previewPath, previewInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(previewPath).toBe("/api/feedback/preview");
@@ -215,7 +224,16 @@ describe("feedback browser API", () => {
 
   it("accepts only the closed local submit outcome", async () => {
     for (const response of [
+      { outcome: "accepted" },
       { outcome: "accepted", receiptSecret: "must-not-enter-ui-contract" },
+      {
+        outcome: "accepted",
+        receipt: {
+          receiptId: "invalid",
+          receiptSecret: "A".repeat(43),
+          expiresAt: "2026-08-10T00:00:00.000Z",
+        },
+      },
       { outcome: "queued" },
     ]) {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonOk(response)));
@@ -223,6 +241,23 @@ describe("feedback browser API", () => {
         submitFeedbackReportV1({ canonicalJson: "{}", exactBodySha256: "0".repeat(64) }),
       );
     }
+  });
+
+  it("accepts a strict receipt tuple and content-free rate-limited outcome", async () => {
+    const receipt = {
+      receiptId: "A".repeat(22),
+      receiptSecret: "A".repeat(43),
+      expiresAt: "2026-08-10T00:00:00.000Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonOk({ outcome: "accepted", receipt }))
+      .mockResolvedValueOnce(jsonOk({ outcome: "rate-limited" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const input = { canonicalJson: "{}", exactBodySha256: "0".repeat(64) };
+
+    await expect(submitFeedbackReportV1(input)).resolves.toEqual({ outcome: "accepted", receipt });
+    await expect(submitFeedbackReportV1(input)).resolves.toEqual({ outcome: "rate-limited" });
   });
 
   it("treats a non-success submit response as an uncertain content-free failure", async () => {

@@ -5,6 +5,7 @@
     { "path": "./packages/keiko-git" },
     { "path": "./packages/keiko-editor" },
     { "path": "./packages/keiko-security" },
+    { "path": "./packages/keiko-feedback-intake" },
     { "path": "./packages/keiko-quality-intelligence" },
     { "path": "./packages/keiko-model-gateway" },
     { "path": "./packages/keiko-workspace" },

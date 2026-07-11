@@ -16,7 +16,14 @@ import { preparedSnapshotWithOptionalDispositions } from "./FeedbackWindow.test-
 function renderFeedback(
   submitReport: typeof submitFeedbackReportV1 = vi
     .fn<typeof submitFeedbackReportV1>()
-    .mockResolvedValue({ outcome: "accepted" }),
+    .mockResolvedValue({
+      outcome: "accepted",
+      receipt: {
+        receiptId: "A".repeat(22),
+        receiptSecret: "A".repeat(43),
+        expiresAt: "2026-08-10T00:00:00.000Z",
+      },
+    }),
 ) {
   const prepared = preparedSnapshotWithOptionalDispositions();
   const previewReport = vi
