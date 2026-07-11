@@ -3367,15 +3367,12 @@ function EditorRuntimeWidget({
         // Issue #2234 (ADR-0127): content-free Git awareness. hasConflictMarkers reflects the
         // active file's live merge-conflict count (already tracked for the status bar/tab badge);
         // changedFileCount/truncated come from the same workspace status read the file tree and
-        // Git window use. null when no workspace root is bound yet.
-        gitContextSummary:
-          root === undefined
-            ? null
-            : {
-                hasConflictMarkers: mergeConflicts.count > 0,
-                changedFileCount: workspaceGitSummary?.changedFileCount ?? 0,
-                truncated: mergeConflicts.truncated || (workspaceGitSummary?.truncated ?? false),
-              },
+        // Git window use. root is already guaranteed defined by the early return above.
+        gitContextSummary: {
+          hasConflictMarkers: mergeConflicts.count > 0,
+          changedFileCount: workspaceGitSummary?.changedFileCount ?? 0,
+          truncated: mergeConflicts.truncated || (workspaceGitSummary?.truncated ?? false),
+        },
         ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
         activeFileContentHash: activeContentHash,
         textMode: "none" as const,
