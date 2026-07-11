@@ -161,9 +161,15 @@ vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>Resources
 vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
 vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
 vi.mock("./panels/SettingsPanel", () => ({
-  SettingsPanel: ({ openUpdatesWindow }: { readonly openUpdatesWindow?: () => void }) => (
+  SettingsPanel: ({
+    openUpdatesWindow,
+    root,
+  }: {
+    readonly openUpdatesWindow?: () => void;
+    readonly root?: string;
+  }) => (
     <button type="button" data-testid="settings-panel" onClick={openUpdatesWindow}>
-      SettingsPanel
+      SettingsPanel:{root ?? "unbound"}
     </button>
   ),
 }));
@@ -876,6 +882,7 @@ describe("workspace widget renderer registry", () => {
     );
 
     view.rerender(<>{WIN_TYPES.settings.render({}, ctx)}</>);
+    expect(await screen.findByTestId("settings-panel")).toHaveTextContent("SettingsPanel:/repo");
     fireEvent.click(await screen.findByTestId("settings-panel"));
     expect(ctx.openWindow).toHaveBeenCalledWith("updates", { entrypoint: "settings" });
 

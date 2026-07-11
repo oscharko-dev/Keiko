@@ -18,7 +18,11 @@ import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
-import { runHostLanguageOperation, shutdownHostLspPool } from "./hostLanguageOperation.js";
+import {
+  disposeHostLspPoolEntry,
+  runHostLanguageOperation,
+  shutdownHostLspPool,
+} from "./hostLanguageOperation.js";
 
 let binDir = "";
 let workspaceRoot = "";
@@ -74,13 +78,25 @@ const DIAGNOSTIC_RESULTS = {
   },
 } as const;
 
-function countingSpawn(): { spawn: LspSpawnFn; spawnCount: () => number } {
+function countingSpawn(): {
+  spawn: LspSpawnFn;
+  spawnCount: () => number;
+  receivedMethods: () => readonly string[];
+} {
   let count = 0;
+  const controllers: ReturnType<typeof createFakeLspProcess>[] = [];
   const spawn: LspSpawnFn = () => {
     count += 1;
-    return createFakeLspProcess({ results: DIAGNOSTIC_RESULTS }).handle;
+    const controller = createFakeLspProcess({ results: DIAGNOSTIC_RESULTS });
+    controllers.push(controller);
+    return controller.handle;
   };
-  return { spawn, spawnCount: (): number => count };
+  return {
+    spawn,
+    spawnCount: (): number => count,
+    receivedMethods: (): readonly string[] =>
+      controllers.flatMap((controller) => controller.receivedMethods()),
+  };
 }
 
 function runAt(root: string, spawn: LspSpawnFn): ReturnType<typeof runHostLanguageOperation> {
@@ -95,10 +111,41 @@ function runAt(root: string, spawn: LspSpawnFn): ReturnType<typeof runHostLangua
   });
 }
 
+function runAuthorizedAt(
+  root: string,
+  spawn: LspSpawnFn,
+): ReturnType<typeof runHostLanguageOperation> {
+  return runHostLanguageOperation(diagnosticsRequest(root), {
+    workspace: workspaceAt(root),
+    processEnv: { PATH: binDir },
+    commandRules: [{ executable: "gopls" }],
+    overlayAbsolutePath: join(root, "main.go"),
+    signal: new AbortController().signal,
+    spawn,
+    activationAuthorized: true,
+  });
+}
+
+function runAtRevision(
+  root: string,
+  spawn: LspSpawnFn,
+  revision: number,
+): ReturnType<typeof runHostLanguageOperation> {
+  return runHostLanguageOperation(diagnosticsRequest(root), {
+    workspace: workspaceAt(root),
+    processEnv: { PATH: binDir, KEIKO_EDITOR_LSP_GO: "1" },
+    commandRules: [{ executable: "gopls" }],
+    overlayAbsolutePath: join(root, "main.go"),
+    signal: new AbortController().signal,
+    spawn,
+    protocolConfiguration: { revision, settings: {} },
+  });
+}
+
 describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
   it("spawns the LSP process ONCE across two sequential ops on the same root+language", async () => {
     makeExecutable("gopls");
-    const { spawn, spawnCount } = countingSpawn();
+    const { spawn, spawnCount, receivedMethods } = countingSpawn();
 
     const first = await runAt(workspaceRoot, spawn);
     const second = await runAt(workspaceRoot, spawn);
@@ -107,6 +154,35 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
     expect(second).toMatchObject({ kind: "diagnostics" });
     // Pooled: the warm process from the first op served the second op — no re-spawn.
     expect(spawnCount()).toBe(1);
+    await shutdownHostLspPool();
+    expect(receivedMethods().filter((method) => method === "initialized")).toHaveLength(1);
+    expect(receivedMethods().filter((method) => method === "textDocument/didOpen")).toHaveLength(1);
+    expect(receivedMethods().filter((method) => method === "textDocument/didChange")).toHaveLength(
+      1,
+    );
+    expect(receivedMethods().filter((method) => method === "textDocument/didClose")).toHaveLength(
+      1,
+    );
+  });
+
+  it("uses canonical activation without requiring the legacy environment flag", async () => {
+    makeExecutable("gopls");
+    const { spawn, spawnCount } = countingSpawn();
+
+    const result = await runAuthorizedAt(workspaceRoot, spawn);
+
+    expect(result).toMatchObject({ kind: "diagnostics" });
+    expect(spawnCount()).toBe(1);
+  });
+
+  it("restarts exactly the affected pooled process when configuration revision changes", async () => {
+    makeExecutable("gopls");
+    const { spawn, spawnCount } = countingSpawn();
+
+    await runAtRevision(workspaceRoot, spawn, 1);
+    await runAtRevision(workspaceRoot, spawn, 2);
+
+    expect(spawnCount()).toBe(2);
   });
 
   it("queues a concurrent second op onto the warm process instead of rejecting it busy", async () => {
@@ -140,6 +216,26 @@ describe("runHostLanguageOperation pooling (GEN-PERF-EDITOR-007)", () => {
       expect(a).toMatchObject({ kind: "diagnostics" });
       expect(b).toMatchObject({ kind: "diagnostics" });
       expect(spawnCount()).toBe(2);
+    } finally {
+      rmSync(otherRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("disposes only the selected root and language while unrelated entries remain warm", async () => {
+    makeExecutable("gopls");
+    const otherRoot = mkdtempSync(join(tmpdir(), "keiko-host-lsp-pool-targeted-ws2-"));
+    try {
+      const { spawn, spawnCount } = countingSpawn();
+      await runAt(workspaceRoot, spawn);
+      await runAt(otherRoot, spawn);
+      expect(spawnCount()).toBe(2);
+
+      await disposeHostLspPoolEntry(workspaceRoot, "go");
+      await runAt(otherRoot, spawn);
+      expect(spawnCount()).toBe(2);
+
+      await runAt(workspaceRoot, spawn);
+      expect(spawnCount()).toBe(3);
     } finally {
       rmSync(otherRoot, { recursive: true, force: true });
     }

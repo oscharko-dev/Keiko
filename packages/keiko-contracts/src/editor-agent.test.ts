@@ -1698,7 +1698,14 @@ describe("conflict-code taxonomy (Issue #1391 AC3)", () => {
 
 describe("failure-code taxonomy (Issue #1392)", () => {
   it("enumerates exactly the lifecycle failure codes", () => {
-    expect([...EDITOR_AGENT_FAILURE_CODES]).toEqual(["TIMED_OUT", "QUEUE_FULL"]);
+    expect([...EDITOR_AGENT_FAILURE_CODES]).toEqual([
+      "TIMED_OUT",
+      "QUEUE_FULL",
+      "CANCELLED",
+      "PROVIDER_UNAVAILABLE",
+      "UNSUPPORTED_OPERATION",
+      "LIMIT_EXCEEDED",
+    ]);
     for (const code of EDITOR_AGENT_FAILURE_CODES) {
       expect(isEditorAgentFailureCode(code)).toBe(true);
     }

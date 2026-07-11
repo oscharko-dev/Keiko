@@ -76,7 +76,10 @@ function pruneBundledWorkspaceNodeModules(repoRoot, removed) {
 }
 
 function pruneThirdPartyRuntimeSourceMaps(repoRoot, removed) {
-  for (const packageDir of [join(repoRoot, "node_modules", "pdfjs-dist")]) {
+  for (const packageDir of [
+    join(repoRoot, "node_modules", "pdfjs-dist"),
+    join(repoRoot, "node_modules", "smol-toml"),
+  ]) {
     const resolved = assertWithinRepo(repoRoot, packageDir);
     if (!existsSync(resolved)) continue;
     pruneDistTree(repoRoot, resolved, removed);

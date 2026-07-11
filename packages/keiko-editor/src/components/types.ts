@@ -39,6 +39,7 @@ import type { EditorGitGutterHost } from "./git-gutter-bridge.js";
 import type { EditorBlameHost } from "./blame-bridge.js";
 import type { ConflictLabels } from "./conflict-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
+import type { WireEditorSemanticTokens } from "./on-mount.js";
 
 export interface EditorUriLike {
   toString(): string;
@@ -196,6 +197,8 @@ export interface KeikoCodeEditorProps {
   readonly onRevealCallHierarchyLocation?: ((location: EditorLocation) => void) | undefined;
   /** Host-injected inlay-hints resolver rendered by Monaco's native hint surface (Issue #2216). */
   readonly provideInlayHints?: EditorInlayHintsResolver | undefined;
+  /** Host-built, bounded semantic-token provider registered through the editor mount seam. */
+  readonly semanticTokens?: WireEditorSemanticTokens | undefined;
   /**
    * Host-injected code-action resolver (Epic #2089). When present, the editor registers Monaco's
    * lightbulb provider and enables the lightbulb UI. Edits are limited to the active model.

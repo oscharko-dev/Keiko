@@ -20,6 +20,7 @@ import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
+  DEFAULT_LANGUAGE_SERVICE_LIMITS,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
@@ -495,7 +496,14 @@ describe("server-resolved navigation and search actions (#2218)", () => {
     const text = "const target = 1;\ntarget;\n";
     writeFileSync(join(root, "src", "a.ts"), text, "utf8");
     await registerSnapshotOnly({ workspaceRoot: root, activeFile: "src/a.ts" });
-    const deps = { store, redactor: buildRedactor({}), env: {} } as unknown as UiHandlerDeps;
+    const deps = {
+      store,
+      redactor: buildRedactor({}),
+      env: {},
+      editorLanguageRouteOptions: {
+        limits: { ...DEFAULT_LANGUAGE_SERVICE_LIMITS, deadlineMs: 15_000 },
+      },
+    } as unknown as UiHandlerDeps;
     try {
       const response = await handleEditorAgentActions(
         context(

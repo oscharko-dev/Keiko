@@ -10,6 +10,7 @@
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteResult } from "../../routes.js";
 import { listLspLifecycleEvents } from "./lspLifecycleLedger.js";
+import { listHostLspHealthSnapshots } from "./hostLanguageOperation.js";
 
 export interface LspStatusRouteDeps {
   readonly env: EnvSource;
@@ -26,5 +27,8 @@ export function handleEditorLspStatus(_ctx: unknown, deps: LspStatusRouteDeps): 
   if (!isLspStatusTrusted(deps.env)) {
     return { status: 404, body: errorBody("NOT_FOUND", "The requested resource was not found.") };
   }
-  return { status: 200, body: { events: listLspLifecycleEvents() } };
+  return {
+    status: 200,
+    body: { events: listLspLifecycleEvents(), health: listHostLspHealthSnapshots() },
+  };
 }

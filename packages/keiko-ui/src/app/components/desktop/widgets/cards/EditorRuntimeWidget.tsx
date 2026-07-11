@@ -122,6 +122,9 @@ import {
   type GitEditorDiffHunk,
   type GitEditorBlameLine,
   GIT_EDITOR_BLAME_MAX_LINES,
+  MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
+  MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
+  type ManagedLspSemanticTokenLegend,
   type WorkspaceReplaceApplyFile,
   type WorkspaceReplacePreviewTextRange,
 } from "@oscharko-dev/keiko-contracts";
@@ -146,6 +149,7 @@ import {
   requestEditorImplementation,
   requestEditorCallHierarchy,
   requestEditorInlayHints,
+  requestEditorSemanticTokens,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -211,6 +215,11 @@ import {
 import { buildEditorAgentChangesetPatch } from "./editorAgentChangeset";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import type { EditorSurfaceProps } from "./EditorSurface";
+import {
+  createEditorSemanticTokensHost,
+  type EditorSemanticTokensQuery,
+  type EditorSemanticTokensResolver,
+} from "./editorSemanticTokens";
 import { EditorBreadcrumbBar } from "./EditorBreadcrumbBar";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
 import { useEditorSourceControlTranslate } from "./editor-source-control-i18n";
@@ -465,6 +474,27 @@ const SESSION_CACHE_CAPACITY = 16;
 const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
 const CONTENT_HASH_DEBOUNCE_MS = 150;
 const UTF8_ENCODER = new TextEncoder();
+const RUST_SEMANTIC_TOKEN_LEGEND: ManagedLspSemanticTokenLegend = Object.freeze({
+  schemaVersion: "1",
+  legendVersion: 1,
+  tokenTypes: MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
+  tokenModifiers: MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
+  returnedTypeCount: MANAGED_LSP_SEMANTIC_TOKEN_TYPES.length,
+  totalTypeCount: MANAGED_LSP_SEMANTIC_TOKEN_TYPES.length,
+  returnedModifierCount: MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS.length,
+  totalModifierCount: MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS.length,
+  truncated: false,
+});
+const SEMANTIC_TEXT_ENCODER = new TextEncoder();
+
+function semanticLegendMatches(value: ManagedLspSemanticTokenLegend): boolean {
+  return (
+    value.legendVersion === RUST_SEMANTIC_TOKEN_LEGEND.legendVersion &&
+    value.tokenTypes.join("\0") === RUST_SEMANTIC_TOKEN_LEGEND.tokenTypes.join("\0") &&
+    value.tokenModifiers.join("\0") === RUST_SEMANTIC_TOKEN_LEGEND.tokenModifiers.join("\0")
+  );
+}
+
 // Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
 // GET resolves. It seeds the TypeScript/JavaScript provider as available so the primary editing
 // surface registers its governed intelligence at the FIRST `onMount` and does not remount when the GET
@@ -2338,7 +2368,14 @@ function EditorRuntimeWidget({
   // degrades to nothing (no markers / no hover / no outline / no edits) — it never breaks editing.
   const provideDiagnostics = useCallback<EditorDiagnosticsResolver>(
     async (query: EditorDiagnosticsQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
+      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "diagnostics")
+      ) {
         return { request: query.request.request, diagnostics: [] };
       }
       const wire = await requestEditorDiagnostics(
@@ -2347,12 +2384,19 @@ function EditorRuntimeWidget({
       );
       return mapWireToEditorDiagnosticsResponse(query.request.request, wire);
     },
-    [file, hasTarget, root],
+    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
   );
 
   const provideHover = useCallback<EditorHoverResolver>(
     async (query: EditorHoverQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
+      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "hover")
+      ) {
         return { request: query.request.request, hover: { contents: null } };
       }
       const wire = await requestEditorHover(
@@ -2370,16 +2414,23 @@ function EditorRuntimeWidget({
       );
       return mapWireToEditorHoverResponse(query.request.request, wire);
     },
-    [file, hasTarget, root],
+    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
   );
 
   const resolveEditorSymbols = useCallback(
     async (query: EditorSymbolsQuery, signal: AbortSignal): Promise<EditorSymbolsResponse> => {
       const request = query.request.request;
-      if (!hasTarget || root === undefined || file === undefined) {
+      const language = query.request.document.language;
+      const provider = providerForLanguage(languageCapabilities, language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "symbols")
+      ) {
         return { request, symbols: [] };
       }
-      const language = query.request.document.language;
       const cacheInput = { root, path: file, language, text: query.documentText };
       if (symbolCacheMatches(symbolCacheRef.current, cacheInput)) {
         return { request, symbols: symbolCacheRef.current.symbols };
@@ -2392,7 +2443,7 @@ function EditorRuntimeWidget({
       symbolCacheRef.current = { ...cacheInput, symbols: response.symbols };
       return response;
     },
-    [file, hasTarget, root],
+    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
   );
 
   const provideSymbols = useCallback<EditorSymbolsResolver>(
@@ -2409,7 +2460,14 @@ function EditorRuntimeWidget({
 
   const provideFormatting = useCallback<EditorFormattingResolver>(
     async (query: EditorFormattingQuery, signal: AbortSignal) => {
-      if (!hasTarget || root === undefined || file === undefined) {
+      const provider = providerForLanguage(languageCapabilities, query.request.document.language);
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.uri !== currentDocumentUri ||
+        !providerOperationEnabled(provider, "formatting")
+      ) {
         return { request: query.request.request, edits: [] };
       }
       const wire = await requestEditorFormatting(
@@ -2427,7 +2485,7 @@ function EditorRuntimeWidget({
       );
       return mapWireToEditorFormattingResponse(query.request.request, wire);
     },
-    [file, hasTarget, root],
+    [currentDocumentUri, file, hasTarget, languageCapabilities, root],
   );
 
   const provideDefinition = useCallback<EditorDefinitionResolver>(
@@ -2553,6 +2611,38 @@ function EditorRuntimeWidget({
         signal,
       );
       return mapWireToEditorInlayHintsResponse(query.request.request, wire);
+    },
+    [file, hasTarget, root],
+  );
+
+  const provideSemanticTokens = useCallback<EditorSemanticTokensResolver>(
+    async (query: EditorSemanticTokensQuery, signal: AbortSignal) => {
+      if (
+        !hasTarget ||
+        root === undefined ||
+        file === undefined ||
+        query.request.document.language !== "rust"
+      ) {
+        return null;
+      }
+      const response = await requestEditorSemanticTokens(
+        {
+          root,
+          path: file,
+          text: query.documentText,
+          version: query.request.document.version,
+        },
+        signal,
+      );
+      if (
+        !response.supported ||
+        response.legend === undefined ||
+        response.data === undefined ||
+        !semanticLegendMatches(response.legend)
+      ) {
+        return null;
+      }
+      return response.data;
     },
     [file, hasTarget, root],
   );
@@ -2810,6 +2900,29 @@ function EditorRuntimeWidget({
     providerOperationEnabled(languageProvider, "callHierarchy") && !largeFileDegraded;
   const inlayHintsEnabled =
     providerOperationEnabled(languageProvider, "inlayHints") && !largeFileDegraded;
+  const semanticTokensEnabled =
+    completionLanguage === "rust" &&
+    providerOperationEnabled(languageProvider, "hover") &&
+    !largeFileDegraded;
+  const semanticTokens = useMemo(
+    () =>
+      semanticTokensEnabled && currentDocumentUri !== null
+        ? createEditorSemanticTokensHost({
+            legend: RUST_SEMANTIC_TOKEN_LEGEND,
+            resolve: provideSemanticTokens,
+            isCurrentDocument: (uri): boolean => uri === currentDocumentUri,
+            language: "rust",
+            streamId: "editor-semantic-tokens",
+            newRequestId: createEditorRequestId,
+            isLargeDocument: (text): boolean =>
+              deriveLargeFileMode({
+                sizeBytes: SEMANTIC_TEXT_ENCODER.encode(text).length,
+                text,
+              }) === "degraded",
+          })
+        : undefined,
+    [currentDocumentUri, provideSemanticTokens, semanticTokensEnabled],
+  );
   const referencesEnabled =
     providerOperationEnabled(languageProvider, "references") && !largeFileDegraded;
   const renameEnabled =
@@ -4665,6 +4778,7 @@ function EditorRuntimeWidget({
             callHierarchyEnabled ? revealCallHierarchyLocation : undefined
           }
           provideInlayHints={inlayHintsEnabled ? provideInlayHints : undefined}
+          semanticTokens={semanticTokens}
           uriForPath={
             definitionEnabled || typeDefinitionEnabled || implementationEnabled || referencesEnabled
               ? uriForPath

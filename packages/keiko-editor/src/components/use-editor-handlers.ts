@@ -757,7 +757,7 @@ function availabilityBit(value: unknown): string {
 }
 
 function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
-  return [
+  const availability = [
     props.provideCompletions,
     props.provideInlineCompletions,
     props.provideDiagnostics,
@@ -769,6 +769,7 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.provideImplementation,
     props.provideCallHierarchy,
     props.provideInlayHints,
+    props.semanticTokens,
     props.provideReferences,
     props.provideCodeActions,
     props.provideSignatureHelp,
@@ -785,6 +786,7 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
   ]
     .map(availabilityBit)
     .join("");
+  return `${availability}:${String(props.semanticTokens?.legendVersion ?? 0)}`;
 }
 
 // Stable per-editor-instance stream ids and the content-free telemetry accumulator. The completion
@@ -826,14 +828,13 @@ interface MountRuntimeArgs {
 }
 
 function mountEditorRuntime(args: MountRuntimeArgs): void {
-  const mountMonaco = args.monaco as MountMonaco;
   args.refs.editorRef.current = args.editor;
-  args.refs.monacoRef.current = mountMonaco;
+  args.refs.monacoRef.current = args.monaco as MountMonaco;
   args.refs.containerRef.current = args.editor.getContainerDomNode();
   applyViewState(args.editor, args.refs.viewStateRef.current);
   args.refs.disposeRef.current = wireEditorOnMount({
     editor: args.editor,
-    monaco: mountMonaco,
+    monaco: args.monaco as MountMonaco,
     container: args.refs.containerRef.current,
     themeVariant: args.themeVariant ?? "dark",
     autoFocus: args.autoFocus ?? false,
@@ -864,6 +865,7 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
       args.onCallHierarchyResult,
     ),
     inlayHints: buildInlayHintsWiring(args.latestProps, `${args.streamId}:inlay-hints`),
+    semanticTokens: args.latestProps.current.semanticTokens,
     references: buildReferencesWiring(args.latestProps, `${args.streamId}:references`),
     codeActions: buildCodeActionsWiring(args.latestProps, `${args.streamId}:codeActions`),
     signatureHelp: buildSignatureHelpWiring(args.latestProps, `${args.streamId}:signatureHelp`),

@@ -143,10 +143,30 @@ export interface EditorAgentSessionSnapshot {
 }
 
 export type EditorAgentNavigateSymbolOperation =
-  "definition" | "references" | "renamePrepare" | "codeActions" | "signatureHelp";
+  | "diagnostics"
+  | "definition"
+  | "typeDefinition"
+  | "implementation"
+  | "references"
+  | "callHierarchy"
+  | "inlayHints"
+  | "renamePrepare"
+  | "codeActions"
+  | "signatureHelp";
 
 export const EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS: readonly EditorAgentNavigateSymbolOperation[] =
-  ["definition", "references", "renamePrepare", "codeActions", "signatureHelp"] as const;
+  [
+    "diagnostics",
+    "definition",
+    "typeDefinition",
+    "implementation",
+    "references",
+    "callHierarchy",
+    "inlayHints",
+    "renamePrepare",
+    "codeActions",
+    "signatureHelp",
+  ];
 
 export interface EditorAgentNavigateSymbolRequest {
   readonly operation: EditorAgentNavigateSymbolOperation;
@@ -434,12 +454,26 @@ export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
 // Issue #1392 — structured lifecycle failure codes (status: "failed") raised AFTER an action is
 // admitted to the bounded queue, distinct from the preflight conflict taxonomy above:
 //   - TIMED_OUT   the connected bridge never reported a result before the action deadline elapsed.
-//   - QUEUE_FULL  the bounded per-session action queue was already saturated when the action arrived.
-export type EditorAgentFailureCode = "TIMED_OUT" | "QUEUE_FULL";
+//   - QUEUE_FULL            the bounded per-session action queue was already saturated.
+//   - CANCELLED             the caller cancelled a server-resolved editor operation.
+//   - PROVIDER_UNAVAILABLE  the current workspace/provider state cannot serve the language.
+//   - UNSUPPORTED_OPERATION the active provider did not negotiate the requested operation.
+//   - LIMIT_EXCEEDED        the bounded request or response exceeded a language-service limit.
+export type EditorAgentFailureCode =
+  | "TIMED_OUT"
+  | "QUEUE_FULL"
+  | "CANCELLED"
+  | "PROVIDER_UNAVAILABLE"
+  | "UNSUPPORTED_OPERATION"
+  | "LIMIT_EXCEEDED";
 
 export const EDITOR_AGENT_FAILURE_CODES: readonly EditorAgentFailureCode[] = [
   "TIMED_OUT",
   "QUEUE_FULL",
+  "CANCELLED",
+  "PROVIDER_UNAVAILABLE",
+  "UNSUPPORTED_OPERATION",
+  "LIMIT_EXCEEDED",
 ] as const;
 
 export interface EditorAgentActionFailure {

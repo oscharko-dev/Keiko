@@ -9,11 +9,17 @@
 import { isAbsolute, resolve } from "node:path";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  MANAGED_LSP_LANGUAGES,
   parseLanguageServiceRequest,
+  parseManagedLspSemanticTokenRequest,
   type LanguageProviderDescriptor,
   type LanguageServiceErrorCode,
   type LanguageServiceLimits,
   type LanguageServiceRequest,
+  type ManagedLspEffectiveState,
+  type ManagedLspLanguage,
+  type ManagedLspRuntimeConfiguration,
+  type ManagedLspSemanticTokenResponse,
 } from "@oscharko-dev/keiko-contracts";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
@@ -26,10 +32,18 @@ import { describeLanguageCapabilities, runLanguageOperation } from "./languageSe
 import type { LanguageServiceOutcome } from "./languageService.js";
 import {
   detectHostLanguageProviderDescriptors,
+  defaultHostLanguageCommandRules,
   HOST_LANGUAGE_PROVIDER_SPECS,
+  HOST_LSP_DISABLED_REASON,
 } from "./lsp/hostLanguageProviders.js";
-import { runHostLanguageOperation } from "./lsp/hostLanguageOperation.js";
+import {
+  runHostLanguageOperation,
+  runHostLanguageSemanticTokens,
+  type HostLanguageOperationOptions,
+} from "./lsp/hostLanguageOperation.js";
 import type { LspSpawnFn } from "./lsp/lspNodeAdapter.js";
+import type { ManagedLspControlSnapshot } from "./lsp/managedLspControl.js";
+import { managedProviderProtocolConfiguration } from "./lsp/providers/providerConfiguration.js";
 
 // The overlay buffer may be up to the document-size cap; allow 64 KiB of JSON envelope on top.
 const MAX_LANGUAGE_BODY_BYTES = DEFAULT_LANGUAGE_SERVICE_LIMITS.maxDocumentBytes + 64 * 1024;
@@ -145,6 +159,7 @@ export async function handleEditorLanguage(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   options: EditorLanguageRouteOptions = {},
+  signalOverride?: AbortSignal,
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_LANGUAGE_BODY_BYTES);
   if (isRouteResult(body)) {
@@ -163,7 +178,7 @@ export async function handleEditorLanguage(
       deps,
       root.realRoot,
       overlayAbsolutePath,
-      clientAbortSignal(ctx),
+      signalOverride ?? clientAbortSignal(ctx),
       options,
     );
     return outcomeToResult(outcome, deps);
@@ -174,13 +189,43 @@ export function handleEditorLanguageCapabilities(): RouteResult {
   return { status: 200, body: describeLanguageCapabilities() };
 }
 
-function defaultHostLanguageCommandRules(): readonly CommandRule[] {
-  const names = new Set<string>();
-  for (const spec of HOST_LANGUAGE_PROVIDER_SPECS) {
-    names.add(spec.executableName);
-    for (const executable of spec.requiredExecutables) names.add(executable);
+function semanticFallback(): ManagedLspSemanticTokenResponse {
+  return { schemaVersion: "1", supported: false };
+}
+
+export async function handleEditorLanguageSemanticTokens(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions = {},
+): Promise<RouteResult> {
+  const body = await readJsonObject(ctx.req, MAX_LANGUAGE_BODY_BYTES);
+  if (isRouteResult(body)) return body;
+  const parsed = parseManagedLspSemanticTokenRequest(body);
+  if (!parsed.ok) {
+    return { status: 400, body: errorBody("INVALID_REQUEST", parsed.errors.join("; ")) };
   }
-  return [...names].sort().map((executable) => ({ executable }));
+  return runFilesHandler(async () => {
+    const request = parsed.value;
+    const root = await resolveRoot(deps.store, request.root, deps.redactor);
+    const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
+    const authorization = await managedActivationAuthorization(deps, root.realRoot, "rust");
+    if (authorization?.authorized !== true) return { status: 200, body: semanticFallback() };
+    const result = await runHostLanguageSemanticTokens(request.document, {
+      workspace: workspaceForRoot(root.realRoot),
+      processEnv: deps.env,
+      commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
+      overlayAbsolutePath,
+      signal: clientAbortSignal(ctx),
+      now: options.now,
+      ...(options.hostLanguageSpawn === undefined ? {} : { spawn: options.hostLanguageSpawn }),
+      ...managedHostOptions(authorization, root.realRoot),
+    });
+    const response: ManagedLspSemanticTokenResponse =
+      result === undefined
+        ? semanticFallback()
+        : { schemaVersion: "1", supported: true, legend: result.legend, data: result.data };
+    return { status: 200, body: response };
+  });
 }
 
 function workspaceForRoot(
@@ -206,6 +251,14 @@ export async function runEditorLanguageOperation(
   signal: AbortSignal,
   options: EditorLanguageRouteOptions = {},
 ): Promise<LanguageServiceOutcome> {
+  const authorization = await managedActivationAuthorization(
+    deps,
+    realRoot,
+    request.document.languageId,
+  );
+  if (authorization?.authorized === false) {
+    return runInProcessLanguageOperation(request, realRoot, overlayAbsolutePath, signal, options);
+  }
   const hostOutcome = await runHostLanguageOperation(request, {
     workspace: workspaceForRoot(realRoot),
     processEnv: deps.env,
@@ -215,10 +268,21 @@ export async function runEditorLanguageOperation(
     limits: options.limits,
     now: options.now,
     ...(options.hostLanguageSpawn !== undefined ? { spawn: options.hostLanguageSpawn } : {}),
+    ...managedHostOptions(authorization, realRoot),
   });
   if (hostOutcome !== undefined) {
     return hostOutcome;
   }
+  return runInProcessLanguageOperation(request, realRoot, overlayAbsolutePath, signal, options);
+}
+
+function runInProcessLanguageOperation(
+  request: LanguageServiceRequest,
+  realRoot: string,
+  overlayAbsolutePath: string,
+  signal: AbortSignal,
+  options: EditorLanguageRouteOptions,
+): LanguageServiceOutcome {
   return runLanguageOperation(request, {
     fs: nodeWorkspaceFs,
     realRoot,
@@ -226,6 +290,105 @@ export async function runEditorLanguageOperation(
     signal,
     limits: options.limits,
     now: options.now,
+  });
+}
+
+const SPAWNABLE_MANAGED_STATES: readonly ManagedLspEffectiveState[] = [
+  "available",
+  "starting",
+  "active",
+  "degraded",
+  "restartRequired",
+];
+
+function snapshotAuthorizesLanguage(
+  snapshot: ManagedLspControlSnapshot,
+  languageId: string,
+): boolean {
+  const status = snapshot.languages.find((entry) => entry.ok && entry.language === languageId);
+  return status?.ok === true && SPAWNABLE_MANAGED_STATES.includes(status.state);
+}
+
+async function managedActivationAuthorization(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  languageId: string,
+): Promise<ManagedActivationAuthorization | undefined> {
+  if (!HOST_LANGUAGE_PROVIDER_SPECS.some((spec) => spec.languages.includes(languageId))) {
+    return undefined;
+  }
+  if (deps.managedLspControl === undefined) return undefined;
+  const language = managedLanguage(languageId);
+  if (language === undefined) return { authorized: false };
+  const [snapshot, configuration] = await Promise.all([
+    deps.managedLspControl.read(realRoot),
+    deps.managedLspControl.readConfiguration(realRoot, language),
+  ]);
+  return {
+    authorized: snapshotAuthorizesLanguage(snapshot, languageId),
+    ...(configuration === undefined ? {} : { configuration }),
+  };
+}
+
+interface ManagedActivationAuthorization {
+  readonly authorized: boolean;
+  readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
+}
+
+function managedHostOptions(
+  authorization: ManagedActivationAuthorization | undefined,
+  realRoot: string,
+): Pick<HostLanguageOperationOptions, "activationAuthorized" | "protocolConfiguration"> {
+  if (authorization?.authorized !== true) return {};
+  return {
+    activationAuthorized: true,
+    ...(authorization.configuration === undefined
+      ? {}
+      : {
+          protocolConfiguration: managedProviderProtocolConfiguration(
+            authorization.configuration,
+            realRoot,
+          ),
+        }),
+  };
+}
+
+function managedLanguage(languageId: string): ManagedLspLanguage | undefined {
+  return MANAGED_LSP_LANGUAGES.find((language) => language === languageId);
+}
+
+function disabledDescriptor(
+  spec: (typeof HOST_LANGUAGE_PROVIDER_SPECS)[number],
+): LanguageProviderDescriptor {
+  return {
+    id: spec.id,
+    languages: spec.languages,
+    operations: spec.operations,
+    availability: "unavailable",
+    unavailableReason: HOST_LSP_DISABLED_REASON,
+  };
+}
+
+function controlledDescriptors(
+  snapshot: ManagedLspControlSnapshot,
+  realRoot: string,
+  deps: UiHandlerDeps,
+  options: EditorLanguageRouteOptions,
+): readonly LanguageProviderDescriptor[] {
+  const commandRules = options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules();
+  return HOST_LANGUAGE_PROVIDER_SPECS.map((spec) => {
+    if (!spec.languages.some((language) => snapshotAuthorizesLanguage(snapshot, language))) {
+      return disabledDescriptor(spec);
+    }
+    return (
+      detectHostLanguageProviderDescriptors({
+        workspace: workspaceForRoot(realRoot),
+        processEnv: deps.env,
+        commandRules,
+        specs: [spec],
+        ignoreActivationFlag: true,
+      })[0] ?? disabledDescriptor(spec)
+    );
   });
 }
 
@@ -243,11 +406,19 @@ export async function handleEditorLanguageCapabilitiesForRoute(
   }
   return runFilesHandler(async () => {
     const resolved = await resolveRoot(deps.store, root, deps.redactor);
-    const detected = detectHostLanguageProviderDescriptors({
-      workspace: workspaceForRoot(resolved.realRoot),
-      processEnv: deps.env,
-      commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
-    });
+    const detected =
+      deps.managedLspControl === undefined
+        ? detectHostLanguageProviderDescriptors({
+            workspace: workspaceForRoot(resolved.realRoot),
+            processEnv: deps.env,
+            commandRules: options.hostLanguageCommandRules ?? defaultHostLanguageCommandRules(),
+          })
+        : controlledDescriptors(
+            await deps.managedLspControl.read(resolved.realRoot),
+            resolved.realRoot,
+            deps,
+            options,
+          );
     return {
       status: 200,
       body: describeLanguageCapabilities(undefined, [
