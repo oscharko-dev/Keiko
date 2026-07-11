@@ -6,6 +6,8 @@ import prettier from "eslint-config-prettier";
 export default tseslint.config(
   {
     ignores: [
+      ".stryker-tmp/**",
+      "reports/mutation/**",
       "dist/**",
       "**/dist/**",
       "coverage/**",

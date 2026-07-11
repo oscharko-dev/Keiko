@@ -1,0 +1,35 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const root = resolve(import.meta.dirname, "..", "..");
+const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
+const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
+const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
+
+describe("dev quality workflows", () => {
+  it("always emits a mutation check for dev PRs and runs a daily full scan", () => {
+    expect(mutation).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
+    expect(mutation).toContain('cron: "17 2 * * *"');
+    expect(mutation).toContain("name: Mutation quality gate");
+    expect(mutationScope).toContain('"--diff-filter=ACMR"');
+    expect(mutation).not.toContain("continue-on-error: true");
+  });
+
+  it("runs Sonar and LCOV mapping only for dev pull requests", () => {
+    const scanner = ci.indexOf("SonarCloud CI-based analysis");
+    const verifier = ci.indexOf("Verify SonarCloud Banking Grade PR evidence");
+    expect(scanner).toBeGreaterThan(-1);
+    expect(verifier).toBeGreaterThan(scanner);
+    expect(ci).toContain("github.base_ref == 'dev'");
+    expect(ci).toContain("SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}");
+    expect(ci).toContain("Verify changed production sources are mapped into LCOV");
+  });
+
+  it("contains no privileged pull-request trigger", () => {
+    expect(mutation).not.toContain("pull_request_target");
+    expect(mutation).not.toContain("workflow_run");
+    expect(ci).not.toContain("pull_request_target");
+    expect(ci).not.toContain("workflow_run");
+  });
+});

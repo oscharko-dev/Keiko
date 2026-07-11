@@ -3,8 +3,19 @@
   "testRunner": "vitest",
   "plugins": ["@stryker-mutator/vitest-runner"],
   "vitest": {
-    "configFile": "vitest.config.ts"
+    "configFile": "vitest.config.ts",
+    "related": true
   },
+  "testFiles": [
+    "packages/keiko-security/src/**/*.test.ts",
+    "packages/keiko-evidence/src/**/*.test.ts",
+    "packages/keiko-memory-vault/src/**/*.test.ts",
+    "packages/keiko-model-gateway/src/**/*.test.ts",
+    "packages/keiko-sandbox/src/**/*.test.ts",
+    "packages/keiko-workflows/src/**/*.test.ts",
+    "packages/keiko-server/src/coding-runtime/**/*.test.ts",
+    "packages/keiko-server/src/qualityIntelligence/**/*.test.ts"
+  ],
   "mutate": [
     "packages/keiko-security/src/redaction.ts",
     "packages/keiko-security/src/secretbox.ts",
@@ -19,14 +30,17 @@
     "packages/keiko-memory-vault/src/cipher.ts",
     "packages/keiko-memory-vault/src/migrate-encrypt.ts"
   ],
-  "reporters": ["html", "clear-text", "progress"],
+  "reporters": ["html", "json", "clear-text", "progress"],
   "htmlReporter": {
     "fileName": "reports/mutation/security/index.html"
   },
+  "jsonReporter": {
+    "fileName": "reports/mutation/security/mutation-report.json"
+  },
   "thresholds": {
-    "high": 80,
-    "low": 65,
-    "break": 50
+    "high": 90,
+    "low": 80,
+    "break": 0
   },
   "coverageAnalysis": "perTest",
   "timeoutMS": 30000,

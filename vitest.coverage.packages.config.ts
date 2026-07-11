@@ -29,7 +29,13 @@ export default defineConfig({
       // computed and regenerated (the reality-guard tests depend on a fresh summary existing).
       reportOnFailure: true,
       reportsDirectory: "coverage/packages",
-      include: ["packages/*/src/**/*.{ts,tsx}"],
+      include: [
+        "packages/*/src/**/*.{ts,tsx}",
+        "scripts/check-lcov-source-mapping.mjs",
+        "scripts/check-mutation-quality.mjs",
+        "scripts/check-mutation-scope.mjs",
+        "scripts/check-sonar-pr-quality-gate.mjs",
+      ],
       exclude: [
         "packages/keiko-ui/**",
         "**/*.test.*",
@@ -42,6 +48,33 @@ export default defineConfig({
         "dist/**",
         "node_modules/**",
       ],
+      thresholds: {
+        perFile: true,
+        "scripts/check-lcov-source-mapping.mjs": {
+          branches: 85,
+          functions: 90,
+          lines: 90,
+          statements: 90,
+        },
+        "scripts/check-mutation-quality.mjs": {
+          branches: 85,
+          functions: 90,
+          lines: 90,
+          statements: 90,
+        },
+        "scripts/check-mutation-scope.mjs": {
+          branches: 85,
+          functions: 90,
+          lines: 90,
+          statements: 90,
+        },
+        "scripts/check-sonar-pr-quality-gate.mjs": {
+          branches: 85,
+          functions: 90,
+          lines: 90,
+          statements: 90,
+        },
+      },
     },
   },
 });
