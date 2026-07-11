@@ -3,7 +3,7 @@ Set-StrictMode -Version Latest
 function Invoke-WindowsPortableNativePolicy {
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory = $true)][object[]]$Entries,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Entries,
     [Parameter(Mandatory = $true)][string]$ExpectedIdentityEku,
     [Parameter(Mandatory = $true)][scriptblock]$VerifySigntool,
     [Parameter(Mandatory = $true)][scriptblock]$ReadSignature,
