@@ -61,7 +61,8 @@ interface AuthorityRecord {
   readonly usage: AuthorityUsage;
   readonly localActionBinding?: LocalActionBinding | undefined;
   readonly runtimeEnvelope?: CodingWorkbenchRuntimeAuthorityEnvelope | undefined;
-  readonly runtimeDelegations?: Map<string, CodingWorkbenchRuntimeAuthorityEnvelope> | undefined;
+  readonly runtimeDelegations?: Map<string, RuntimeDelegationReservation> | undefined;
+  readonly runtimeIdempotencyKeys?: Set<string> | undefined;
 }
 
 interface AuthorityUsage {
@@ -69,6 +70,16 @@ interface AuthorityUsage {
   patchBytes: number;
   promptTokens: number;
 }
+
+interface RuntimeDelegationReservation {
+  readonly delegationId: string;
+  readonly idempotencyKey: string;
+  readonly usage: CodingWorkbenchRuntimeDelegationUsage;
+}
+
+type RuntimeRecordResolution =
+  | { readonly ok: true; readonly record: AuthorityRecord }
+  | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode };
 
 interface LocalActionBinding {
   readonly sessionId: string;
@@ -169,7 +180,12 @@ export class EditorAgentAuthorityRegistry {
         ? registration
         : { ok: false, reason: "invalid" };
     }
-    this.records.set(key, { ...record, runtimeEnvelope: envelope, runtimeDelegations: new Map() });
+    this.records.set(key, {
+      ...record,
+      runtimeEnvelope: envelope,
+      runtimeDelegations: new Map(),
+      runtimeIdempotencyKeys: new Set(),
+    });
     return registration;
   }
 
@@ -177,6 +193,7 @@ export class EditorAgentAuthorityRegistry {
     reference: EditorAgentGovernedAuthorityReference,
     liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
     delegationId: string,
+    idempotencyKey: string,
     usage: CodingWorkbenchRuntimeDelegationUsage,
     workspaceRoot: string,
     deploymentCeiling: CodingWorkbenchMode,
@@ -187,24 +204,30 @@ export class EditorAgentAuthorityRegistry {
     if (!validateCodingWorkbenchRuntimeAuthorityFacts(liveFacts).ok) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
+    const resolved = this.resolveRuntimeRecord(reference, workspaceRoot, deploymentCeiling, nowIso);
+    return resolved.ok
+      ? admitRuntimeDelegation(resolved.record, liveFacts, delegationId, idempotencyKey, usage)
+      : resolved;
+  }
+
+  private resolveRuntimeRecord(
+    reference: EditorAgentGovernedAuthorityReference,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    nowIso: string,
+  ): RuntimeRecordResolution {
     const resolved = this.resolve(reference, workspaceRoot, deploymentCeiling, nowIso);
-    if (!resolved.ok) {
+    if (!resolved.ok)
       return {
         ok: false,
         reason: resolved.reason === "expired" ? "authority-expired" : "authority-resolution-failed",
       };
-    }
     const record = this.records.get(recordKey(reference));
-    if (record?.runtimeEnvelope === undefined || record.runtimeDelegations === undefined) {
-      return { ok: false, reason: "authority-resolution-failed" };
-    }
-    const retained = record.runtimeDelegations.get(delegationId);
-    if (retained !== undefined) return { ok: true, envelope: retained };
-    const drift = runtimeDrift(runtimeFacts(record.runtimeEnvelope), liveFacts);
-    if (drift !== undefined) return { ok: false, reason: drift };
-    if (!reserveUsage(record, usage)) return { ok: false, reason: "authority-budget-exceeded" };
-    record.runtimeDelegations.set(delegationId, record.runtimeEnvelope);
-    return { ok: true, envelope: record.runtimeEnvelope };
+    return record?.runtimeEnvelope !== undefined &&
+      record.runtimeDelegations !== undefined &&
+      record.runtimeIdempotencyKeys !== undefined
+      ? { ok: true, record }
+      : { ok: false, reason: "authority-resolution-failed" };
   }
 
   public registerLocalBridge(
@@ -333,6 +356,44 @@ export class EditorAgentAuthorityRegistry {
       }
     }
   }
+}
+
+function nonEmptyIdentity(value: string): boolean {
+  return value.length > 0 && value.length <= 256;
+}
+
+function admitRuntimeDelegation(
+  record: AuthorityRecord,
+  liveFacts: CodingWorkbenchRuntimeAuthorityFacts,
+  delegationId: string,
+  idempotencyKey: string,
+  usage: CodingWorkbenchRuntimeDelegationUsage,
+):
+  | { readonly ok: true; readonly envelope: CodingWorkbenchRuntimeAuthorityEnvelope }
+  | { readonly ok: false; readonly reason: CodingWorkbenchRuntimeFailureCode } {
+  if (
+    record.runtimeEnvelope === undefined ||
+    record.runtimeDelegations === undefined ||
+    record.runtimeIdempotencyKeys === undefined
+  )
+    return { ok: false, reason: "authority-resolution-failed" };
+  if (!nonEmptyIdentity(delegationId) || !nonEmptyIdentity(idempotencyKey))
+    return { ok: false, reason: "authority-resolution-failed" };
+  if (
+    record.runtimeDelegations.has(delegationId) ||
+    record.runtimeIdempotencyKeys.has(idempotencyKey)
+  )
+    return { ok: false, reason: "authority-replayed" };
+  const drift = runtimeDrift(runtimeFacts(record.runtimeEnvelope), liveFacts);
+  if (drift !== undefined) return { ok: false, reason: drift };
+  if (!reserveUsage(record, usage)) return { ok: false, reason: "authority-budget-exceeded" };
+  record.runtimeDelegations.set(delegationId, {
+    delegationId,
+    idempotencyKey,
+    usage: { ...usage },
+  });
+  record.runtimeIdempotencyKeys.add(idempotencyKey);
+  return { ok: true, envelope: record.runtimeEnvelope };
 }
 
 function reserveUsage(
