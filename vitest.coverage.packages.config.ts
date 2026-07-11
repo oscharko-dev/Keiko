@@ -31,6 +31,8 @@ export default defineConfig({
       reportsDirectory: "coverage/packages",
       include: [
         "packages/*/src/**/*.{ts,tsx}",
+        "scripts/banking-quality-gate-core.mjs",
+        "scripts/banking-quality-gate-worker.mjs",
         "scripts/check-lcov-source-mapping.mjs",
         "scripts/check-mutation-quality.mjs",
         "scripts/check-mutation-scope.mjs",
@@ -50,6 +52,18 @@ export default defineConfig({
       ],
       thresholds: {
         perFile: true,
+        "scripts/banking-quality-gate-core.mjs": {
+          branches: 85,
+          functions: 90,
+          lines: 90,
+          statements: 90,
+        },
+        "scripts/banking-quality-gate-worker.mjs": {
+          branches: 85,
+          functions: 90,
+          lines: 90,
+          statements: 90,
+        },
         "scripts/check-lcov-source-mapping.mjs": {
           branches: 85,
           functions: 90,

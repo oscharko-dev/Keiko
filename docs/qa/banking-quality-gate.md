@@ -35,6 +35,10 @@ external runtime validates webhook HMAC signatures and rejects replayed events, 
 repositories/installations, and stale head SHAs. It stores metadata only: repository, PR number,
 head SHA, check name, producer App ID, status, timestamps, and finding counts.
 
+The open-source Worker implementation, least-privilege GitHub App manifest, and Cloudflare
+deployment template live in [`../../infrastructure/banking-quality-gate/`](../../infrastructure/banking-quality-gate/).
+Runtime credentials exist only in the external runtime's secret store.
+
 ## Fail-closed evidence rules
 
 For a PR against `dev`, the app's check remains pending or failed unless every current required
@@ -45,7 +49,9 @@ Processing success alone is insufficient for review products:
 
 - Gitar requires no current `CHANGES_REQUESTED` review and no unresolved finding for the head;
 - Socket requires no warning or error alert for the head; an accepted risk is valid only when it
-  matches the exact package, version, and integrity policy in the repository;
+  matches an exact owner command, the external deployment allowlist, and the package/version and
+  lockfile integrity policy in
+  [`supply-chain-risk-acceptances.json`](supply-chain-risk-acceptances.json);
 - SonarCloud requires native gate `OK`, exact current head, zero unresolved issues and new
   violations, at least 85 percent new-code coverage, at most 3 percent new duplication, and all
   security hotspots reviewed;
@@ -56,6 +62,11 @@ Processing success alone is insufficient for review products:
 Unknown or changed Gitar/Socket evidence formats are parser failures, never success. A short,
 bounded stability window follows the final Gitar and Socket events before the aggregate check may
 turn green.
+
+Gitar and Socket comments must have been updated after their current-head checks started. This
+prevents a successful processing check on a new commit from reusing a clean comment from an older
+head. Dismissing a Gitar review alone is therefore insufficient: current, parseable, zero-finding
+evidence is still mandatory.
 
 ## Activation protocol
 

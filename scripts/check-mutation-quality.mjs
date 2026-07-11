@@ -28,7 +28,7 @@ export function summarizeMutationReport(report) {
   }
   const detected = summary.killed + summary.timeout;
   return {
-    debt: debt.sort(),
+    debt: debt.toSorted((left, right) => left.localeCompare(right)),
     errors,
     score: summary.total === 0 ? 0 : (detected / summary.total) * 100,
     summary,
@@ -52,7 +52,7 @@ export function evaluateMutationBaseline(report, baseline) {
   const accepted = new Set(baseline.acceptedDebt ?? []);
   const newDebt = current.debt.filter((fingerprint) => !accepted.has(fingerprint));
   const failures = [...current.errors.map((value) => `Unexpected mutant result: ${value}`)];
-  if (current.score + 0.000_001 < baseline.minimumScore) {
+  if (current.score + 1e-6 < baseline.minimumScore) {
     failures.push(
       `Mutation score ${current.score.toFixed(2)}% regressed below baseline ${baseline.minimumScore.toFixed(2)}%.`,
     );

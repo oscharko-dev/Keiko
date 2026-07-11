@@ -32,7 +32,7 @@ found:
 
 ## Decision
 
-### D1 — CI-based analysis, embedded in the existing required `ci` job
+### D1 — Parallel CI-based analysis with a fail-closed required `ci` aggregate
 
 Automatic Analysis is replaced by CI-based analysis using the Sonar Scanner CLI, downloaded and
 SHA-256-verified directly from `binaries.sonarsource.com` rather than via
@@ -43,19 +43,24 @@ weakening the denylist (a repository-wide supply-chain gate, not a per-dependenc
 scan step avoids the Action dependency entirely, mirroring the existing `actionlint` job in the same
 workflow, which already downloads and checksum-verifies a binary directly instead of using a
 marketplace action. The scanner CLI zip ships its own bundled JRE, so this introduces no other
-toolchain dependency. The scan step is added **inside the existing required `ci` job** in
-`.github/workflows/ci.yml`, not as a new job or a new required check — following the precedent
-already recorded in [ADR-0020](ADR-0020-workspace-tooling-and-architecture-gate.md) Alternative 4
-(embedding a gate in an existing required job avoids a branch-protection admin change). The scan
-step runs after "Coverage quality gates" so the LCOV reports it consumes already exist. It runs
-only for pull requests targeting `dev` and pushes to `dev`; unrelated PR targets do not invoke
-SonarCloud.
+toolchain dependency.
+
+Coverage and Sonar run in the dedicated `coverage-sonar` job in parallel with the long-running
+`core-quality` job. The existing required check name `ci` is retained as a minimal fail-closed
+aggregate that runs with `always()` and succeeds only when the protected-branch gate, core quality,
+and coverage/Sonar jobs all report `success`. Missing, cancelled, skipped, or failed dependencies
+therefore keep the required `ci` check red without forcing Sonar to wait behind unrelated package,
+retrieval, editor, and architecture gates. The scan itself still runs after "Coverage quality
+gates" so both LCOV reports exist. It runs only for pull requests targeting `dev` and pushes to
+`dev`; unrelated PR targets emit a successful not-applicable coverage/Sonar job rather than
+silently omitting the required aggregate evidence.
 
 ### D2 — Native gate plus commit-bound fail-closed verification
 
 The scan step passes `-Dsonar.qualitygate.wait=true`, which makes the scanner poll the
-server-computed Quality Gate result and exit non-zero when it is red. The same required `ci` job
-then runs `scripts/check-sonar-pr-quality-gate.mjs` for pull requests targeting `dev`. The verifier
+server-computed Quality Gate result and exit non-zero when it is red. The same `coverage-sonar` job
+then runs `scripts/check-sonar-pr-quality-gate.mjs` for pull requests targeting `dev`; its result is
+transitively mandatory through the required `ci` aggregate. The verifier
 queries SonarCloud for the exact PR and rejects stale analysis revisions, a native gate other than
 `OK`, any unresolved issue or new violation, new-code coverage below 85 percent, new-code
 duplication above 3 percent, or less than 100 percent hotspot review. Missing analysis or metrics

@@ -51,6 +51,16 @@ describe("mutation quality", () => {
     );
   });
 
+  it("returns mutation debt in deterministic order without mutating report data", () => {
+    const first = mutant("Survived", { id: "2", replacement: "true" });
+    const second = mutant("NoCoverage", { id: "1", replacement: "false" });
+    const data = report(first, second);
+    const originalMutants = [...data.files["src/security.ts"].mutants];
+    const result = summarizeMutationReport(data);
+    expect(result.debt).toEqual([...result.debt].sort((left, right) => left.localeCompare(right)));
+    expect(data.files["src/security.ts"].mutants).toEqual(originalMutants);
+  });
+
   it("accepts unchanged historical debt and improvements", () => {
     const debt = mutant("Survived");
     const baseline = {

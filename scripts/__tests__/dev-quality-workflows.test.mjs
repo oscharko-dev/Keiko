@@ -26,6 +26,17 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("Verify changed production sources are mapped into LCOV");
   });
 
+  it("runs coverage and Sonar in parallel and aggregates required CI fail closed", () => {
+    const coverageJob = ci.match(/ {2}coverage-sonar:\n[\s\S]*?(?=\n {2}ci:\n)/u)?.[0];
+    const aggregateJob = ci.match(/ {2}ci:\n[\s\S]*?(?=\n {2}actionlint:\n)/u)?.[0];
+    expect(coverageJob).toBeDefined();
+    expect(coverageJob).not.toContain("needs:");
+    expect(aggregateJob).toContain("if: ${{ always() }}");
+    expect(aggregateJob).toContain("- core-quality");
+    expect(aggregateJob).toContain("- coverage-sonar");
+    expect(aggregateJob).toContain('if [ "$result" != "success" ]');
+  });
+
   it("contains no privileged pull-request trigger", () => {
     expect(mutation).not.toContain("pull_request_target");
     expect(mutation).not.toContain("workflow_run");
