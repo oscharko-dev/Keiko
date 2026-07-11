@@ -686,9 +686,9 @@ export const ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS: readonly AtlassianCo
     "authority-budget-exceeded",
   ] as const satisfies readonly AtlassianConnectorAuthorityFailureReason[]);
 
-// ─── Human-initiation rationale (Issue #2244, ADR-0127/ADR-0128 D5) ───────────
+// ─── Human-initiation rationale (Issue #2244, ADR-0129/ADR-0128 D5) ───────────
 // A direct human-triggered BFF operation (v1 sync is explicitly user-triggered, ADR-0128 D5) is
-// human-approved by construction under the ADR-0127 human-control invariant: the per-action
+// human-approved by construction under the ADR-0129 human-control invariant: the per-action
 // human trigger satisfies the D4 review requirement in every mode. Such an attempt records
 // disposition `allowed` with this explicit rationale — never a bare, untraceable "allowed" —
 // so the activity trail distinguishes a human-initiated action from an envelope-admitted one.

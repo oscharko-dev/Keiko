@@ -1,4 +1,4 @@
-// Issue #2241 — Atlassian connector credential custody BFF routes (ADR-0128 D2/D3, ADR-0127 D3).
+// Issue #2241 — Atlassian connector credential custody BFF routes (ADR-0128 D2/D3, ADR-0129 D3).
 //
 //   POST   /api/atlassian-connectors/credentials                  create (write-only: responds
 //                                                                 authRef + metadata, never the

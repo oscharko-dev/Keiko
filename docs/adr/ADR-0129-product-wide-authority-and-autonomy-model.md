@@ -1,11 +1,14 @@
-# ADR-0127: Product-wide authority and autonomy model
+# ADR-0129: Product-wide authority and autonomy model
 
 ## Status
 
-Accepted (2026-07-10).
+Accepted (2026-07-10; renumbered to 0129 on 2026-07-11 during epic integration).
 
-ADR-0127 was allocated after refreshing `origin/dev` and checking all open pull requests on
-2026-07-10. `origin/dev` ended at ADR-0126 and no open pull request claimed ADR-0127.
+This record was first drafted as ADR-0127. During integration of Epic #2238, `origin/dev` had
+advanced to include ADR-0127 (editor Git reads, diff rendering, and conflict-editing semantics,
+Epic #2093) and the connector ADR-0128 from this epic. To avoid a number collision it was renumbered
+to ADR-0129 — the next free number after refreshing `origin/dev` and checking all open pull requests
+on 2026-07-11 — with no change to its decision content. Existing ADR numbers were not renumbered.
 
 ## Amends
 

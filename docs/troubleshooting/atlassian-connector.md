@@ -9,7 +9,7 @@ Setup and normal operation are documented in the
 [Atlassian connector setup and operations guide](../local-knowledge/atlassian-connector-guide.md);
 the authority, credential, egress, evidence, and permissions decisions are fixed by
 [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md). Autonomy-mode names
-follow [ADR-0127](../adr/ADR-0127-product-wide-authority-and-autonomy-model.md): **Ask for
+follow [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md): **Ask for
 approval**, **Approve for me**, and **Full access**.
 
 All examples use synthetic hosts, keys, and identifiers (`example.atlassian.net`, `EXAMPLE-1`,
@@ -630,7 +630,7 @@ Agent-initiated write and live-read actions must present a valid Authority Envel
 envelope digest, workspace root). The action is refused when the envelope fails validation
 (`authority-invalid`), has expired (`authority-expired`), or its action budget is exhausted
 (`authority-budget-exceeded`). These are mode-independent hard denials: invalid or expired authority
-and exhausted budgets fail closed in every mode (ADR-0127; ADR-0128 D2).
+and exhausted budgets fail closed in every mode (ADR-0129; ADR-0128 D2).
 
 **Diagnostic Steps**
 

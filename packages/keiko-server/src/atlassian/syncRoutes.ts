@@ -15,7 +15,7 @@
 //
 // Sync-start disposition (Issue #2244, closing the #2242 open item): ADR-0128 D5 fixes v1 sync
 // as EXPLICITLY USER-TRIGGERED, so a start WITHOUT authority context is human-approved by
-// construction under the ADR-0127 human-control invariant — the per-action human trigger
+// construction under the ADR-0129 human-control invariant — the per-action human trigger
 // satisfies the D4 review requirement in every mode, and the run's activity record says so
 // explicitly (`allowed` + `human-initiated` rationale, never a bare static "allowed"). A start
 // WITH authority context is agent-initiated: it flows through the shared policy seam
@@ -414,7 +414,7 @@ export function handleStartAtlassianConnectorSync(
     if (body.authority !== undefined) {
       return startSyncGoverned(deps, guard, credential, body, body.authority);
     }
-    // Direct human-triggered start: human-approved by construction (ADR-0127; ADR-0128 D5) —
+    // Direct human-triggered start: human-approved by construction (ADR-0129; ADR-0128 D5) —
     // recorded as `allowed` + `human-initiated` on the run's activity record.
     return startSyncAllowed(deps, guard, credential, body);
   });

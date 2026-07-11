@@ -15,7 +15,7 @@ Status: user and operator guide for Epic
 The connector's authority, credential, egress, sync-bounds, evidence, and permissions decisions are
 fixed by [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md). This guide
 restates that record for operators; where the two differ, the ADR is authoritative. Autonomy-mode
-language follows [ADR-0127](../adr/ADR-0127-product-wide-authority-and-autonomy-model.md): the three
+language follows [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md): the three
 user-facing modes are **Ask for approval**, **Approve for me**, and **Full access**.
 
 ## What the connector does
@@ -379,7 +379,7 @@ evidence, is finalized by the release owner at release time — not by this docu
   evidence: children, reuse decisions, limitations, and follow-ups.
 - [ADR-0128](../adr/ADR-0128-atlassian-connector-authority-and-security-design.md) — the normative
   authority, credential, egress, sync-bounds, evidence, and permissions decisions.
-- [ADR-0127](../adr/ADR-0127-product-wide-authority-and-autonomy-model.md) — the three-mode
+- [ADR-0129](../adr/ADR-0129-product-wide-authority-and-autonomy-model.md) — the three-mode
   authority model and the exact mode names.
 - [Knowledge Pods](knowledge-pods.md) — the Local Knowledge pod model the connector's synced content
   becomes part of.

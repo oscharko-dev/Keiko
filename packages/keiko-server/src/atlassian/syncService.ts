@@ -101,7 +101,7 @@ export class AtlassianSyncRequestError extends Error {
 
 // ─── Governance rationale (Issue #2244, ADR-0128 D4) ──────────────────────────
 // How this run was admitted, recorded on its terminal activity record. A direct human-triggered
-// BFF start is human-approved by construction (ADR-0127 human-control invariant; ADR-0128 D5
+// BFF start is human-approved by construction (ADR-0129 human-control invariant; ADR-0128 D5
 // explicit user-triggered sync) and records `allowed` + `human-initiated`; an agent-initiated
 // start under an Authority Envelope records the D4 disposition the policy seam derived
 // (`allowed` when the mode admits it, `review-required` + the review reason when a human

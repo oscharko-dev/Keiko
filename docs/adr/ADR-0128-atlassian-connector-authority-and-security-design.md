@@ -5,13 +5,16 @@
 Accepted (Issue #2239, Epic #2238, 2026-07-11).
 
 ADR-0128 was allocated after refreshing `origin/dev` and checking all open pull requests on
-2026-07-11. `origin/dev` ended at ADR-0126; ADR-0127 was accepted into this working tree the same
-day and no open pull request (`#2237`, `#2236`) claimed ADR-0127 or ADR-0128.
+2026-07-11. The product-wide authority record it builds on was drafted as ADR-0127 and renumbered to
+[ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md) during this epic's integration,
+because `origin/dev` had meanwhile accepted its own ADR-0127 (editor Git reads and conflict
+semantics, Epic #2093). ADR-0128 keeps its number — no committed `origin/dev` ADR claims 0128 — and
+this epic renumbers only its own not-yet-committed authority record; no existing ADR was renumbered.
 
 ## Amends
 
 This decision does not amend or supersede any existing record. It is the first forward-citation
-consumer of [ADR-0127](ADR-0127-product-wide-authority-and-autonomy-model.md) (D6): it maps the
+consumer of [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md) (D6): it maps the
 Confluence/Jira connector lane onto the shared three-mode authority model instead of inventing a
 connector-local autonomy vocabulary. It extends
 [ADR-0046](ADR-0046-local-credential-vault.md)'s local secret vault to a new credential namespace
@@ -197,7 +200,7 @@ discards the request-body value after that call returns.
 **Deletion:** removing a connector calls `vault.delete(authRef)` and deletes the descriptor row in
 the same server-side operation; `LocalSecretVault.delete` is already atomic and crash-safe.
 
-**Exfiltration is a mode-independent hard denial (ADR-0127 D3).** By construction, the resolved
+**Exfiltration is a mode-independent hard denial (ADR-0129 D3).** By construction, the resolved
 secret exists only inside the `AtlassianHttpPort` adapter's closure in `keiko-server` — it is never
 passed into `keiko-connectors`' pure domain logic, never enters a model prompt or context pack,
 never enters an evidence or audit record (D6), and never appears in an error message (transport
@@ -463,7 +466,7 @@ and distribution accordingly.
 - The `knowledge-base.*` connector scope is coined here for a capability (Confluence) whose
   contract does not exist until #2240 lands; until then this ADR's D4 table describes a
   not-yet-implementable scope, which is the intended and necessary order (ADR before contract, per
-  ADR-0127 D6).
+  ADR-0129 D6).
 - The permissions posture in D8 is a genuine limitation, not a mitigated risk: a regulated deployer
   must actively choose a narrowly scoped service token, because Keiko enforces nothing beyond what
   the token already restricts.
@@ -521,7 +524,7 @@ and distribution accordingly.
 - **Pros**: writes to an external system of record (Jira, Confluence) feel closer to "delivery" than
   to ordinary internet access; reusing the `delivery` resource scope would make every write
   `approval-required` in every mode including Full access, which reads as maximally conservative.
-- **Cons**: `delivery` is reserved by ADR-0124/ADR-0127 D4 for git commit/push/PR/merge and
+- **Cons**: `delivery` is reserved by ADR-0124/ADR-0129 D4 for git commit/push/PR/merge and
   "authority widening" — actions with a categorically different reversibility and blast-radius
   profile (rewriting the project's source-control history and triggering CI/release automation) than
   adding a Jira comment. Folding connector writes into `delivery` would make Full access unable to
@@ -533,11 +536,11 @@ and distribution accordingly.
 - **Why rejected**: `connector-write`/`internet` already exists, is already the action class Epic
   #2238's own issues (#2244, #2248) describe dispositions against, and preserves the risk-tier
   distinction D4 relies on. `delivery` remains reserved for source-control/release actions, per
-  ADR-0127 D4's unchanged definition.
+  ADR-0129 D4's unchanged definition.
 
 ## References
 
-- [ADR-0127](ADR-0127-product-wide-authority-and-autonomy-model.md) — the product-wide three-mode
+- [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md) — the product-wide three-mode
   authority model this record maps onto (D6 forward-citation rule satisfied here).
 - [ADR-0124](ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md) — connector scopes,
   Authority Envelope, content-free evidence rules (D7) reused unmodified.

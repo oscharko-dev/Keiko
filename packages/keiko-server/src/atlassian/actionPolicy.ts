@@ -12,10 +12,10 @@
 // The registry's closed failure vocabulary maps 1:1 onto the existing envelope reason codes
 // (`invalid → authority-invalid`, `expired → authority-expired`, `budget-exceeded →
 // authority-budget-exceeded`); an authority failure is a mode-independent hard denial
-// (ADR-0127 D3) carrying exactly one of those codes.
+// (ADR-0129 D3) carrying exactly one of those codes.
 //
 // Direct HUMAN-TRIGGERED BFF operations do not pass through this seam: ADR-0128 D5 fixes v1
-// sync as explicitly user-triggered, and under the ADR-0127 human-control invariant the
+// sync as explicitly user-triggered, and under the ADR-0129 human-control invariant the
 // per-action human trigger IS the review satisfaction in every mode — such attempts record
 // disposition `allowed` with the explicit `human-initiated` rationale (see syncRoutes.ts).
 // The #2241 credential custody surfaces (create/list/delete/verify) are human credential

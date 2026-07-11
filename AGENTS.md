@@ -25,7 +25,7 @@ work. It is a TypeScript monorepo (npm workspaces, Node ≥ 22) that ships as on
 
 The product has exactly three user-facing modes — the product-wide authority model for every
 autonomy-capable surface, anchored by
-[ADR-0127](docs/adr/ADR-0127-product-wide-authority-and-autonomy-model.md) and governed in detail
+[ADR-0129](docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md) and governed in detail
 by [ADR-0124](docs/adr/ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md) and
 [ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md):
 

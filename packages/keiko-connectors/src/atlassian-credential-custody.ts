@@ -1,6 +1,6 @@
 // Atlassian connector credential custody (Issue #2241, Epic #2238, ADR-0128 D2).
 //
-// The enforcement point for the mode-independent hard denial from ADR-0127 D3: a stored Atlassian
+// The enforcement point for the mode-independent hard denial from ADR-0129 D3: a stored Atlassian
 // API token must never reach logs, evidence, diagnostics, audit events, API responses, or the UI
 // after save. The custody surface is write-only after creation:
 //
