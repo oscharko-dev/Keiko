@@ -100,6 +100,14 @@ const FIXED_NOW: () => number = () => 1_700_000_000_000;
 // ─── memFs-based unit tests ───────────────────────────────────────────────────
 
 describe("searchText (memFs)", () => {
+  it("accepts native Windows separators at the virtual filesystem boundary", () => {
+    const { fs } = memScope({ "src/a.ts": "hello world\n" });
+    const nativeStylePath = `${MEM_ROOT}\\src\\a.ts`;
+
+    expect(fs.exists(nativeStylePath)).toBe(true);
+    expect(fs.readFileUtf8(nativeStylePath)).toBe("hello world\n");
+  });
+
   it("returns a single atom for a single-line natural-language match", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "hello world\n" });
     const result = await searchText(scope, nlq("hello"), DEFAULT_SEARCH_LIMITS, {
@@ -889,7 +897,7 @@ describe("searchText (memFs)", () => {
 
   it("omits internal runtime state while grounding package.json metadata", async () => {
     const { scope, fs } = memScope({
-      "package.json": '{\n  "packageManager": "npm@10.9.8"\n}\n',
+      "package.json": '{\n  "packageManager": "npm@11.16.0"\n}\n',
       ".keiko/evidence/qi/run.candidates.json":
         '{"packageManager":"stale-internal-value","connected":"repository","context":"evidence"}\n',
       ".codex/history.jsonl":

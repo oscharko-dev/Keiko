@@ -159,12 +159,23 @@ describe("useSSE", () => {
     expect(FakeEventSource.instances).toEqual([]);
   });
 
-  // GEN-PERF-SSE-001 — an event burst must not cost one React commit per event. Each
-  // emit below runs in its own act() (own task), which is how real EventSource messages
-  // arrive; pre-batching this produced ~one commit per event (≥30), batched it is the
-  // leading commit plus one trailing frame flush.
+  // GEN-PERF-SSE-001 — an event burst must not cost one React commit per event. The
+  // frame scheduler is controlled explicitly so coverage/runtime slowness cannot let
+  // requestAnimationFrame fire halfway through the synthetic burst and turn one logical
+  // frame into several frame windows.
   it("coalesces an event burst into a leading commit plus one frame flush", async () => {
     vi.stubGlobal("EventSource", FakeEventSource);
+    let queuedFrame: FrameRequestCallback | undefined;
+    const requestFrame = vi.fn((callback: FrameRequestCallback): number => {
+      queuedFrame = callback;
+      return 1;
+    });
+    const cancelFrame = vi.fn((handle: number): void => {
+      if (handle === 1) queuedFrame = undefined;
+    });
+    vi.stubGlobal("requestAnimationFrame", requestFrame);
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+
     const renders = { count: 0 };
     const view = renderHook(() => {
       renders.count += 1;
@@ -182,9 +193,18 @@ describe("useSSE", () => {
         await Promise.resolve();
       });
     }
+    await waitFor(() => expect(view.result.current.events).toHaveLength(1));
+    expect(requestFrame).toHaveBeenCalledTimes(1);
+    expect(renders.count - before).toBeLessThanOrEqual(3);
+    const flushFrame = queuedFrame;
+    expect(flushFrame).toBeDefined();
+    act(() => {
+      flushFrame?.(16);
+    });
     await waitFor(() => expect(view.result.current.events).toHaveLength(30));
-    expect(renders.count - before).toBeLessThanOrEqual(6);
+    expect(renders.count - before).toBeLessThanOrEqual(5);
     view.unmount();
+    expect(cancelFrame).not.toHaveBeenCalled();
   });
 
   it("caps retained events so long-running streams do not grow unbounded", async () => {

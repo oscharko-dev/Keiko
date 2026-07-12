@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
@@ -21,6 +22,9 @@ import {
   redactedWindowsSigningError,
   validateAzureArtifactSigningConfig,
 } from "../windows-portable-signing.mjs";
+
+const hasPowerShell =
+  spawnSync("pwsh", ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0;
 
 const portableWorkflow = readFileSync(".github/workflows/portable-assets.yml", "utf8");
 const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
@@ -308,14 +312,23 @@ describe("Windows portable production signing workflow", () => {
     expect(windowsVerifier).not.toMatch(/thumbprint|subject/iu);
   });
 
-  it("cryptographically accepts RFC3161 SHA-256 fixtures and rejects legacy or malformed tokens", () => {
-    const result = spawnSync(
-      "pwsh",
-      ["-NoProfile", "-NonInteractive", "-File", "scripts/__tests__/windows-rfc3161-fixtures.ps1"],
-      { encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
-  }, 60_000);
+  it.skipIf(!hasPowerShell)(
+    "cryptographically accepts RFC3161 SHA-256 fixtures and rejects legacy or malformed tokens",
+    () => {
+      const result = spawnSync(
+        "pwsh",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-File",
+          "scripts/__tests__/windows-rfc3161-fixtures.ps1",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+    },
+    120_000,
+  );
 
   it("clears Azure immediately after signing and fails closed before native verification", () => {
     const signing = portableWorkflow.indexOf("Sign the exact inventoried PE set");
@@ -347,21 +360,24 @@ describe("Windows portable production signing workflow", () => {
     }
   });
 
-  it("executes the production native reducer against the deterministic failure matrix", () => {
-    const result = spawnSync(
-      "pwsh",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-File",
-        "scripts/__tests__/windows-native-policy-fixtures.ps1",
-      ],
-      { encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(windowsVerifier).toContain("Invoke-WindowsPortableNativePolicy");
-    expect(portableWorkflow).not.toMatch(/fixture|test-mode|VerifySigntool/iu);
-  });
+  it.skipIf(!hasPowerShell)(
+    "executes the production native reducer against the deterministic failure matrix",
+    () => {
+      const result = spawnSync(
+        "pwsh",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-File",
+          "scripts/__tests__/windows-native-policy-fixtures.ps1",
+        ],
+        { encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(windowsVerifier).toContain("Invoke-WindowsPortableNativePolicy");
+      expect(portableWorkflow).not.toMatch(/fixture|test-mode|VerifySigntool/iu);
+    },
+  );
 });
 
 describe("Windows Artifact Signing protected configuration", () => {
@@ -595,4 +611,3 @@ describe("macOS portable production signing workflow", () => {
     expect(assembles({ dispatch: false, prerelease: false, smoke: "failure" })).toBe(false);
   });
 });
-import { spawnSync } from "node:child_process";

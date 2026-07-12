@@ -12,6 +12,8 @@ describe("dev quality workflows", () => {
     expect(mutation).toMatch(/pull_request:\n\s+branches:\n\s+- dev/u);
     expect(mutation).toContain('cron: "17 2 * * *"');
     expect(mutation).toContain("name: Mutation quality gate");
+    expect(mutation).toContain('node-version: "24.18.0"');
+    expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain('-- --mutate "$MUTATION_FILES"');
     expect(mutation).not.toContain('"${mutation_files[@]}"');
     expect(mutationScope).toContain('"--diff-filter=ACMR"');

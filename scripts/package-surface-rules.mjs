@@ -24,6 +24,14 @@ export const FORBIDDEN_TARBALL_PATH_RULES = [
     label: "keiko-ui workspace source",
   },
   {
+    test: (p) => p.includes("node_modules/@typescript/native"),
+    label: "the development-only TypeScript native compiler",
+  },
+  {
+    test: (p) => p.includes("node_modules/@typescript/typescript-"),
+    label: "a platform-specific TypeScript native compiler dependency",
+  },
+  {
     test: (p) => p.startsWith("packages/") && p.includes("/node_modules/"),
     label: "a nested workspace node_modules dependency",
   },

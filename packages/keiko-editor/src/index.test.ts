@@ -271,7 +271,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
   it("treats React as a peer dependency, never a bundled runtime dependency", () => {
     const manifest = readManifest();
     for (const packageName of ["react", "react-dom"]) {
-      expect(manifest.peerDependencies?.[packageName]).toBe("^18.3.1");
+      expect(manifest.peerDependencies?.[packageName]).toBe("^19.2.7");
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
       expect(manifest.devDependencies?.[packageName]).toBeUndefined();
     }

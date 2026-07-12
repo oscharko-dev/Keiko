@@ -424,7 +424,7 @@ function SummaryCard({
   readonly session: UpdateSessionStatus;
   readonly remediation: UpdateRemediationStatusReport;
   readonly manualInstallVerified: boolean;
-  readonly titleRef: RefObject<HTMLHeadingElement>;
+  readonly titleRef: RefObject<HTMLHeadingElement | null>;
 }): ReactNode {
   const t = useTranslate();
   const visibleSession = sessionForDisplay(session, report);
@@ -1270,7 +1270,14 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           previousManualTarget !== undefined &&
           !report.updateAvailable &&
           report.currentVersion === previousManualTarget;
-        setState({ status: "ready", report, session, remediation });
+        const nextReadyState: Extract<LoadState, { status: "ready" }> = {
+          status: "ready",
+          report,
+          session,
+          remediation,
+        };
+        readyStateRef.current = nextReadyState;
+        setState(nextReadyState);
         if (hasReleaseNotes(report) && report.targetVersion !== undefined) {
           setReleaseNotesReport(report);
         }

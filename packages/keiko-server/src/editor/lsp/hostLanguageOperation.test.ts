@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import { providerConformanceCapabilities } from "./testing/providerConformanceFixture.js";
+import { writeExecutableFixture } from "./testing/executableFixture.js";
 import { runHostLanguageOperation, shutdownHostLspPool } from "./hostLanguageOperation.js";
 
 let binDir = "";
@@ -41,9 +42,7 @@ function workspace(): WorkspaceInfo {
 }
 
 function makeExecutable(name: string): void {
-  const path = join(binDir, name);
-  writeFileSync(path, "#!/bin/sh\n", "utf8");
-  chmodSync(path, 0o755);
+  writeExecutableFixture(binDir, name);
 }
 
 function baseDocument(languageId: string, path = "main.go"): LanguageServiceRequest["document"] {

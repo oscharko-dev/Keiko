@@ -1515,15 +1515,19 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe("markdown");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
-    expect(surface.mounts).toBe(1);
+    await waitFor(() => {
+      expect(surface.mounts).toBe(1);
+    });
 
     rerender(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await waitFor(() => {
       expect(surface.props?.fileModel.identity.language).toBe("typescript");
     });
-    expect(surface.props?.provideInlineCompletions).toBeDefined();
-    expect(surface.mounts).toBe(2);
-    expect(surface.unmounts).toBeGreaterThanOrEqual(1);
+    await waitFor(() => {
+      expect(surface.props?.provideInlineCompletions).toBeDefined();
+      expect(surface.mounts).toBe(2);
+      expect(surface.unmounts).toBeGreaterThanOrEqual(1);
+    });
   });
 });
 

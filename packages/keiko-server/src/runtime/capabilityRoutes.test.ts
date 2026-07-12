@@ -50,7 +50,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), "keiko-runtime-route-"));
   await writeFile(
     join(root, "package.json"),
-    JSON.stringify({ packageManager: "npm@10.9.8", scripts: { test: "node should-not-run.js" } }),
+    JSON.stringify({ packageManager: "npm@11.16.0", scripts: { test: "node should-not-run.js" } }),
     "utf8",
   );
   store = createInMemoryUiStore();

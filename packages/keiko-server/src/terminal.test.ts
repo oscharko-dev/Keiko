@@ -2,7 +2,7 @@
 // manager exercises the real allowlist + cwd containment + redaction passthrough without a real
 // child process. Route-level coverage lives in terminal-routes.test.ts.
 
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -115,7 +115,7 @@ let outsideRoots: string[];
 beforeEach(() => {
   ensureProcessKillPatched();
   FAKE_CHILDREN.clear();
-  workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-term-"));
+  workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-term-")));
   store = createInMemoryUiStore();
   store.createProject(workspaceRoot, "test-project");
   evidenceStore = createInMemoryEvidenceStore();

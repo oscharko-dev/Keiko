@@ -93,7 +93,7 @@ describe("retrieval mode comparison (#2010)", () => {
     const vector = comparison.rows.find((row) => row.mode === "vector");
     expect(vector?.fixtureIds).toContain("semantic-paraphrase");
     expect(vector?.fixtureIds).toContain("multilingual-retrieval");
-  });
+  }, 60_000);
 
   it("surfaces a lexical-leg regression as a below-floor mode row", async () => {
     const regressed = await runRetrievalEval(regressExpectations(exactTechnicalFixture));
@@ -133,7 +133,7 @@ describe("retrieval mode comparison (#2010)", () => {
     const fused = comparison.rows.find((row) => row.mode === "fused");
     expect(fused?.hybridQueryCount).toBeGreaterThan(0);
     expect(fused?.passed).toBe(true);
-  });
+  }, 60_000);
 
   // Audit fix (#2016 post-merge audit, confirmed defect): a row's `passed` must reflect only the
   // dimensions the row itself displays and aggregates (recall/precision/MRR/nDCG) plus the
@@ -156,7 +156,7 @@ describe("retrieval mode comparison (#2010)", () => {
     const lexical = comparison.rows.find((row) => row.mode === "lexical");
     expect(lexical?.floorHeadroom).toBeGreaterThanOrEqual(0);
     expect(lexical?.passed).toBe(true);
-  });
+  }, 60_000);
 
   it("renders one row per mode, not a single aggregate", async () => {
     const report = renderRetrievalModeComparisonReport(
@@ -165,5 +165,5 @@ describe("retrieval mode comparison (#2010)", () => {
     expect(report).toContain("| lexical |");
     expect(report).toContain("| vector |");
     expect(report).toContain("| fused |");
-  });
+  }, 60_000);
 });

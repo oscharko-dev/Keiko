@@ -205,43 +205,55 @@ function labelFor(event: EditorVerificationEvent): SharedRunState & { readonly t
   }
 }
 
-function onEvent(event: EditorVerificationEvent): void {
-  let root: string;
-  if (event.kind === "run-started") {
-    root = event.projectId;
-    projectIdByRunId.set(event.runId, root);
-    const entry = projectState(root);
-    // A fresh run supersedes any pending dismiss from a PREVIOUS run's terminal label.
-    clearDismissTimer(entry);
-    if (entry.activeRunId !== null && entry.activeRunId !== event.runId) {
-      projectIdByRunId.delete(entry.activeRunId);
-    }
-    entry.activeRunId = event.runId;
-    entry.startToken = null;
-    if (entry.cancelRequested) void requestCancel(root, event.runId);
-  } else {
-    const knownRoot = projectIdByRunId.get(event.runId);
-    if (knownRoot === undefined) return;
-    const entry = projectStates.get(knownRoot);
-    if (entry === undefined || entry.activeRunId !== event.runId) return;
-    root = knownRoot;
+function adoptStartedRun(event: Extract<EditorVerificationEvent, { kind: "run-started" }>): string {
+  const root = event.projectId;
+  projectIdByRunId.set(event.runId, root);
+  const entry = projectState(root);
+  // A fresh run supersedes any pending dismiss from a PREVIOUS run's terminal label.
+  clearDismissTimer(entry);
+  if (entry.activeRunId !== null && entry.activeRunId !== event.runId) {
+    projectIdByRunId.delete(entry.activeRunId);
   }
+  entry.activeRunId = event.runId;
+  entry.startToken = null;
+  if (entry.cancelRequested) void requestCancel(root, event.runId);
+  return root;
+}
+
+function rootForTrackedRun(
+  event: Exclude<EditorVerificationEvent, { kind: "run-started" }>,
+): string | null {
+  const root = projectIdByRunId.get(event.runId);
+  if (root === undefined) return null;
+  const entry = projectStates.get(root);
+  return entry?.activeRunId === event.runId ? root : null;
+}
+
+function rootForEvent(event: EditorVerificationEvent): string | null {
+  return event.kind === "run-started" ? adoptStartedRun(event) : rootForTrackedRun(event);
+}
+
+function settleTerminalRun(root: string, entry: ProjectRunState, runId: string): void {
+  entry.activeRunId = null;
+  entry.startToken = null;
+  entry.cancelRequested = false;
+  if (entry.cancelInFlightRunId !== runId) entry.cancelInFlightRunId = null;
+  projectIdByRunId.delete(runId);
+  if (!hasActiveRun()) closeSharedSource();
+  // Issue #2212 fix-up: dismiss the terminal label after a short delay so it does not permanently
+  // mask a later status update (e.g. test-generation) in the project's shared status-bar `run` slot.
+  scheduleDismiss(root, entry);
+}
+
+function onEvent(event: EditorVerificationEvent): void {
+  const root = rootForEvent(event);
+  if (root === null) return;
   const entry = projectState(root);
   // Feed the latest completed report to the Problems panel (Issue #2213) — the run store is the one
   // authoritative source of the report, so the problems store never opens a second stream.
   if (event.kind === "run-completed") setVerificationReport(root, event.report);
   const view = labelFor(event);
-  if (view.terminal) {
-    entry.activeRunId = null;
-    entry.startToken = null;
-    entry.cancelRequested = false;
-    entry.cancelInFlightRunId = null;
-    projectIdByRunId.delete(event.runId);
-    if (!hasActiveRun()) closeSharedSource();
-    // Issue #2212 fix-up: dismiss the terminal label after a short delay so it does not permanently
-    // mask a later status update (e.g. test-generation) in the project's shared status-bar `run` slot.
-    scheduleDismiss(root, entry);
-  }
+  if (view.terminal) settleTerminalRun(root, entry, event.runId);
   emit(root, entry, { running: view.running, label: view.label });
 }
 
@@ -397,6 +409,21 @@ function isDeleteAcknowledgement(value: unknown): value is { readonly ok: true }
   return typeof value === "object" && value !== null && "ok" in value && value.ok === true;
 }
 
+function acknowledgeCancel(root: string, entry: ProjectRunState, runId: string): void {
+  if (entry.activeRunId !== null && entry.activeRunId !== runId) return;
+  if (entry.startToken !== null && entry.cancelInFlightRunId !== runId) return;
+  if (entry.activeRunId === runId) {
+    entry.activeRunId = null;
+    projectIdByRunId.delete(runId);
+    if (!hasActiveRun()) closeSharedSource();
+  }
+  entry.cancelRequested = false;
+  if (entry.cancelInFlightRunId === runId) entry.cancelInFlightRunId = null;
+  clearDismissTimer(entry);
+  emit(root, entry, { running: false, label: "Verification: cancelled" });
+  scheduleDismiss(root, entry);
+}
+
 async function requestCancel(root: string, runId: string): Promise<void> {
   const entry = projectStates.get(root);
   if (entry === undefined || entry.cancelInFlightRunId === runId) return;
@@ -409,6 +436,7 @@ async function requestCancel(root: string, runId: string): Promise<void> {
     if (!response.ok) throw new Error("verification cancel rejected");
     const payload: unknown = await response.json();
     if (!isDeleteAcknowledgement(payload)) throw new Error("malformed cancel response");
+    acknowledgeCancel(root, entry, runId);
   } catch {
     if (entry.activeRunId === runId) {
       emit(root, entry, { running: true, label: "Verification: cancel failed" });
@@ -422,7 +450,11 @@ function cancelRun(root: string): void {
   const entry = projectStates.get(root);
   if (entry === undefined) return;
   entry.cancelRequested = true;
-  if (entry.activeRunId !== null) void requestCancel(root, entry.activeRunId);
+  if (entry.activeRunId !== null) {
+    clearDismissTimer(entry);
+    emit(root, entry, { running: true, label: "Verification: cancelling…" });
+    void requestCancel(root, entry.activeRunId);
+  }
 }
 
 // Exposed for hermetic tests to reset the module singleton between cases.

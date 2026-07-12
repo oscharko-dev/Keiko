@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -14,6 +14,7 @@ import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createLspFrameReader, writeLspFrame } from "./lspFrameCodec.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import type { FakeLspBehavior, FakeLspController } from "./testing/fakeLspProcess.js";
+import { writeExecutableFixture } from "./testing/executableFixture.js";
 
 // `resolveExecutableOutsideWorkspace` runs against the real filesystem even when the spawn function is
 // faked, so the manager only proceeds to spawn if `fakelsp` actually resolves on PATH outside the
@@ -25,12 +26,8 @@ let WORKSPACE_ROOT = "";
 beforeAll(() => {
   BIN_DIR = mkdtempSync(join(tmpdir(), "keiko-lsp-bin-"));
   WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), "keiko-lsp-ws-"));
-  const exe = join(BIN_DIR, "fakelsp");
-  writeFileSync(exe, "#!/bin/sh\n");
-  chmodSync(exe, 0o755);
-  const tool = join(BIN_DIR, "approvedtool");
-  writeFileSync(tool, "#!/bin/sh\n");
-  chmodSync(tool, 0o755);
+  writeExecutableFixture(BIN_DIR, "fakelsp");
+  writeExecutableFixture(BIN_DIR, "approvedtool");
 });
 
 afterAll(() => {
@@ -350,8 +347,9 @@ describe("createLspProcessManager", () => {
     await manager.sendRequest("textDocument/hover", {}, new AbortController().signal);
 
     const health = manager.getHealthSnapshot();
+    if (health === undefined) throw new Error("Expected LSP health snapshot");
     expect(health).toMatchObject({ requestCount: 1, successCount: 1, failureCount: 0 });
-    expect(health?.latency).toMatchObject({ count: 1, lessThanOrEqual10Ms: 1 });
+    expect(health.latency).toMatchObject({ count: 1, lessThanOrEqual10Ms: 1 });
     expect(JSON.stringify(health)).not.toContain(WORKSPACE_ROOT);
     await manager.dispose();
   });
