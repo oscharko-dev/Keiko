@@ -319,7 +319,9 @@ export function parseJson(value) {
 }
 
 export function parseStabilityMs(value) {
-  return value === undefined ? 60_000 : Number(value);
+  if (value === undefined || value.trim() === "") return 60_000;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60_000;
 }
 
 export function isValidHeadSha(value) {

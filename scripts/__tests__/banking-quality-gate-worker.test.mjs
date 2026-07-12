@@ -351,8 +351,13 @@ describe("Banking Quality Gate worker trust boundary", () => {
     expect(parseJson('{"value":1}')).toEqual({ value: 1 });
     expect(parseJson("{")).toBeUndefined();
     expect(parseStabilityMs(undefined)).toBe(60_000);
+    expect(parseStabilityMs("")).toBe(60_000);
+    expect(parseStabilityMs("   ")).toBe(60_000);
     expect(parseStabilityMs("0")).toBe(0);
     expect(parseStabilityMs("1234")).toBe(1_234);
+    expect(parseStabilityMs("invalid")).toBe(60_000);
+    expect(parseStabilityMs("-1")).toBe(60_000);
+    expect(parseStabilityMs("Infinity")).toBe(60_000);
     expect(isValidHeadSha("a".repeat(40))).toBe(true);
     expect(isValidHeadSha(`a${"b".repeat(40)}`)).toBe(false);
     expect(isValidHeadSha({ toString: () => "a".repeat(40) })).toBe(false);
