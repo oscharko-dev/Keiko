@@ -100,9 +100,9 @@ describe("editor settings store — direct coverage", () => {
     const store = createEditorSettingsStore({ stateDir });
     const foreignRecord = emptyEditorSettingsWorkspaceRecord(rootA);
 
-    expect(() => store.commitWorkspace(rootB, foreignRecord)).toThrow(
-      /workspace identity mismatch/u,
-    );
+    expect(() => {
+      store.commitWorkspace(rootB, foreignRecord);
+    }).toThrow(/workspace identity mismatch/u);
   });
 
   it("rejects commitWorkspace when the state directory is nested inside the workspace root", () => {
@@ -111,8 +111,8 @@ describe("editor settings store — direct coverage", () => {
     const store = createEditorSettingsStore({ stateDir });
     const record = emptyEditorSettingsWorkspaceRecord(root);
 
-    expect(() => store.commitWorkspace(root, record)).toThrow(
-      /state directory must remain outside the workspace/u,
-    );
+    expect(() => {
+      store.commitWorkspace(root, record);
+    }).toThrow(/state directory must remain outside the workspace/u);
   });
 });
