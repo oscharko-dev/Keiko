@@ -31,12 +31,18 @@ import {
   updateCapsuleContextualRetrieval,
 } from "@/lib/local-knowledge-api";
 import { formatBytes, formatDurationCompact as formatDuration } from "@/lib/format";
+import {
+  useLocalKnowledgeTranslate as useTranslate,
+  type I18nTranslate,
+} from "../local-knowledge-i18n";
 import Link from "next/link";
 import { STATUS_LABELS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
 import { CapsuleActions } from "./capsule-actions";
 import { CapsuleRename } from "./capsule-rename";
 import { SourceRebindControl } from "./source-rebind-control";
+import detailStyles from "../capsule-detail.module.css";
+import { Explainable } from "../detail-help";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,10 +63,15 @@ function formatPercent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100).toString()}%`;
 }
 
-function scopeLocation(scope: SourceIndexStats["scope"]): string {
+function scopeLocation(scope: SourceIndexStats["scope"], t: I18nTranslate): string {
   if (scope.kind === "folder") return scope.rootPath;
   if (scope.kind === "repository") return scope.repositoryRoot;
-  return `${scope.rootPath} (${scope.files.length.toString()} selected files)`;
+  return t(
+    scope.files.length === 1
+      ? "localKnowledge.detail.sources.selectedFiles.one"
+      : "localKnowledge.detail.sources.selectedFiles.many",
+    { root: scope.rootPath, count: scope.files.length },
+  );
 }
 
 function sourceTotal(src: SourceIndexStats): number {
@@ -107,10 +118,10 @@ function compatibilityTone(status: EmbeddingCompatibility["status"]): "ok" | "wa
   return "danger";
 }
 
-function compatibilityLabel(status: EmbeddingCompatibility["status"]): string {
-  if (status === "compatible") return "Compatible";
-  if (status === "unknown") return "Unknown";
-  return "Incompatible";
+function compatibilityLabel(status: EmbeddingCompatibility["status"], t: I18nTranslate): string {
+  if (status === "compatible") return t("localKnowledge.detail.compatibility.compatible");
+  if (status === "unknown") return t("localKnowledge.detail.compatibility.unknown");
+  return t("localKnowledge.detail.compatibility.incompatible");
 }
 
 function contextualTone(
@@ -122,20 +133,27 @@ function contextualTone(
   return "neutral";
 }
 
-function contextualStatusLabel(status: ContextualRetrievalHealth["status"] | undefined): string {
-  if (status === "ready") return "Ready";
-  if (status === "rebuild-required") return "Rebuild required";
-  if (status === "degraded") return "Degraded";
-  if (status === "unavailable") return "Unavailable";
-  return "Disabled";
+function contextualStatusLabel(
+  status: ContextualRetrievalHealth["status"] | undefined,
+  t: I18nTranslate,
+): string {
+  if (status === "ready") return t("localKnowledge.detail.context.status.ready");
+  if (status === "rebuild-required") return t("localKnowledge.detail.context.status.rebuild");
+  if (status === "degraded") return t("localKnowledge.detail.context.status.degraded");
+  if (status === "unavailable") return t("localKnowledge.detail.context.status.unavailable");
+  return t("localKnowledge.detail.context.status.disabled");
 }
 
 // ---------------------------------------------------------------------------
 // SectionHeading
 // ---------------------------------------------------------------------------
 
-function SectionHeading({ children }: { children: ReactNode }): ReactNode {
-  return <h2 className="lk-section-head">{children}</h2>;
+function SectionHeading({ children, help }: { children: ReactNode; help?: string }): ReactNode {
+  return (
+    <h2 className="lk-section-head">
+      {help === undefined ? children : <Explainable description={help}>{children}</Explainable>}
+    </h2>
+  );
 }
 
 const DEFAULT_VISIBLE_ROWS = 25;
@@ -158,16 +176,20 @@ function MoreRowsButton({
   showAll,
   onToggle,
   noun,
+  t,
 }: {
   hiddenCount: number;
   showAll: boolean;
   onToggle: () => void;
   noun: string;
+  t: I18nTranslate;
 }): ReactNode {
   if (!showAll && hiddenCount <= 0) return null;
   return (
     <button type="button" className="lk-btn lk-btn-ghost" onClick={onToggle}>
-      {showAll ? `Show fewer ${noun}` : `Show ${hiddenCount.toString()} more ${noun}`}
+      {showAll
+        ? t("localKnowledge.detail.rows.showFewer", { noun })
+        : t("localKnowledge.detail.rows.showMore", { count: hiddenCount, noun })}
     </button>
   );
 }
@@ -180,19 +202,27 @@ function MetricCard({
   label,
   value,
   meta,
+  help,
   tone = "neutral",
 }: {
   label: string;
   value: ReactNode;
   meta: ReactNode;
+  help?: string;
   tone?: "neutral" | "ok" | "warn" | "danger";
 }): ReactNode {
-  return (
+  const card = (
     <div className="lkd-metric-card" data-tone={tone}>
       <span className="lkd-metric-label">{label}</span>
       <strong className="lkd-metric-value">{value}</strong>
       <span className="lkd-metric-meta">{meta}</span>
     </div>
+  );
+  if (help === undefined) return card;
+  return (
+    <Explainable as="div" block={true} description={help}>
+      {card}
+    </Explainable>
   );
 }
 
@@ -212,108 +242,202 @@ function ProgressBar({
   );
 }
 
-function partialIndexMessage(data: CapsuleDetailData, job: IndexingJobRecord | undefined): string {
+function ProgressRow({
+  label,
+  value,
+  help,
+  tone = "ok",
+}: {
+  label: string;
+  value: number;
+  help: string;
+  tone?: "ok" | "warn" | "danger";
+}): ReactNode {
+  return (
+    <Explainable as="div" block={true} description={help}>
+      <div className="lkd-status-bar-row">
+        <span>{label}</span>
+        <ProgressBar value={value} label={label} tone={tone} />
+        <span>{formatPercent(value)}</span>
+      </div>
+    </Explainable>
+  );
+}
+
+function partialIndexMessage(
+  data: CapsuleDetailData,
+  job: IndexingJobRecord | undefined,
+  t: I18nTranslate,
+): string {
   const missingVectors = data.health.chunkCount - data.health.vectorCount;
   if (job?.lastError?.code === "EMBEDDING_ADAPTER_FAILED") {
-    return `Embedding stopped early: ${job.lastError.message}. ${missingVectors.toString()} chunks still need vectors.`;
+    return t("localKnowledge.detail.index.embeddingStopped", {
+      message: job.lastError.message,
+      count: missingVectors,
+    });
   }
   if (missingVectors > 0) {
-    return `${missingVectors.toString()} chunks still need vectors before retrieval can cover the full source.`;
+    return t("localKnowledge.detail.index.missingVectors", { count: missingVectors });
   }
   if (data.health.unsupportedDocuments > 0) {
-    return `${data.health.unsupportedDocuments.toString()} documents need a different extraction path before they can be indexed.`;
+    return t("localKnowledge.detail.index.unsupportedDocuments", {
+      count: data.health.unsupportedDocuments,
+    });
   }
-  return "Index and vectors are aligned for the current source set.";
+  return t("localKnowledge.detail.index.aligned");
+}
+
+function discoveryProgressRatio(total: number, completed: number): number {
+  if (total <= 0) return 0;
+  return completed / total;
+}
+
+function retrievalCoverageRatio(data: CapsuleDetailData): number {
+  if (data.health.chunkCount <= 0) return 0;
+  return data.health.vectorCount / data.health.chunkCount;
+}
+
+function jobDurationLabel(job: IndexingJobRecord | undefined, t: I18nTranslate): string {
+  if (job === undefined) return t("localKnowledge.detail.index.noJobRecorded");
+  return formatDuration((job.finishedAt ?? Date.now()) - job.startedAt);
+}
+
+function jobElapsedMs(job: IndexingJobRecord | undefined): number {
+  if (job === undefined) return 0;
+  return Math.max(Date.now() - job.startedAt, 1);
+}
+
+function indexEtaMs(job: IndexingJobRecord | undefined, total: number, completed: number): number {
+  const elapsedMs = jobElapsedMs(job);
+  const docsPerMs = completed > 0 ? completed / elapsedMs : 0;
+  if (docsPerMs <= 0) return 0;
+  return Math.max(0, total - completed) / docsPerMs;
+}
+
+function indexRemainingLabel(
+  job: IndexingJobRecord | undefined,
+  total: number,
+  completed: number,
+  t: I18nTranslate,
+): string {
+  if (job?.status === "running" && total > 0 && completed > 0) {
+    return t("localKnowledge.detail.index.eta", {
+      duration: formatDuration(indexEtaMs(job, total, completed)),
+    });
+  }
+  return jobDurationLabel(job, t);
+}
+
+function indexIssueTone(
+  missingVectors: number,
+  data: CapsuleDetailData,
+  job: IndexingJobRecord | undefined,
+): "ok" | "warn" | "danger" {
+  if (missingVectors <= 0 && data.health.failedDocuments <= 0) return "ok";
+  if (job?.lastError !== undefined) return "danger";
+  return "warn";
+}
+
+function indexLiveNoteLabel(job: IndexingJobRecord | undefined, t: I18nTranslate): string {
+  if (job?.status === "running") return t("localKnowledge.detail.index.updating");
+  return t("localKnowledge.detail.index.latestRun");
+}
+
+function indexedDocumentsTone(data: CapsuleDetailData): "ok" | "warn" | "danger" {
+  if (data.health.failedDocuments > 0) return "danger";
+  if (data.health.skippedDocuments > 0) return "warn";
+  return "ok";
+}
+
+function missingVectorsMetaLabel(missingVectors: number, t: I18nTranslate): string {
+  if (missingVectors > 0) {
+    return t("localKnowledge.detail.index.chunksMissingVectors", { count: missingVectors });
+  }
+  return t("localKnowledge.detail.index.allChunksEmbedded");
+}
+
+function missingVectorsTone(missingVectors: number): "ok" | "danger" {
+  if (missingVectors > 0) return "danger";
+  return "ok";
+}
+
+function latestJobValueLabel(job: IndexingJobRecord | undefined, t: I18nTranslate): string {
+  if (job === undefined) return t("localKnowledge.detail.index.notIndexed");
+  return jobStatusLabel(job.status, t);
+}
+
+function latestJobTone(job: IndexingJobRecord | undefined): "neutral" | "warn" | "danger" {
+  if (job?.status === "failed") return "danger";
+  if (job?.status === "running") return "warn";
+  return "neutral";
 }
 
 function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode {
+  const t = useTranslate();
   const job = latestJob(data);
   const total = job?.totalDocuments ?? data.health.documentCount;
   const completed = completedDocuments(job);
   const indexedDocumentCount = indexedDocuments(data);
-  const documentProgress = total > 0 ? completed / total : 0;
-  const indexedProgress =
-    data.health.chunkCount > 0 ? data.health.vectorCount / data.health.chunkCount : 0;
+  const documentProgress = discoveryProgressRatio(total, completed);
+  const indexedProgress = retrievalCoverageRatio(data);
   const missingVectors = Math.max(0, data.health.chunkCount - data.health.vectorCount);
-  const jobDuration =
-    job !== undefined
-      ? formatDuration((job.finishedAt ?? Date.now()) - job.startedAt)
-      : "No job recorded";
-  const elapsedMs = job !== undefined ? Math.max(Date.now() - job.startedAt, 1) : 0;
-  const docsPerMs = completed > 0 ? completed / elapsedMs : 0;
-  const etaMs = docsPerMs > 0 ? Math.max(0, total - completed) / docsPerMs : 0;
-  const remainingLabel =
-    job?.status === "running" && total > 0 && completed > 0
-      ? `ETA ${formatDuration(etaMs)}`
-      : jobDuration;
-  const issueTone =
-    missingVectors > 0 || data.health.failedDocuments > 0
-      ? job?.lastError !== undefined
-        ? "danger"
-        : "warn"
-      : "ok";
+  const remainingLabel = indexRemainingLabel(job, total, completed, t);
+  const issueTone = indexIssueTone(missingVectors, data, job);
 
   return (
     <section aria-labelledby="lkd-index-status-heading" className="lkd-status-section">
       <div className="lkd-section-title-row">
-        <SectionHeading>
-          <span id="lkd-index-status-heading">Index status</span>
+        <SectionHeading help={t("localKnowledge.detail.help.indexStatus")}>
+          <span id="lkd-index-status-heading">{t("localKnowledge.detail.index.title")}</span>
         </SectionHeading>
         <span className="lkd-live-note" aria-live="polite">
-          {job?.status === "running" ? "Updating every 2s" : "Latest run"}
+          {indexLiveNoteLabel(job, t)}
         </span>
       </div>
       <div className="lkd-metric-grid">
         <MetricCard
-          label="Indexed documents"
+          label={t("localKnowledge.detail.index.indexedDocuments")}
+          help={t("localKnowledge.detail.help.indexedDocuments")}
           value={`${indexedDocumentCount.toString()} / ${data.health.documentCount.toString()}`}
-          meta={`${data.health.failedDocuments.toString()} failed, ${data.health.skippedDocuments.toString()} skipped`}
-          tone={
-            data.health.failedDocuments > 0
-              ? "danger"
-              : data.health.skippedDocuments > 0
-                ? "warn"
-                : "ok"
-          }
+          meta={t("localKnowledge.detail.index.failedSkipped", {
+            failed: data.health.failedDocuments,
+            skipped: data.health.skippedDocuments,
+          })}
+          tone={indexedDocumentsTone(data)}
         />
         <MetricCard
-          label="Vectors"
+          label={t("localKnowledge.detail.index.vectors")}
+          help={t("localKnowledge.detail.help.vectors")}
           value={`${data.health.vectorCount.toString()} / ${data.health.chunkCount.toString()}`}
-          meta={
-            missingVectors > 0
-              ? `${missingVectors.toString()} chunks missing vectors`
-              : "All chunks embedded"
-          }
-          tone={missingVectors > 0 ? "danger" : "ok"}
+          meta={missingVectorsMetaLabel(missingVectors, t)}
+          tone={missingVectorsTone(missingVectors)}
         />
         <MetricCard
-          label="Latest job"
-          value={job !== undefined ? JOB_STATUS_LABEL[job.status] : "Not indexed"}
+          label={t("localKnowledge.detail.index.latestJob")}
+          help={t("localKnowledge.detail.help.latestJob")}
+          value={latestJobValueLabel(job, t)}
           meta={remainingLabel}
-          tone={
-            job?.status === "failed" ? "danger" : job?.status === "running" ? "warn" : "neutral"
-          }
+          tone={latestJobTone(job)}
         />
       </div>
       <div className="lkd-status-bars">
-        <div className="lkd-status-bar-row">
-          <span>Discovery progress</span>
-          <ProgressBar value={documentProgress} label="Document discovery progress" />
-          <span>{formatPercent(documentProgress)}</span>
-        </div>
-        <div className="lkd-status-bar-row">
-          <span>Retrieval coverage</span>
-          <ProgressBar
-            value={indexedProgress}
-            label="Vector retrieval coverage"
-            tone={missingVectors > 0 ? "danger" : "ok"}
-          />
-          <span>{formatPercent(indexedProgress)}</span>
-        </div>
+        <ProgressRow
+          label={t("localKnowledge.detail.index.discoveryProgress")}
+          value={documentProgress}
+          help={t("localKnowledge.detail.help.discoveryProgress")}
+        />
+        <ProgressRow
+          label={t("localKnowledge.detail.index.retrievalCoverage")}
+          value={indexedProgress}
+          help={t("localKnowledge.detail.help.retrievalCoverage")}
+          tone={missingVectorsTone(missingVectors)}
+        />
       </div>
-      <p className="lkd-status-callout" data-tone={issueTone}>
-        {partialIndexMessage(data, job)}
-      </p>
+      <Explainable as="div" block={true} description={t("localKnowledge.detail.help.indexMessage")}>
+        <p className="lkd-status-callout" data-tone={issueTone}>
+          {partialIndexMessage(data, job, t)}
+        </p>
+      </Explainable>
     </section>
   );
 }
@@ -323,6 +447,7 @@ function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode
 // ---------------------------------------------------------------------------
 
 function EmbeddingCompatibilitySection({ data }: { data: CapsuleDetailData }): ReactNode {
+  const t = useTranslate();
   const compatibility = data.health.embeddingCompatibility;
   const status = compatibilityStatus(data);
   const tone = compatibilityTone(status);
@@ -331,35 +456,56 @@ function EmbeddingCompatibilitySection({ data }: { data: CapsuleDetailData }): R
       ? formatEmbeddingIdentity(data.health.embeddingIdentity)
       : `${compatibility.pinnedModelId} (${compatibility.pinnedVectorDimensions.toString()}d, ${compatibility.pinnedVectorMetric})`;
   const pinnedProvider = compatibility?.pinnedProvider ?? data.health.embeddingIdentity.provider;
-  const currentModel = compatibility?.currentModelId ?? "Not configured";
-  const currentProvider = compatibility?.currentProvider ?? "No embedding provider";
+  const currentModel =
+    compatibility?.currentModelId ?? t("localKnowledge.detail.compatibility.notConfigured");
+  const currentProvider =
+    compatibility?.currentProvider ?? t("localKnowledge.detail.compatibility.noProvider");
   const message =
     compatibility?.message ??
     (data.health.vectorCompatible
-      ? "The pinned embedding model is configured for embeddings."
-      : "Embedding compatibility could not be confirmed. Run full re-embed after fixing the Gateway configuration.");
+      ? t("localKnowledge.detail.compatibility.readyMessage")
+      : t("localKnowledge.detail.compatibility.fixGatewayMessage"));
 
   return (
     <section aria-labelledby="lkd-embedding-compat-heading" className="lkd-status-section">
       <div className="lkd-section-title-row">
-        <SectionHeading>
-          <span id="lkd-embedding-compat-heading">Embedding compatibility</span>
+        <SectionHeading help={t("localKnowledge.detail.help.embeddingSection")}>
+          <span id="lkd-embedding-compat-heading">
+            {t("localKnowledge.detail.compatibility.title")}
+          </span>
         </SectionHeading>
-        <span className="lkd-live-note">{compatibilityLabel(status)}</span>
+        <span className="lkd-live-note">{compatibilityLabel(status, t)}</span>
       </div>
       <div className="lkd-metric-grid">
-        <MetricCard label="Pinned model" value={pinnedModel} meta={pinnedProvider} />
-        <MetricCard label="Current embedding model" value={currentModel} meta={currentProvider} />
         <MetricCard
-          label="Compatibility"
-          value={compatibilityLabel(status)}
-          meta={compatibility?.reason ?? "legacy-health"}
+          label={t("localKnowledge.detail.compatibility.pinnedModel")}
+          help={t("localKnowledge.detail.help.pinnedModel")}
+          value={pinnedModel}
+          meta={pinnedProvider}
+        />
+        <MetricCard
+          label={t("localKnowledge.detail.compatibility.currentModel")}
+          help={t("localKnowledge.detail.help.currentModel")}
+          value={currentModel}
+          meta={currentProvider}
+        />
+        <MetricCard
+          label={t("localKnowledge.detail.compatibility.metric")}
+          help={t("localKnowledge.detail.help.compatibility")}
+          value={compatibilityLabel(status, t)}
+          meta={compatibility?.reason ?? t("localKnowledge.detail.compatibility.legacyHealth")}
           tone={tone}
         />
       </div>
-      <p className="lkd-status-callout" data-tone={tone}>
-        {message}
-      </p>
+      <Explainable
+        as="div"
+        block={true}
+        description={t("localKnowledge.detail.help.embeddingMessage")}
+      >
+        <p className="lkd-status-callout" data-tone={tone}>
+          {message}
+        </p>
+      </Explainable>
     </section>
   );
 }
@@ -368,35 +514,49 @@ function EmbeddingCompatibilitySection({ data }: { data: CapsuleDetailData }): R
 // OverviewSection
 // ---------------------------------------------------------------------------
 
-function OverviewRow({ label, value }: { label: string; value: ReactNode }): ReactNode {
+function OverviewRow({
+  label,
+  value,
+  help,
+}: {
+  label: string;
+  value: ReactNode;
+  help?: string;
+}): ReactNode {
   return (
     <div className="lkd-row">
-      <dt className="lkd-label">{label}</dt>
+      <dt className="lkd-label">
+        {help === undefined ? label : <Explainable description={help}>{label}</Explainable>}
+      </dt>
       <dd className="lkd-value">{value}</dd>
     </div>
   );
 }
 
 function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
+  const t = useTranslate();
   const { capsule, health } = data;
   const embId = capsule.embeddingModelIdentity;
   const status = compatibilityStatus(data);
 
   return (
     <section aria-labelledby="lkd-overview-heading">
-      <SectionHeading>
-        <span id="lkd-overview-heading">Overview</span>
+      <SectionHeading help={t("localKnowledge.detail.help.overview")}>
+        <span id="lkd-overview-heading">{t("localKnowledge.detail.overview.title")}</span>
       </SectionHeading>
       <dl className="lkd-dl">
-        <OverviewRow label="Name" value={capsule.displayName} />
+        <OverviewRow label={t("localKnowledge.detail.overview.name")} value={capsule.displayName} />
         {capsule.description !== undefined ? (
-          <OverviewRow label="Description" value={capsule.description} />
+          <OverviewRow
+            label={t("localKnowledge.detail.overview.description")}
+            value={capsule.description}
+          />
         ) : null}
         {capsule.tags.length > 0 ? (
           <OverviewRow
-            label="Tags"
+            label={t("localKnowledge.detail.overview.tags")}
             value={
-              <ul className="lkd-tags" aria-label="Knowledge Pod tags">
+              <ul className="lkd-tags" aria-label={t("localKnowledge.detail.overview.tags")}>
                 {capsule.tags.map((tag) => (
                   <li key={tag} className="lkd-tag">
                     {tag}
@@ -407,39 +567,63 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
           />
         ) : null}
         <OverviewRow
-          label="Status"
+          label={t("common.status")}
+          help={t("localKnowledge.detail.help.overviewStatus")}
           value={
             <span
               className="lk-badge"
               data-state={capsule.lifecycleState}
               role="status"
-              aria-label={`Status: ${STATUS_LABELS[capsule.lifecycleState]}`}
+              aria-label={t("localKnowledge.detail.overview.statusAria", {
+                status: STATUS_LABELS[capsule.lifecycleState],
+              })}
             >
               {STATUS_LABELS[capsule.lifecycleState]}
             </span>
           }
         />
-        <OverviewRow label="Embedding model" value={formatEmbeddingIdentity(embId)} />
-        <OverviewRow label="Storage size" value={formatBytes(health.storageSizeBytes)} />
-        <OverviewRow label="Unsupported documents" value={health.unsupportedDocuments.toString()} />
+        <OverviewRow
+          label={t("localKnowledge.detail.overview.embeddingModel")}
+          help={t("localKnowledge.detail.help.overviewEmbeddingModel")}
+          value={formatEmbeddingIdentity(embId)}
+        />
+        <OverviewRow
+          label={t("localKnowledge.detail.overview.storageSize")}
+          help={t("localKnowledge.detail.help.overviewStorage")}
+          value={formatBytes(health.storageSizeBytes)}
+        />
+        <OverviewRow
+          label={t("localKnowledge.detail.overview.unsupportedDocuments")}
+          help={t("localKnowledge.detail.help.overviewUnsupported")}
+          value={health.unsupportedDocuments.toString()}
+        />
         {health.lastIndexedAt !== undefined ? (
-          <OverviewRow label="Last indexed" value={formatTs(health.lastIndexedAt)} />
+          <OverviewRow
+            label={t("localKnowledge.detail.overview.lastIndexed")}
+            help={t("localKnowledge.detail.help.overviewLastIndexed")}
+            value={formatTs(health.lastIndexedAt)}
+          />
         ) : null}
         <OverviewRow
-          label="Vector compatible"
+          label={t("localKnowledge.detail.overview.vectorCompatible")}
+          help={t("localKnowledge.detail.help.overviewVectorCompatible")}
           value={
             status === "compatible"
-              ? "Compatible"
+              ? t("localKnowledge.detail.compatibility.compatible")
               : status === "unknown"
-                ? "Unknown — check Gateway configuration"
-                : "Incompatible — full re-embed required"
+                ? t("localKnowledge.detail.overview.vectorUnknown")
+                : t("localKnowledge.detail.overview.vectorIncompatible")
           }
         />
         {health.staleReasons.length > 0 ? (
           <OverviewRow
-            label="Stale reasons"
+            label={t("localKnowledge.detail.overview.staleReasons")}
+            help={t("localKnowledge.detail.help.overviewStaleReasons")}
             value={
-              <ul className="lkd-stale-reasons" aria-label="Stale reasons">
+              <ul
+                className="lkd-stale-reasons"
+                aria-label={t("localKnowledge.detail.overview.staleReasons")}
+              >
                 {health.staleReasons.map((r) => (
                   <li key={r}>{r}</li>
                 ))}
@@ -449,9 +633,13 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
         ) : null}
         {health.unsupportedGuidance.length > 0 ? (
           <OverviewRow
-            label="Next steps"
+            label={t("localKnowledge.detail.overview.nextSteps")}
+            help={t("localKnowledge.detail.help.overviewNextSteps")}
             value={
-              <ul className="lkd-stale-reasons" aria-label="Unsupported document guidance">
+              <ul
+                className="lkd-stale-reasons"
+                aria-label={t("localKnowledge.detail.overview.unsupportedGuidance")}
+              >
                 {health.unsupportedGuidance.map((guidance) => (
                   <li key={guidance}>{guidance}</li>
                 ))}
@@ -490,6 +678,7 @@ function ContextualRetrievalSection({
   onSaved,
   updateImpl = updateCapsuleContextualRetrieval,
 }: ContextualRetrievalSectionProps): ReactNode {
+  const t = useTranslate();
   const settings = data.capsule.contextualRetrieval;
   const health = data.health.contextualRetrieval;
   const [enabled, setEnabled] = useState(settings?.enabled ?? false);
@@ -531,9 +720,11 @@ function ContextualRetrievalSection({
     try {
       const updated = await updateImpl(data.capsule.id, next);
       onSaved(updated);
-      setMessage("Saved. Full rebuild / rechunk this pod to apply retrieval text changes.");
+      setMessage(t("localKnowledge.detail.context.saved"));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to save contextual retrieval.");
+      setError(
+        cause instanceof Error ? cause.message : t("localKnowledge.detail.context.saveFailed"),
+      );
     } finally {
       setBusy(false);
     }
@@ -542,32 +733,42 @@ function ContextualRetrievalSection({
   return (
     <section aria-labelledby="lkd-contextual-retrieval-heading" className="lkd-status-section">
       <div className="lkd-section-title-row">
-        <SectionHeading>
-          <span id="lkd-contextual-retrieval-heading">Contextual retrieval</span>
+        <SectionHeading help={t("localKnowledge.detail.help.contextualRetrieval")}>
+          <span id="lkd-contextual-retrieval-heading">
+            {t("localKnowledge.detail.context.title")}
+          </span>
         </SectionHeading>
-        <span className="lkd-live-note">{contextualStatusLabel(health?.status)}</span>
+        <span className="lkd-live-note">{contextualStatusLabel(health?.status, t)}</span>
       </div>
       <p className="lkd-status-callout" data-tone={contextualTone(health?.status)}>
-        Adds a context-generation chat call per chunk during indexing. Run Full rebuild / rechunk
-        after saving.
+        {t("localKnowledge.detail.context.description")}
       </p>
       {health !== undefined ? (
         <div className="lkd-metric-grid">
           <MetricCard
-            label="Retrieval context"
-            value={contextualStatusLabel(health.status)}
-            meta={`settings: ${health.source}`}
+            label={t("localKnowledge.detail.context.retrievalContext")}
+            help={t("localKnowledge.detail.help.contextStatus")}
+            value={contextualStatusLabel(health.status, t)}
+            meta={t("localKnowledge.detail.context.settingsSource", { source: health.source })}
             tone={contextualTone(health.status)}
           />
           <MetricCard
-            label="Context model"
-            value={health.modelId ?? "Gateway default"}
-            meta={health.strict ? "strict" : "non-strict fallback"}
+            label={t("localKnowledge.detail.context.model")}
+            help={t("localKnowledge.detail.help.contextModel")}
+            value={health.modelId ?? t("localKnowledge.detail.context.gatewayDefault")}
+            meta={
+              health.strict
+                ? t("localKnowledge.detail.context.strict")
+                : t("localKnowledge.detail.context.nonStrict")
+            }
           />
           <MetricCard
-            label="Stale context chunks"
+            label={t("localKnowledge.detail.context.staleChunks")}
+            help={t("localKnowledge.detail.help.contextStale")}
             value={health.staleChunkCount.toString()}
-            meta={`${health.degradedChunkCount.toString()} degraded`}
+            meta={t("localKnowledge.detail.context.degradedChunks", {
+              count: health.degradedChunkCount,
+            })}
             tone={health.rebuildRequired ? "warn" : health.degradedChunkCount > 0 ? "warn" : "ok"}
           />
         </div>
@@ -582,7 +783,11 @@ function ContextualRetrievalSection({
         </p>
       ) : null}
       <div className="lkd-connect-row">
-        <label className="dlg-label" htmlFor="lkd-context-enabled">
+        <label
+          className="dlg-label"
+          htmlFor="lkd-context-enabled"
+          title={t("localKnowledge.detail.help.contextEnable")}
+        >
           <input
             id="lkd-context-enabled"
             type="checkbox"
@@ -590,12 +795,14 @@ function ContextualRetrievalSection({
             disabled={busy}
             onChange={(event: ChangeEvent<HTMLInputElement>) => setEnabled(event.target.checked)}
           />{" "}
-          Generate retrieval context at index time
+          {t("localKnowledge.detail.context.generateAtIndex")}
         </label>
       </div>
       <div className="lkd-connect-row">
         <label htmlFor="lkd-context-model" className="dlg-label">
-          Context model ID
+          <Explainable description={t("localKnowledge.detail.help.contextModelInput")}>
+            {t("localKnowledge.detail.context.modelId")}
+          </Explainable>
         </label>
         <input
           id="lkd-context-model"
@@ -603,12 +810,16 @@ function ContextualRetrievalSection({
           className="dlg-input lkd-connect-input"
           value={modelId}
           disabled={busy || !enabled}
-          placeholder="Use gateway default chat model"
+          placeholder={t("localKnowledge.detail.context.defaultModelPlaceholder")}
           onChange={(event: ChangeEvent<HTMLInputElement>) => setModelId(event.target.value)}
         />
       </div>
       <div className="lkd-connect-row">
-        <label className="dlg-label" htmlFor="lkd-context-strict">
+        <label
+          className="dlg-label"
+          htmlFor="lkd-context-strict"
+          title={t("localKnowledge.detail.help.contextStrict")}
+        >
           <input
             id="lkd-context-strict"
             type="checkbox"
@@ -616,12 +827,14 @@ function ContextualRetrievalSection({
             disabled={busy || !enabled}
             onChange={(event: ChangeEvent<HTMLInputElement>) => setStrict(event.target.checked)}
           />{" "}
-          Fail indexing if context generation fails
+          {t("localKnowledge.detail.context.failOnError")}
         </label>
       </div>
       <div className="lkd-connect-row">
         <label htmlFor="lkd-context-max" className="dlg-label">
-          Generated context character limit
+          <Explainable description={t("localKnowledge.detail.help.contextGeneratedLimit")}>
+            {t("localKnowledge.detail.context.generatedLimit")}
+          </Explainable>
         </label>
         <input
           id="lkd-context-max"
@@ -638,7 +851,9 @@ function ContextualRetrievalSection({
       </div>
       <div className="lkd-connect-row">
         <label htmlFor="lkd-document-context-max" className="dlg-label">
-          Document context character limit
+          <Explainable description={t("localKnowledge.detail.help.contextDocumentLimit")}>
+            {t("localKnowledge.detail.context.documentLimit")}
+          </Explainable>
         </label>
         <input
           id="lkd-document-context-max"
@@ -658,9 +873,10 @@ function ContextualRetrievalSection({
         className="lk-btn lk-btn-ghost"
         disabled={busy}
         aria-busy={busy}
+        title={t("localKnowledge.detail.help.contextSave")}
         onClick={() => void handleSave()}
       >
-        {busy ? "Saving…" : "Save retrieval settings"}
+        {busy ? t("common.saving") : t("localKnowledge.detail.context.save")}
       </button>
       {message !== null ? (
         <p className="lkd-status-callout" data-tone="warn" role="status">
@@ -689,28 +905,33 @@ function SourcesSection({
   readonly sources: readonly SourceIndexStats[];
   readonly onActionComplete: () => void;
 }): ReactNode {
+  const t = useTranslate();
   if (sources.length === 0) {
     return (
       <section aria-labelledby="lkd-sources-heading">
-        <SectionHeading>
-          <span id="lkd-sources-heading">Sources</span>
+        <SectionHeading help={t("localKnowledge.detail.help.sources")}>
+          <span id="lkd-sources-heading">{t("localKnowledge.detail.sources.title")}</span>
         </SectionHeading>
-        <p className="lkd-empty-note">No sources attached to this pod.</p>
+        <p className="lkd-empty-note">{t("localKnowledge.detail.sources.empty")}</p>
       </section>
     );
   }
 
   return (
     <section aria-labelledby="lkd-sources-heading">
-      <SectionHeading>
-        <span id="lkd-sources-heading">Sources</span>
+      <SectionHeading help={t("localKnowledge.detail.help.sources")}>
+        <span id="lkd-sources-heading">{t("localKnowledge.detail.sources.title")}</span>
       </SectionHeading>
-      <ul className="lkd-list lkd-source-list" aria-label="Knowledge Pod sources">
+      <ul className="lkd-list lkd-source-list" aria-label={t("localKnowledge.detail.sources.list")}>
         {sources.map((src) => {
           const total = sourceTotal(src);
-          const location = scopeLocation(src.scope);
+          const location = scopeLocation(src.scope, t);
           return (
-            <li key={src.sourceId} className="lkd-source-card">
+            <li
+              key={src.sourceId}
+              className="lkd-source-card"
+              title={t("localKnowledge.detail.help.sourceCard")}
+            >
               <div className="lkd-source-card-head">
                 <div>
                   <div className="lkd-source-name" title={src.displayName}>
@@ -732,7 +953,12 @@ function SourcesSection({
               <div
                 className="lkd-source-coverage"
                 role="img"
-                aria-label={`Source document coverage: ${src.indexedCount.toString()} indexed, ${src.failedCount.toString()} failed, ${src.skippedCount.toString()} skipped`}
+                title={t("localKnowledge.detail.help.sourceCoverage")}
+                aria-label={t("localKnowledge.detail.sources.coverage", {
+                  indexed: src.indexedCount,
+                  failed: src.failedCount,
+                  skipped: src.skippedCount,
+                })}
               >
                 <span
                   className="lkd-source-segment lkd-source-segment-ok"
@@ -747,15 +973,18 @@ function SourcesSection({
                   style={progressStyle(total > 0 ? src.skippedCount / total : 0)}
                 />
               </div>
-              <div className="lkd-source-counts" aria-label="Document counts">
+              <div
+                className="lkd-source-counts"
+                aria-label={t("localKnowledge.detail.documentCounts")}
+              >
                 <span className="lkd-count lkd-count-ok">
-                  {src.indexedCount.toString()} indexed
+                  {t("localKnowledge.detail.counts.indexed", { count: src.indexedCount })}
                 </span>
                 <span className="lkd-count lkd-count-fail">
-                  {src.failedCount.toString()} failed
+                  {t("localKnowledge.detail.counts.failed", { count: src.failedCount })}
                 </span>
                 <span className="lkd-count lkd-count-skip">
-                  {src.skippedCount.toString()} skipped
+                  {t("localKnowledge.detail.counts.skipped", { count: src.skippedCount })}
                 </span>
               </div>
             </li>
@@ -767,24 +996,16 @@ function SourcesSection({
 }
 
 function PrivacySection(): ReactNode {
+  const t = useTranslate();
   return (
     <section aria-labelledby="lkd-privacy-heading">
-      <SectionHeading>
-        <span id="lkd-privacy-heading">Privacy and deletion</span>
+      <SectionHeading help={t("localKnowledge.detail.help.privacy")}>
+        <span id="lkd-privacy-heading">{t("localKnowledge.detail.privacy.title")}</span>
       </SectionHeading>
-      <ul className="lkd-list" aria-label="Privacy and deletion details">
-        <li className="lkd-source-row">
-          Indexed text, vectors, diagnostics, and job history stay in Keiko&apos;s local runtime
-          state on this machine.
-        </li>
-        <li className="lkd-source-row">
-          Selected chunks may be sent through the configured Model Gateway for embeddings during
-          indexing and for grounded answers when you ask questions against this Knowledge Pod.
-        </li>
-        <li className="lkd-source-row">
-          Deleting a Knowledge Pod removes its local index data and Knowledge Pod Set memberships.
-          Source files on disk are not deleted.
-        </li>
+      <ul className="lkd-list" aria-label={t("localKnowledge.detail.privacy.details")}>
+        <li className="lkd-source-row">{t("localKnowledge.detail.privacy.localState")}</li>
+        <li className="lkd-source-row">{t("localKnowledge.detail.privacy.modelGateway")}</li>
+        <li className="lkd-source-row">{t("localKnowledge.detail.privacy.deletion")}</li>
       </ul>
     </section>
   );
@@ -796,11 +1017,11 @@ function PrivacySection(): ReactNode {
 // Raw extracted text is intentionally absent (browser-safety rule from contracts).
 // ---------------------------------------------------------------------------
 
-const DIAG_SEVERITY_LABEL: Record<ParserDiagnosticSeverity, string> = {
-  info: "Info",
-  warning: "Warning",
-  error: "Error",
-};
+function diagnosticSeverityLabel(severity: ParserDiagnosticSeverity, t: I18nTranslate): string {
+  if (severity === "info") return t("localKnowledge.detail.diagnostics.severity.info");
+  if (severity === "warning") return t("localKnowledge.detail.diagnostics.severity.warning");
+  return t("localKnowledge.detail.diagnostics.severity.error");
+}
 
 const MAX_DIAGNOSTIC_GROUPS = 8;
 
@@ -828,15 +1049,21 @@ function diagnosticGroups(diagnostics: readonly ParserDiagnostic[]): readonly Di
   return [...groups.values()].sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
 }
 
-function DiagnosticGroupRow({ group }: { group: DiagnosticGroup }): ReactNode {
+function DiagnosticGroupRow({ group, t }: { group: DiagnosticGroup; t: I18nTranslate }): ReactNode {
+  const severityLabel = diagnosticSeverityLabel(group.severity, t);
   return (
     <li
       className="lkd-diag-group"
       data-severity={group.severity}
-      aria-label={`${DIAG_SEVERITY_LABEL[group.severity]}: ${group.code} (${group.count.toString()}x)`}
+      title={t("localKnowledge.detail.help.diagnosticRow")}
+      aria-label={t("localKnowledge.detail.diagnostics.groupAria", {
+        severity: severityLabel,
+        code: group.code,
+        count: group.count,
+      })}
     >
       <span className="lkd-diag-severity" aria-hidden="true">
-        {DIAG_SEVERITY_LABEL[group.severity]}
+        {severityLabel}
       </span>
       <span className="lkd-diag-group-count">{group.count.toString()}x</span>
       <span className="lkd-diag-code">{group.code}</span>
@@ -845,15 +1072,20 @@ function DiagnosticGroupRow({ group }: { group: DiagnosticGroup }): ReactNode {
   );
 }
 
-function DiagnosticRow({ diag }: { diag: ParserDiagnostic }): ReactNode {
+function DiagnosticRow({ diag, t }: { diag: ParserDiagnostic; t: I18nTranslate }): ReactNode {
+  const severityLabel = diagnosticSeverityLabel(diag.severity, t);
   return (
     <li
       className="lkd-diag-row"
       data-severity={diag.severity}
-      aria-label={`${DIAG_SEVERITY_LABEL[diag.severity]}: ${diag.code}`}
+      title={t("localKnowledge.detail.help.diagnosticRow")}
+      aria-label={t("localKnowledge.detail.diagnostics.rowAria", {
+        severity: severityLabel,
+        code: diag.code,
+      })}
     >
       <span className="lkd-diag-severity" aria-hidden="true">
-        {DIAG_SEVERITY_LABEL[diag.severity]}
+        {severityLabel}
       </span>
       <span className="lkd-diag-code">{diag.code}</span>
       <span className="lkd-diag-message">{diag.message}</span>
@@ -869,6 +1101,7 @@ function HealthDiagnosticsSection({
 }: {
   diagnostics: readonly ParserDiagnostic[];
 }): ReactNode {
+  const t = useTranslate();
   const { visibleCount, showAll, setShowAll } = useVisibleRows(diagnostics.length);
   const visible = diagnostics.slice(0, visibleCount);
   const hiddenCount = diagnostics.length - visible.length;
@@ -876,30 +1109,37 @@ function HealthDiagnosticsSection({
 
   return (
     <section aria-labelledby="lkd-diag-heading">
-      <SectionHeading>
-        <span id="lkd-diag-heading">Health Diagnostics</span>
+      <SectionHeading help={t("localKnowledge.detail.help.diagnostics")}>
+        <span id="lkd-diag-heading">{t("localKnowledge.detail.diagnostics.title")}</span>
       </SectionHeading>
       {diagnostics.length === 0 ? (
         <p className="lkd-empty-note" data-testid="diag-empty">
-          No parser diagnostics — all documents processed cleanly.
+          {t("localKnowledge.detail.diagnostics.empty")}
         </p>
       ) : (
         <>
-          <ul className="lkd-list lkd-diag-group-list" aria-label="Grouped parser diagnostics">
+          <ul
+            className="lkd-list lkd-diag-group-list"
+            aria-label={t("localKnowledge.detail.diagnostics.groupedList")}
+          >
             {groups.map((group) => (
-              <DiagnosticGroupRow key={group.key} group={group} />
+              <DiagnosticGroupRow key={group.key} group={group} t={t} />
             ))}
           </ul>
-          <ul className="lkd-list lkd-diag-list" aria-label="Parser diagnostics">
+          <ul
+            className="lkd-list lkd-diag-list"
+            aria-label={t("localKnowledge.detail.diagnostics.list")}
+          >
             {visible.map((diag, i) => (
-              <DiagnosticRow key={`${diag.code}-${i.toString()}`} diag={diag} />
+              <DiagnosticRow key={`${diag.code}-${i.toString()}`} diag={diag} t={t} />
             ))}
           </ul>
           <MoreRowsButton
             hiddenCount={hiddenCount}
-            noun="diagnostics"
+            noun={t("localKnowledge.detail.rows.diagnostics")}
             showAll={showAll}
             onToggle={() => setShowAll(!showAll)}
+            t={t}
           />
         </>
       )}
@@ -911,21 +1151,30 @@ function HealthDiagnosticsSection({
 // IndexingJobsSection
 // ---------------------------------------------------------------------------
 
-const JOB_STATUS_LABEL: Record<IndexingJobStatus, string> = {
-  queued: "Queued",
-  running: "Running",
-  succeeded: "Succeeded",
-  failed: "Failed",
-  cancelled: "Cancelled",
-};
+function jobStatusLabel(status: IndexingJobStatus, t: I18nTranslate): string {
+  if (status === "queued") return t("localKnowledge.detail.jobs.status.queued");
+  if (status === "running") return t("localKnowledge.detail.jobs.status.running");
+  if (status === "succeeded") return t("localKnowledge.detail.jobs.status.succeeded");
+  if (status === "failed") return t("localKnowledge.detail.jobs.status.failed");
+  return t("localKnowledge.detail.jobs.status.cancelled");
+}
 
-function JobRow({ job }: { job: IndexingJobRecord }): ReactNode {
+function JobRow({ job, t }: { job: IndexingJobRecord; t: I18nTranslate }): ReactNode {
   const duration =
-    job.finishedAt !== undefined ? formatDuration(job.finishedAt - job.startedAt) : "In progress";
+    job.finishedAt !== undefined
+      ? formatDuration(job.finishedAt - job.startedAt)
+      : t("localKnowledge.detail.jobs.inProgress");
   return (
-    <li className="lkd-job-row" aria-label={`Job ${job.id}: ${JOB_STATUS_LABEL[job.status]}`}>
+    <li
+      className="lkd-job-row"
+      title={t("localKnowledge.detail.help.jobRow")}
+      aria-label={t("localKnowledge.detail.jobs.rowAria", {
+        id: job.id,
+        status: jobStatusLabel(job.status, t),
+      })}
+    >
       <span className="lkd-job-status" data-status={job.status}>
-        {JOB_STATUS_LABEL[job.status]}
+        {jobStatusLabel(job.status, t)}
       </span>
       <span className="lkd-job-dates">
         <time dateTime={new Date(job.startedAt).toISOString()}>{formatTs(job.startedAt)}</time>
@@ -939,12 +1188,16 @@ function JobRow({ job }: { job: IndexingJobRecord }): ReactNode {
         ) : null}
       </span>
       <span className="lkd-job-duration">{duration}</span>
-      <div className="lkd-source-counts" aria-label="Document counts">
+      <div className="lkd-source-counts" aria-label={t("localKnowledge.detail.documentCounts")}>
         <span className="lkd-count lkd-count-ok">
-          {job.processedDocuments.toString()} processed
+          {t("localKnowledge.detail.counts.processed", { count: job.processedDocuments })}
         </span>
-        <span className="lkd-count lkd-count-fail">{job.failedDocuments.toString()} failed</span>
-        <span className="lkd-count lkd-count-skip">{job.skippedDocuments.toString()} skipped</span>
+        <span className="lkd-count lkd-count-fail">
+          {t("localKnowledge.detail.counts.failed", { count: job.failedDocuments })}
+        </span>
+        <span className="lkd-count lkd-count-skip">
+          {t("localKnowledge.detail.counts.skipped", { count: job.skippedDocuments })}
+        </span>
       </div>
       {job.lastError !== undefined ? (
         <div className="lkd-job-error">
@@ -957,29 +1210,31 @@ function JobRow({ job }: { job: IndexingJobRecord }): ReactNode {
 }
 
 function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): ReactNode {
+  const t = useTranslate();
   const { visibleCount, showAll, setShowAll } = useVisibleRows(jobs.length);
   const visible = jobs.slice(0, visibleCount);
   const hiddenCount = jobs.length - visible.length;
 
   return (
     <section aria-labelledby="lkd-jobs-heading">
-      <SectionHeading>
-        <span id="lkd-jobs-heading">Indexing Job History</span>
+      <SectionHeading help={t("localKnowledge.detail.help.jobs")}>
+        <span id="lkd-jobs-heading">{t("localKnowledge.detail.jobs.title")}</span>
       </SectionHeading>
       {jobs.length === 0 ? (
-        <p className="lkd-empty-note">No indexing jobs recorded yet.</p>
+        <p className="lkd-empty-note">{t("localKnowledge.detail.jobs.empty")}</p>
       ) : (
         <>
-          <ul className="lkd-list" aria-label="Indexing job history">
+          <ul className="lkd-list" aria-label={t("localKnowledge.detail.jobs.list")}>
             {visible.map((job) => (
-              <JobRow key={job.id} job={job} />
+              <JobRow key={job.id} job={job} t={t} />
             ))}
           </ul>
           <MoreRowsButton
             hiddenCount={hiddenCount}
-            noun="jobs"
+            noun={t("localKnowledge.detail.rows.jobs")}
             showAll={showAll}
             onToggle={() => setShowAll(!showAll)}
+            t={t}
           />
         </>
       )}
@@ -997,18 +1252,18 @@ function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): 
 // warnings, and a Resume control for interrupted large-document jobs.
 // ---------------------------------------------------------------------------
 
-const PHASE_LABELS: Readonly<Record<ExtractionPhase, string>> = {
-  preflight: "Preflight",
-  extracting: "Extracting",
-  extracted: "Extracted",
-  chunking: "Chunking",
-  chunked: "Chunked",
-  embedding: "Embedding",
-  embedded: "Embedded",
-  complete: "Complete",
-  cancelled: "Cancelled",
-  failed: "Failed",
-};
+function phaseLabel(phase: ExtractionPhase, t: I18nTranslate): string {
+  if (phase === "preflight") return t("localKnowledge.detail.large.phase.preflight");
+  if (phase === "extracting") return t("localKnowledge.detail.large.phase.extracting");
+  if (phase === "extracted") return t("localKnowledge.detail.large.phase.extracted");
+  if (phase === "chunking") return t("localKnowledge.detail.large.phase.chunking");
+  if (phase === "chunked") return t("localKnowledge.detail.large.phase.chunked");
+  if (phase === "embedding") return t("localKnowledge.detail.large.phase.embedding");
+  if (phase === "embedded") return t("localKnowledge.detail.large.phase.embedded");
+  if (phase === "complete") return t("localKnowledge.detail.large.phase.complete");
+  if (phase === "cancelled") return t("localKnowledge.detail.large.phase.cancelled");
+  return t("localKnowledge.detail.large.phase.failed");
+}
 
 function coverageTone(coverage: CoverageQuality): "ok" | "warn" | "danger" {
   if (coverage === "complete") return "ok";
@@ -1016,21 +1271,33 @@ function coverageTone(coverage: CoverageQuality): "ok" | "warn" | "danger" {
   return "warn";
 }
 
-function LargeDocumentRow({ progress }: { progress: LargeDocumentJobProgress }): ReactNode {
+function LargeDocumentRow({
+  progress,
+  t,
+}: {
+  progress: LargeDocumentJobProgress;
+  t: I18nTranslate;
+}): ReactNode {
   return (
-    <li className="lkd-source-card">
+    <li className="lkd-source-card" title={t("localKnowledge.detail.help.largeDocumentRow")}>
       <div className="lkd-source-card-head">
         <div className="lkd-source-name" title={progress.safeDisplayName}>
           {progress.safeDisplayName}
         </div>
-        <span className="lkd-source-scope">{PHASE_LABELS[progress.phase]}</span>
+        <span className="lkd-source-scope">{phaseLabel(progress.phase, t)}</span>
       </div>
       <div className="lkd-metric-meta">
-        <span data-tone={coverageTone(progress.coverage)}>{progress.coverage} coverage</span>
+        <span data-tone={coverageTone(progress.coverage)}>
+          {t("localKnowledge.detail.large.coverage", { coverage: progress.coverage })}
+        </span>
         {" · "}
-        {progress.processedPages.toString()} pages {" · "}
-        {progress.embeddedChunkCount.toString()}/{progress.chunkCount.toString()} chunks embedded
-        {progress.resumable ? " · resumable" : ""}
+        {t("localKnowledge.detail.large.pages", { count: progress.processedPages })}
+        {" · "}
+        {t("localKnowledge.detail.large.chunksEmbedded", {
+          embedded: progress.embeddedChunkCount,
+          chunks: progress.chunkCount,
+        })}
+        {progress.resumable ? ` · ${t("localKnowledge.detail.large.resumable")}` : ""}
       </div>
     </li>
   );
@@ -1051,13 +1318,14 @@ function LargeDocumentSection({
   jobActive,
   resumeImpl,
 }: LargeDocumentSectionProps): ReactNode {
+  const t = useTranslate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (health.progress.length === 0) return null;
 
   const activePhases = health.progress
     .filter((p) => !isTerminalExtractionPhase(p.phase))
-    .map((p) => PHASE_LABELS[p.phase]);
+    .map((p) => phaseLabel(p.phase, t));
 
   async function handleResume(): Promise<void> {
     setBusy(true);
@@ -1066,7 +1334,9 @@ function LargeDocumentSection({
       await (resumeImpl ?? resumeCapsuleLargeDocuments)(capsuleId);
       onActionComplete();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Resume failed.");
+      setError(
+        cause instanceof Error ? cause.message : t("localKnowledge.detail.large.resumeFailed"),
+      );
     } finally {
       setBusy(false);
     }
@@ -1075,27 +1345,35 @@ function LargeDocumentSection({
   return (
     <section aria-labelledby="lkd-large-doc-heading" className="lkd-status-section">
       <div className="lkd-section-title-row">
-        <SectionHeading>
-          <span id="lkd-large-doc-heading">Large documents</span>
+        <SectionHeading help={t("localKnowledge.detail.help.largeDocuments")}>
+          <span id="lkd-large-doc-heading">{t("localKnowledge.detail.large.title")}</span>
         </SectionHeading>
         <span className="lkd-live-note" role="status" aria-live="polite">
-          {activePhases.length > 0 ? `In progress: ${activePhases.join(", ")}` : "Idle"}
+          {activePhases.length > 0
+            ? t("localKnowledge.detail.large.inProgress", { phases: activePhases.join(", ") })
+            : t("localKnowledge.detail.large.idle")}
         </span>
       </div>
       {health.partialCoverageDocuments > 0 ? (
         <p className="lkd-status-callout" data-tone="warn">
-          {health.partialCoverageDocuments.toString()} document
-          {health.partialCoverageDocuments === 1 ? "" : "s"} indexed with partial coverage. The
-          pipeline is stable; retrieval quality is limited for these documents.
+          {t(
+            health.partialCoverageDocuments === 1
+              ? "localKnowledge.detail.large.partialCoverage.one"
+              : "localKnowledge.detail.large.partialCoverage.many",
+            { count: health.partialCoverageDocuments },
+          )}
         </p>
       ) : null}
-      <ul className="lkd-list lkd-source-list" aria-label="Large-document progress">
+      <ul className="lkd-list lkd-source-list" aria-label={t("localKnowledge.detail.large.list")}>
         {health.progress.map((progress) => (
-          <LargeDocumentRow key={progress.documentId} progress={progress} />
+          <LargeDocumentRow key={progress.documentId} progress={progress} t={t} />
         ))}
       </ul>
       {health.qualityWarnings.length > 0 ? (
-        <ul className="lkd-stale-reasons" aria-label="Retrieval quality warnings">
+        <ul
+          className="lkd-stale-reasons"
+          aria-label={t("localKnowledge.detail.large.qualityWarnings")}
+        >
           {health.qualityWarnings.map((warning) => (
             <li key={warning}>{warning}</li>
           ))}
@@ -1108,14 +1386,18 @@ function LargeDocumentSection({
             void handleResume();
           }}
           disabled={busy || jobActive}
-          aria-label="Resume interrupted large-document indexing"
+          aria-label={t("localKnowledge.detail.large.resumeAria")}
+          title={t("localKnowledge.detail.help.largeResume")}
           className="lk-action-button"
         >
           {busy
-            ? "Resuming…"
-            : `Resume ${health.resumableDocuments.length.toString()} document${
-                health.resumableDocuments.length === 1 ? "" : "s"
-              }`}
+            ? t("localKnowledge.detail.large.resuming")
+            : t(
+                health.resumableDocuments.length === 1
+                  ? "localKnowledge.detail.large.resume.one"
+                  : "localKnowledge.detail.large.resume.many",
+                { count: health.resumableDocuments.length },
+              )}
         </button>
       ) : null}
       {error !== null ? (
@@ -1145,6 +1427,7 @@ export function CapsuleDetail({
   resumeImpl,
   updateContextualRetrievalImpl,
 }: CapsuleDetailProps = {}): ReactNode {
+  const t = useTranslate();
   const searchParams = useSearchParams();
   const router = useRouter();
   const capsuleId =
@@ -1166,7 +1449,7 @@ export function CapsuleDetail({
   if (loadStatus === "loading") {
     return (
       <p role="status" aria-live="polite" className="lk-loading">
-        Loading Knowledge Pod…
+        {t("localKnowledge.detail.loading")}
       </p>
     );
   }
@@ -1178,9 +1461,9 @@ export function CapsuleDetail({
     if (capsuleId === "") {
       return (
         <div role="alert" aria-live="assertive" className="lk-alert">
-          No Knowledge Pod selected. Open a pod from the Local Knowledge overview.
+          {t("localKnowledge.detail.noSelection")}
           <Link href="/local-knowledge" className="lk-alert-retry">
-            Back to Local Knowledge
+            {t("localKnowledge.detail.backToLocalKnowledge")}
           </Link>
         </div>
       );
@@ -1191,32 +1474,32 @@ export function CapsuleDetail({
     if (isMissingCapsule) {
       return (
         <div role="alert" aria-live="assertive" className="lk-alert">
-          This Knowledge Pod no longer exists. Return to the Local Knowledge overview.
+          {t("localKnowledge.detail.notFound")}
           <Link href="/local-knowledge" className="lk-alert-retry">
-            Back to Knowledge Pods
+            {t("localKnowledge.overview.backToPods")}
           </Link>
         </div>
       );
     }
     return (
       <div role="alert" aria-live="assertive" className="lk-alert">
-        {loadError ?? "Failed to load Knowledge Pod."}
+        {loadError ?? t("localKnowledge.detail.loadFailed")}
         <button
           type="button"
           onClick={reload}
-          aria-label="Retry loading Knowledge Pod detail"
+          aria-label={t("localKnowledge.detail.retryLoad")}
           className="lk-alert-retry"
         >
-          Retry
+          {t("common.retry")}
         </button>
       </div>
     );
   }
 
   return (
-    <div className="lkd-content">
-      <header className="lk-header">
-        <h1 className="lk-title">{data.capsule.displayName}</h1>
+    <div className={`lkd-content ${detailStyles.detailContent}`}>
+      <header className={`lk-header ${detailStyles.podHeader}`}>
+        <h1 className={`lk-title ${detailStyles.podTitle}`}>{data.capsule.displayName}</h1>
         <CapsuleRename
           capsuleId={capsuleId}
           displayName={data.capsule.displayName}
@@ -1242,32 +1525,45 @@ export function CapsuleDetail({
       />
 
       <IndexingStatusSection data={data} />
-      <EmbeddingCompatibilitySection data={data} />
-      <ContextualRetrievalSection
-        data={data}
-        onSaved={replaceData}
-        {...(updateContextualRetrievalImpl !== undefined
-          ? { updateImpl: updateContextualRetrievalImpl }
-          : {})}
-      />
-      {data.largeDocumentHealth !== undefined ? (
-        <LargeDocumentSection
-          capsuleId={capsuleId}
-          health={data.largeDocumentHealth}
-          onActionComplete={reload}
-          jobActive={
-            data.capsule.lifecycleState === "indexing" ||
-            latestJob(data)?.status === "running" ||
-            latestJob(data)?.status === "queued"
-          }
-          {...(resumeImpl !== undefined ? { resumeImpl } : {})}
-        />
-      ) : null}
-      <OverviewSection data={data} />
-      <PrivacySection />
-      <SourcesSection capsuleId={capsuleId} sources={data.sources} onActionComplete={reload} />
-      <HealthDiagnosticsSection diagnostics={data.parserDiagnostics} />
-      <IndexingJobsSection jobs={data.indexingJobs} />
+      <details className={detailStyles.advancedDisclosure}>
+        <summary className={detailStyles.disclosureSummary}>
+          <span>
+            <Explainable description={t("localKnowledge.detail.help.advanced")}>
+              {t("localKnowledge.detail.advanced.summary")}
+            </Explainable>
+          </span>
+          <span>{t("localKnowledge.detail.advanced.hint")}</span>
+          <span className={detailStyles.disclosureIcon} aria-hidden="true" />
+        </summary>
+        <div className={detailStyles.advancedStack}>
+          <EmbeddingCompatibilitySection data={data} />
+          <ContextualRetrievalSection
+            data={data}
+            onSaved={replaceData}
+            {...(updateContextualRetrievalImpl !== undefined
+              ? { updateImpl: updateContextualRetrievalImpl }
+              : {})}
+          />
+          {data.largeDocumentHealth !== undefined ? (
+            <LargeDocumentSection
+              capsuleId={capsuleId}
+              health={data.largeDocumentHealth}
+              onActionComplete={reload}
+              jobActive={
+                data.capsule.lifecycleState === "indexing" ||
+                latestJob(data)?.status === "running" ||
+                latestJob(data)?.status === "queued"
+              }
+              {...(resumeImpl !== undefined ? { resumeImpl } : {})}
+            />
+          ) : null}
+          <SourcesSection capsuleId={capsuleId} sources={data.sources} onActionComplete={reload} />
+          <OverviewSection data={data} />
+          <PrivacySection />
+          <HealthDiagnosticsSection diagnostics={data.parserDiagnostics} />
+          <IndexingJobsSection jobs={data.indexingJobs} />
+        </div>
+      </details>
     </div>
   );
 }

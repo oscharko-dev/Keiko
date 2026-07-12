@@ -2,14 +2,15 @@
 // ADR-0100 D3/D6). Implements the preferred proxied-SDP negotiation mode of the #496 protocol
 // (`VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"] = "proxied-sdp"`): the Keiko host performs the
 // browser↔provider SDP exchange so the long-lived provider credential never reaches the browser
-// (AC2). The browser's opaque SDP offer is POSTed once to `${endpoint}/realtime/calls` as
-// `application/sdp` through the single `gatewayFetch` egress seam (ADR-0038), so realtime voice
+// (AC2). With standard server auth, the opaque SDP offer and server-owned session configuration are
+// POSTed atomically to `${endpoint}/realtime/calls` as GA multipart form data through the single
+// `gatewayFetch` egress seam (ADR-0038), so realtime voice
 // traffic inherits the same corporate-proxy, custom-CA, timeout, and byte-cap behavior as every
 // other productive model call (ADR-0100 D4); the provider's SDP answer is returned to the caller.
 //
 // The endpoint contract is the OpenAI Realtime WebRTC SDP-exchange surface
-// (`POST /v1/realtime/calls`, `Content-Type: application/sdp`, `Authorization: Bearer <key>`), which
-// explicitly supports a server-side (proxied) request with the standard provider key. It is
+// (`POST /v1/realtime/calls`, multipart `sdp` + `session`, `Authorization: Bearer <key>`), which
+// explicitly supports a server-side proxied request with the standard provider key. It is
 // provider-neutral exactly as the speech-to-text adapter's `/audio/transcriptions` surface is:
 // Azure Foundry and customer-hosted controlled-network deployments reach their own realtime endpoint
 // through the configured provider base URL (ADR-0100 D7), never a hardcoded host. Only the opaque SDP
@@ -18,6 +19,7 @@
 // (voice-protocol.ts redaction class): they are never logged or persisted here.
 
 import { apiKeyHeaderValue } from "./config.js";
+import { randomUUID } from "node:crypto";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -43,13 +45,15 @@ export const REALTIME_VOICES = [
   "ballad",
   "coral",
   "echo",
+  "marin",
+  "cedar",
   "sage",
   "shimmer",
   "verse",
 ] as const;
 export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
 export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "alloy";
-export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
+export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
 export const DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
 export const DEFAULT_REALTIME_TRANSCRIPTION_DELAY = "low" as const;
 export const DEFAULT_REALTIME_VAD_THRESHOLD = 0.5;
@@ -98,6 +102,7 @@ export interface RealtimeNegotiationRequest {
   readonly transcriptionModel?: string;
   readonly transcriptionLanguage?: string | undefined;
   readonly transcriptionDelay?: RealtimeTranscriptionDelay | undefined;
+  readonly turnDetection?: Readonly<Record<string, unknown>> | undefined;
   readonly tools?: readonly RealtimeSessionTool[] | undefined;
   readonly toolChoice?: RealtimeSessionToolChoice | undefined;
   // Used for grounded sessions when the provider does not support realtime function calls. Server VAD
@@ -182,9 +187,9 @@ function headerName(name: string | undefined): string {
   return name.toLowerCase();
 }
 
-function joinUrl(endpoint: string, modelId: string): string {
+function joinUrl(endpoint: string): string {
   const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
-  return `${trimmed}/realtime/calls?model=${encodeURIComponent(modelId)}`;
+  return `${trimmed}/realtime/calls`;
 }
 
 function joinClientSecretsUrl(endpoint: string): string {
@@ -226,29 +231,57 @@ interface BuiltRequest {
   readonly url: string;
   readonly clientSecretsUrl: string;
   readonly headers: Record<string, string>;
-  readonly body: string;
+  readonly body: string | Blob;
+  readonly offerSdp: string;
   readonly signal: AbortSignal;
   readonly timeoutSignal: AbortSignal;
   readonly callerSignal: AbortSignal | undefined;
 }
 
+interface UnifiedRealtimeBody {
+  readonly body: Blob;
+  readonly contentType: string;
+}
+
+function buildUnifiedRealtimeBody(request: RealtimeNegotiationRequest): UnifiedRealtimeBody {
+  const boundary = `keiko-realtime-${randomUUID()}`;
+  const contentType = `multipart/form-data; boundary=${boundary}`;
+  const session = JSON.stringify(buildRealtimeSession(request));
+  const body = new Blob(
+    [
+      `--${boundary}\r\nContent-Disposition: form-data; name="sdp"; filename="offer.sdp"\r\n`,
+      `Content-Type: application/sdp\r\n\r\n${request.offerSdp}\r\n`,
+      `--${boundary}\r\nContent-Disposition: form-data; name="session"\r\n`,
+      `Content-Type: application/json\r\n\r\n${session}\r\n--${boundary}--\r\n`,
+    ],
+    { type: contentType },
+  );
+  return { body, contentType };
+}
+
 function buildRequest(request: RealtimeNegotiationRequest): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
+  const unified = buildUnifiedRealtimeBody(request);
+  const ephemeral = request.realtimeAuthMode === "ephemeral-session";
+  const body = ephemeral ? request.offerSdp : unified.body;
   const headers: Record<string, string> = {
-    "content-type": "application/sdp",
+    "content-type": ephemeral ? "application/sdp" : unified.contentType,
     // Set explicitly so the proxy/CA-fallback egress path sends a fixed-length body. The Fetch spec
     // treats content-length as a forbidden header on the direct path, where undici computes it.
-    "content-length": String(Buffer.byteLength(request.offerSdp, "utf8")),
+    "content-length": String(
+      typeof body === "string" ? Buffer.byteLength(body, "utf8") : body.size,
+    ),
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
-    url: joinUrl(request.endpoint, request.modelId),
+    url: joinUrl(request.endpoint),
     clientSecretsUrl: joinClientSecretsUrl(request.endpoint),
     headers,
-    body: request.offerSdp,
+    body,
+    offerSdp: request.offerSdp,
     signal,
     timeoutSignal,
     callerSignal: request.signal,
@@ -310,12 +343,11 @@ async function dispatch(
   }
 }
 
-function realtimeTurnDetection(
-  disableAutomaticResponse: boolean | undefined,
-): Record<string, unknown> {
-  return disableAutomaticResponse === true
-    ? { ...DEFAULT_REALTIME_TURN_DETECTION, create_response: false }
-    : DEFAULT_REALTIME_TURN_DETECTION;
+function realtimeTurnDetection(request: RealtimeNegotiationRequest): Record<string, unknown> {
+  const configured = request.turnDetection ?? DEFAULT_REALTIME_TURN_DETECTION;
+  return request.disableAutomaticResponse === true
+    ? { ...configured, create_response: false }
+    : { ...configured };
 }
 
 // Builds the ephemeral client-secret request body. The session-config schema is the GA nested
@@ -353,7 +385,7 @@ function buildDialogueClientSecretSession(
     // server_vad gives provider-side end-of-turn detection and barge-in (interrupt_response) for the
     // realtime media plane without any client polling. Prefix padding captures speech that starts
     // during browser EC/NS/AGC warm-up or immediately after the visible session start.
-    turn_detection: realtimeTurnDetection(request.disableAutomaticResponse),
+    turn_detection: realtimeTurnDetection(request),
   };
   audioInput.transcription = {
     model: nonEmptyString(request.transcriptionModel)
@@ -390,11 +422,13 @@ function buildTranscriptionClientSecretSession(
 }
 
 function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
-  const session =
-    request.sessionType === "transcription"
-      ? buildTranscriptionClientSecretSession(request)
-      : buildDialogueClientSecretSession(request);
-  return JSON.stringify({ session });
+  return JSON.stringify({ session: buildRealtimeSession(request) });
+}
+
+function buildRealtimeSession(request: RealtimeNegotiationRequest): Record<string, unknown> {
+  return request.sessionType === "transcription"
+    ? buildTranscriptionClientSecretSession(request)
+    : buildDialogueClientSecretSession(request);
 }
 
 function extractEphemeralToken(parsed: unknown): string | undefined {
@@ -461,10 +495,10 @@ async function dispatchWithEphemeralToken(
       method: "POST",
       headers: {
         "content-type": "application/sdp",
-        "content-length": String(Buffer.byteLength(built.body, "utf8")),
+        "content-length": String(Buffer.byteLength(built.offerSdp, "utf8")),
         authorization: `Bearer ${tokenResult.token}`,
       },
-      body: built.body,
+      body: built.offerSdp,
       signal: built.signal,
       maxResponseBytes: MAX_SDP_BYTES,
       ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),

@@ -79,11 +79,7 @@ function validateWorkspaceExports(relativePath, manifest, failures) {
   );
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity -- release manifest gate intentionally reports all violations in one pass.
-export function validatePublishManifests(rootManifest, workspaceManifests) {
-  const failures = [];
-  const expectedVersion = rootManifest.version;
-
+function validateRootManifestBasics(rootManifest, expectedVersion, failures) {
   if (rootManifest.private === true) {
     failures.push(
       "package.json: root product package must remain publishable (private must not be true).",
@@ -97,65 +93,73 @@ export function validatePublishManifests(rootManifest, workspaceManifests) {
       `package.json: repository.url must be ${expectedRepositoryUrl} so npm provenance can validate the GitHub source repository.`,
     );
   }
+}
 
-  const workspaceNames = new Set(workspaceManifests.map(({ manifest }) => manifest.name));
-  const rootInternalDependencies = internalDependencyEntries(rootManifest);
-  const bundled = new Set(
-    Array.isArray(rootManifest.bundleDependencies) ? rootManifest.bundleDependencies : [],
-  );
-
-  for (const { relativePath, manifest } of workspaceManifests) {
-    if (typeof manifest.name !== "string" || !manifest.name.startsWith(scope)) {
-      failures.push(`${relativePath}: workspace package must declare an ${scope} package name.`);
-      continue;
-    }
-    if (manifest.version !== expectedVersion) {
+function validateWorkspaceBundlingStatus(relativePath, manifest, context, failures) {
+  const { rootInternalDependencies, bundled } = context;
+  const privateExclusion = explicitPrivateWorkspaceExclusions.get(manifest.name);
+  const inRootDependencies = dependencyHas(rootInternalDependencies, manifest.name);
+  const inBundle = bundled.has(manifest.name);
+  if (privateExclusion !== undefined) {
+    if (inRootDependencies || inBundle) {
       failures.push(
-        `${relativePath}: version ${manifest.version} does not match root ${expectedVersion}.`,
+        `${relativePath}: ${manifest.name} is a build-time-only workspace exclusion (${privateExclusion}) and must not appear in root dependencies or bundleDependencies.`,
       );
     }
-    if (manifest.private !== true) {
+    return;
+  }
+  if (!inRootDependencies) {
+    failures.push(
+      `${relativePath}: runtime workspace ${manifest.name} must be listed in root dependencies.`,
+    );
+  }
+  if (!inBundle) {
+    failures.push(
+      `${relativePath}: runtime workspace ${manifest.name} must be listed in root bundleDependencies.`,
+    );
+  }
+}
+
+function validateWorkspaceInternalDependencyEntries(relativePath, manifest, context, failures) {
+  const { workspaceNames, expectedVersion } = context;
+  for (const entry of internalDependencyEntries(manifest)) {
+    if (failMalformedDependency(manifest.name ?? relativePath, entry, failures)) continue;
+    if (!workspaceNames.has(entry.name)) {
       failures.push(
-        `${relativePath}: internal workspace ${manifest.name} must set private: true; only the root package is published.`,
+        `${relativePath}: ${entry.field}.${entry.name} does not refer to a local workspace package.`,
       );
     }
-    validateWorkspaceExports(relativePath, manifest, failures);
-    const privateExclusion = explicitPrivateWorkspaceExclusions.get(manifest.name);
-    const inRootDependencies = dependencyHas(rootInternalDependencies, manifest.name);
-    const inBundle = bundled.has(manifest.name);
-    if (privateExclusion !== undefined) {
-      if (inRootDependencies || inBundle) {
-        failures.push(
-          `${relativePath}: ${manifest.name} is a build-time-only workspace exclusion (${privateExclusion}) and must not appear in root dependencies or bundleDependencies.`,
-        );
-      }
-    } else {
-      if (!inRootDependencies) {
-        failures.push(
-          `${relativePath}: runtime workspace ${manifest.name} must be listed in root dependencies.`,
-        );
-      }
-      if (!inBundle) {
-        failures.push(
-          `${relativePath}: runtime workspace ${manifest.name} must be listed in root bundleDependencies.`,
-        );
-      }
-    }
-    for (const entry of internalDependencyEntries(manifest)) {
-      if (failMalformedDependency(manifest.name ?? relativePath, entry, failures)) continue;
-      if (!workspaceNames.has(entry.name)) {
-        failures.push(
-          `${relativePath}: ${entry.field}.${entry.name} does not refer to a local workspace package.`,
-        );
-      }
-      if (entry.specifier !== expectedVersion) {
-        failures.push(
-          `${relativePath}: ${entry.field}.${entry.name} must be pinned to ${expectedVersion}, got ${entry.specifier}.`,
-        );
-      }
+    if (entry.specifier !== expectedVersion) {
+      failures.push(
+        `${relativePath}: ${entry.field}.${entry.name} must be pinned to ${expectedVersion}, got ${entry.specifier}.`,
+      );
     }
   }
+}
 
+function validateWorkspaceManifestEntry(relativePath, manifest, context, failures) {
+  const { expectedVersion } = context;
+  if (typeof manifest.name !== "string" || !manifest.name.startsWith(scope)) {
+    failures.push(`${relativePath}: workspace package must declare an ${scope} package name.`);
+    return;
+  }
+  if (manifest.version !== expectedVersion) {
+    failures.push(
+      `${relativePath}: version ${manifest.version} does not match root ${expectedVersion}.`,
+    );
+  }
+  if (manifest.private !== true) {
+    failures.push(
+      `${relativePath}: internal workspace ${manifest.name} must set private: true; only the root package is published.`,
+    );
+  }
+  validateWorkspaceExports(relativePath, manifest, failures);
+  validateWorkspaceBundlingStatus(relativePath, manifest, context, failures);
+  validateWorkspaceInternalDependencyEntries(relativePath, manifest, context, failures);
+}
+
+function validateRootInternalDependencyEntries(rootInternalDependencies, context, failures) {
+  const { workspaceNames, expectedVersion, bundled } = context;
   for (const entry of rootInternalDependencies) {
     if (failMalformedDependency("package.json", entry, failures)) continue;
     const { field, name, specifier } = entry;
@@ -183,7 +187,10 @@ export function validatePublishManifests(rootManifest, workspaceManifests) {
       failures.push(`package.json: dependency ${name} must also be listed in bundleDependencies.`);
     }
   }
+}
 
+function validateBundledWorkspaceEntries(bundled, context, failures) {
+  const { workspaceNames, workspaceManifests, rootInternalDependencies } = context;
   for (const name of bundled) {
     if (!name.startsWith(scope)) continue;
     if (!workspaceNames.has(name)) {
@@ -205,6 +212,33 @@ export function validatePublishManifests(rootManifest, workspaceManifests) {
       failures.push(`package.json: bundleDependencies entry ${name} is missing from dependencies.`);
     }
   }
+}
+
+export function validatePublishManifests(rootManifest, workspaceManifests) {
+  const failures = [];
+  const expectedVersion = rootManifest.version;
+
+  validateRootManifestBasics(rootManifest, expectedVersion, failures);
+
+  const workspaceNames = new Set(workspaceManifests.map(({ manifest }) => manifest.name));
+  const rootInternalDependencies = internalDependencyEntries(rootManifest);
+  const bundled = new Set(
+    Array.isArray(rootManifest.bundleDependencies) ? rootManifest.bundleDependencies : [],
+  );
+  const context = {
+    expectedVersion,
+    workspaceNames,
+    rootInternalDependencies,
+    bundled,
+    workspaceManifests,
+  };
+
+  for (const { relativePath, manifest } of workspaceManifests) {
+    validateWorkspaceManifestEntry(relativePath, manifest, context, failures);
+  }
+
+  validateRootInternalDependencyEntries(rootInternalDependencies, context, failures);
+  validateBundledWorkspaceEntries(bundled, context, failures);
 
   return failures;
 }

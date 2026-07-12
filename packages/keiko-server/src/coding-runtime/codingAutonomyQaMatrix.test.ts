@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
+  codingWorkbenchPolicyEffectFor,
   decideCodingWorkbenchActionForMode,
   validateCodingWorkbenchEvidenceRecord,
   type CodingWorkbenchAuthorityEnvelope,
@@ -182,43 +183,36 @@ function withoutConnectorScopes(
 }
 
 describe("coding autonomy closeout QA matrix", () => {
-  it("keeps the three autonomy modes on separate authority tiers", () => {
-    expect(decideCodingWorkbenchActionForMode("governed-assist", "workspace-read")).toEqual({
-      allowed: true,
-    });
-    expect(decideCodingWorkbenchActionForMode("governed-assist", "verification")).toEqual({
-      allowed: true,
-    });
-    expect(decideCodingWorkbenchActionForMode("governed-assist", "workspace-write")).toEqual({
-      allowed: false,
-      reasonCode: "workspace-write-denied",
-    });
-    expect(
-      decideCodingWorkbenchActionForMode("governed-assist", "connector-access", [
-        "issue-tracker.write",
-      ]),
-    ).toEqual({ allowed: false, reasonCode: "connector-write-denied" });
-
-    expect(decideCodingWorkbenchActionForMode("supervised-coding", "workspace-write")).toEqual({
-      allowed: true,
-    });
-    expect(decideCodingWorkbenchActionForMode("supervised-coding", "command-execution")).toEqual({
-      allowed: true,
-    });
-    expect(decideCodingWorkbenchActionForMode("supervised-coding", "delivery-substrate")).toEqual({
-      allowed: false,
-      reasonCode: "delivery-denied",
-    });
+  it("keeps class admission separate from the three scope and risk policies", () => {
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"] as const) {
+      expect(
+        CODING_WORKBENCH_ACTION_CLASSES.every(
+          (actionClass) => decideCodingWorkbenchActionForMode(mode, actionClass).allowed,
+        ),
+      ).toBe(true);
+    }
 
     expect(
-      CODING_WORKBENCH_ACTION_CLASSES.every(
-        (actionClass) =>
-          decideCodingWorkbenchActionForMode("autonomous-delivery", actionClass, [
-            "source-control.write",
-            "issue-tracker.write",
-          ]).allowed,
-      ),
-    ).toBe(true);
+      codingWorkbenchPolicyEffectFor("governed-assist", "workspace-contained", "critical"),
+    ).toBe("allowed");
+    expect(codingWorkbenchPolicyEffectFor("governed-assist", "external-file", "low")).toBe(
+      "approval-required",
+    );
+    expect(codingWorkbenchPolicyEffectFor("governed-assist", "internet", "low")).toBe(
+      "approval-required",
+    );
+    expect(codingWorkbenchPolicyEffectFor("supervised-coding", "external-file", "medium")).toBe(
+      "allowed",
+    );
+    expect(codingWorkbenchPolicyEffectFor("supervised-coding", "internet", "high")).toBe(
+      "approval-required",
+    );
+    expect(codingWorkbenchPolicyEffectFor("autonomous-delivery", "internet", "critical")).toBe(
+      "allowed",
+    );
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"] as const) {
+      expect(codingWorkbenchPolicyEffectFor(mode, "delivery", "low")).toBe("approval-required");
+    }
   });
 
   it("allows confirmed autonomous PR handoff while keeping evidence content-free", () => {
@@ -406,9 +400,14 @@ describe("coding autonomy closeout QA matrix", () => {
       "autonomous closeout narrow viewport has no horizontal overflow",
     ],
     [
-      "operator runbook",
+      "operator runbook three-mode policy",
       "docs/qa/coding-workbench-operator-runbook.md",
-      "Autonomous Delivery can create or update a PR only through the governed gateway",
+      "| **Ask for approval** | `governed-assist`",
+    ],
+    [
+      "operator runbook delivery boundary",
+      "docs/qa/coding-workbench-operator-runbook.md",
+      "require separate explicit human approval in all three modes",
     ],
   ] as const)("keeps %s proof wired into the closeout ledger", (_label, filePath, expectedText) => {
     const absolutePath = resolve(process.cwd(), filePath);

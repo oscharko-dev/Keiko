@@ -1,0 +1,37 @@
+name: OSV dependency scan
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - opened
+      - ready_for_review
+      - reopened
+      - synchronize
+  push:
+    branches:
+      - dev
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  scan:
+    name: Scan dependency lockfiles
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Scan dependency manifests with OSV Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --recursive
+            ./

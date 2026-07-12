@@ -94,9 +94,9 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("region", { name: "Coding Workbench" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Ready for a coding run" })).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: "Coding autonomy mode" })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Governed Assist/u })).toBeEnabled();
-    expect(screen.getByRole("radio", { name: /Supervised Coding/u })).toBeEnabled();
-    expect(screen.getByRole("radio", { name: /Autonomous Delivery/u })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Ask for approval/u })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /Approve for me/u })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: /Full access/u })).toBeDisabled();
     expect(screen.getByText("No runtime events yet.")).toBeInTheDocument();
     expect(screen.queryByText(/marketing|documentation card/iu)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByText("Available").length).toBeGreaterThanOrEqual(1));
@@ -109,7 +109,7 @@ describe("CodingWorkbenchWindow", () => {
     const modeGroup = screen.getByRole("radiogroup", { name: "Coding autonomy mode" });
     expect(modeGroup).toHaveAttribute("aria-busy", "false");
 
-    await user.click(screen.getByRole("radio", { name: /Governed Assist/u }));
+    await user.click(screen.getByRole("radio", { name: /Ask for approval/u }));
 
     expect(modeGroup).toHaveAttribute("aria-busy", "true");
     expect(screen.getByText("Mode change pending server confirmation.")).toHaveAttribute(
@@ -131,7 +131,7 @@ describe("CodingWorkbenchWindow", () => {
       />,
     );
 
-    expect(screen.getByRole("radio", { name: /Supervised Coding/u })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Approve for me/u })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Stop sidecar" }));
     expect(onStopRun).toHaveBeenCalledWith("run-1990");
     expect(screen.getByRole("status")).toHaveTextContent("Stop requested");
@@ -203,7 +203,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(
       screen.getByRole("heading", { name: "Issue #1991 Governed Assist proposal" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Governed Assist/u })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Ask for approval/u })).toBeDisabled();
     expect(screen.getByText("Proposed diff only")).toBeInTheDocument();
     expect(screen.getByText("120 added, 14 deleted")).toBeInTheDocument();
     expect(
@@ -302,7 +302,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(
       screen.getByRole("heading", { name: "Issue #1994 Autonomous Delivery confirmed envelope" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /Autonomous Delivery/u })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Full access/u })).toBeChecked();
     expect(screen.getByText("Governed PR gateway handoff pending")).toBeInTheDocument();
     expect(screen.getByText("Delivery runner")).toBeInTheDocument();
     expect(

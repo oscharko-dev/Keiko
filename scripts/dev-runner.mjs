@@ -28,6 +28,8 @@ const children = new Map();
 const restartCounts = new Map();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
 const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "webpack";
+const skipPackageWatchForTest =
+  process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
 let nextBundler = nextBundlerPreference === "turbopack" ? "turbopack" : "webpack";
 let server;
 let shuttingDown = false;
@@ -491,7 +493,9 @@ if (invokedDirectly) {
     process.exit(1);
   }
 
-  startPackageBuildWatch();
+  // The readiness integration test exercises BFF/Next warmup and runs beside the package suite.
+  // Its test-only seam prevents a real tsc --watch from mutating the shared dist graph mid-suite.
+  if (!skipPackageWatchForTest) startPackageBuildWatch();
   startBff();
   startNext();
 

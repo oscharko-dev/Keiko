@@ -15,7 +15,8 @@
 // never implies a full Voice Digital Twin conversation, speech playback, or realtime interaction
 // (AC5). Insertion places reviewed text into the composer; it never sends or plays audio.
 
-import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useEffect, useRef, type ReactNode, type Ref, type RefObject } from "react";
+import { useVoiceTranslate as useTranslate, type I18nTranslate } from "./voice-i18n";
 import { Icons } from "./Icons";
 import type {
   DictationController,
@@ -31,22 +32,19 @@ export const VOICE_PRIVACY_HINT_ID = "cmp-voice-privacy-hint";
 // sr-only hint (both can be in the DOM during the preview phase).
 const VOICE_PRIVACY_NOTE_ID = "cmp-voice-privacy-note";
 
-const PRIVACY_MESSAGE =
-  "Audio is sent only to your configured speech-to-text endpoint and is not stored.";
-
-function micLabel(phase: DictationPhase): string {
+function micLabel(phase: DictationPhase, t: I18nTranslate): string {
   switch (phase) {
     case "requesting":
-      return "Starting microphone…";
+      return t("voice.dictation.starting");
     case "recording":
-      return "Stop dictation";
+      return t("voice.dictation.stop");
     case "finalizing":
-      return "Finishing dictation…";
+      return t("voice.dictation.finishing");
     case "transcribing":
-      return "Transcribing your dictation…";
+      return t("voice.dictation.transcribing");
     default:
       // idle | preview | error — the affordance starts (or restarts) dictation.
-      return "Dictate a message";
+      return t("voice.dictation.start");
   }
 }
 
@@ -67,12 +65,13 @@ export function VoiceDictationButton({
   buttonRef,
   compact = false,
 }: VoiceDictationButtonProps): ReactNode {
+  const t = useTranslate();
   const recording = phase === "recording";
   const live = recording || phase === "finalizing";
   // Interactive only when there is a clear action: start from idle/preview/error, stop while
   // recording. The transient requesting / transcribing states are announced but not clickable.
   const busy = phase === "requesting" || phase === "finalizing" || phase === "transcribing";
-  const label = micLabel(phase);
+  const label = micLabel(phase, t);
   return (
     <button
       type="button"
@@ -108,7 +107,7 @@ export function VoiceDictationButton({
         <Icons.mic size={16} />
       )}
       <span id={VOICE_PRIVACY_HINT_ID} className="sr-only">
-        {PRIVACY_MESSAGE}
+        {t("voice.dictation.privacy")}
       </span>
     </button>
   );
@@ -136,19 +135,19 @@ function VoiceLevelMeter({
   );
 }
 
-function errorHeadline(reason: DictationErrorReason): string {
+function errorHeadline(reason: DictationErrorReason, t: I18nTranslate): string {
   switch (reason) {
     case "permission-denied":
-      return "Microphone access was denied. Allow microphone access in your browser to dictate.";
+      return t("voice.dictation.error.permission");
     case "no-microphone":
-      return "No microphone was found. Connect a microphone and try again.";
+      return t("voice.error.noMicrophone");
     case "unsupported":
-      return "This browser does not support microphone dictation.";
+      return t("voice.dictation.error.unsupported");
     case "unavailable":
-      return "Speech-to-text dictation is not available right now.";
+      return t("voice.dictation.error.unavailable");
     case "transcribe-failed":
     case "capture-failed":
-      return "Dictation could not be completed.";
+      return t("voice.dictation.error.failed");
   }
 }
 
@@ -167,6 +166,186 @@ interface VoiceDictationPreviewProps {
   readonly onRetry: () => void;
 }
 
+// "Preparing mic" until capture is verified live, so the user is only invited to speak once audio is
+// actually flowing; then "Listening" / "Capturing speech" as the level crosses the speech gate.
+function recordingStatusLabel(micReady: boolean, heardSpeech: boolean, t: I18nTranslate): string {
+  if (!micReady) {
+    return t("voice.dictation.preparingMic");
+  }
+  if (heardSpeech) {
+    return t("voice.dictation.capturing");
+  }
+  return t("voice.dictation.listening");
+}
+
+// Focus handoff (WCAG 2.4.3): when the editable transcript appears, move focus to it so a keyboard
+// or screen-reader user lands on the review field; when an error appears, move focus to its retry
+// action so the alert and its recovery are immediately reachable.
+function focusForPhase(
+  phase: DictationPhase,
+  textareaRef: RefObject<HTMLTextAreaElement | null>,
+  retryRef: RefObject<HTMLButtonElement | null>,
+): void {
+  if (phase === "preview") {
+    textareaRef.current?.focus();
+  } else if (phase === "error") {
+    retryRef.current?.focus();
+  }
+}
+
+interface RecordingPreviewProps {
+  readonly liveTranscript: string;
+  readonly audioLevel: number;
+  readonly micReady: boolean;
+  readonly heardSpeech: boolean;
+  readonly t: I18nTranslate;
+}
+
+function RecordingPreview({
+  liveTranscript,
+  audioLevel,
+  micReady,
+  heardSpeech,
+  t,
+}: RecordingPreviewProps): ReactNode {
+  const recordingLabel = recordingStatusLabel(micReady, heardSpeech, t);
+  return (
+    <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
+      <VoiceLevelMeter level={micReady ? audioLevel : 0} />
+      <span>{recordingLabel}</span>
+      {liveTranscript.trim().length > 0 ? (
+        <span className="cmp-voice-label">{liveTranscript}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function FinalizingPreview({
+  liveTranscript,
+  t,
+}: {
+  readonly liveTranscript: string;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
+      <VoiceLevelMeter level={0} />
+      <span>{t("voice.dictation.finishing")}</span>
+      {liveTranscript.trim().length > 0 ? (
+        <span className="cmp-voice-label">{liveTranscript}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function TranscribingPreview({ t }: { readonly t: I18nTranslate }): ReactNode {
+  return (
+    <div className="cmp-voice-preview" role="status" aria-live="polite">
+      <span className="cmp-loading-dot" aria-hidden="true" />
+      {t("voice.dictation.transcribing")}
+    </div>
+  );
+}
+
+interface ErrorPreviewProps {
+  readonly error: { readonly reason: DictationErrorReason; readonly message: string };
+  readonly retryRef: Ref<HTMLButtonElement>;
+  readonly onRetry: () => void;
+  readonly onDiscard: () => void;
+  readonly t: I18nTranslate;
+}
+
+function ErrorPreview({ error, retryRef, onRetry, onDiscard, t }: ErrorPreviewProps): ReactNode {
+  return (
+    <div className="cmp-voice-preview cmp-voice-error" role="alert" aria-atomic="true">
+      <p className="cmp-voice-error-text">{errorHeadline(error.reason, t)}</p>
+      <div className="cmp-voice-actions">
+        <button type="button" ref={retryRef} className="cmp-voice-btn" onClick={onRetry}>
+          {t("common.tryAgain")}
+        </button>
+        <button type="button" className="cmp-voice-btn" onClick={onDiscard}>
+          {t("common.dismiss")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface ReadyPreviewProps {
+  readonly transcript: string;
+  readonly finalizationNote: string | undefined;
+  readonly textareaRef: Ref<HTMLTextAreaElement>;
+  readonly onTranscriptChange: (value: string) => void;
+  readonly onInsert: () => void;
+  readonly onRetry: () => void;
+  readonly onDiscard: () => void;
+  readonly t: I18nTranslate;
+}
+
+function ReadyPreview({
+  transcript,
+  finalizationNote,
+  textareaRef,
+  onTranscriptChange,
+  onInsert,
+  onRetry,
+  onDiscard,
+  t,
+}: ReadyPreviewProps): ReactNode {
+  return (
+    <div className="cmp-voice-preview" role="group" aria-label={t("voice.dictation.preview")}>
+      <span role="status" aria-live="polite" className="sr-only">
+        {t("voice.dictation.ready")}
+      </span>
+      <label className="cmp-voice-label" htmlFor="cmp-voice-transcript">
+        {t("voice.dictation.review")}
+      </label>
+      <textarea
+        id="cmp-voice-transcript"
+        ref={textareaRef}
+        className="cmp-voice-transcript"
+        rows={3}
+        value={transcript}
+        aria-describedby={VOICE_PRIVACY_NOTE_ID}
+        onChange={(event) => onTranscriptChange(event.target.value)}
+      />
+      <p id={VOICE_PRIVACY_NOTE_ID} className="cmp-voice-privacy">
+        {t("voice.dictation.privacy")}
+      </p>
+      {finalizationNote !== undefined ? (
+        <p className="cmp-voice-privacy">{finalizationNote}</p>
+      ) : null}
+      <div className="cmp-voice-actions">
+        <button
+          type="button"
+          className="cmp-voice-btn cmp-voice-btn-primary"
+          aria-label={t("voice.dictation.insertAria")}
+          disabled={transcript.trim().length === 0}
+          onClick={onInsert}
+        >
+          {t("voice.dictation.insert")}
+        </button>
+        <button
+          type="button"
+          className="cmp-voice-btn"
+          aria-label={t("voice.dictation.rerecordAria")}
+          onClick={onRetry}
+        >
+          {t("voice.dictation.rerecord")}
+        </button>
+        <button
+          type="button"
+          className="cmp-voice-btn"
+          aria-label={t("voice.dictation.discardAria")}
+          onClick={onDiscard}
+        >
+          {t("voice.dictation.discard")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function VoiceDictationPreview({
   phase,
   transcript,
@@ -181,73 +360,43 @@ export function VoiceDictationPreview({
   onDiscard,
   onRetry,
 }: VoiceDictationPreviewProps): ReactNode {
+  const t = useTranslate();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
 
-  // Focus handoff (WCAG 2.4.3): when the editable transcript appears, move focus to it so a keyboard
-  // or screen-reader user lands on the review field; when an error appears, move focus to its retry
-  // action so the alert and its recovery are immediately reachable.
   useEffect(() => {
-    if (phase === "preview") {
-      textareaRef.current?.focus();
-    } else if (phase === "error") {
-      retryRef.current?.focus();
-    }
+    focusForPhase(phase, textareaRef, retryRef);
   }, [phase]);
 
   if (phase === "recording") {
-    // "Preparing mic" until capture is verified live, so the user is only invited to speak once audio is
-    // actually flowing; then "Listening" / "Capturing speech" as the level crosses the speech gate.
-    const recordingLabel = !micReady
-      ? "Preparing mic…"
-      : heardSpeech
-        ? "Capturing speech…"
-        : "Listening…";
     return (
-      <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
-        <VoiceLevelMeter level={micReady ? audioLevel : 0} />
-        <span>{recordingLabel}</span>
-        {liveTranscript.trim().length > 0 ? (
-          <span className="cmp-voice-label">{liveTranscript}</span>
-        ) : null}
-      </div>
+      <RecordingPreview
+        liveTranscript={liveTranscript}
+        audioLevel={audioLevel}
+        micReady={micReady}
+        heardSpeech={heardSpeech}
+        t={t}
+      />
     );
   }
 
   if (phase === "finalizing") {
-    return (
-      <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
-        <VoiceLevelMeter level={0} />
-        <span>Finishing dictation…</span>
-        {liveTranscript.trim().length > 0 ? (
-          <span className="cmp-voice-label">{liveTranscript}</span>
-        ) : null}
-      </div>
-    );
+    return <FinalizingPreview liveTranscript={liveTranscript} t={t} />;
   }
 
   if (phase === "transcribing") {
-    return (
-      <div className="cmp-voice-preview" role="status" aria-live="polite">
-        <span className="cmp-loading-dot" aria-hidden="true" />
-        Transcribing your dictation…
-      </div>
-    );
+    return <TranscribingPreview t={t} />;
   }
 
   if (phase === "error" && error !== undefined) {
     return (
-      <div className="cmp-voice-preview cmp-voice-error" role="alert" aria-atomic="true">
-        <p className="cmp-voice-error-text">{errorHeadline(error.reason)}</p>
-        <div className="cmp-voice-actions">
-          <button type="button" ref={retryRef} className="cmp-voice-btn" onClick={onRetry}>
-            Try again
-          </button>
-          <button type="button" className="cmp-voice-btn" onClick={onDiscard}>
-            Dismiss
-          </button>
-        </div>
-      </div>
+      <ErrorPreview
+        error={error}
+        retryRef={retryRef}
+        onRetry={onRetry}
+        onDiscard={onDiscard}
+        t={t}
+      />
     );
   }
 
@@ -256,56 +405,16 @@ export function VoiceDictationPreview({
   }
 
   return (
-    <div className="cmp-voice-preview" role="group" aria-label="Dictation transcript preview">
-      <span role="status" aria-live="polite" className="sr-only">
-        Transcript ready for review.
-      </span>
-      <label className="cmp-voice-label" htmlFor="cmp-voice-transcript">
-        Review your dictation
-      </label>
-      <textarea
-        id="cmp-voice-transcript"
-        ref={textareaRef}
-        className="cmp-voice-transcript"
-        rows={3}
-        value={transcript}
-        aria-describedby={VOICE_PRIVACY_NOTE_ID}
-        onChange={(event) => onTranscriptChange(event.target.value)}
-      />
-      <p id={VOICE_PRIVACY_NOTE_ID} className="cmp-voice-privacy">
-        {PRIVACY_MESSAGE}
-      </p>
-      {finalizationNote !== undefined ? (
-        <p className="cmp-voice-privacy">{finalizationNote}</p>
-      ) : null}
-      <div className="cmp-voice-actions">
-        <button
-          type="button"
-          className="cmp-voice-btn cmp-voice-btn-primary"
-          aria-label="Insert transcript into the message"
-          disabled={transcript.trim().length === 0}
-          onClick={onInsert}
-        >
-          Insert
-        </button>
-        <button
-          type="button"
-          className="cmp-voice-btn"
-          aria-label="Re-record the dictation"
-          onClick={onRetry}
-        >
-          Re-record
-        </button>
-        <button
-          type="button"
-          className="cmp-voice-btn"
-          aria-label="Discard the dictation"
-          onClick={onDiscard}
-        >
-          Discard
-        </button>
-      </div>
-    </div>
+    <ReadyPreview
+      transcript={transcript}
+      finalizationNote={finalizationNote}
+      textareaRef={textareaRef}
+      onTranscriptChange={onTranscriptChange}
+      onInsert={onInsert}
+      onRetry={onRetry}
+      onDiscard={onDiscard}
+      t={t}
+    />
   );
 }
 

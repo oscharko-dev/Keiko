@@ -71,6 +71,8 @@ import type {
   EditorAgentAction,
   EditorAgentActionQueuedResponse,
   EditorAgentActionResultRequest,
+  EditorAgentBridgeActionRequest,
+  EditorAgentBridgeDecisionCapability,
   EditorAgentAuditResponse,
   EditorAgentSessionSnapshot,
   EditorAgentSessionsResponse,
@@ -129,6 +131,22 @@ import type {
   WorkspaceReplacePreviewResponse,
   WorkspaceSymbolSearchRequest,
   WorkspaceSymbolSearchResponse,
+  LanguageCallHierarchyResult,
+  LanguageInlayHintsResult,
+  ManagedLspActivationResolution,
+  ManagedLspLanguage,
+  ManagedLspProcessHealthSnapshot,
+  ManagedLspRuntimeConfiguration,
+  ManagedLspSemanticTokenResponse,
+  EditorM7SettingsMutation,
+  EditorM7SettingsMutationResult,
+  EditorM7SettingsSnapshot,
+  EditorM7WorkspaceSnippetMutation,
+  EditorM7WorkspaceSnippetMutationResult,
+  EditorM7WorkspaceSnippetSnapshot,
+  GitEditorBlameResponse,
+  GitEditorDiffResponse,
+  GitEditorDiffScope,
 } from "@oscharko-dev/keiko-contracts";
 import {
   validateGitHistoryResponse,
@@ -640,6 +658,10 @@ export interface GatewaySetupInput {
   readonly voiceApiKey?: string | undefined;
   readonly voiceApiKeyHeaderName?: string | undefined;
   readonly voiceModelId?: string | undefined;
+  readonly voiceSpeechToTextModelId?: string | undefined;
+  readonly voiceRealtimeModelId?: string | undefined;
+  readonly voiceSpeechOutputModelId?: string | undefined;
+  readonly voiceOutputVoiceId?: string | undefined;
   readonly voiceProviderLocality?: string | undefined;
   readonly voiceTimeoutMs?: number | undefined;
   readonly figmaAccessToken?: string | undefined;
@@ -1615,13 +1637,59 @@ export async function copyFilesEntry(input: {
   return fetchJson("/api/files/copy", { method: "POST", body: JSON.stringify(input) });
 }
 
-export async function fetchGitStatus(root: string): Promise<GitRepositoryStatusResponse> {
+export async function fetchGitStatus(
+  root: string,
+  options?: { readonly includeIgnored?: boolean | undefined },
+): Promise<GitRepositoryStatusResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
+  if (options?.includeIgnored === true) params.set("includeIgnored", "true");
   return fetchJson(
     `/api/git/status?${params.toString()}`,
     undefined,
     validateGitRepositoryStatusResponse,
+  );
+}
+
+export async function fetchGitStructuredDiff(input: {
+  readonly root: string;
+  readonly path?: string | undefined;
+  readonly scope: GitEditorDiffScope;
+}): Promise<GitEditorDiffResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  params.set("scope", input.scope);
+  if (input.path !== undefined) params.set("path", input.path);
+  const path = `/api/git/diff/structured?${params.toString()}`;
+  const [value, contracts] = await Promise.all([
+    fetchJson<unknown>(path),
+    import("@oscharko-dev/keiko-contracts/git-editor"),
+  ]);
+  const result = contracts.parseGitEditorDiffResponse(value);
+  return validateBffResponse<GitEditorDiffResponse>(path, value, () =>
+    result.ok ? { ok: true } : { ok: false, reasons: result.errors },
+  );
+}
+
+export async function fetchGitBlame(input: {
+  readonly root: string;
+  readonly path: string;
+  readonly startLine: number;
+  readonly maxLines: number;
+}): Promise<GitEditorBlameResponse> {
+  const params = new URLSearchParams();
+  params.set("root", input.root);
+  params.set("path", input.path);
+  params.set("startLine", input.startLine.toString());
+  params.set("maxLines", input.maxLines.toString());
+  const path = `/api/git/blame?${params.toString()}`;
+  const [value, contracts] = await Promise.all([
+    fetchJson<unknown>(path),
+    import("@oscharko-dev/keiko-contracts/git-editor"),
+  ]);
+  const result = contracts.parseGitEditorBlameResponse(value);
+  return validateBffResponse<GitEditorBlameResponse>(path, value, () =>
+    result.ok ? { ok: true } : { ok: false, reasons: result.errors },
   );
 }
 
@@ -1900,6 +1968,113 @@ export async function fetchEditorLanguageCapabilities(
   return fetchJson(`/api/editor/language/capabilities${query}`);
 }
 
+export interface ManagedLspConfigurationSummary {
+  readonly language: ManagedLspLanguage;
+  readonly workspaceActivation: "enabled" | "disabled" | "unset";
+  readonly configured: boolean;
+  readonly restartRequired: boolean;
+  readonly restartFields: readonly ("runtime" | "settings")[];
+  readonly provenance: ManagedLspRuntimeConfiguration["provenance"] | null;
+}
+
+export interface ManagedLspSettingsResponse {
+  readonly storeState: "absent" | "ready" | "unavailable";
+  readonly revision: number;
+  readonly etag: string;
+  readonly evidenceCount: number;
+  readonly languages: readonly ManagedLspActivationResolution[];
+  readonly settings: readonly ManagedLspConfigurationSummary[];
+  readonly configurations: readonly ManagedLspRuntimeConfiguration[];
+  readonly health: readonly ManagedLspProcessHealthSnapshot[];
+  readonly providerMetadata?:
+    | readonly {
+        readonly language: ManagedLspLanguage;
+        readonly configurationSource: string;
+      }[]
+    | undefined;
+}
+
+export type ManagedLspSettingsAction =
+  "activate" | "deactivate" | "configure" | "reset" | "rollback" | "restart";
+
+export interface ManagedLspSettingsMutationInput {
+  readonly root: string;
+  readonly language: ManagedLspLanguage;
+  readonly action: ManagedLspSettingsAction;
+  readonly expectedRevision: number;
+  readonly configuration?: ManagedLspRuntimeConfiguration | undefined;
+}
+
+export function fetchManagedLspSettings(
+  root: string,
+  signal?: AbortSignal,
+): Promise<ManagedLspSettingsResponse> {
+  return fetchJson(`/api/editor/lsp/settings?root=${encodeURIComponent(root)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateManagedLspSettings(
+  input: ManagedLspSettingsMutationInput,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<{ readonly kind: "ok"; readonly revision: number; readonly etag: string }> {
+  return fetchJson("/api/editor/lsp/settings", {
+    method: "PUT",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function fetchEditorSettings(
+  root?: string | undefined,
+  signal?: AbortSignal,
+): Promise<EditorM7SettingsSnapshot> {
+  const query = root === undefined || root.length === 0 ? "" : `?root=${encodeURIComponent(root)}`;
+  return fetchJson(`/api/editor/settings${query}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateEditorSettings(
+  input: EditorM7SettingsMutation,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM7SettingsMutationResult> {
+  return fetchJson("/api/editor/settings", {
+    method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function fetchWorkspaceSnippets(
+  root: string,
+  signal?: AbortSignal,
+): Promise<EditorM7WorkspaceSnippetSnapshot> {
+  return fetchJson(`/api/editor/snippets?root=${encodeURIComponent(root)}`, {
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export function mutateWorkspaceSnippets(
+  input: EditorM7WorkspaceSnippetMutation,
+  etag: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<EditorM7WorkspaceSnippetMutationResult> {
+  return fetchJson("/api/editor/snippets", {
+    method: "PATCH",
+    headers: { "If-Match": etag, "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
 export async function requestEditorDiagnostics(
   input: EditorLanguageRequestInput,
   signal?: AbortSignal,
@@ -2000,6 +2175,114 @@ export async function requestEditorDefinition(
     },
   );
   return envelope.result;
+}
+
+async function requestEditorLocationOperation(
+  operation: "typeDefinition" | "implementation",
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageDefinitionResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation,
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export function requestEditorTypeDefinition(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  return requestEditorLocationOperation("typeDefinition", input, signal);
+}
+
+export function requestEditorImplementation(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageDefinitionResult> {
+  return requestEditorLocationOperation("implementation", input, signal);
+}
+
+export async function requestEditorCallHierarchy(
+  input: EditorLanguageRequestInput & {
+    readonly position: { readonly line: number; readonly character: number };
+  },
+  signal?: AbortSignal,
+): Promise<LanguageCallHierarchyResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageCallHierarchyResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "callHierarchy",
+        root: input.root,
+        document: languageDocument(input),
+        position: input.position,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorInlayHints(
+  input: EditorLanguageRequestInput & { readonly range: LanguageRange },
+  signal?: AbortSignal,
+): Promise<LanguageInlayHintsResult> {
+  const envelope = await fetchJson<LanguageOperationEnvelope<LanguageInlayHintsResult>>(
+    "/api/editor/language",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        operation: "inlayHints",
+        root: input.root,
+        document: languageDocument(input),
+        range: input.range,
+      }),
+      ...(signal === undefined ? {} : { signal }),
+    },
+  );
+  return envelope.result;
+}
+
+export async function requestEditorSemanticTokens(
+  input: {
+    readonly root: string;
+    readonly path: string;
+    readonly text: string;
+    readonly version: number;
+  },
+  signal?: AbortSignal,
+): Promise<ManagedLspSemanticTokenResponse> {
+  return fetchJson("/api/editor/language/semantic-tokens", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      root: input.root,
+      document: {
+        path: input.path,
+        languageId: "rust",
+        text: input.text,
+        version: input.version,
+      },
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
 }
 
 export async function requestEditorReferences(
@@ -2131,6 +2414,7 @@ export async function requestEditorAgentSnapshot(
 
 export async function postEditorAgentSessionSnapshot(
   snapshot: EditorAgentSessionSnapshot,
+  bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability,
 ): Promise<EditorAgentSnapshotResponse> {
   return fetchJson("/api/editor/agent/snapshot", {
     method: "POST",
@@ -2138,6 +2422,7 @@ export async function postEditorAgentSessionSnapshot(
       schemaVersion: snapshot.schemaVersion,
       kind: "snapshot",
       snapshot,
+      ...(bridgeDecisionCapability === undefined ? {} : { bridgeDecisionCapability }),
     }),
   });
 }
@@ -2148,6 +2433,22 @@ export async function queueEditorAgentAction(
   return fetchJson("/api/editor/agent/actions", {
     method: "POST",
     body: JSON.stringify(action),
+  });
+}
+
+export async function queueEditorAgentBridgeAction(
+  action: EditorAgentAction,
+  bridgeDecisionCapability: EditorAgentBridgeDecisionCapability,
+): Promise<EditorAgentActionQueuedResponse> {
+  const request: EditorAgentBridgeActionRequest = {
+    schemaVersion: action.schemaVersion,
+    kind: "action",
+    action,
+    bridgeDecisionCapability,
+  };
+  return fetchJson("/api/editor/agent/actions", {
+    method: "POST",
+    body: JSON.stringify(request),
   });
 }
 

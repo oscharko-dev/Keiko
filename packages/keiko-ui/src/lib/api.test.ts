@@ -20,22 +20,29 @@ import {
   fetchGitDeliverySyncExecute,
   fetchGitDeliverySyncPreview,
   fetchGitDiff,
+  fetchGitStructuredDiff,
+  fetchGitBlame,
   fetchGitHistory,
   fetchGitRemotes,
   fetchGitSummary,
   fetchGitStatus,
   fetchConfig,
   fetchModels,
+  fetchManagedLspSettings,
   fetchNativeFileDialogCapability,
   fetchPdfCitationPreviewDocument,
   fetchProjects,
   openNativeFileDialog,
+  mutateManagedLspSettings,
   regenerateDesktopChat,
   fetchStartupUpdatePreflight,
   fetchUpdateRemediationStatus,
   fetchUpdateSessionStatus,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
+  postEditorAgentActionResult,
+  postEditorAgentSessionSnapshot,
+  queueEditorAgentBridgeAction,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
   runGatewayReadiness,
@@ -48,6 +55,11 @@ import {
   requestEditorCodeActions,
   requestEditorCompletion,
   requestEditorDefinition,
+  requestEditorTypeDefinition,
+  requestEditorImplementation,
+  requestEditorCallHierarchy,
+  requestEditorInlayHints,
+  requestEditorSemanticTokens,
   requestEditorDiagnostics,
   requestEditorFormatting,
   requestEditorHover,
@@ -66,12 +78,166 @@ import {
   type StreamHandlers,
 } from "./api";
 
+describe("managed language settings API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("encodes the workspace root and forwards abortable no-store reads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ languages: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await fetchManagedLspSettings("/workspace/a b", controller.signal);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/lsp/settings?root=%2Fworkspace%2Fa%20b",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    controller.abort();
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it("sends revision, CSRF, ETag, idempotency, and cancellation on mutations", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ kind: "ok", revision: 4, etag: '"lspcfg-4-abcdefghijklmnop"' }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await mutateManagedLspSettings(
+      { root: "/workspace/a", language: "python", action: "restart", expectedRevision: 3 },
+      '"lspcfg-3-abcdefghijklmnop"',
+      "request-1",
+      controller.signal,
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/lsp/settings",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          root: "/workspace/a",
+          language: "python",
+          action: "restart",
+          expectedRevision: 3,
+        }),
+        headers: expect.objectContaining({
+          "X-Keiko-CSRF": "1",
+          "If-Match": '"lspcfg-3-abcdefghijklmnop"',
+          "Idempotency-Key": "request-1",
+        }),
+        signal: controller.signal,
+      }),
+    );
+  });
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("editor agent bridge capability serialization", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("attaches the capability only to explicit bridge request envelopes", async () => {
+    const capability = "A".repeat(43);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ snapshot: null, bridgeDecisionCapability: capability }))
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "succeeded" } }))
+      .mockResolvedValueOnce(jsonResponse({ result: { status: "queued" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const snapshot = {
+      schemaVersion: "1",
+      sessionId: "session-1",
+      windowId: "window-1",
+      workspaceRoot: "/repo",
+      activePaneId: "pane-1",
+      panes: [{ paneId: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] }],
+      dirtyFiles: [],
+      activeFile: "src/a.ts",
+      cursor: null,
+      selection: null,
+      diagnosticsSummary: null,
+      activeFileContentHash: "a".repeat(64),
+      textMode: "none",
+      updatedAt: 1,
+    } as const;
+
+    await postEditorAgentSessionSnapshot(snapshot, capability);
+    await postEditorAgentActionResult({
+      schemaVersion: "1",
+      kind: "result",
+      bridgeDecisionCapability: capability,
+      result: {
+        schemaVersion: "1",
+        actionId: "action-1",
+        sessionId: "session-1",
+        status: "succeeded",
+      },
+    });
+    const action = {
+      schemaVersion: "1",
+      actionId: "action-2",
+      idempotencyKey: "key-2",
+      sessionId: "session-1",
+      type: "applyPatch",
+      patch: "patch",
+    } as const;
+    await queueEditorAgentBridgeAction(action, capability);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/editor/agent/snapshot",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "snapshot",
+          snapshot,
+          bridgeDecisionCapability: capability,
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/editor/agent/actions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "result",
+          bridgeDecisionCapability: capability,
+          result: {
+            schemaVersion: "1",
+            actionId: "action-1",
+            sessionId: "session-1",
+            status: "succeeded",
+          },
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/editor/agent/actions",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          kind: "action",
+          action,
+          bridgeDecisionCapability: capability,
+        }),
+      }),
+    );
+  });
+});
 
 describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
   afterEach(() => {
@@ -618,6 +784,66 @@ describe("language-intelligence helpers (Issue #1201)", () => {
           root: "/repo",
           document: { path: "src/a.ts", languageId: "typescript", text: "foo();\n" },
           position: { line: 0, character: 1 },
+        }),
+      }),
+    );
+  });
+
+  it("posts type-definition, implementation, call-hierarchy, and inlay-hints operations", async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        jsonResponse({
+          operation: "navigation",
+          result: { locations: [], roots: [], hints: [] },
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const input = {
+      root: "/repo",
+      path: "src/a.ts",
+      languageId: "typescript",
+      text: "foo();\n",
+    };
+
+    await requestEditorTypeDefinition({ ...input, position: { line: 0, character: 1 } });
+    await requestEditorImplementation({ ...input, position: { line: 0, character: 1 } });
+    await requestEditorCallHierarchy({ ...input, position: { line: 0, character: 1 } });
+    await requestEditorInlayHints({
+      ...input,
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } },
+    });
+
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).operation)).toEqual(
+      ["typeDefinition", "implementation", "callHierarchy", "inlayHints"],
+    );
+  });
+
+  it("posts a versioned Rust full-document semantic-token request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ schemaVersion: "1", supported: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await requestEditorSemanticTokens({
+      root: "/repo",
+      path: "src/lib.rs",
+      text: "fn main() {}\n",
+      version: 9,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/language/semantic-tokens",
+      expect.objectContaining({
+        body: JSON.stringify({
+          schemaVersion: "1",
+          root: "/repo",
+          document: {
+            path: "src/lib.rs",
+            languageId: "rust",
+            text: "fn main() {}\n",
+            version: 9,
+          },
         }),
       }),
     );
@@ -1292,6 +1518,75 @@ describe("files API helpers", () => {
       code: "CONTRACT_VALIDATION_FAILED",
       status: 502,
     });
+  });
+
+  it("encodes structured diff, blame, and optional ignored-status reads", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          scope: "staged",
+          files: [],
+          truncated: false,
+          totalFiles: 0,
+          totalBytes: 0,
+          maxBytes: 524288,
+          maxFiles: 400,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          path: "src/a.ts",
+          startLine: 1,
+          lines: [],
+          truncated: false,
+          totalLines: 0,
+          totalBytes: 0,
+          maxBytes: 262144,
+          maxLines: 2000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          schemaVersion: "1",
+          root: "/repo space",
+          state: "available",
+          available: true,
+          branch: "main",
+          detached: false,
+          clean: true,
+          stagedCount: 0,
+          unstagedCount: 0,
+          untrackedCount: 0,
+          conflictedCount: 0,
+          changes: [],
+          truncated: false,
+          maxChanges: 500,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitStructuredDiff({ root: "/repo space", path: "src/a.ts", scope: "staged" });
+    await fetchGitBlame({ root: "/repo space", path: "src/a.ts", startLine: 1, maxLines: 20 });
+    await fetchGitStatus("/repo space", { includeIgnored: true });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/git/diff/structured?root=%2Frepo+space&scope=staged&path=src%2Fa.ts",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/git/blame?root=%2Frepo+space&path=src%2Fa.ts&startLine=1&maxLines=20",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/git/status?root=%2Frepo+space&includeIgnored=true",
+      expect.any(Object),
+    );
   });
 
   it("encodes Git summary, history, and remotes requests", async () => {

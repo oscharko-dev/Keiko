@@ -178,6 +178,16 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "locationToMonacoLocation",
       "definitionResponseToMonaco",
       "DEFINITION_ELIGIBLE_LANGUAGES",
+      "registerKeikoTypeDefinitionProvider",
+      "TYPE_DEFINITION_ELIGIBLE_LANGUAGES",
+      "registerKeikoImplementationProvider",
+      "IMPLEMENTATION_ELIGIBLE_LANGUAGES",
+      "createKeikoInlayHintsProvider",
+      "registerKeikoInlayHintsProvider",
+      "INLAY_HINTS_ELIGIBLE_LANGUAGES",
+      "registerKeikoCallHierarchyAction",
+      "EDITOR_CALL_HIERARCHY_ACTION_ID",
+      "CALL_HIERARCHY_ELIGIBLE_LANGUAGES",
       "createKeikoReferencesProvider",
       "registerKeikoReferencesProvider",
       "referenceToMonacoLocation",
@@ -212,10 +222,15 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       // VS Code-feeling UX: command actions + status bar (#1205).
       "MONACO_BUILTIN_ACTION_IDS",
       "EDITOR_COMMAND_KEYBINDINGS",
+      "EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_ID",
+      "EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_LABEL",
       "EDITOR_GENERATE_TESTS_ACTION_ID",
       "EDITOR_GENERATE_TESTS_ACTION_LABEL",
       "EDITOR_RENAME_SYMBOL_ACTION_ID",
       "EDITOR_RENAME_SYMBOL_ACTION_LABEL",
+      "buildAskKeikoAboutSelectionKeybinding",
+      "buildAskKeikoAboutSelectionActionDescriptor",
+      "buildAskKeikoAboutSelectionRunHandler",
       "buildGenerateTestsKeybinding",
       "buildGenerateTestsActionDescriptor",
       "buildRenameSymbolKeybinding",
@@ -229,6 +244,19 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "exceedsLineCount",
       "LARGE_FILE_DEGRADED_BYTES",
       "LARGE_FILE_DEGRADED_LINES",
+      // Bounded Monaco model retention (#2322).
+      "EditorModelRegistry",
+      "DEFAULT_EDITOR_MODEL_REGISTRY_OPTIONS",
+      "UNPROTECTED_EDITOR_MODEL",
+      "estimateEditorModelBytes",
+      "getEditorModelRegistryDiagnostics",
+      // Source-control read integrations and conflict grammar (#2229-#2231, ADR-0127).
+      "registerEditorGitGutter",
+      "registerEditorBlame",
+      "MAX_CONFLICT_CHARS",
+      "MAX_TRACKED_CONFLICTS",
+      "conflictReplacement",
+      "parseConflictMarkers",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });
@@ -249,7 +277,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
   it("treats React as a peer dependency, never a bundled runtime dependency", () => {
     const manifest = readManifest();
     for (const packageName of ["react", "react-dom"]) {
-      expect(manifest.peerDependencies?.[packageName]).toBe("^18.3.1");
+      expect(manifest.peerDependencies?.[packageName]).toBe("^19.2.7");
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
       expect(manifest.devDependencies?.[packageName]).toBeUndefined();
     }

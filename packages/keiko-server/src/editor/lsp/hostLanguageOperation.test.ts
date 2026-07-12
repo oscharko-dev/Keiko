@@ -1,6 +1,7 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { LanguageServiceRequest } from "@oscharko-dev/keiko-contracts";
@@ -8,6 +9,8 @@ import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
+import { providerConformanceCapabilities } from "./testing/providerConformanceFixture.js";
+import { writeExecutableFixture } from "./testing/executableFixture.js";
 import { runHostLanguageOperation, shutdownHostLspPool } from "./hostLanguageOperation.js";
 
 let binDir = "";
@@ -39,9 +42,7 @@ function workspace(): WorkspaceInfo {
 }
 
 function makeExecutable(name: string): void {
-  const path = join(binDir, name);
-  writeFileSync(path, "#!/bin/sh\n", "utf8");
-  chmodSync(path, 0o755);
+  writeExecutableFixture(binDir, name);
 }
 
 function baseDocument(languageId: string, path = "main.go"): LanguageServiceRequest["document"] {
@@ -111,6 +112,50 @@ function definitionRequest(
     root: workspaceRoot,
     document: baseDocument(languageId, "main.ts"),
     position: { line: 0, character: 1 },
+  };
+}
+
+function typeDefinitionRequest(
+  languageId: string,
+): Extract<LanguageServiceRequest, { operation: "typeDefinition" }> {
+  return {
+    operation: "typeDefinition",
+    root: workspaceRoot,
+    document: baseDocument(languageId),
+    position: { line: 0, character: 1 },
+  };
+}
+
+function implementationRequest(
+  languageId: string,
+): Extract<LanguageServiceRequest, { operation: "implementation" }> {
+  return {
+    operation: "implementation",
+    root: workspaceRoot,
+    document: baseDocument(languageId),
+    position: { line: 0, character: 1 },
+  };
+}
+
+function callHierarchyRequest(
+  languageId: string,
+): Extract<LanguageServiceRequest, { operation: "callHierarchy" }> {
+  return {
+    operation: "callHierarchy",
+    root: workspaceRoot,
+    document: baseDocument(languageId),
+    position: { line: 0, character: 1 },
+  };
+}
+
+function inlayHintsRequest(
+  languageId: string,
+): Extract<LanguageServiceRequest, { operation: "inlayHints" }> {
+  return {
+    operation: "inlayHints",
+    root: workspaceRoot,
+    document: baseDocument(languageId),
+    range,
   };
 }
 
@@ -201,6 +246,53 @@ describe("runHostLanguageOperation", () => {
     const outcome = await run(definitionRequest("typescript"), [], normalSpawn({}));
 
     expect(outcome).toBeUndefined();
+  });
+
+  it("discards malformed typeDefinition, implementation, callHierarchy, and inlayHints responses instead of surfacing them", async () => {
+    makeExecutable("gopls");
+    const rules: readonly CommandRule[] = [{ executable: "gopls" }];
+    const documentUri = pathToFileURL(join(workspaceRoot, "main.go")).href;
+    const spawn: LspSpawnFn = () =>
+      createFakeLspProcess({
+        initializeResult: providerConformanceCapabilities(true),
+        results: {
+          "textDocument/typeDefinition": { detail: "not a location" },
+          "textDocument/implementation": "unexpected-string-result",
+          "textDocument/prepareCallHierarchy": [
+            { name: "value", uri: documentUri, range, selectionRange: range },
+          ],
+          "callHierarchy/incomingCalls": [
+            { from: { uri: documentUri, range, selectionRange: range } },
+          ],
+          "callHierarchy/outgoingCalls": "not-an-array",
+          "textDocument/inlayHint": [
+            null,
+            { label: "missing-position" },
+            { position: { line: 0, character: 1 }, label: [{ value: "ok" }, { value: 42 }] },
+            { position: { line: 0, character: 0 }, label: "fine" },
+          ],
+        },
+      }).handle;
+
+    await expect(run(typeDefinitionRequest("go"), rules, spawn)).resolves.toMatchObject({
+      kind: "typeDefinition",
+      result: { locations: [], truncated: false },
+    });
+    await expect(run(implementationRequest("go"), rules, spawn)).resolves.toMatchObject({
+      kind: "implementation",
+      result: { locations: [], truncated: false },
+    });
+    await expect(run(callHierarchyRequest("go"), rules, spawn)).resolves.toMatchObject({
+      kind: "callHierarchy",
+      result: {
+        roots: [{ item: { name: "value" }, incomingCalls: [], outgoingCalls: [] }],
+        truncated: false,
+      },
+    });
+    await expect(run(inlayHintsRequest("go"), rules, spawn)).resolves.toMatchObject({
+      kind: "inlayHints",
+      result: { hints: [{ label: "fine" }], truncated: false },
+    });
   });
 
   it("reports unsupported operations according to the provider's declared support", async () => {

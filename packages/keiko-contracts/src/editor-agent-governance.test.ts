@@ -3,19 +3,28 @@ import {
   EDITOR_AGENT_ACTION_DENY_REASONS,
   EDITOR_AGENT_ACTION_DISPOSITIONS,
   EDITOR_AGENT_ACTION_EFFECT_CLASS,
+  EDITOR_AGENT_ACTION_APPROVAL_RISK,
   EDITOR_AGENT_ACTION_REVIEW_REASONS,
   EDITOR_AGENT_AUDIT_SCHEMA_VERSION,
   EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS,
+  EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT,
+  EDITOR_AGENT_WORKBENCH_ACTION_CLASS,
+  EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE,
   buildEditorAgentActionAuditRecord,
   classifyEditorAgentAction,
+  composeEditorAgentActionPolicyDecision,
+  editorAgentDispositionForPolicyEffect,
   isEditorAgentActionAuditRecord,
   isEditorAgentActionDisposition,
   isEditorAgentActionEffectClass,
   isMutatingEditorAgentAction,
   type EditorAgentActionAuditInput,
   type EditorAgentActionPolicyContext,
+  type EditorAgentActionPolicyDecision,
+  type EditorAgentAuthorityPolicy,
 } from "./editor-agent-governance.js";
 import type { EditorAgentActionType } from "./editor-agent.js";
+import { CODING_WORKBENCH_MODES } from "./coding-workbench.js";
 
 const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "openFile",
@@ -27,6 +36,11 @@ const ALL_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
+  "navigateSymbol",
+  "searchWorkspace",
+  "requestVerification",
+  "queryGit",
 ];
 
 const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
@@ -34,6 +48,7 @@ const CONTENT_MUTATIONS: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
 ];
 
 const NON_MUTATING: readonly EditorAgentActionType[] = [
@@ -42,10 +57,27 @@ const NON_MUTATING: readonly EditorAgentActionType[] = [
   "moveTab",
   "splitPane",
   "setSelection",
+  "navigateSymbol",
+  "searchWorkspace",
+  "requestVerification",
+  "queryGit",
 ];
 
 function ctx(over: Partial<EditorAgentActionPolicyContext> = {}): EditorAgentActionPolicyContext {
   return { targetPath: "src/a.ts", targetSensitive: false, ...over };
+}
+
+function authority(
+  mode: EditorAgentAuthorityPolicy["effectiveMode"],
+  over: Partial<EditorAgentAuthorityPolicy> = {},
+): EditorAgentAuthorityPolicy {
+  return {
+    requestedMode: mode,
+    deploymentCeiling: mode,
+    effectiveMode: mode,
+    actionClasses: ["workspace-write", "delivery-substrate"],
+    ...over,
+  };
 }
 
 describe("effect-class taxonomy (Issue #1395 D1)", () => {
@@ -55,7 +87,7 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     }
   });
 
-  it("classifies the four write actions as content-mutation", () => {
+  it("classifies all write actions as content-mutation", () => {
     for (const type of CONTENT_MUTATIONS) {
       expect(EDITOR_AGENT_ACTION_EFFECT_CLASS[type]).toBe("content-mutation");
     }
@@ -65,13 +97,27 @@ describe("effect-class taxonomy (Issue #1395 D1)", () => {
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.openFile).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.focusTab).toBe("navigation");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.setSelection).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.navigateSymbol).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.searchWorkspace).toBe("navigation");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.queryGit).toBe("workspace-read");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.moveTab).toBe("layout");
     expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.splitPane).toBe("layout");
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.requestVerification).toBe("execution");
   });
 
   it("marks exactly the mutating action set as mutating (AC1)", () => {
     for (const type of CONTENT_MUTATIONS) expect(isMutatingEditorAgentAction(type)).toBe(true);
     for (const type of NON_MUTATING) expect(isMutatingEditorAgentAction(type)).toBe(false);
+  });
+
+  it("keeps server-resolved navigation actions baseline-allowed", () => {
+    for (const type of ["navigateSymbol", "searchWorkspace"] as const) {
+      const decision = classifyEditorAgentAction(type, ctx());
+      expect(decision.disposition).toBe("allowed");
+      expect(
+        composeEditorAgentActionPolicyDecision(decision, authority("governed-assist"), "low"),
+      ).toMatchObject({ disposition: "allowed", effectClass: "navigation" });
+    }
   });
 });
 
@@ -85,11 +131,11 @@ describe("policy classifier (Issue #1395 AC2)", () => {
     }
   });
 
-  it("marks a contained, non-sensitive content mutation review-required", () => {
+  it("allows a contained, non-sensitive content mutation before mode composition", () => {
     for (const type of CONTENT_MUTATIONS) {
       const decision = classifyEditorAgentAction(type, ctx());
-      expect(decision.disposition).toBe("review-required");
-      expect(decision.reviewReason).toBe("content-mutation-requires-review");
+      expect(decision.disposition).toBe("allowed");
+      expect(decision.reviewReason).toBeUndefined();
       expect(decision.denyReason).toBeUndefined();
     }
   });
@@ -124,9 +170,171 @@ describe("policy classifier (Issue #1395 AC2)", () => {
     expect(a).toEqual(b);
   });
 
+  it("carries a chat origin and defaults an omitted origin to agent", () => {
+    expect(classifyEditorAgentAction("applyPatch", ctx()).origin).toBe("agent");
+    expect(classifyEditorAgentAction("applyPatch", ctx({ origin: "chat" })).origin).toBe("chat");
+  });
+
   it("allows a content mutation with no file target (null path) that is not sensitive", () => {
     const decision = classifyEditorAgentAction("save", ctx({ targetPath: null }));
+    expect(decision.disposition).toBe("allowed");
+  });
+});
+
+describe("Authority Envelope composition (Issue #2121)", () => {
+  it("maps all effect classes onto the shared Workbench vocabulary", () => {
+    expect(EDITOR_AGENT_WORKBENCH_ACTION_CLASS).toEqual({
+      navigation: null,
+      layout: null,
+      "workspace-read": "workspace-read",
+      "content-mutation": "workspace-write",
+      "external-effect": "delivery-substrate",
+      execution: "verification",
+    });
+    expect(EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE).toEqual({
+      navigation: null,
+      layout: null,
+      "workspace-read": "workspace-contained",
+      "content-mutation": "workspace-contained",
+      "external-effect": "delivery",
+      execution: "workspace-contained",
+    });
+  });
+
+  it("assigns deterministic risk without a second risk taxonomy", () => {
+    expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.save).toBe("low");
+    expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.applyPatch).toBe("medium");
+    expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.applyChangeset).toBe("high");
+  });
+
+  it("allows normal contained saves in every maintained mode", () => {
+    const baseline = classifyEditorAgentAction("save", ctx());
+    for (const mode of CODING_WORKBENCH_MODES) {
+      const decision = composeEditorAgentActionPolicyDecision(
+        baseline,
+        authority(mode),
+        EDITOR_AGENT_ACTION_APPROVAL_RISK.save,
+      );
+      expect(decision.disposition).toBe("allowed");
+      expect(decision.effectClass).toBe("content-mutation");
+    }
+  });
+
+  it("requires approval for a high-risk contained changeset only in Approve for me", () => {
+    const baseline = classifyEditorAgentAction("applyChangeset", ctx());
+    const decision = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("supervised-coding"),
+      EDITOR_AGENT_ACTION_APPROVAL_RISK.applyChangeset,
+    );
     expect(decision.disposition).toBe("review-required");
+    expect(decision.reviewReason).toBe("deterministic-risk-approval-required");
+    expect(
+      composeEditorAgentActionPolicyDecision(baseline, authority("governed-assist"), "high")
+        .disposition,
+    ).toBe("allowed");
+    expect(
+      composeEditorAgentActionPolicyDecision(baseline, authority("autonomous-delivery"), "high")
+        .disposition,
+    ).toBe("allowed");
+  });
+
+  it("keeps the baseline denial when the mode ceiling is more permissive", () => {
+    const baseline = classifyEditorAgentAction("applyPatch", ctx({ targetSensitive: true }));
+    const decision = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery"),
+      "medium",
+    );
+    expect(decision).toEqual(baseline);
+    expect(decision.denyReason).toBe("denied-sensitive-path");
+  });
+
+  it("exempts navigation and layout and keeps external delivery review-required", () => {
+    for (const type of ["openFile", "moveTab"] as const) {
+      const baseline = classifyEditorAgentAction(type, ctx());
+      expect(
+        composeEditorAgentActionPolicyDecision(
+          baseline,
+          authority("supervised-coding"),
+          "critical",
+        ),
+      ).toEqual(baseline);
+    }
+    const external: EditorAgentActionPolicyDecision = {
+      disposition: "allowed",
+      effectClass: "external-effect",
+      origin: "agent",
+    };
+    for (const mode of CODING_WORKBENCH_MODES) {
+      const decision = composeEditorAgentActionPolicyDecision(
+        external,
+        authority(mode),
+        "critical",
+      );
+      expect(decision.disposition).toBe("review-required");
+      expect(decision.reviewReason).toBe("delivery-human-approval-required");
+    }
+  });
+
+  it("composes requested mode and deployment ceiling effects with stricter-wins", () => {
+    const baseline = classifyEditorAgentAction("applyChangeset", ctx());
+    const policy = authority("governed-assist", {
+      requestedMode: "supervised-coding",
+      deploymentCeiling: "governed-assist",
+    });
+    const decision = composeEditorAgentActionPolicyDecision(baseline, policy, "high");
+    expect(decision.disposition).toBe("review-required");
+    expect(decision.reviewReason).toBe("deterministic-risk-approval-required");
+  });
+
+  it("denies an action class omitted by the validated Authority Envelope", () => {
+    const baseline = classifyEditorAgentAction("save", ctx());
+    const decision = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: ["workspace-read"] }),
+      "low",
+    );
+    expect(decision.disposition).toBe("denied");
+    expect(decision.denyReason).toBe("mode-policy-denied");
+  });
+
+  it("gates low-risk queryGit reads through workspace-read authority without mutation or delivery", () => {
+    const baseline = classifyEditorAgentAction("queryGit", ctx());
+    const granted = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: ["workspace-read"] }),
+      EDITOR_AGENT_ACTION_APPROVAL_RISK.queryGit,
+    );
+    expect(granted).toMatchObject({ disposition: "allowed", effectClass: "workspace-read" });
+    expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.queryGit).toBe("low");
+    expect(isMutatingEditorAgentAction("queryGit")).toBe(false);
+
+    const withheld = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: [] }),
+      EDITOR_AGENT_ACTION_APPROVAL_RISK.queryGit,
+    );
+    expect(withheld).toMatchObject({
+      disposition: "denied",
+      effectClass: "workspace-read",
+      denyReason: "mode-policy-denied",
+    });
+  });
+
+  it("denies queryGit reads for escaping and sensitive targets before envelope composition", () => {
+    expect(
+      classifyEditorAgentAction("queryGit", ctx({ targetPath: "../escape.ts" })),
+    ).toMatchObject({
+      disposition: "denied",
+      effectClass: "workspace-read",
+      denyReason: "workspace-boundary-escape",
+    });
+    expect(classifyEditorAgentAction("queryGit", ctx({ targetSensitive: true }))).toMatchObject({
+      disposition: "denied",
+      effectClass: "workspace-read",
+      denyReason: "denied-sensitive-path",
+    });
   });
 });
 
@@ -141,14 +349,28 @@ describe("disposition and reason enums", () => {
   });
 
   it("freezes the deny and review reason taxonomies", () => {
-    expect([...EDITOR_AGENT_ACTION_DENY_REASONS]).toEqual([
-      "workspace-boundary-escape",
-      "denied-sensitive-path",
-    ]);
-    expect([...EDITOR_AGENT_ACTION_REVIEW_REASONS]).toEqual([
-      "content-mutation-requires-review",
-      "external-effect-requires-review",
-    ]);
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("authority-missing");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("authority-invalid");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("authority-expired");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("authority-budget-exceeded");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("unsupported-action");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("secret-exfiltration");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("platform-restricted");
+    expect(EDITOR_AGENT_ACTION_DENY_REASONS).toContain("mode-policy-denied");
+    expect(EDITOR_AGENT_ACTION_REVIEW_REASONS).toContain("mode-approval-required");
+    expect(EDITOR_AGENT_ACTION_REVIEW_REASONS).toContain("deterministic-risk-approval-required");
+    expect(EDITOR_AGENT_ACTION_REVIEW_REASONS).toContain("delivery-human-approval-required");
+  });
+
+  it("maps the central policy effects onto the existing editor disposition vocabulary", () => {
+    expect(EDITOR_AGENT_DISPOSITION_BY_POLICY_EFFECT).toEqual({
+      allowed: "allowed",
+      "approval-required": "review-required",
+      denied: "denied",
+    });
+    expect(editorAgentDispositionForPolicyEffect("allowed")).toBe("allowed");
+    expect(editorAgentDispositionForPolicyEffect("approval-required")).toBe("review-required");
+    expect(editorAgentDispositionForPolicyEffect("denied")).toBe("denied");
   });
 });
 
@@ -174,12 +396,29 @@ describe("audit record builder (Issue #1395 AC1, AC3)", () => {
     expect(record.actionType).toBe("applyTextEdits");
     expect(record.effectClass).toBe("content-mutation");
     expect(record.mutating).toBe(true);
-    expect(record.disposition).toBe("review-required");
-    expect(record.reviewReason).toBe("content-mutation-requires-review");
+    expect(record.disposition).toBe("allowed");
+    expect(record.reviewReason).toBeUndefined();
     expect(record.outcome).toBe("queued");
+    expect(record.origin).toBe("agent");
     expect(record.targetPath).toBe("src/a.ts");
     expect(record.editCount).toBe(3);
     expect(isEditorAgentActionAuditRecord(record)).toBe(true);
+  });
+
+  it("distinguishes chat actions while retaining bounded target metadata", () => {
+    const record = buildEditorAgentActionAuditRecord(
+      auditInput({
+        decision: classifyEditorAgentAction("applyPatch", ctx({ origin: "chat" })),
+        actionType: "applyPatch",
+        targetPath: "src/private-name.ts",
+        patchByteLength: 123,
+      }),
+    );
+    const serialized = JSON.stringify(record);
+    expect(record.origin).toBe("chat");
+    expect(record.targetPath).toBe("src/private-name.ts");
+    expect(record.patchByteLength).toBe(123);
+    expect(serialized).not.toContain("newText");
   });
 
   it("records the deny reason and conflict code for a denied action", () => {
@@ -221,6 +460,23 @@ describe("audit record builder (Issue #1395 AC1, AC3)", () => {
     expect(JSON.stringify(record)).not.toContain(fingerprint);
     expect(record.patchByteLength).toBe(4096);
   });
+
+  it("uses bounded basename/hash-only target metadata for queryGit", () => {
+    const targetPathHash = "a".repeat(64);
+    const record = buildEditorAgentActionAuditRecord({
+      ...auditInput(),
+      actionType: "queryGit",
+      decision: classifyEditorAgentAction("queryGit", ctx()),
+      targetPath: "src/private/repository-name.ts",
+      targetBasename: "repository-name.ts",
+      targetPathHash,
+    });
+    expect(record.targetBasename).toBe("repository-name.ts");
+    expect(record.targetPathHash).toBe(targetPathHash);
+    expect(record.targetPath).toBeUndefined();
+    expect(record.summary).not.toContain("src/private");
+    expect(isEditorAgentActionAuditRecord(record)).toBe(true);
+  });
 });
 
 describe("audit record guard", () => {
@@ -235,6 +491,79 @@ describe("audit record guard", () => {
       }),
     ).toBe(false);
     expect(isEditorAgentActionAuditRecord({ ...valid, disposition: "nope" })).toBe(false);
+    expect(isEditorAgentActionAuditRecord({ ...valid, origin: "automation" })).toBe(false);
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetBasename: "x".repeat(256) })).toBe(
+      false,
+    );
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetPathHash: "not-a-sha256" })).toBe(
+      false,
+    );
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetBasename: "src/a.ts" })).toBe(false);
+    expect(isEditorAgentActionAuditRecord({ ...valid, targetPathHash: "A".repeat(64) })).toBe(
+      false,
+    );
+    expect(isEditorAgentActionAuditRecord({ ...valid, effectClass: "workspace-read" })).toBe(false);
+    expect(
+      isEditorAgentActionAuditRecord({
+        ...valid,
+        actionType: "queryGit",
+        effectClass: "workspace-read",
+        targetPath: "src/a.ts",
+      }),
+    ).toBe(false);
     expect(isEditorAgentActionAuditRecord(null)).toBe(false);
+  });
+});
+
+describe("execution effect class + requestVerification (Issue #2210, ADR-0126 D4/D5)", () => {
+  it("maps requestVerification to the execution effect class", () => {
+    expect(EDITOR_AGENT_ACTION_EFFECT_CLASS.requestVerification).toBe("execution");
+    expect(Object.keys(EDITOR_AGENT_ACTION_EFFECT_CLASS)).toContain("requestVerification");
+    expect(Object.keys(EDITOR_AGENT_ACTION_APPROVAL_RISK)).toContain("requestVerification");
+  });
+
+  it("maps execution onto the existing verification / workspace-contained vocabulary (non-null)", () => {
+    // Non-null in BOTH tables so compose gates it through the Authority Envelope rather than
+    // short-circuiting it like navigation/layout — the invariant the agent-access child issue needs.
+    expect(EDITOR_AGENT_WORKBENCH_ACTION_CLASS.execution).toBe("verification");
+    expect(EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE.execution).toBe("workspace-contained");
+    expect(EDITOR_AGENT_WORKBENCH_ACTION_CLASS.execution).not.toBeNull();
+    expect(EDITOR_AGENT_WORKBENCH_RESOURCE_SCOPE.execution).not.toBeNull();
+  });
+
+  it("classifies requestVerification as low approval risk and non-mutating", () => {
+    expect(EDITOR_AGENT_ACTION_APPROVAL_RISK.requestVerification).toBe("low");
+    expect(isMutatingEditorAgentAction("requestVerification")).toBe(false);
+  });
+
+  it("baseline-allows a contained request and denies escape/sensitive targets", () => {
+    expect(classifyEditorAgentAction("requestVerification", ctx()).disposition).toBe("allowed");
+    const escape = classifyEditorAgentAction("requestVerification", ctx({ targetPath: "../x.ts" }));
+    expect(escape.disposition).toBe("denied");
+    expect(escape.denyReason).toBe("workspace-boundary-escape");
+    const sensitive = classifyEditorAgentAction(
+      "requestVerification",
+      ctx({ targetSensitive: true }),
+    );
+    expect(sensitive.disposition).toBe("denied");
+    expect(sensitive.denyReason).toBe("denied-sensitive-path");
+  });
+
+  it("gates an execution request through the Authority Envelope (stricter-wins)", () => {
+    const baseline = classifyEditorAgentAction("requestVerification", ctx());
+    const granted = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: ["verification"] }),
+      "low",
+    );
+    expect(granted.disposition).not.toBe("denied");
+    // An envelope WITHOUT the verification action class denies it — never short-circuited to allowed.
+    const withheld = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority("autonomous-delivery", { actionClasses: [] }),
+      "low",
+    );
+    expect(withheld.disposition).toBe("denied");
+    expect(withheld.denyReason).toBe("mode-policy-denied");
   });
 });

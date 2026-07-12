@@ -15,6 +15,7 @@ import { createDeadlineCancellation } from "./languageCancellation.js";
 import type { LanguageProviderContext } from "./languageProvider.js";
 import {
   resolveTypescriptCodeActions,
+  resolveTypescriptInlayHints,
   resolveTypescriptRenameApply,
   resolveTypescriptRenamePrepare,
   resolveTypescriptSignatureHelp,
@@ -162,6 +163,25 @@ function fakeProject(
 }
 
 describe("typescript refactoring provider", () => {
+  it("returns inferred parameter-name and type inlay hints", () => {
+    const text =
+      "function format(value: string, repeat: number): string { return value.repeat(repeat); }\n" +
+      "let inferred = format('x', 2);\n";
+    const files = { "tsconfig.json": tsconfig(), "src/main.ts": text };
+    const hints = resolveTypescriptInlayHints(project(files, "src/main.ts"), {
+      start: { line: 0, character: 0 },
+      end: { line: 1, character: "let inferred = format('x', 2);".length },
+    });
+
+    expect(hints.hints).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "value:", kind: "parameter" }),
+        expect.objectContaining({ label: "repeat:", kind: "parameter" }),
+        expect.objectContaining({ label: ": string", kind: "type" }),
+      ]),
+    );
+  });
+
   it("prepares rename at a renameable position and returns a negative result in comments", () => {
     const files = basicRenameFiles({
       "src/comment.ts": "// sharedValue\nexport const value = 1;\n",

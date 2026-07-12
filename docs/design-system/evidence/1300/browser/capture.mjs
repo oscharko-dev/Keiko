@@ -373,217 +373,214 @@ const DEMO_MODELS = [
   },
 ];
 
-function apiBody(url) {
-  const pathname = typeof url === "string" ? url : url.pathname;
-  const searchParams = typeof url === "string" ? new URLSearchParams() : url.searchParams;
-  if (pathname === "/api/health") return { status: "ok", version: "0.2.0-beta.9" };
-  if (pathname === "/api/config") {
-    return {
-      config: null,
-      configPresent: false,
-      effectiveGroundingLimits: { maxConnectedSources: 16 },
-    };
-  }
-  if (pathname === "/api/models") return { models: DEMO_MODELS };
-  if (pathname === "/api/workflows") return { workflows: [] };
-  if (pathname === "/api/chats") return { chats: [] };
-  if (pathname === "/api/projects") {
-    return {
-      projects: [{ path: DEMO_ROOT, name: "Issue #1300 fixture", available: true }],
-      path: DEMO_ROOT,
-    };
-  }
-  if (pathname === "/api/memory") return { memories: [], total: 0, limit: 50, offset: 0 };
-  if (pathname === "/api/memory/review-queue") return { memories: [], total: 0 };
-  if (pathname === "/api/memory/consolidation/jobs") return { jobs: [] };
-  if (pathname === "/api/relationships") {
-    return { entries: [], truncated: false, nextCursor: null };
-  }
-  if (pathname === "/api/relationships/health") {
-    return {
-      checkedAt: 1_750_000_000_000,
-      totals: ZERO_RELATIONSHIP_TOTALS,
-      truncated: false,
-      findings: EMPTY_RELATIONSHIP_FINDINGS,
-    };
-  }
-  if (pathname === "/api/local-knowledge/capsules") return { capsules: [] };
-  if (pathname === "/api/local-knowledge/capsule-sets") return { capsuleSets: [] };
-  if (pathname === "/api/editor/language/capabilities") {
-    return {
-      schemaVersion: "1",
-      providers: [
-        {
-          id: "static-evidence-typescript",
-          languages: ["typescript", "javascript", "tsx", "jsx"],
-          operations: ["diagnostics", "hover", "symbols"],
-          availability: "available",
-        },
-      ],
-    };
-  }
-  if (pathname === "/api/editor/agent/sessions") return { sessions: [] };
+// Exact-pathname API fixtures. Every route here returns a fixed body with no request-dependent
+// logic, so apiBody() can dispatch through a single lookup instead of a long if/else chain — same
+// bodies as before, one branch per route to look up instead of one branch per route to evaluate.
+const STATIC_API_BODIES = {
+  "/api/health": { status: "ok", version: "0.2.0-beta.9" },
+  "/api/config": {
+    config: null,
+    configPresent: false,
+    effectiveGroundingLimits: { maxConnectedSources: 16 },
+  },
+  "/api/models": { models: DEMO_MODELS },
+  "/api/workflows": { workflows: [] },
+  "/api/chats": { chats: [] },
+  "/api/projects": {
+    projects: [{ path: DEMO_ROOT, name: "Issue #1300 fixture", available: true }],
+    path: DEMO_ROOT,
+  },
+  "/api/memory": { memories: [], total: 0, limit: 50, offset: 0 },
+  "/api/memory/review-queue": { memories: [], total: 0 },
+  "/api/memory/consolidation/jobs": { jobs: [] },
+  "/api/relationships": { entries: [], truncated: false, nextCursor: null },
+  "/api/relationships/health": {
+    checkedAt: 1_750_000_000_000,
+    totals: ZERO_RELATIONSHIP_TOTALS,
+    truncated: false,
+    findings: EMPTY_RELATIONSHIP_FINDINGS,
+  },
+  "/api/local-knowledge/capsules": { capsules: [] },
+  "/api/local-knowledge/capsule-sets": { capsuleSets: [] },
+  "/api/editor/language/capabilities": {
+    schemaVersion: "1",
+    providers: [
+      {
+        id: "static-evidence-typescript",
+        languages: ["typescript", "javascript", "tsx", "jsx"],
+        operations: ["diagnostics", "hover", "symbols"],
+        availability: "available",
+      },
+    ],
+  },
+  "/api/editor/agent/sessions": { sessions: [] },
   // Issue #446 (Epic #443) — the globally mounted task-workspace switcher reads the inventory and the
   // active binding on boot. Without these the malformed fallback leaves `instances` undefined and the
   // switcher throws on every route, so the read surface must return an empty inventory and no active
   // binding (the unbound studio default), keeping every scenario error-free.
-  if (pathname === "/api/task-workspaces") return { instances: [] };
-  if (pathname === "/api/task-workspaces/active") return { active: null };
+  "/api/task-workspaces": { instances: [] },
+  "/api/task-workspaces/active": { active: null },
   // Issue #1574 — read surface for the Git client window shell (repository status / branches / diff).
   // Fixtures keep the shell's desktop IA fully populated: a dirty repository (changed-file list), a
   // current branch in the branch selector, and a Sync status pill, proving the shell renders at all
   // viewport widths. No mutation endpoints are exercised (#1575/#1576/#1577 own those).
-  if (pathname === "/api/git/status") {
-    return {
-      schemaVersion: "1",
-      root: DEMO_ROOT,
-      repositoryRoot: DEMO_ROOT,
-      state: "available",
-      available: true,
-      branch: "main",
-      detached: false,
-      clean: false,
-      stagedCount: 1,
-      unstagedCount: 1,
-      untrackedCount: 0,
-      conflictedCount: 0,
-      changes: [
-        {
-          path: "src/App.tsx",
-          indexStatus: "M",
-          worktreeStatus: " ",
-          staged: true,
-          unstaged: false,
-          untracked: false,
-          conflicted: false,
-        },
-        {
-          path: "README.md",
-          indexStatus: " ",
-          worktreeStatus: "M",
-          staged: false,
-          unstaged: true,
-          untracked: false,
-          conflicted: false,
-        },
-      ],
-      truncated: false,
-      maxChanges: 1000,
-    };
-  }
-  if (pathname === "/api/git/branches") {
-    return {
-      schemaVersion: "1",
-      root: DEMO_ROOT,
-      repositoryRoot: DEMO_ROOT,
-      available: true,
-      state: "available",
-      branches: [
-        { name: "main", headRefHash: "0".repeat(40), current: true },
-        { name: "feature/git-window-shell", headRefHash: "1".repeat(40), current: false },
-      ],
-      truncated: false,
-    };
-  }
-  if (pathname === "/api/git/diff") {
-    return {
-      schemaVersion: "1",
-      root: DEMO_ROOT,
-      repositoryRoot: DEMO_ROOT,
-      state: "available",
-      available: true,
-      scope: "all",
-      diff: "",
-      truncated: false,
-      maxBytes: 262144,
-    };
-  }
+  "/api/git/status": {
+    schemaVersion: "1",
+    root: DEMO_ROOT,
+    repositoryRoot: DEMO_ROOT,
+    state: "available",
+    available: true,
+    branch: "main",
+    detached: false,
+    clean: false,
+    stagedCount: 1,
+    unstagedCount: 1,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [
+      {
+        path: "src/App.tsx",
+        indexStatus: "M",
+        worktreeStatus: " ",
+        staged: true,
+        unstaged: false,
+        untracked: false,
+        conflicted: false,
+      },
+      {
+        path: "README.md",
+        indexStatus: " ",
+        worktreeStatus: "M",
+        staged: false,
+        unstaged: true,
+        untracked: false,
+        conflicted: false,
+      },
+    ],
+    truncated: false,
+    maxChanges: 1000,
+  },
+  "/api/git/branches": {
+    schemaVersion: "1",
+    root: DEMO_ROOT,
+    repositoryRoot: DEMO_ROOT,
+    available: true,
+    state: "available",
+    branches: [
+      { name: "main", headRefHash: "0".repeat(40), current: true },
+      { name: "feature/git-window-shell", headRefHash: "1".repeat(40), current: false },
+    ],
+    truncated: false,
+  },
+  "/api/git/diff": {
+    schemaVersion: "1",
+    root: DEMO_ROOT,
+    repositoryRoot: DEMO_ROOT,
+    state: "available",
+    available: true,
+    scope: "all",
+    diff: "",
+    truncated: false,
+    maxBytes: 262144,
+  },
   // Issue #1575 — the commit composer auto-previews policy for the staged set, so the live shell
   // posts here on mount. Return a content-free, passing preview so the policy preview renders.
-  if (pathname === "/api/git-delivery/commit/preview") {
-    return {
-      schemaVersion: "1",
-      summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
-      intent: { warnings: [], mixedScope: false, isWip: false },
-      messageValidation: { ok: true },
-      preflightFindingCodes: [],
-      policyOutcome: "allowed",
-    };
-  }
-  if (pathname === "/api/quality-intelligence/runs") {
-    return {
-      runs: [
-        {
-          id: "qi-run-1300-visual-proof",
-          status: "succeeded",
-          reviewState: "approved",
-          requestedAt: "2026-06-22T00:00:00.000Z",
-          completedAt: "2026-06-22T00:01:00.000Z",
-          totals: { candidates: 3, findings: 0, exports: 0 },
-        },
-      ],
-      limit: 25,
-      totalRunIds: 1,
-      truncated: false,
-    };
-  }
-  if (pathname.startsWith("/api/quality-intelligence/runs/")) {
-    return {
-      runId: "qi-run-1300-visual-proof",
-      status: "succeeded",
-      reviewState: "approved",
-      requestedAt: "2026-06-22T00:00:00.000Z",
-      completedAt: "2026-06-22T00:01:00.000Z",
-      summary: {
-        title: "Issue #1300 visual evidence run",
-        totalCandidates: 3,
-        approvedCandidates: 3,
+  "/api/git-delivery/commit/preview": {
+    schemaVersion: "1",
+    summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+    intent: { warnings: [], mixedScope: false, isWip: false },
+    messageValidation: { ok: true },
+    preflightFindingCodes: [],
+    policyOutcome: "allowed",
+  },
+  "/api/quality-intelligence/runs": {
+    runs: [
+      {
+        id: "qi-run-1300-visual-proof",
+        status: "succeeded",
+        reviewState: "approved",
+        requestedAt: "2026-06-22T00:00:00.000Z",
+        completedAt: "2026-06-22T00:01:00.000Z",
+        totals: { candidates: 3, findings: 0, exports: 0 },
       },
-      candidates: [],
-      findings: [],
-      coverage: { coveragePercentage: 100, coveredCount: 6, totalCount: 6, gaps: [] },
-    };
+    ],
+    limit: 25,
+    totalRunIds: 1,
+    truncated: false,
+  },
+};
+
+function qualityIntelligenceRunDetailBody() {
+  return {
+    runId: "qi-run-1300-visual-proof",
+    status: "succeeded",
+    reviewState: "approved",
+    requestedAt: "2026-06-22T00:00:00.000Z",
+    completedAt: "2026-06-22T00:01:00.000Z",
+    summary: {
+      title: "Issue #1300 visual evidence run",
+      totalCandidates: 3,
+      approvedCandidates: 3,
+    },
+    candidates: [],
+    findings: [],
+    coverage: { coveragePercentage: 100, coveredCount: 6, totalCount: 6, gaps: [] },
+  };
+}
+
+function filesTreeBody(searchParams) {
+  const path = searchParams.get("path") ?? "";
+  if (path === "src") {
+    return { root: DEMO_ROOT, path: "src", entries: [FILE_ENTRY_TSX], truncated: false };
   }
-  if (pathname === "/api/files/tree") {
-    const path = searchParams.get("path") ?? "";
-    if (path === "src") {
-      return { root: DEMO_ROOT, path: "src", entries: [FILE_ENTRY_TSX], truncated: false };
-    }
-    return {
-      root: DEMO_ROOT,
-      path: "",
-      entries: [
-        {
-          name: "src",
-          path: "src",
-          kind: "directory",
-          sizeBytes: 0,
-          modifiedAt: FILE_VERSION.modifiedAt,
-          extension: null,
-          symlink: false,
-          readable: true,
-        },
-        FILE_ENTRY_README,
-      ],
-      truncated: false,
-    };
-  }
-  if (pathname === "/api/files/preview" || pathname === "/api/files/content") {
-    if (pathname === "/api/files/preview") {
-      return {
-        ...FILE_BASE,
-        kind: "text",
-        content: FILE_CONTENT,
-        truncated: false,
-        maxBytes: 262144,
-      };
-    }
+  return {
+    root: DEMO_ROOT,
+    path: "",
+    entries: [
+      {
+        name: "src",
+        path: "src",
+        kind: "directory",
+        sizeBytes: 0,
+        modifiedAt: FILE_VERSION.modifiedAt,
+        extension: null,
+        symlink: false,
+        readable: true,
+      },
+      FILE_ENTRY_README,
+    ],
+    truncated: false,
+  };
+}
+
+function filesContentBody(pathname) {
+  if (pathname === "/api/files/preview") {
     return {
       ...FILE_BASE,
+      kind: "text",
       content: FILE_CONTENT,
+      truncated: false,
       maxBytes: 262144,
-      session: { schemaVersion: "1", version: FILE_VERSION },
     };
+  }
+  return {
+    ...FILE_BASE,
+    content: FILE_CONTENT,
+    maxBytes: 262144,
+    session: { schemaVersion: "1", version: FILE_VERSION },
+  };
+}
+
+function apiBody(url) {
+  const pathname = typeof url === "string" ? url : url.pathname;
+  const searchParams = typeof url === "string" ? new URLSearchParams() : url.searchParams;
+  if (Object.hasOwn(STATIC_API_BODIES, pathname)) return STATIC_API_BODIES[pathname];
+  if (pathname.startsWith("/api/quality-intelligence/runs/")) {
+    return qualityIntelligenceRunDetailBody();
+  }
+  if (pathname === "/api/files/tree") return filesTreeBody(searchParams);
+  if (pathname === "/api/files/preview" || pathname === "/api/files/content") {
+    return filesContentBody(pathname);
   }
   return { ok: true };
 }

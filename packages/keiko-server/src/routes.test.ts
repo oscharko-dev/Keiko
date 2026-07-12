@@ -66,6 +66,14 @@ describe("API route contract", () => {
     }
   });
 
+  it("includes the managed LSP settings read/write routes (#2272)", () => {
+    for (const method of ["GET", "PUT"]) {
+      expect(matchRoute(method, "/api/editor/lsp/settings")).toMatchObject({
+        definition: { method, pattern: "/api/editor/lsp/settings" },
+      });
+    }
+  });
+
   it("includes the user-facing workspace search route pair (#2108)", () => {
     for (const pattern of [
       "/api/editor/workspace-search",
@@ -389,11 +397,23 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/diff"),
     ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/diff/structured"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/git/blame"),
+    ).toBeDefined();
     expect(matchRoute("GET", "/api/git/status")).toMatchObject({
       definition: { pattern: "/api/git/status" },
     });
     expect(matchRoute("GET", "/api/git/diff")).toMatchObject({
       definition: { pattern: "/api/git/diff" },
+    });
+    expect(matchRoute("GET", "/api/git/diff/structured")).toMatchObject({
+      definition: { pattern: "/api/git/diff/structured" },
+    });
+    expect(matchRoute("GET", "/api/git/blame")).toMatchObject({
+      definition: { pattern: "/api/git/blame" },
     });
   });
 

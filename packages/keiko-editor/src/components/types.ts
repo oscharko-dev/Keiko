@@ -15,12 +15,14 @@ import type {
   EditorCodeActionsResolver,
   EditorCompletionResolver,
   EditorDefinitionResolver,
+  EditorDiagnostic,
   EditorDiagnosticsResolver,
   EditorFileModel,
   EditorFormattingResolver,
   EditorHostEditRequest,
   EditorHoverResolver,
   EditorInlineCompletionResolver,
+  EditorLocation,
   EditorPosition,
   EditorRange,
   EditorReferencesResolver,
@@ -29,8 +31,16 @@ import type {
   EditorSymbolsResolver,
 } from "../index.js";
 import type { EditorThemeVariant } from "../monaco/theme.js";
+import type { KeikoEditorPreferenceOptions } from "./editor-options.js";
 import type { InlineCompletionTelemetrySnapshot } from "./inline-completion-telemetry.js";
+import type { CallHierarchyPanelLabels } from "./CallHierarchyPanel.js";
+import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
+import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
+import type { EditorGitGutterHost } from "./git-gutter-bridge.js";
+import type { EditorBlameHost } from "./blame-bridge.js";
+import type { ConflictLabels } from "./conflict-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
+import type { WireEditorSemanticTokens } from "./on-mount.js";
 
 export interface EditorUriLike {
   toString(): string;
@@ -70,6 +80,17 @@ export interface EditorContentDelta {
   readonly sizeBytes: number;
 }
 
+/** The bounded Monaco selection handed to the host by the Ask Keiko command (Issue #2119). */
+export interface EditorSelectionCapture {
+  /** Fixed discriminator matching the existing agent snapshot text-mode contract. */
+  readonly textMode: "selection";
+  readonly range: EditorRange;
+  /** Text read from `getValueInRange(range)` only; never an implicit active-buffer fallback. */
+  readonly text: string;
+}
+
+export type AskKeikoAboutSelectionHandler = (selection: EditorSelectionCapture) => void;
+
 /**
  * Controlled, host-agnostic props for {@link import("./KeikoCodeEditor.js").KeikoCodeEditor}.
  *
@@ -94,6 +115,18 @@ export interface KeikoCodeEditorProps {
    */
   readonly showStatusFooter?: boolean | undefined;
   readonly themeVariant?: EditorThemeVariant | undefined;
+  /** Server-resolved M7 editor options; live-updated through Monaco updateOptions. */
+  readonly editorPreferences?: KeikoEditorPreferenceOptions | undefined;
+  /** Stable per-pane key for retained Monaco view state; content-free and host-defined. */
+  readonly modelViewStateKey?: string | undefined;
+  /** Extra model-retention protection flags for host review/recovery states. */
+  readonly modelRetentionProtection?:
+    | {
+        readonly hotExitRecovery?: boolean | undefined;
+        readonly agentReview?: boolean | undefined;
+        readonly pinned?: boolean | undefined;
+      }
+    | undefined;
   /** Accessible name for the editor control; hosts may include workspace/root context. */
   readonly ariaLabel?: string | undefined;
   readonly autoFocus?: boolean | undefined;
@@ -160,6 +193,10 @@ export interface KeikoCodeEditorProps {
    * native go-to-definition provider; the host owns the governed BFF call.
    */
   readonly provideDefinition?: EditorDefinitionResolver | undefined;
+  /** Host-injected Go to Type Definition resolver (Issue #2216). */
+  readonly provideTypeDefinition?: EditorDefinitionResolver | undefined;
+  /** Host-injected Go to Implementation resolver (Issue #2216). */
+  readonly provideImplementation?: EditorDefinitionResolver | undefined;
   /** Resolve a workspace-relative location path to the host-owned Monaco model URI. */
   readonly uriForPath?: EditorUriForPath | undefined;
   /**
@@ -167,6 +204,14 @@ export interface KeikoCodeEditorProps {
    * native find-references provider; the host owns the governed BFF call.
    */
   readonly provideReferences?: EditorReferencesResolver | undefined;
+  /** Host-injected call-hierarchy resolver and localized tree labels (Issue #2216). */
+  readonly provideCallHierarchy?: EditorCallHierarchyResolver | undefined;
+  readonly callHierarchyLabels?: CallHierarchyPanelLabels | undefined;
+  readonly onRevealCallHierarchyLocation?: ((location: EditorLocation) => void) | undefined;
+  /** Host-injected inlay-hints resolver rendered by Monaco's native hint surface (Issue #2216). */
+  readonly provideInlayHints?: EditorInlayHintsResolver | undefined;
+  /** Host-built, bounded semantic-token provider registered through the editor mount seam. */
+  readonly semanticTokens?: WireEditorSemanticTokens | undefined;
   /**
    * Host-injected code-action resolver (Epic #2089). When present, the editor registers Monaco's
    * lightbulb provider and enables the lightbulb UI. Edits are limited to the active model.
@@ -189,12 +234,37 @@ export interface KeikoCodeEditorProps {
    */
   readonly onDiagnosticsSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
   /**
+   * Issue #2213 (ADR-0126) — the full per-diagnostic list for the active buffer on every non-stale
+   * resolve (string severity, no Monaco-numbered leak). Consumed by the workspace Problems panel to
+   * aggregate diagnostics across open panes. Absent when the host wires no diagnostics.
+   */
+  readonly onDiagnostics?: ((diagnostics: readonly EditorDiagnostic[]) => void) | undefined;
+  /**
    * Host handler for the "Generate Tests" command (Issue #1205). When present, the editor registers a
    * Keiko action into Monaco's native command palette (F1), the context menu, and the `Cmd/Ctrl+Alt+T`
    * keybinding; the run delegates here, to the host's governed test-generation flow (#1202). Absent
    * when the host offers no test generation (e.g. a non-source buffer), so the action never registers.
    */
   readonly onGenerateTests?: (() => void) | undefined;
+  /**
+   * Host handler for "Ask Keiko about this selection" (Issue #2119). The command is registered only
+   * when this callback exists and is disabled by Monaco when no non-empty selection exists. The
+   * payload contains only the live selected range and its text; the host owns chat-session routing.
+   */
+  readonly onAskKeikoAboutSelection?: AskKeikoAboutSelectionHandler | undefined;
   /** Host handler for the F2 Rename Symbol command (Epic #2089, Issue #2105). */
   readonly onRenameSymbol?: (() => void) | undefined;
+  /** Host-owned, read-only Git hunk source for event-driven gutter decorations (ADR-0127). */
+  readonly editorGitGutter?: EditorGitGutterHost | undefined;
+  /** On-demand, read-only blame source; registration performs no read until toggled. */
+  readonly editorBlame?: EditorBlameHost | undefined;
+  /** Monotonic save/explicit-refresh trigger; content edits intentionally do not change it. */
+  readonly gitGutterRefreshNonce?: number | undefined;
+  readonly editorConflicts?:
+    | {
+        readonly labels: ConflictLabels;
+        readonly onChange: (count: number, truncated: boolean) => void;
+        readonly onStale?: (() => void) | undefined;
+      }
+    | undefined;
 }

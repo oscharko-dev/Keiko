@@ -10,11 +10,22 @@ export function isSecondaryPointerButton(button: number): boolean {
   return button === 2;
 }
 
+function isMacPlatform(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || "");
+}
+
+// Issue #2150 — Ctrl+left-click is the macOS convention for a secondary/context
+// click, but on Windows and Linux it is the OS-standard "toggle selection"
+// modifier. Without the platform check, isPrimaryActivationPointer rejected
+// Ctrl+left-click as a canvas-pan/marquee activation on EVERY platform, so the
+// marquee's Ctrl-drag "toggle" mode (see marqueeMode in Workspace.tsx) could
+// never start via mouse on Windows.
 export function isMacContextClick(event: {
   readonly button: number;
   readonly ctrlKey: boolean;
 }): boolean {
-  return event.button === 0 && event.ctrlKey;
+  return isMacPlatform() && event.button === 0 && event.ctrlKey;
 }
 
 export function isPrimaryActivationPointer(event: {

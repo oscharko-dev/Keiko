@@ -15,6 +15,7 @@
 
 import type { IncomingMessage } from "node:http";
 import {
+  findConfiguredCapability,
   requestSpeechToText,
   requestTextToSpeech,
   requestTextToSpeechStream,
@@ -39,6 +40,8 @@ import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import { isVoiceDisabledByPolicy } from "./read-handlers.js";
+import { toSpeakableText } from "./voice-speech-text.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 
 // The decoded-audio ceiling for one dictation clip. This is the authoritative bound on the
 // transcribable duration: regardless of codec, a clip cannot exceed this many bytes, so the maximum
@@ -555,8 +558,12 @@ function validateSpeakRequest(
   if (body.persona !== undefined && !isVoicePersona(body.persona)) {
     return badRequest(deps, "INVALID_PERSONA", "The persona is not a supported voice persona.");
   }
+  const speakable = toSpeakableText(text);
+  if (speakable.length === 0) {
+    return badRequest(deps, "INVALID_TEXT", "The text contains no speakable content.");
+  }
   return {
-    text,
+    text: speakable,
     ...(isVoicePersona(body.persona) ? { persona: body.persona } : {}),
   };
 }
@@ -597,6 +604,12 @@ function resolveSpeechTarget(
 // MIME stays inside the server ALLOWED_SPEECH_MIME allowlist (audio/ogg).
 const INTERACTIVE_SPEECH_FORMAT = "opus" as const;
 const INTERACTIVE_MAX_SPEECH_AUDIO_BYTES = 1_500_000;
+const KEIKO_SPEECH_INSTRUCTIONS =
+  "Speak in the same language as the input. Sound like a thoughtful colleague: warm, calm, " +
+  "engaged, and emotionally aware without overacting. Use natural pacing, subtle emphasis, varied " +
+  "intonation, and clear pronunciation. Favor careful articulation and moderate vocal effort over " +
+  "simply getting louder. For a repetition, slow slightly and emphasize only the key words. Do not " +
+  "add words, sound effects, or commentary.";
 
 function buildTtsRequest(
   provider: ModelProviderConfig,
@@ -605,6 +618,10 @@ function buildTtsRequest(
   deps: UiHandlerDeps,
 ): TextToSpeechRequest {
   const egress = provider.egress ?? currentGatewayEgressConfig(deps);
+  const capability = findConfiguredCapability(
+    currentGatewayConfig(deps) ?? { providers: [] },
+    target.modelId,
+  );
   return {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
@@ -617,6 +634,9 @@ function buildTtsRequest(
     input: validated.text,
     responseFormat: INTERACTIVE_SPEECH_FORMAT,
     maxAudioBytes: INTERACTIVE_MAX_SPEECH_AUDIO_BYTES,
+    ...(capability?.supportsSpeechSynthesisInstructions === true
+      ? { instructions: KEIKO_SPEECH_INSTRUCTIONS }
+      : {}),
     ...(target.voiceId !== undefined ? { voice: target.voiceId } : {}),
     ...(egress !== undefined ? { egress } : {}),
     timeoutMs: provider.timeoutMs,
@@ -714,13 +734,32 @@ function abortOnResClose(ctx: RouteContext): AbortController {
   return controller;
 }
 
-// Pipes the provider audio stream to the response honoring backpressure (res.write → false aborts) and
-// client disconnect. Once 200 + audio headers are sent no JSON error is possible, so a mid-stream
-// failure just ends the partial stream — the client falls back to the buffered route on the next turn.
+function waitForResponseDrain(ctx: RouteContext, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise<boolean>((resolve) => {
+    const finish = (drained: boolean): void => {
+      ctx.res.off("drain", onDrain);
+      signal.removeEventListener("abort", onAbort);
+      resolve(drained);
+    };
+    const onDrain = (): void => {
+      finish(true);
+    };
+    const onAbort = (): void => {
+      finish(false);
+    };
+    ctx.res.once("drain", onDrain);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// Pipes provider audio while honoring ordinary Node response backpressure. A false write means
+// "wait for drain", not "disconnect"; only the response close signal aborts synthesis.
 async function pipeAudioStream(
   ctx: RouteContext,
   body: ReadableStream<Uint8Array>,
   controller: AbortController,
+  deps: UiHandlerDeps,
 ): Promise<void> {
   const reader = body.getReader();
   try {
@@ -729,14 +768,23 @@ async function pipeAudioStream(
       if (done || controller.signal.aborted) {
         break;
       }
-      if (!ctx.res.write(value)) {
-        controller.abort();
-        ctx.res.destroy();
+      if (!ctx.res.write(value) && !(await waitForResponseDrain(ctx, controller.signal))) {
         break;
       }
     }
-  } catch {
-    // partial stream — ended in finally
+  } catch (error) {
+    if (!controller.signal.aborted) {
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: ctx.correlationId ?? "unknown",
+          operation: "voice.speech.stream",
+          source: "voice.speech",
+          error,
+          redact: (message: string): string => String(deps.redactor(message)),
+        }),
+      );
+    }
   } finally {
     try {
       await reader.cancel();
@@ -766,6 +814,6 @@ export async function handleVoiceSpeakStream(
     ? outcome.value.mimeType
     : DEFAULT_SPEECH_MIME;
   ctx.res.writeHead(200, { "Content-Type": mimeType, "Cache-Control": "no-store" });
-  await pipeAudioStream(ctx, outcome.value.body, controller);
+  await pipeAudioStream(ctx, outcome.value.body, controller, deps);
   return STREAMING;
 }

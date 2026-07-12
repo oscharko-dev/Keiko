@@ -1,0 +1,32 @@
+.editorSurface :global(.keiko-conflict-region-0) {
+  background: color-mix(in oklch, var(--success) 12%, transparent);
+}
+
+.editorSurface :global(.keiko-conflict-region-1) {
+  background: color-mix(in oklch, var(--text-muted) 12%, transparent);
+}
+
+.editorSurface :global(.keiko-conflict-region-2) {
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+}
+
+.editorSurface :global(.keiko-conflict-mark-0) {
+  border-left: 3px solid var(--success);
+}
+
+.editorSurface :global(.keiko-conflict-mark-1) {
+  border-left: 3px dotted var(--text-muted);
+}
+
+.editorSurface :global(.keiko-conflict-mark-2) {
+  border-left: 3px dashed var(--accent);
+}
+
+.badge {
+  border: 1px dashed currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1px 4px;
+}

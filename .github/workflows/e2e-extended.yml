@@ -24,14 +24,19 @@ jobs:
         suite:
           - test:e2e:editor-baseline-1377
           - test:e2e:editor-layout-1375
+          - test:e2e:editor-run-verification-2215
           - test:e2e:git-changes-1575
           - test:e2e:local-knowledge
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: "22.x"
+          node-version: "24.18.0"
           cache: "npm"
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
         run: npm ci
       - name: Build internal packages

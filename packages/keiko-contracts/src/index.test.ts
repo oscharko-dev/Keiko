@@ -182,8 +182,8 @@ import {
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.2.14", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.2.14");
+  it("exposes the version constant pinned at 0.2.15", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.2.15");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -419,7 +419,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(27);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(29);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
@@ -625,25 +625,71 @@ describe("keiko-contracts package surface", () => {
     const mod = await import("./index.js");
     // Compatibility pin for the schema version constant: the public agent-editor contract is v1.
     expect(mod.EDITOR_AGENT_SCHEMA_VERSION).toBe("1");
+    expect(mod.EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS).toBe(128);
+    expect(mod.EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS).toBe(1_024);
+    expect(mod.EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS).toBe(1_024);
+    expect(mod.DEFAULT_EDITOR_AGENT_ACTION_ORIGIN).toBe("agent");
+    expect(mod.EDITOR_AGENT_ACTION_ORIGINS).toEqual(["agent", "chat"]);
+    expect(mod.EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES).toBe(32);
+    expect(mod.EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS).toBe(43);
+    expect(mod.EDITOR_AGENT_ACTION_ID_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SESSION_ID_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_TARGET_PATH_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_MAX_PANES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES).toBeGreaterThan(0);
+    expect(mod.EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES).toBe(65_536);
     // AC1: the content-free default snapshot text mode is exported and is `none`.
     expect(mod.DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE).toBe("none");
     // AC3: the structured conflict-code taxonomy is exported in full, including PRECONDITION_REQUIRED
     // and the Issue #1392 NO_ACTIVE_BRIDGE liveness code.
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("PRECONDITION_REQUIRED");
     expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("NO_ACTIVE_BRIDGE");
-    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(8);
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("POLICY_DENIED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES).toContain("APPROVAL_REQUIRED");
+    expect(mod.EDITOR_AGENT_CONFLICT_CODES.length).toBe(10);
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
-    expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual(["QUEUE_FULL", "TIMED_OUT"]);
+    expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual([
+      "CANCELLED",
+      "LIMIT_EXCEEDED",
+      "PROVIDER_UNAVAILABLE",
+      "QUEUE_FULL",
+      "TIMED_OUT",
+      "UNSUPPORTED_OPERATION",
+    ]);
     // AC2: the write-action classification is exported as a single source of truth.
     expect([...mod.EDITOR_AGENT_WRITE_ACTION_TYPES].sort()).toEqual(
-      ["applyPatch", "applyTextEdits", "format", "save"].sort(),
+      ["applyChangeset", "applyPatch", "applyTextEdits", "format", "save"].sort(),
     );
     expect(typeof mod.isEditorAgentEvent).toBe("function");
+    expect(typeof mod.isEditorAgentBridgeDecisionCapability).toBe("function");
+    expect(typeof mod.isEditorAgentActiveBufferActionType).toBe("function");
+    expect(typeof mod.isEditorAgentActionOrigin).toBe("function");
+    expect(typeof mod.resolveEditorAgentActionOrigin).toBe("function");
     expect(typeof mod.isEditorAgentWriteActionType).toBe("function");
     expect(typeof mod.editorAgentWritePreconditionError).toBe("function");
     expect(typeof mod.editorAgentActionHasWritePrecondition).toBe("function");
     expect(typeof mod.isEditorAgentConflictCode).toBe("function");
     expect(typeof mod.isEditorAgentFailureCode).toBe("function");
+    // Issue #2114 (ADR-0125 D3): the applyChangeset public contract surface — caps, changeset/
+    // conflict/file-result guards, and the authority/approval reference guards — is re-exported
+    // through the barrel so downstream packages import named symbols instead of re-deriving them.
+    expect(mod.EDITOR_AGENT_CHANGESET_MAX_FILES).toBe(50);
+    expect(mod.EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES).toBe(65_536);
+    expect(mod.EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS).toBe(2_000);
+    expect(mod.EDITOR_AGENT_REFERENCE_ID_MAX_CHARS).toBe(128);
+    expect(typeof mod.isEditorAgentChangeset).toBe("function");
+    expect(typeof mod.isEditorAgentChangesetFile).toBe("function");
+    expect(typeof mod.isEditorAgentConflictDetail).toBe("function");
+    expect(typeof mod.isEditorAgentDiagnostic).toBe("function");
+    expect(typeof mod.isEditorAgentDiagnosticsDetail).toBe("function");
+    expect(typeof mod.isEditorAgentFileActionResult).toBe("function");
+    expect(typeof mod.isEditorAgentGovernedAuthorityReference).toBe("function");
+    expect(typeof mod.isEditorAgentOneUseApprovalReference).toBe("function");
+    expect(typeof mod.isEditorAgentPreparedChangeset).toBe("function");
   });
 
   it("editor-agent contract type re-exports are reachable through the barrel (#1391)", () => {
@@ -652,17 +698,67 @@ describe("keiko-contracts package surface", () => {
     const pin = <T>(_value?: T): T | undefined => undefined;
     type _Code = import("./index.js").EditorAgentConflictCode;
     type _Action = import("./index.js").EditorAgentAction;
+    type _ActionOrigin = import("./index.js").EditorAgentActionOrigin;
+    type _BridgeCapability = import("./index.js").EditorAgentBridgeDecisionCapability;
     type _Result = import("./index.js").EditorAgentActionResult;
     type _Event = import("./index.js").EditorAgentEvent;
+    type _Diagnostic = import("./index.js").EditorAgentDiagnostic;
+    type _DiagnosticsDetail = import("./index.js").EditorAgentDiagnosticsDetail;
     type _Snapshot = import("./index.js").EditorAgentSessionSnapshot;
     type _Request = import("./index.js").EditorAgentSnapshotRequest;
+    // Issue #2114 (ADR-0125 D3): changeset / prepared-changeset / conflict / file-result types.
+    type _Changeset = import("./index.js").EditorAgentChangeset;
+    type _ChangesetFile = import("./index.js").EditorAgentChangesetFile;
+    type _PreparedChangeset = import("./index.js").EditorAgentPreparedChangeset;
+    type _PreparedChangesetFile = import("./index.js").EditorAgentPreparedChangesetFile;
+    type _PreparedChangeKind = import("./index.js").EditorAgentPreparedChangeKind;
+    type _PreparedTextEdit = import("./index.js").EditorAgentPreparedTextEdit;
+    type _ConflictDetail = import("./index.js").EditorAgentConflictDetail;
+    type _FileActionResult = import("./index.js").EditorAgentFileActionResult;
+    type _FileActionStatus = import("./index.js").EditorAgentFileActionStatus;
     pin<_Code>();
     pin<_Action>();
+    pin<_ActionOrigin>();
+    pin<_BridgeCapability>();
     pin<_Result>();
     pin<_Event>();
+    pin<_Diagnostic>();
+    pin<_DiagnosticsDetail>();
     pin<_Snapshot>();
     pin<_Request>();
+    pin<_Changeset>();
+    pin<_ChangesetFile>();
+    pin<_PreparedChangeset>();
+    pin<_PreparedChangesetFile>();
+    pin<_PreparedChangeKind>();
+    pin<_PreparedTextEdit>();
+    pin<_ConflictDetail>();
+    pin<_FileActionResult>();
+    pin<_FileActionStatus>();
     expect(true).toBe(true);
+  });
+
+  it("coding workbench mode-policy contracts are reachable through the barrel (#2091)", async () => {
+    const mod = await import("./index.js");
+    expect(mod.CODING_WORKBENCH_POLICY_EFFECTS).toEqual(["allowed", "approval-required", "denied"]);
+    expect(mod.CODING_WORKBENCH_POLICY_RESOURCE_SCOPES).toEqual([
+      "workspace-contained",
+      "external-file",
+      "internet",
+      "delivery",
+    ]);
+    expect(mod.codingWorkbenchPolicyEffectFor("governed-assist", "internet", "low")).toBe(
+      "approval-required",
+    );
+    expect(mod.strictestCodingWorkbenchPolicyEffect("allowed", "approval-required")).toBe(
+      "approval-required",
+    );
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").CodingWorkbenchPolicyEffect>();
+    pin<import("./index.js").CodingWorkbenchPolicyResourceScope>();
+    pin<import("./index.js").CodingWorkbenchModeDisplay>();
+    pin<import("./index.js").CodingWorkbenchModeEffectMatrix>();
   });
 
   it("governed Git delivery contracts are reachable through the barrel (#471)", () => {
@@ -779,6 +875,37 @@ describe("keiko-contracts package surface", () => {
     expect(readiness.objectExists).toBe(false);
   });
 
+  it("managed LSP activation contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_ACTIVATION_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(m.MANAGED_LSP_EFFECTIVE_STATES).toHaveLength(9);
+    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toHaveLength(16);
+    expect(typeof m.parseManagedLspActivationInput).toBe("function");
+    expect(typeof m.parseManagedLspActivationStatus).toBe("function");
+    expect(typeof m.resolveManagedLspActivation).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspLanguage>();
+    pin<import("./index.js").ManagedLspEffectiveState>();
+    pin<import("./index.js").ManagedLspActivationReasonCode>();
+    pin<import("./index.js").ManagedLspProductSupport>();
+    pin<import("./index.js").ManagedLspCanonicalState>();
+    pin<import("./index.js").ManagedLspDeploymentPolicy>();
+    pin<import("./index.js").ManagedLspProvisioning>();
+    pin<import("./index.js").ManagedLspWorkspaceActivation>();
+    pin<import("./index.js").ManagedLspLegacyEnvironment>();
+    pin<import("./index.js").ManagedLspNegotiation>();
+    pin<import("./index.js").ManagedLspRuntimeHealth>();
+    pin<import("./index.js").ManagedLspPolicyResult>();
+    pin<import("./index.js").ManagedLspActivationInput>();
+    pin<import("./index.js").ManagedLspActivationStatus>();
+    pin<import("./index.js").ManagedLspActivationDenied>();
+    pin<import("./index.js").ManagedLspActivationResolution>();
+    pin<import("./index.js").ManagedLspActivationParseResult<unknown>>();
+  });
+
   it("feedback report and counted text-safety contracts are reachable through the barrel", async () => {
     const m = await import("./index.js");
 
@@ -793,5 +920,177 @@ describe("keiko-contracts package surface", () => {
     expect(typeof m.redactAbsolutePathsWithCount).toBe("function");
     expect(typeof m.isUnicodeScalarString).toBe("function");
     expect(typeof m.containsControlOtherThanTabOrLf).toBe("function");
+  });
+
+  it("managed LSP runtime configuration contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_RUNTIME_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_RUNTIME_ID_MAX_CHARS).toBe(128);
+    expect(m.MANAGED_LSP_ETAG_MAX_CHARS).toBe(96);
+    expect(m.MANAGED_LSP_BUILD_TAG_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_BUILD_TAG_MAX_CHARS).toBe(64);
+    expect(m.MANAGED_LSP_PYTHON_EXTRA_PATH_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_GO_DIRECTORY_FILTER_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_SHELLCHECK_EXCLUDE_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_SHELL_INCLUDE_PATH_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_JAVA_CLASSPATH_MAX_COUNT).toBe(128);
+    expect(m.MANAGED_LSP_JAVA_PROJECT_ROOT_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_RUST_FEATURE_MAX_COUNT).toBe(64);
+    expect(m.MANAGED_LSP_RUST_CFG_MAX_COUNT).toBe(64);
+    expect(m.MANAGED_LSP_RUST_LINKED_PROJECT_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_RUST_MAX_PROJECT_FILES).toBe(100_000);
+    expect(m.MANAGED_LSP_RUST_MAX_CARGO_METADATA_BYTES).toBe(16_777_216);
+    expect(m.MANAGED_LSP_RUST_MAX_MEMORY_MB).toBe(4_096);
+    expect(m.MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS).toBe(120_000);
+    expect(m.MANAGED_LSP_SETTING_PRECEDENCE).toEqual([
+      "builtInDefault",
+      "legacyEnvironment",
+      "operatorProvisioning",
+      "workspace",
+    ]);
+    expect(typeof m.resolveManagedLspSetting).toBe("function");
+    expect(typeof m.parseManagedLspRuntimeConfiguration).toBe("function");
+    expect(typeof m.matchesManagedLspConfigurationPrecondition).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspSettingSource>();
+    pin<import("./index.js").ManagedLspPersistedSettingSource>();
+    pin<import("./index.js").ManagedLspSettingLayers<unknown>>();
+    pin<import("./index.js").ManagedLspResolvedSetting<unknown>>();
+    pin<import("./index.js").ManagedLspWorkspaceActivationSetting>();
+    pin<import("./index.js").ManagedLspApprovedRuntimeReference>();
+    pin<import("./index.js").ManagedLspWorkspaceRelativePath>();
+    pin<import("./index.js").ManagedLspConfigurationProvenance>();
+    pin<import("./index.js").ManagedLspPythonSettings>();
+    pin<import("./index.js").ManagedLspGoBuildFlags>();
+    pin<import("./index.js").ManagedLspGoOperatingSystem>();
+    pin<import("./index.js").ManagedLspGoArchitecture>();
+    pin<import("./index.js").ManagedLspGoTarget>();
+    pin<import("./index.js").ManagedLspGoDirectoryFilter>();
+    pin<import("./index.js").ManagedLspGoSettings>();
+    pin<import("./index.js").ManagedLspShellCheckSettings>();
+    pin<import("./index.js").ManagedLspShellSettings>();
+    pin<import("./index.js").ManagedLspJavaLanguageLevel>();
+    pin<import("./index.js").ManagedLspJavaSettings>();
+    pin<import("./index.js").ManagedLspRustCfg>();
+    pin<import("./index.js").ManagedLspRustResourceBudget>();
+    pin<import("./index.js").ManagedLspRustSettings>();
+    pin<import("./index.js").ManagedLspRestartField>();
+    pin<import("./index.js").ManagedLspPythonConfiguration>();
+    pin<import("./index.js").ManagedLspGoConfiguration>();
+    pin<import("./index.js").ManagedLspShellConfiguration>();
+    pin<import("./index.js").ManagedLspJavaConfiguration>();
+    pin<import("./index.js").ManagedLspRustConfiguration>();
+    pin<import("./index.js").ManagedLspRuntimeConfiguration>();
+    pin<import("./index.js").ManagedLspConfigurationPrecondition>();
+    pin<import("./index.js").ManagedLspRuntimeParseResult>();
+  });
+
+  it("managed LSP capability negotiation contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_CAPABILITY_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES).toBe(64);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS).toBe(16);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS).toBe(10_000);
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_TYPES).toHaveLength(23);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS).toHaveLength(10);
+    expect(typeof m.parseManagedLspCandidateCapabilities).toBe("function");
+    expect(typeof m.parseManagedLspNegotiatedCapabilitySnapshot).toBe("function");
+    expect(typeof m.isManagedLspOperationNegotiated).toBe("function");
+    expect(typeof m.parseManagedLspSemanticTokenLegend).toBe("function");
+    expect(typeof m.parseManagedLspSemanticTokenData).toBe("function");
+    expect(typeof m.managedLspSemanticTokensFitDocument).toBe("function");
+    expect(typeof m.parseManagedLspSemanticTokenRequest).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspProtocolVersion>();
+    pin<import("./index.js").ManagedLspPositionEncoding>();
+    pin<import("./index.js").ManagedLspTextSync>();
+    pin<import("./index.js").ManagedLspCandidateCapabilities>();
+    pin<import("./index.js").ManagedLspNegotiatedSemanticTokens>();
+    pin<import("./index.js").ManagedLspNegotiatedCapabilitySnapshot>();
+    pin<import("./index.js").ManagedLspSemanticTokenType>();
+    pin<import("./index.js").ManagedLspSemanticTokenModifier>();
+    pin<import("./index.js").ManagedLspSemanticTokenLegend>();
+    pin<import("./index.js").ManagedLspSemanticTokenData>();
+    pin<import("./index.js").ManagedLspSemanticTokenRequest>();
+    pin<import("./index.js").ManagedLspSemanticTokenResponse>();
+    pin<import("./index.js").ManagedLspCapabilityParseResult<unknown>>();
+  });
+
+  it("managed LSP evidence contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_EVIDENCE_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_EVIDENCE_ACTOR_CLASSES).toEqual([
+      "localHuman",
+      "operator",
+      "policyEngine",
+      "system",
+    ]);
+    expect(m.MANAGED_LSP_EVIDENCE_ACTIONS).toEqual([
+      "activate",
+      "deactivate",
+      "configure",
+      "reset",
+      "rollback",
+      "restart",
+      "lifecycle",
+    ]);
+    expect(m.MANAGED_LSP_EVIDENCE_OUTCOMES).toEqual([
+      "accepted",
+      "denied",
+      "noOp",
+      "failed",
+      "conflict",
+    ]);
+    expect(typeof m.parseManagedLspEvidence).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspEvidenceActorClass>();
+    pin<import("./index.js").ManagedLspEvidenceKind>();
+    pin<import("./index.js").ManagedLspEvidenceAction>();
+    pin<import("./index.js").ManagedLspEvidenceOutcome>();
+    pin<import("./index.js").ManagedLspActivationEvidence>();
+    pin<import("./index.js").ManagedLspLifecycleEvidence>();
+    pin<import("./index.js").ManagedLspEvidence>();
+    pin<import("./index.js").ManagedLspEvidenceParseResult>();
+  });
+
+  it("M7 editor platform contracts are reachable through the barrel (#2317)", async () => {
+    const m = await import("./index.js");
+    expect(m.EDITOR_M7_SCHEMA_VERSION).toBe("1");
+    expect(m.EDITOR_M7_SETTING_REGISTRY.map((entry) => entry.id)).toContain("fontSize");
+    expect(m.EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
+    expect(m.EDITOR_M7_KEYBINDING_OVERRIDE_VERSION).toBe("1");
+    expect(m.defaultEditorM7Settings().inlineCompletion).toBe(false);
+    expect(m.defaultEditorM7Settings().testGeneration).toBe(false);
+    expect(m.defaultEditorM7Settings().patchApply).toBe(false);
+    expect(m.parseEditorM7SettingPatch("workspace", { minimap: true })).toMatchObject({
+      ok: false,
+      reasonCode: "WORKSPACE_SCOPE_DENIED",
+    });
+    expect(
+      m.resolveEditorM7AiActivation({
+        schemaVersion: "1",
+        feature: "inlineCompletion",
+        productSupported: true,
+        operatorCeiling: "allowed",
+        explicitOptIn: false,
+        modelCapability: "available",
+        budget: "available",
+        providerHealth: "healthy",
+        securityPrerequisites: "satisfied",
+      }),
+    ).toMatchObject({ state: "available", reasonCode: "EXPLICIT_OPT_IN_REQUIRED" });
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").EditorM7SettingDefinition>();
+    pin<import("./index.js").EditorM7WatchEvent>();
+    pin<import("./index.js").EditorM7ModelEvictionPlan>();
+    pin<import("./index.js").EditorM7CommandDefinition>();
+    pin<import("./index.js").EditorM7SnippetCollection>();
+    pin<import("./index.js").EditorM7AiActivationStatus>();
+    pin<import("./index.js").EditorM7AiActivationSummary>();
   });
 });

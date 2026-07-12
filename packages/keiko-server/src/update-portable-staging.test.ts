@@ -341,7 +341,7 @@ function portableManifest(
       sha256: archiveSha,
     },
     runtime: {
-      nodeVersion: "22.23.1",
+      nodeVersion: "24.18.0",
       nodePlatform: "win32",
       nodeArchitecture: "x64",
       nodeDistribution: "official-nodejs-dist",

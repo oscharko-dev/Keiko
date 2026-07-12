@@ -215,11 +215,34 @@ const contextRequest: EditorContextRequest = {
 
 const contextEntry: EditorContextEntry = {
   sourceKind: "repo-search",
+  sourceTier: "first-party-workspace",
   id: "entry-1",
   score: 0.91,
   rank: 0,
   citationRef: "cite-1",
   byteCount: 256,
+  truncated: false,
+};
+
+const editorStateContextEntry: EditorContextEntry = {
+  sourceKind: "editor-state",
+  sourceTier: "first-party-workspace",
+  id: "editor-state-1",
+  score: 1,
+  rank: 0,
+  citationRef: "editor-state",
+  byteCount: 128,
+  truncated: false,
+};
+
+const gitContextEntry: EditorContextEntry = {
+  sourceKind: "git-context",
+  sourceTier: "first-party-workspace",
+  id: "git-context-1",
+  score: 1,
+  rank: 0,
+  citationRef: "workspace",
+  byteCount: 64,
   truncated: false,
 };
 
@@ -230,7 +253,7 @@ const contextOmission: EditorContextOmission = {
 
 const contextPack: EditorContextPack = {
   request: requestIdentity,
-  entries: [contextEntry],
+  entries: [contextEntry, gitContextEntry],
   usedBytes: 256,
   budgetBytes: 16384,
   droppedForBudget: 0,
@@ -272,6 +295,7 @@ const crossBoundaryInstances: Readonly<Record<string, unknown>> = {
   recentEditSummary,
   recentEditContext,
   contextRequest,
+  editorStateContextEntry,
   contextReady: contextResults[0],
   contextDegraded: contextResults[1],
   contextUnavailable: contextResults[2],
@@ -332,6 +356,7 @@ describe("content-free types carry no content-bearing key", () => {
     modelProvenance,
     contextRequest,
     contextEntry,
+    editorStateContextEntry,
     contextPack,
     contextOmission,
     recentEditSummary,

@@ -1,11 +1,24 @@
 import { createRef, useCallback, useState, type ReactNode, type RefObject } from "react";
 import { createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import { WindowFrame } from "./WindowFrame";
 import type { AppWindow } from "./types";
 import { registerWindowRender, WIN_TYPES } from "./WindowsRegistry";
+
+const originalPlatform = window.navigator.platform;
+
+function stubPlatform(platform: string): void {
+  Object.defineProperty(window.navigator, "platform", {
+    value: platform,
+    configurable: true,
+  });
+}
+
+afterEach(() => {
+  stubPlatform(originalPlatform);
+});
 
 function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   return {
@@ -106,7 +119,7 @@ function domRect(patch: Partial<DOMRect> = {}): DOMRect {
   } as DOMRect;
 }
 
-function workspaceRef(rect: DOMRect = domRect()): RefObject<HTMLElement> {
+function workspaceRef(rect: DOMRect = domRect()): RefObject<HTMLElement | null> {
   const element = document.createElement("div");
   vi.spyOn(element, "getBoundingClientRect").mockReturnValue(rect);
   return { current: element };
@@ -818,6 +831,7 @@ describe("WindowFrame content zoom controls", () => {
   });
 
   it("does not start header dragging from right click or macOS control click", () => {
+    stubPlatform("MacIntel");
     const focus = vi.fn();
     const update = vi.fn();
     const { container } = render(
@@ -845,6 +859,33 @@ describe("WindowFrame content zoom controls", () => {
     expect(focus).toHaveBeenCalledWith("agents-1");
     expect(update).not.toHaveBeenCalled();
     expect(document.body.style.cursor).toBe("");
+  });
+
+  it("issue #2150 — on Windows/Linux, ctrl+left-click still starts a header drag (no mac context-click reinterpretation)", () => {
+    stubPlatform("Win32");
+    const focus = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={workspaceRef(domRect())}
+      />,
+    );
+
+    const header = container.querySelector<HTMLElement>(".win-head");
+    expect(header).not.toBeNull();
+
+    fireEvent.pointerDown(header as HTMLElement, {
+      button: 0,
+      ctrlKey: true,
+      clientX: 100,
+      clientY: 90,
+    });
+
+    expect(document.body.style.cursor).toBe("grabbing");
   });
 
   it("restores maximized geometry before starting a header drag", () => {

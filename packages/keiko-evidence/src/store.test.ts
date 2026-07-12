@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  chmodSync,
   existsSync,
   linkSync,
   mkdirSync,
@@ -238,6 +239,18 @@ describe("createNodeEvidenceStore", () => {
     writeFileSync(filePath, "x");
     const store = createNodeEvidenceStore(filePath);
     expect(() => store.list()).toThrow(EvidenceReadError);
+  });
+
+  it("wraps directory listing failures as EvidenceReadError", () => {
+    if (process.platform === "win32") return;
+    const dir = freshDir();
+    const store = createNodeEvidenceStore(dir);
+    chmodSync(dir, 0);
+    try {
+      expect(() => store.list()).toThrow(EvidenceReadError);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   });
 
   it("does not create the evidence directory for read-only list/get operations", () => {

@@ -4,14 +4,28 @@
 // provider invents retrieval logic: repo-search reuses keiko-workspace `searchText`/`readExcerpt`,
 // Local Knowledge reuses the query-only `runLocalKnowledgeRetrieval` path (no answer generation), and
 // memory reuses the `retrieveMemoryContext` pipeline already wired for /api/memory/context. Retrieved
-// text is untrusted model input (OWASP LLM08/LLM01): every candidate is tagged with its source tier
-// (by the orchestrator) and stripped of unsafe format characters before it can reach a model or the
-// harness.
+// editor state reuses the singleton editor-agent registry. Retrieved text is untrusted model input
+// (OWASP LLM08/LLM01): every candidate is tagged with its source tier (by the orchestrator) and
+// stripped of unsafe format characters before it can reach a model or the harness.
 
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  GIT_EDITOR_BLAME_MAX_LINES,
+  GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+  GIT_AGENT_CONTEXT_MAX_FILES,
+  GIT_AGENT_CONTEXT_MAX_HUNKS,
+  parseGitEditorBlameResponse,
+  parseGitEditorDiffResponse,
   stripUnsafeFormatChars,
+  validateGitRepositoryStatusResponse,
   type CodingContextOmission,
   type CodingContextSourceKind,
+  type EditorAgentDiagnostic,
+  type EditorAgentSessionSnapshot,
+  type GitEditorBlameResponse,
+  type GitEditorDiffResponse,
+  type GitRepositoryStatusResponse,
+  type LanguageRange,
   type RetrievalQuery,
   type RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
@@ -27,6 +41,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readCitationExcerpt } from "@oscharko-dev/keiko-local-knowledge";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import type { UiHandlerDeps } from "../deps.js";
+import { handleGitBlame, handleGitStatus, handleGitStructuredDiff } from "../gitRoutes.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
 import { vaultAsQueryPort } from "../memory-conv-handlers.js";
 import { LOCAL_CONVERSATION_MEMORY_USER_ID } from "../memory-conversation-context.js";
@@ -36,6 +51,7 @@ import {
   conversationFusionMode,
   semanticRetrievalGateForText,
 } from "../memory-retrieval-signals.js";
+import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
   buildLocalKnowledgeScope,
   retrieveEditorLocalKnowledge,
@@ -63,7 +79,21 @@ export interface ProviderContext {
   readonly signal: AbortSignal;
   readonly maxBytesPerExcerpt: number;
   readonly nowMs: number;
+  readonly gitContextReader?: GitContextReader | undefined;
 }
+
+export interface GitContextReadResult {
+  readonly status: GitRepositoryStatusResponse;
+  readonly diffs: readonly GitEditorDiffResponse[];
+  readonly blame: GitEditorBlameResponse | undefined;
+}
+
+export type GitContextReader = (input: {
+  readonly deps: UiHandlerDeps;
+  readonly realRoot: string;
+  readonly activeFile: string | null;
+  readonly startLine: number;
+}) => Promise<GitContextReadResult | undefined>;
 
 const REPO_SEARCH_MAX_HITS = 6;
 const FILES_FOCUS_MAX_LINES = 240;
@@ -71,6 +101,12 @@ const FILES_FOCUS_MAX_CHANGED_FILES = 4;
 const LOCAL_KNOWLEDGE_MAX_REFERENCES = 8;
 const MEMORY_MAX_ENTRIES = 8;
 const MAX_CITATION_REF_CHARS = 160;
+// A live-state excerpt is intentionally narrower than the 50-file changeset ceiling and the
+// 128-item snapshot diagnostics ceiling so it cannot crowd out the rest of the context pack.
+const EDITOR_STATE_MAX_DIRTY_FILES = 32;
+const EDITOR_STATE_MAX_DIAGNOSTICS = 32;
+const EDITOR_STATE_EXCERPT_ID = "editor-state-current";
+const GIT_CONTEXT_SUMMARY_EXCERPT_ID = "git-context-summary";
 
 function basename(scopePath: string): string {
   const parts = scopePath.split("/");
@@ -209,6 +245,333 @@ async function readHitExcerpt(
 // cooperative cancellation checks stay live (and lint-clean).
 function isAborted(signal: AbortSignal): boolean {
   return signal.aborted;
+}
+
+// ─── live editor-state provider ─────────────────────────────────────────────────────
+function copyLanguageRange(range: LanguageRange): LanguageRange {
+  return {
+    start: { line: range.start.line, character: range.start.character },
+    end: { line: range.end.line, character: range.end.character },
+  };
+}
+
+function summarizeEditorDiagnostic(diagnostic: EditorAgentDiagnostic): EditorAgentDiagnostic {
+  return {
+    severity: diagnostic.severity,
+    range: copyLanguageRange(diagnostic.range),
+    message: diagnostic.message,
+  };
+}
+
+function summarizeEditorState(snapshot: EditorAgentSessionSnapshot): {
+  readonly text: string;
+  readonly truncated: boolean;
+} {
+  const dirtyFiles = snapshot.dirtyFiles.slice(0, EDITOR_STATE_MAX_DIRTY_FILES);
+  const detail = snapshot.diagnosticsDetail;
+  const diagnosticsDetail =
+    detail === undefined
+      ? null
+      : {
+          items: detail.items.slice(0, EDITOR_STATE_MAX_DIAGNOSTICS).map(summarizeEditorDiagnostic),
+          truncated: detail.truncated || detail.items.length > EDITOR_STATE_MAX_DIAGNOSTICS,
+        };
+  return {
+    text: JSON.stringify(
+      {
+        activeFile: snapshot.activeFile,
+        selection: snapshot.selection === null ? null : copyLanguageRange(snapshot.selection),
+        diagnosticsSummary:
+          snapshot.diagnosticsSummary === null
+            ? null
+            : {
+                errors: snapshot.diagnosticsSummary.errors,
+                warnings: snapshot.diagnosticsSummary.warnings,
+                infos: snapshot.diagnosticsSummary.infos,
+              },
+        dirtyFiles,
+        diagnosticsDetail,
+      },
+      null,
+      2,
+    ),
+    truncated:
+      snapshot.dirtyFiles.length > EDITOR_STATE_MAX_DIRTY_FILES ||
+      (diagnosticsDetail?.truncated ?? false),
+  };
+}
+
+export function runEditorStateProvider(
+  ctx: ProviderContext,
+  input: { readonly sessionId: string },
+): ProviderOutcome {
+  if (isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("editor-state", "unavailable") };
+  }
+  const snapshot = editorAgentRegistry.snapshotFor(input.sessionId);
+  if (snapshot === undefined || isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("editor-state", "unavailable") };
+  }
+  if (snapshot.workspaceRoot !== ctx.realRoot) {
+    return { excerpts: [], omission: omission("editor-state", "denied") };
+  }
+  const summary = summarizeEditorState(snapshot);
+  const excerpt = prepareExcerpt(ctx, {
+    sourceKind: "editor-state",
+    id: EDITOR_STATE_EXCERPT_ID,
+    score: 1,
+    citationRef: snapshot.activeFile === null ? undefined : basename(snapshot.activeFile),
+    text: summary.text,
+    truncated: summary.truncated,
+  });
+  return excerpt === undefined
+    ? { excerpts: [], omission: omission("editor-state", "out-of-budget") }
+    : { excerpts: [excerpt], omission: undefined };
+}
+
+// ─── read-only Git-context provider ────────────────────────────────────────────────
+function gitRouteContext(path: string): import("../routes.js").RouteContext {
+  return {
+    req: {} as IncomingMessage,
+    res: {} as ServerResponse,
+    params: {},
+    url: new URL(path, "http://127.0.0.1"),
+  };
+}
+
+function availableStatus(body: unknown): GitRepositoryStatusResponse | undefined {
+  const validation = validateGitRepositoryStatusResponse(body);
+  if (!validation.ok) return undefined;
+  const status = body as GitRepositoryStatusResponse;
+  return status.available ? status : undefined;
+}
+
+async function readStructuredDiff(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  activeFile: string,
+  scope: "staged" | "unstaged",
+): Promise<GitEditorDiffResponse | undefined> {
+  const query = new URLSearchParams({ root: realRoot, path: activeFile, scope });
+  const result = await handleGitStructuredDiff(
+    gitRouteContext(`/api/git/diff/structured?${query.toString()}`),
+    deps,
+    deps.gitRouteOptions,
+  );
+  const parsed = parseGitEditorDiffResponse(result.body);
+  return result.status === 200 && parsed.ok ? parsed.value : undefined;
+}
+
+async function readBlame(
+  deps: UiHandlerDeps,
+  realRoot: string,
+  activeFile: string,
+  startLine: number,
+): Promise<GitEditorBlameResponse | undefined> {
+  const query = new URLSearchParams({
+    root: realRoot,
+    path: activeFile,
+    startLine: String(startLine),
+    maxLines: String(Math.min(GIT_AGENT_CONTEXT_MAX_BLAME_LINES, GIT_EDITOR_BLAME_MAX_LINES)),
+  });
+  const result = await handleGitBlame(
+    gitRouteContext(`/api/git/blame?${query.toString()}`),
+    deps,
+    deps.gitRouteOptions,
+  );
+  const parsed = parseGitEditorBlameResponse(result.body);
+  return result.status === 200 && parsed.ok ? parsed.value : undefined;
+}
+
+const defaultGitContextReader: GitContextReader = async (input) => {
+  const query = new URLSearchParams({ root: input.realRoot });
+  const result = await handleGitStatus(
+    gitRouteContext(`/api/git/status?${query.toString()}`),
+    input.deps,
+    input.deps.gitRouteOptions,
+  );
+  const status = result.status === 200 ? availableStatus(result.body) : undefined;
+  if (status === undefined) return undefined;
+  if (input.activeFile === null) return { status, diffs: [], blame: undefined };
+  const diffs = await Promise.all(
+    (["staged", "unstaged"] as const).map((scope) =>
+      readStructuredDiff(input.deps, input.realRoot, input.activeFile ?? "", scope),
+    ),
+  );
+  const blame = await readBlame(input.deps, input.realRoot, input.activeFile, input.startLine);
+  return {
+    status,
+    diffs: diffs.filter((diff): diff is GitEditorDiffResponse => diff !== undefined),
+    blame,
+  };
+};
+
+function gitSummaryText(result: GitContextReadResult): { text: string; truncated: boolean } {
+  const changedFiles = result.status.changes.slice(0, GIT_AGENT_CONTEXT_MAX_FILES);
+  const conflictedFiles = changedFiles.filter((change) => change.conflicted);
+  return {
+    text: JSON.stringify({
+      hasConflictMarkers: result.status.conflictedCount > 0,
+      changedFileCount: result.status.changes.length,
+      conflictedFiles: conflictedFiles.map((change) => basename(change.path)),
+      changedFiles: changedFiles.map((change) => ({
+        file: basename(change.path),
+        staged: change.staged,
+        unstaged: change.unstaged,
+        untracked: change.untracked,
+        conflicted: change.conflicted,
+      })),
+    }),
+    truncated:
+      result.status.truncated || result.status.changes.length > GIT_AGENT_CONTEXT_MAX_FILES,
+  };
+}
+
+function prepareGitSummary(
+  ctx: ProviderContext,
+  snapshot: EditorAgentSessionSnapshot,
+  result: GitContextReadResult,
+): RawExcerpt | undefined {
+  const summary = gitSummaryText(result);
+  return prepareExcerpt(ctx, {
+    sourceKind: "git-context",
+    id: GIT_CONTEXT_SUMMARY_EXCERPT_ID,
+    score: 1,
+    citationRef: snapshot.activeFile === null ? "workspace" : basename(snapshot.activeFile),
+    text: summary.text,
+    truncated: summary.truncated,
+  });
+}
+
+function prepareGitHunks(
+  ctx: ProviderContext,
+  citationRef: string,
+  result: GitContextReadResult,
+): { excerpts: RawExcerpt[]; truncated: boolean } {
+  const files = result.diffs.flatMap((diff) =>
+    diff.files.map((file) => ({ scope: diff.scope, file })),
+  );
+  const hunks = files
+    .slice(0, GIT_AGENT_CONTEXT_MAX_FILES)
+    .flatMap(({ scope, file }) => file.hunks.map((hunk) => ({ scope, file, hunk })));
+  const excerpts = hunks.slice(0, GIT_AGENT_CONTEXT_MAX_HUNKS).flatMap((entry, index) => {
+    const prepared = prepareExcerpt(ctx, {
+      sourceKind: "git-context",
+      id: `git-context-hunk-${String(index)}`,
+      score: 0.9,
+      citationRef,
+      text: JSON.stringify({
+        scope: entry.scope,
+        file: basename(entry.file.path),
+        header: entry.hunk.header,
+        lines: entry.hunk.lines,
+      }),
+      truncated: entry.file.truncated || entry.hunk.truncated,
+    });
+    return prepared === undefined ? [] : [prepared];
+  });
+  return {
+    excerpts,
+    truncated:
+      hunks.length > GIT_AGENT_CONTEXT_MAX_HUNKS ||
+      files.length > GIT_AGENT_CONTEXT_MAX_FILES ||
+      result.diffs.some(
+        (diff) => diff.truncated || diff.files.length > GIT_AGENT_CONTEXT_MAX_FILES,
+      ),
+  };
+}
+
+function prepareGitBlame(
+  ctx: ProviderContext,
+  citationRef: string,
+  blame: GitEditorBlameResponse | undefined,
+): { excerpt: RawExcerpt | undefined; truncated: boolean } {
+  if (blame === undefined) return { excerpt: undefined, truncated: false };
+  const lines = blame.lines.slice(0, GIT_AGENT_CONTEXT_MAX_BLAME_LINES);
+  return {
+    excerpt: prepareExcerpt(ctx, {
+      sourceKind: "git-context",
+      id: "git-context-blame",
+      score: 0.8,
+      citationRef,
+      text: JSON.stringify({
+        lines: lines.map(({ line, commitHash, authorTime, summary }) => ({
+          line,
+          commitHash,
+          authorTime,
+          summary,
+        })),
+      }),
+      truncated: blame.truncated || blame.lines.length > GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+    }),
+    truncated: blame.truncated || blame.lines.length > GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+  };
+}
+
+function gitContextSnapshot(
+  ctx: ProviderContext,
+  sessionId: string,
+): EditorAgentSessionSnapshot | ProviderOutcome {
+  if (isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("git-context", "unavailable") };
+  }
+  const snapshot = editorAgentRegistry.snapshotFor(sessionId);
+  if (snapshot === undefined || isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("git-context", "unavailable") };
+  }
+  if (snapshot.workspaceRoot !== ctx.realRoot) {
+    return { excerpts: [], omission: omission("git-context", "denied") };
+  }
+  return snapshot;
+}
+
+async function readGitContext(
+  ctx: ProviderContext,
+  snapshot: EditorAgentSessionSnapshot,
+): Promise<GitContextReadResult | undefined> {
+  try {
+    return await (ctx.gitContextReader ?? defaultGitContextReader)({
+      deps: ctx.deps,
+      realRoot: ctx.realRoot,
+      activeFile: snapshot.activeFile,
+      startLine: (snapshot.cursor?.line ?? 0) + 1,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function preparedGitContextOutcome(
+  ctx: ProviderContext,
+  snapshot: EditorAgentSessionSnapshot,
+  result: GitContextReadResult,
+): ProviderOutcome {
+  const citationRef = snapshot.activeFile === null ? "workspace" : basename(snapshot.activeFile);
+  const summary = prepareGitSummary(ctx, snapshot, result);
+  const hunks = prepareGitHunks(ctx, citationRef, result);
+  const blame = prepareGitBlame(ctx, citationRef, result.blame);
+  const excerpts = [summary, ...hunks.excerpts, blame.excerpt].filter(
+    (excerpt): excerpt is RawExcerpt => excerpt !== undefined,
+  );
+  const truncated = hunks.truncated || blame.truncated || summary?.truncated === true;
+  return {
+    excerpts,
+    omission:
+      excerpts.length === 0 || truncated ? omission("git-context", "out-of-budget") : undefined,
+  };
+}
+
+export async function runGitContextProvider(
+  ctx: ProviderContext,
+  input: { readonly sessionId: string },
+): Promise<ProviderOutcome> {
+  const snapshot = gitContextSnapshot(ctx, input.sessionId);
+  if ("excerpts" in snapshot) return snapshot;
+  const result = await readGitContext(ctx, snapshot);
+  if (result === undefined || isAborted(ctx.signal)) {
+    return { excerpts: [], omission: omission("git-context", "unavailable") };
+  }
+  return preparedGitContextOutcome(ctx, snapshot, result);
 }
 
 // ─── files-focus + repo-search provider ─────────────────────────────────────────────

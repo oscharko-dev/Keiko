@@ -283,3 +283,45 @@ export {
   type ManualIndexingPhase,
   type ManualRemediation,
 } from "./manual-pod-progress.js";
+
+// ─── Connector-backed Knowledge Pods (Epic #2238, Issue #2242, ADR-0128 D5) ────
+// The Epic #1856 machinery generalized for connector sources: the SHARED fingerprint-diff engine
+// (one diff implementation for manual refresh and connector sync), item-keyed fingerprints, the
+// persisted approved sync scope, and the sink that drives the existing parser/chunking/indexing
+// pipeline for one applied sync run. No second ingestion, diff, or retrieval path.
+export {
+  diffFingerprintSets,
+  type FingerprintDiffOptions,
+  type FingerprintSetDelta,
+} from "./fingerprint-diff.js";
+export {
+  computeConnectorItemFingerprint,
+  computeConnectorRunFingerprint,
+  readConnectorItemFingerprints,
+  replaceConnectorItemFingerprints,
+  type ConnectorItemFingerprint,
+} from "./connector-item-fingerprints.js";
+export {
+  listConnectorSourceMetadata,
+  persistConnectorSourceMetadata,
+  readConnectorSourceMetadata,
+  resolveConnectorCitationTarget,
+  updateConnectorSyncState,
+  type ConnectorCitationTargetResolution,
+  type ConnectorSourceDefinition,
+  type ConnectorSourceMetadata,
+  type ConnectorSyncState,
+} from "./connector-source-metadata.js";
+export {
+  applyConnectorSyncRun,
+  createConnectorPodShell,
+  recordUnappliedConnectorSyncRun,
+  requireConnectorSourceMetadata,
+  type ConnectorPodDeps,
+  type ConnectorPodIndexingDeps,
+  type ConnectorSyncApplyResult,
+  type ConnectorSyncContentItem,
+  type ConnectorSyncRunInput,
+  type CreateConnectorPodShellInput,
+  type UnappliedConnectorSyncRunInput,
+} from "./connector-pod.js";

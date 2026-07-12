@@ -197,6 +197,32 @@ describe("findForbiddenPaths — nested workspace node_modules", () => {
   });
 });
 
+describe("findForbiddenPaths — TypeScript compiler/runtime split", () => {
+  it.each([
+    "node_modules/@typescript/native/package.json",
+    "packages/keiko-server/node_modules/@typescript/native/bin/tsc",
+  ])("flags the development-only native compiler at %s", (path) => {
+    const hits = findForbiddenPaths([path]);
+    expect(
+      hits.some((hit) => hit.label === "the development-only TypeScript native compiler"),
+    ).toBe(true);
+  });
+
+  it.each([
+    "node_modules/@typescript/typescript-linux-x64/bin/tsc",
+    "packages/keiko-server/node_modules/@typescript/typescript-win32-x64/bin/tsc.exe",
+  ])("flags a platform-specific native compiler package at %s", (path) => {
+    const hits = findForbiddenPaths([path]);
+    expect(
+      hits.some((hit) => hit.label === "a platform-specific TypeScript native compiler dependency"),
+    ).toBe(true);
+  });
+
+  it("allows the productive TypeScript 6 runtime package", () => {
+    expect(findForbiddenPaths(["node_modules/typescript/package.json"])).toEqual([]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Native addon binary rule (new Issue #287 AC4 guard)
 // ---------------------------------------------------------------------------

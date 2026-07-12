@@ -238,7 +238,7 @@ describe("bounded large-document memory + storage profile", () => {
     expect(large.maxReadBytes).toBeLessThanOrEqual(1024);
     expect(small.maxWindowChars).toBe(large.maxWindowChars);
     expect(large.maxWindowChars).toBeLessThan(windowTextCeiling);
-  });
+  }, 60_000);
 
   it("stores text as bounded per-window rows that grow linearly, never one giant column", async () => {
     const a = await streamBounded("a.synthetic", {

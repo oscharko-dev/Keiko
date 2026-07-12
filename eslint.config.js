@@ -3,9 +3,52 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
+const sonarCompatibilityPlugin = {
+  rules: {
+    "no-fractional-numeric-separators": {
+      meta: {
+        messages: {
+          forbidden:
+            "Use scientific notation instead of separators in a fractional numeric literal.",
+        },
+        type: "problem",
+      },
+      create(context) {
+        return {
+          Literal(node) {
+            const source = context.sourceCode.getText(node);
+            if (typeof node.value === "number" && source.includes(".") && source.includes("_")) {
+              context.report({ messageId: "forbidden", node });
+            }
+          },
+        };
+      },
+    },
+    "require-sort-comparator": {
+      meta: {
+        messages: { required: "sort() and toSorted() require an explicit comparator." },
+        type: "problem",
+      },
+      create(context) {
+        return {
+          CallExpression(node) {
+            const property = node.callee.type === "MemberExpression" ? node.callee.property : null;
+            const method = property?.type === "Identifier" ? property.name : undefined;
+            if ((method === "sort" || method === "toSorted") && node.arguments.length === 0) {
+              context.report({ messageId: "required", node });
+            }
+          },
+        };
+      },
+    },
+  },
+};
+
 export default tseslint.config(
   {
     ignores: [
+      ".stryker-tmp/**",
+      "reports/mutation/**",
       "dist/**",
       "**/dist/**",
       "coverage/**",
@@ -49,6 +92,10 @@ export default tseslint.config(
       "max-lines-per-function": ["error", { max: 50, skipBlankLines: true, skipComments: true }],
       "no-console": "warn",
     },
+  },
+  {
+    files: ["eslint.config.js"],
+    rules: { "@typescript-eslint/explicit-function-return-type": "off" },
   },
   // The keiko-editor package's build tsconfig (tsconfig.json) excludes test files and the jsdom
   // setup so they never reach dist. Point the typed-lint parser at the package's lint-only project
@@ -136,6 +183,52 @@ export default tseslint.config(
     rules: {
       "no-console": "off",
       "@typescript-eslint/explicit-function-return-type": "off",
+    },
+  },
+  {
+    files: ["scripts/banking-quality-gate-worker.mjs"],
+    languageOptions: {
+      globals: {
+        Response: "readonly",
+        TextEncoder: "readonly",
+        atob: "readonly",
+        btoa: "readonly",
+        crypto: "readonly",
+        fetch: "readonly",
+      },
+    },
+  },
+  {
+    files: ["scripts/__tests__/banking-quality-gate-worker.test.mjs"],
+    languageOptions: {
+      globals: {
+        Buffer: "readonly",
+        Request: "readonly",
+        Response: "readonly",
+        URL: "readonly",
+      },
+    },
+  },
+  {
+    files: [
+      "scripts/check-lcov-source-mapping.mjs",
+      "scripts/check-mutation-quality.mjs",
+      "scripts/check-mutation-scope.mjs",
+      "scripts/check-sonar-pr-quality-gate.mjs",
+      "scripts/banking-quality-gate-core.mjs",
+      "scripts/banking-quality-gate-worker.mjs",
+    ],
+    plugins: { "keiko-sonar": sonarCompatibilityPlugin },
+    rules: {
+      "keiko-sonar/no-fractional-numeric-separators": "error",
+      "keiko-sonar/require-sort-comparator": "error",
+      "no-restricted-syntax": [
+        "error",
+        {
+          message: "Use non-mutating toSorted() with an explicit comparator.",
+          selector: "CallExpression[callee.property.name='sort']",
+        },
+      ],
     },
   },
   {

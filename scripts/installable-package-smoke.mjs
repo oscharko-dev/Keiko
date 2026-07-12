@@ -24,11 +24,11 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
-const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 90_000;
-const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
-const DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS =
+export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
+export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
+export const DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS =
   process.platform === "win32" ? WINDOWS_NPM_INSTALL_TIMEOUT_MS : DEFAULT_NPM_INSTALL_TIMEOUT_MS;
-const NPM_INSTALL_TIMEOUT_MS =
+export const NPM_INSTALL_TIMEOUT_MS =
   parsePositiveTimeoutEnv("KEIKO_SMOKE_INSTALL_TIMEOUT_MS") ??
   DEFAULT_EFFECTIVE_NPM_INSTALL_TIMEOUT_MS;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
@@ -42,7 +42,7 @@ const rootPackageSurfaceContract = JSON.parse(
 const rootVersion = rootPackageJson.version;
 const bundled = rootPackageJson.bundleDependencies ?? [];
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   return {
     includeOptional: argv.includes("--include-optional"),
   };
@@ -53,7 +53,7 @@ function fail(message) {
   process.exit(1);
 }
 
-function parsePositiveTimeoutEnv(name) {
+export function parsePositiveTimeoutEnv(name) {
   const value = process.env[name];
   if (value === undefined || value === "") {
     return undefined;
@@ -286,7 +286,7 @@ async function assertInstalledRootRuntimeSurface(tmp) {
       join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "index.js"),
     ).href;
     const mod = await import(moduleUrl);
-    const runtimeExports = Object.keys(mod).sort();
+    const runtimeExports = Object.keys(mod).sort((a, b) => a.localeCompare(b));
     const diff = diffExpectedExports(runtimeExports, rootPackageSurfaceContract.runtimeExports);
     if (diff.missing.length > 0 || diff.unexpected.length > 0) {
       fail(
@@ -692,4 +692,6 @@ async function main() {
   }
 }
 
-void main();
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main();
+}

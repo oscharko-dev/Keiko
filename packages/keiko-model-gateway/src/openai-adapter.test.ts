@@ -39,7 +39,16 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 }
 
 function adapterWith(fetchImpl: typeof fetch): OpenAiAdapter {
-  return new OpenAiAdapter({ fetchImpl, requestId: "fixed-id", costClass: "high", now: () => 0 });
+  let tick = 0;
+  return new OpenAiAdapter({
+    fetchImpl,
+    requestId: "fixed-id",
+    costClass: "high",
+    now: (): number => {
+      tick += 10;
+      return tick;
+    },
+  });
 }
 
 describe("OpenAiAdapter.call", () => {
@@ -56,6 +65,7 @@ describe("OpenAiAdapter.call", () => {
     expect(result.modelId).toBe("example-chat-model");
     expect(result.content).toBe("pong");
     expect(result.usage.promptTokens).toBe(3);
+    expect(result.usage.latencyMs).toBe(10);
     expect(result.usage.requestId).toBe("fixed-id");
     expect(result.usage.costClass).toBe("high");
   });
@@ -622,8 +632,28 @@ describe("OpenAiAdapter.callStream", () => {
     expect(done.response.finishReason).toBe("stop");
     expect(done.response.usage.promptTokens).toBe(7);
     expect(done.response.usage.completionTokens).toBe(2);
+    expect(done.response.usage.latencyMs).toBe(10);
     expect(done.response.usage.requestId).toBe("fixed-id");
     expect(done.response.usage.costClass).toBe("high");
+  });
+
+  it("preserves a streamed length finish reason instead of defaulting to stop", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        sseResponse([
+          deltaLine("partial"),
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n`,
+          "data: [DONE]\n",
+        ]),
+      ),
+    );
+
+    const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
+    const done = chunks.at(-1);
+
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.finishReason).toBe("length");
+    expect(done.response.content).toBe("partial");
   });
 
   it("requests stream:true with include_usage in the request body", async () => {
@@ -708,6 +738,67 @@ describe("OpenAiAdapter.callStream", () => {
     // Nor must the done chunk's assembled content.
     const serialized = JSON.stringify(chunks);
     expect(serialized).not.toContain(customSecret);
+  });
+
+  it("emits only the safe prefix while holding back a possible secret suffix", async () => {
+    const customSecret = "opaque-buffered-secret-value";
+    const heldPrefix = customSecret.slice(0, 6);
+    const adapter = adapterWith(() =>
+      Promise.resolve(sseResponse([deltaLine(`safe-${heldPrefix}`), "data: [DONE]\n"])),
+    );
+
+    const chunks = await collectStream(
+      adapter.callStream(REQUEST, { ...CONFIG, apiKey: customSecret }),
+    );
+    const deltaTokens = chunks.filter(
+      (chunk): chunk is Extract<typeof chunk, { type: "delta" }> => chunk.type === "delta",
+    );
+
+    expect(deltaTokens).toEqual([
+      { type: "delta", token: "safe-" },
+      { type: "delta", token: heldPrefix },
+    ]);
+  });
+
+  it("holds back a streamed secret prefix until the following delta proves it redacted", async () => {
+    const customSecret = "opaque-held-prefix-secret-value";
+    const prefix = customSecret.slice(0, 11);
+    const suffix = customSecret.slice(11);
+    const adapter = adapterWith(() =>
+      Promise.resolve(sseResponse([deltaLine(prefix), deltaLine(suffix), "data: [DONE]\n"])),
+    );
+
+    const chunks = await collectStream(
+      adapter.callStream(REQUEST, { ...CONFIG, apiKey: customSecret }),
+    );
+    const deltaTokens = chunks.filter(
+      (chunk): chunk is Extract<typeof chunk, { type: "delta" }> => chunk.type === "delta",
+    );
+
+    expect(deltaTokens).toHaveLength(1);
+    expect(deltaTokens[0]?.token).toContain("[REDACTED]");
+    expect(JSON.stringify(chunks)).not.toContain(customSecret);
+    expect(JSON.stringify(chunks)).not.toContain(prefix);
+  });
+
+  it("flushes a trailing secret prefix when the stream ends before the secret completes", async () => {
+    const customSecret = "opaque-trailing-secret-value";
+    const trailingPrefix = customSecret.slice(0, 9);
+    const adapter = adapterWith(() =>
+      Promise.resolve(sseResponse([deltaLine(trailingPrefix), "data: [DONE]\n"])),
+    );
+
+    const chunks = await collectStream(
+      adapter.callStream(REQUEST, { ...CONFIG, apiKey: customSecret }),
+    );
+    const deltaTokens = chunks.filter(
+      (chunk): chunk is Extract<typeof chunk, { type: "delta" }> => chunk.type === "delta",
+    );
+    const done = chunks.at(-1);
+
+    expect(deltaTokens).toEqual([{ type: "delta", token: trailingPrefix }]);
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.content).toBe(trailingPrefix);
   });
 
   it("maps a non-ok streaming status to the matching gateway error", async () => {

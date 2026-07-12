@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
 import {
   DE_CATALOG,
@@ -10,6 +11,7 @@ import {
   changedFilesFromGit,
   changedFilesFromInput,
   checkUiI18nGuard,
+  hasI18nRelevantAddedLine,
   hasUserFacingTextLine,
   isUiProductionSource,
 } from "../check-ui-i18n-guard.mjs";
@@ -91,6 +93,19 @@ test("recognizes user-facing JSX, a11y attributes, and return strings", () => {
   assert.equal(hasUserFacingTextLine('return "Enter a name.";'), true);
   assert.equal(hasUserFacingTextLine('<g transform="translate(10 10)">'), false);
   assert.equal(hasUserFacingTextLine("// Called when the user opens a file."), false);
+});
+
+test("requires catalog review only for i18n-relevant added lines", () => {
+  expect(hasI18nRelevantAddedLine('return <p>{t("feature.title")}</p>;')).toBe(true);
+  expect(hasI18nRelevantAddedLine("return <p>{t(`feature.title`)}</p>;")).toBe(true);
+  expect(hasI18nRelevantAddedLine("const t = useTranslate();")).toBe(true);
+  expect(hasI18nRelevantAddedLine("const i18n = useI18n();")).toBe(true);
+  expect(hasI18nRelevantAddedLine('<I18nTranslate id="feature.title" />')).toBe(true);
+  expect(hasI18nRelevantAddedLine('<button aria-label="Open">')).toBe(true);
+  expect(hasI18nRelevantAddedLine("readonly titleRef: RefObject<HTMLElement | null>;")).toBe(false);
+  expect(hasI18nRelevantAddedLine("// Improve compatibility with the current renderer.")).toBe(
+    false,
+  );
 });
 
 test("detects changed files from the push event before SHA", () => {
@@ -351,4 +366,88 @@ test("fails when English and German catalog keys drift", async () => {
       assert.match(result.problems.join("\n"), /feature\.subtitle/);
     },
   );
+});
+
+async function withGitFixture(callback) {
+  const repoRoot = await mkdtemp(join(tmpdir(), "keiko-i18n-guard-git-"));
+  const savedBaseSha = process.env.KEIKO_I18N_GUARD_BASE_SHA;
+  const run = (args) => spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", stdio: "pipe" });
+
+  try {
+    run(["init", "-q"]);
+    run(["config", "user.email", "test@example.com"]);
+    run(["config", "user.name", "Test"]);
+    for (const [file, contents] of Object.entries(matchingCatalogs)) {
+      await writeRepoFile(repoRoot, file, contents);
+    }
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <p>\n      {t("feature.title")}\n    </p>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "base"]);
+    const baseSha = run(["rev-parse", "HEAD"]).stdout.trim();
+    process.env.KEIKO_I18N_GUARD_BASE_SHA = baseSha;
+
+    return await callback(repoRoot, run);
+  } finally {
+    if (savedBaseSha === undefined) delete process.env.KEIKO_I18N_GUARD_BASE_SHA;
+    else process.env.KEIKO_I18N_GUARD_BASE_SHA = savedBaseSha;
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+}
+
+test("passes a pure refactor of an already-translated file with no new user-facing text", async () => {
+  const result = await withGitFixture(async (repoRoot, run) => {
+    // The unchanged t("feature.title") call stays on its own line, untouched, exactly like a real
+    // diff hunk that only edits nearby structural code (e.g. adding a ref/tabIndex to a heading).
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useRef } from "react";\nimport { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  const ref = useRef(null);\n  return (\n    <p ref={ref}>\n      {t("feature.title")}\n    </p>\n  );\n}\n',
+    );
+
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "refactor"]);
+
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.problems).toEqual([]);
+});
+
+test("fails a change that adds a genuinely new translation key without updating catalogs", async () => {
+  const result = await withGitFixture(async (repoRoot, run) => {
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <>\n      <p>{t("feature.title")}</p>\n      <p>{t("feature.subtitle")}</p>\n    </>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "add subtitle"]);
+
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
+});
+
+test("fails a change that adds new hard-coded user-facing text", async () => {
+  const result = await withGitFixture(async (repoRoot, run) => {
+    await writeRepoFile(
+      repoRoot,
+      UI_FILE,
+      'import { useTranslate } from "@/lib/i18n";\nexport function NewFeature() {\n  const t = useTranslate();\n  return (\n    <>\n      <p>{t("feature.title")}</p>\n      <p>Hard-coded text</p>\n    </>\n  );\n}\n',
+    );
+    run(["add", "-A"]);
+    run(["commit", "-q", "-m", "add hard-coded text"]);
+
+    return checkUiI18nGuard({ repoRoot, changedFiles: [UI_FILE] });
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.problems.join("\n")).toMatch(/i18n-messages\.en\.ts/);
 });

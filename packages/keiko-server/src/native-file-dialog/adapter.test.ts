@@ -132,6 +132,25 @@ describe("Windows native dialog adapter", () => {
   });
 });
 
+describe("Windows native folder picker foreground owner (issue #2151)", () => {
+  // The BFF's PowerShell helper is a background process, so a modal dialog it opens WITHOUT an
+  // owner window lands behind the browser that triggered it (Windows foreground lock) and the
+  // user never sees it — they fall back to typing the path, i.e. "the previous version of the
+  // folder search". The Windows FILE dialog already anchors to an invisible top-most owner form
+  // (New-DialogOwner + ShowDialog($owner)); the FOLDER Common Item Dialog must do the same or it
+  // opens behind the browser. Real Explorer behavior is not CI-verifiable (ADR-0118), so this
+  // pins the script invariant the fix relies on — mirroring the picker-deletion characterization
+  // test's approach for platform code CI cannot exercise.
+  it("anchors the folder Common Item Dialog to a foreground owner, not IntPtr.Zero", () => {
+    expect(WINDOWS_NATIVE_FILE_DIALOG_SCRIPT).not.toContain("dialog.Show(IntPtr.Zero)");
+    expect(WINDOWS_NATIVE_FILE_DIALOG_SCRIPT).toContain("dialog.Show(owner)");
+  });
+
+  it("passes the invisible top-most owner window handle into the folder helper", () => {
+    expect(WINDOWS_NATIVE_FILE_DIALOG_SCRIPT).toContain("$owner.Handle");
+  });
+});
+
 describe("adapter failure mapping", () => {
   it("maps a timed-out helper to a typed timeout", async () => {
     const error = await adapterFailure(captureRunner({ timedOut: true }, []));

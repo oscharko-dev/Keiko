@@ -31,6 +31,7 @@ interface CapturedEditor {
     empty: boolean;
   }) => void;
   runSaveAction: () => void;
+  runAction: (id: string, editor: unknown) => void;
   formatRuns: () => number;
   saveKeybinding: () => number | undefined;
   focus: ReturnType<typeof vi.fn>;
@@ -39,6 +40,8 @@ interface CapturedEditor {
   revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
   deltaDecorations: ReturnType<typeof vi.fn>;
   executeEdits: ReturnType<typeof vi.fn>;
+  setModelValue: ReturnType<typeof vi.fn>;
+  modelValue: () => string;
   pushUndoStop: ReturnType<typeof vi.fn>;
   disposed: { action: boolean; cursor: boolean; selection: boolean };
 }
@@ -132,7 +135,7 @@ vi.mock("@monaco-editor/react", () => {
     editor: { defineTheme: vi.fn(), setModelMarkers: vi.fn() },
     MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
     KeyMod: { CtrlCmd: 2048, Alt: 512 },
-    KeyCode: { KeyS: 49, KeyT: 53, F2: 60 },
+    KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
     languages: {
       CompletionItemKind: {
         Text: 1,
@@ -170,7 +173,11 @@ vi.mock("@monaco-editor/react", () => {
     },
   };
   interface FakeEditorShape {
-    addAction: (descriptor: { keybindings?: number[]; run: () => void }) => { dispose: () => void };
+    addAction: (descriptor: {
+      id: string;
+      keybindings?: number[];
+      run: (editor?: unknown) => void;
+    }) => { dispose: () => void };
     getAction: (id: string) => { run: () => void } | null;
     onDidChangeCursorPosition: (
       listener: (e: { position: { lineNumber: number; column: number } }) => void,
@@ -189,6 +196,7 @@ vi.mock("@monaco-editor/react", () => {
     pushUndoStop: ReturnType<typeof vi.fn>;
     getModel: () => {
       getValue: () => string;
+      setValue: ReturnType<typeof vi.fn>;
       getVersionId: () => number;
       getLanguageId: () => string;
       getLineCount: () => number;
@@ -201,6 +209,7 @@ vi.mock("@monaco-editor/react", () => {
   }
   interface FakeModelShape {
     getValue: () => string;
+    setValue: ReturnType<typeof vi.fn>;
     getVersionId: () => number;
     getLanguageId: () => string;
     getLineCount: () => number;
@@ -212,6 +221,7 @@ vi.mock("@monaco-editor/react", () => {
     container: { current: HTMLDivElement | null };
     disposed: { action: boolean; cursor: boolean; selection: boolean };
     saveRun: () => void;
+    actionRuns: Map<string, (editor?: unknown) => void>;
     formatRunCount: number;
     saveKeybindings: readonly number[] | undefined;
     cursorListener: ((e: { position: { lineNumber: number; column: number } }) => void) | null;
@@ -222,6 +232,7 @@ vi.mock("@monaco-editor/react", () => {
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
     executeEdits: ReturnType<typeof vi.fn>;
+    setModelValue: ReturnType<typeof vi.fn>;
     pushUndoStop: ReturnType<typeof vi.fn>;
     modelText: string;
     modelLanguage: string;
@@ -236,6 +247,7 @@ vi.mock("@monaco-editor/react", () => {
       container: { current: null },
       disposed: { action: false, cursor: false, selection: false },
       saveRun: (): void => undefined,
+      actionRuns: new Map(),
       formatRunCount: 0,
       saveKeybindings: undefined,
       cursorListener: null,
@@ -249,6 +261,7 @@ vi.mock("@monaco-editor/react", () => {
           newDecorations.length > 0 ? ["reference-decoration"] : [],
       ),
       executeEdits: vi.fn(),
+      setModelValue: vi.fn(),
       pushUndoStop: vi.fn(() => true),
       modelText: "",
       modelLanguage: "plaintext",
@@ -269,10 +282,21 @@ vi.mock("@monaco-editor/react", () => {
         return true;
       },
     );
+    s.setModelValue.mockImplementation((text: string): void => {
+      s.modelText = text;
+      s.modelVersion += 1;
+      s.modelContentListener?.();
+      s.onChange?.(text);
+    });
     s.fakeEditor = {
       addAction: (descriptor): { dispose: () => void } => {
-        s.saveRun = descriptor.run;
-        s.saveKeybindings = descriptor.keybindings;
+        s.actionRuns.set(descriptor.id, descriptor.run);
+        if (descriptor.id === "keiko.editor.save") {
+          s.saveRun = (): void => {
+            descriptor.run();
+          };
+          s.saveKeybindings = descriptor.keybindings;
+        }
         return {
           dispose: (): void => {
             s.disposed.action = true;
@@ -314,6 +338,7 @@ vi.mock("@monaco-editor/react", () => {
       pushUndoStop: s.pushUndoStop,
       getModel: (): FakeModelShape => ({
         getValue: (): string => s.modelText,
+        setValue: s.setModelValue,
         getVersionId: (): number => s.modelVersion,
         getLanguageId: (): string => s.modelLanguage,
         getLineCount: (): number => Math.max(1, s.modelText.split("\n").length),
@@ -346,6 +371,11 @@ vi.mock("@monaco-editor/react", () => {
       runSaveAction: (): void => {
         s.saveRun();
       },
+      runAction: (id, editor): void => {
+        const run = s.actionRuns.get(id);
+        if (run === undefined) throw new Error(`missing editor action ${id}`);
+        run(editor);
+      },
       formatRuns: (): number => s.formatRunCount,
       saveKeybinding: (): number | undefined => s.saveKeybindings?.[0],
       focus: s.focus,
@@ -354,6 +384,8 @@ vi.mock("@monaco-editor/react", () => {
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
       executeEdits: s.executeEdits,
+      setModelValue: s.setModelValue,
+      modelValue: (): string => s.modelText,
       pushUndoStop: s.pushUndoStop,
       disposed: s.disposed,
     };
@@ -370,7 +402,7 @@ vi.mock("@monaco-editor/react", () => {
     captured.language = props.language ?? null;
     captured.options = props.options ?? null;
     captured.keepCurrentModel = props.keepCurrentModel ?? null;
-    state.modelText = props.value ?? "";
+    if (!state.mounted) state.modelText = props.value ?? "";
     state.modelLanguage = props.language ?? "plaintext";
     state.onChange = props.onChange ?? null;
     scheduleMountOnce(state, props.onMount);
@@ -479,6 +511,28 @@ describe("KeikoCodeEditor — controlled editing", () => {
     ];
     expect(delta.text).toBe("const renamed = 1;\n");
     expect(origin).toBe("applied-patch");
+  });
+
+  it("syncs host-controlled buffer changes into the retained Monaco model without echoing dirty edits", async () => {
+    const onContentChange = vi.fn();
+    const { rerender } = render(<KeikoCodeEditor {...baseProps({ onContentChange })} />);
+    await flushMount();
+    onContentChange.mockClear();
+
+    rerender(
+      <KeikoCodeEditor
+        {...baseProps({
+          onContentChange,
+          buffer: buildBuffer({ text: "const a = 2;\n" }),
+        })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(captured.editor?.setModelValue).toHaveBeenCalledWith("const a = 2;\n");
+      expect(captured.editor?.modelValue()).toBe("const a = 2;\n");
+    });
+    expect(onContentChange).not.toHaveBeenCalled();
   });
 
   it("uses a host-provided accessible editor label", () => {
@@ -621,6 +675,37 @@ describe("KeikoCodeEditor — selection and cursor reporting", () => {
     });
     expect(onSelectionChange).toHaveBeenCalledWith(null);
   });
+
+  it("runs Ask Keiko through the mounted action with the latest host callback", async () => {
+    const initialHandler = vi.fn();
+    const latestHandler = vi.fn();
+    const { rerender } = render(
+      <KeikoCodeEditor {...baseProps({ onAskKeikoAboutSelection: initialHandler })} />,
+    );
+    await flushMount();
+    rerender(<KeikoCodeEditor {...baseProps({ onAskKeikoAboutSelection: latestHandler })} />);
+    const selection = {
+      startLineNumber: 1,
+      startColumn: 7,
+      endLineNumber: 1,
+      endColumn: 12,
+      isEmpty: (): boolean => false,
+    };
+    const getValueInRange = vi.fn(() => "value");
+
+    captured.editor?.runAction("keiko.editor.askKeikoAboutSelection", {
+      getSelection: () => selection,
+      getModel: () => ({ getValueInRange }),
+    });
+
+    expect(initialHandler).not.toHaveBeenCalled();
+    expect(getValueInRange).toHaveBeenCalledWith(selection);
+    expect(latestHandler).toHaveBeenCalledWith({
+      textMode: "selection",
+      range: { start: { line: 0, column: 6 }, end: { line: 0, column: 11 } },
+      text: "value",
+    });
+  });
 });
 
 describe("KeikoCodeEditor — runtime errors", () => {
@@ -738,6 +823,28 @@ describe("KeikoCodeEditor — reference reveal", () => {
         },
       ],
     );
+  });
+
+  it("keeps the cursor on an indented symbol while highlighting its whole line", async () => {
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          revealRequest: {
+            id: "nested-symbol",
+            range: { start: { line: 16, column: 2 }, end: { line: 18, column: 3 } },
+          },
+        })}
+      />,
+    );
+    await flushMount();
+
+    expect(captured.editor?.setSelection).toHaveBeenCalledWith({
+      startLineNumber: 17,
+      startColumn: 1,
+      endLineNumber: 19,
+      endColumn: 4,
+    });
+    expect(captured.editor?.setPosition).toHaveBeenCalledWith({ lineNumber: 17, column: 3 });
   });
 
   it("replays the same range when the host sends a new reveal request id", async () => {
@@ -1079,9 +1186,9 @@ describe("KeikoCodeEditor — large-file degraded mode (Issue #1207)", () => {
     expect(captured.options?.largeFileOptimizations).toBe(true);
   });
 
-  it("lets @monaco-editor/react dispose the current model when the editor unmounts", () => {
+  it("keeps Monaco models across unmount so the bounded registry owns disposal", () => {
     render(<KeikoCodeEditor {...baseProps()} />);
-    expect(captured.keepCurrentModel).toBe(false);
+    expect(captured.keepCurrentModel).toBe(true);
   });
 
   it("passes degraded Monaco options for a buffer over the 500 KB size threshold", () => {

@@ -178,19 +178,36 @@ function seedChunks(
   upsertLexicalRows(store._internal.db, lexicalRows);
 }
 
+function addTopicBoost(boosts: Record<string, number>, topic: string | undefined): void {
+  if (topic === undefined) return;
+  boosts[topic] = 1.0;
+}
+
+function collectDocumentTopicBoosts(boosts: Record<string, number>, doc: EvalDocumentSpec): void {
+  for (const chunk of doc.chunks) {
+    addTopicBoost(boosts, chunk.topic);
+  }
+}
+
+function collectSourceTopicBoosts(boosts: Record<string, number>, source: EvalSourceSpec): void {
+  for (const doc of source.documents) {
+    collectDocumentTopicBoosts(boosts, doc);
+  }
+}
+
+function collectCapsuleTopicBoosts(boosts: Record<string, number>, capsule: EvalCapsuleSpec): void {
+  for (const source of capsule.sources) {
+    collectSourceTopicBoosts(boosts, source);
+  }
+}
+
 function collectTopicBoosts(fixture: RetrievalEvalFixture): Record<string, number> {
   const boosts: Record<string, number> = {};
   for (const capsule of fixture.capsules) {
-    for (const source of capsule.sources) {
-      for (const doc of source.documents) {
-        for (const chunk of doc.chunks) {
-          if (chunk.topic !== undefined) boosts[chunk.topic] = 1.0;
-        }
-      }
-    }
+    collectCapsuleTopicBoosts(boosts, capsule);
   }
   for (const query of fixture.queries) {
-    if (query.topic !== undefined) boosts[query.topic] = 1.0;
+    addTopicBoost(boosts, query.topic);
   }
   return boosts;
 }

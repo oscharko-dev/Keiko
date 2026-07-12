@@ -15,6 +15,7 @@ const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
 const USER_FACING_STRING_RETURN_PATTERN =
   /\breturn\s+(?:"[^"]*\s[A-Za-z][^"]*"|'[^']*\s[A-Za-z][^']*'|`[^`]*\s[A-Za-z][^`]*`)/u;
+const I18N_KEY_REFERENCE_PATTERN = /\bt\s*\(\s*(?:"[^"]+"|'[^']+'|`[^`]+`)/u;
 
 function normalizePath(file) {
   return file.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -76,6 +77,14 @@ export function hasUserFacingTextLine(line) {
   );
 }
 
+export function hasI18nRelevantAddedLine(line) {
+  return (
+    hasUserFacingTextLine(line) ||
+    I18N_KEY_REFERENCE_PATTERN.test(line) ||
+    I18N_USAGE_PATTERNS.some((pattern) => pattern.test(line))
+  );
+}
+
 function addedLinesFromPatch(patch) {
   return patch
     .split(/\r?\n/)
@@ -103,11 +112,16 @@ function sourceHasUserFacingText(source) {
   return source.split(/\r?\n/).some(hasUserFacingTextLine);
 }
 
+// When a real diff is available, only the ADDED lines decide relevance: a change is i18n-relevant
+// only if it introduces new user-facing text or a new i18n API call, not merely because the file
+// already used i18n elsewhere (e.g. a pure focus-management or logic refactor of an already
+// translated component must not force an unrelated catalog touch). Fixture-driven callers with no
+// git history (addedLines === null) fall back to whole-file detection, matching prior behavior.
 function hasI18nRelevantChange(repoRoot, file) {
-  if (hasI18nUsage(repoRoot, file)) return true;
   const addedLines = gitAddedLinesForFile(repoRoot, file);
-  if (addedLines !== null) return addedLines.some(hasUserFacingTextLine);
-  return sourceHasUserFacingText(readText(repoRoot, file));
+  if (addedLines !== null) return addedLines.some(hasI18nRelevantAddedLine);
+  const source = readText(repoRoot, file);
+  return hasI18nUsage(repoRoot, file) || sourceHasUserFacingText(source);
 }
 
 function isSafeGitSha(value) {
@@ -252,7 +266,7 @@ function symmetricDifference(left, right) {
   return [
     ...Array.from(left).filter((key) => !right.has(key)),
     ...Array.from(right).filter((key) => !left.has(key)),
-  ].sort();
+  ].sort((a, b) => a.localeCompare(b));
 }
 
 export function checkUiI18nGuard({

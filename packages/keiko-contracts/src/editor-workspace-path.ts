@@ -10,11 +10,11 @@
 //
 // Leaf-package rules (ADR-0019): pure string functions only. No filesystem, no clock, no crypto,
 // no randomness, and no imports of other `@oscharko-dev/keiko-*` packages. The single in-package
-// dependency is `isContainedAgentPath` (./editor-agent), the existing root-relative path guard the
+// dependency is `isContainedAgentPath` (./editor-agent-path), the root-relative path guard the
 // agent action surface already uses — reused here so ONE predicate defines what a contained,
 // root-relative file identifier is across the editor surface (AC5: no new subsystem).
 
-import { isContainedAgentPath } from "./editor-agent.js";
+import { isContainedAgentPath } from "./editor-agent-path.js";
 
 // A root-relative POSIX file identifier: no leading slash, no drive/UNC prefix, no `..` segment,
 // no NUL — i.e. exactly what `isContainedAgentPath` accepts. The empty string is reserved for

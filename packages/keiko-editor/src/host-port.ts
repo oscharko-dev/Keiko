@@ -1,6 +1,8 @@
-import type { FileContent } from "@oscharko-dev/keiko-contracts";
+import type { FileContent, VerificationKind } from "@oscharko-dev/keiko-contracts";
 
 import type { EditorLanguageId } from "./languages.js";
+import type { EditorGitGutterResolver } from "./components/git-gutter-bridge.js";
+import type { EditorBlameHost } from "./components/blame-bridge.js";
 import type {
   EditorCompletionRequest,
   EditorCompletionResponse,
@@ -32,6 +34,15 @@ export interface EditorBuffer {
   readonly language: EditorLanguageId;
   readonly content: FileContent;
   readonly readOnly: boolean;
+}
+
+/**
+ * Issue #2212 (ADR-0126) — a general run-affordance request. `targetPath` names the workspace-relative
+ * file for a `targeted-test` run; the workspace-wide kinds (`typecheck`/`lint`/`build`) omit it.
+ */
+export interface EditorVerificationRunIntent {
+  readonly kind: VerificationKind;
+  readonly targetPath?: string | undefined;
 }
 
 /**
@@ -80,4 +91,17 @@ export interface EditorHostPort {
   readonly applyPatchReview?: (
     decision: EditorPatchReviewDecision,
   ) => Promise<EditorPatchApplyResult>;
+  // Issue #2212 (ADR-0126) — verify the current pending patch (activates the previously-unwired
+  // `runVerification` capability for the patch-review case). The host owns the run identity end to end.
+  readonly runVerification?: () => void;
+  // Issue #2212 (ADR-0126) — start a general run affordance (file-targeted tests, or a workspace
+  // typecheck/lint/build) through Issue #2211's governed route. The host tracks the server-assigned run
+  // id so `cancelVerification` reaches the server-side run rather than merely aborting a local fetch —
+  // the cross-boundary cancellation convention, not a bare AbortSignal (see the header note above).
+  readonly runWorkspaceVerification?: (intent: EditorVerificationRunIntent) => void;
+  readonly cancelVerification?: () => void;
+  /** Read-only, host-owned structured Git changes for the active editor buffer (ADR-0127). */
+  readonly fetchGitChanges?: EditorGitGutterResolver;
+  /** On-demand, read-only blame capability for a saved active file (ADR-0127). */
+  readonly fetchGitBlame?: EditorBlameHost["resolve"];
 }

@@ -13,13 +13,33 @@ agree; flag the drift.
 ## 1. What Keiko is (and the one rule you cannot break)
 
 Keiko is a **governed, local-first agentic workspace** for regulated engineering and knowledge
-work. It is a TypeScript monorepo (npm workspaces, Node ≥ 22) that ships as one bundled product.
+work. It is a TypeScript monorepo (npm workspaces, Node >=24.18.0 <25) that ships as one bundled
+product.
 
 **The human-control invariant — non-negotiable:**
 
-> Keiko never commits, pushes, opens pull requests, merges, or applies changes to a user's
-> repository without an explicit, local human action. Manifest-producing surfaces emit
-> **redacted** evidence for human review.
+> A local human selects or accepts the task, autonomy mode, Authority Envelope, and deployment
+> ceiling. Keiko may then act inside that validated, bounded authority without per-action approval
+> when policy says `allowed`. Commit, push, pull-request creation, merge, and authority widening
+> remain separately human-approved delivery actions. Manifest-producing surfaces emit **redacted**
+> evidence for human review.
+
+The product has exactly three user-facing modes — the product-wide authority model for every
+autonomy-capable surface, anchored by
+[ADR-0129](docs/adr/ADR-0129-product-wide-authority-and-autonomy-model.md) and governed in detail
+by [ADR-0124](docs/adr/ADR-0124-coding-autonomy-modes-and-sidecar-runtime-authority.md) and
+[ADR-0125](docs/adr/ADR-0125-governed-agent-docking-and-editor-changesets.md):
+
+- **Ask for approval** (`governed-assist`) allows workspace-contained work and asks before external
+  files, internet use, or delivery.
+- **Approve for me** (`supervised-coding`) allows low/medium-risk file and internet work and asks
+  before high/critical-risk work or delivery.
+- **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
+  Authority Envelope without per-action approval; delivery is still separately human-approved.
+
+Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
+sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
+restrictions fail closed.
 
 This shapes the product _and_ how you work on it:
 
@@ -83,17 +103,34 @@ There is a convenience aggregate that chains the core of the above:
 npm run conversation:release-check
 ```
 
+For PR-bound work, use the Codex pre-PR gate instead of manually stitching a partial checklist
+together:
+
+```bash
+npm run codex:pre-pr
+```
+
+This gate runs the local-first sequence in a fixed order: typecheck, lint, format, UI package
+checks, unit tests, coverage quality, LCOV source mapping, architecture checks, ADR/dependency
+hygiene, clean build, UI build, package-surface, editor bundle size, and smoke coverage. It writes a
+machine-readable report to `.codex/pre-pr-report.json` so the exact local outcome is inspectable
+before the first push, a PR update, or a merge.
+
 ### Local-first gate policy
 
 Never use GitHub Actions as the first test environment for a change. Before pushing,
 force-pushing, updating a pull request, or merging:
 
 1. Identify every GitHub quality gate that the change can affect.
-2. Run the corresponding local command before the push.
+2. Run `npm run codex:pre-pr` for PR-bound work, plus any additional touched-area gate that is not
+   already covered by that command.
 3. If a GitHub gate is already red, reproduce that exact failure locally, or reduce it to the
    nearest deterministic local gate, before pushing another fix.
-4. Push only after the relevant local gate is green.
-5. Report the exact local commands and outcomes.
+4. Fix every local finding before pushing; after any fix, rerun the failed targeted gate and then
+   rerun the full `npm run codex:pre-pr` gate before the next push.
+5. Push only after the relevant local gate is green or a documented platform-specific local skip is
+   unavoidable.
+6. Report the exact local commands and outcomes from the generated pre-PR report.
 
 If a required gate cannot be run locally, stop and state that before any push. Do not let the
 remote pull request be the first place where format, lint, typecheck, package-surface,
@@ -276,9 +313,15 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 - **All required CI checks must be green before merge.** As of today (verify against
   [`CONTRIBUTING.md`](CONTRIBUTING.md), which is authoritative):
 
-  `ci` · `actionlint` · `Verify pinned action SHAs` · `Analyze (actions)` ·
+  `ci` · `actionlint` · `Verify pinned action SHAs` · `zizmor` · `Analyze (actions)` ·
   `Analyze (javascript-typescript)` · `Build, scan, SBOM, smoke` ·
-  `Review dependency diff (dev/main)` · `ui`
+  `Review dependency diff (dev/main)` · `ui` · `Scan dependency lockfiles` ·
+  `Mutation quality gate` · `SonarCloud Code Analysis` ·
+  `Socket Security: Project Report` · `Socket Security: Pull Request Alerts` · `Gitar`
+
+  The maintainer/contributor approval bypass is disabled during the Banking Quality Gate recovery.
+  Do not restore or bypass it until the independent app-bound aggregate gate has passed its live
+  negative probes; see [`docs/qa/banking-quality-gate.md`](docs/qa/banking-quality-gate.md).
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the `Verify pinned action SHAs` gate. Keep the SHA-plus-comment format.

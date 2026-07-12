@@ -8,7 +8,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { AgentConflictBanner, type AgentConflictCode } from "./AgentConflictBanner";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -37,9 +38,29 @@ function renderBanner(
   };
 }
 
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});
+
 // ─── Structure & ARIA ────────────────────────────────────────────────────────
 
 describe("AgentConflictBanner — structure", () => {
+  it("localizes conflict recovery controls when German is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <AgentConflictBanner
+          code="NO_ACTIVE_BRIDGE"
+          message="No live browser bridge is connected."
+          onDismiss={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByText("Keine aktive Editorverbindung")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Ausblenden" })).toBeInTheDocument();
+  });
+
   it("renders role=alertdialog so screen readers announce the conflict and expect an action", () => {
     renderBanner("DIRTY");
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
@@ -237,6 +258,19 @@ describe("AgentConflictBanner — PRECONDITION_REQUIRED affordances", () => {
   });
 });
 
+describe("AgentConflictBanner — policy affordances", () => {
+  it.each([
+    ["POLICY_DENIED", "Action denied by policy"],
+    ["APPROVAL_REQUIRED", "Action approval required"],
+  ] as const)("renders the bounded title and only Dismiss for %s", (code, title) => {
+    renderBanner(code);
+    expect(screen.getByText(title)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reload" })).toBeNull();
+  });
+});
+
 // ─── Focus + Escape (GEN-UI-A11Y-005) ────────────────────────────────────────
 
 describe("AgentConflictBanner — focus + keyboard (GEN-UI-A11Y-005)", () => {
@@ -280,7 +314,10 @@ describe("AgentConflictBanner — accessibility (jest-axe)", () => {
     "INVALID_EDITS",
     "OUT_OF_SCOPE",
     "NO_ACTIVE_SESSION",
+    "NO_ACTIVE_BRIDGE",
     "PRECONDITION_REQUIRED",
+    "POLICY_DENIED",
+    "APPROVAL_REQUIRED",
   ];
 
   it.each(allCodes)("has no axe violations for code %s", async (code) => {

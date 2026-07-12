@@ -1,10 +1,35 @@
 import type { WorkspaceDirEntry, WorkspaceFileReader, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import { resolve } from "node:path";
 
 // Minimal in-memory WorkspaceFs over a flat path->content map. Directories are implied by
 // path prefixes. Keys are relative POSIX paths under a single absolute root. No symlinks.
 
+const FORWARD_SLASH_CODE = "/".codePointAt(0);
+
+function canonicalPath(path: string): string {
+  return resolve(path.replaceAll("\\", "/")).replaceAll("\\", "/");
+}
+
+function trimBoundarySlashes(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  let start = 0;
+  while (start < normalized.length && normalized.codePointAt(start) === FORWARD_SLASH_CODE) {
+    start += 1;
+  }
+  let end = normalized.length;
+  while (end > start && normalized.codePointAt(end - 1) === FORWARD_SLASH_CODE) {
+    end -= 1;
+  }
+  return normalized.slice(start, end);
+}
+
 function toAbs(root: string, rel: string): string {
-  return rel === root ? root : `${root}/${rel}`.replace(/\/+/g, "/");
+  const canonicalRoot = canonicalPath(root);
+  if (rel === root) return canonicalRoot;
+  const relativePath = trimBoundarySlashes(rel);
+  return canonicalRoot.endsWith("/")
+    ? `${canonicalRoot}${relativePath}`
+    : `${canonicalRoot}/${relativePath}`;
 }
 
 function childrenOf(
@@ -12,7 +37,9 @@ function childrenOf(
   files: Readonly<Record<string, string>>,
   dirAbs: string,
 ): readonly WorkspaceDirEntry[] {
-  const prefix = dirAbs === root ? `${root}/` : `${dirAbs}/`;
+  const canonicalRoot = canonicalPath(root);
+  const canonicalDir = canonicalPath(dirAbs);
+  const prefix = canonicalDir === canonicalRoot ? `${canonicalRoot}/` : `${canonicalDir}/`;
   const fileNames = new Set<string>();
   const dirNames = new Set<string>();
   for (const key of Object.keys(files)) {
@@ -119,7 +146,8 @@ function memOpenFileReader(
 
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
   const findKey = (absolutePath: string): string | undefined =>
-    Object.keys(files).find((key) => toAbs(root, key) === absolutePath);
+    Object.keys(files).find((key) => toAbs(root, key) === canonicalPath(absolutePath));
+  const canonicalRoot = canonicalPath(root);
   return {
     readFileUtf8: (absolutePath: string): string => {
       const key = findKey(absolutePath);
@@ -144,7 +172,7 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
       childrenOf(root, files, absolutePath),
     realPath: (absolutePath: string): string => absolutePath,
     exists: (absolutePath: string): boolean =>
-      findKey(absolutePath) !== undefined || absolutePath === root,
+      findKey(absolutePath) !== undefined || canonicalPath(absolutePath) === canonicalRoot,
     readFileBytes: (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
       return memReadFileBytes(files, findKey(absolutePath), absolutePath, maxBytes);
     },

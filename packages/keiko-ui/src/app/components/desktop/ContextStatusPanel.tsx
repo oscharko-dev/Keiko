@@ -11,6 +11,7 @@
 
 import type { ReactNode } from "react";
 import { formatTokens } from "@/lib/format";
+import { useLocale, useTranslate, type I18nTranslate, type Locale } from "@/lib/i18n";
 import { MetricRow, humanizeToken } from "./GroundedAnswer";
 import {
   DEFAULT_TOKEN_ESTIMATOR_ID,
@@ -18,24 +19,30 @@ import {
   type GroundedAnswerContextSummary,
 } from "@/lib/types";
 
-const ASSEMBLED_TOKEN_HINT = `Conservative assembled-context estimate for this grounded answer, produced by the context allocator's ${DEFAULT_TOKEN_ESTIMATOR_ID} token estimator. It is separate from the live composer context below.`;
-
-// Sentence-case the four-value pressure enum for the metric column (e.g. "moderate" → "Moderate").
-function pressureLabel(pressure: ContextBudgetPressure): string {
-  return pressure.charAt(0).toUpperCase() + pressure.slice(1);
+function pressureLabel(pressure: ContextBudgetPressure, t: I18nTranslate): string {
+  if (pressure === "low") return t("context.pressure.low");
+  if (pressure === "moderate") return t("context.pressure.moderate");
+  if (pressure === "high") return t("context.pressure.high");
+  return t("context.pressure.exceeded");
 }
 
 function populatedLaneCount(laneCounts: GroundedAnswerContextSummary["laneCounts"]): number {
   return Object.values(laneCounts).filter((count) => count > 0).length;
 }
 
-function contextSummaryMeta(contextSummary: GroundedAnswerContextSummary): string {
+function contextSummaryMeta(
+  contextSummary: GroundedAnswerContextSummary,
+  t: I18nTranslate,
+  locale: Locale,
+): string {
   const lanes = populatedLaneCount(contextSummary.laneCounts);
   return [
-    `${formatTokens(contextSummary.totalEstimatedTokens)} est. assembled tokens`,
-    `${pressureLabel(contextSummary.budgetPressure)} pressure`,
-    `${lanes.toLocaleString("en-US")} ${lanes === 1 ? "lane" : "lanes"}`,
-    contextSummary.compactionActive ? "Compaction active" : "Compaction inactive",
+    t("context.meta.tokens", { tokens: formatTokens(contextSummary.totalEstimatedTokens) }),
+    t("context.meta.pressure", { pressure: pressureLabel(contextSummary.budgetPressure, t) }),
+    t("context.meta.lanes", { count: lanes.toLocaleString(locale) }),
+    contextSummary.compactionActive
+      ? t("context.compaction.active")
+      : t("context.compaction.inactive"),
   ].join(" · ");
 }
 
@@ -44,8 +51,10 @@ function contextSummaryMeta(contextSummary: GroundedAnswerContextSummary): strin
 // never a path; the value is an integer count. Object.entries order follows the laneCounts map.
 function LaneRows({
   laneCounts,
+  locale,
 }: {
   readonly laneCounts: GroundedAnswerContextSummary["laneCounts"];
+  readonly locale: Locale;
 }): ReactNode {
   const populated = Object.entries(laneCounts).filter(([, count]) => count > 0);
   return (
@@ -54,7 +63,7 @@ function LaneRows({
         <MetricRow
           key={`lane-${lane}`}
           label={humanizeToken(lane)}
-          value={count.toLocaleString("en-US")}
+          value={count.toLocaleString(locale)}
         />
       ))}
     </>
@@ -66,6 +75,8 @@ export function ContextStatusPanel({
 }: {
   readonly contextSummary?: GroundedAnswerContextSummary | undefined;
 }): ReactNode {
+  const locale = useLocale();
+  const t = useTranslate();
   if (contextSummary === undefined) {
     return null;
   }
@@ -73,24 +84,35 @@ export function ContextStatusPanel({
     <details className="ctx-status grounded-evidence-disclosure">
       <summary
         className="ctx-status-summary grounded-evidence-summary"
-        aria-label="Context assembly details"
-        title={ASSEMBLED_TOKEN_HINT}
+        aria-label={t("context.details.aria")}
+        title={t("context.details.hint", { estimator: DEFAULT_TOKEN_ESTIMATOR_ID })}
       >
-        <span className="grounded-evidence-summary-title">Context</span>
-        <span className="grounded-evidence-summary-meta">{contextSummaryMeta(contextSummary)}</span>
+        <span className="grounded-evidence-summary-title">{t("context.details.title")}</span>
+        <span className="grounded-evidence-summary-meta">
+          {contextSummaryMeta(contextSummary, t, locale)}
+        </span>
       </summary>
       <div className="ctx-status-body grounded-evidence-body">
         <dl className="ctx-status-dl grounded-context-pack-dl">
-          <MetricRow label="Estimator" value={DEFAULT_TOKEN_ESTIMATOR_ID} />
+          <MetricRow label={t("context.metric.estimator")} value={DEFAULT_TOKEN_ESTIMATOR_ID} />
           <MetricRow
-            label="Assembled estimate"
-            value={`${formatTokens(contextSummary.totalEstimatedTokens)} tok`}
+            label={t("context.metric.assembledEstimate")}
+            value={t("context.metric.tokensShort", {
+              tokens: formatTokens(contextSummary.totalEstimatedTokens),
+            })}
           />
-          <MetricRow label="Budget pressure" value={pressureLabel(contextSummary.budgetPressure)} />
-          <LaneRows laneCounts={contextSummary.laneCounts} />
           <MetricRow
-            label="Compaction"
-            value={contextSummary.compactionActive ? "Active" : "Inactive"}
+            label={t("context.metric.budgetPressure")}
+            value={pressureLabel(contextSummary.budgetPressure, t)}
+          />
+          <LaneRows laneCounts={contextSummary.laneCounts} locale={locale} />
+          <MetricRow
+            label={t("context.metric.compaction")}
+            value={
+              contextSummary.compactionActive
+                ? t("context.compaction.active")
+                : t("context.compaction.inactive")
+            }
           />
         </dl>
       </div>

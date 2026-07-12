@@ -82,6 +82,7 @@ function pruneThirdPartyRuntimeSourceMaps(repoRoot, removed) {
     join(repoRoot, "node_modules", "pg-protocol"),
     join(repoRoot, "node_modules", "oauth4webapi"),
     join(repoRoot, "node_modules", "openid-client"),
+    join(repoRoot, "node_modules", "smol-toml"),
   ]) {
     const resolved = assertWithinRepo(repoRoot, packageDir);
     if (!existsSync(resolved)) continue;

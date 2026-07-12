@@ -224,7 +224,7 @@ export function workspaceActionLabel(action: WorkspaceUiAction): string {
 }
 
 export function workspaceChordKey(chord: WorkspaceKeyChord): string {
-  const sorted = [...chord.mod].sort();
+  const sorted = [...chord.mod].sort((a, b) => a.localeCompare(b));
   return `${sorted.join("+")}|${chord.key.toLowerCase()}`;
 }
 

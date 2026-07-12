@@ -161,6 +161,96 @@ function FindingCard({ finding, onOpenDetail, t }: FindingCardProps): ReactNode 
   );
 }
 
+interface RecordsInspectedNoteProps {
+  readonly result: MemoryHealthScanResultWire;
+  readonly t: I18nTranslate;
+}
+
+// Extracted from HealthScanFindings (SonarCloud S3776) — the "N records inspected" note,
+// including its own truncated-suffix ternary, isolated so it doesn't add nesting to the
+// section-body branch it's rendered from.
+function RecordsInspectedNote({ result, t }: RecordsInspectedNoteProps): ReactNode {
+  return (
+    <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--text-secondary)" }}>
+      {t("memoria.healthScan.recordsInspected", { count: result.recordsInspected })}
+      {result.truncated ? ` · ${t("memoria.healthScan.truncated")}` : ""}
+    </p>
+  );
+}
+
+interface HealthScanSectionBodyProps {
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly findings: readonly MemoryHealthScanFindingWire[];
+  readonly result: MemoryHealthScanResultWire | null;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+  readonly onRetry: () => void;
+  readonly t: I18nTranslate;
+}
+
+// Extracted from HealthScanFindings (SonarCloud S3776) — the loading/error/empty/populated
+// decision tree, previously a 4-way nested ternary. Early returns keep each branch at the same
+// nesting level instead of nesting inside the previous branch's "else".
+function HealthScanSectionBody({
+  loading,
+  error,
+  findings,
+  result,
+  onOpenDetail,
+  onRetry,
+  t,
+}: HealthScanSectionBodyProps): ReactNode {
+  if (loading) {
+    return (
+      <p role="status" aria-live="polite" className="lk-loading">
+        {t("memoria.healthScan.loading")}
+      </p>
+    );
+  }
+
+  if (error !== null) {
+    return (
+      <div role="alert" aria-live="assertive" className="lk-alert">
+        {error}
+        <button type="button" className="lk-alert-retry" onClick={onRetry}>
+          {t("memoria.retry")}
+        </button>
+      </div>
+    );
+  }
+
+  if (findings.length === 0) {
+    return (
+      <div data-testid="health-scan-empty" className="lk-empty">
+        <div>
+          <p className="lk-empty-title">{t("memoria.healthScan.emptyTitle")}</p>
+          <p className="lk-empty-body">{t("memoria.healthScan.emptyBody")}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {result !== null ? <RecordsInspectedNote result={result} t={t} /> : null}
+      <ul
+        style={{
+          listStyle: "none",
+          padding: 0,
+          margin: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {findings.map((finding) => (
+          <FindingCard key={finding.id} finding={finding} onOpenDetail={onOpenDetail} t={t} />
+        ))}
+      </ul>
+    </>
+  );
+}
+
 export interface HealthScanFindingsProps {
   readonly fetchImpl?: typeof fetchMemoryHealthScan;
   readonly onBack?: (() => void) | undefined;
@@ -228,54 +318,17 @@ export function HealthScanFindings({
         aria-busy={loading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
-        {loading ? (
-          <p role="status" aria-live="polite" className="lk-loading">
-            {t("memoria.healthScan.loading")}
-          </p>
-        ) : error !== null ? (
-          <div role="alert" aria-live="assertive" className="lk-alert">
-            {error}
-            <button
-              type="button"
-              className="lk-alert-retry"
-              onClick={() => {
-                void load();
-              }}
-            >
-              {t("memoria.retry")}
-            </button>
-          </div>
-        ) : findings.length === 0 ? (
-          <div data-testid="health-scan-empty" className="lk-empty">
-            <div>
-              <p className="lk-empty-title">{t("memoria.healthScan.emptyTitle")}</p>
-              <p className="lk-empty-body">{t("memoria.healthScan.emptyBody")}</p>
-            </div>
-          </div>
-        ) : (
-          <>
-            {result !== null ? (
-              <p style={{ margin: "0 0 8px", fontSize: 12, color: "var(--text-secondary)" }}>
-                {t("memoria.healthScan.recordsInspected", { count: result.recordsInspected })}
-                {result.truncated ? ` · ${t("memoria.healthScan.truncated")}` : ""}
-              </p>
-            ) : null}
-            <ul
-              style={{
-                listStyle: "none",
-                padding: 0,
-                margin: 0,
-                display: "flex",
-                flexDirection: "column",
-                gap: 8,
-              }}
-            >
-              {findings.map((finding) => (
-                <FindingCard key={finding.id} finding={finding} onOpenDetail={onOpenDetail} t={t} />
-              ))}
-            </ul>
-          </>
-        )}
+        <HealthScanSectionBody
+          loading={loading}
+          error={error}
+          findings={findings}
+          result={result}
+          onOpenDetail={onOpenDetail}
+          onRetry={() => {
+            void load();
+          }}
+          t={t}
+        />
       </section>
     </>
   );

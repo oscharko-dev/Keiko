@@ -70,6 +70,8 @@ describe("prune-package-build-artifacts", () => {
     write(join(root, "node_modules", "pdfjs-dist", "build", "pdf.mjs"), "export {};\n");
     write(join(root, "node_modules", "oauth4webapi", "build", "index.js.map"), "{}\n");
     write(join(root, "node_modules", "openid-client", "build", "index.js.map"), "{}\n");
+    write(join(root, "node_modules", "smol-toml", "dist", "index.js.map"), "{}\n");
+    write(join(root, "node_modules", "smol-toml", "dist", "index.js"), "export {};\n");
     write(
       join(
         root,
@@ -95,6 +97,8 @@ describe("prune-package-build-artifacts", () => {
     expect(existsSync(join(root, "node_modules", "openid-client", "build", "index.js.map"))).toBe(
       false,
     );
+    expect(existsSync(join(root, "node_modules", "smol-toml", "dist", "index.js.map"))).toBe(false);
+    expect(existsSync(join(root, "node_modules", "smol-toml", "dist", "index.js"))).toBe(true);
     expect(existsSync(join(root, "packages", "keiko-local-knowledge", "node_modules"))).toBe(false);
   });
 });

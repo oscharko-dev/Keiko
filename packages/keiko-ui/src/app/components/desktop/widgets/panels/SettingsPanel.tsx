@@ -8,9 +8,12 @@ import {
   LOCALE_LABELS,
   useLocale,
   useSetLocale,
-  useTranslate,
-  type I18nTranslate,
+  useTranslate as useGlobalTranslate,
 } from "@/lib/i18n";
+import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import { EditorSettingsPanel } from "./EditorSettingsPanel";
+import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
+import { OPEN_EDITOR_SETTINGS_EVENT } from "./settingsPanelEvents";
 import type {
   ConversationIneligibilityReason,
   GatewayReadinessProbeResult,
@@ -505,6 +508,7 @@ function GeneralPrefs({
   const locale = useLocale();
   const setLocale = useSetLocale();
   const t = useTranslate();
+  const globalT = useGlobalTranslate();
   const voicePersonaOptions = useMemo(
     () => (voicePersonas.length > 0 ? voicePersonas : VOICE_PERSONAS),
     [voicePersonas],
@@ -707,9 +711,9 @@ function GeneralPrefs({
       </div>
       <div className="set-sec-h">
         <div>
-          <div className="set-sec-t">{t("settings.feedback.title")}</div>
+          <div className="set-sec-t">{globalT("settings.feedback.title")}</div>
           <div className="set-sec-d" id="settings-feedback-help">
-            {t("settings.feedback.description")}
+            {globalT("settings.feedback.description")}
           </div>
         </div>
         <button
@@ -720,7 +724,7 @@ function GeneralPrefs({
           onClick={openFeedbackWindow}
         >
           <Icons.newChat size={14} />
-          {t("settings.feedback.open")}
+          {globalT("settings.feedback.open")}
         </button>
       </div>
       <div className="set-sec-h">
@@ -924,7 +928,7 @@ function GeneralPrefs({
   );
 }
 
-type Tab = "models" | "general" | "security";
+type Tab = "models" | "general" | "editor" | "languages" | "security";
 
 // uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
 // codes, not explanations — map them to a human-readable message. Messages
@@ -945,12 +949,241 @@ function describeSettingsLoadError(error: unknown, t: I18nTranslate): string {
   return message;
 }
 
+function computeGatewayStatusLabel(
+  gatewayConfigured: boolean,
+  hasDiscoveredModels: boolean,
+  t: I18nTranslate,
+): string {
+  if (!gatewayConfigured) return t("settings.models.setupRequired");
+  if (hasDiscoveredModels) return t("settings.models.connected");
+  return t("settings.models.configured");
+}
+
+// uiux-fix C286: with models discovered but zero conversation-eligible ones
+// (e.g. embedding/OCR-only gateways) the detail must not claim chat works.
+function computeGatewayStatusDetail(
+  gatewayConfigured: boolean,
+  hasDiscoveredModels: boolean,
+  chatCount: number,
+  t: I18nTranslate,
+): string {
+  if (!gatewayConfigured) return t("settings.models.detailSetup");
+  if (!hasDiscoveredModels) return t("settings.models.detailNoModels");
+  if (chatCount === 0) return t("settings.models.detailNoChat");
+  return t("settings.models.detailReady");
+}
+
+// Issue #1399: receive gateway-setup deep-link requests. The latch covers "Settings was just
+// opened" (read on mount), the event covers "Settings already open" (live listener). Both paths
+// gate on consuming the latch so exactly ONE of them claims a given request (the bus invariant).
+// Named module-scope helper (not a closure over the whole component) so the effect body stays flat.
+function bindGatewaySetupRequestListener(claim: () => void): () => void {
+  if (consumePendingGatewaySetup()) claim();
+  const onRequest = (): void => {
+    if (consumePendingGatewaySetup()) claim();
+  };
+  window.addEventListener(GATEWAY_SETUP_REQUEST_EVENT, onRequest);
+  return () => {
+    window.removeEventListener(GATEWAY_SETUP_REQUEST_EVENT, onRequest);
+  };
+}
+
+interface SettingsLoadHandlers {
+  readonly setConfig: (config: SafeGatewayConfig | null) => void;
+  readonly setConfigPresent: (present: boolean) => void;
+  readonly setModels: (models: readonly ModelCapability[]) => void;
+  readonly setModelError: (message: string | undefined) => void;
+  readonly setLoadingModels: (loading: boolean) => void;
+  readonly isCancelled: () => boolean;
+}
+
+// uiux-fix C287: explicit-params helper (not a closure over the whole component) so the load
+// effect stays a single call instead of an inline async function with its own try/catch/finally.
+async function loadSettingsData(handlers: SettingsLoadHandlers, t: I18nTranslate): Promise<void> {
+  handlers.setLoadingModels(true);
+  handlers.setModelError(undefined);
+  try {
+    const [configPayload, modelPayload] = await Promise.all([fetchConfig(), fetchModels()]);
+    if (handlers.isCancelled()) return;
+    handlers.setConfig(configPayload.config);
+    handlers.setConfigPresent(configPayload.configPresent);
+    handlers.setModels(modelPayload.models);
+  } catch (error) {
+    if (handlers.isCancelled()) return;
+    handlers.setModelError(describeSettingsLoadError(error, t));
+  } finally {
+    if (!handlers.isCancelled()) handlers.setLoadingModels(false);
+  }
+}
+
+async function runModelReadinessCheck(
+  modelId: string,
+  deep: boolean,
+  setReadiness: (
+    updater: (current: Record<string, ReadinessRunState>) => Record<string, ReadinessRunState>,
+  ) => void,
+  t: I18nTranslate,
+): Promise<void> {
+  setReadiness((current) => ({ ...current, [modelId]: { status: "running", deep } }));
+  try {
+    const report = await runGatewayReadiness(
+      modelId,
+      deep ? { includeDeepProbes: true } : undefined,
+    );
+    setReadiness((current) => ({ ...current, [modelId]: { status: "done", report } }));
+  } catch (error) {
+    setReadiness((current) => ({
+      ...current,
+      [modelId]: { status: "error", message: readinessErrorMessage(error, t) },
+    }));
+  }
+}
+
+interface ModelsTabContentProps {
+  readonly gatewayConfigured: boolean;
+  readonly models: readonly ModelCapability[];
+  readonly modelError: string | undefined;
+  readonly loadingModels: boolean;
+  readonly readiness: Record<string, ReadinessRunState>;
+  readonly setupOpen: boolean;
+  readonly config: SafeGatewayConfig | null;
+  readonly onOpenSetup: () => void;
+  readonly onCloseSetup: () => void;
+  readonly onRetry: () => void;
+  readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+}
+
+// uiux-fix C147/C285/C287: the "models" tab body, mirrored after GeneralPrefs — its own
+// component instead of an inline nested-ternary block in SettingsPanel's return.
+function ModelsTabContent({
+  gatewayConfigured,
+  models,
+  modelError,
+  loadingModels,
+  readiness,
+  setupOpen,
+  config,
+  onOpenSetup,
+  onCloseSetup,
+  onRetry,
+  onRunReadiness,
+}: ModelsTabContentProps): ReactNode {
+  const t = useTranslate();
+  // Issue #144: source of truth is the helper, not an inline kind check.
+  const chatCount = models.filter(isConversationEligibleModel).length;
+  const hasDiscoveredModels = models.length > 0;
+  const gatewayStatusLabel = computeGatewayStatusLabel(gatewayConfigured, hasDiscoveredModels, t);
+  const gatewayStatusDetail = computeGatewayStatusDetail(
+    gatewayConfigured,
+    hasDiscoveredModels,
+    chatCount,
+    t,
+  );
+  const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
+  return (
+    <>
+      <div className="set-sec-h">
+        <div>
+          <div className="set-sec-t">{t("settings.models.gatewayTitle")}</div>
+          <div className="set-sec-d">{t("settings.models.gatewayDescription")}</div>
+        </div>
+        <div className="set-sec-actions">
+          <button type="button" className="set-add" onClick={onOpenSetup}>
+            <Icons.plus size={14} />
+            {gatewayConfigured
+              ? t("settings.models.updateCredentials")
+              : t("settings.models.connectGateway")}
+          </button>
+          <span className="set-onprem set-onprem-gateway" title={t("settings.selfHostedTitle")}>
+            <span className="dot" style={{ background: "var(--accent)" }} />{" "}
+            {t("settings.selfHosted")}
+          </span>
+        </div>
+      </div>
+
+      <div className="ml-row">
+        <span className="ml-ico">
+          <Icons.cube size={16} />
+        </span>
+        <div className="ml-info">
+          <div className="ml-top">
+            <span className="ml-name">{gatewayStatusLabel}</span>
+            <span className="ml-type mono">
+              {t("settings.models.modelCount", { count: models.length })}
+            </span>
+            <span className="ml-type mono">
+              {t("settings.models.chatCount", { count: chatCount })}
+            </span>
+          </div>
+          <div className="ml-url mono">{gatewayStatusDetail}</div>
+        </div>
+        <span
+          className={"ml-status " + gatewayStatusTone}
+          title={
+            gatewayConfigured
+              ? t("settings.models.statusConfigured")
+              : t("settings.models.statusSetupRequired")
+          }
+          aria-hidden="true"
+        />
+      </div>
+
+      {/* uiux-fix C285/C287: async failure is announced (role=alert) and
+          recoverable in place via Retry — fetchModels drops its cached
+          promise on rejection, so a retry really re-fetches. */}
+      {modelError !== undefined ? (
+        <div className="gw-error" role="alert">
+          {modelError}
+          <button type="button" className="gw-error-retry" onClick={onRetry}>
+            {t("settings.models.retry")}
+          </button>
+        </div>
+      ) : null}
+
+      {/* uiux-fix C285: loading -> result transition is announced */}
+      {loadingModels ? (
+        <div className="set-placeholder" role="status">
+          {t("settings.models.loading")}
+        </div>
+      ) : models.length === 0 ? (
+        <div className="set-placeholder" role="status">
+          {gatewayConfigured
+            ? t("settings.models.emptyConfigured")
+            : t("settings.models.emptyUnconfigured")}
+        </div>
+      ) : (
+        <div className="set-list">
+          {models.map((model) => (
+            <ModelCapabilityRow
+              key={model.id}
+              model={model}
+              readiness={readiness[model.id]}
+              onRunReadiness={onRunReadiness}
+            />
+          ))}
+        </div>
+      )}
+
+      {setupOpen ? (
+        <GatewaySetupDialog
+          onCancel={onCloseSetup}
+          preserveExisting={gatewayConfigured}
+          storedApiKeyHeaderName={config?.providers[0]?.credentialHeaderName}
+          storedModels={models}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function SettingsPanel({
   openUpdatesWindow,
   openFeedbackWindow,
+  root,
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
   readonly openFeedbackWindow?: (() => void) | undefined;
+  readonly root?: string | undefined;
 } = {}): ReactNode {
   const t = useTranslate();
   const [tab, setTab] = useState<Tab>("models");
@@ -977,13 +1210,16 @@ export function SettingsPanel({
       setTab("models");
       setPendingSetupRequest(true);
     };
-    if (consumePendingGatewaySetup()) claim();
-    const onRequest = (): void => {
-      if (consumePendingGatewaySetup()) claim();
+    return bindGatewaySetupRequestListener(claim);
+  }, []);
+
+  useEffect(() => {
+    const onOpenEditorSettings = (): void => {
+      setTab("editor");
     };
-    window.addEventListener(GATEWAY_SETUP_REQUEST_EVENT, onRequest);
+    window.addEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
     return () => {
-      window.removeEventListener(GATEWAY_SETUP_REQUEST_EVENT, onRequest);
+      window.removeEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
     };
   }, []);
 
@@ -1000,71 +1236,33 @@ export function SettingsPanel({
 
   useEffect(() => {
     let cancelled = false;
-
-    async function load(): Promise<void> {
-      setLoadingModels(true);
-      setModelError(undefined);
-      try {
-        const [configPayload, modelPayload] = await Promise.all([fetchConfig(), fetchModels()]);
-        if (cancelled) return;
-        setConfig(configPayload.config);
-        setConfigPresent(configPayload.configPresent);
-        setModels(modelPayload.models);
-      } catch (error) {
-        if (cancelled) return;
-        setModelError(describeSettingsLoadError(error, t));
-      } finally {
-        if (!cancelled) setLoadingModels(false);
-      }
-    }
-
-    void load();
+    void loadSettingsData(
+      {
+        setConfig,
+        setConfigPresent,
+        setModels,
+        setModelError,
+        setLoadingModels,
+        isCancelled: () => cancelled,
+      },
+      t,
+    );
     return () => {
       cancelled = true;
     };
   }, [reloadTick, t]);
 
-  // Issue #144: source of truth is the helper, not an inline kind check.
-  const chatCount = models.filter(isConversationEligibleModel).length;
   const voicePersonas = useMemo(() => voicePersonasFromModels(models), [models]);
   const gatewayConfigured = configPresent;
-  const hasDiscoveredModels = models.length > 0;
-  const gatewayStatusLabel = !gatewayConfigured
-    ? t("settings.models.setupRequired")
-    : hasDiscoveredModels
-      ? t("settings.models.connected")
-      : t("settings.models.configured");
-  // uiux-fix C286: with models discovered but zero conversation-eligible ones
-  // (e.g. embedding/OCR-only gateways) the detail must not claim chat works.
-  const gatewayStatusDetail = !gatewayConfigured
-    ? t("settings.models.detailSetup")
-    : !hasDiscoveredModels
-      ? t("settings.models.detailNoModels")
-      : chatCount === 0
-        ? t("settings.models.detailNoChat")
-        : t("settings.models.detailReady");
-  const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
 
   async function handleRunReadiness(modelId: string, deep: boolean): Promise<void> {
-    setReadiness((current) => ({ ...current, [modelId]: { status: "running", deep } }));
-    try {
-      const report = await runGatewayReadiness(
-        modelId,
-        deep ? { includeDeepProbes: true } : undefined,
-      );
-      setReadiness((current) => ({ ...current, [modelId]: { status: "done", report } }));
-    } catch (error) {
-      setReadiness((current) => ({
-        ...current,
-        [modelId]: { status: "error", message: readinessErrorMessage(error, t) },
-      }));
-    }
+    await runModelReadinessCheck(modelId, deep, setReadiness, t);
   }
 
   return (
     <div className="set">
       <div className="set-tabs">
-        {(["models", "general", "security"] as readonly Tab[]).map((id) => (
+        {(["models", "general", "editor", "languages", "security"] as readonly Tab[]).map((id) => (
           <button
             type="button"
             key={id}
@@ -1080,117 +1278,27 @@ export function SettingsPanel({
             onClick={() => setTab(id)}
           >
             {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}
-            {id === "models"
-              ? t("settings.tabs.models")
-              : id === "general"
-                ? t("settings.tabs.general")
-                : t("settings.tabs.security")}
+            {settingsTabLabel(id, t)}
           </button>
         ))}
       </div>
       <div className="set-body">
         {tab === "models" && (
-          <>
-            <div className="set-sec-h">
-              <div>
-                <div className="set-sec-t">{t("settings.models.gatewayTitle")}</div>
-                <div className="set-sec-d">{t("settings.models.gatewayDescription")}</div>
-              </div>
-              <div className="set-sec-actions">
-                <button type="button" className="set-add" onClick={() => setSetupOpen(true)}>
-                  <Icons.plus size={14} />
-                  {gatewayConfigured
-                    ? t("settings.models.updateCredentials")
-                    : t("settings.models.connectGateway")}
-                </button>
-                <span
-                  className="set-onprem set-onprem-gateway"
-                  title={t("settings.selfHostedTitle")}
-                >
-                  <span className="dot" style={{ background: "var(--accent)" }} />{" "}
-                  {t("settings.selfHosted")}
-                </span>
-              </div>
-            </div>
-
-            <div className="ml-row">
-              <span className="ml-ico">
-                <Icons.cube size={16} />
-              </span>
-              <div className="ml-info">
-                <div className="ml-top">
-                  <span className="ml-name">{gatewayStatusLabel}</span>
-                  <span className="ml-type mono">
-                    {t("settings.models.modelCount", { count: models.length })}
-                  </span>
-                  <span className="ml-type mono">
-                    {t("settings.models.chatCount", { count: chatCount })}
-                  </span>
-                </div>
-                <div className="ml-url mono">{gatewayStatusDetail}</div>
-              </div>
-              <span
-                className={"ml-status " + gatewayStatusTone}
-                title={
-                  gatewayConfigured
-                    ? t("settings.models.statusConfigured")
-                    : t("settings.models.statusSetupRequired")
-                }
-                aria-hidden="true"
-              />
-            </div>
-
-            {/* uiux-fix C285/C287: async failure is announced (role=alert) and
-                recoverable in place via Retry — fetchModels drops its cached
-                promise on rejection, so a retry really re-fetches. */}
-            {modelError !== undefined ? (
-              <div className="gw-error" role="alert">
-                {modelError}
-                <button
-                  type="button"
-                  className="gw-error-retry"
-                  onClick={() => setReloadTick((tick) => tick + 1)}
-                >
-                  {t("settings.models.retry")}
-                </button>
-              </div>
-            ) : null}
-
-            {/* uiux-fix C285: loading -> result transition is announced */}
-            {loadingModels ? (
-              <div className="set-placeholder" role="status">
-                {t("settings.models.loading")}
-              </div>
-            ) : models.length === 0 ? (
-              <div className="set-placeholder" role="status">
-                {gatewayConfigured
-                  ? t("settings.models.emptyConfigured")
-                  : t("settings.models.emptyUnconfigured")}
-              </div>
-            ) : (
-              <div className="set-list">
-                {models.map((model) => (
-                  <ModelCapabilityRow
-                    key={model.id}
-                    model={model}
-                    readiness={readiness[model.id]}
-                    onRunReadiness={(modelId, deep) => {
-                      void handleRunReadiness(modelId, deep);
-                    }}
-                  />
-                ))}
-              </div>
-            )}
-
-            {setupOpen ? (
-              <GatewaySetupDialog
-                onCancel={() => setSetupOpen(false)}
-                preserveExisting={gatewayConfigured}
-                storedApiKeyHeaderName={config?.providers[0]?.credentialHeaderName}
-                storedModels={models}
-              />
-            ) : null}
-          </>
+          <ModelsTabContent
+            gatewayConfigured={gatewayConfigured}
+            models={models}
+            modelError={modelError}
+            loadingModels={loadingModels}
+            readiness={readiness}
+            setupOpen={setupOpen}
+            config={config}
+            onOpenSetup={() => setSetupOpen(true)}
+            onCloseSetup={() => setSetupOpen(false)}
+            onRetry={() => setReloadTick((tick) => tick + 1)}
+            onRunReadiness={(modelId, deep) => {
+              void handleRunReadiness(modelId, deep);
+            }}
+          />
         )}
         {tab === "general" && (
           <GeneralPrefs
@@ -1199,10 +1307,20 @@ export function SettingsPanel({
             openFeedbackWindow={openFeedbackWindow}
           />
         )}
+        {tab === "editor" && <EditorSettingsPanel root={root} />}
+        {tab === "languages" && <ManagedLanguageSettings root={root} />}
         {tab === "security" && (
           <div className="set-placeholder">{t("settings.security.placeholder")}</div>
         )}
       </div>
     </div>
   );
+}
+
+function settingsTabLabel(tab: Tab, t: I18nTranslate): string {
+  if (tab === "models") return t("settings.tabs.models");
+  if (tab === "general") return t("settings.tabs.general");
+  if (tab === "editor") return t("settings.tabs.editor");
+  if (tab === "languages") return t("settings.tabs.languages");
+  return t("settings.tabs.security");
 }

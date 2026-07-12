@@ -68,7 +68,10 @@ export interface CommandRunInput {
 }
 
 export type CommandRunnerEventEmitter = (event: CommandRunnerEvent) => void;
-export type CommandRunnerWorkspaceTrustDecider = (workspace: WorkspaceInfo) => boolean;
+export type CommandRunnerWorkspaceTrustDecider = (
+  projectId: string,
+  workspace: WorkspaceInfo,
+) => boolean;
 
 export interface CommandRunnerManager {
   readonly discover: (projectId: string) => CommandTaskCatalog;
@@ -149,7 +152,7 @@ function readPackageScripts(workspace: WorkspaceInfo, fs: WorkspaceFs): readonly
     .filter(([, value]) => typeof value === "string")
     .map(([name]) => name)
     .filter((name) => name.length > 0 && name.length <= MAX_SCRIPT_NAME_LENGTH)
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function classifyScriptKind(name: string): CommandTaskKind {
@@ -311,7 +314,11 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     return {
       schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
       projectId,
-      tasks: discoverTasks(workspace, this.fs(), this.workspaceTrustedForPackageScripts(workspace)),
+      tasks: discoverTasks(
+        workspace,
+        this.fs(),
+        this.workspaceTrustedForPackageScripts(projectId, workspace),
+      ),
     };
   };
 
@@ -324,7 +331,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     const task = discoverTasks(
       workspace,
       this.fs(),
-      this.workspaceTrustedForPackageScripts(workspace),
+      this.workspaceTrustedForPackageScripts(input.projectId, workspace),
     ).find((entry) => entry.id === input.taskId);
     if (task === undefined) {
       throw new CommandRunnerError("TASK_NOT_FOUND", "Task is not in the discovered catalog.");
@@ -345,9 +352,9 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     return this.runDeps.fs ?? nodeWorkspaceFs;
   }
 
-  private workspaceTrustedForPackageScripts(workspace: WorkspaceInfo): boolean {
+  private workspaceTrustedForPackageScripts(projectId: string, workspace: WorkspaceInfo): boolean {
     try {
-      return this.isWorkspaceTrustedForPackageScripts(workspace);
+      return this.isWorkspaceTrustedForPackageScripts(projectId, workspace);
     } catch {
       return false;
     }

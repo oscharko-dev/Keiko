@@ -20,20 +20,82 @@ function parseIpv4(hostname: string): readonly [number, number, number, number] 
   return parts as [number, number, number, number];
 }
 
-// eslint-disable-next-line complexity -- explicit network ranges keep SSRF/private-address policy auditable.
-function classifyIpv4(parts: readonly [number, number, number, number]): OutboundTargetClass {
+function isLoopbackIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a] = parts;
+  return a === 127;
+}
+
+function isMetadataIpv4(parts: readonly [number, number, number, number]): boolean {
   const [a, b, c, d] = parts;
-  if (a === 127) return "loopback";
-  if (a === 169 && b === 254 && c === 169 && d === 254) return "metadata";
-  if (a === 169 && b === 254) return "link-local";
-  if (a === 10) return "private";
-  if (a === 172 && b >= 16 && b <= 31) return "private";
-  if (a === 192 && b === 168) return "private";
-  if (a === 100 && b >= 64 && b <= 127) return "private";
-  if (a === 0 || a >= 224) return "private";
-  if (a === 192 && b === 0 && c === 0) return "private";
-  if (a === 198 && (b === 18 || b === 19)) return "private";
-  return "public";
+  return a === 169 && b === 254 && c === 169 && d === 254;
+}
+
+function isLinkLocalIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a, b] = parts;
+  return a === 169 && b === 254;
+}
+
+function isRfc1918TenIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a] = parts;
+  return a === 10;
+}
+
+function isRfc1918OneSeventyTwoIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a, b] = parts;
+  return a === 172 && b >= 16 && b <= 31;
+}
+
+function isRfc1918OneNinetyTwoIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a, b] = parts;
+  return a === 192 && b === 168;
+}
+
+function isCarrierGradeNatIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a, b] = parts;
+  return a === 100 && b >= 64 && b <= 127;
+}
+
+function isReservedOrMulticastIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a] = parts;
+  return a === 0 || a >= 224;
+}
+
+function isIetfProtocolAssignmentIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a, b, c] = parts;
+  return a === 192 && b === 0 && c === 0;
+}
+
+function isBenchmarkingIpv4(parts: readonly [number, number, number, number]): boolean {
+  const [a, b] = parts;
+  return a === 198 && (b === 18 || b === 19);
+}
+
+interface Ipv4ClassificationRule {
+  readonly targetClass: OutboundTargetClass;
+  readonly matches: (parts: readonly [number, number, number, number]) => boolean;
+}
+
+// Explicit, named network ranges keep SSRF/private-address policy auditable. Order matters only
+// where ranges overlap: the /32 cloud-metadata address is a subset of the /16 link-local block,
+// so it must be checked first to win the more specific classification.
+function ipv4ClassificationRules(): readonly Ipv4ClassificationRule[] {
+  return [
+    { targetClass: "loopback", matches: isLoopbackIpv4 },
+    { targetClass: "metadata", matches: isMetadataIpv4 },
+    { targetClass: "link-local", matches: isLinkLocalIpv4 },
+    { targetClass: "private", matches: isRfc1918TenIpv4 },
+    { targetClass: "private", matches: isRfc1918OneSeventyTwoIpv4 },
+    { targetClass: "private", matches: isRfc1918OneNinetyTwoIpv4 },
+    { targetClass: "private", matches: isCarrierGradeNatIpv4 },
+    { targetClass: "private", matches: isReservedOrMulticastIpv4 },
+    { targetClass: "private", matches: isIetfProtocolAssignmentIpv4 },
+    { targetClass: "private", matches: isBenchmarkingIpv4 },
+  ];
+}
+
+function classifyIpv4(parts: readonly [number, number, number, number]): OutboundTargetClass {
+  const rule = ipv4ClassificationRules().find((candidate) => candidate.matches(parts));
+  return rule?.targetClass ?? "public";
 }
 
 function mappedIpv4FromIpv6(hostname: string): string | undefined {

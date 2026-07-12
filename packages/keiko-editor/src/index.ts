@@ -55,7 +55,7 @@ export {
 export type { EditorHotExitSnapshotV1 } from "./hot-exit.js";
 
 // ─── Types: host port ────────────────────────────────────────────────────────────
-export type { EditorBuffer, EditorHostPort } from "./host-port.js";
+export type { EditorBuffer, EditorHostPort, EditorVerificationRunIntent } from "./host-port.js";
 
 // ─── Types: geometry, document model, provenance, completion, diagnostics ─────────
 export type {
@@ -153,6 +153,7 @@ export type {
   EditorContextPurpose,
   EditorContextRequest,
   EditorContextSourceKind,
+  EditorContextSourceTier,
   EditorContextEntry,
   EditorContextOmissionReason,
   EditorContextOmission,
@@ -184,6 +185,19 @@ export {
 
 // ─── Runtime: file-model reducer ─────────────────────────────────────────────────
 export { createFileModel, editorFileModelReducer, isDocumentDirty } from "./file-model.js";
+export {
+  EditorModelRegistry,
+  DEFAULT_EDITOR_MODEL_REGISTRY_OPTIONS,
+  UNPROTECTED_EDITOR_MODEL,
+  estimateEditorModelBytes,
+  getEditorModelRegistryDiagnostics,
+} from "./components/editor-model-registry.js";
+export type {
+  EditorModelRegistryDiagnostics,
+  EditorModelRegistryDiagnosticsEntry,
+  EditorModelRegistryOptions,
+  EditorModelProtection,
+} from "./components/editor-model-registry.js";
 
 // ─── Runtime: cancellation identity ──────────────────────────────────────────────
 export {
@@ -424,6 +438,57 @@ export type {
   MonacoUriForPath,
 } from "./components/definition-bridge.js";
 export {
+  registerKeikoTypeDefinitionProvider,
+  TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
+} from "./components/type-definition-bridge.js";
+export type {
+  MonacoTypeDefinitionProvider,
+  MonacoTypeDefinitionRegistrar,
+  RegisterKeikoTypeDefinitionProviderArgs,
+} from "./components/type-definition-bridge.js";
+export {
+  registerKeikoImplementationProvider,
+  IMPLEMENTATION_ELIGIBLE_LANGUAGES,
+} from "./components/implementation-bridge.js";
+export type {
+  MonacoImplementationProvider,
+  MonacoImplementationRegistrar,
+  RegisterKeikoImplementationProviderArgs,
+} from "./components/implementation-bridge.js";
+export {
+  createKeikoInlayHintsProvider,
+  registerKeikoInlayHintsProvider,
+  INLAY_HINTS_ELIGIBLE_LANGUAGES,
+} from "./components/inlay-hints-bridge.js";
+export type {
+  EditorInlayHintKind,
+  EditorInlayHint,
+  EditorInlayHintsRequest,
+  EditorInlayHintsQuery,
+  EditorInlayHintsResponse,
+  EditorInlayHintsResolver,
+  MonacoInlayHint,
+  MonacoInlayHintList,
+  MonacoInlayHintsProvider,
+  MonacoInlayHintsRegistrar,
+} from "./components/inlay-hints-bridge.js";
+export {
+  EDITOR_CALL_HIERARCHY_ACTION_ID,
+  registerKeikoCallHierarchyAction,
+  CALL_HIERARCHY_ELIGIBLE_LANGUAGES,
+} from "./components/call-hierarchy-bridge.js";
+export type {
+  EditorCallHierarchyItem,
+  EditorCallHierarchyCall,
+  EditorCallHierarchyRoot,
+  EditorCallHierarchyRequest,
+  EditorCallHierarchyQuery,
+  EditorCallHierarchyResponse,
+  EditorCallHierarchyResolver,
+  CallHierarchyActionLabels,
+} from "./components/call-hierarchy-bridge.js";
+export type { CallHierarchyPanelLabels } from "./components/CallHierarchyPanel.js";
+export {
   createKeikoReferencesProvider,
   registerKeikoReferencesProvider,
   referenceToMonacoLocation,
@@ -506,6 +571,29 @@ export {
 } from "./components/large-file-mode.js";
 export type { EditorLargeFileMode, LargeFileModeInput } from "./components/large-file-mode.js";
 
+// ─── Runtime: event-driven structured Git gutter bridge (#2229, ADR-0127) ───
+export { registerEditorGitGutter } from "./components/git-gutter-bridge.js";
+export type {
+  EditorGitGutterBridge,
+  EditorGitGutterChanges,
+  EditorGitGutterHost,
+  EditorGitGutterLabels,
+  EditorGitGutterLayer,
+  EditorGitGutterPeek,
+  EditorGitGutterResolver,
+  MonacoGitGutterEditor,
+  RegisterEditorGitGutterArgs,
+} from "./components/git-gutter-bridge.js";
+
+export { registerEditorBlame } from "./components/blame-bridge.js";
+export type {
+  EditorBlameBridge,
+  EditorBlameHost,
+  EditorBlameLabels,
+  MonacoBlameEditor,
+  RegisterEditorBlameArgs,
+} from "./components/blame-bridge.js";
+
 // ─── Runtime: KeikoCodeEditor React component (#1194) ───
 export { KeikoCodeEditor } from "./components/KeikoCodeEditor.js";
 export type {
@@ -514,7 +602,10 @@ export type {
   KeikoEditorLoadState,
   EditorContentDelta,
   EditorRevealRequest,
+  EditorSelectionCapture,
+  AskKeikoAboutSelectionHandler,
 } from "./components/types.js";
+export type { KeikoEditorPreferenceOptions } from "./components/editor-options.js";
 // The controlled component renders the host-owned save lifecycle; these pure helpers let a host
 // (e.g. keiko-ui in #1196) drive `saveStatus` and detect optimistic-concurrency conflicts
 // consistently with what the component expects, without re-implementing the FSM.
@@ -588,14 +679,21 @@ export type {
 export {
   MONACO_BUILTIN_ACTION_IDS,
   EDITOR_COMMAND_KEYBINDINGS,
+  EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_ID,
+  EDITOR_ASK_KEIKO_ABOUT_SELECTION_ACTION_LABEL,
   EDITOR_GENERATE_TESTS_ACTION_ID,
   EDITOR_GENERATE_TESTS_ACTION_LABEL,
+  buildAskKeikoAboutSelectionKeybinding,
+  buildAskKeikoAboutSelectionActionDescriptor,
+  buildAskKeikoAboutSelectionRunHandler,
   buildGenerateTestsKeybinding,
   buildGenerateTestsActionDescriptor,
 } from "./components/command-actions.js";
 export type {
   KeybindingDisplay,
   CommandActionKeys,
+  AskKeikoAboutSelectionCommandActionKeys,
+  AskKeikoAboutSelectionActionArgs,
   GenerateTestsActionArgs,
 } from "./components/command-actions.js";
 export { deriveEditorStatusBar, editorLanguageLabel } from "./components/status-bar.js";
@@ -610,3 +708,16 @@ export type {
 } from "./components/status-bar.js";
 export { EditorStatusBar } from "./components/EditorStatusBar.js";
 export type { EditorStatusBarProps } from "./components/EditorStatusBar.js";
+export {
+  MAX_CONFLICT_CHARS,
+  MAX_TRACKED_CONFLICTS,
+  conflictReplacement,
+  parseConflictMarkers,
+} from "./components/conflict-markers.js";
+export type {
+  ConflictBlock,
+  ConflictChoice,
+  ConflictMarkerModel,
+  ConflictRange,
+} from "./components/conflict-markers.js";
+export type { ConflictLabels } from "./components/conflict-bridge.js";

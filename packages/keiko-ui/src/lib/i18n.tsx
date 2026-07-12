@@ -129,11 +129,12 @@ export function I18nProvider({ children }: { readonly children: ReactNode }): Re
     return { locale, ready: isLocaleReady(locale) };
   });
   const { locale, ready } = state;
+  const activeLocale = ready ? locale : DEFAULT_LOCALE;
 
   useEffect(() => {
-    applyDocumentLocale(locale);
+    applyDocumentLocale(activeLocale);
     persistLocale(locale);
-  }, [locale]);
+  }, [activeLocale, locale]);
 
   useEffect(() => {
     if (ready || isLocaleReady(locale)) {
@@ -173,7 +174,7 @@ export function I18nProvider({ children }: { readonly children: ReactNode }): Re
   );
 
   return (
-    <LocaleContext.Provider value={locale}>
+    <LocaleContext.Provider value={activeLocale}>
       <SetLocaleContext.Provider value={setLocale}>
         <TranslateContext.Provider value={t}>{children}</TranslateContext.Provider>
       </SetLocaleContext.Provider>

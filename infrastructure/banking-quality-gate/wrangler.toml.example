@@ -1,0 +1,16 @@
+name = "keiko-banking-quality-gate"
+main = "../../scripts/banking-quality-gate-worker.mjs"
+compatibility_date = "2026-07-11"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[kv_namespaces]]
+binding = "BANKING_GATE_STATE"
+id = "replace-with-production-kv-id"
+
+[vars]
+TARGET_REPOSITORY = "oscharko-dev/Keiko"
+STABILITY_WINDOW_MS = "60000"
+SOCKET_RISK_ALLOWLIST_JSON = '["npm/execa@9.6.1","npm/underscore@1.13.8"]'
+SOCKET_RISK_ACTORS_JSON = '["oscharko"]'

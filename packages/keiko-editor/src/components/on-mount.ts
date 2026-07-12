@@ -16,13 +16,39 @@ import type { EditorLanguageId, EditorPosition, EditorRange } from "../index.js"
 import { registerKeikoEditorTheme, resolveEditorThemeTokensFromDom } from "../index.js";
 import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.js";
 import { buildSaveActionDescriptor } from "./keybindings.js";
-import { buildGenerateTestsActionDescriptor } from "./command-actions.js";
+import {
+  buildAskKeikoAboutSelectionActionDescriptor,
+  buildAskKeikoAboutSelectionRunHandler,
+  buildGenerateTestsActionDescriptor,
+} from "./command-actions.js";
 import { buildRenameSymbolActionDescriptor } from "./rename-bridge.js";
 import type { EditorDiagnosticsSummary } from "./status-bar.js";
+import type { AskKeikoAboutSelectionHandler } from "./types.js";
+import {
+  registerConflictBridge,
+  type ConflictBridge,
+  type ConflictEditor,
+  type ConflictLabels,
+} from "./conflict-bridge.js";
+import {
+  registerEditorBlame,
+  type EditorBlameBridge,
+  type EditorBlameHost,
+  type MonacoBlameEditor,
+} from "./blame-bridge.js";
+import {
+  registerEditorGitGutter,
+  type EditorGitGutterBridge,
+  type EditorGitGutterLabels,
+  type EditorGitGutterPeek,
+  type EditorGitGutterResolver,
+  type MonacoGitGutterEditor,
+} from "./git-gutter-bridge.js";
 import {
   COMPLETION_ELIGIBLE_LANGUAGES,
   registerKeikoCompletionProvider,
   type MonacoDisposable,
+  type MonacoCancellationToken,
   type MonacoLanguagesRegistrar,
   type MonacoRange,
 } from "./completion-bridge.js";
@@ -66,6 +92,29 @@ import {
   type MonacoUriLike,
 } from "./definition-bridge.js";
 import {
+  TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
+  registerKeikoTypeDefinitionProvider,
+  type MonacoTypeDefinitionRegistrar,
+} from "./type-definition-bridge.js";
+import {
+  IMPLEMENTATION_ELIGIBLE_LANGUAGES,
+  registerKeikoImplementationProvider,
+  type MonacoImplementationRegistrar,
+} from "./implementation-bridge.js";
+import {
+  INLAY_HINTS_ELIGIBLE_LANGUAGES,
+  registerKeikoInlayHintsProvider,
+  type EditorInlayHintsResolver,
+  type MonacoInlayHintsRegistrar,
+} from "./inlay-hints-bridge.js";
+import {
+  registerKeikoCallHierarchyAction,
+  type CallHierarchyActionLabels,
+  type EditorCallHierarchyResolver,
+  type EditorCallHierarchyResponse,
+  type MonacoCallHierarchyEditor,
+} from "./call-hierarchy-bridge.js";
+import {
   REFERENCES_ELIGIBLE_LANGUAGES,
   registerKeikoReferencesProvider,
   type MonacoReferenceRegistrar,
@@ -101,12 +150,37 @@ import {
 
 /** Minimal `monaco` namespace surface the mount wiring needs (the live `onMount` second arg). */
 export interface MountMonaco {
-  readonly editor: MonacoThemeRegistrar;
+  readonly editor: MonacoThemeRegistrar & {
+    readonly MouseTargetType?: { readonly GUTTER_GLYPH_MARGIN: number } | undefined;
+    createModel?(
+      text: string,
+      language: string,
+      uri: MonacoUriLike,
+    ): {
+      readonly uri: MonacoUriLike;
+      getValue(): string;
+      setValue?(text: string): void;
+      dispose(): void;
+      isDisposed?(): boolean;
+    };
+    getModel?(uri: MonacoUriLike): {
+      readonly uri: MonacoUriLike;
+      getValue(): string;
+      setValue?(text: string): void;
+      dispose(): void;
+      isDisposed?(): boolean;
+    } | null;
+  };
   readonly Uri?: { parse(value: string): MonacoUriLike };
-  // `Alt` is needed for the #1205 Generate Tests chord (`Cmd/Ctrl+Alt+T`); `CtrlCmd` for save.
+  // `Alt` is needed for the host-owned command chords; `CtrlCmd` also backs save.
   readonly KeyMod: { readonly CtrlCmd: number; readonly Alt: number };
-  // `KeyT` backs Generate Tests, `F2` backs Rename Symbol, and `KeyS` backs save.
-  readonly KeyCode: { readonly KeyS: number; readonly KeyT: number; readonly F2: number };
+  // `KeyK` backs Ask Keiko, `KeyT` Generate Tests, `F2` Rename Symbol, and `KeyS` save.
+  readonly KeyCode: {
+    readonly KeyS: number;
+    readonly KeyK: number;
+    readonly KeyT: number;
+    readonly F2: number;
+  };
   // The `languages` registry is present on the live `monaco` namespace; it is optional here so the
   // theme-only mount paths (and their tests) need not provide it. Completion registration is skipped
   // when it (or the completion args) is absent.
@@ -157,6 +231,8 @@ export interface WireEditorDiagnostics {
   /** Content-free diagnostic-count observer for the status bar (Issue #1205). */
   readonly onSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
   readonly onOverviewMarkers?: RegisterKeikoDiagnosticsArgs["onOverviewMarkers"] | undefined;
+  /** Issue #2213 (ADR-0126) — full per-diagnostic list for the workspace Problems panel. */
+  readonly onDiagnostics?: RegisterKeikoDiagnosticsArgs["onDiagnostics"] | undefined;
 }
 
 /**
@@ -167,6 +243,8 @@ export interface WireEditorDiagnostics {
 export interface WireEditorCommands {
   /** Run the governed test-generation flow (#1202); bound to `Cmd/Ctrl+Alt+T`. */
   readonly generateTests?: (() => void) | undefined;
+  /** Hand the bounded active selection to the host chat flow (#2119); bound to Cmd/Ctrl+Alt+K. */
+  readonly askKeikoAboutSelection?: AskKeikoAboutSelectionHandler | undefined;
   /** Run the governed rename-symbol flow (#2105); bound to F2. */
   readonly renameSymbol?: (() => void) | undefined;
 }
@@ -208,6 +286,65 @@ export interface WireEditorDefinition {
   readonly languages?: readonly EditorLanguageId[] | undefined;
 }
 
+export interface WireEditorInlayHints {
+  readonly resolve: EditorInlayHintsResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly languages?: readonly EditorLanguageId[] | undefined;
+}
+
+export interface WireEditorSemanticTokens {
+  readonly languages: readonly EditorLanguageId[];
+  readonly provider: MonacoDocumentSemanticTokensProvider;
+  readonly legendVersion: number;
+  readonly dispose: () => void;
+}
+
+export interface MonacoSemanticTokensModel {
+  getValue(): string;
+  getVersionId(): number;
+  getLineCount(): number;
+  getLineMaxColumn(lineNumber: number): number;
+  readonly uri: MonacoUriLike;
+}
+
+export interface MonacoSemanticTokensLegend {
+  readonly tokenTypes: readonly string[];
+  readonly tokenModifiers: readonly string[];
+}
+
+export interface MonacoSemanticTokens {
+  readonly data: Uint32Array;
+}
+
+export interface MonacoDocumentSemanticTokensProvider {
+  getLegend(): MonacoSemanticTokensLegend;
+  provideDocumentSemanticTokens(
+    model: MonacoSemanticTokensModel,
+    lastResultId: string | null,
+    token: MonacoCancellationToken,
+  ): Promise<MonacoSemanticTokens | null>;
+  releaseDocumentSemanticTokens(resultId: string): void;
+}
+
+export interface MonacoSemanticTokensRegistrar {
+  registerDocumentSemanticTokensProvider(
+    languageSelector: string,
+    provider: MonacoDocumentSemanticTokensProvider,
+  ): MonacoDisposable;
+}
+
+export interface WireEditorCallHierarchy {
+  readonly resolve: EditorCallHierarchyResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
+  readonly streamId: string;
+  readonly newRequestId: () => string;
+  readonly documentLanguage: EditorLanguageId;
+  readonly labels: CallHierarchyActionLabels;
+  readonly onResult: (response: EditorCallHierarchyResponse) => void;
+}
+
 /** Host-injected find-references wiring (Epic #2089); absent when unsupported. */
 export interface WireEditorReferences {
   readonly resolve: EditorReferencesResolver;
@@ -238,17 +375,57 @@ export interface WireEditorSignatureHelp {
   readonly retriggerCharacters?: readonly string[] | undefined;
 }
 
+export interface WireEditorGitGutter {
+  readonly resolve: EditorGitGutterResolver;
+  readonly labels: EditorGitGutterLabels;
+  readonly degraded: boolean;
+  readonly onPeek: (peek: EditorGitGutterPeek) => void;
+  readonly onError?: ((message: string) => void) | undefined;
+}
+
+export interface WireEditorBlame extends EditorBlameHost {
+  readonly degraded: boolean;
+  readonly dirty: () => boolean;
+  readonly onError?: ((message: string) => void) | undefined;
+}
+
+export interface WireEditorConflicts {
+  readonly labels: ConflictLabels;
+  readonly onChange: (count: number, truncated: boolean) => void;
+  readonly onStale?: (() => void) | undefined;
+  readonly degraded: boolean;
+}
+
 /** Minimal editor surface the mount wiring needs (the live `onMount` first arg). */
 export interface MountEditor {
   addAction(descriptor: monaco.editor.IActionDescriptor): monaco.IDisposable;
   getAction(id: string): { run: () => void | Promise<void> } | null;
+  getPosition?(): { readonly lineNumber: number; readonly column: number } | null;
   onDidChangeCursorPosition(
     listener: (event: { position: monaco.Position }) => void,
   ): monaco.IDisposable;
   onDidChangeCursorSelection(
     listener: (event: { selection: monaco.Selection }) => void,
   ): monaco.IDisposable;
+  onDidFocusEditorWidget?(listener: () => void): monaco.IDisposable;
+  onMouseDown?(
+    listener: (event: {
+      readonly target: {
+        readonly type: number;
+        readonly position?: { readonly lineNumber: number } | null | undefined;
+      };
+    }) => void,
+  ): monaco.IDisposable;
   focus(): void;
+  setModel?(
+    model: {
+      readonly uri: MonacoUriLike;
+      getValue(): string;
+      setValue?(text: string): void;
+      dispose(): void;
+      isDisposed?(): boolean;
+    } | null,
+  ): void;
   setSelection(range: MonacoRange): void;
   setPosition(position: { readonly lineNumber: number; readonly column: number }): void;
   revealRangeInCenterIfOutsideViewport(range: MonacoRange): void;
@@ -262,6 +439,12 @@ export interface MountEditor {
   ): boolean;
   pushUndoStop?(): boolean;
   getModel?(): {
+    getValue(): string;
+    setValue?(text: string): void;
+    getVersionId?(): number;
+    getPositionAt?(offset: number): { readonly lineNumber: number; readonly column: number };
+    onDidChangeContent?(listener: () => void): monaco.IDisposable;
+    readonly uri?: MonacoUriLike;
     getLineCount(): number;
     getLineMaxColumn(lineNumber: number): number;
   } | null;
@@ -303,6 +486,11 @@ export interface WireEditorOnMountArgs {
   readonly formatting?: WireEditorFormatting | undefined;
   /** Go-to-definition wiring (Epic #2089); absent when the host supplies no resolver. */
   readonly definition?: WireEditorDefinition | undefined;
+  readonly typeDefinition?: WireEditorDefinition | undefined;
+  readonly implementation?: WireEditorDefinition | undefined;
+  readonly callHierarchy?: WireEditorCallHierarchy | undefined;
+  readonly inlayHints?: WireEditorInlayHints | undefined;
+  readonly semanticTokens?: WireEditorSemanticTokens | undefined;
   /** Find-references wiring (Epic #2089); absent when the host supplies no resolver. */
   readonly references?: WireEditorReferences | undefined;
   /** Code-action wiring (Epic #2089); absent when the host supplies no resolver. */
@@ -311,6 +499,10 @@ export interface WireEditorOnMountArgs {
   readonly signatureHelp?: WireEditorSignatureHelp | undefined;
   /** Command-action wiring (Issue #1205); registers host commands into the Monaco command palette. */
   readonly commands?: WireEditorCommands | undefined;
+  readonly gitGutter?: WireEditorGitGutter | undefined;
+  readonly blame?: WireEditorBlame | undefined;
+  readonly conflicts?: WireEditorConflicts | undefined;
+  readonly onGitGutterBridge?: ((bridge: EditorGitGutterBridge | null) => void) | undefined;
 }
 
 /** True when a keyboard event is the Cmd/Ctrl+S save chord (regardless of platform modifier). */
@@ -536,6 +728,98 @@ function installDefinitionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   });
 }
 
+function installTypeDefinitionProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.typeDefinition;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoTypeDefinitionRegistrar;
+  if (typeof registrar.registerTypeDefinitionProvider !== "function") return null;
+  return registerKeikoTypeDefinitionProvider({
+    languages: registrar,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguages: wiring.languages ?? TYPE_DEFINITION_ELIGIBLE_LANGUAGES,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+    uriForPath: normalizeUriForPath(args.monaco.Uri, wiring.uriForPath),
+  });
+}
+
+function installImplementationProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.implementation;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoImplementationRegistrar;
+  if (typeof registrar.registerImplementationProvider !== "function") return null;
+  return registerKeikoImplementationProvider({
+    languages: registrar,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguages: wiring.languages ?? IMPLEMENTATION_ELIGIBLE_LANGUAGES,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+    uriForPath: normalizeUriForPath(args.monaco.Uri, wiring.uriForPath),
+  });
+}
+
+function installInlayHintsProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.inlayHints;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoInlayHintsRegistrar;
+  if (typeof registrar.registerInlayHintsProvider !== "function") return null;
+  return registerKeikoInlayHintsProvider({
+    languages: registrar,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguages: wiring.languages ?? INLAY_HINTS_ELIGIBLE_LANGUAGES,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+  });
+}
+
+function installSemanticTokensProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.semanticTokens;
+  const languages = args.monaco.languages;
+  if (wiring === undefined || languages === undefined) return null;
+  const registrar = languages as unknown as MonacoSemanticTokensRegistrar;
+  if (typeof registrar.registerDocumentSemanticTokensProvider !== "function") return null;
+  const registrations = wiring.languages.map((language) =>
+    registrar.registerDocumentSemanticTokensProvider(language, wiring.provider),
+  );
+  return {
+    dispose(): void {
+      for (const registration of registrations) registration.dispose();
+      wiring.dispose();
+    },
+  };
+}
+
+function installCallHierarchyAction(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const wiring = args.callHierarchy;
+  const editor = args.editor;
+  const model = editor.getModel?.();
+  if (
+    wiring === undefined ||
+    typeof editor.getPosition !== "function" ||
+    model === null ||
+    model === undefined ||
+    typeof model.getValue !== "function" ||
+    model.uri === undefined
+  )
+    return null;
+  return registerKeikoCallHierarchyAction({
+    editor: editor as unknown as MonacoCallHierarchyEditor,
+    resolve: wiring.resolve,
+    isCurrentDocument: wiring.isCurrentDocument,
+    documentLanguage: wiring.documentLanguage,
+    streamId: wiring.streamId,
+    newRequestId: wiring.newRequestId,
+    labels: wiring.labels,
+    onResult: wiring.onResult,
+  });
+}
+
 // Registers the find-references provider. Shift+F12 remains Monaco-native; Keiko adds no keybinding.
 function installReferencesProvider(args: WireEditorOnMountArgs): MonacoDisposable | null {
   const references = args.references;
@@ -664,6 +948,9 @@ function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | nul
     ...(diagnostics.onOverviewMarkers === undefined
       ? {}
       : { onOverviewMarkers: diagnostics.onOverviewMarkers }),
+    ...(diagnostics.onDiagnostics === undefined
+      ? {}
+      : { onDiagnostics: diagnostics.onDiagnostics }),
   });
 }
 
@@ -686,6 +973,16 @@ function installCommandActions(args: WireEditorOnMountArgs): readonly monaco.IDi
       ),
     );
   }
+  if (commands.askKeikoAboutSelection !== undefined) {
+    disposables.push(
+      args.editor.addAction(
+        buildAskKeikoAboutSelectionActionDescriptor({
+          keys: { KeyMod: args.monaco.KeyMod, KeyCode: args.monaco.KeyCode },
+          run: buildAskKeikoAboutSelectionRunHandler(commands.askKeikoAboutSelection),
+        }),
+      ),
+    );
+  }
   if (commands.renameSymbol !== undefined) {
     disposables.push(
       args.editor.addAction(
@@ -699,6 +996,86 @@ function installCommandActions(args: WireEditorOnMountArgs): readonly monaco.IDi
   return disposables;
 }
 
+function installGitGutter(args: WireEditorOnMountArgs): EditorGitGutterBridge | null {
+  const gutter = args.gitGutter;
+  const targetType = args.monaco.editor.MouseTargetType?.GUTTER_GLYPH_MARGIN;
+  if (
+    gutter === undefined ||
+    targetType === undefined ||
+    args.editor.onDidFocusEditorWidget === undefined ||
+    args.editor.onMouseDown === undefined
+  ) {
+    return null;
+  }
+  const focus = args.editor.onDidFocusEditorWidget.bind(args.editor);
+  const mouse = args.editor.onMouseDown.bind(args.editor);
+  const editor: MonacoGitGutterEditor = {
+    deltaDecorations: (oldDecorations, newDecorations) =>
+      args.editor.deltaDecorations(oldDecorations, [...newDecorations]),
+    onDidFocusEditorWidget: focus,
+    onMouseDown: mouse,
+    getPosition: () => args.editor.getPosition?.() ?? null,
+    addAction: (descriptor) => args.editor.addAction(descriptor),
+  };
+  const bridge = registerEditorGitGutter({
+    editor,
+    resolve: gutter.resolve,
+    labels: gutter.labels,
+    degraded: gutter.degraded,
+    glyphMarginTargetType: targetType,
+    onPeek: gutter.onPeek,
+    onError: gutter.onError,
+  });
+  args.onGitGutterBridge?.(bridge);
+  return bridge;
+}
+
+function installBlame(args: WireEditorOnMountArgs): EditorBlameBridge | null {
+  const blame = args.blame;
+  const targetType = args.monaco.editor.MouseTargetType?.GUTTER_GLYPH_MARGIN;
+  if (blame === undefined || targetType === undefined || args.editor.onMouseDown === undefined) {
+    return null;
+  }
+  const editor: MonacoBlameEditor = {
+    deltaDecorations: (oldIds, decorations) =>
+      args.editor.deltaDecorations(oldIds, [...decorations]),
+    getPosition: () => args.editor.getPosition?.() ?? null,
+    onMouseDown: args.editor.onMouseDown.bind(args.editor),
+    addAction: (descriptor) => args.editor.addAction(descriptor),
+  };
+  return registerEditorBlame({ ...blame, editor, glyphMarginTargetType: targetType });
+}
+
+function supportsConflicts(editor: MountEditor): boolean {
+  const model = editor.getModel?.();
+  return (
+    model?.getVersionId !== undefined &&
+    model.getPositionAt !== undefined &&
+    model.onDidChangeContent !== undefined &&
+    editor.executeEdits !== undefined &&
+    editor.pushUndoStop !== undefined &&
+    editor.getPosition !== undefined
+  );
+}
+
+function installConflicts(args: WireEditorOnMountArgs): ConflictBridge | null {
+  const wiring = args.conflicts;
+  if (wiring === undefined || wiring.degraded || !supportsConflicts(args.editor)) return null;
+  return registerConflictBridge({
+    editor: args.editor as ConflictEditor,
+    labels: wiring.labels,
+    onChange: wiring.onChange,
+    onStale: wiring.onStale,
+  });
+}
+
+function installSourceControl(args: WireEditorOnMountArgs): readonly DisposableLike[] {
+  const bridges = [installGitGutter(args), installBlame(args), installConflicts(args)];
+  return bridges.filter(
+    (entry): entry is Exclude<(typeof bridges)[number], null> => entry !== null,
+  );
+}
+
 function isDisposable(disposable: DisposableLike | null): disposable is DisposableLike {
   return disposable !== null;
 }
@@ -709,11 +1086,17 @@ function disposeAll(disposables: readonly DisposableLike[]): void {
   }
 }
 
+function installMountFoundation(args: WireEditorOnMountArgs): {
+  readonly action: monaco.IDisposable;
+  readonly removeBackstop: () => void;
+} {
+  registerTheme(args);
+  return { action: installSaveAction(args), removeBackstop: installKeydownBackstop(args) };
+}
+
 /** Wire the editor on mount and return a disposer that tears everything down on unmount. */
 export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
-  registerTheme(args);
-  const action = installSaveAction(args);
-  const removeBackstop = installKeydownBackstop(args);
+  const { action, removeBackstop } = installMountFoundation(args);
   const cursorSub = subscribeCursor(args);
   const selectionSub = subscribeSelection(args);
   const completionSub = installCompletionProvider(args);
@@ -723,10 +1106,15 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
   const symbolsSub = installDocumentSymbolProvider(args);
   const formattingSub = installFormattingProvider(args);
   const definitionSub = installDefinitionProvider(args);
+  const typeDefinitionSub = installTypeDefinitionProvider(args);
+  const implementationSub = installImplementationProvider(args);
+  const callHierarchySub = installCallHierarchyAction(args);
+  const inlayHintsSub = installInlayHintsProvider(args);
   const referencesSub = installReferencesProvider(args);
   const codeActionsSub = installCodeActionProvider(args);
   const signatureHelpSub = installSignatureHelpProvider(args);
   const commandActions = installCommandActions(args);
+  const sourceControlSubs = installSourceControl(args);
   const disposables = [
     action,
     cursorSub,
@@ -738,14 +1126,21 @@ export function wireEditorOnMount(args: WireEditorOnMountArgs): () => void {
     symbolsSub,
     formattingSub,
     definitionSub,
+    typeDefinitionSub,
+    implementationSub,
+    callHierarchySub,
+    inlayHintsSub,
+    installSemanticTokensProvider(args),
     referencesSub,
     codeActionsSub,
     signatureHelpSub,
+    ...sourceControlSubs,
   ].filter(isDisposable);
   if (args.autoFocus) {
     args.editor.focus();
   }
   return () => {
+    args.onGitGutterBridge?.(null);
     removeBackstop();
     disposeAll([...disposables, ...commandActions]);
   };

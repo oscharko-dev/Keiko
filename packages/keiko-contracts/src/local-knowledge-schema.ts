@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 27 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 29 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -190,6 +190,113 @@ CREATE TABLE html_manual_page_fingerprints (
   PRIMARY KEY (capsule_id, source_id, relative_path),
   FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
   FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+// v28 shape (Epic #2238, Issue #2242): approved connector scope + sync bookkeeping. The v28
+// migration applies this exact shape; the v29 migration ALTERs it up to the full shape below so a
+// store created at v28 and a fresh install converge.
+const CREATE_CONNECTOR_SOURCES_V28 = `
+CREATE TABLE connector_sources (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('confluence', 'jira')),
+  connector_id TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  scope_keys_json TEXT NOT NULL,
+  max_items INTEGER NOT NULL,
+  max_bytes INTEGER NOT NULL,
+  max_duration_ms INTEGER NOT NULL,
+  max_concurrency INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_sync_at INTEGER,
+  last_sync_run_id TEXT,
+  last_sync_status TEXT,
+  last_failure_reason TEXT,
+  last_change_summary_json TEXT,
+  PRIMARY KEY (capsule_id, source_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+// Connector-backed Knowledge Pod sources (Epic #2238, Issues #2242/#2243, ADR-0128 D5). One row
+// per connector source: the approved sync scope (provider, connector id, base URL, scope keys,
+// opaque Jira JQL narrowing, run bounds) persisted at pod-create time so an explicit re-sync
+// reproduces the exact bounded run WITHOUT widening scope (mirroring html_manual_sources), plus
+// additive sync bookkeeping (last run id/time/status, closed failure reason, redacted
+// change-summary JSON, and the verbatim provider `updated` watermark that narrows a Jira
+// incremental re-sync — provider clock, compared in UTC, never surfaced in evidence). `source_id`
+// is a lineage column (no FK to capsule_sources, mirroring document_text_windows): the approved
+// scope row is written when the connector pod shell is created, BEFORE the first applied sync
+// attaches the capsule_sources row — a failed initial sync must still find its approved scope.
+// Capsule deletion cascades the row. `scope_jql` is opaque approved user input for the run's
+// search composition only; no column can carry a page/issue body, comment text, or credential.
+const CREATE_CONNECTOR_SOURCES = `
+CREATE TABLE connector_sources (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  provider TEXT NOT NULL CHECK (provider IN ('confluence', 'jira')),
+  connector_id TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  scope_keys_json TEXT NOT NULL,
+  max_items INTEGER NOT NULL,
+  max_bytes INTEGER NOT NULL,
+  max_duration_ms INTEGER NOT NULL,
+  max_concurrency INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_sync_at INTEGER,
+  last_sync_run_id TEXT,
+  last_sync_status TEXT,
+  last_failure_reason TEXT,
+  last_change_summary_json TEXT,
+  scope_jql TEXT,
+  provider_watermark TEXT,
+  PRIMARY KEY (capsule_id, source_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+// v28 shape (Epic #2238, Issue #2242): item fingerprints + citation link path. The v28 migration
+// applies this exact shape; the v29 migration ALTERs it up to the full shape below.
+const CREATE_CONNECTOR_ITEM_FINGERPRINTS_V28 = `
+CREATE TABLE connector_item_fingerprints (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  byte_length INTEGER NOT NULL,
+  relative_path TEXT NOT NULL,
+  webui_path TEXT,
+  sync_run_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (capsule_id, source_id, item_key),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+// Per-item content fingerprints for connector-backed pods (Epic #2238, Issues #2242/#2243,
+// ADR-0128 D5). The Epic #1856 fingerprint model generalized to stable provider item keys (e.g.
+// 'confluence:<connectorId>:<pageId>', 'jira:<connectorId>:<issueId>') instead of crawled
+// relative paths: one opaque content hash per item from the most recent applied sync run,
+// replaced atomically per run. `relative_path` records where the item's document is mounted
+// (id-derived, rename-stable), `webui_path` records the provider's own link path for citation
+// click-through, and `citation_metadata_json` (#2243) records the adapter-validated structured
+// citation projection — bounded display-safe field values and identifiers only, never a body or
+// comment text. `source_id` is a lineage column like connector_sources above.
+const CREATE_CONNECTOR_ITEM_FINGERPRINTS = `
+CREATE TABLE connector_item_fingerprints (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  content_fingerprint TEXT NOT NULL,
+  byte_length INTEGER NOT NULL,
+  relative_path TEXT NOT NULL,
+  webui_path TEXT,
+  sync_run_id TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  citation_metadata_json TEXT,
+  PRIMARY KEY (capsule_id, source_id, item_key),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 
@@ -827,6 +934,8 @@ const CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX =
   "CREATE INDEX idx_html_manual_sources_fingerprint ON html_manual_sources(source_fingerprint);";
 const CREATE_HTML_MANUAL_PAGE_FINGERPRINTS_SOURCE_INDEX =
   "CREATE INDEX idx_html_manual_page_fingerprints_source ON html_manual_page_fingerprints(capsule_id, source_id);";
+const CREATE_CONNECTOR_ITEM_FINGERPRINTS_SOURCE_INDEX =
+  "CREATE INDEX idx_connector_item_fingerprints_source ON connector_item_fingerprints(capsule_id, source_id);";
 
 const CREATE_SECTIONS_SECTION_PATH_HASH_INDEX =
   "CREATE UNIQUE INDEX idx_sections_document_section_path_hash ON sections(document_id, section_path_hash) WHERE section_path_hash IS NOT NULL;";
@@ -840,6 +949,8 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CAPSULE_SOURCES,
   CREATE_HTML_MANUAL_SOURCES,
   CREATE_HTML_MANUAL_PAGE_FINGERPRINTS,
+  CREATE_CONNECTOR_SOURCES,
+  CREATE_CONNECTOR_ITEM_FINGERPRINTS,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
   CREATE_DOCUMENT_BLOBS,
@@ -869,6 +980,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_knowledge_sources_updated ON knowledge_sources(updated_at DESC, id ASC);",
   CREATE_HTML_MANUAL_SOURCES_FINGERPRINT_INDEX,
   CREATE_HTML_MANUAL_PAGE_FINGERPRINTS_SOURCE_INDEX,
+  CREATE_CONNECTOR_ITEM_FINGERPRINTS_SOURCE_INDEX,
   "CREATE INDEX idx_capsule_set_members_capsule ON capsule_set_members(capsule_id);",
   "CREATE INDEX idx_document_texts_capsule ON document_texts(capsule_id);",
   "CREATE INDEX idx_pages_capsule ON pages(capsule_id);",
@@ -1315,6 +1427,26 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       CREATE_HTML_MANUAL_PAGE_FINGERPRINTS_SOURCE_INDEX,
     ],
   },
+  {
+    version: 28,
+    reason:
+      "Persist approved connector sync scopes and per-item content fingerprints so an explicit connector re-sync reproduces the exact bounded run and classifies added/changed/removed/unchanged items without exposing raw content (Epic #2238, Issue #2242, ADR-0128 D5).",
+    up: [
+      CREATE_CONNECTOR_SOURCES_V28,
+      CREATE_CONNECTOR_ITEM_FINGERPRINTS_V28,
+      CREATE_CONNECTOR_ITEM_FINGERPRINTS_SOURCE_INDEX,
+    ],
+  },
+  {
+    version: 29,
+    reason:
+      "Jira connector sync (#2243): persist the approved opaque JQL narrowing beside the project keys (scope preservation — a re-sync reconstructs the exact approved scope, JQL included, and can never widen it), the provider-clock incremental watermark (the verbatim max `updated` timestamp of the last applied run, so `updated >=` narrowing compares provider time in UTC instead of trusting the local clock), and the per-item structured citation metadata projection (bounded display-safe field values — status, type, assignee, labels, priority, estimates, parent/subtask/link keys — never a body). All three columns are additive and nullable; Confluence rows leave them NULL.",
+    up: [
+      "ALTER TABLE connector_sources ADD COLUMN scope_jql TEXT;",
+      "ALTER TABLE connector_sources ADD COLUMN provider_watermark TEXT;",
+      "ALTER TABLE connector_item_fingerprints ADD COLUMN citation_metadata_json TEXT;",
+    ],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -1344,6 +1476,8 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "knowledge_sources",
   "html_manual_sources",
   "html_manual_page_fingerprints",
+  "connector_sources",
+  "connector_item_fingerprints",
   "document_texts",
   "capsule_membership_changes",
   "capsule_audit_events",
@@ -1359,6 +1493,7 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_knowledge_sources_updated",
   "idx_html_manual_sources_fingerprint",
   "idx_html_manual_page_fingerprints_source",
+  "idx_connector_item_fingerprints_source",
   "idx_capsule_set_members_capsule",
   "idx_document_texts_capsule",
   "idx_pages_capsule",

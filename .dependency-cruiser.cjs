@@ -115,6 +115,39 @@ module.exports = {
       },
     },
     {
+      name: "adr-0128-connectors-only-contracts-security",
+      comment:
+        "ADR-0128 D1 (Atlassian connector boundary, Epic #2238): keiko-connectors is a domain " +
+        "leaf that may depend only on keiko-contracts and keiko-security. It must NEVER import " +
+        "keiko-model-gateway (its egress is an injected AtlassianHttpPort that keiko-server — " +
+        "the sole composition root — implements with gatewayFetch), keiko-local-knowledge (both " +
+        "stay independent leaves; only keiko-server composes them), or any other sibling. The " +
+        "dependency on keiko-security carries the secret-vault types/hashing primitives the " +
+        "credential custody builds on (ADR-0128 D2). The to.path forbids both non-allow-listed " +
+        "packages AND every sibling src/ shim domain so a future deep-import is caught " +
+        "(boundary-weakening gap pattern from issues #160 and #165). Also fires on the negative-" +
+        "test fixture under tests/architecture/fixtures/connectors/ so the gate can be proven " +
+        "live by scripts/arch-check-negative.mjs. The no-direct-egress companion rule " +
+        "(adr-0128-connectors-no-direct-egress) lives in scripts/check-import-policy.mjs because " +
+        "bare fetch()/node:https specifiers are not source-graph edges dependency-cruiser " +
+        "reports in this configuration.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-connectors/src/|" + "tests/architecture/fixtures/connectors/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|connectors)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|connectors)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|connectors)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
+        pathNot: "^packages/keiko-connectors/src/",
+      },
+    },
+    {
       name: "adr-0019-direction-3d-evidence-only-contracts-security-workspace",
       comment:
         "ADR-0019 direction rule 3 (evidence boundary): keiko-evidence may depend on " +
@@ -654,9 +687,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },
@@ -665,11 +698,12 @@ module.exports = {
       comment:
         "ADR-0019 direction rule 6: domain packages (contracts, security, model-gateway, " +
         "workspace, tools, harness, workflows, evidence, quality-intelligence) must not " +
-        "import from keiko-server. quality-intelligence added by issue #272 (ADR-0023 D14).",
+        "import from keiko-server. quality-intelligence added by issue #272 (ADR-0023 D14). " +
+        "connectors added by issue #2241 (ADR-0128 D1: keiko-server is its composition root).",
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence)/src/|" +
+          "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
           "tests/architecture/fixtures/domain-not-server/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },
@@ -682,11 +716,11 @@ module.exports = {
       comment:
         "ADR-0019 direction rule 7: domain packages must not import from keiko-cli. CLI may " +
         "depend on domain packages, never the reverse. quality-intelligence added to from.path " +
-        "by issue #272 (ADR-0023 D14).",
+        "by issue #272 (ADR-0023 D14). connectors added by issue #2241 (ADR-0128 D1).",
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence)/src/|" +
+          "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors)/src/|" +
           "tests/architecture/fixtures/domain-not-cli/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },

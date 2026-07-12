@@ -24,7 +24,32 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
 | STT `keiko-stt`                          | ~1.2s round-trip; rejects audio without a recognized file extension                                 |
 | Realtime `keiko-realtime` session create | HTTP 200 ~0.3s; **default session ran the provider demo persona**; voice `nova` rejected (HTTP 400) |
 
-## Fixed in this change
+## Current hardening pass (2026-07-09)
+
+- **Atomic server-owned Realtime session:** standard-key WebRTC negotiation now sends GA multipart
+  `sdp` + complete `session` configuration in one call. Ephemeral-session negotiation applies the same
+  configuration while minting the token. Keiko's persona, recent chat, MemoriaViva priming, grounding
+  tools, transcription, voice, and VAD are active before media starts.
+- **No client configuration rollback:** the browser no longer sends duplicate instructions, tools,
+  `tool_choice`, or transcription settings after connection. A narrow `session.update` carries only an
+  explicitly selected acoustic turn-detection profile, so it cannot erase server grounding or memory.
+- **Single-copy memory priming:** initial MemoriaViva context is sent in server instructions only. Later
+  memory changes can still be injected mid-session; a priming failure emits a redacted operator diagnostic
+  instead of silently disappearing.
+- **Recognition and endpointing:** dialogue transcription defaults to `gpt-realtime-whisper`. Providers can
+  explicitly advertise `supportsSemanticTurnDetection` and a `realtimeTranscriptionModel`; unsupported
+  endpoints retain the conservative server-VAD path.
+- **No cut-off PCM on backpressure:** `ServerResponse.write() === false` now waits for `drain` instead of
+  aborting and destroying the stream. Only a real client close cancels synthesis. Mid-stream failures are
+  correlation-keyed in redacted diagnostics.
+- **Speech-safe grounded answers:** visible Markdown keeps clickable links and citations, while synthesis
+  and Realtime response instructions receive a deterministic `spokenAnswer` without URLs, Markdown,
+  citation markers, source appendices, or fenced code.
+- **Natural delivery where supported:** `supportsSpeechSynthesisInstructions` enables language-preserving,
+  warm colleague-like delivery guidance with natural pacing, subtle emotion, varied intonation, and clear
+  pronunciation. Older endpoints receive no speculative field.
+
+## Earlier foundations
 
 ### Realtime dialogue (Wave A) — `fix(voice): make realtime dialogue audible and grounded`
 
@@ -54,33 +79,64 @@ latency, choppiness, turn-taking, robustness) is what this work targets.
   the base64 inflation of the JSON envelope. opus output is a valid, browser-playable Ogg/Opus
   container, and the MIME stays inside the existing server allowlist.
 
-## Prioritized follow-ups (identified, deliberately deferred)
+## Current residual validation
 
-These were confirmed real but are deferred to keep this change contained, well-tested, and within the
-shipped subsystem's invariants. They are ordered by perceived-fluidity value.
+1. **Provider perceptual sign-off.** Automated tests prove transport, ordering, interruption, retrieval,
+   memory, and redaction behavior, but timbre and emotional naturalness still require a short human listening
+   matrix for each configured model / voice / language combination.
+2. **Deployment capability accuracy.** Operators must advertise synthesis instructions and semantic VAD
+   only for endpoints that support them. The parser fails closed on inconsistent declarations, but it cannot
+   remotely probe a regulated provider during startup.
+3. **Real network media evidence.** CI remains hermetic and cannot prove customer WebRTC routing, acoustic
+   echo behavior, or provider latency. Those remain deployment acceptance checks using content-free timing
+   marks and the existing voice evaluation runbook.
+4. **Turn-based STT+TTS mode.** The non-Realtime degradation path remains push-to-talk by design. Natural
+   provider VAD, continuous barge-in, and semantic endpointing apply to the full Realtime mode.
 
-1. **Turn-based VAD end-of-turn + voice-activated barge-in.** The shipped dialogue mode (STT+TTS)
-   ends a user turn only when the user manually taps the mic again, and barge-in is button-driven.
-   A WebAudio `AnalyserNode` on the dictation `MediaStream` (trailing-silence end-of-turn + energy-
-   onset barge-in) would make turns feel natural. Deferred because it requires exposing the shared
-   dictation recorder's stream and WebAudio test infrastructure (regression surface on composer
-   dictation, #495). _Files: `useVoiceDialogueSession.ts`, `voice-dialogue-session.ts`,
-   `dictation-recorder.ts`._ Note: realtime mode already gets natural turn-taking via `server_vad`.
-2. **Streaming assistant-speech playout (MSE/Web Audio).** Start playback on the first audio chunk
-   instead of buffering the whole clip. With opus the whole-clip wait is already ~1.1s versus a
-   ~0.9s time-to-first-audio floor, so the remaining benefit is ~0.2s; it is a larger architectural
-   change to the audible path and warrants its own change with perceptual sign-off. _Files:
-   `useAssistantSpeech.ts`, `voice-handlers.ts` (reuse the existing SSE seam), `lib/api.ts`._
-3. **Control-plane WS heartbeat + client negotiate() timeout.** Ping/pong liveness and a browser-side
-   handshake timeout so a half-open connection cannot stall on "negotiating". _Files:
-   `voice-realtime.ts`, `voice-realtime-client.ts`._
-4. **Per-user persona selection for realtime.** Plumb the selected `male`/`female`/`neutral` persona
-   through the control protocol so realtime honors it (today it uses the configured neutral default).
-5. **Live interrupt offset.** Source the barge-in offset from the live media position rather than the
-   previous interrupt's stored offset. _File: `useVoiceDialogueSession.ts`._
-6. **STT interim/verbose_json.** Request `verbose_json` for real duration (the current `json` path
-   parses `confidence`/`duration` that are never returned) and surface interim transcripts. _File:
-   `speech-to-text-adapter.ts`._
+## GPT-Live architecture review (2026-07-09)
+
+OpenAI's GPT-Live announcement validates the direction of Keiko's realtime path: continuous
+full-duplex interaction, interruption-aware turn taking, deliberate pauses, sparse backchannels, and
+delegation of deeper work while the interaction layer preserves conversational flow. Keiko already
+ships the applicable provider-neutral foundations: WebRTC media, semantic VAD, barge-in, a floor
+manager with a backchannel effect, grounding and Memoria Viva tools, and separate visible versus
+spoken grounded answers.
+
+The review produced two immediate changes that do not depend on an unreleased model API:
+
+- The realtime persona now treats hesitation and short pauses as thinking time, honors an explicit
+  request to keep listening, and permits only sparse non-committal verbal acknowledgements. An
+  acknowledgement is never agreement, confirmation, or permission to complete the user's thought.
+- The existing visible/spoken split remains the presentation contract: rich source-backed material
+  stays inspectable in chat while the voice renders a concise speech projection. This matches the
+  useful "visual answer while talking" pattern without sending links or source metadata to speech.
+
+GPT-Live model identifiers and wire behavior are deliberately not added yet. The announcement says
+API availability is forthcoming, so inventing capability names or transport fields would violate the
+provider-neutral gateway boundary. When a published API contract exists, evaluate one additional
+capability: an interaction-plane model that can issue a single acknowledgement, delegate governed
+retrieval or agent work asynchronously, remain interruptible while that work runs, and resume with a
+redacted result. The task lifecycle must be content-free in diagnostics and cancellation must preserve
+the user's current turn; no background worker may bypass Keiko's existing policy, evidence, or memory
+boundaries.
+
+## Research synthesis (2026-07-09)
+
+Six recent papers supplied additional evidence. The decisions below distinguish changes that are safe
+for the current provider-neutral product from research directions that require a separate governed
+capability and evaluation gate.
+
+| Evidence                                                                                                                                                                                                                                                                                        | Keiko decision                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| _Unified Audio Intelligence Without Regressing on Text Intelligence_ ([arXiv:2607.05196](https://arxiv.org/abs/2607.05196)) shows that native audio training can regress reasoning, long-context, and agentic/tool behavior unless those capabilities are explicitly preserved and evaluated.   | Do not promote a native audio model on speech quality alone. Keep chat and voice selection capability-driven, require explicit tool support, and retain text reasoning, grounded retrieval, long-context, policy-following, and agentic evaluations as promotion gates.                                                                            |
+| _Synthesizing the Lombard Effect_ ([arXiv:2606.23176](https://arxiv.org/abs/2606.23176)) finds that controlled articulation drives intelligibility more reliably than simple loudness or time stretching, while excessive vocal effort can hurt recognition and naturalness.                    | TTS and realtime delivery guidance now favors careful articulation and moderate vocal effort. Repetitions slow slightly and emphasize key words instead of becoming globally louder. Future listening matrices should include babble, overlapping speech, and steady noise, with intelligibility and naturalness scored separately.                |
+| _Low-Latency Real-Time Audio Game Commentary via LLM-Based Parallel Text Generation_ ([arXiv:2606.13322](https://arxiv.org/abs/2606.13322)) demonstrates that overlapping generation with playback and selecting from a bounded candidate buffer can sharply reduce unnatural silence.          | Keiko may overlap governed retrieval or deep work with the interaction plane, but it must not queue speculative factual speech. Any future candidate buffer is bounded, cancellable, latest-valid-first, tied to a committed user turn, and discarded on interruption or context change.                                                           |
+| _Endpoint Anticipation for Low-Latency Spoken Dialogue_ ([arXiv:2606.13450](https://arxiv.org/abs/2606.13450)) reports lower latency through speculative LLM/TTS execution, with measurable premature triggers and redundant compute.                                                           | Endpoint anticipation is not enabled by this change. A future capability must keep speculative audio inaudible until endpoint confirmation, never persist partial transcripts, and gate Median Realized Anticipation, Premature Anticipation Rate, Expected Redundant Computation, and Horizon Entry Accuracy alongside normal interruption tests. |
+| _Wan-Streamer v0.1_ ([arXiv:2606.25041](https://arxiv.org/abs/2606.25041)) and _v0.2_ ([arXiv:2607.04443](https://arxiv.org/abs/2607.04443)) show the value of a persistent causal interaction state and isolating a latency-critical thinker/control path from expensive performer generation. | Preserve Keiko's responsive media/control path while heavier retrieval or agent work runs behind compact, redacted, cancellable task boundaries. Video avatars and generated visual agents are not implied by the Voice Mode and remain out of scope.                                                                                              |
+
+The immediate product changes are intentionally narrow: listening behavior and delivery articulation.
+Speculative endpointing, background answer generation, and native GPT-Live model identifiers remain
+deferred until their provider contracts and Keiko governance/evaluation requirements can be proved.
 
 ## Invariants preserved
 

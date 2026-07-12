@@ -172,6 +172,53 @@ describe("UnifiedQuickAccessPalette", () => {
     );
   });
 
+  it("collapses a workspace text match onto an existing filename result for the same path", async () => {
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "quick",
+      results: [
+        {
+          root: "/repo",
+          path: "src/quick.ts",
+          name: "quick.ts",
+          directory: "src",
+          extension: ".ts",
+          sizeBytes: 120,
+          modifiedAt: 1,
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 1,
+    });
+    fetchWorkspaceSearchMock.mockResolvedValue({
+      results: [
+        {
+          path: "src/quick.ts",
+          lineRange: { startLine: 5, endLine: 5 },
+          snippet: "export const quick = 1;",
+          score: 1,
+        },
+      ],
+      truncated: false,
+      filesScanned: 1,
+      elapsedMs: 1,
+    });
+    render(
+      <UnifiedQuickAccessPalette
+        initialMode="files"
+        root="/repo"
+        commands={[]}
+        openEditorFile={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await userEvent.type(screen.getByRole("combobox"), "quick");
+    await screen.findByRole("option", { name: /src\/quick\.ts/ });
+
+    expect(screen.getAllByRole("option", { name: /src\/quick\.ts/ })).toHaveLength(1);
+  });
+
   it("has no axe violations in file and command modes", async () => {
     fetchFilesSearchMock.mockResolvedValue({
       root: "/repo",

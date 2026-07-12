@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow, clearKnowledgeCatalogCacheForTests } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
-import type { Chat } from "@/lib/types";
+import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 
@@ -49,6 +49,33 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     localKnowledgeScope: undefined,
     createdAt: 1,
     updatedAt: 2,
+    ...overrides,
+  };
+}
+
+function makeProject(path: string): ProjectWithAvailability {
+  return {
+    path,
+    name: "Project",
+    favorite: false,
+    createdAt: 1,
+    lastOpenedAt: 2,
+    available: true,
+  };
+}
+
+function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: "message-1",
+    chatId: "chat-1",
+    role: "assistant",
+    content: "Answer",
+    timestamp: 1,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
     ...overrides,
   };
 }
@@ -176,6 +203,23 @@ describe("ChatWindow a11y", () => {
         ],
       }),
     );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("jest-axe: assistant code apply control has no violations", async () => {
+    const workspaceRoot = "/workspace/exact";
+    const { container } = renderWindow(
+      makeSession({
+        activeProject: makeProject(workspaceRoot),
+        activeChat: makeChat({ projectPath: workspaceRoot }),
+        messages: [
+          makeMessage({ content: "```diff\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n```" }),
+        ],
+      }),
+    );
+
+    expect(screen.getByRole("button", { name: "Apply to editor" })).toBeInTheDocument();
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });

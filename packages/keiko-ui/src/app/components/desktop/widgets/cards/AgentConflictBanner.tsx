@@ -9,15 +9,17 @@
  *
  * - DIRTY: Save + Dismiss (the user saves the dirty buffer so the agent can re-try)
  * - VERSION_MISMATCH / CONTENT_HASH_MISMATCH: Reload + Dismiss (stale token — reload refreshes it)
- * - INVALID_EDITS / OUT_OF_SCOPE / PRECONDITION_REQUIRED / NO_ACTIVE_SESSION / NO_ACTIVE_BRIDGE:
- *   Dismiss only (agent errors or an unavailable bridge — the user cannot self-resolve, the agent must
- *   re-issue the action once a live bridge is connected)
+ * - INVALID_EDITS / OUT_OF_SCOPE / PRECONDITION_REQUIRED / POLICY_DENIED / APPROVAL_REQUIRED /
+ *   NO_ACTIVE_SESSION / NO_ACTIVE_BRIDGE: Dismiss only (the producer must re-issue the action after
+ *   satisfying the reported structural, policy, approval, or bridge condition)
  *
  * Uses the existing `.ai-danger` / `.ai-danger-h` / `.ai-danger-act` classes; no new CSS classes.
  */
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { useEffect, useId, useRef } from "react";
 import type { EditorAgentActionResult } from "../../../../../lib/types";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 
 export type AgentConflictCode = NonNullable<EditorAgentActionResult["conflict"]>["code"];
 
@@ -29,24 +31,28 @@ export interface AgentConflictBannerProps {
   readonly onDismiss: () => void;
 }
 
-function conflictTitle(code: AgentConflictCode): string {
+function conflictTitle(code: AgentConflictCode, t: EditorAgentTranslate): string {
   switch (code) {
     case "DIRTY":
-      return "Unsaved changes conflict";
+      return t("conflict.title.dirty");
     case "VERSION_MISMATCH":
-      return "File version mismatch";
+      return t("conflict.title.versionMismatch");
     case "CONTENT_HASH_MISMATCH":
-      return "File content mismatch";
+      return t("conflict.title.contentHashMismatch");
     case "INVALID_EDITS":
-      return "Invalid agent edits";
+      return t("conflict.title.invalidEdits");
     case "OUT_OF_SCOPE":
-      return "Action out of scope";
+      return t("conflict.title.outOfScope");
     case "NO_ACTIVE_SESSION":
-      return "No active editor session";
+      return t("conflict.title.noActiveSession");
     case "NO_ACTIVE_BRIDGE":
-      return "No live editor bridge";
+      return t("conflict.title.noActiveBridge");
     case "PRECONDITION_REQUIRED":
-      return "Missing write precondition";
+      return t("conflict.title.preconditionRequired");
+    case "POLICY_DENIED":
+      return t("conflict.title.policyDenied");
+    case "APPROVAL_REQUIRED":
+      return t("conflict.title.approvalRequired");
   }
 }
 
@@ -56,6 +62,8 @@ function ConflictActions({
   onReload,
   onDismiss,
   primaryRef,
+  reloadLabel,
+  t,
 }: {
   readonly code: AgentConflictCode;
   readonly onSave: (() => void) | undefined;
@@ -63,17 +71,19 @@ function ConflictActions({
   readonly onDismiss: () => void;
   // GEN-UI-A11Y-005: focus lands on the primary recovery action on mount (Save for DIRTY, Reload for a
   // version/content mismatch, else the sole Dismiss).
-  readonly primaryRef: RefObject<HTMLButtonElement>;
+  readonly primaryRef: RefObject<HTMLButtonElement | null>;
+  readonly reloadLabel: string;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (code === "DIRTY") {
     return (
       <div className="ai-danger-act">
         <button type="button" className="ed-save" onClick={onSave} ref={primaryRef}>
-          Save
+          {t("common.save")}
         </button>
         {/* A11Y-4: use ed-save (neutral) not ed-reload (reload semantic is misleading for Dismiss) */}
         <button type="button" className="ed-save" onClick={onDismiss}>
-          Dismiss
+          {t("common.dismiss")}
         </button>
       </div>
     );
@@ -82,10 +92,10 @@ function ConflictActions({
     return (
       <div className="ai-danger-act">
         <button type="button" className="ed-reload" onClick={onReload} ref={primaryRef}>
-          Reload
+          {reloadLabel}
         </button>
         <button type="button" className="ed-reload" onClick={onDismiss}>
-          Dismiss
+          {t("common.dismiss")}
         </button>
       </div>
     );
@@ -93,7 +103,7 @@ function ConflictActions({
   return (
     <div className="ai-danger-act">
       <button type="button" className="ed-reload" onClick={onDismiss} ref={primaryRef}>
-        Dismiss
+        {t("common.dismiss")}
       </button>
     </div>
   );
@@ -106,6 +116,8 @@ export function AgentConflictBanner({
   onReload,
   onDismiss,
 }: AgentConflictBannerProps): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  const t = useTranslate();
   const titleId = useId();
   const bodyId = useId();
   // GEN-UI-A11Y-005: this is a recoverable conflict prompt that demands a choice, so it is an
@@ -132,7 +144,7 @@ export function AgentConflictBanner({
     >
       <div className="ai-danger-h">
         <span className="tt" id={titleId}>
-          {conflictTitle(code)}
+          {conflictTitle(code, agentT)}
         </span>
       </div>
       <p id={bodyId}>
@@ -145,6 +157,8 @@ export function AgentConflictBanner({
         onReload={onReload}
         onDismiss={onDismiss}
         primaryRef={primaryRef}
+        reloadLabel={agentT("conflict.reload")}
+        t={t}
       />
     </div>
   );

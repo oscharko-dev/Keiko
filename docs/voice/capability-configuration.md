@@ -21,12 +21,15 @@ in the chat model selector), never workflow-eligible, and never elected for chat
 
 The voice modality is refined by additive optional flags:
 
-| Field                   | Meaning                                                                       |
-| ----------------------- | ----------------------------------------------------------------------------- |
-| `supportsSpeechInput`   | Speech-to-text / transcription (audio in → text); composer dictation.         |
-| `supportsSpeechOutput`  | Speech output / synthesis (text → audio playback).                            |
-| `supportsRealtimeVoice` | Realtime, full-duplex speech (interruptible, colleague-like).                 |
-| `voiceProviderLocality` | Where the provider runs: `azure-foundry`, `customer-hosted`, or `local-only`. |
+| Field                                 | Meaning                                                                       |
+| ------------------------------------- | ----------------------------------------------------------------------------- |
+| `supportsSpeechInput`                 | Speech-to-text / transcription (audio in → text); composer dictation.         |
+| `supportsSpeechOutput`                | Speech output / synthesis (text → audio playback).                            |
+| `supportsSpeechSynthesisInstructions` | Synthesis accepts tone, pacing, and intonation instructions.                  |
+| `supportsRealtimeVoice`               | Realtime, full-duplex speech (interruptible, colleague-like).                 |
+| `supportsSemanticTurnDetection`       | Realtime endpoint accepts semantic VAD with automatic eagerness.              |
+| `realtimeTranscriptionModel`          | Input transcription model for the realtime dialogue session.                  |
+| `voiceProviderLocality`               | Where the provider runs: `azure-foundry`, `customer-hosted`, or `local-only`. |
 
 Two invariants are enforced by the config parser (`packages/keiko-model-gateway/src/config.ts`), identically
 for the strict top-level `capabilities` array and the inline per-provider `capability`:
@@ -37,11 +40,33 @@ for the strict top-level `capabilities` array and the inline per-provider `capab
    with no `supportsSpeechInput`/`supportsSpeechOutput`/`supportsRealtimeVoice` set to `true`, or without
    `voiceProviderLocality`, is rejected — fail-closed, and the provider is represented explicitly rather than
    inferred from an endpoint URL or environment name.
+3. **Provider tuning is dependency-checked.** `supportsSpeechSynthesisInstructions` requires speech
+   output. Semantic turn detection and a realtime transcription-model override require realtime voice.
+   Declaring unsupported tuning fails configuration instead of sending speculative fields to a provider.
 
 Adding the `voice` kind is a structural change, so `CONVERSATION_CAPABILITY_CONTRACT_VERSION` is bumped to
 `3`. The additive sub-capability flags do not themselves bump the version.
 
 ## 2. Registering the existing `keiko-stt` deployment (STT-only)
+
+### First-run setup for operators
+
+The credential dialog groups audio configuration by user-visible outcome and uses one shared audio
+connection:
+
+- **Dictate** needs the exact speech-to-text deployment name.
+- **Digital Voice** needs the exact Realtime deployment name. An STT deployment alone cannot enable
+  live conversation.
+- **Read aloud** optionally needs a text-to-speech deployment name.
+
+Enter the audio endpoint URL and credential once, then fill only the deployment roles the installation
+supports. Keiko stores each role as explicit capability metadata and shows the corresponding controls only
+when that capability is configured. Output-capable roles receive the neutral `alloy` persona by default so a
+valid Realtime installation exposes Digital Voice immediately; an operator can replace the provider voice id
+in the same dialog. Advanced auth-header, locality, and timeout fields normally keep their defaults.
+
+The dialog validates configuration structure before saving, but it does not upload synthetic customer audio.
+Provider availability is therefore verified on first use, and failures remain content-free and credential-free.
 
 The Azure Foundry `keiko-stt` deployment is registered as an **STT-only** voice provider through
 configuration — no global Azure dependency is hardcoded, and Azure is one valid provider locality among
@@ -73,6 +98,22 @@ A customer-hosted controlled-network deployment uses the identical shape with
 `"voiceProviderLocality": "customer-hosted"` and the customer endpoint (which may be a private/RFC-1918
 host). A full-realtime provider additionally sets `"supportsRealtimeVoice": true` (and/or both
 `supportsSpeechInput` and `supportsSpeechOutput`).
+
+For a current provider that supports semantic endpointing and the low-latency transcription model, the
+realtime capability adds:
+
+```jsonc
+{
+  "kind": "voice",
+  "supportsRealtimeVoice": true,
+  "supportsSemanticTurnDetection": true,
+  "realtimeTranscriptionModel": "gpt-realtime-whisper",
+  "voiceProviderLocality": "customer-hosted",
+}
+```
+
+Omit either tuning field when the configured endpoint does not support it. The server then uses its
+provider-compatible server-VAD and transcription defaults; the browser does not overwrite them.
 
 ### Credentials
 
@@ -146,7 +187,7 @@ provider that maps the requested persona to its `voiceId`; the resolver result c
 therefore stays server-side. It is the seam the assistant speech-output feature (Issue #1558) consumes.
 
 > **Realtime voice ids are a narrower set than text-to-speech voice ids.** The realtime models accept
-> `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, and `verse`; some text-to-speech-only voices
+> `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, and `verse`; some text-to-speech-only voices
 > (for example `nova` and `onyx`) are **rejected** by the realtime model and would break realtime session
 > creation. For this reason a `keiko-realtime` provider's `voiceProfiles` must map each persona to a
 > realtime-valid voice id. The realtime negotiation applies `resolveRealtimeVoice` as a defense-in-depth

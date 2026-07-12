@@ -5,6 +5,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
 import type { RouteResult } from "../routes.js";
@@ -13,8 +14,12 @@ import {
   handleEditorLanguage,
   handleEditorLanguageCapabilities,
   handleEditorLanguageCapabilitiesForRoute,
+  handleEditorLanguageSemanticTokens,
+  managedActivationAuthorization,
   type EditorLanguageRouteOptions,
 } from "./languageRoutes.js";
+import { createManagedLspActivationStore } from "./lsp/managedLspActivationStore.js";
+import { createManagedLspControlService } from "./lsp/managedLspControl.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -297,9 +302,137 @@ describe("GET /api/editor/language/capabilities", () => {
     );
     expect(JSON.stringify(result.body)).not.toContain(root);
   });
+
+  it("uses canonical workspace activation instead of allowing a legacy env flag to bypass default-off", async () => {
+    const bin = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-control-bin-")));
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-control-state-")));
+    try {
+      const pyright = join(bin, "pyright-langserver");
+      await writeFile(pyright, "#!/bin/sh\n", "utf8");
+      await chmod(pyright, 0o755);
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      const context = getContext(
+        `/api/editor/language/capabilities?root=${encodeURIComponent(root)}`,
+      );
+      const controlledDeps = {
+        ...deps(buildRedactor({}), { PATH: bin, KEIKO_EDITOR_LSP_PYTHON: "1" }),
+        managedLspControl,
+      };
+
+      const defaultOff = await handleEditorLanguageCapabilitiesForRoute(context, controlledDeps, {
+        hostLanguageCommandRules: [{ executable: "pyright-langserver" }],
+      });
+      expect(hasProvider(defaultOff.body, "python-lsp", "unavailable")).toBe(true);
+
+      await managedLspControl.mutate({
+        action: "activate",
+        actorClass: "localHuman",
+        expectedRevision: 0,
+        idempotencyKey: "activate-python-capabilities",
+        language: "python",
+        root,
+      });
+      const activated = await handleEditorLanguageCapabilitiesForRoute(
+        context,
+        { ...controlledDeps, env: { PATH: bin } },
+        { hostLanguageCommandRules: [{ executable: "pyright-langserver" }] },
+      );
+      expect(hasProvider(activated.body, "python-lsp", "available")).toBe(true);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("POST /api/editor/language", () => {
+  it("degrades semantic-token requests to syntax highlighting when Rust is not activated", async () => {
+    await mkdir(join(root, "src"), { recursive: true });
+    await writeFile(join(root, "src/lib.rs"), "fn main() {}\n", "utf8");
+    const result = await handleEditorLanguageSemanticTokens(
+      postContext({
+        schemaVersion: "1",
+        root,
+        document: {
+          path: "src/lib.rs",
+          languageId: "rust",
+          text: "fn main() {}\n",
+          version: 2,
+        },
+      }),
+      deps(),
+    );
+
+    expect(result).toEqual({ status: 200, body: { schemaVersion: "1", supported: false } });
+  });
+
+  it("rejects malformed semantic-token request fields before provider dispatch", async () => {
+    const result = await handleEditorLanguageSemanticTokens(
+      postContext({
+        schemaVersion: "1",
+        root,
+        document: { path: "../escape.rs", languageId: "rust", text: "x", version: 1 },
+      }),
+      deps(),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("does not spawn a legacy-env-enabled provider while canonical workspace activation is absent", async () => {
+    const bin = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-operation-bin-")));
+    const stateDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-route-operation-state-")));
+    try {
+      const pyright = join(bin, "pyright-langserver");
+      await writeFile(pyright, "#!/bin/sh\n", "utf8");
+      await chmod(pyright, 0o755);
+      let spawned = false;
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      const result = await handleEditorLanguage(
+        postContext({
+          operation: "diagnostics",
+          root,
+          document: { path: "src/a.py", languageId: "python", text: "value = 1\n" },
+        }),
+        {
+          ...deps(buildRedactor({}), { PATH: bin, KEIKO_EDITOR_LSP_PYTHON: "1" }),
+          managedLspControl,
+        },
+        {
+          hostLanguageCommandRules: [{ executable: "pyright-langserver" }],
+          hostLanguageSpawn: () => {
+            spawned = true;
+            throw new Error("spawn must remain unreachable");
+          },
+        },
+      );
+
+      expect(result.status).toBe(422);
+      expect(spawned).toBe(false);
+    } finally {
+      await rm(bin, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("returns diagnostics for an overlay with a type error", async () => {
     const result = await handleEditorLanguage(
       postContext({
@@ -659,5 +792,47 @@ describe("POST /api/editor/language", () => {
     );
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+});
+
+describe("managedActivationAuthorization", () => {
+  it("evaluates authorization against the given languageId, not a fixed language", async () => {
+    const stateDir = await realpath(
+      await mkdtemp(join(tmpdir(), "keiko-managed-authorization-state-")),
+    );
+    try {
+      const managedLspControl = createManagedLspControlService({
+        store: createManagedLspActivationStore({ stateDir }),
+        processEnv: {},
+        provisioning: () => true,
+        disposePoolEntry: () => Promise.resolve(),
+        runtimeApproved: () => true,
+        configurationSafe: () => true,
+        projectEvidence: () => "projected",
+        mutex: createWorkspaceMutexRegistry(),
+      });
+      await managedLspControl.mutate({
+        action: "activate",
+        actorClass: "localHuman",
+        expectedRevision: 0,
+        idempotencyKey: "activate-python-authorization",
+        language: "python",
+        root,
+      });
+      const controlledDeps = { ...deps(), managedLspControl };
+
+      // Python is activated: the same call site logic used by handleEditorLanguageSemanticTokens
+      // and runEditorLanguageOperation must authorize it when asked about "python".
+      const python = await managedActivationAuthorization(controlledDeps, root, "python");
+      expect(python?.authorized).toBe(true);
+
+      // Rust is NOT activated: a call site that hardcodes "rust" instead of forwarding the
+      // request's own document.languageId would incorrectly report this workspace as authorized
+      // for Rust too. It must not.
+      const rust = await managedActivationAuthorization(controlledDeps, root, "rust");
+      expect(rust?.authorized).toBe(false);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

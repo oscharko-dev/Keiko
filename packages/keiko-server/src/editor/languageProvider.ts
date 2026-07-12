@@ -7,11 +7,14 @@
 import type {
   LanguageCompletionResult,
   LanguageCodeActionsResult,
+  LanguageCallHierarchyResult,
   LanguageDefinitionResult,
   LanguageDiagnostic,
   LanguageDocumentSymbol,
   LanguageFormattingOptions,
   LanguageHoverResult,
+  LanguageImplementationResult,
+  LanguageInlayHintsResult,
   LanguagePosition,
   LanguageProviderDescriptor,
   LanguageRange,
@@ -21,6 +24,7 @@ import type {
   LanguageServiceErrorCode,
   LanguageServiceLimits,
   LanguageSignatureHelpResult,
+  LanguageTypeDefinitionResult,
   LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -62,6 +66,19 @@ export interface LanguageProvider {
     ctx: LanguageProviderContext,
     position: LanguagePosition,
   ): LanguageDefinitionResult;
+  getTypeDefinition?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+  ): LanguageTypeDefinitionResult;
+  getImplementation?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+  ): LanguageImplementationResult;
+  getCallHierarchy?(
+    ctx: LanguageProviderContext,
+    position: LanguagePosition,
+  ): LanguageCallHierarchyResult;
+  getInlayHints?(ctx: LanguageProviderContext, range: LanguageRange): LanguageInlayHintsResult;
   getReferences?(
     ctx: LanguageProviderContext,
     position: LanguagePosition,

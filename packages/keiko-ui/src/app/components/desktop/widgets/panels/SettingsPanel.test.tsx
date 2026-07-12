@@ -16,12 +16,18 @@ import { consumePendingGatewaySetup, requestGatewaySetup } from "../shared/gatew
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
 const runGatewayReadinessMock = vi.fn();
+const fetchManagedLspSettingsMock = vi.fn();
+const mutateManagedLspSettingsMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   fetchConfig: (): Promise<unknown> => fetchConfigMock(),
   fetchModels: (): Promise<unknown> => fetchModelsMock(),
   runGatewayReadiness: (...args: readonly unknown[]): Promise<unknown> =>
     runGatewayReadinessMock(...args),
+  fetchManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
+    fetchManagedLspSettingsMock(...args),
+  mutateManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
+    mutateManagedLspSettingsMock(...args),
 }));
 
 // Issue #144: synthetic capability fixtures. Generic ids only — no customer
@@ -283,6 +289,31 @@ describe("SettingsPanel Feedback entry point (Issue #2073)", () => {
   });
 });
 
+describe("SettingsPanel managed language composition", () => {
+  it("mounts the reusable server-owned language section for the active workspace", async () => {
+    primeFetches([]);
+    fetchManagedLspSettingsMock.mockResolvedValue({
+      storeState: "ready",
+      revision: 0,
+      etag: '"lspcfg-0-abcdefghijklmnop"',
+      evidenceCount: 0,
+      languages: [],
+      settings: [],
+      configurations: [],
+      health: [],
+    });
+    render(<SettingsPanel root="/workspace/settings" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Languages" }));
+
+    expect(await screen.findByText("Language intelligence")).toBeInTheDocument();
+    expect(fetchManagedLspSettingsMock).toHaveBeenCalledWith(
+      "/workspace/settings",
+      expect.any(AbortSignal),
+    );
+  });
+});
+
 describe("SettingsPanel does not leak provider URLs or credentials (Issue #144 AC #3)", () => {
   it("renders no http(s):// host-name pattern in the model list markup", async () => {
     // A synthetic credential-shape string the test will look for. It is not
@@ -540,9 +571,9 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     fireEvent.click(screen.getByRole("option", { name: "Deutsch" }));
 
     expect(window.localStorage.getItem("keiko.locale")).toBe("de");
+    expect(await screen.findByText("Sprache")).toBeInTheDocument();
     expect(document.documentElement.lang).toBe("de");
     expect(document.documentElement.dataset.locale).toBe("de");
-    expect(await screen.findByText("Sprache")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Allgemein" })).toHaveAttribute(
       "aria-pressed",
       "true",

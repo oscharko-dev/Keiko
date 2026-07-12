@@ -170,6 +170,38 @@ describe("POST /api/editor/workspace-search", () => {
     expect(insensitiveBody.results.length).toBeGreaterThan(sensitiveBody.results.length);
   });
 
+  it("matches embedded identifiers only when whole-word search is disabled", async () => {
+    await writeFile(join(root, "src", "whole-word.ts"), "export const id = 1;\n", "utf8");
+    await writeFile(
+      join(root, "src", "embedded-word.ts"),
+      "export const userId = logId;\n",
+      "utf8",
+    );
+
+    const wholeWord = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "id", wholeWord: true })),
+      deps(),
+    );
+    const substring = await handleEditorWorkspaceSearch(
+      postContext(searchBody({ query: "id", wholeWord: false })),
+      deps(),
+    );
+
+    expect(wholeWord.status).toBe(200);
+    expect(substring.status).toBe(200);
+    const wholeWordPaths = (wholeWord.body as { results: { path: string }[] }).results.map(
+      (result) => result.path,
+    );
+    const substringPaths = (substring.body as { results: { path: string }[] }).results.map(
+      (result) => result.path,
+    );
+    expect(wholeWordPaths).toContain("src/whole-word.ts");
+    expect(wholeWordPaths).not.toContain("src/embedded-word.ts");
+    expect(substringPaths).toEqual(
+      expect.arrayContaining(["src/whole-word.ts", "src/embedded-word.ts"]),
+    );
+  });
+
   it("keeps user-facing workspace search lexical rather than semantic", async () => {
     const result = await handleEditorWorkspaceSearch(
       postContext(searchBody({ query: "configuration parser" })),
@@ -348,6 +380,54 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
     expect(after).toBe(before);
   });
 
+  it("expands regex capture groups independently for every match", async () => {
+    await writeFile(join(root, "src", "calls.ts"), "alpha(); beta();\n", "utf8");
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "(\\w+)\\(\\)",
+          mode: "regex",
+          replacement: "call_$1()",
+          includeGlobs: ["src/calls.ts"],
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      files: { edits: { originalText: string; newText: string }[] }[];
+    };
+    expect(body.files[0]?.edits).toEqual([
+      expect.objectContaining({ originalText: "alpha()", newText: "call_alpha()" }),
+      expect.objectContaining({ originalText: "beta()", newText: "call_beta()" }),
+    ]);
+  });
+
+  it("expands only numeric capture references and keeps expression-like text literal", async () => {
+    await writeFile(join(root, "src", "bounded-replace.ts"), "safe();\n", "utf8");
+    const replacement = "$1:${globalThis.compromised = true}:$&:$`:$'";
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "(\\w+)\\(\\)",
+          mode: "regex",
+          replacement,
+          includeGlobs: ["src/bounded-replace.ts"],
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { files: { edits: { newText: string }[] }[] };
+    expect(body.files[0]?.edits[0]?.newText).toBe("safe:${globalThis.compromised = true}:$&:$`:$'");
+  });
+
   it("recomputes matches from current on-disk content at preview time", async () => {
     await handleEditorWorkspaceSearch(
       postContext(searchBody({ includeGlobs: ["src/a.ts"] })),
@@ -391,6 +471,31 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
     expect(body.truncated).toBe(true);
   });
 
+  it("accepts a validator-approved regex containing an unescaped quantifier-like character instead of crashing", async () => {
+    // "items{" is valid, non-ReDoS Annex-B regex syntax without the unicode ("u") flag but throws
+    // a SyntaxError under it ("Incomplete quantifier"); `regexSafetyIssue` and the sibling search
+    // route's matcher both validate/match without "u", so this route's own RegExp construction
+    // must not add "u" either, or a validator-approved query would crash instead of previewing.
+    await writeFile(join(root, "src", "flags.ts"), 'export const label = "items{";\n', "utf8");
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "items{",
+          mode: "regex",
+          replacement: "entries[",
+          includeGlobs: ["src/flags.ts"],
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { files: { edits: { originalText: string }[] }[] };
+    expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual(["items{"]);
+  });
+
   it("rejects an unsafe regex before constructing a RegExp, and mutates no file", async () => {
     const before = await readFile(join(root, "src", "a.ts"), "utf8");
 
@@ -426,6 +531,56 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
     expect(result.status).toBe(200);
     const body = result.body as { files: { edits: { originalText: string }[] }[] };
     expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual(["parse Config"]);
+  });
+
+  it("replaces a match that follows a brace-delimited block in the same file, not just the block's own declaration line", async () => {
+    // src/a.ts has "parseConfig" both in the function declaration (line 1, inside a
+    // brace-delimited block) and again in a standalone statement after the block's closing
+    // brace (line 4). Both must be found and replaced, not merged/collapsed into one.
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      editCount: number;
+      files: { edits: { range: { startLine: number }; originalText: string }[] }[];
+    };
+    expect(body.editCount).toBe(2);
+    const matchedLines = body.files[0]?.edits.map((edit) => edit.range.startLine).sort();
+    expect(matchedLines).toEqual([1, 4]);
+  });
+
+  it("replaces every non-overlapping occurrence in a file, even beyond the search engine's per-file evidence-diversity sample size", async () => {
+    const functionCount = 5;
+    const lines: string[] = [];
+    for (let index = 0; index < functionCount; index += 1) {
+      lines.push(`export function widget${String(index)}(): number {`);
+      lines.push("  return widgetToken;");
+      lines.push("}");
+    }
+    await writeFile(join(root, "src", "many-matches.ts"), `${lines.join("\n")}\n`, "utf8");
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "widgetToken",
+          replacement: "WIDGET_TOKEN",
+          includeGlobs: ["src/many-matches.ts"],
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { editCount: number; files: { edits: unknown[] }[] };
+    expect(body.files[0]?.edits).toHaveLength(functionCount);
+    expect(body.editCount).toBe(functionCount);
   });
 });
 
@@ -464,8 +619,9 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
-    expect(content).toContain("readConfig");
-    expect(content).toContain('export const marker = parseConfig("a");');
+    expect(content).toContain("export function readConfig(value: string): string {");
+    expect(content).toContain('export const marker = readConfig("a");');
+    expect(content).not.toContain("parseConfig");
   });
 
   it("keeps exact closed-file content while using the governed patch preflight", async () => {

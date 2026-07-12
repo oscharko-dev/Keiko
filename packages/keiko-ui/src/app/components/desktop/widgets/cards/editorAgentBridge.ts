@@ -9,29 +9,34 @@
  *
  * The pure dispatcher maps a validated {@link EditorAgentAction} to a controller call and returns a
  * synchronous {@link EditorAgentActionDescriptor} — or a Promise of one (`save`) — without touching
- * React or the DOM, so the full nine-action protocol is unit-testable in isolation. The two write
- * actions (`applyTextEdits`/`applyPatch`) need React setters, so they return a `"deferred"` marker
- * and self-report from inside their component callbacks via the shared result-posting helper.
+ * React or the DOM, so the full action protocol is unit-testable in isolation. The write actions
+ * (`applyTextEdits`/`applyPatch`/`applyChangeset`) need React setters, so they return a `"deferred"`
+ * marker and self-report from inside their component callbacks via the shared result-posting helper.
  *
  * The three layout-controller actions (`moveTab`, `splitPane`, `setSelection`) are completed here:
  * `moveTab`/`splitPane` delegate to the layout controllers injected by `EditorWidget`; `setSelection`
  * sets a one-shot `revealRequest` payload the host merges into the editor surface.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
-import { postEditorAgentActionResult } from "../../../../../lib/api";
-import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
-import type {
-  EditorAgentAction,
-  EditorAgentEvent,
-  EditorAgentActionResult,
-  EditorAgentActionResultRequest,
-  EditorAgentConflictCode,
-} from "../../../../../lib/types";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isContainedAgentPath,
+  isEditorAgentActiveBufferActionType,
+  isEditorAgentBridgeDecisionCapability,
   isEditorAgentEvent,
+  isEditorAgentWriteActionType,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
+
+import { postEditorAgentActionResult, queueEditorAgentBridgeAction } from "../../../../../lib/api";
+import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+import type {
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentEvent,
+  EditorAgentActionResult,
+  EditorAgentActionResultRequest,
+  EditorAgentSnapshotResponse,
+  EditorAgentConflictCode,
 } from "../../../../../lib/types";
 
 /**
@@ -40,6 +45,18 @@ import {
  * sees the settled state promptly.
  */
 export const EDITOR_SNAPSHOT_DEBOUNCE_MS = 300;
+
+/**
+ * Issue #2120 (ADR-0058 through ADR-0062) — action/result traffic is considered recent for one
+ * minute. This deliberately measures observed agent activity, not the browser's own SSE liveness.
+ */
+export const EDITOR_AGENT_ACTIVITY_RECENCY_MS = 60_000;
+
+/**
+ * Maximum content-free action identifiers retained by one mounted bridge hook. A newly observed
+ * action evicts the oldest retained identifier when this FIFO bound is full.
+ */
+export const MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS = 64;
 
 /** A content-free agent selection-reveal request the host merges into the editor surface. */
 export interface EditorAgentSelectionRequest {
@@ -57,6 +74,13 @@ export interface EditorAgentSelectionRequest {
 export interface EditorAgentActionControllers {
   /** The pane this bridge serves; used as the default pane target for layout actions. */
   readonly paneId: string | undefined;
+  /** The snapshot/browser target against which active-buffer actions are checked. */
+  readonly activePaneId: string | undefined;
+  readonly activeFile: string | undefined;
+  /** Runtime-owned repeat check immediately before a controller mutation. */
+  readonly verifyActiveTarget: (action: EditorAgentAction) => boolean;
+  /** Runtime-owned optimistic-concurrency check immediately before a write action. */
+  readonly verifyWritePrecondition: (action: EditorAgentAction) => boolean;
   /** Open/focus a file tab in this pane. */
   readonly onSelectOpenFile: ((file: string) => void) | undefined;
   /** Whether the host's deterministic formatter is available for the active language. */
@@ -71,6 +95,8 @@ export interface EditorAgentActionControllers {
   readonly applyTextEdits: (action: EditorAgentAction) => void;
   /** Stage an agent patch for explicit review; self-reports via the shared helper. */
   readonly applyPatch: (action: EditorAgentAction) => void;
+  /** Stage a prepared multi-file changeset for review; self-reports via the shared helper. */
+  readonly applyChangeset?: ((action: EditorAgentAction) => void) | undefined;
   /** Split the given pane; injected by EditorWidget. Undefined when rendered standalone. */
   readonly onSplitPane: ((paneId: string, direction: "row" | "column") => void) | undefined;
   /** Move a file tab across panes; injected by EditorWidget. Undefined when rendered standalone. */
@@ -90,6 +116,99 @@ export type EditorAgentActionDescriptor =
   | { readonly status: "async"; readonly promise: Promise<EditorAgentActionDescriptor> };
 
 const DEFERRED: EditorAgentActionDescriptor = { status: "deferred" };
+const MAX_BROWSER_BRIDGE_CAPABILITIES = 256;
+interface BrowserBridgeCapability {
+  readonly value: string;
+  readonly generation: number;
+}
+
+const editorAgentDecisionCapabilities = new Map<string, BrowserBridgeCapability>();
+const editorAgentSnapshotRegistrations = new Map<string, Promise<boolean>>();
+const editorAgentReadySessions = new Set<string>();
+let editorAgentCapabilityGeneration = 0;
+
+function evictIdleBridgeCapability(): boolean {
+  for (const sessionId of editorAgentDecisionCapabilities.keys()) {
+    if (editorAgentSubscribersBySession.has(sessionId)) continue;
+    editorAgentDecisionCapabilities.delete(sessionId);
+    return true;
+  }
+  return false;
+}
+
+function rememberBridgeCapability(sessionId: string, capability: string): boolean {
+  const current = editorAgentDecisionCapabilities.get(sessionId);
+  if (current?.value === capability) return true;
+  if (
+    current === undefined &&
+    editorAgentDecisionCapabilities.size >= MAX_BROWSER_BRIDGE_CAPABILITIES &&
+    !evictIdleBridgeCapability()
+  ) {
+    return false;
+  }
+  editorAgentCapabilityGeneration += 1;
+  editorAgentDecisionCapabilities.set(sessionId, {
+    value: capability,
+    generation: editorAgentCapabilityGeneration,
+  });
+  return true;
+}
+
+/** Queue an explicit local UI action without exposing the bridge capability to its caller. */
+export function queueLocalEditorAgentAction(
+  action: EditorAgentAction,
+): Promise<EditorAgentActionQueuedResponse> {
+  const capability = editorAgentDecisionCapabilities.get(action.sessionId)?.value;
+  if (capability === undefined) {
+    return Promise.reject(new Error("The browser bridge decision capability is unavailable."));
+  }
+  return queueEditorAgentBridgeAction(action, capability);
+}
+
+function normalizeActiveTarget(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function activeTargetConflict(
+  action: EditorAgentAction,
+  controllers: EditorAgentActionControllers,
+): EditorAgentActionDescriptor | null {
+  if (!isEditorAgentActiveBufferActionType(action.type)) return null;
+  const claimedFile = action.target?.file;
+  const claimedPane = action.target?.paneId;
+  const fileMismatch =
+    claimedFile === undefined ||
+    controllers.activeFile === undefined ||
+    normalizeActiveTarget(claimedFile) !== normalizeActiveTarget(controllers.activeFile);
+  const paneMismatch =
+    claimedPane === undefined ||
+    controllers.activePaneId === undefined ||
+    claimedPane !== controllers.activePaneId;
+  if (!fileMismatch && !paneMismatch && controllers.verifyActiveTarget(action)) return null;
+  return {
+    status: "conflict",
+    conflictCode: "OUT_OF_SCOPE",
+    message: "Action target does not match the active editor buffer.",
+  };
+}
+
+function writePreconditionConflict(
+  action: EditorAgentAction,
+  controllers: EditorAgentActionControllers,
+): EditorAgentActionDescriptor | null {
+  if (!isEditorAgentWriteActionType(action.type) || controllers.verifyWritePrecondition(action)) {
+    return null;
+  }
+  return {
+    status: "conflict",
+    conflictCode: "VERSION_MISMATCH",
+    message: "The active editor buffer changed after action admission.",
+  };
+}
 
 function dispatchOpenOrFocus(
   action: EditorAgentAction,
@@ -174,13 +293,17 @@ function dispatchSetSelection(
 
 /**
  * Pure, React-free dispatcher: map a validated agent action to a controller call and return a
- * descriptor. `applyTextEdits`/`applyPatch` return `"deferred"` (they self-report inside the
+ * descriptor. Write-review actions return `"deferred"` (they self-report inside the
  * component); `save` returns `"async"` with a Promise of the final descriptor.
  */
 export function dispatchEditorAgentAction(
   action: EditorAgentAction,
   controllers: EditorAgentActionControllers,
 ): EditorAgentActionDescriptor {
+  const targetConflict = activeTargetConflict(action, controllers);
+  if (targetConflict !== null) return targetConflict;
+  const preconditionConflict = writePreconditionConflict(action, controllers);
+  if (preconditionConflict !== null) return preconditionConflict;
   switch (action.type) {
     case "openFile":
     case "focusTab":
@@ -195,12 +318,33 @@ export function dispatchEditorAgentAction(
     case "applyPatch":
       controllers.applyPatch(action);
       return DEFERRED;
+    case "applyChangeset":
+      if (controllers.applyChangeset === undefined) {
+        return { status: "failed", message: "Provider unavailable." };
+      }
+      controllers.applyChangeset(action);
+      return DEFERRED;
     case "splitPane":
       return dispatchSplitPane(action, controllers);
     case "moveTab":
       return dispatchMoveTab(action, controllers);
     case "setSelection":
       return dispatchSetSelection(action, controllers);
+    case "requestVerification":
+      // Issue #2210/#2214 (ADR-0126 D5): a verification run is a server-side sandboxed spawn dispatched
+      // through Issue #2211's route, never the browser bridge (it has no editor buffer to apply to).
+      // The bridge rejects it if one ever arrives here.
+      return {
+        status: "failed",
+        message: "Verification runs are not dispatched through the editor bridge.",
+      };
+    case "navigateSymbol":
+    case "searchWorkspace":
+    case "queryGit":
+      return {
+        status: "failed",
+        message: "Server-resolved editor actions cannot execute in the browser bridge.",
+      };
   }
 }
 
@@ -229,9 +373,20 @@ export function postEditorAgentResult(
       ...(conflict === undefined ? {} : { conflict }),
     },
   };
-  void postEditorAgentActionResult(body).catch(() => {
+  void postEditorAgentResultRequest(action, body).catch(() => {
     // Best-effort action reporting; the local UI action already happened or was rejected.
   });
+}
+
+export function postEditorAgentResultRequest(
+  action: EditorAgentAction,
+  request: EditorAgentActionResultRequest,
+): Promise<EditorAgentActionQueuedResponse> {
+  const capability = editorAgentDecisionCapabilities.get(action.sessionId)?.value;
+  if (capability === undefined) {
+    return Promise.reject(new Error("The browser bridge decision capability is unavailable."));
+  }
+  return postEditorAgentActionResult({ ...request, bridgeDecisionCapability: capability });
 }
 
 function reportDescriptor(
@@ -255,7 +410,9 @@ export interface UseEditorAgentBridgeParams {
    * snapshot dependency list, so its identity changes exactly when a snapshot dimension changes and
    * the hook re-fires the register effect.
    */
-  readonly registerSnapshot: () => void;
+  readonly registerSnapshot: (
+    capability: string | undefined,
+  ) => Promise<EditorAgentSnapshotResponse | void> | EditorAgentSnapshotResponse | void;
   readonly onConflict: (conflict: {
     readonly code: EditorAgentConflictCode;
     readonly message: string;
@@ -266,16 +423,175 @@ export interface UseEditorAgentBridgeParams {
    * so the governance surface stays live without widening the frozen `EditorAgentEvent` union.
    */
   readonly onAgentActivity?: (() => void) | undefined;
+  /** Receives validated terminal SSE results for this exact session without retaining a history. */
+  readonly onTerminalResult?: ((result: EditorAgentActionResult) => void) | undefined;
 }
 
 export interface UseEditorAgentBridgeResult {
   readonly agentSelectionRequest: EditorAgentSelectionRequest | null;
   readonly consumeSelectionRequest: () => void;
+  readonly bridgeState: EditorAgentBridgeState;
+}
+
+/** Bounded, content-free state derived only from action/result frames already observed by the hook. */
+export interface EditorAgentBridgeState {
+  /** Epoch milliseconds for the most recently observed valid action or result frame. */
+  readonly lastActivityAt: number | null;
+  /** True only during the finite recency window following the latest observed frame. */
+  readonly recentlyAttached: boolean;
+  /** Bounded action metadata retained until a matching terminal result or lifecycle reset. */
+  readonly inFlightActionIds: readonly string[];
+  readonly inFlightActionCount: number;
 }
 
 interface EditorAgentSessionHandlers {
   readonly onAction: (action: EditorAgentAction) => void;
   readonly onResult: (result: EditorAgentActionResult) => void;
+}
+
+const EMPTY_EDITOR_AGENT_BRIDGE_STATE: EditorAgentBridgeState = {
+  lastActivityAt: null,
+  recentlyAttached: false,
+  inFlightActionIds: [],
+  inFlightActionCount: 0,
+};
+
+function recentBridgeState(
+  lastActivityAt: number,
+  inFlightActionIds: readonly string[],
+): EditorAgentBridgeState {
+  return {
+    lastActivityAt,
+    recentlyAttached: true,
+    inFlightActionIds,
+    inFlightActionCount: inFlightActionIds.length,
+  };
+}
+
+function retainInFlightAction(current: readonly string[], actionId: string): readonly string[] {
+  if (current.includes(actionId)) return current;
+  const firstRetainedIndex = Math.max(0, current.length - MAX_EDITOR_AGENT_IN_FLIGHT_ACTIONS + 1);
+  return [...current.slice(firstRetainedIndex), actionId];
+}
+
+function stateAfterActionFrame(
+  current: EditorAgentBridgeState,
+  actionId: string,
+  observedAt: number,
+): EditorAgentBridgeState {
+  return recentBridgeState(observedAt, retainInFlightAction(current.inFlightActionIds, actionId));
+}
+
+function stateAfterResultFrame(
+  current: EditorAgentBridgeState,
+  result: EditorAgentActionResult,
+  observedAt: number,
+): EditorAgentBridgeState {
+  const inFlightActionIds =
+    result.status === "queued"
+      ? current.inFlightActionIds
+      : current.inFlightActionIds.filter((actionId) => actionId !== result.actionId);
+  return recentBridgeState(observedAt, inFlightActionIds);
+}
+
+function inactiveBridgeState(current: EditorAgentBridgeState): EditorAgentBridgeState {
+  return current.recentlyAttached ? { ...current, recentlyAttached: false } : current;
+}
+
+interface EditorAgentBridgeStateObserver {
+  readonly bridgeState: EditorAgentBridgeState;
+  readonly observeAction: (actionId: string) => void;
+  readonly observeResult: (result: EditorAgentActionResult) => void;
+}
+
+function useEditorAgentBridgeState(
+  agentSessionId: string,
+  enabled: boolean,
+): EditorAgentBridgeStateObserver {
+  const [bridgeState, setBridgeState] = useState(EMPTY_EDITOR_AGENT_BRIDGE_STATE);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearInactivityTimer = useCallback((): void => {
+    if (inactivityTimerRef.current === null) return;
+    clearTimeout(inactivityTimerRef.current);
+    inactivityTimerRef.current = null;
+  }, []);
+  const restartInactivityTimer = useCallback((): void => {
+    clearInactivityTimer();
+    inactivityTimerRef.current = setTimeout(() => {
+      inactivityTimerRef.current = null;
+      setBridgeState(inactiveBridgeState);
+    }, EDITOR_AGENT_ACTIVITY_RECENCY_MS);
+  }, [clearInactivityTimer]);
+  const observeAction = useCallback(
+    (actionId: string): void => {
+      const observedAt = Date.now();
+      setBridgeState((current) => stateAfterActionFrame(current, actionId, observedAt));
+      restartInactivityTimer();
+    },
+    [restartInactivityTimer],
+  );
+  const observeResult = useCallback(
+    (result: EditorAgentActionResult): void => {
+      const observedAt = Date.now();
+      setBridgeState((current) => stateAfterResultFrame(current, result, observedAt));
+      restartInactivityTimer();
+    },
+    [restartInactivityTimer],
+  );
+  useEffect(() => {
+    clearInactivityTimer();
+    setBridgeState(EMPTY_EDITOR_AGENT_BRIDGE_STATE);
+    return clearInactivityTimer;
+  }, [agentSessionId, clearInactivityTimer, enabled]);
+  return { bridgeState, observeAction, observeResult };
+}
+
+async function performBridgeSnapshotRegistration(
+  sessionId: string,
+  registerSnapshot: UseEditorAgentBridgeParams["registerSnapshot"],
+): Promise<boolean> {
+  try {
+    const current = editorAgentDecisionCapabilities.get(sessionId)?.value;
+    const response = await registerSnapshot(current);
+    const issued = response?.bridgeDecisionCapability;
+    if (issued === undefined) return editorAgentDecisionCapabilities.has(sessionId);
+    return isEditorAgentBridgeDecisionCapability(issued)
+      ? rememberBridgeCapability(sessionId, issued)
+      : false;
+  } catch {
+    // Registration is availability-only; mutation remains server-gated without a valid lease.
+    return false;
+  }
+}
+
+function registerBridgeSnapshot(
+  sessionId: string,
+  registerSnapshot: UseEditorAgentBridgeParams["registerSnapshot"],
+): Promise<boolean> {
+  const prior = editorAgentSnapshotRegistrations.get(sessionId);
+  if (
+    prior === undefined &&
+    editorAgentSnapshotRegistrations.size >= MAX_BROWSER_BRIDGE_CAPABILITIES &&
+    !editorAgentDecisionCapabilities.has(sessionId)
+  ) {
+    return Promise.resolve(false);
+  }
+  const pending = (prior ?? Promise.resolve(true))
+    .then(() => performBridgeSnapshotRegistration(sessionId, registerSnapshot))
+    .then((ready) => {
+      if (ready && editorAgentSubscribersBySession.has(sessionId)) {
+        editorAgentReadySessions.add(sessionId);
+        scheduleEditorAgentReconcile();
+      }
+      return ready;
+    });
+  editorAgentSnapshotRegistrations.set(sessionId, pending);
+  void pending.then(() => {
+    if (editorAgentSnapshotRegistrations.get(sessionId) === pending) {
+      editorAgentSnapshotRegistrations.delete(sessionId);
+    }
+  });
+  return pending;
 }
 
 const editorAgentSubscribersBySession = new Map<string, Set<EditorAgentSessionHandlers>>();
@@ -288,18 +604,51 @@ let editorAgentResultListener: EventListener | null = null;
 // tear down and re-open the stream. `null` means "no stream is currently open".
 let editorAgentConnectedSessionKey: string | null = null;
 let editorAgentRestartScheduled = false;
+let editorAgentBridgeStreamId: string | null = null;
 
-function currentSessionKey(): string {
-  return [...editorAgentSubscribersBySession.keys()].sort().join(" ");
+interface ReadySubscribedSession {
+  readonly sessionId: string;
+  readonly capability: BrowserBridgeCapability;
 }
 
-function editorAgentEventUrl(): string {
+function readySubscribedSessions(): readonly ReadySubscribedSession[] {
+  const ready: ReadySubscribedSession[] = [];
+  for (const sessionId of [...editorAgentSubscribersBySession.keys()].sort((a, b) =>
+    a.localeCompare(b),
+  )) {
+    const capability = editorAgentDecisionCapabilities.get(sessionId);
+    if (!editorAgentReadySessions.has(sessionId) || capability === undefined) continue;
+    ready.push({ sessionId, capability });
+  }
+  return ready;
+}
+
+function currentSessionKey(sessions: readonly ReadySubscribedSession[]): string {
+  return sessions
+    .map(({ sessionId, capability }) => `${sessionId}:${String(capability.generation)}`)
+    .join("\u0000");
+}
+
+function bridgeStreamId(): string | null {
+  if (editorAgentBridgeStreamId !== null) return editorAgentBridgeStreamId;
+  if (globalThis.crypto === undefined) return null;
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  editorAgentBridgeStreamId = [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return editorAgentBridgeStreamId;
+}
+
+function editorAgentEventUrl(sessions: readonly ReadySubscribedSession[]): string | null {
+  const streamId = bridgeStreamId();
+  if (streamId === null) return null;
   const params = new URLSearchParams();
-  for (const sessionId of [...editorAgentSubscribersBySession.keys()].sort()) {
+  params.set("bridgeStreamId", streamId);
+  for (const { sessionId, capability } of sessions) {
     params.append("sessionId", sessionId);
+    params.append("bridgeDecisionCapability", capability.value);
   }
   const query = params.toString();
-  return query.length > 0 ? `/api/editor/agent/events?${query}` : "/api/editor/agent/events";
+  return query.length > 0 ? `/api/editor/agent/events?${query}` : null;
 }
 
 function eventSessionId(event: EditorAgentEvent): string | undefined {
@@ -361,9 +710,10 @@ function closeEditorAgentEventSource(): void {
  * extra panes on an already-subscribed session no longer force a reconnect.
  */
 function reconcileEditorAgentEventSource(): void {
-  const nextKey = currentSessionKey();
-  if (editorAgentSubscribersBySession.size === 0) {
-    // Last subscriber left — tear the stream down.
+  const readySessions = readySubscribedSessions();
+  const nextKey = currentSessionKey(readySessions);
+  if (readySessions.length === 0) {
+    // No authenticated subscriber is ready — tear the stream down.
     closeEditorAgentEventSource();
     return;
   }
@@ -373,7 +723,9 @@ function reconcileEditorAgentEventSource(): void {
   }
   closeEditorAgentEventSource();
   if (typeof EventSource === "undefined") return;
-  const source = createSameOriginApiEventSource(editorAgentEventUrl());
+  const url = editorAgentEventUrl(readySessions);
+  if (url === null) return;
+  const source = createSameOriginApiEventSource(url);
   if (source === null) return;
   editorAgentActionListener = handleEditorAgentFrame;
   editorAgentResultListener = handleEditorAgentFrame;
@@ -413,7 +765,10 @@ function subscribeEditorAgentSession(
     const subscribers = editorAgentSubscribersBySession.get(sessionId);
     if (subscribers === undefined) return;
     subscribers.delete(handlers);
-    if (subscribers.size === 0) editorAgentSubscribersBySession.delete(sessionId);
+    if (subscribers.size === 0) {
+      editorAgentSubscribersBySession.delete(sessionId);
+      editorAgentReadySessions.delete(sessionId);
+    }
     if (editorAgentSubscribersBySession.size === 0) {
       // Last subscriber left — tear the stream down synchronously so unmount closes the
       // connection deterministically (no deferred socket lingering after the pane is gone).
@@ -426,10 +781,22 @@ function subscribeEditorAgentSession(
   };
 }
 
+/** Test-only reset for module-scoped capability and EventSource state. */
+export function _resetEditorAgentBridgeStateForTests(): void {
+  closeEditorAgentEventSource();
+  editorAgentSubscribersBySession.clear();
+  editorAgentDecisionCapabilities.clear();
+  editorAgentSnapshotRegistrations.clear();
+  editorAgentReadySessions.clear();
+  editorAgentCapabilityGeneration = 0;
+  editorAgentRestartScheduled = false;
+  editorAgentBridgeStreamId = null;
+}
+
 /**
- * The single React artifact of the bridge: owns the snapshot-register effect, the SSE connection
- * (action + result listeners, both validated with `isEditorAgentEvent`), result posting, conflict
- * surfacing, and the one-shot `setSelection` reveal state.
+ * The single exported React artifact of the bridge: owns the snapshot-register effect, the SSE
+ * connection (action + result listeners, both validated with `isEditorAgentEvent`), result posting,
+ * conflict surfacing, and the one-shot `setSelection` reveal state.
  */
 export function useEditorAgentBridge(
   params: UseEditorAgentBridgeParams,
@@ -441,9 +808,14 @@ export function useEditorAgentBridge(
     registerSnapshot,
     onConflict,
     onAgentActivity,
+    onTerminalResult,
   } = params;
   const [agentSelectionRequest, setAgentSelectionRequest] =
     useState<EditorAgentSelectionRequest | null>(null);
+  const { bridgeState, observeAction, observeResult } = useEditorAgentBridgeState(
+    agentSessionId,
+    enabled,
+  );
 
   // Refs keep the SSE effect stable across re-renders so the live onConflictRef and
   // dispatchControllersRef are used without tearing down and re-opening the EventSource on every keystroke.
@@ -451,6 +823,8 @@ export function useEditorAgentBridge(
   onConflictRef.current = onConflict;
   const onAgentActivityRef = useRef(onAgentActivity);
   onAgentActivityRef.current = onAgentActivity;
+  const onTerminalResultRef = useRef(onTerminalResult);
+  onTerminalResultRef.current = onTerminalResult;
 
   const requestSelectionReveal = useCallback((request: EditorAgentSelectionRequest): void => {
     setAgentSelectionRequest(request);
@@ -476,35 +850,42 @@ export function useEditorAgentBridge(
   const registerSnapshotRef = useRef(registerSnapshot);
   registerSnapshotRef.current = registerSnapshot;
   useEffect(() => {
+    if (!enabled) return;
     // `registerSnapshot` is a dependency so a new snapshot dimension re-arms the timer;
     // the ref indirection means we always invoke the latest closure on the trailing edge.
     const handle = setTimeout(() => {
-      registerSnapshotRef.current();
+      void registerBridgeSnapshot(agentSessionId, registerSnapshotRef.current);
     }, EDITOR_SNAPSHOT_DEBOUNCE_MS);
     return (): void => {
       clearTimeout(handle);
     };
-  }, [registerSnapshot]);
+  }, [agentSessionId, enabled, registerSnapshot]);
 
   useEffect(() => {
     if (!enabled) return;
-    return subscribeEditorAgentSession(agentSessionId, {
+    const handlers: EditorAgentSessionHandlers = {
       onAction: (action): void => {
+        observeAction(action.actionId);
         const descriptor = dispatchEditorAgentAction(action, dispatchControllersRef.current);
         reportDescriptor(action, descriptor);
         // Issue #1395 — an action for this session was dispatched; refresh the audit panel.
         onAgentActivityRef.current?.();
       },
       onResult: (result): void => {
+        observeResult(result);
         // Issue #1395 — any result for this session is audit-relevant; refresh the audit panel.
         onAgentActivityRef.current?.();
+        if (result.status !== "queued") onTerminalResultRef.current?.(result);
         if (result.status !== "conflict") return;
         const { conflict } = result;
         if (conflict === undefined) return;
         onConflictRef.current({ code: conflict.code, message: conflict.message });
       },
-    });
-  }, [agentSessionId, enabled]);
+    };
+    const unsubscribe = subscribeEditorAgentSession(agentSessionId, handlers);
+    void registerBridgeSnapshot(agentSessionId, registerSnapshotRef.current);
+    return unsubscribe;
+  }, [agentSessionId, enabled, observeAction, observeResult]);
 
-  return { agentSelectionRequest, consumeSelectionRequest };
+  return { agentSelectionRequest, consumeSelectionRequest, bridgeState };
 }

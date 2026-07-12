@@ -190,6 +190,51 @@ describe("rerankAndSelect — maxExcerptBytes", () => {
   });
 });
 
+// ─── Deferred hydration: estimatedBytes ───────────────────────────────────────
+// A candidate may defer its expensive redactedText hydration (leaving redactedText = "") and carry
+// a cheap estimatedBytes proxy instead, so the byte-budget truncation below runs BEFORE any
+// candidate is hydrated (grounded-qa-hybrid.ts's connectorRerankInput does exactly this).
+
+describe("rerankAndSelect — estimatedBytes (deferred hydration)", () => {
+  it("uses estimatedBytes instead of redactedText.length for the byte budget when text is deferred", () => {
+    const deferred: RerankInput<string> = {
+      kind: "connector",
+      redactedText: "", // deferred — not yet hydrated
+      estimatedBytes: 500, // but the estimate says it is large
+      engineScore: 0.9,
+      sourceLabel: "connector-deferred",
+      tieKey: "c-deferred",
+      payload: "deferred-payload",
+    };
+    const budget: RerankBudget = { maxCandidates: 10, maxExcerptBytes: 10 };
+    // Without estimatedBytes this would fit (redactedText="" -> 0 bytes); the estimate correctly
+    // gates it out instead, proving estimatedBytes — not redactedText — drives the budget decision.
+    expect(rerankAndSelect([deferred], budget)).toEqual([]);
+  });
+
+  it("carries the estimate through as SelectedCandidate.bytes for a deferred candidate", () => {
+    const deferred: RerankInput<string> = {
+      kind: "connector",
+      redactedText: "",
+      estimatedBytes: 42,
+      engineScore: 0.9,
+      sourceLabel: "connector-deferred",
+      tieKey: "c-deferred",
+      payload: "deferred-payload",
+    };
+    const selected = rerankAndSelect([deferred], { maxCandidates: 10, maxExcerptBytes: 1000 });
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.bytes).toBe(42);
+    expect(selected[0]?.redactedText).toBe("");
+  });
+
+  it("falls back to Buffer.byteLength(redactedText) when estimatedBytes is omitted (unchanged behavior)", () => {
+    const eager = connector("c-eager", 0.9, "y".repeat(20));
+    const selected = rerankAndSelect([eager], { maxCandidates: 10, maxExcerptBytes: 1000 });
+    expect(selected[0]?.bytes).toBe(20);
+  });
+});
+
 // ─── maxCandidates cap ────────────────────────────────────────────────────────
 
 describe("rerankAndSelect — maxCandidates", () => {

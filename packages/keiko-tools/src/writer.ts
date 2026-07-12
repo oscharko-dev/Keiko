@@ -151,7 +151,38 @@ export const nodeWorkspaceWriter: WorkspaceWriter = {
   },
 };
 
-// eslint-disable-next-line max-lines-per-function -- writer authority checks stay local to the contained writer closure.
+// Creates a missing directory segment, re-validating it is a real directory (not a symlink)
+// both before and after creation to close the TOCTOU window against a concurrent replace.
+function createMissingContainedDirectorySegment(current: string, causeError: unknown): void {
+  try {
+    mkdirSync(current);
+  } catch (mkdirError) {
+    if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+  }
+  const created = lstatSync(current);
+  if (created.isSymbolicLink() || !created.isDirectory()) {
+    throw new Error("workspace writer refused a non-directory path segment", {
+      cause: causeError,
+    });
+  }
+}
+
+// Ensures a single path segment under `root` exists as a real, contained directory, creating it
+// if absent. Re-checked per segment because each `join` step is a fresh symlink/containment race.
+function ensureContainedDirectorySegment(root: string, current: string): void {
+  assertContained(root, current);
+  try {
+    const stats = lstatSync(current);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      throw new Error("workspace writer refused a non-directory path segment");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    createMissingContainedDirectorySegment(current, error);
+  }
+  assertContained(root, realpathSync(current));
+}
+
 export function createContainedNodeWorkspaceWriter(workspaceRoot: string): WorkspaceWriter {
   const lexicalRoot = resolve(workspaceRoot);
   const root = realpathSync(workspaceRoot);
@@ -167,7 +198,6 @@ export function createContainedNodeWorkspaceWriter(workspaceRoot: string): Works
     return join(root, relative(lexicalRoot, resolvedPath));
   }
 
-  // eslint-disable-next-line complexity -- mkdirp must re-check every segment for symlink and containment races.
   function mkdirpContained(absoluteDir: string): void {
     const resolvedDir = resolveWorkspacePath(absoluteDir);
     assertContained(root, resolvedDir);
@@ -176,27 +206,7 @@ export function createContainedNodeWorkspaceWriter(workspaceRoot: string): Works
     let current = root;
     for (const segment of rel.split(/[\\/]+/u).filter(Boolean)) {
       current = join(current, segment);
-      assertContained(root, current);
-      try {
-        const stats = lstatSync(current);
-        if (stats.isSymbolicLink() || !stats.isDirectory()) {
-          throw new Error("workspace writer refused a non-directory path segment");
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        try {
-          mkdirSync(current);
-        } catch (mkdirError) {
-          if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
-        }
-        const created = lstatSync(current);
-        if (created.isSymbolicLink() || !created.isDirectory()) {
-          throw new Error("workspace writer refused a non-directory path segment", {
-            cause: error,
-          });
-        }
-      }
-      assertContained(root, realpathSync(current));
+      ensureContainedDirectorySegment(root, current);
     }
   }
 

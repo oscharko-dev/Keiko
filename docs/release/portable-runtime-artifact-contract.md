@@ -46,13 +46,15 @@ It does not perform production signing, macOS notarization, release upload, nati
 implementation, first-run setup, updater swap, sidecar launch, permission bridging, or model
 routing.
 
-Generated #1948 staging manifests therefore use `verificationPolicy: "staging"`,
+Manifest schema v1 has three explicit validation contexts. Staging manifests use
+`verificationPolicy: "staging"`,
 `verificationStatus: "unverified-staging"`, `signatureVerified: false`,
 `notarizationVerified: false`, target-specific `verificationChecks` set to `false`, and
 `platformSignatureLocallyVerified: false`. They also use `artifact.assetId: 0` because GitHub
-Release asset ids do not exist until #1952 uploads the artifacts. Those artifacts are manual-only
-staging outputs until #1951 replaces the metadata with verified signing/notarization evidence and
-#1952 binds real GitHub Release asset ids. The manifest example below remains the
+Release asset ids do not exist before upload. Unverified staging and verified unpublished candidates
+must use `release.releaseId: 0`, `artifact.assetId: 0`, and matching zero-id release-impact bindings;
+any positive pre-upload identity is rejected. After upload, the published context requires positive
+ids that exactly match the GitHub API release/asset snapshot. The manifest example below remains the
 production-complete contract for artifacts that may be promoted as portable release assets.
 
 ## Archive And Evidence Layout
@@ -229,11 +231,18 @@ without Coding Workbench enabled. When present, the contract is generic: it can 
 more Keiko-owned coding runtimes. `opencode-compatible` is the first fixture shape, not a hard-coded
 single-runtime limit.
 
-Sidecar payloads are staged from controlled Keiko release inputs by the release pipeline. They must
+Sidecar payloads are staged from controlled Keiko release inputs by the release pipeline. The
+controlled release input is the committed
+[`portable-runtime-approvals.json`](../../portable-runtime-approvals.json): it pins the approved
+sidecar runtime version with per-target archive URLs, SHA-256 digests, sizes, and license
+evidence, and `scripts/prepare-approved-sidecar-payloads.mjs` materializes the payloads from those
+pins with digest verification before staging. Sidecar payloads must
 not be acquired by customer machines through postinstall scripts, first-run downloads, app-launch
 downloads, updater-time side downloads, global npm installs, curl installers, or any other
 customer-side tool installation path. Refreshing a frozen sidecar payload is a Keiko release
-decision: update the controlled release input, regenerate all three portable artifacts, verify the
+decision: update the approvals file (for example with
+`npm run portable:approve-runtimes -- --opencode-version <v>`), review and merge that diff,
+regenerate all three portable artifacts, verify the
 new digests/evidence/signing status, and ship through the normal reviewed release flow.
 
 Sidecar metadata remains content-free. It may record runtime identity, kind, upstream version,
@@ -475,8 +484,10 @@ Validation rules:
 - `schemaVersion` is `1` until a later issue deliberately revises the schema.
 - `artifact.platformTarget` is one of `windows-x64`, `macos-arm64`, or `macos-x64`.
 - `artifact.assetName` must match the platform matrix exactly.
-- `artifact.assetId` must be a real non-zero GitHub Release asset id for production manifests.
-  `0` is reserved for #1948 unverified staging manifests only.
+- `artifact.assetId` and `release.releaseId` are exactly `0` for staging and verified unpublished
+  candidates. API-bound published manifests require positive values matching the remote snapshot.
+- `provenance.buildWorkflowRunId` and `provenance.buildWorkflowAttempt` are the actual GitHub Actions
+  run identity, independent of the zero pre-upload Release Asset identity.
 - `artifact.sha256`, `runtime.nodeArchiveSha256`, and `release.commitSha` are digests, not paths.
 - `provenance.sourceCommitSha`, `provenance.rootPackageTarballSha256`,
   `provenance.packagedAppTreeSha256`, and `provenance.provenanceStatementSha256` bind the packaged

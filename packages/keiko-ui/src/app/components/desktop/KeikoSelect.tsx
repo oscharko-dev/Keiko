@@ -10,8 +10,10 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { useTranslate } from "@/lib/i18n";
 
 export type KeikoSelectOption = {
   readonly value: string;
@@ -105,6 +107,51 @@ function nextEnabledIndex(
     if (options[index]?.disabled !== true) return index;
   }
   return -1;
+}
+
+function resolveTypeaheadStartIndex(activeIndex: number, selectedIndex: number): number {
+  return activeIndex >= 0 ? activeIndex : Math.max(selectedIndex, 0);
+}
+
+function triggerOpenDirectionClass(openUp: boolean): string {
+  return openUp ? "ksel-trigger-open-up" : "ksel-trigger-open-down";
+}
+
+function findTypeaheadIndex(options: readonly FlatOption[], start: number, query: string): number {
+  for (let i = 1; i <= options.length; i += 1) {
+    const idx = (start + i) % options.length;
+    const option = options[idx];
+    if (
+      option !== undefined &&
+      option.disabled !== true &&
+      option.label.toLowerCase().startsWith(query)
+    ) {
+      return idx;
+    }
+  }
+  return -1;
+}
+
+function buildTriggerClasses(params: {
+  readonly disabled: boolean;
+  readonly mono: boolean;
+  readonly open: boolean;
+  readonly openUp: boolean;
+  readonly position: MenuPosition | null;
+  readonly triggerClassName: string | undefined;
+}): string {
+  return [
+    "ksel-trigger",
+    params.mono ? "mono" : "",
+    params.triggerClassName ?? "",
+    params.open ? "ksel-trigger-open" : "",
+    params.open && params.position?.attached === true
+      ? triggerOpenDirectionClass(params.openUp)
+      : "",
+    params.disabled ? "ksel-trigger-disabled" : "",
+  ]
+    .filter((token) => token.length > 0)
+    .join(" ");
 }
 
 function OverflowOptionButton({
@@ -215,12 +262,166 @@ function OverflowOptionButton({
   );
 }
 
+function KeikoSelectMenuSection({
+  activeIndex,
+  flatOptions,
+  menuId,
+  onCommit,
+  onOptionKeyDown,
+  section,
+  sectionIndex,
+  setOptionRef,
+}: {
+  readonly activeIndex: number;
+  readonly flatOptions: readonly FlatOption[];
+  readonly menuId: string;
+  readonly onCommit: (option: FlatOption) => void;
+  readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
+  readonly section: KeikoSelectSection;
+  readonly sectionIndex: number;
+  readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
+}): ReactNode {
+  // A labelled section is a real listbox group so its options stay
+  // owned by the listbox and screen readers announce the group name;
+  // an unlabelled wrapper is role="presentation" so its options are
+  // treated as direct listbox children (WAI-ARIA listbox pattern).
+  const sectionLabelId =
+    section.label !== undefined ? `${menuId}-section-${sectionIndex.toString()}` : undefined;
+  return (
+    <div
+      className="ksel-section"
+      role={section.label !== undefined ? "group" : "presentation"}
+      aria-labelledby={sectionLabelId}
+    >
+      {section.label !== undefined ? (
+        <div className="ksel-section-label" id={sectionLabelId}>
+          {section.label}
+        </div>
+      ) : null}
+      {section.options.map((option) => {
+        const index = flatOptions.findIndex(
+          (entry) => entry.value === option.value && entry.sectionLabel === section.label,
+        );
+        // aria-selected tracks the roving focus (activeIndex) so
+        // assistive tech reports the option keyboard focus is on,
+        // not the last committed value.
+        const active = index === activeIndex;
+        const flatOption = flatOptions[index];
+        if (flatOption === undefined) return null;
+        return (
+          <OverflowOptionButton
+            active={active}
+            index={index}
+            key={`${section.label ?? "section"}-${option.value}`}
+            onCommit={onCommit}
+            onOptionKeyDown={onOptionKeyDown}
+            option={flatOption}
+            setOptionRef={setOptionRef}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function KeikoSelectMenu({
+  activeIndex,
+  ariaLabel,
+  flatOptions,
+  menuClassName,
+  menuCountLabel,
+  menuId,
+  menuLabel,
+  menuRef,
+  menuTitle,
+  onCommit,
+  onOptionKeyDown,
+  placeholder,
+  position,
+  sections,
+  setOptionRef,
+  showMenuHeader,
+}: {
+  readonly activeIndex: number;
+  readonly ariaLabel: string | undefined;
+  readonly flatOptions: readonly FlatOption[];
+  readonly menuClassName: string | undefined;
+  readonly menuCountLabel: string | undefined;
+  readonly menuId: string;
+  readonly menuLabel: string;
+  readonly menuRef: RefObject<HTMLDivElement | null>;
+  readonly menuTitle: string | undefined;
+  readonly onCommit: (option: FlatOption) => void;
+  readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
+  readonly placeholder: string | undefined;
+  readonly position: MenuPosition;
+  readonly sections: readonly KeikoSelectSection[];
+  readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
+  readonly showMenuHeader: boolean;
+}): ReactNode {
+  return createPortal(
+    <div
+      ref={menuRef}
+      className={[
+        "ksel-menu",
+        position.attached ? "ksel-menu-attached" : "",
+        position.openUp ? "ksel-menu-open-up" : "ksel-menu-open-down",
+        menuClassName ?? "",
+      ]
+        .filter((token) => token.length > 0)
+        .join(" ")}
+      style={{
+        left: `${position.left.toString()}px`,
+        top: `${position.top.toString()}px`,
+        width: `${position.width.toString()}px`,
+        ["--ksel-option-height" as string]: `${position.optionHeight.toString()}px`,
+        fontFamily: position.fontFamily,
+        fontSize: position.fontSize,
+        fontWeight: position.fontWeight,
+        letterSpacing: position.letterSpacing,
+        lineHeight: position.lineHeight,
+      }}
+    >
+      {showMenuHeader ? (
+        <div className="ksel-menu-head">
+          <div className="ksel-menu-title">{menuTitle ?? ariaLabel ?? placeholder}</div>
+          <div className="ksel-menu-note">
+            {menuCountLabel ?? `${flatOptions.length.toString()} options`}
+          </div>
+        </div>
+      ) : null}
+      <div
+        className="ksel-menu-scroll"
+        role="listbox"
+        id={menuId}
+        aria-label={menuLabel}
+        style={{ maxHeight: `${position.maxHeight.toString()}px` }}
+      >
+        {sections.map((section, sectionIndex) => (
+          <KeikoSelectMenuSection
+            activeIndex={activeIndex}
+            flatOptions={flatOptions}
+            key={`${section.label ?? "section"}-${sectionIndex.toString()}`}
+            menuId={menuId}
+            onCommit={onCommit}
+            onOptionKeyDown={onOptionKeyDown}
+            section={section}
+            sectionIndex={sectionIndex}
+            setOptionRef={setOptionRef}
+          />
+        ))}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export default function KeikoSelect({
   value,
   sections,
   onValueChange,
   disabled = false,
-  placeholder = "Select an option",
+  placeholder,
   ariaLabel,
   ariaDescribedBy,
   ariaLabelledBy,
@@ -237,6 +438,7 @@ export default function KeikoSelect({
   triggerStyle,
   autoFocus = false,
 }: KeikoSelectProps): ReactNode {
+  const t = useTranslate();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -260,9 +462,10 @@ export default function KeikoSelect({
 
   const selectedIndex = flatOptions.findIndex((option) => option.value === value);
   const selectedOption = selectedIndex === -1 ? null : flatOptions[selectedIndex]!;
-  const visibleLabel = selectedOption?.label ?? placeholder;
+  const resolvedPlaceholder = placeholder ?? t("select.placeholder");
+  const visibleLabel = selectedOption?.label ?? resolvedPlaceholder;
   const visibleDescription = selectedOption?.description ?? null;
-  const menuLabel = menuTitle ?? ariaLabel ?? placeholder;
+  const menuLabel = menuTitle ?? ariaLabel ?? resolvedPlaceholder;
 
   const closeMenu = (): void => {
     setOpen(false);
@@ -467,134 +670,47 @@ export default function KeikoSelect({
       if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey) {
         if (isTextEntryTarget(event.target)) return;
         const query = event.key.toLowerCase();
-        const start = activeIndex >= 0 ? activeIndex : selectedIndex >= 0 ? selectedIndex : 0;
-        for (let i = 1; i <= flatOptions.length; i += 1) {
-          const idx = (start + i) % flatOptions.length;
-          const option = flatOptions[idx];
-          if (
-            option !== undefined &&
-            option.disabled !== true &&
-            option.label.toLowerCase().startsWith(query)
-          ) {
-            setActiveIndex(idx);
-            break;
-          }
-        }
+        const start = resolveTypeaheadStartIndex(activeIndex, selectedIndex);
+        const matchIndex = findTypeaheadIndex(flatOptions, start, query);
+        if (matchIndex !== -1) setActiveIndex(matchIndex);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [open, activeIndex, flatOptions, selectedIndex]);
 
-  const triggerClasses = [
-    "ksel-trigger",
-    mono ? "mono" : "",
-    triggerClassName ?? "",
-    open ? "ksel-trigger-open" : "",
-    open && position?.attached === true
-      ? openUp
-        ? "ksel-trigger-open-up"
-        : "ksel-trigger-open-down"
-      : "",
-    disabled ? "ksel-trigger-disabled" : "",
-  ]
-    .filter((token) => token.length > 0)
-    .join(" ");
+  const triggerClasses = buildTriggerClasses({
+    disabled,
+    mono,
+    open,
+    openUp,
+    position,
+    triggerClassName,
+  });
 
   const popup =
-    open && position !== null
-      ? createPortal(
-          <div
-            ref={menuRef}
-            className={[
-              "ksel-menu",
-              position.attached ? "ksel-menu-attached" : "",
-              position.openUp ? "ksel-menu-open-up" : "ksel-menu-open-down",
-              menuClassName ?? "",
-            ]
-              .filter((token) => token.length > 0)
-              .join(" ")}
-            style={{
-              left: `${position.left.toString()}px`,
-              top: `${position.top.toString()}px`,
-              width: `${position.width.toString()}px`,
-              ["--ksel-option-height" as string]: `${position.optionHeight.toString()}px`,
-              fontFamily: position.fontFamily,
-              fontSize: position.fontSize,
-              fontWeight: position.fontWeight,
-              letterSpacing: position.letterSpacing,
-              lineHeight: position.lineHeight,
-            }}
-          >
-            {showMenuHeader ? (
-              <div className="ksel-menu-head">
-                <div className="ksel-menu-title">{menuTitle ?? ariaLabel ?? placeholder}</div>
-                <div className="ksel-menu-note">
-                  {menuCountLabel ?? `${flatOptions.length.toString()} options`}
-                </div>
-              </div>
-            ) : null}
-            <div
-              className="ksel-menu-scroll"
-              role="listbox"
-              id={menuId}
-              aria-label={menuLabel}
-              style={{ maxHeight: `${position.maxHeight.toString()}px` }}
-            >
-              {sections.map((section, sectionIndex) => {
-                // A labelled section is a real listbox group so its options stay
-                // owned by the listbox and screen readers announce the group name;
-                // an unlabelled wrapper is role="presentation" so its options are
-                // treated as direct listbox children (WAI-ARIA listbox pattern).
-                const sectionLabelId =
-                  section.label !== undefined
-                    ? `${menuId}-section-${sectionIndex.toString()}`
-                    : undefined;
-                return (
-                  <div
-                    className="ksel-section"
-                    key={`${section.label ?? "section"}-${sectionIndex.toString()}`}
-                    role={section.label !== undefined ? "group" : "presentation"}
-                    aria-labelledby={sectionLabelId}
-                  >
-                    {section.label !== undefined ? (
-                      <div className="ksel-section-label" id={sectionLabelId}>
-                        {section.label}
-                      </div>
-                    ) : null}
-                    {section.options.map((option) => {
-                      const index = flatOptions.findIndex(
-                        (entry) =>
-                          entry.value === option.value && entry.sectionLabel === section.label,
-                      );
-                      // aria-selected tracks the roving focus (activeIndex) so
-                      // assistive tech reports the option keyboard focus is on,
-                      // not the last committed value.
-                      const active = index === activeIndex;
-                      const flatOption = flatOptions[index];
-                      if (flatOption === undefined) return null;
-                      return (
-                        <OverflowOptionButton
-                          active={active}
-                          index={index}
-                          key={`${section.label ?? "section"}-${option.value}`}
-                          onCommit={commit}
-                          onOptionKeyDown={onOptionKeyDown}
-                          option={flatOption}
-                          setOptionRef={(optionIndex, element) => {
-                            optionRefs.current[optionIndex] = element;
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                );
-              })}
-            </div>
-          </div>,
-          document.body,
-        )
-      : null;
+    open && position !== null ? (
+      <KeikoSelectMenu
+        activeIndex={activeIndex}
+        ariaLabel={ariaLabel}
+        flatOptions={flatOptions}
+        menuClassName={menuClassName}
+        menuCountLabel={menuCountLabel}
+        menuId={menuId}
+        menuLabel={menuLabel}
+        menuRef={menuRef}
+        menuTitle={menuTitle}
+        onCommit={commit}
+        onOptionKeyDown={onOptionKeyDown}
+        placeholder={placeholder}
+        position={position}
+        sections={sections}
+        setOptionRef={(optionIndex, element) => {
+          optionRefs.current[optionIndex] = element;
+        }}
+        showMenuHeader={showMenuHeader}
+      />
+    ) : null;
 
   return (
     <>

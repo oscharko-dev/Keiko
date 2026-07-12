@@ -7,12 +7,15 @@
 
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  type LanguageCallHierarchyResult,
   type LanguageCodeActionsResult,
   type LanguageCompletionResult,
   type LanguageDefinitionResult,
   type LanguageDiagnosticsResult,
   type LanguageFormattingResult,
   type LanguageHoverResult,
+  type LanguageImplementationResult,
+  type LanguageInlayHintsResult,
   type LanguageServiceCapabilities,
   type LanguageServiceErrorCode,
   type LanguageProviderDescriptor,
@@ -23,6 +26,7 @@ import {
   type LanguageServiceRequest,
   type LanguageSignatureHelpResult,
   type LanguageSymbolResult,
+  type LanguageTypeDefinitionResult,
   EDITOR_LANGUAGE_MODE_IDS,
   LANGUAGE_SERVICE_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
@@ -42,12 +46,14 @@ import {
   unavailableExternalLspDescriptors,
 } from "./builtinLanguageProviders.js";
 import {
+  sanitizeCallHierarchy,
   sanitizeCompletion,
   sanitizeCodeActions,
   sanitizeDefinition,
   sanitizeDiagnostics,
   sanitizeFormatting,
   sanitizeHover,
+  sanitizeInlayHints,
   sanitizeReferences,
   sanitizeRenameApply,
   sanitizeRenamePrepare,
@@ -128,7 +134,11 @@ export type LanguageServiceOutcome =
   | { readonly kind: "symbols"; readonly result: LanguageSymbolResult }
   | { readonly kind: "formatting"; readonly result: LanguageFormattingResult }
   | { readonly kind: "definition"; readonly result: LanguageDefinitionResult }
+  | { readonly kind: "typeDefinition"; readonly result: LanguageTypeDefinitionResult }
+  | { readonly kind: "implementation"; readonly result: LanguageImplementationResult }
   | { readonly kind: "references"; readonly result: LanguageReferencesResult }
+  | { readonly kind: "callHierarchy"; readonly result: LanguageCallHierarchyResult }
+  | { readonly kind: "inlayHints"; readonly result: LanguageInlayHintsResult }
   | { readonly kind: "renamePrepare"; readonly result: LanguageRenamePrepareResult }
   | { readonly kind: "renameApply"; readonly result: LanguageRenameApplyResult }
   | { readonly kind: "codeActions"; readonly result: LanguageCodeActionsResult }
@@ -168,6 +178,10 @@ type CoreLanguageServiceRequest = Extract<
 >;
 
 type ExtendedLanguageServiceRequest = Exclude<LanguageServiceRequest, CoreLanguageServiceRequest>;
+type ExtendedNavigationLanguageServiceRequest = Extract<
+  LanguageServiceRequest,
+  { operation: "typeDefinition" | "implementation" | "callHierarchy" | "inlayHints" }
+>;
 
 const CORE_OPERATIONS = new Set<string>([
   "diagnostics",
@@ -224,6 +238,62 @@ function runDefinitionOperation(
     : {
         kind: "definition",
         result: sanitizeDefinition(provider.getDefinition(ctx, request.position), limits),
+      };
+}
+
+function runTypeDefinitionOperation(
+  request: Extract<LanguageServiceRequest, { operation: "typeDefinition" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getTypeDefinition === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "typeDefinition",
+        result: sanitizeDefinition(provider.getTypeDefinition(ctx, request.position), limits),
+      };
+}
+
+function runImplementationOperation(
+  request: Extract<LanguageServiceRequest, { operation: "implementation" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getImplementation === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "implementation",
+        result: sanitizeDefinition(provider.getImplementation(ctx, request.position), limits),
+      };
+}
+
+function runCallHierarchyOperation(
+  request: Extract<LanguageServiceRequest, { operation: "callHierarchy" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getCallHierarchy === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "callHierarchy",
+        result: sanitizeCallHierarchy(provider.getCallHierarchy(ctx, request.position), limits),
+      };
+}
+
+function runInlayHintsOperation(
+  request: Extract<LanguageServiceRequest, { operation: "inlayHints" }>,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  return provider.getInlayHints === undefined
+    ? errorOutcome("UNSUPPORTED_OPERATION", "The provider does not serve this operation.")
+    : {
+        kind: "inlayHints",
+        result: sanitizeInlayHints(provider.getInlayHints(ctx, request.range), limits),
       };
 }
 
@@ -307,6 +377,9 @@ function runExtendedOperation(
   ctx: LanguageProviderContext,
   limits: LanguageServiceLimits,
 ): LanguageServiceOutcome {
+  if (isExtendedNavigationRequest(request)) {
+    return runExtendedNavigationOperation(request, provider, ctx, limits);
+  }
   switch (request.operation) {
     case "definition":
       return runDefinitionOperation(request, provider, ctx, limits);
@@ -320,6 +393,32 @@ function runExtendedOperation(
       return runCodeActionsOperation(request, provider, ctx, limits);
     case "signatureHelp":
       return runSignatureHelpOperation(request, provider, ctx, limits);
+  }
+}
+
+function isExtendedNavigationRequest(
+  request: ExtendedLanguageServiceRequest,
+): request is ExtendedNavigationLanguageServiceRequest {
+  return new Set(["typeDefinition", "implementation", "callHierarchy", "inlayHints"]).has(
+    request.operation,
+  );
+}
+
+function runExtendedNavigationOperation(
+  request: ExtendedNavigationLanguageServiceRequest,
+  provider: LanguageProvider,
+  ctx: LanguageProviderContext,
+  limits: LanguageServiceLimits,
+): LanguageServiceOutcome {
+  switch (request.operation) {
+    case "typeDefinition":
+      return runTypeDefinitionOperation(request, provider, ctx, limits);
+    case "implementation":
+      return runImplementationOperation(request, provider, ctx, limits);
+    case "callHierarchy":
+      return runCallHierarchyOperation(request, provider, ctx, limits);
+    case "inlayHints":
+      return runInlayHintsOperation(request, provider, ctx, limits);
   }
 }
 

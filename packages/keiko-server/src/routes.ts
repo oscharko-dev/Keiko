@@ -95,6 +95,7 @@ import {
   handleCodingCodexSubscriptionSetup,
 } from "./coding-codex-subscription.js";
 import { AUTONOMOUS_DELIVERY_ROUTE_GROUP } from "./coding-runtime/autonomousDeliveryRoutes.js";
+import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -122,6 +123,15 @@ import {
   handleCreateCommandRun,
   handleDeleteCommandRun,
 } from "./command-runner-routes.js";
+import {
+  handleCreateVerificationRun,
+  handleDeleteVerificationRun,
+  handleGrantWorkspaceScriptTrust,
+  handleRevokeWorkspaceScriptTrust,
+  handleVerificationCatalog,
+  handleVerificationEvents,
+} from "./editor/verificationRoutes.js";
+import { handleEditorAgentVerificationRun } from "./editor/agentVerificationRoute.js";
 import {
   handleActivateTaskWorkspace,
   handleCleanupOrphanTaskWorkspaces,
@@ -158,7 +168,13 @@ import {
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
-import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
+import {
+  handleGitBlame,
+  handleGitBranches,
+  handleGitDiff,
+  handleGitStatus,
+  handleGitStructuredDiff,
+} from "./gitRoutes.js";
 import {
   handleNativeFileDialogCapability,
   handleNativeFileDialogOpen,
@@ -167,8 +183,30 @@ import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepos
 import {
   handleEditorLanguage,
   handleEditorLanguageCapabilitiesForRoute,
+  handleEditorLanguageSemanticTokens,
 } from "./editor/languageRoutes.js";
 import { handleEditorLspStatus } from "./editor/lsp/lspStatusRoute.js";
+import {
+  handleGetManagedLspControl,
+  handlePutManagedLspControl,
+} from "./editor/lsp/managedLspRoutes.js";
+import {
+  handleEditorSettingsEvents,
+  handleGetEditorSettings,
+  handlePatchEditorSettings,
+} from "./editor/settings/editorSettingsRoutes.js";
+import {
+  handleGetWorkspaceSnippets,
+  handleMutateWorkspaceSnippets,
+  handlePreviewWorkspaceSnippet,
+  handleValidateWorkspaceSnippets,
+  handleWorkspaceSnippetsEvents,
+} from "./editor/snippets/workspaceSnippetsRoutes.js";
+import {
+  handleEditorWorkspaceWatchEvents,
+  handleEditorWorkspaceWatchHealth,
+  handleEditorWorkspaceWatchSnapshot,
+} from "./editor/watch/workspaceWatchRoutes.js";
 import {
   handleEditorContext,
   handleEditorLocalKnowledgeRetrieve,
@@ -194,6 +232,7 @@ import {
 } from "./editor/hotExitRoutes.js";
 import {
   handleEditorAgentActions,
+  handleEditorAgentAuthority,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
@@ -279,6 +318,25 @@ import {
   handlePromptEnhancement,
   handlePromptEnhancementEvidence,
 } from "./promptEnhancer/index.js";
+import {
+  handleCreateAtlassianConnectorCredential,
+  handleDeleteAtlassianConnectorCredential,
+  handleListAtlassianConnectorCredentials,
+  handleVerifyAtlassianConnectorCredential,
+} from "./atlassian/credentialRoutes.js";
+import {
+  handleCancelAtlassianConnectorSyncJob,
+  handleGetAtlassianConnectorSyncJob,
+  handleListAtlassianConnectorActivity,
+  handleStartAtlassianConnectorSync,
+} from "./atlassian/syncRoutes.js";
+import {
+  handleApproveAtlassianConnectorActionApproval,
+  handleExecuteAtlassianConnectorAction,
+  handleGetAtlassianConnectorActionApproval,
+  handleListAtlassianConnectorActionApprovals,
+  handleRejectAtlassianConnectorActionApproval,
+} from "./atlassian/writeActionRoutes.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
@@ -366,6 +424,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-sidecar/gateway/profile",
     handler: handleCodingSidecarGatewayProfile,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/language/semantic-tokens",
+    handler: (ctx, deps) =>
+      handleEditorLanguageSemanticTokens(ctx, deps, deps.editorLanguageRouteOptions),
   },
   {
     method: "POST",
@@ -500,6 +564,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/git/diff",
     handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/diff/structured",
+    handler: (ctx, deps) => handleGitStructuredDiff(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "GET",
+    pattern: "/api/git/blame",
+    handler: (ctx, deps) => handleGitBlame(ctx, deps, deps.gitRouteOptions),
   },
   {
     method: "GET",
@@ -765,6 +839,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleEditorAgentActions,
   },
   {
+    method: "POST",
+    pattern: "/api/editor/agent/authority",
+    handler: handleEditorAgentAuthority,
+  },
+  {
     method: "GET",
     pattern: "/api/editor/agent/events",
     handler: handleEditorAgentEvents,
@@ -783,9 +862,117 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: (ctx, deps) => handleEditorLspStatus(ctx, { env: deps.env }),
   },
   {
+    method: "GET",
+    pattern: "/api/editor/lsp/settings",
+    handler: handleGetManagedLspControl,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/editor/lsp/settings",
+    handler: handlePutManagedLspControl,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/snapshot",
+    handler: handleEditorWorkspaceWatchSnapshot,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/health",
+    handler: handleEditorWorkspaceWatchHealth,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/workspace-watch/events",
+    handler: handleEditorWorkspaceWatchEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings/events",
+    handler: handleEditorSettingsEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/settings",
+    handler: handleGetEditorSettings,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/settings",
+    handler: handlePatchEditorSettings,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/snippets/events",
+    handler: handleWorkspaceSnippetsEvents,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/snippets",
+    handler: handleGetWorkspaceSnippets,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/editor/snippets",
+    handler: handleMutateWorkspaceSnippets,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/snippets/validate",
+    handler: handleValidateWorkspaceSnippets,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/snippets/preview",
+    handler: handlePreviewWorkspaceSnippet,
+  },
+  {
     method: "POST",
     pattern: "/api/editor/local-knowledge/retrieve",
     handler: handleEditorLocalKnowledgeRetrieve,
+  },
+  // Issue #2211 (Epic #2092, ADR-0126) — editor verification runner. Plans and runs
+  // test | targeted-test | typecheck | lint | build through keiko-verification composed with the
+  // shared enforce-or-fail-closed primitive, streaming content-free lifecycle events over SSE. Literal
+  // catalog/events paths register before the `:runId` route.
+  {
+    method: "GET",
+    pattern: "/api/editor/verification/catalog",
+    handler: handleVerificationCatalog,
+  },
+  {
+    method: "GET",
+    pattern: "/api/editor/verification/events",
+    handler: handleVerificationEvents,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/verification/trust",
+    handler: handleGrantWorkspaceScriptTrust,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/editor/verification/trust",
+    handler: handleRevokeWorkspaceScriptTrust,
+  },
+  {
+    method: "POST",
+    pattern: "/api/editor/verification/runs",
+    handler: handleCreateVerificationRun,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/editor/verification/runs/:runId",
+    handler: handleDeleteVerificationRun,
+  },
+  // Issue #2214 (Epic #2092, ADR-0126) — the agent-authorized verification entry point. Classifies and
+  // gates an agent-triggered run through the Authority Envelope (the "execution" effect class), then
+  // reuses the SAME keiko-verification execution path as the human run affordance; returns a redacted
+  // report. A distinct literal path — never captured by the `runs/:runId` matcher above.
+  {
+    method: "POST",
+    pattern: "/api/editor/verification/agent-runs",
+    handler: handleEditorAgentVerificationRun,
   },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   {
@@ -973,6 +1160,86 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/docs-browser/navigate", handler: handleDocsBrowserNavigate },
   { method: "POST", pattern: "/api/docs-browser/propose", handler: handleDocsBrowserPropose },
   { method: "POST", pattern: "/api/docs-browser/approve", handler: handleDocsBrowserApprove },
+  // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody. Write-only
+  // after creation: create answers authRef + metadata (never the secret), list is metadata-only,
+  // delete removes ciphertext + metadata and invalidates the authRef, and verify runs one bounded
+  // probe against the configured base URL returning the closed status union. POST/DELETE inherit
+  // the server CSRF + JSON content-type gate.
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/credentials",
+    handler: handleListAtlassianConnectorCredentials,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials",
+    handler: handleCreateAtlassianConnectorCredential,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/atlassian-connectors/credentials/:authRef",
+    handler: handleDeleteAtlassianConnectorCredential,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/verify",
+    handler: handleVerifyAtlassianConnectorCredential,
+  },
+  // Issue #2242 (Epic #2238, ADR-0128 D5/D6) — explicit Confluence space sync into local
+  // Knowledge Pods: start (initial sync creates the connector pod; re-sync reuses the persisted
+  // approved scope), poll status/progress, cancel, and the content-free connector activity trail.
+  // Poll-with-cancel job model mirrors the memory-consolidation routes.
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/sync-jobs",
+    handler: handleStartAtlassianConnectorSync,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/sync-jobs/:jobId",
+    handler: handleGetAtlassianConnectorSyncJob,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/sync-jobs/:jobId/cancel",
+    handler: handleCancelAtlassianConnectorSyncJob,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/activity",
+    handler: handleListAtlassianConnectorActivity,
+  },
+  // Issue #2244 (Epic #2238, ADR-0128 D4/D6) — governed Confluence/Jira write actions under the
+  // three-mode authority model. Every action request resolves the validated Authority Envelope
+  // (ADR-0125 registry: opaque run id + envelope digest) and is dispositioned by the shared D4
+  // matrix; review-required parks a bounded pending approval (approve executes, reject records —
+  // rendered by the #2245 UI), denied answers exactly one content-free reason, and every attempt
+  // emits one content-free activity record. POST inherits the server CSRF + JSON gate.
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/credentials/:authRef/actions",
+    handler: handleExecuteAtlassianConnectorAction,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/action-approvals",
+    handler: handleListAtlassianConnectorActionApprovals,
+  },
+  {
+    method: "GET",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId",
+    handler: handleGetAtlassianConnectorActionApproval,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/approve",
+    handler: handleApproveAtlassianConnectorActionApproval,
+  },
+  {
+    method: "POST",
+    pattern: "/api/atlassian-connectors/action-approvals/:approvalId/reject",
+    handler: handleRejectAtlassianConnectorActionApproval,
+  },
   // Issue #278 (Epic #270) — Quality Intelligence connector routes (additive).
   // Authorisation defaults to FALSE; only flips on explicit gateway-config flags.
   // No outbound network call; no provider SDK import.
@@ -1111,6 +1378,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #1993 autonomous delivery: confirmed Authority Envelope gate over the existing typed repository
   // operation facade. This route never shells out directly and returns content-free execution evidence.
   ...AUTONOMOUS_DELIVERY_ROUTE_GROUP,
+  // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
+  // authorization, the server deployment ceiling, and connector-scope grants. Context stays
+  // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.
+  ...CODING_CONTEXT_ROUTE_GROUP,
 ];
 
 interface PreparedRoute {

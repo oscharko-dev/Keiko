@@ -29,9 +29,13 @@ agent context.
 - Default customer path remains one npm product package, one `keiko` CLI, one local
   loopback UI/BFF runtime. Do not introduce cloud control planes, telemetry, service
   meshes, or distributed runtime requirements without a new ADR.
-- Users stay in control. Keiko must not commit, push, open PRs, merge, apply patches,
-  run commands, or use connectors without the governed local action surface required
-  by the relevant domain.
+- Users stay in control. Selecting the task, autonomy mode, Authority Envelope, and deployment
+  ceiling grants bounded local authority. Actions that the shared policy marks `allowed` do not
+  require another prompt; delivery actions and authority widening remain separately
+  human-approved. See [ADR-0125](adr/ADR-0125-governed-agent-docking-and-editor-changesets.md).
+- The three user-facing modes are **Ask for approval**, **Approve for me**, and **Full access**.
+  Their machine values, resource/risk matrix, and mode-independent hard denials come only from the
+  shared Coding Workbench contract and ADR-0125; do not reconstruct them in a feature-local policy.
 - Evidence and audit surfaces are redacted, bounded, and content-minimized. Persist
   ids, hashes, counts, enums, timestamps, branch names, and safe summaries rather
   than raw source text, secrets, unbounded logs, provider payloads, or customer data.
@@ -43,7 +47,11 @@ agent context.
 - Browser-tier packages must not value-import Node-domain packages.
 - `@oscharko-dev/keiko-contracts` stays a pure dependency leaf: no IO, no clock, no
   crypto, no randomness, no imports from other Keiko packages.
-- Runtime requirements are Node.js >= 22 and npm >= 10.9 for repository development.
+- Runtime requirements are Node.js >=24.18.0 <25 and npm 11.16.0 for repository development. See
+  [Runtime toolchain](runtime-toolchain.md) for migration and rollback guidance.
+- UI and editor hosts use React 19.2.7. See
+  [React 19 UI and editor migration](react19-ui-editor-migration.md) for compatibility, verification,
+  and rollback guidance.
 
 ## Repository and package map
 
@@ -194,6 +202,8 @@ Primary docs:
 - [connected-context-privacy.md](connected-context-privacy.md)
 - [connected-context-document-extraction.md](connected-context-document-extraction.md)
 - [local-knowledge/runtime-state-protection.md](local-knowledge/runtime-state-protection.md)
+- [local-knowledge/knowledge-pods.md](local-knowledge/knowledge-pods.md)
+- [local-knowledge/atlassian-connector-guide.md](local-knowledge/atlassian-connector-guide.md)
 - [local-runtime-state-contract.md](local-runtime-state-contract.md)
 - [memory-verification-matrix.md](memory-verification-matrix.md)
 - [conversation-center-privacy.md](conversation-center-privacy.md)

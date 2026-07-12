@@ -41,11 +41,34 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     requiredCapabilities: [],
   },
   { id: "editor.generateTests", title: "Generate Tests", requiredCapabilities: ["generateTests"] },
+  {
+    id: "editor.askKeikoAboutSelection",
+    title: "Ask Keiko about this selection",
+    requiredCapabilities: ["askKeikoAboutSelection"],
+  },
   { id: "editor.renameSymbol", title: "Rename Symbol", requiredCapabilities: ["renameSymbol"] },
   {
     id: "editor.runVerification",
     title: "Run Verification",
     requiredCapabilities: ["runVerification"],
+  },
+  // Issue #2212 (ADR-0126) — general run affordances, gated by `runWorkspaceVerification`.
+  {
+    id: "editor.runFileTests",
+    title: "Run Tests for File",
+    requiredCapabilities: ["runWorkspaceVerification"],
+  },
+  {
+    id: "editor.runTypecheck",
+    title: "Run Typecheck",
+    requiredCapabilities: ["runWorkspaceVerification"],
+  },
+  { id: "editor.runLint", title: "Run Lint", requiredCapabilities: ["runWorkspaceVerification"] },
+  { id: "editor.runBuild", title: "Run Build", requiredCapabilities: ["runWorkspaceVerification"] },
+  {
+    id: "editor.cancelVerification",
+    title: "Cancel Verification",
+    requiredCapabilities: ["runWorkspaceVerification"],
   },
   { id: "editor.previewPatch", title: "Preview Patch", requiredCapabilities: ["previewPatch"] },
   { id: "editor.openDiff", title: "Open Diff", requiredCapabilities: ["previewPatch"] },
@@ -58,6 +81,12 @@ export const EDITOR_COMMANDS: readonly EditorCommand[] = [
     title: "Request Context",
     requiredCapabilities: ["provideContext"],
   },
+  { id: "editor.toggleBlame", title: "Toggle Blame", requiredCapabilities: ["fetchGitBlame"] },
+  { id: "editor.nextConflict", title: "Next Merge Conflict", requiredCapabilities: [] },
+  { id: "editor.previousConflict", title: "Previous Merge Conflict", requiredCapabilities: [] },
+  { id: "editor.acceptConflictOurs", title: "Accept Ours", requiredCapabilities: [] },
+  { id: "editor.acceptConflictTheirs", title: "Accept Theirs", requiredCapabilities: [] },
+  { id: "editor.acceptConflictBoth", title: "Accept Both", requiredCapabilities: [] },
 ] as const;
 
 /**
@@ -74,7 +103,15 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   "editor.applyPatch": (ctx) => !ctx.readOnly && ctx.pendingPatchId !== null,
   "editor.rejectPatch": (ctx) => ctx.pendingPatchId !== null,
   "editor.runVerification": (ctx) => ctx.pendingPatchId !== null,
+  // Issue #2212 — the four run commands are available only while no run is active; file-targeted tests
+  // additionally require a resolvable target. Cancel is the inverse: available only while a run is active.
+  "editor.runFileTests": (ctx) => !ctx.verificationRunning && ctx.activeFileVerifiable,
+  "editor.runTypecheck": (ctx) => !ctx.verificationRunning,
+  "editor.runLint": (ctx) => !ctx.verificationRunning,
+  "editor.runBuild": (ctx) => !ctx.verificationRunning,
+  "editor.cancelVerification": (ctx) => ctx.verificationRunning,
   "editor.generateTests": () => true,
+  "editor.askKeikoAboutSelection": (ctx) => ctx.hasSelection,
   "editor.renameSymbol": (ctx) => !ctx.readOnly,
   "editor.previewPatch": () => true,
   "editor.openDiff": () => true,
@@ -83,6 +120,12 @@ const STATE_GATES: Readonly<Record<EditorCommandId, (ctx: EditorCommandContext) 
   // Find is read-only and always available once the editor is mounted.
   "editor.find": () => true,
   "editor.requestContext": () => true,
+  "editor.toggleBlame": () => true,
+  "editor.nextConflict": (ctx) => (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.previousConflict": (ctx) => (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.acceptConflictOurs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.acceptConflictTheirs": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
+  "editor.acceptConflictBoth": (ctx) => !ctx.readOnly && (ctx.mergeConflictCount ?? 0) > 0,
 };
 
 function hasRequiredCapabilities(command: EditorCommand, ctx: EditorCommandContext): boolean {

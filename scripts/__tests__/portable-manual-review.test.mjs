@@ -1,11 +1,20 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import yauzl from "yauzl";
 
 import {
+  latestManualArtifactRoot,
   manualReviewPlan,
   prepareManualReview,
   prepareScenarioFixture,
@@ -64,7 +73,9 @@ describe("portable manual review harness", () => {
   it("plans every first-class target and manual matrix scenario", () => {
     const plan = manualReviewPlan();
 
-    expect(plan.currentVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+    // The current root version may be a release-branch prerelease; the simulated TARGET of a
+    // portable manual review is always its stable base.
+    expect(plan.currentVersion).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u);
     expect(plan.targetVersion).toMatch(/^\d+\.\d+\.\d+$/u);
     expect(plan.targets.map((target) => target.platformTarget)).toEqual(
       PORTABLE_TARGETS.map((target) => target.platformTarget),
@@ -94,7 +105,7 @@ describe("portable manual review harness", () => {
     expect(readFileSync(cmdPath, "utf8")).toContain(
       "--target windows-x64 --scenario bad-checksum --open",
     );
-    expect(statSync(shellPath).mode & 0o111).not.toBe(0);
+    if (process.platform !== "win32") expect(statSync(shellPath).mode & 0o111).not.toBe(0);
 
     const evidence = jsonAt(join(outDir, "prepare-evidence.json"));
     expect(findPortableMetadataRedactionFailures(evidence, "prepareEvidence")).toEqual([]);
@@ -104,7 +115,7 @@ describe("portable manual review harness", () => {
     const outDir = tmpReviewRoot();
     const root = targetRoot(outDir, "macos-arm64", "current-release");
 
-    expect(root.startsWith(`${realpathSync(tmpdir())}/`)).toBe(true);
+    expect(root.startsWith(`${realpathSync(tmpdir())}${sep}`)).toBe(true);
   });
 
   it("creates an artifact slot for each required release target", () => {
@@ -114,6 +125,17 @@ describe("portable manual review harness", () => {
     for (const target of PORTABLE_TARGETS) {
       expect(existsSync(join(outDir, "artifacts", "current", target.platformTarget))).toBe(true);
     }
+  });
+
+  it("selects the latest manual artifact root with an explicit stable locale order", () => {
+    const runtimeRoot = tmpReviewRoot();
+    const earlier = join(runtimeRoot, "manual-2026-07-08T09-00-00Z");
+    const later = join(runtimeRoot, "manual-2026-07-10T09-00-00Z");
+    mkdirSync(earlier);
+    mkdirSync(later);
+    mkdirSync(join(runtimeRoot, "unrelated"));
+
+    expect(latestManualArtifactRoot(runtimeRoot)).toBe(later);
   });
 
   it("creates stager-compatible fake release archives", async () => {

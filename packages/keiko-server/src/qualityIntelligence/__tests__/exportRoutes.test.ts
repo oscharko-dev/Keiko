@@ -544,10 +544,202 @@ describe("handleQiExport — WP6 export traceability and provenance", () => {
     expect(envelope.diagnostics ?? []).not.toContain("export:finding-refs-missing");
   });
 
+  it("links finding refs through evidence atom ids derived by a candidate", async () => {
+    recordQualityIntelligenceRun(
+      {
+        ...runRecordInput(RUN_ID),
+        totals: { candidates: 2, findings: 1, exports: 0 },
+        findings: [
+          {
+            id: "qi-finding-export-atom",
+            kind: "coverage-gap",
+            severity: "medium",
+            summaryRedacted: "Atom-linked finding.",
+            evidenceAtomIds: ["atom-2"],
+          },
+        ],
+      },
+      { evidenceDir },
+    );
+    recordQualityIntelligenceCandidates({
+      runId: RUN_ID,
+      generatedAt: "2026-06-01T10:01:00.000Z",
+      candidates: [
+        makeCandidate("User can log in with valid credentials", "cand-001"),
+        {
+          ...makeCandidate("User can reset a password", "cand-002"),
+          derivedFromAtomIds: [QualityIntelligence.asQualityIntelligenceEvidenceAtomId("atom-2")],
+        },
+      ],
+      evidenceDir,
+      redact: (v: unknown): unknown => v,
+    });
+
+    const { envelope } = await exportJson();
+
+    expect(
+      envelope.candidates.find((candidate) => candidate.id === "cand-001")?.findingRefs,
+    ).toEqual([]);
+    expect(
+      envelope.candidates.find((candidate) => candidate.id === "cand-002")?.findingRefs,
+    ).toEqual(["qi-finding-export-atom"]);
+    expect(envelope.diagnostics ?? []).not.toContain("export:finding-ref-candidate-missing");
+  });
+
+  it("links finding refs through coverage matrix atoms and ignores unknown covering candidates", async () => {
+    recordQualityIntelligenceRun(
+      {
+        ...runRecordInput(RUN_ID),
+        totals: { candidates: 2, findings: 1, exports: 0 },
+        findings: [
+          {
+            id: "qi-finding-export-coverage",
+            kind: "coverage-gap",
+            severity: "medium",
+            summaryRedacted: "Coverage-linked finding.",
+            evidenceAtomIds: ["atom-covered"],
+          },
+        ],
+        coverageMatrix: [
+          {
+            atomId: "atom-covered",
+            status: "covered",
+            confidence: 0.8,
+            coveringCandidateIds: ["cand-002", "cand-missing"],
+          },
+        ],
+      },
+      { evidenceDir },
+    );
+    recordQualityIntelligenceCandidates({
+      runId: RUN_ID,
+      generatedAt: "2026-06-01T10:01:00.000Z",
+      candidates: [
+        { ...makeCandidate("User can log in", "cand-001"), derivedFromAtomIds: [] },
+        { ...makeCandidate("User can reset a password", "cand-002"), derivedFromAtomIds: [] },
+      ],
+      evidenceDir,
+      redact: (v: unknown): unknown => v,
+    });
+
+    const { envelope } = await exportJson();
+
+    expect(
+      envelope.candidates.find((candidate) => candidate.id === "cand-001")?.findingRefs,
+    ).toEqual([]);
+    expect(
+      envelope.candidates.find((candidate) => candidate.id === "cand-002")?.findingRefs,
+    ).toEqual(["qi-finding-export-coverage"]);
+    expect(envelope.diagnostics ?? []).not.toContain("export:finding-ref-candidate-missing");
+    expect(envelope.diagnostics ?? []).not.toContain("export:finding-ref-unlinked");
+  });
+
+  it("does not link findings through fallback atoms when evidenceAtomIds is omitted", async () => {
+    recordQualityIntelligenceRun(
+      {
+        ...runRecordInput(RUN_ID),
+        totals: { candidates: 2, findings: 1, exports: 0 },
+        findings: [
+          {
+            id: "qi-finding-export-direct",
+            kind: "coverage-gap",
+            severity: "medium",
+            summaryRedacted: "Direct finding.",
+            candidateId: "cand-001",
+          },
+        ],
+        coverageMatrix: [
+          {
+            atomId: "Stryker was here",
+            status: "covered",
+            confidence: 0.9,
+            coveringCandidateIds: ["cand-002"],
+          },
+        ],
+      },
+      { evidenceDir },
+    );
+    recordQualityIntelligenceCandidates({
+      runId: RUN_ID,
+      generatedAt: "2026-06-01T10:01:00.000Z",
+      candidates: [
+        { ...makeCandidate("User can log in", "cand-001"), derivedFromAtomIds: [] },
+        { ...makeCandidate("User can reset a password", "cand-002"), derivedFromAtomIds: [] },
+      ],
+      evidenceDir,
+      redact: (v: unknown): unknown => v,
+    });
+
+    const { envelope } = await exportJson();
+
+    expect(
+      envelope.candidates.find((candidate) => candidate.id === "cand-001")?.findingRefs,
+    ).toEqual(["qi-finding-export-direct"]);
+    expect(
+      envelope.candidates.find((candidate) => candidate.id === "cand-002")?.findingRefs,
+    ).toEqual([]);
+  });
+
+  it("reports sorted diagnostics when a finding points at a missing candidate and no atom link", async () => {
+    recordQualityIntelligenceRun(
+      {
+        ...runRecordInput(RUN_ID),
+        totals: { candidates: 1, findings: 1, exports: 0 },
+        findings: [
+          {
+            id: "qi-finding-export-missing",
+            kind: "coverage-gap",
+            severity: "medium",
+            summaryRedacted: "Missing candidate finding.",
+            evidenceAtomIds: ["atom-unlinked"],
+            candidateId: "cand-missing",
+          },
+        ],
+      },
+      { evidenceDir },
+    );
+
+    const { routeBody, envelope } = await exportJson();
+
+    expect(routeBody.warnings).toEqual([
+      "export:coverage-map-refs-unavailable",
+      "export:finding-ref-candidate-missing",
+      "export:finding-ref-unlinked",
+      "export:finding-refs-missing",
+    ]);
+    expect(envelope.diagnostics).toEqual(routeBody.warnings);
+  });
+
   it("surfaces missing coverage refs as route warnings and JSON diagnostics", async () => {
     const { routeBody, envelope } = await exportJson();
     expect(routeBody.warnings).toContain("export:coverage-map-refs-unavailable");
     expect(envelope.diagnostics).toContain("export:coverage-map-refs-unavailable");
+  });
+
+  it("omits the binary warnings property when PDF bundle diagnostics are empty", async () => {
+    recordRunWithTraceability();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "pdf", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    expect("warnings" in (result.body as Record<string, unknown>)).toBe(false);
+  });
+
+  it("includes binary warnings when ZIP bundle diagnostics are present", async () => {
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "zip-bundle", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    const body = result.body as { warnings?: readonly string[] };
+
+    expect(result.status).toBe(200);
+    expect(body.warnings).toContain("export:coverage-map-refs-unavailable");
   });
 
   it("includes model provenance when model routing is present", async () => {

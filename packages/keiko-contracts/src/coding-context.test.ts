@@ -72,6 +72,10 @@ describe("coding-context purpose + tiering", () => {
 
   it("tiers workspace, knowledge, and memory sources distinctly (LLM08 provenance)", () => {
     expect(tierForCodingContextSource("repo-search")).toBe("first-party-workspace");
+    expect(CODING_CONTEXT_SOURCE_KINDS).toContain("editor-state");
+    expect(tierForCodingContextSource("editor-state")).toBe("first-party-workspace");
+    expect(CODING_CONTEXT_SOURCE_KINDS).toContain("git-context");
+    expect(tierForCodingContextSource("git-context")).toBe("first-party-workspace");
     expect(tierForCodingContextSource("local-knowledge")).toBe("indexed-knowledge");
     expect(tierForCodingContextSource("memory")).toBe("retained-memory");
     expect(tierForCodingContextSource("quality-intelligence")).toBe("derived-evidence");
@@ -107,6 +111,11 @@ describe("isCodingContextCitation (content-free guard)", () => {
   it("accepts a well-formed content-free citation", () => {
     expect(isCodingContextCitation(citation())).toBe(true);
     expect(isCodingContextCitation(citation({ citationRef: undefined }))).toBe(true);
+    expect(
+      isCodingContextCitation(
+        citation({ sourceKind: "editor-state", sourceTier: "first-party-workspace" }),
+      ),
+    ).toBe(true);
   });
 
   it("rejects any object carrying excerpt content", () => {
@@ -156,7 +165,7 @@ describe("toCodingContextWirePack (content-free projection)", () => {
 });
 
 describe("validateCodingContextRequest", () => {
-  it("accepts a valid request", () => {
+  it("keeps requests without an editor session link backward-compatible", () => {
     expect(validateCodingContextRequest(validRequest())).toEqual({ ok: true });
     expect(
       validateCodingContextRequest(
@@ -167,6 +176,23 @@ describe("validateCodingContextRequest", () => {
         }),
       ),
     ).toEqual({ ok: true });
+  });
+
+  it("accepts a non-empty editor session link", () => {
+    const request: CodingContextRequest = {
+      ...validRequest(),
+      editorSessionId: "editor-session-1",
+    };
+
+    expect(request.schemaVersion).toBe("1");
+    expect(validateCodingContextRequest(request)).toEqual({ ok: true });
+  });
+
+  it("rejects empty and non-string editor session links", () => {
+    for (const editorSessionId of ["", "   ", 7, null]) {
+      const result = validateCodingContextRequest({ ...validRequest(), editorSessionId });
+      expect(result).toEqual({ ok: false, reasons: ["request.editorSessionId invalid"] });
+    }
   });
 
   it("rejects a non-object", () => {

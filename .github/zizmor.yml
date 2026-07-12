@@ -1,0 +1,35 @@
+# zizmor configuration for this repo's GitHub Actions workflows.
+# https://docs.zizmor.sh/configuration/
+#
+# Every ignore below is a reviewed, documented risk acceptance, not a blanket suppression -
+# each is scoped to specific lines with a reason. If the referenced file changes near those
+# lines, re-run `zizmor .` locally: a shifted line either drops the ignore (the gate fails
+# loudly) or, rarely, points at different code (re-verify the reasoning still applies).
+rules:
+  cache-poisoning:
+    ignore:
+      # Neither job publishes, signs, or attests anything: `core-quality` and `coverage-sonar`
+      # have read-only contents permission. Every ci.yml job that DOES hold signing-relevant
+      # permissions (currently
+      # build-scan-sbom-smoke and ui, both attestations: write / id-token: write for artifact
+      # attestations) has package-manager-cache: false instead, same as release.yml and
+      # portable-assets.yml - so there is no privileged consumer for a cache poisoned here.
+      - ci.yml:62
+      - ci.yml:169
+  misfeature:
+    ignore:
+      # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
+      # native CMD batch tooling; the step deliberately persists only the single-line
+      # variables the rc/cl compiler needs to GITHUB_ENV (see the inline comment at the
+      # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
+      # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
+      # build and cannot be verified on this platform.
+      - portable-assets.yml:100
+      - portable-assets.yml:150
+  adhoc-packages:
+    ignore:
+      # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;
+      # bootstrapping npm is inherently outside the lockfile since it changes the binary that
+      # later reads that lockfile. The version is pinned exactly (not @latest), which is the
+      # practical mitigation for this specific operation (see the inline comment there).
+      - release.yml:127

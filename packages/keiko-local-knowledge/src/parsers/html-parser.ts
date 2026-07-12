@@ -33,6 +33,7 @@ import {
   shouldStop,
 } from "./_internal.js";
 import type { DocumentId, ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -63,7 +64,7 @@ function collapseWhitespace(value: string): string {
 const PARSER_ID = "html";
 const PARSER_VERSION = "1";
 
-const HTML_EXTENSIONS: ReadonlySet<string> = new Set(["html", "htm", "xhtml"]);
+const HTML_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS);
 const HTML_MEDIA_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml+xml"]);
 
 function isHtml(input: ParserSelectionInput): boolean {
@@ -761,6 +762,15 @@ function appendFrameLink(state: ScanState, tag: Tag): void {
 // undifferentiated document text. A raw substring search would accept a `<title>...</title>`-
 // shaped literal sitting inside an earlier `<script>` (e.g. a client-side widget building HTML
 // strings) as if it were the document's real title.
+// Extracts the text of an already-located open `<title>` tag: undefined when the closing tag is
+// missing (unterminated element) or the decoded text is empty.
+function titleFromOpenTag(rawText: string, textLower: string, tag: Tag): string | undefined {
+  const close = textLower.indexOf("</title", tag.end);
+  if (close < 0) return undefined;
+  const title = htmlFragmentText(rawText.slice(tag.end, close));
+  return title.length === 0 ? undefined : title;
+}
+
 function readDocumentTitle(rawText: string): string | undefined {
   const textLower = rawText.toLowerCase();
   let cursor = 0;
@@ -777,10 +787,7 @@ function readDocumentTitle(rawText: string): string | undefined {
       continue;
     }
     if (tag.name === "title" && tag.kind === "open") {
-      const close = textLower.indexOf("</title", tag.end);
-      if (close < 0) return undefined;
-      const title = htmlFragmentText(rawText.slice(tag.end, close));
-      return title.length === 0 ? undefined : title;
+      return titleFromOpenTag(rawText, textLower, tag);
     }
     cursor = event.next;
   }

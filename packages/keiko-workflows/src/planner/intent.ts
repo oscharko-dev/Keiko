@@ -2,6 +2,7 @@
 // This module is intentionally pure: no IO, no clock, no model calls.
 
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts";
 import { ecosystemMetadataIntentPatterns } from "@oscharko-dev/keiko-workspace";
 
 export type RetrievalIntent =
@@ -158,7 +159,7 @@ function matchedTerms(
       terms.add(entry.term);
     }
   }
-  return [...terms].sort();
+  return sortedStrings(terms);
 }
 
 function classifyByPatterns(

@@ -93,7 +93,7 @@ export function readOnlyPathsForPacks(
       }
     }
   }
-  return [...unique].sort();
+  return [...unique].sort((a, b) => a.localeCompare(b));
 }
 
 export function evidenceAtomIdsForPacks(packs: readonly ConnectedContextPack[]): readonly string[] {
@@ -105,7 +105,7 @@ export function evidenceAtomIdsForPacks(packs: readonly ConnectedContextPack[]):
       }
     }
   }
-  return [...unique].sort();
+  return [...unique].sort((a, b) => a.localeCompare(b));
 }
 
 export function approvalTokenInputFor(request: WorkflowHandoffRequest): UserApprovalTokenInput {

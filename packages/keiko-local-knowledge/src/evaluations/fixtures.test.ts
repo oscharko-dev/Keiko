@@ -22,6 +22,8 @@ import {
   htmlManualDeniedLinkFixture,
   htmlManualIndexPageFixture,
   htmlManualMultilingualFixture,
+  confluenceConnectorFixture,
+  jiraConnectorFixture,
   codeRepositoryFixture,
   chainedQuestionFixture,
   mixedStrategyFixture,
@@ -88,6 +90,8 @@ describe("fixtures — registry", () => {
       htmlManualDeniedLinkFixture.id,
       htmlManualIndexPageFixture.id,
       htmlManualMultilingualFixture.id,
+      confluenceConnectorFixture.id,
+      jiraConnectorFixture.id,
     ]);
   });
 

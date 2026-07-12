@@ -9,6 +9,7 @@ import { relative } from "node:path";
 import ts from "typescript";
 import {
   MAX_LANGUAGE_FORMATTING_TAB_SIZE,
+  type LanguageCallHierarchyResult,
   type LanguageCodeActionsResult,
   type LanguageCompletionItem,
   type LanguageCompletionItemKind,
@@ -19,6 +20,8 @@ import {
   type LanguageDocumentSymbol,
   type LanguageFormattingOptions,
   type LanguageHoverResult,
+  type LanguageImplementationResult,
+  type LanguageInlayHintsResult,
   type LanguagePosition,
   type LanguageProviderDescriptor,
   type LanguageReferencesResult,
@@ -27,6 +30,7 @@ import {
   type LanguageSignatureHelpResult,
   type LanguageSymbolKind,
   type LanguageTextEdit,
+  type LanguageTypeDefinitionResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
   createContainedLanguageServiceHost,
@@ -43,11 +47,15 @@ import type {
 import { LanguageProviderFailureError } from "./languageProvider.js";
 import { computeLineStarts, positionToOffset, spanToRange } from "./textOffsets.js";
 import {
+  resolveTypescriptCallHierarchy,
   resolveTypescriptDefinition,
+  resolveTypescriptImplementation,
   resolveTypescriptReferences,
+  resolveTypescriptTypeDefinition,
 } from "./typescriptNavigationProvider.js";
 import {
   resolveTypescriptCodeActions,
+  resolveTypescriptInlayHints,
   resolveTypescriptRenameApply,
   resolveTypescriptRenamePrepare,
   resolveTypescriptSignatureHelp,
@@ -79,7 +87,11 @@ const DESCRIPTOR: LanguageProviderDescriptor = {
     "symbols",
     "formatting",
     "definition",
+    "typeDefinition",
+    "implementation",
     "references",
+    "callHierarchy",
+    "inlayHints",
     "renamePrepare",
     "renameApply",
     "codeActions",
@@ -464,6 +476,14 @@ export function createTypescriptLanguageProvider(): LanguageProvider {
     getFormatting: formattingFor,
     getDefinition: (ctx, position): LanguageDefinitionResult =>
       withProjectOrSingle(ctx, (project) => resolveTypescriptDefinition(project, position)),
+    getTypeDefinition: (ctx, position): LanguageTypeDefinitionResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptTypeDefinition(project, position)),
+    getImplementation: (ctx, position): LanguageImplementationResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptImplementation(project, position)),
+    getCallHierarchy: (ctx, position): LanguageCallHierarchyResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptCallHierarchy(project, position)),
+    getInlayHints: (ctx, range): LanguageInlayHintsResult =>
+      withProjectOrSingle(ctx, (project) => resolveTypescriptInlayHints(project, range)),
     getReferences: (ctx, position): LanguageReferencesResult =>
       withProjectOrSingle(ctx, (project) => resolveTypescriptReferences(project, position)),
     getRenamePrepare: (ctx, position): LanguageRenamePrepareResult =>

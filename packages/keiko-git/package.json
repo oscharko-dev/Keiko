@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-git",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Git core primitives — hardened process runner and environments, repository resolution and path containment, porcelain/ref/remote/history parsers, and failure classification. Single source of truth consumed by keiko-server, keiko-tools, and keiko-workspace. Not published independently.",
@@ -22,11 +22,11 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=22"
+    "node": ">=24.18.0 <25"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.14",
-    "typescript": "^6.0.3"
+    "@oscharko-dev/keiko-contracts": "0.2.15",
+    "typescript": "~6.0.3"
   },
   "private": true
 }

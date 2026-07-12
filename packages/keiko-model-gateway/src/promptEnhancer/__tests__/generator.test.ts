@@ -288,10 +288,12 @@ describe("generateEnhancedPrompt — authority and safety (AC4)", () => {
     }
   });
 
-  it("requires explicit human approval for agentic prompts", () => {
+  it("requires human-confirmed authority and policy-driven approval for agentic prompts", () => {
     const prompt = generateFor({ recommendedProfile: "agentic" });
-    expect(prompt.safetyRules.some((r) => /requires explicit human approval/i.test(r))).toBe(true);
-    expect(prompt.constraints.some((c) => /without explicit approval/i.test(c))).toBe(true);
+    expect(
+      prompt.safetyRules.some((r) => /human-approved mode and Authority Envelope/i.test(r)),
+    ).toBe(true);
+    expect(prompt.constraints.some((c) => /runtime policy requires it/i.test(c))).toBe(true);
   });
 
   it("requires human approval when the analyzer flags tool-authority or egress requests", () => {
@@ -299,9 +301,9 @@ describe("generateEnhancedPrompt — authority and safety (AC4)", () => {
       recommendedProfile: "technical",
       riskFlags: ["tool-authority-requested"],
     });
-    expect(toolPrompt.safetyRules.some((r) => /requires explicit human approval/i.test(r))).toBe(
-      true,
-    );
+    expect(
+      toolPrompt.safetyRules.some((r) => /human-approved mode and Authority Envelope/i.test(r)),
+    ).toBe(true);
   });
 
   it("adds a professional-advice disclaimer for safety-critical tasks", () => {

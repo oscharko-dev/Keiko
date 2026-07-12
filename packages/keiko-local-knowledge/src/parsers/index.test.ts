@@ -4,6 +4,7 @@
 //      falls through to the unsupported adapter for known-unsupported formats.
 
 import { describe, expect, it } from "vitest";
+import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
 
 import * as parsers from "./index.js";
 import {
@@ -46,6 +47,19 @@ describe("parsers barrel", () => {
 });
 
 describe("createDefaultParserRegistry", () => {
+  it("resolves every file type offered by the native document picker", () => {
+    const registry = parsers.createDefaultParserRegistry();
+    for (const filter of LOCAL_KNOWLEDGE_FILE_FILTERS) {
+      for (const extension of filter.extensions) {
+        const resolution = registry.resolve(selectionFromText("", { extension }));
+        expect(resolution.kind).toBe("matched");
+        if (resolution.kind === "matched") {
+          expect(resolution.adapter.capability.parserId).not.toBe("unsupported");
+        }
+      }
+    }
+  });
+
   it("routes JSON to the JSON parser", () => {
     const registry = parsers.createDefaultParserRegistry();
     const resolution = registry.resolve(selectionFromText("{}", { extension: "json" }));

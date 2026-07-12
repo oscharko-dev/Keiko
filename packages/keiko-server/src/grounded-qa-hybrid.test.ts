@@ -51,7 +51,13 @@ import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { RerankOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedRetriever } from "./grounded-qa-multi-source.js";
-import { EmbeddingAdapterError, type ConnectorRetrieve } from "./grounded-qa-hybrid.js";
+import {
+  EmbeddingAdapterError,
+  connectorQuery,
+  connectorRetrievalTopK,
+  estimateConnectorExcerptBytes,
+  type ConnectorRetrieve,
+} from "./grounded-qa-hybrid.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
@@ -1279,6 +1285,59 @@ describe("hybrid grounded ask — EmbeddingAdapterError is skipped, not aborted"
   });
 });
 
+// ─── Folder retrieval fans out with bounded concurrency (issue #2147) ─────────
+//
+// retrieveFolderPacks() must retrieve multiple connected folder scopes concurrently (bounded by
+// MAX_FOLDER_RETRIEVAL_CONCURRENCY), mirroring retrieveConnectors() in the same file and
+// retrieveAllSources() on the folders-only path. Before the fix, folders were retrieved one at a
+// time in a plain sequential loop, so wall-clock folder-retrieval latency scaled linearly with
+// folder count whenever the hybrid path was used (any folder+connector mix, or 2+ connectors).
+
+describe("hybrid grounded ask — folder retrieval concurrency", () => {
+  it("retrieves multiple folder sources concurrently, not one at a time", async () => {
+    const { capsuleId } = await seedReadyCapsule("Concurrency Connector");
+    const folders: ChatConnectedScope[] = Array.from({ length: 4 }, (_unused, i) => ({
+      kind: "directory" as const,
+      relativePaths: [`src/concurrent-${String(i)}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(`concurrent-folder-${String(i)}`),
+    }));
+    const chatId = makeHybridChat(folders, [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const retriever: GroundedRetriever = async (input) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight -= 1;
+      const key = input.scope.relativePaths[0] ?? "";
+      return {
+        pack: folderPack(key, 0.5, `atom-${key}`),
+        elapsedMs: 20,
+        plan: { state: "ready" } as never,
+      };
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "scan concurrently" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: retriever,
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+      },
+    );
+
+    // mutation: reverting retrieveFolderPacks to a sequential for-loop → maxInFlight stays at 1
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(maxInFlight).toBeGreaterThan(1);
+    expect(maxInFlight).toBeLessThanOrEqual(4);
+  });
+});
+
 // ─── Case 3c: Folder pack-validation failure is skipped, not aborted (Fix 3) ──
 //
 // When one folder's retrieved pack fails isValidGroundedPack, retrieveFolderPacks()
@@ -2484,5 +2543,102 @@ describe("ask-path source cap — combined folder and connector total", () => {
     expect(skipped).toHaveLength(4);
     expect(answer.contextPack.folderSourceCount).toBe(10);
     expect(answer.contextPack.connectorSourceCount).toBe(10);
+  });
+});
+
+// ─── Pure helpers — connector candidate budget (perf follow-up to #2147) ──────
+//
+// connectorRetrievalTopK/connectorQuery: per-connector topK must shrink as connector count grows,
+// mirroring splitExplorationBudget on the folder side, so raw candidate volume no longer scales as
+// numConnectors * a fixed topK (previously up to maxLocalKnowledgeSources * 100). Before this fix,
+// connectorQuery always returned LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES regardless of connector count.
+//
+// estimateConnectorExcerptBytes: a cheap, DB-free length proxy so rerankAndSelect's byte-budget
+// truncation runs BEFORE any excerpt is decrypted — the second, independent latency contributor
+// flagged alongside #2147's folder-concurrency fix (PR #2162).
+
+describe("connectorRetrievalTopK", () => {
+  it("returns the full candidate budget for 0 or 1 connector (no split needed)", () => {
+    expect(connectorRetrievalTopK(0)).toBe(100);
+    expect(connectorRetrievalTopK(1)).toBe(100);
+  });
+
+  it("divides the shared candidate budget evenly across connectors", () => {
+    // mutation: returning a fixed topK regardless of connectorScopeCount
+    expect(connectorRetrievalTopK(2)).toBe(50);
+    expect(connectorRetrievalTopK(4)).toBe(25);
+    expect(connectorRetrievalTopK(5)).toBe(20);
+  });
+
+  it("never drops below the floor even with a large connector count", () => {
+    // mutation: removing Math.max(floor, share) → 100/16=6, well below a useful per-source minimum
+    expect(connectorRetrievalTopK(16)).toBe(15);
+    expect(connectorRetrievalTopK(100)).toBe(15);
+  });
+});
+
+describe("connectorQuery", () => {
+  const capsuleScope: ChatLocalKnowledgeScope = {
+    kind: "capsule",
+    capsuleId: "cap-x" as KnowledgeCapsuleId,
+    connectedAtMs: NOW,
+  };
+
+  it("plumbs connectorRetrievalTopK(connectorScopeCount) into topK", () => {
+    // mutation: hardcoding topK to LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES regardless of count
+    expect(connectorQuery(capsuleScope, "q", 1).topK).toBe(100);
+    expect(connectorQuery(capsuleScope, "q", 5).topK).toBe(20);
+    expect(connectorQuery(capsuleScope, "q", 16).topK).toBe(15);
+  });
+
+  it("passes the question text through unmodified and tags the capsule scope", () => {
+    const query = connectorQuery(capsuleScope, "What changed?", 3);
+    expect(query.text).toBe("What changed?");
+    expect(query).toMatchObject({ capsuleId: "cap-x" });
+  });
+});
+
+describe("estimateConnectorExcerptBytes", () => {
+  function referenceWithOffsets(
+    characterStart: number | undefined,
+    characterEnd: number | undefined,
+  ): RetrievalReference {
+    return {
+      chunkId: "chunk-1" as ChunkId,
+      capsuleId: "cap-x" as KnowledgeCapsuleId,
+      score: 0.5,
+      citation: {
+        documentId: "doc-1" as DocumentId,
+        capsuleId: "cap-x" as KnowledgeCapsuleId,
+        sourceId: "src-1" as KnowledgeSourceId,
+        chunkId: "chunk-1" as ChunkId,
+        safeDisplayName: "doc-1",
+        ...(characterStart === undefined ? {} : { characterStart }),
+        ...(characterEnd === undefined ? {} : { characterEnd }),
+      },
+    };
+  }
+
+  it("estimates the char span length, capped at maxExcerptChars — with NO store parameter at all", () => {
+    // The absence of a `store` parameter on this function's signature IS the guarantee: it is
+    // structurally impossible for this estimate to reach the database.
+    expect(estimateConnectorExcerptBytes(referenceWithOffsets(100, 150), 900)).toBe(50);
+  });
+
+  it("caps the estimate at maxExcerptChars for a span longer than the excerpt cap", () => {
+    expect(estimateConnectorExcerptBytes(referenceWithOffsets(0, 5000), 900)).toBe(900);
+  });
+
+  it("returns undefined when the citation carries no character span", () => {
+    // mutation: falling back to maxExcerptChars here would silently misestimate the no-offset case
+    // (e.g. table/JSON-pointer citations) that connectorRerankInput falls back to eager hydration for
+    expect(
+      estimateConnectorExcerptBytes(referenceWithOffsets(undefined, undefined), 900),
+    ).toBeUndefined();
+    expect(estimateConnectorExcerptBytes(referenceWithOffsets(10, undefined), 900)).toBeUndefined();
+  });
+
+  it("never returns a negative estimate for a malformed (end < start) span", () => {
+    expect(estimateConnectorExcerptBytes(referenceWithOffsets(500, 100), 900)).toBe(0);
   });
 });

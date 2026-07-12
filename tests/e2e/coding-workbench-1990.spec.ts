@@ -104,8 +104,8 @@ test("opens the Coding Workbench from the rail with usable pre-run authority @sm
 
   await expect(page.getByRole("heading", { name: "Ready for a coding run" })).toBeVisible();
   await expect(page.getByRole("radiogroup", { name: "Coding autonomy mode" })).toBeVisible();
-  await expect(page.getByRole("radio", { name: /Governed Assist/u })).toBeEnabled();
-  await expect(page.getByRole("radio", { name: /Autonomous Delivery/u })).toBeDisabled();
+  await expect(page.getByRole("radio", { name: /Ask for approval/u })).toBeEnabled();
+  await expect(page.getByRole("radio", { name: /Full access/u })).toBeDisabled();
   await expect(page.getByText("ChatGPT/Codex subscription profile")).toBeVisible();
   await expect(page.getByText("Connected")).toBeVisible();
   await page.screenshot({

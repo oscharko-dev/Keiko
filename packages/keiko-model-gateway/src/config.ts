@@ -773,6 +773,9 @@ interface DeclaredVoiceFlags {
   readonly speechInput: boolean | undefined;
   readonly speechOutput: boolean | undefined;
   readonly realtimeVoice: boolean | undefined;
+  readonly synthesisInstructions: boolean | undefined;
+  readonly semanticTurnDetection: boolean | undefined;
+  readonly realtimeTranscriptionModel: string | undefined;
 }
 
 // Reads each voice sub-capability flag, present-only (undefined when the operator omitted it).
@@ -790,6 +793,24 @@ function readDeclaredVoiceFlags(raw: Record<string, unknown>, path: string): Dec
       raw.supportsRealtimeVoice !== undefined
         ? requireBoolean(raw.supportsRealtimeVoice, `${path}.supportsRealtimeVoice`)
         : undefined,
+    synthesisInstructions:
+      raw.supportsSpeechSynthesisInstructions !== undefined
+        ? requireBoolean(
+            raw.supportsSpeechSynthesisInstructions,
+            `${path}.supportsSpeechSynthesisInstructions`,
+          )
+        : undefined,
+    semanticTurnDetection:
+      raw.supportsSemanticTurnDetection !== undefined
+        ? requireBoolean(raw.supportsSemanticTurnDetection, `${path}.supportsSemanticTurnDetection`)
+        : undefined,
+    realtimeTranscriptionModel:
+      raw.realtimeTranscriptionModel !== undefined
+        ? requireNonEmptyTrimmedString(
+            raw.realtimeTranscriptionModel,
+            `${path}.realtimeTranscriptionModel`,
+          )
+        : undefined,
   };
 }
 
@@ -804,6 +825,9 @@ function assertNoVoiceFieldsForNonVoiceKind(
     flags.speechInput !== undefined ||
     flags.speechOutput !== undefined ||
     flags.realtimeVoice !== undefined ||
+    flags.synthesisInstructions !== undefined ||
+    flags.semanticTurnDetection !== undefined ||
+    flags.realtimeTranscriptionModel !== undefined ||
     localityDeclared;
   if (anyDeclared) {
     throw new ConfigInvalidError(
@@ -817,10 +841,48 @@ type ParsedVoiceFields = Partial<
     ModelCapability,
     | "supportsSpeechInput"
     | "supportsSpeechOutput"
+    | "supportsSpeechSynthesisInstructions"
     | "supportsRealtimeVoice"
+    | "supportsSemanticTurnDetection"
+    | "realtimeTranscriptionModel"
     | "voiceProviderLocality"
   >
 >;
+
+function assertVoiceTuningInvariants(flags: DeclaredVoiceFlags, path: string): void {
+  if (flags.synthesisInstructions !== undefined && flags.speechOutput !== true) {
+    throw new ConfigInvalidError(
+      `${path}.supportsSpeechSynthesisInstructions requires supportsSpeechOutput to be true`,
+    );
+  }
+  if (flags.semanticTurnDetection !== undefined && flags.realtimeVoice !== true) {
+    throw new ConfigInvalidError(
+      `${path}.supportsSemanticTurnDetection requires supportsRealtimeVoice to be true`,
+    );
+  }
+  if (flags.realtimeTranscriptionModel !== undefined && flags.realtimeVoice !== true) {
+    throw new ConfigInvalidError(
+      `${path}.realtimeTranscriptionModel requires supportsRealtimeVoice to be true`,
+    );
+  }
+}
+
+function parsedVoiceFlags(flags: DeclaredVoiceFlags): ParsedVoiceFields {
+  return {
+    ...(flags.speechInput !== undefined ? { supportsSpeechInput: flags.speechInput } : {}),
+    ...(flags.speechOutput !== undefined ? { supportsSpeechOutput: flags.speechOutput } : {}),
+    ...(flags.synthesisInstructions !== undefined
+      ? { supportsSpeechSynthesisInstructions: flags.synthesisInstructions }
+      : {}),
+    ...(flags.realtimeVoice !== undefined ? { supportsRealtimeVoice: flags.realtimeVoice } : {}),
+    ...(flags.semanticTurnDetection !== undefined
+      ? { supportsSemanticTurnDetection: flags.semanticTurnDetection }
+      : {}),
+    ...(flags.realtimeTranscriptionModel !== undefined
+      ? { realtimeTranscriptionModel: flags.realtimeTranscriptionModel }
+      : {}),
+  };
+}
 
 // Resolves the voice fields for a `kind: "voice"` capability, enforcing the two voice invariants:
 //   1. at least one of speech input / speech output / realtime must be advertised (a voice model
@@ -840,15 +902,14 @@ function resolveVoiceKindFields(
   if (raw.voiceProviderLocality === undefined) {
     throw new ConfigInvalidError(`${path} with kind "voice" must declare voiceProviderLocality`);
   }
+  assertVoiceTuningInvariants(flags, path);
   const voiceProviderLocality = requireEnum<VoiceProviderLocality>(
     raw.voiceProviderLocality,
     `${path}.voiceProviderLocality`,
     VOICE_PROVIDER_LOCALITIES,
   );
   return {
-    ...(flags.speechInput !== undefined ? { supportsSpeechInput: flags.speechInput } : {}),
-    ...(flags.speechOutput !== undefined ? { supportsSpeechOutput: flags.speechOutput } : {}),
-    ...(flags.realtimeVoice !== undefined ? { supportsRealtimeVoice: flags.realtimeVoice } : {}),
+    ...parsedVoiceFlags(flags),
     voiceProviderLocality,
   };
 }
@@ -1001,7 +1062,10 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "infillingAlignment",
   "supportsSpeechInput",
   "supportsSpeechOutput",
+  "supportsSpeechSynthesisInstructions",
   "supportsRealtimeVoice",
+  "supportsSemanticTurnDetection",
+  "realtimeTranscriptionModel",
   "voiceProviderLocality",
   "workflowEligible",
   "costClass",

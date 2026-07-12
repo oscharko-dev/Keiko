@@ -40,6 +40,7 @@ const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|package
 // import-policy expectations below cover literal import specifiers dependency-cruiser does not
 // expose as source graph edges in this repository configuration.
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
+  "adr-0128-connectors-only-contracts-security": 1,
   "adr-0019-direction-1-contracts-leaf": 1,
   "adr-0019-direction-2-security-only-contracts": 1,
   "adr-0125-feedback-intake-hosted-boundary": 1,
@@ -79,6 +80,7 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
   "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-9-local-knowledge-no-egress": 1,
+  "adr-0128-connectors-no-direct-egress": 1,
   "adr-0112-provider-runtime-no-internal-bypass": 3,
 };
 

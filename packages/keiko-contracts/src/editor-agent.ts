@@ -1,7 +1,90 @@
 import type { EditorDocumentVersion } from "./editor-session.js";
-import type { LanguageRange } from "./language-service.js";
+import type {
+  LanguageDiagnostic,
+  LanguageDiagnosticSeverity,
+  LanguagePosition,
+  LanguageRange,
+} from "./language-service.js";
+import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
+import {
+  parseEditorVerificationRunRequest,
+  type EditorVerificationRunRequest,
+} from "./editor-verification.js";
+import {
+  GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
+  GIT_AGENT_CONTEXT_MAX_FILES,
+  GIT_AGENT_CONTEXT_MAX_HUNKS,
+  GIT_AGENT_CONTEXT_MAX_RESULT_BYTES,
+  isGitEditorBlameLine,
+  isGitEditorDiffFileStatus,
+  isGitEditorDiffHunk,
+  type GitEditorBlameLine,
+  type GitEditorDiffFileStatus,
+  type GitEditorDiffHunk,
+  type GitEditorDiffLayer,
+  type GitEditorDiffScope,
+} from "./git-editor.js";
+import type { GitRepositoryState, GitStatusCode } from "./git-repository.js";
+
+export { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath };
 
 export const EDITOR_AGENT_SCHEMA_VERSION = "1" as const;
+export const EDITOR_AGENT_CHANGESET_MAX_FILES = 50;
+export const EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES = 65_536;
+export const EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS = 2_000;
+export const EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS = 128;
+export const EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS = 1_024;
+export const EDITOR_AGENT_REFERENCE_ID_MAX_CHARS = 128;
+export const EDITOR_AGENT_ACTION_ID_MAX_BYTES = 128;
+export const EDITOR_AGENT_SESSION_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES = 256;
+export const EDITOR_AGENT_WINDOW_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_PANE_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES = 4_096;
+export const EDITOR_AGENT_SNAPSHOT_MAX_PANES = 32;
+export const EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE = 256;
+export const EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES = 512;
+export const EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES = 262_144;
+export const EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES = 65_536;
+export const EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS = 1_024;
+export const EDITOR_AGENT_ACTION_DATA_MAX_BYTES = 256 * 1024;
+export const EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES = 1_000_000;
+export const EDITOR_AGENT_SEARCH_MAX_QUERY_CHARS = 200;
+export const EDITOR_AGENT_SEARCH_MAX_RESULTS = 200;
+export const EDITOR_AGENT_EVENT_ID_MAX_BYTES = 256;
+export const EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES = 32;
+export const EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS = 43;
+
+export const EDITOR_AGENT_ACTION_ORIGINS = ["agent", "chat"] as const;
+export type EditorAgentActionOrigin = (typeof EDITOR_AGENT_ACTION_ORIGINS)[number];
+export const DEFAULT_EDITOR_AGENT_ACTION_ORIGIN: EditorAgentActionOrigin = "agent";
+
+export type EditorAgentBridgeDecisionCapability = string;
+
+const EDITOR_AGENT_TEXT_ENCODER = new TextEncoder();
+
+export interface EditorAgentGovernedAuthorityReference {
+  readonly runId: string;
+  readonly envelopeDigest: string;
+}
+
+export interface EditorAgentOneUseApprovalReference {
+  readonly approvalId: string;
+  readonly actionId: string;
+  readonly approvalProofDigest: string;
+  readonly expiresAt: string;
+}
+
+export interface EditorAgentDiagnostic {
+  readonly severity: LanguageDiagnosticSeverity;
+  readonly range: LanguageRange;
+  readonly message: string;
+}
+
+export interface EditorAgentDiagnosticsDetail {
+  readonly items: readonly EditorAgentDiagnostic[];
+  readonly truncated: boolean;
+}
 
 export type EditorAgentSnapshotTextMode = "none" | "selection" | "activeFile";
 
@@ -33,6 +116,7 @@ export interface EditorAgentSessionSnapshot {
     readonly warnings: number;
     readonly infos: number;
   } | null;
+  readonly diagnosticsDetail?: EditorAgentDiagnosticsDetail | undefined;
   // Issue #1379 AC4 (ADR-0067 D6) — content-free language-provider availability for the active file.
   // Additive and optional: old snapshots (field absent) still validate. ids/booleans/short reason
   // strings only — never buffer text. `providerId` is null when no provider serves the language.
@@ -42,12 +126,195 @@ export interface EditorAgentSessionSnapshot {
     readonly available: boolean;
     readonly unavailableReason?: string | undefined;
   } | null;
+  // Issue #2234 (ADR-0127): content-free, additive Git awareness. Content-bearing diff, conflict,
+  // and blame excerpts remain server-internal coding context. Old snapshots without this field
+  // continue to validate.
+  readonly gitContextSummary?: {
+    readonly hasConflictMarkers: boolean;
+    readonly changedFileCount: number;
+    readonly truncated: boolean;
+  } | null;
   readonly documentVersion?: EditorDocumentVersion | undefined;
   readonly activeFileContentHash?: string | undefined;
   readonly textMode: EditorAgentSnapshotTextMode;
   readonly text?: string | undefined;
   readonly textTruncated?: boolean | undefined;
   readonly updatedAt: number;
+}
+
+export type EditorAgentNavigateSymbolOperation =
+  | "diagnostics"
+  | "definition"
+  | "typeDefinition"
+  | "implementation"
+  | "references"
+  | "callHierarchy"
+  | "inlayHints"
+  | "renamePrepare"
+  | "codeActions"
+  | "signatureHelp";
+
+export const EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS: readonly EditorAgentNavigateSymbolOperation[] =
+  [
+    "diagnostics",
+    "definition",
+    "typeDefinition",
+    "implementation",
+    "references",
+    "callHierarchy",
+    "inlayHints",
+    "renamePrepare",
+    "codeActions",
+    "signatureHelp",
+  ];
+
+export interface EditorAgentNavigateSymbolRequest {
+  readonly operation: EditorAgentNavigateSymbolOperation;
+  readonly document: {
+    readonly path: string;
+    readonly languageId: string;
+    readonly text?: string | undefined;
+  };
+  readonly position: LanguagePosition;
+  readonly range?: LanguageRange | undefined;
+  readonly diagnostics?: readonly LanguageDiagnostic[] | undefined;
+}
+
+export type EditorAgentSearchWorkspaceMode = "text" | "symbol";
+
+export interface EditorAgentSearchWorkspaceRequest {
+  readonly mode: EditorAgentSearchWorkspaceMode;
+  readonly query: string;
+  readonly caseSensitive?: boolean | undefined;
+  readonly includeGlobs?: readonly string[] | undefined;
+  readonly excludeGlobs?: readonly string[] | undefined;
+  readonly maxResults?: number | undefined;
+  readonly scopePath?: string | undefined;
+}
+
+// Issue #2298: the read-only aspects an agent may request for a file's source-control state. Each
+// maps to one already-bounded, redacted M5 git read handler; the tool never mutates git state.
+export type EditorAgentGitAspect = "status" | "diff" | "blame";
+
+export const EDITOR_AGENT_GIT_ASPECTS: readonly EditorAgentGitAspect[] = [
+  "status",
+  "diff",
+  "blame",
+];
+
+// Issue #2298: a governed, non-mutating on-demand git query for one workspace-contained file. The
+// active complement to #2234's passive `git-context` CodingContextPack source: an agent asks for
+// the current status/diff-vs-HEAD/blame of a specific file at the moment it needs it. Server-owned
+// caps and redaction apply per aspect; no bound field is exposed the server does not honour.
+export interface EditorAgentQueryGitRequest {
+  readonly path: string;
+  readonly aspects: readonly EditorAgentGitAspect[];
+}
+
+export const EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION = "1" as const;
+export const EDITOR_AGENT_QUERY_GIT_TARGET_BASENAME_MAX_CHARS = 255;
+export const EDITOR_AGENT_QUERY_GIT_BRANCH_MAX_CHARS = 512;
+
+export const EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS = [
+  "unavailable",
+  "denied",
+  "out-of-budget",
+] as const;
+export type EditorAgentQueryGitOmissionReason =
+  (typeof EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS)[number];
+
+export const EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS = [
+  "not-repository",
+  "git-missing",
+  "unsafe-repository",
+  "git-error",
+  "malformed-response",
+] as const;
+export type EditorAgentQueryGitMachineReason =
+  (typeof EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS)[number];
+
+export interface EditorAgentQueryGitTarget {
+  readonly basename: string;
+  readonly pathHash: string;
+}
+
+export interface EditorAgentQueryGitCaps {
+  readonly maxFiles: typeof GIT_AGENT_CONTEXT_MAX_FILES;
+  readonly maxHunks: typeof GIT_AGENT_CONTEXT_MAX_HUNKS;
+  readonly maxBlameLines: typeof GIT_AGENT_CONTEXT_MAX_BLAME_LINES;
+  readonly maxResultBytes: typeof GIT_AGENT_CONTEXT_MAX_RESULT_BYTES;
+}
+
+export interface EditorAgentQueryGitStatusChange {
+  readonly indexStatus: GitStatusCode;
+  readonly worktreeStatus: GitStatusCode;
+  readonly staged: boolean;
+  readonly unstaged: boolean;
+  readonly untracked: boolean;
+  readonly conflicted: boolean;
+}
+
+export interface EditorAgentQueryGitStatus {
+  readonly state: GitRepositoryState;
+  readonly available: boolean;
+  readonly branch?: string | undefined;
+  readonly detached: boolean;
+  readonly clean: boolean;
+  readonly change: EditorAgentQueryGitStatusChange | null;
+  readonly truncated: boolean;
+}
+
+export interface EditorAgentQueryGitDiffFile {
+  readonly layer: GitEditorDiffLayer;
+  readonly status: GitEditorDiffFileStatus;
+  readonly binary: boolean;
+  readonly hunks: readonly GitEditorDiffHunk[];
+  readonly addedLines: number;
+  readonly removedLines: number;
+  readonly truncated: boolean;
+}
+
+export interface EditorAgentQueryGitDiffLayer {
+  readonly scope: GitEditorDiffScope;
+  readonly layer: GitEditorDiffLayer;
+  readonly files: readonly EditorAgentQueryGitDiffFile[];
+  readonly truncated: boolean;
+  readonly totalFiles: number;
+  readonly totalBytes: number;
+}
+
+export interface EditorAgentQueryGitDiff {
+  readonly staged?: EditorAgentQueryGitDiffLayer | undefined;
+  readonly unstaged?: EditorAgentQueryGitDiffLayer | undefined;
+}
+
+export interface EditorAgentQueryGitBlame {
+  readonly startLine: number;
+  readonly lines: readonly GitEditorBlameLine[];
+  readonly truncated: boolean;
+  readonly totalLines: number;
+  readonly totalBytes: number;
+}
+
+export interface EditorAgentQueryGitAspects {
+  readonly status?: EditorAgentQueryGitStatus | undefined;
+  readonly diff?: EditorAgentQueryGitDiff | undefined;
+  readonly blame?: EditorAgentQueryGitBlame | undefined;
+}
+
+export interface EditorAgentQueryGitOmission {
+  readonly aspect: EditorAgentGitAspect;
+  readonly scope?: GitEditorDiffScope | undefined;
+  readonly reason: EditorAgentQueryGitOmissionReason;
+  readonly machineReason?: EditorAgentQueryGitMachineReason | undefined;
+}
+
+export interface EditorAgentQueryGitData {
+  readonly schemaVersion: typeof EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION;
+  readonly target: EditorAgentQueryGitTarget;
+  readonly caps: EditorAgentQueryGitCaps;
+  readonly aspects: EditorAgentQueryGitAspects;
+  readonly omissions: readonly EditorAgentQueryGitOmission[];
 }
 
 export type EditorAgentActionType =
@@ -59,7 +326,57 @@ export type EditorAgentActionType =
   | "format"
   | "save"
   | "applyTextEdits"
-  | "applyPatch";
+  | "applyPatch"
+  | "applyChangeset"
+  // Issue #2210 (ADR-0126 D5): a governed, non-mutating request to run a verification through Issue
+  // #2211's route. Added for policy classification; NOT dispatched to the browser bridge.
+  | "requestVerification"
+  | "navigateSymbol"
+  | "searchWorkspace"
+  // Issue #2298: a governed, read-only on-demand git query resolved server-side; NOT dispatched to
+  // the browser bridge.
+  | "queryGit";
+
+// Issue #2210 (ADR-0126 D5): an agent-originated verification request uses the same wire shape as the
+// human editor route request (kinds/targetPath/requestId). Aliased to avoid duplicating the shape;
+// the guard delegates to the canonical parser so validation stays in one place.
+export type EditorAgentVerificationRequest = EditorVerificationRunRequest;
+
+export function isEditorAgentVerificationRequest(
+  value: unknown,
+): value is EditorAgentVerificationRequest {
+  return parseEditorVerificationRunRequest(value).ok;
+}
+
+export interface EditorAgentChangesetFile {
+  readonly file: string;
+  readonly expectedDocumentVersion?: EditorDocumentVersion | undefined;
+  readonly expectedContentHash?: string | undefined;
+}
+
+export type EditorAgentPreparedChangeKind = "create" | "modify" | "delete";
+
+export interface EditorAgentPreparedTextEdit {
+  readonly range: LanguageRange;
+  readonly newText: string;
+}
+
+export interface EditorAgentPreparedChangesetFile {
+  readonly file: string;
+  readonly kind: EditorAgentPreparedChangeKind;
+  readonly textEdits: readonly EditorAgentPreparedTextEdit[];
+}
+
+export interface EditorAgentPreparedChangeset {
+  readonly files: readonly EditorAgentPreparedChangesetFile[];
+}
+
+export interface EditorAgentChangeset {
+  readonly patch: string;
+  readonly files: readonly EditorAgentChangesetFile[];
+  readonly selectedFiles?: readonly string[] | undefined;
+  readonly prepared?: EditorAgentPreparedChangeset | undefined;
+}
 
 export interface EditorAgentAction {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
@@ -67,6 +384,11 @@ export interface EditorAgentAction {
   readonly idempotencyKey: string;
   readonly sessionId: string;
   readonly type: EditorAgentActionType;
+  readonly origin?: EditorAgentActionOrigin | undefined;
+  readonly authorityRef?: EditorAgentGovernedAuthorityReference | undefined;
+  readonly approvalRef?: EditorAgentOneUseApprovalReference | undefined;
+  /** Server-derived on emitted patch/changeset actions; omission preserves legacy review behavior. */
+  readonly requiresReview?: boolean | undefined;
   readonly target?:
     | {
         readonly paneId?: string | undefined;
@@ -81,6 +403,10 @@ export interface EditorAgentAction {
   readonly textEdits?:
     readonly { readonly range: LanguageRange; readonly newText: string }[] | undefined;
   readonly patch?: string | undefined;
+  readonly changeset?: EditorAgentChangeset | undefined;
+  readonly navigateSymbol?: EditorAgentNavigateSymbolRequest | undefined;
+  readonly searchWorkspace?: EditorAgentSearchWorkspaceRequest | undefined;
+  readonly queryGit?: EditorAgentQueryGitRequest | undefined;
 }
 
 export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "conflict";
@@ -98,6 +424,8 @@ export type EditorAgentActionStatus = "queued" | "succeeded" | "failed" | "confl
 //   - INVALID_EDITS          the edits/patch are structurally invalid (overlap, inverted, malformed).
 //   - OUT_OF_SCOPE           the target escapes the workspace root or the action is unsupported here.
 //   - PRECONDITION_REQUIRED  a write action omitted the mandatory version/hash precondition (AC2).
+//   - POLICY_DENIED          validated policy or authority denies the action.
+//   - APPROVAL_REQUIRED      policy requires a review mechanism not available for this action.
 export type EditorAgentConflictCode =
   | "DIRTY"
   | "VERSION_MISMATCH"
@@ -106,7 +434,9 @@ export type EditorAgentConflictCode =
   | "NO_ACTIVE_BRIDGE"
   | "INVALID_EDITS"
   | "OUT_OF_SCOPE"
-  | "PRECONDITION_REQUIRED";
+  | "PRECONDITION_REQUIRED"
+  | "POLICY_DENIED"
+  | "APPROVAL_REQUIRED";
 
 export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
   "DIRTY",
@@ -117,22 +447,53 @@ export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
   "INVALID_EDITS",
   "OUT_OF_SCOPE",
   "PRECONDITION_REQUIRED",
+  "POLICY_DENIED",
+  "APPROVAL_REQUIRED",
 ] as const;
 
 // Issue #1392 — structured lifecycle failure codes (status: "failed") raised AFTER an action is
 // admitted to the bounded queue, distinct from the preflight conflict taxonomy above:
 //   - TIMED_OUT   the connected bridge never reported a result before the action deadline elapsed.
-//   - QUEUE_FULL  the bounded per-session action queue was already saturated when the action arrived.
-export type EditorAgentFailureCode = "TIMED_OUT" | "QUEUE_FULL";
+//   - QUEUE_FULL            the bounded per-session action queue was already saturated.
+//   - CANCELLED             the caller cancelled a server-resolved editor operation.
+//   - PROVIDER_UNAVAILABLE  the current workspace/provider state cannot serve the language.
+//   - UNSUPPORTED_OPERATION the active provider did not negotiate the requested operation.
+//   - LIMIT_EXCEEDED        the bounded request or response exceeded a language-service limit.
+export type EditorAgentFailureCode =
+  | "TIMED_OUT"
+  | "QUEUE_FULL"
+  | "CANCELLED"
+  | "PROVIDER_UNAVAILABLE"
+  | "UNSUPPORTED_OPERATION"
+  | "LIMIT_EXCEEDED";
 
 export const EDITOR_AGENT_FAILURE_CODES: readonly EditorAgentFailureCode[] = [
   "TIMED_OUT",
   "QUEUE_FULL",
+  "CANCELLED",
+  "PROVIDER_UNAVAILABLE",
+  "UNSUPPORTED_OPERATION",
+  "LIMIT_EXCEEDED",
 ] as const;
 
 export interface EditorAgentActionFailure {
   readonly code: EditorAgentFailureCode;
   readonly message: string;
+}
+
+export interface EditorAgentConflictDetail {
+  readonly code: EditorAgentConflictCode;
+  readonly message: string;
+  readonly file?: string | undefined;
+}
+
+export type EditorAgentFileActionStatus = "succeeded" | "failed" | "conflict" | "not-selected";
+
+export interface EditorAgentFileActionResult {
+  readonly file: string;
+  readonly status: EditorAgentFileActionStatus;
+  readonly message?: string | undefined;
+  readonly conflict?: EditorAgentConflictDetail | undefined;
 }
 
 export interface EditorAgentActionResult {
@@ -141,13 +502,11 @@ export interface EditorAgentActionResult {
   readonly sessionId: string;
   readonly status: EditorAgentActionStatus;
   readonly message?: string | undefined;
-  readonly conflict?:
-    | {
-        readonly code: EditorAgentConflictCode;
-        readonly message: string;
-      }
-    | undefined;
+  readonly conflict?: EditorAgentConflictDetail | undefined;
   readonly failure?: EditorAgentActionFailure | undefined;
+  readonly files?: readonly EditorAgentFileActionResult[] | undefined;
+  /** Bounded server-resolved data for read-only actions; never included in global audit/SSE projections. */
+  readonly data?: Readonly<Record<string, unknown>> | undefined;
 }
 
 export type EditorAgentEvent =
@@ -187,15 +546,29 @@ export interface EditorAgentBridgeSnapshotRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "snapshot";
   readonly snapshot: EditorAgentSessionSnapshot;
+  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
 }
 
 export interface EditorAgentActionResultRequest {
   readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
   readonly kind: "result";
   readonly result: EditorAgentActionResult;
+  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
 }
 
-export type EditorAgentActionsPostBody = EditorAgentAction | EditorAgentActionResultRequest;
+/**
+ * A browser-originated action request. The capability authenticates the live bridge only and is
+ * never copied onto the queued action or emitted over SSE.
+ */
+export interface EditorAgentBridgeActionRequest {
+  readonly schemaVersion: typeof EDITOR_AGENT_SCHEMA_VERSION;
+  readonly kind: "action";
+  readonly action: EditorAgentAction;
+  readonly bridgeDecisionCapability: EditorAgentBridgeDecisionCapability;
+}
+
+export type EditorAgentActionsPostBody =
+  EditorAgentAction | EditorAgentBridgeActionRequest | EditorAgentActionResultRequest;
 
 export interface EditorAgentSessionsResponse {
   readonly sessions: readonly EditorAgentSessionSnapshot[];
@@ -207,6 +580,7 @@ export interface EditorAgentActionQueuedResponse {
 
 export interface EditorAgentSnapshotResponse {
   readonly snapshot: EditorAgentSessionSnapshot | null;
+  readonly bridgeDecisionCapability?: EditorAgentBridgeDecisionCapability | undefined;
 }
 
 export interface EditorAgentParseOk<T> {
@@ -231,6 +605,11 @@ const EDITOR_AGENT_ACTION_TYPES: readonly EditorAgentActionType[] = [
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
+  "requestVerification",
+  "navigateSymbol",
+  "searchWorkspace",
+  "queryGit",
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -245,12 +624,50 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+function isBoundedNonEmptyString(value: unknown, maxChars: number): value is string {
+  return isNonEmptyString(value) && value.length <= maxChars;
+}
+
+function isBoundedUtf8String(value: unknown, maxBytes: number): value is string {
+  return isNonEmptyString(value) && isUtf8StringWithin(value, maxBytes);
+}
+
+function isUtf8StringWithin(value: unknown, maxBytes: number): value is string {
+  return typeof value === "string" && EDITOR_AGENT_TEXT_ENCODER.encode(value).length <= maxBytes;
+}
+
+function isBoundedTargetPath(value: unknown): value is string {
+  return isBoundedUtf8String(value, EDITOR_AGENT_TARGET_PATH_MAX_BYTES);
+}
+
+function countUnicodeCodePoints(value: string): number {
+  return Array.from(value).length;
+}
+
+function isBoundedDiagnosticMessage(value: unknown): value is string {
+  return (
+    isNonEmptyString(value) &&
+    countUnicodeCodePoints(value) <= EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS
+  );
+}
+
+function isBoundedResultMessage(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    countUnicodeCodePoints(value) <= EDITOR_AGENT_RESULT_MESSAGE_MAX_CHARS
+  );
+}
+
+function isTargetPathArray(value: unknown, maxItems: number): value is readonly string[] {
+  return Array.isArray(value) && value.length <= maxItems && value.every(isBoundedTargetPath);
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isSha256Hex(value: unknown): value is string {
@@ -269,7 +686,7 @@ function isDocumentVersion(value: unknown): value is EditorDocumentVersion {
   return (
     isRecord(value) &&
     isNonNegativeInteger(value.sizeBytes) &&
-    isNonNegativeInteger(value.modifiedAt) &&
+    isNonNegativeFiniteNumber(value.modifiedAt) &&
     isSha256Hex(value.contentHash)
   );
 }
@@ -284,6 +701,173 @@ function isPosition(
 
 function isRange(value: unknown): value is LanguageRange {
   return isRecord(value) && isPosition(value.start) && isPosition(value.end);
+}
+
+function isDiagnosticSeverity(value: unknown): value is LanguageDiagnosticSeverity {
+  return value === "error" || value === "warning" || value === "info" || value === "hint";
+}
+
+export function isEditorAgentDiagnostic(value: unknown): value is EditorAgentDiagnostic {
+  return (
+    isRecord(value) &&
+    isDiagnosticSeverity(value.severity) &&
+    isRange(value.range) &&
+    isBoundedDiagnosticMessage(value.message)
+  );
+}
+
+export function isEditorAgentDiagnosticsDetail(
+  value: unknown,
+): value is EditorAgentDiagnosticsDetail {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.items) &&
+    value.items.length <= EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS &&
+    value.items.every(isEditorAgentDiagnostic) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+export function isEditorAgentGovernedAuthorityReference(
+  value: unknown,
+): value is EditorAgentGovernedAuthorityReference {
+  return (
+    isRecord(value) &&
+    isBoundedNonEmptyString(value.runId, EDITOR_AGENT_REFERENCE_ID_MAX_CHARS) &&
+    isSha256Hex(value.envelopeDigest)
+  );
+}
+
+export function isEditorAgentOneUseApprovalReference(
+  value: unknown,
+): value is EditorAgentOneUseApprovalReference {
+  return (
+    isRecord(value) &&
+    isBoundedNonEmptyString(value.approvalId, EDITOR_AGENT_REFERENCE_ID_MAX_CHARS) &&
+    isBoundedNonEmptyString(value.actionId, EDITOR_AGENT_REFERENCE_ID_MAX_CHARS) &&
+    isSha256Hex(value.approvalProofDigest) &&
+    isBoundedNonEmptyString(value.expiresAt, 64)
+  );
+}
+
+function changesetFileHasPrecondition(file: EditorAgentChangesetFile): boolean {
+  return file.expectedDocumentVersion !== undefined || file.expectedContentHash !== undefined;
+}
+
+function normalizeAgentPath(path: string): string {
+  return path
+    .replace(/\\/gu, "/")
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
+}
+
+function normalizedPathsAreUnique(paths: readonly string[]): boolean {
+  const normalized = paths.map(normalizeAgentPath);
+  return new Set(normalized).size === normalized.length;
+}
+
+export function isEditorAgentChangesetFile(value: unknown): value is EditorAgentChangesetFile {
+  if (!isRecord(value) || "idempotencyKey" in value) return false;
+  return [
+    isNonEmptyString(value.file) && isContainedAgentPath(value.file),
+    isUndefinedOr(value.expectedDocumentVersion, isDocumentVersion),
+    isUndefinedOr(value.expectedContentHash, isSha256Hex),
+    value.expectedDocumentVersion !== undefined || value.expectedContentHash !== undefined,
+  ].every(Boolean);
+}
+
+function isUniqueNonEmptyStringArray(value: unknown, maxItems: number): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.length <= maxItems &&
+    value.every(isNonEmptyString) &&
+    new Set(value).size === value.length
+  );
+}
+
+function selectedFilesBelongToChangeset(
+  selectedFiles: unknown,
+  files: readonly EditorAgentChangesetFile[],
+): boolean {
+  if (selectedFiles === undefined) return true;
+  if (!isUniqueNonEmptyStringArray(selectedFiles, files.length)) return false;
+  if (!selectedFiles.every(isContainedAgentPath) || !normalizedPathsAreUnique(selectedFiles)) {
+    return false;
+  }
+  const available = new Set(files.map((file) => normalizeAgentPath(file.file)));
+  return selectedFiles.every((file) => available.has(normalizeAgentPath(file)));
+}
+
+function isPreparedChangeKind(value: unknown): value is EditorAgentPreparedChangeKind {
+  return value === "create" || value === "modify" || value === "delete";
+}
+
+function isPreparedTextEditArray(value: unknown): value is readonly EditorAgentPreparedTextEdit[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(isTextEdit) &&
+    validateAgentTextEdits(value) === null
+  );
+}
+
+function isEditorAgentPreparedChangesetFile(
+  value: unknown,
+): value is EditorAgentPreparedChangesetFile {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.file) &&
+    isContainedAgentPath(value.file) &&
+    isPreparedChangeKind(value.kind) &&
+    isPreparedTextEditArray(value.textEdits)
+  );
+}
+
+function preparedTextBytes(files: readonly EditorAgentPreparedChangesetFile[]): number {
+  return files.reduce(
+    (total, file) =>
+      total +
+      file.textEdits.reduce(
+        (fileTotal, edit) => fileTotal + EDITOR_AGENT_TEXT_ENCODER.encode(edit.newText).length,
+        0,
+      ),
+    0,
+  );
+}
+
+export function isEditorAgentPreparedChangeset(
+  value: unknown,
+): value is EditorAgentPreparedChangeset {
+  if (!isRecord(value) || !Array.isArray(value.files)) return false;
+  if (value.files.length === 0 || value.files.length > EDITOR_AGENT_CHANGESET_MAX_FILES)
+    return false;
+  if (!value.files.every(isEditorAgentPreparedChangesetFile)) return false;
+  const files = value.files as readonly EditorAgentPreparedChangesetFile[];
+  const editCount = files.reduce((total, file) => total + file.textEdits.length, 0);
+  return (
+    normalizedPathsAreUnique(files.map((file) => file.file)) &&
+    editCount <= EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS &&
+    preparedTextBytes(files) <= EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES
+  );
+}
+
+export function isEditorAgentChangeset(value: unknown): value is EditorAgentChangeset {
+  if (!isRecord(value)) return false;
+  if (!Array.isArray(value.files)) return false;
+  if (value.files.length === 0 || value.files.length > EDITOR_AGENT_CHANGESET_MAX_FILES)
+    return false;
+  if (!value.files.every(isEditorAgentChangesetFile)) return false;
+  const files = value.files as readonly EditorAgentChangesetFile[];
+  if (!normalizedPathsAreUnique(files.map((file) => file.file))) return false;
+  return (
+    isNonEmptyString(value.patch) &&
+    EDITOR_AGENT_TEXT_ENCODER.encode(value.patch).length <=
+      EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES &&
+    selectedFilesBelongToChangeset(value.selectedFiles, files) &&
+    isUndefinedOr(value.prepared, isEditorAgentPreparedChangeset)
+  );
 }
 
 function isDiagnosticsSummary(
@@ -311,12 +895,24 @@ function isLanguageCapability(value: unknown): boolean {
   );
 }
 
+function isGitContextSummary(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) =>
+      ["hasConflictMarkers", "changedFileCount", "truncated"].includes(key),
+    ) &&
+    typeof value.hasConflictMarkers === "boolean" &&
+    isNonNegativeInteger(value.changedFileCount) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
 function isPaneSnapshot(value: unknown): value is EditorAgentPaneSnapshot {
   return (
     isRecord(value) &&
-    isNonEmptyString(value.paneId) &&
-    (value.activeFile === null || typeof value.activeFile === "string") &&
-    isStringArray(value.openFiles)
+    isBoundedUtf8String(value.paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES) &&
+    (value.activeFile === null || isBoundedTargetPath(value.activeFile)) &&
+    isTargetPathArray(value.openFiles, EDITOR_AGENT_SNAPSHOT_MAX_OPEN_FILES_PER_PANE)
   );
 }
 
@@ -325,28 +921,56 @@ function isSnapshotTextMode(value: unknown): value is EditorAgentSnapshotTextMod
 }
 
 function isPaneSnapshotArray(value: unknown): value is readonly EditorAgentPaneSnapshot[] {
-  return Array.isArray(value) && value.every(isPaneSnapshot);
+  return (
+    Array.isArray(value) &&
+    value.length <= EDITOR_AGENT_SNAPSHOT_MAX_PANES &&
+    value.every(isPaneSnapshot)
+  );
+}
+
+function snapshotPathMetadataWithinBound(value: Record<string, unknown>): boolean {
+  if (!isPaneSnapshotArray(value.panes)) return false;
+  if (!isTargetPathArray(value.dirtyFiles, EDITOR_AGENT_SNAPSHOT_MAX_DIRTY_FILES)) return false;
+  const activeFile = value.activeFile;
+  if (activeFile !== null && !isBoundedTargetPath(activeFile)) return false;
+  const paths = value.panes.flatMap((pane) => [
+    ...(pane.activeFile === null ? [] : [pane.activeFile]),
+    ...pane.openFiles,
+  ]);
+  if (activeFile !== null) paths.push(activeFile);
+  paths.push(...value.dirtyFiles);
+  const bytes = paths.reduce(
+    (total, path) => total + EDITOR_AGENT_TEXT_ENCODER.encode(path).length,
+    0,
+  );
+  return bytes <= EDITOR_AGENT_SNAPSHOT_PATH_METADATA_MAX_BYTES;
 }
 
 export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAgentSessionSnapshot {
   if (!isRecord(value)) return false;
   return [
     value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION,
-    isNonEmptyString(value.sessionId),
-    isNonEmptyString(value.windowId),
-    isNonEmptyString(value.workspaceRoot),
-    isNullOr(value.activePaneId, isString),
-    isPaneSnapshotArray(value.panes),
-    isStringArray(value.dirtyFiles),
-    isNullOr(value.activeFile, isString),
+    isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES),
+    isBoundedUtf8String(value.windowId, EDITOR_AGENT_WINDOW_ID_MAX_BYTES),
+    isBoundedUtf8String(value.workspaceRoot, EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES),
+    isNullOr(value.activePaneId, (paneId) =>
+      isBoundedUtf8String(paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES),
+    ),
+    snapshotPathMetadataWithinBound(value),
     isNullOr(value.cursor, isPosition),
     isNullOr(value.selection, isRange),
     isNullOr(value.diagnosticsSummary, isDiagnosticsSummary),
+    isUndefinedOr(value.diagnosticsDetail, isEditorAgentDiagnosticsDetail),
     isUndefinedOr(value.languageCapability, (c) => c === null || isLanguageCapability(c)),
+    isUndefinedOr(value.gitContextSummary, (summary) =>
+      summary === null ? true : isGitContextSummary(summary),
+    ),
     isUndefinedOr(value.documentVersion, isDocumentVersion),
     isUndefinedOr(value.activeFileContentHash, isSha256Hex),
     isSnapshotTextMode(value.textMode),
-    isUndefinedOr(value.text, isString),
+    isUndefinedOr(value.text, (text) =>
+      isUtf8StringWithin(text, EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES),
+    ),
     isUndefinedOr(
       value.textTruncated,
       (candidate): candidate is boolean => typeof candidate === "boolean",
@@ -361,6 +985,19 @@ function isActionType(value: unknown): value is EditorAgentActionType {
   );
 }
 
+export function isEditorAgentActionOrigin(value: unknown): value is EditorAgentActionOrigin {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_ACTION_ORIGINS.includes(value as EditorAgentActionOrigin)
+  );
+}
+
+export function resolveEditorAgentActionOrigin(
+  value: EditorAgentActionOrigin | undefined,
+): EditorAgentActionOrigin {
+  return value ?? DEFAULT_EDITOR_AGENT_ACTION_ORIGIN;
+}
+
 function isSplitDirection(
   value: unknown,
 ): value is NonNullable<NonNullable<EditorAgentAction["target"]>["splitDirection"]> {
@@ -371,12 +1008,415 @@ function isActionTarget(value: unknown): value is NonNullable<EditorAgentAction[
   if (value === undefined) return true;
   if (!isRecord(value)) return false;
   return [
-    isUndefinedOr(value.paneId, isString),
-    isUndefinedOr(value.file, isString),
-    isUndefinedOr(value.toPaneId, isString),
+    isUndefinedOr(value.paneId, (paneId) =>
+      isBoundedUtf8String(paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES),
+    ),
+    isUndefinedOr(value.file, isBoundedTargetPath),
+    isUndefinedOr(value.toPaneId, (paneId) =>
+      isBoundedUtf8String(paneId, EDITOR_AGENT_PANE_ID_MAX_BYTES),
+    ),
     isUndefinedOr(value.splitDirection, isSplitDirection),
     isUndefinedOr(value.selection, isRange),
   ].every(Boolean);
+}
+
+function isBoundedStringArray(value: unknown, maxItems: number): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maxItems &&
+    value.every((entry) => isNonEmptyString(entry) && entry.length <= 200)
+  );
+}
+
+function isNavigateSymbolOperation(value: unknown): value is EditorAgentNavigateSymbolOperation {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS.includes(value as EditorAgentNavigateSymbolOperation)
+  );
+}
+
+function isLanguageDiagnosticArray(value: unknown): value is readonly LanguageDiagnostic[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS &&
+    value.every(
+      (item) => isEditorAgentDiagnostic(item) && isRecord(item) && isNonEmptyString(item.source),
+    )
+  );
+}
+
+function isNavigateSymbolDocument(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    isBoundedTargetPath(value.path) &&
+    isBoundedNonEmptyString(value.languageId, 128) &&
+    isUndefinedOr(value.text, (text) =>
+      isUtf8StringWithin(text, EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES),
+    )
+  );
+}
+
+function isNavigateSymbolExtrasValid(
+  operation: EditorAgentNavigateSymbolOperation,
+  range: unknown,
+  diagnostics: unknown,
+): boolean {
+  if (operation === "codeActions") {
+    return range !== undefined && diagnostics !== undefined;
+  }
+  // Inlay hints are always scoped to a visible range (matches the tool-host's own
+  // validateNavigateSymbolExtras), unlike every other read-only navigation operation.
+  if (operation === "inlayHints") {
+    return range !== undefined && diagnostics === undefined;
+  }
+  return range === undefined && diagnostics === undefined;
+}
+
+function isNavigateSymbolRequest(value: unknown): value is EditorAgentNavigateSymbolRequest {
+  if (!isRecord(value) || !isNavigateSymbolOperation(value.operation)) return false;
+  if (!isNavigateSymbolDocument(value.document) || !isPosition(value.position)) return false;
+  if (!isUndefinedOr(value.range, isRange)) return false;
+  if (!isUndefinedOr(value.diagnostics, isLanguageDiagnosticArray)) return false;
+  return isNavigateSymbolExtrasValid(value.operation, value.range, value.diagnostics);
+}
+
+function isSearchWorkspaceRequest(value: unknown): value is EditorAgentSearchWorkspaceRequest {
+  return (
+    isRecord(value) &&
+    (value.mode === "text" || value.mode === "symbol") &&
+    isBoundedNonEmptyString(value.query, EDITOR_AGENT_SEARCH_MAX_QUERY_CHARS) &&
+    isUndefinedOr(value.caseSensitive, (candidate) => typeof candidate === "boolean") &&
+    isUndefinedOr(value.includeGlobs, (candidate) => isBoundedStringArray(candidate, 32)) &&
+    isUndefinedOr(value.excludeGlobs, (candidate) => isBoundedStringArray(candidate, 32)) &&
+    isUndefinedOr(
+      value.maxResults,
+      (candidate) =>
+        typeof candidate === "number" &&
+        Number.isInteger(candidate) &&
+        candidate > 0 &&
+        candidate <= EDITOR_AGENT_SEARCH_MAX_RESULTS,
+    ) &&
+    isUndefinedOr(value.scopePath, isBoundedTargetPath)
+  );
+}
+
+function isGitAspect(value: unknown): value is EditorAgentGitAspect {
+  return value === "status" || value === "diff" || value === "blame";
+}
+
+function hasOnlyObjectKeys(
+  value: Readonly<Record<string, unknown>>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function isPosixCanonicalQueryGitPath(value: unknown): value is string {
+  if (!isBoundedTargetPath(value) || !isContainedAgentPath(value) || value.includes("\\")) {
+    return false;
+  }
+  const segments = value.split("/");
+  return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+function isQueryGitRequest(value: unknown): value is EditorAgentQueryGitRequest {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["path", "aspects"]) &&
+    isPosixCanonicalQueryGitPath(value.path) &&
+    Array.isArray(value.aspects) &&
+    value.aspects.length > 0 &&
+    value.aspects.length <= EDITOR_AGENT_GIT_ASPECTS.length &&
+    value.aspects.every(isGitAspect) &&
+    new Set(value.aspects).size === value.aspects.length
+  );
+}
+
+function isQueryGitTarget(value: unknown): value is EditorAgentQueryGitTarget {
+  if (!isRecord(value) || !hasOnlyObjectKeys(value, ["basename", "pathHash"])) return false;
+  return (
+    isBoundedNonEmptyString(value.basename, EDITOR_AGENT_QUERY_GIT_TARGET_BASENAME_MAX_CHARS) &&
+    value.basename !== "." &&
+    value.basename !== ".." &&
+    !value.basename.includes("/") &&
+    !value.basename.includes("\\") &&
+    !value.basename.includes("\0") &&
+    isSha256Hex(value.pathHash)
+  );
+}
+
+function isQueryGitCaps(value: unknown): value is EditorAgentQueryGitCaps {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["maxFiles", "maxHunks", "maxBlameLines", "maxResultBytes"]) &&
+    value.maxFiles === GIT_AGENT_CONTEXT_MAX_FILES &&
+    value.maxHunks === GIT_AGENT_CONTEXT_MAX_HUNKS &&
+    value.maxBlameLines === GIT_AGENT_CONTEXT_MAX_BLAME_LINES &&
+    value.maxResultBytes === GIT_AGENT_CONTEXT_MAX_RESULT_BYTES
+  );
+}
+
+const QUERY_GIT_STATUS_CODES: readonly GitStatusCode[] = [
+  " ",
+  "M",
+  "A",
+  "D",
+  "R",
+  "C",
+  "U",
+  "?",
+  "!",
+] as const;
+
+function isQueryGitStatusCode(value: unknown): value is GitStatusCode {
+  return typeof value === "string" && QUERY_GIT_STATUS_CODES.includes(value as GitStatusCode);
+}
+
+function isQueryGitStatusChange(value: unknown): value is EditorAgentQueryGitStatusChange {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, [
+      "indexStatus",
+      "worktreeStatus",
+      "staged",
+      "unstaged",
+      "untracked",
+      "conflicted",
+    ]) &&
+    isQueryGitStatusCode(value.indexStatus) &&
+    isQueryGitStatusCode(value.worktreeStatus) &&
+    typeof value.staged === "boolean" &&
+    typeof value.unstaged === "boolean" &&
+    typeof value.untracked === "boolean" &&
+    typeof value.conflicted === "boolean"
+  );
+}
+
+function isQueryGitRepositoryState(value: unknown): value is GitRepositoryState {
+  return (
+    value === "available" || value === "unavailable" || value === "unsafe" || value === "error"
+  );
+}
+
+function isQueryGitStatus(value: unknown): value is EditorAgentQueryGitStatus {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, [
+      "state",
+      "available",
+      "branch",
+      "detached",
+      "clean",
+      "change",
+      "truncated",
+    ]) &&
+    isQueryGitRepositoryState(value.state) &&
+    typeof value.available === "boolean" &&
+    value.available === (value.state === "available") &&
+    isUndefinedOr(value.branch, (branch) =>
+      isBoundedNonEmptyString(branch, EDITOR_AGENT_QUERY_GIT_BRANCH_MAX_CHARS),
+    ) &&
+    typeof value.detached === "boolean" &&
+    typeof value.clean === "boolean" &&
+    isNullOr(value.change, isQueryGitStatusChange) &&
+    typeof value.truncated === "boolean"
+  );
+}
+
+function isQueryGitDiffFile(
+  value: unknown,
+  expectedLayer: GitEditorDiffLayer,
+): value is EditorAgentQueryGitDiffFile {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, [
+      "layer",
+      "status",
+      "binary",
+      "hunks",
+      "addedLines",
+      "removedLines",
+      "truncated",
+    ]) &&
+    value.layer === expectedLayer &&
+    isGitEditorDiffFileStatus(value.status) &&
+    hasValidQueryGitDiffContent(value) &&
+    hasValidQueryGitDiffCounts(value)
+  );
+}
+
+function hasValidQueryGitDiffContent(value: Readonly<Record<string, unknown>>): boolean {
+  if (typeof value.binary !== "boolean") return false;
+  if (!Array.isArray(value.hunks) || !value.hunks.every(isGitEditorDiffHunk)) return false;
+  return !value.binary || value.hunks.length === 0;
+}
+
+function hasValidQueryGitDiffCounts(value: Readonly<Record<string, unknown>>): boolean {
+  if (!isNonNegativeInteger(value.addedLines) || !isNonNegativeInteger(value.removedLines)) {
+    return false;
+  }
+  if (typeof value.truncated !== "boolean") return false;
+  return value.binary !== true || (value.addedLines === 0 && value.removedLines === 0);
+}
+
+function isQueryGitDiffLayer(
+  value: unknown,
+  expectedScope: GitEditorDiffScope,
+  expectedLayer: GitEditorDiffLayer,
+): value is EditorAgentQueryGitDiffLayer {
+  if (!isRecord(value)) return false;
+  if (
+    !hasOnlyObjectKeys(value, ["scope", "layer", "files", "truncated", "totalFiles", "totalBytes"])
+  ) {
+    return false;
+  }
+  if (!Array.isArray(value.files) || value.files.length > GIT_AGENT_CONTEXT_MAX_FILES) return false;
+  return (
+    value.scope === expectedScope &&
+    value.layer === expectedLayer &&
+    value.files.every((file) => isQueryGitDiffFile(file, expectedLayer)) &&
+    hasValidQueryGitDiffTotals(value)
+  );
+}
+
+function hasValidQueryGitDiffTotals(value: Readonly<Record<string, unknown>>): boolean {
+  if (!Array.isArray(value.files)) return false;
+  return (
+    typeof value.truncated === "boolean" &&
+    isNonNegativeInteger(value.totalFiles) &&
+    value.totalFiles >= value.files.length &&
+    isNonNegativeInteger(value.totalBytes)
+  );
+}
+
+function queryGitDiffFiles(diff: EditorAgentQueryGitDiff): readonly EditorAgentQueryGitDiffFile[] {
+  return [...(diff.staged?.files ?? []), ...(diff.unstaged?.files ?? [])];
+}
+
+function isQueryGitDiff(value: unknown): value is EditorAgentQueryGitDiff {
+  if (!isRecord(value) || !hasOnlyObjectKeys(value, ["staged", "unstaged"])) return false;
+  if (value.staged === undefined && value.unstaged === undefined) return false;
+  if (!isUndefinedOr(value.staged, (layer) => isQueryGitDiffLayer(layer, "staged", "staged"))) {
+    return false;
+  }
+  if (
+    !isUndefinedOr(value.unstaged, (layer) => isQueryGitDiffLayer(layer, "unstaged", "worktree"))
+  ) {
+    return false;
+  }
+  const diff = value as unknown as EditorAgentQueryGitDiff;
+  const files = queryGitDiffFiles(diff);
+  return (
+    files.length <= GIT_AGENT_CONTEXT_MAX_FILES &&
+    files.reduce((total, file) => total + file.hunks.length, 0) <= GIT_AGENT_CONTEXT_MAX_HUNKS
+  );
+}
+
+function isQueryGitBlame(value: unknown): value is EditorAgentQueryGitBlame {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, ["startLine", "lines", "truncated", "totalLines", "totalBytes"]) &&
+    typeof value.startLine === "number" &&
+    Number.isInteger(value.startLine) &&
+    value.startLine >= 1 &&
+    hasValidQueryGitBlameLines(value) &&
+    hasValidQueryGitBlameTotals(value)
+  );
+}
+
+function hasValidQueryGitBlameLines(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    Array.isArray(value.lines) &&
+    value.lines.length <= GIT_AGENT_CONTEXT_MAX_BLAME_LINES &&
+    value.lines.every(isGitEditorBlameLine)
+  );
+}
+
+function hasValidQueryGitBlameTotals(value: Readonly<Record<string, unknown>>): boolean {
+  if (!Array.isArray(value.lines)) return false;
+  return (
+    typeof value.truncated === "boolean" &&
+    isNonNegativeInteger(value.totalLines) &&
+    value.totalLines >= value.lines.length &&
+    isNonNegativeInteger(value.totalBytes)
+  );
+}
+
+function isQueryGitAspects(value: unknown): value is EditorAgentQueryGitAspects {
+  return (
+    isRecord(value) &&
+    hasOnlyObjectKeys(value, ["status", "diff", "blame"]) &&
+    isUndefinedOr(value.status, isQueryGitStatus) &&
+    isUndefinedOr(value.diff, isQueryGitDiff) &&
+    isUndefinedOr(value.blame, isQueryGitBlame)
+  );
+}
+
+function isQueryGitOmission(value: unknown): value is EditorAgentQueryGitOmission {
+  if (!isRecord(value)) return false;
+  return (
+    hasOnlyObjectKeys(value, ["aspect", "scope", "reason", "machineReason"]) &&
+    isGitAspect(value.aspect) &&
+    (value.scope === undefined ||
+      (value.aspect === "diff" && (value.scope === "staged" || value.scope === "unstaged"))) &&
+    EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS.includes(
+      value.reason as EditorAgentQueryGitOmissionReason,
+    ) &&
+    isUndefinedOr(value.machineReason, (reason) =>
+      EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS.includes(reason as EditorAgentQueryGitMachineReason),
+    )
+  );
+}
+
+function isQueryGitOmissions(value: unknown): value is readonly EditorAgentQueryGitOmission[] {
+  if (!Array.isArray(value) || value.length > 5 || !value.every(isQueryGitOmission)) return false;
+  const keys = value.map((entry) => `${entry.aspect}:${entry.scope ?? "all"}`);
+  return new Set(keys).size === keys.length;
+}
+
+function queryGitDataWithinByteCap(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    EDITOR_AGENT_TEXT_ENCODER.encode(JSON.stringify(value)).length <=
+    GIT_AGENT_CONTEXT_MAX_RESULT_BYTES
+  );
+}
+
+function parseEditorAgentQueryGitDataUnsafe(
+  value: unknown,
+): EditorAgentParse<EditorAgentQueryGitData> {
+  if (!isRecord(value)) return { ok: false, errors: ["queryGit data must be an object"] };
+  const valid =
+    hasOnlyObjectKeys(value, ["schemaVersion", "target", "caps", "aspects", "omissions"]) &&
+    value.schemaVersion === EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION &&
+    isQueryGitTarget(value.target) &&
+    isQueryGitCaps(value.caps) &&
+    isQueryGitAspects(value.aspects) &&
+    isQueryGitOmissions(value.omissions) &&
+    queryGitDataWithinByteCap(value);
+  return valid
+    ? { ok: true, value: value as unknown as EditorAgentQueryGitData }
+    : { ok: false, errors: ["queryGit data is malformed or exceeds agent caps"] };
+}
+
+export function parseEditorAgentQueryGitData(
+  value: unknown,
+): EditorAgentParse<EditorAgentQueryGitData> {
+  try {
+    return parseEditorAgentQueryGitDataUnsafe(value);
+  } catch {
+    return { ok: false, errors: ["queryGit data could not be inspected"] };
+  }
+}
+
+function isEditorAgentActionData(value: unknown): value is Readonly<Record<string, unknown>> {
+  if (!isRecord(value)) return false;
+  try {
+    return (
+      new TextEncoder().encode(JSON.stringify(value)).length <= EDITOR_AGENT_ACTION_DATA_MAX_BYTES
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isTextEdit(
@@ -395,15 +1435,35 @@ export function isEditorAgentAction(value: unknown): value is EditorAgentAction 
   if (!isRecord(value)) return false;
   return [
     value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION,
-    isNonEmptyString(value.actionId),
-    isNonEmptyString(value.idempotencyKey),
-    isNonEmptyString(value.sessionId),
+    isBoundedUtf8String(value.actionId, EDITOR_AGENT_ACTION_ID_MAX_BYTES),
+    isBoundedUtf8String(value.idempotencyKey, EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES),
+    isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES),
     isActionType(value.type),
+    isUndefinedOr(value.origin, isEditorAgentActionOrigin),
+    isUndefinedOr(value.authorityRef, isEditorAgentGovernedAuthorityReference),
+    isUndefinedOr(
+      value.approvalRef,
+      (reference) =>
+        isEditorAgentOneUseApprovalReference(reference) && reference.actionId === value.actionId,
+    ),
+    isUndefinedOr(value.requiresReview, (candidate) => typeof candidate === "boolean"),
     isActionTarget(value.target),
     isUndefinedOr(value.expectedDocumentVersion, isDocumentVersion),
     isUndefinedOr(value.expectedContentHash, isSha256Hex),
-    isUndefinedOr(value.textEdits, isTextEditArray),
-    isUndefinedOr(value.patch, isString),
+    value.type === "applyTextEdits" || value.type === "applyPatch"
+      ? isUndefinedOr(value.textEdits, isTextEditArray)
+      : value.textEdits === undefined,
+    value.type === "applyPatch" ? isUndefinedOr(value.patch, isString) : value.patch === undefined,
+    value.type === "applyChangeset"
+      ? isEditorAgentChangeset(value.changeset)
+      : value.changeset === undefined,
+    value.type === "navigateSymbol"
+      ? isNavigateSymbolRequest(value.navigateSymbol)
+      : value.navigateSymbol === undefined,
+    value.type === "searchWorkspace"
+      ? isSearchWorkspaceRequest(value.searchWorkspace)
+      : value.searchWorkspace === undefined,
+    value.type === "queryGit" ? isQueryGitRequest(value.queryGit) : value.queryGit === undefined,
   ].every(Boolean);
 }
 
@@ -417,7 +1477,25 @@ export const EDITOR_AGENT_WRITE_ACTION_TYPES: readonly EditorAgentActionType[] =
   "save",
   "applyTextEdits",
   "applyPatch",
+  "applyChangeset",
 ] as const;
+
+export const EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES: readonly EditorAgentActionType[] = [
+  "setSelection",
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+] as const;
+
+export function isEditorAgentActiveBufferActionType(
+  value: unknown,
+): value is EditorAgentActionType {
+  return (
+    typeof value === "string" &&
+    EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES.includes(value as EditorAgentActionType)
+  );
+}
 
 export function isEditorAgentWriteActionType(value: unknown): value is EditorAgentActionType {
   return (
@@ -430,6 +1508,9 @@ export function isEditorAgentWriteActionType(value: unknown): value is EditorAge
 // or by content hash. Either precondition is sufficient; both may be supplied. The mandatory
 // `idempotencyKey` (validated by `isEditorAgentAction`) covers safe retry; this covers safe write.
 export function editorAgentActionHasWritePrecondition(action: EditorAgentAction): boolean {
+  if (action.type === "applyChangeset") {
+    return action.changeset?.files.every(changesetFileHasPrecondition) === true;
+  }
   return action.expectedDocumentVersion !== undefined || action.expectedContentHash !== undefined;
 }
 
@@ -449,13 +1530,43 @@ function isActionStatus(value: unknown): value is EditorAgentActionStatus {
   return value === "queued" || value === "succeeded" || value === "failed" || value === "conflict";
 }
 
-// A conflict detail, when present, must carry a code drawn from the taxonomy and a string message —
-// so a result that claims a conflict cannot smuggle an out-of-taxonomy code past the guard.
-function isEditorAgentConflictDetail(value: unknown): boolean {
-  if (value === undefined) return true;
+export function isEditorAgentConflictDetail(value: unknown): value is EditorAgentConflictDetail {
   return (
-    isRecord(value) && isEditorAgentConflictCode(value.code) && typeof value.message === "string"
+    isRecord(value) &&
+    isEditorAgentConflictCode(value.code) &&
+    isBoundedResultMessage(value.message) &&
+    isUndefinedOr(value.file, (file) => isNonEmptyString(file) && isContainedAgentPath(file))
   );
+}
+
+function isOptionalEditorAgentConflictDetail(value: unknown): boolean {
+  return value === undefined || isEditorAgentConflictDetail(value);
+}
+
+function isEditorAgentFileActionStatus(value: unknown): value is EditorAgentFileActionStatus {
+  return (
+    value === "succeeded" || value === "failed" || value === "conflict" || value === "not-selected"
+  );
+}
+
+export function isEditorAgentFileActionResult(
+  value: unknown,
+): value is EditorAgentFileActionResult {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value.file) &&
+    isContainedAgentPath(value.file) &&
+    isEditorAgentFileActionStatus(value.status) &&
+    isUndefinedOr(value.message, isBoundedResultMessage) &&
+    isOptionalEditorAgentConflictDetail(value.conflict)
+  );
+}
+
+function isEditorAgentFileActionResultArray(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!Array.isArray(value) || value.length > EDITOR_AGENT_CHANGESET_MAX_FILES) return false;
+  if (!value.every(isEditorAgentFileActionResult)) return false;
+  return new Set(value.map((result) => result.file)).size === value.length;
 }
 
 // Issue #1392 — a failure detail, when present, mirrors the conflict-detail guard against the
@@ -463,7 +1574,7 @@ function isEditorAgentConflictDetail(value: unknown): boolean {
 function isEditorAgentFailureDetail(value: unknown): boolean {
   if (value === undefined) return true;
   return (
-    isRecord(value) && isEditorAgentFailureCode(value.code) && typeof value.message === "string"
+    isRecord(value) && isEditorAgentFailureCode(value.code) && isBoundedResultMessage(value.message)
   );
 }
 
@@ -471,12 +1582,14 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
   return (
     isRecord(value) &&
     value.schemaVersion === EDITOR_AGENT_SCHEMA_VERSION &&
-    isNonEmptyString(value.actionId) &&
-    isNonEmptyString(value.sessionId) &&
+    isBoundedUtf8String(value.actionId, EDITOR_AGENT_ACTION_ID_MAX_BYTES) &&
+    isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES) &&
     isActionStatus(value.status) &&
-    (value.message === undefined || typeof value.message === "string") &&
-    isEditorAgentConflictDetail(value.conflict) &&
-    isEditorAgentFailureDetail(value.failure)
+    isUndefinedOr(value.message, isBoundedResultMessage) &&
+    isOptionalEditorAgentConflictDetail(value.conflict) &&
+    isEditorAgentFailureDetail(value.failure) &&
+    isEditorAgentFileActionResultArray(value.files) &&
+    isUndefinedOr(value.data, isEditorAgentActionData)
   );
 }
 
@@ -502,7 +1615,7 @@ export function isEditorAgentFailureCode(value: unknown): value is EditorAgentFa
 export function isEditorAgentEvent(value: unknown): value is EditorAgentEvent {
   if (!isRecord(value)) return false;
   if (value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION) return false;
-  if (!isNonEmptyString(value.eventId)) return false;
+  if (!isBoundedUtf8String(value.eventId, EDITOR_AGENT_EVENT_ID_MAX_BYTES)) return false;
   switch (value.type) {
     case "session":
       return isEditorAgentSessionSnapshot(value.snapshot);
@@ -575,20 +1688,22 @@ export function validateAgentTextEdits(
   return overlapError(edits);
 }
 
-export function isContainedAgentPath(candidate: string): boolean {
-  if (candidate.length === 0) return false;
-  if (candidate.startsWith("/")) return false;
-  if (/^[A-Za-z]:/u.test(candidate)) return false;
-  if (candidate.includes("\u0000")) return false;
-  const segments = candidate.split(/[/\\]/u);
-  return !segments.includes("..");
-}
-
 function parseBridgeSnapshotRequest(
   value: Record<string, unknown>,
 ): EditorAgentParse<EditorAgentBridgeSnapshotRequest> {
-  if (!isEditorAgentSessionSnapshot(value.snapshot)) {
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    value.kind !== "snapshot" ||
+    !Object.keys(value).every((key) => EDITOR_AGENT_BRIDGE_SNAPSHOT_REQUEST_KEYS.has(key)) ||
+    !isEditorAgentSessionSnapshot(value.snapshot)
+  ) {
     return { ok: false, errors: ["snapshot must be a valid editor agent session snapshot"] };
+  }
+  if (
+    value.bridgeDecisionCapability !== undefined &&
+    !isEditorAgentBridgeDecisionCapability(value.bridgeDecisionCapability)
+  ) {
+    return { ok: false, errors: ["bridgeDecisionCapability must be a bounded capability"] };
   }
   return {
     ok: true,
@@ -596,9 +1711,19 @@ function parseBridgeSnapshotRequest(
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "snapshot",
       snapshot: value.snapshot,
+      ...(value.bridgeDecisionCapability === undefined
+        ? {}
+        : { bridgeDecisionCapability: value.bridgeDecisionCapability }),
     },
   };
 }
+
+const EDITOR_AGENT_BRIDGE_SNAPSHOT_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "snapshot",
+  "bridgeDecisionCapability",
+]);
 
 function parseReadSnapshotRequest(
   value: Record<string, unknown>,
@@ -614,8 +1739,11 @@ function parseReadSnapshotRequest(
   if (!isSnapshotTextMode(textMode)) {
     return { ok: false, errors: ["textMode must be none, selection, or activeFile"] };
   }
-  if (value.sessionId !== undefined && typeof value.sessionId !== "string") {
-    return { ok: false, errors: ["sessionId must be a string when present"] };
+  if (
+    value.sessionId !== undefined &&
+    !isBoundedUtf8String(value.sessionId, EDITOR_AGENT_SESSION_ID_MAX_BYTES)
+  ) {
+    return { ok: false, errors: ["sessionId must be a bounded string when present"] };
   }
   if (value.maxBytes !== undefined && !isNonNegativeInteger(value.maxBytes)) {
     return { ok: false, errors: ["maxBytes must be a non-negative integer when present"] };
@@ -640,19 +1768,335 @@ export function parseEditorAgentSnapshotRequest(
     : parseReadSnapshotRequest(value);
 }
 
+function canonicalRange(range: LanguageRange): LanguageRange {
+  return {
+    start: { line: range.start.line, character: range.start.character },
+    end: { line: range.end.line, character: range.end.character },
+  };
+}
+
+function canonicalDocumentVersion(version: EditorDocumentVersion): EditorDocumentVersion {
+  return {
+    sizeBytes: version.sizeBytes,
+    modifiedAt: version.modifiedAt,
+    contentHash: version.contentHash,
+  };
+}
+
+function canonicalActionTarget(
+  target: NonNullable<EditorAgentAction["target"]>,
+): NonNullable<EditorAgentAction["target"]> {
+  return {
+    ...(target.paneId === undefined ? {} : { paneId: target.paneId }),
+    ...(target.file === undefined ? {} : { file: target.file }),
+    ...(target.toPaneId === undefined ? {} : { toPaneId: target.toPaneId }),
+    ...(target.splitDirection === undefined ? {} : { splitDirection: target.splitDirection }),
+    ...(target.selection === undefined ? {} : { selection: canonicalRange(target.selection) }),
+  };
+}
+
+function canonicalChangesetFile(file: EditorAgentChangesetFile): EditorAgentChangesetFile {
+  return {
+    file: file.file,
+    ...(file.expectedDocumentVersion === undefined
+      ? {}
+      : { expectedDocumentVersion: canonicalDocumentVersion(file.expectedDocumentVersion) }),
+    ...(file.expectedContentHash === undefined
+      ? {}
+      : { expectedContentHash: file.expectedContentHash }),
+  };
+}
+
+function canonicalPreparedTextEdit(edit: EditorAgentPreparedTextEdit): EditorAgentPreparedTextEdit {
+  return { range: canonicalRange(edit.range), newText: edit.newText };
+}
+
+function canonicalPreparedChangesetFile(
+  file: EditorAgentPreparedChangesetFile,
+): EditorAgentPreparedChangesetFile {
+  return {
+    file: file.file,
+    kind: file.kind,
+    textEdits: file.textEdits.map(canonicalPreparedTextEdit),
+  };
+}
+
+function canonicalChangeset(changeset: EditorAgentChangeset): EditorAgentChangeset {
+  return {
+    patch: changeset.patch,
+    files: changeset.files.map(canonicalChangesetFile),
+    ...(changeset.selectedFiles === undefined
+      ? {}
+      : { selectedFiles: [...changeset.selectedFiles] }),
+    ...(changeset.prepared === undefined
+      ? {}
+      : {
+          prepared: { files: changeset.prepared.files.map(canonicalPreparedChangesetFile) },
+        }),
+  };
+}
+
+function canonicalNavigateSymbolRequest(
+  request: NonNullable<EditorAgentAction["navigateSymbol"]>,
+): NonNullable<EditorAgentAction["navigateSymbol"]> {
+  return {
+    operation: request.operation,
+    document: {
+      path: request.document.path,
+      languageId: request.document.languageId,
+      ...(request.document.text === undefined ? {} : { text: request.document.text }),
+    },
+    position: canonicalPosition(request.position),
+    ...(request.range === undefined ? {} : { range: canonicalRange(request.range) }),
+    ...(request.diagnostics === undefined
+      ? {}
+      : { diagnostics: request.diagnostics.map(canonicalDiagnostic) }),
+  };
+}
+
+function canonicalSearchWorkspaceRequest(
+  request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+): NonNullable<EditorAgentAction["searchWorkspace"]> {
+  return {
+    mode: request.mode,
+    query: request.query,
+    ...(request.caseSensitive === undefined ? {} : { caseSensitive: request.caseSensitive }),
+    ...(request.includeGlobs === undefined ? {} : { includeGlobs: [...request.includeGlobs] }),
+    ...(request.excludeGlobs === undefined ? {} : { excludeGlobs: [...request.excludeGlobs] }),
+    ...(request.maxResults === undefined ? {} : { maxResults: request.maxResults }),
+    ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
+  };
+}
+
+function canonicalQueryGitRequest(
+  request: NonNullable<EditorAgentAction["queryGit"]>,
+): NonNullable<EditorAgentAction["queryGit"]> {
+  return {
+    path: request.path,
+    aspects: EDITOR_AGENT_GIT_ASPECTS.filter((aspect) => request.aspects.includes(aspect)),
+  };
+}
+
+function canonicalTextEditsPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  return action.textEdits === undefined
+    ? {}
+    : { textEdits: action.textEdits.map(canonicalPreparedTextEdit) };
+}
+
+function canonicalPatchPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  return {
+    ...canonicalTextEditsPayload(action),
+    ...(action.patch === undefined ? {} : { patch: action.patch }),
+  };
+}
+
+function canonicalServerResolvedPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  switch (action.type) {
+    case "navigateSymbol":
+      return action.navigateSymbol === undefined
+        ? {}
+        : { navigateSymbol: canonicalNavigateSymbolRequest(action.navigateSymbol) };
+    case "searchWorkspace":
+      return action.searchWorkspace === undefined
+        ? {}
+        : { searchWorkspace: canonicalSearchWorkspaceRequest(action.searchWorkspace) };
+    case "queryGit":
+      return action.queryGit === undefined
+        ? {}
+        : { queryGit: canonicalQueryGitRequest(action.queryGit) };
+    default:
+      return {};
+  }
+}
+
+function canonicalEditorAgentActionPayload(action: EditorAgentAction): Partial<EditorAgentAction> {
+  switch (action.type) {
+    case "applyTextEdits":
+      return canonicalTextEditsPayload(action);
+    case "applyPatch":
+      return canonicalPatchPayload(action);
+    case "applyChangeset":
+      return action.changeset === undefined
+        ? {}
+        : { changeset: canonicalChangeset(action.changeset) };
+    default:
+      return canonicalServerResolvedPayload(action);
+  }
+}
+
+function canonicalPosition(position: LanguagePosition): LanguagePosition {
+  return { line: position.line, character: position.character };
+}
+
+function canonicalDiagnostic(diagnostic: LanguageDiagnostic): LanguageDiagnostic {
+  return {
+    range: canonicalRange(diagnostic.range),
+    severity: diagnostic.severity,
+    message: diagnostic.message,
+    source: diagnostic.source,
+    ...(diagnostic.code === undefined ? {} : { code: diagnostic.code }),
+  };
+}
+
+function canonicalEditorAgentAction(action: EditorAgentAction): EditorAgentAction {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: action.actionId,
+    idempotencyKey: action.idempotencyKey,
+    sessionId: action.sessionId,
+    type: action.type,
+    origin: resolveEditorAgentActionOrigin(action.origin),
+    ...(action.authorityRef === undefined
+      ? {}
+      : {
+          authorityRef: {
+            runId: action.authorityRef.runId,
+            envelopeDigest: action.authorityRef.envelopeDigest,
+          },
+        }),
+    ...(action.approvalRef === undefined
+      ? {}
+      : {
+          approvalRef: {
+            approvalId: action.approvalRef.approvalId,
+            actionId: action.approvalRef.actionId,
+            approvalProofDigest: action.approvalRef.approvalProofDigest,
+            expiresAt: action.approvalRef.expiresAt,
+          },
+        }),
+    ...(action.requiresReview === undefined ? {} : { requiresReview: action.requiresReview }),
+    ...(action.target === undefined ? {} : { target: canonicalActionTarget(action.target) }),
+    ...(action.expectedDocumentVersion === undefined
+      ? {}
+      : { expectedDocumentVersion: canonicalDocumentVersion(action.expectedDocumentVersion) }),
+    ...(action.expectedContentHash === undefined
+      ? {}
+      : { expectedContentHash: action.expectedContentHash }),
+    ...canonicalEditorAgentActionPayload(action),
+  };
+}
+
+function canonicalConflict(conflict: EditorAgentConflictDetail): EditorAgentConflictDetail {
+  return {
+    code: conflict.code,
+    message: conflict.message,
+    ...(conflict.file === undefined ? {} : { file: conflict.file }),
+  };
+}
+
+function canonicalFileActionResult(
+  result: EditorAgentFileActionResult,
+): EditorAgentFileActionResult {
+  return {
+    file: result.file,
+    status: result.status,
+    ...(result.message === undefined ? {} : { message: result.message }),
+    ...(result.conflict === undefined ? {} : { conflict: canonicalConflict(result.conflict) }),
+  };
+}
+
+function canonicalActionResult(result: EditorAgentActionResult): EditorAgentActionResult {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: result.actionId,
+    sessionId: result.sessionId,
+    status: result.status,
+    ...(result.message === undefined ? {} : { message: result.message }),
+    ...(result.conflict === undefined ? {} : { conflict: canonicalConflict(result.conflict) }),
+    ...(result.failure === undefined
+      ? {}
+      : { failure: { code: result.failure.code, message: result.failure.message } }),
+    ...(result.files === undefined ? {} : { files: result.files.map(canonicalFileActionResult) }),
+    ...(result.data === undefined ? {} : { data: result.data }),
+  };
+}
+
+const EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "action",
+  "bridgeDecisionCapability",
+]);
+
+const EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS = new Set([
+  "schemaVersion",
+  "kind",
+  "result",
+  "bridgeDecisionCapability",
+]);
+
+function parseBridgeActionRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorAgentBridgeActionRequest> {
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    !Object.keys(value).every((key) => EDITOR_AGENT_BRIDGE_ACTION_REQUEST_KEYS.has(key)) ||
+    !isEditorAgentAction(value.action) ||
+    !isEditorAgentBridgeDecisionCapability(value.bridgeDecisionCapability)
+  ) {
+    return { ok: false, errors: ["browser action request is invalid"] };
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "action",
+      action: canonicalEditorAgentAction(value.action),
+      bridgeDecisionCapability: value.bridgeDecisionCapability,
+    },
+  };
+}
+
+function parseActionResultRequest(
+  value: Record<string, unknown>,
+): EditorAgentParse<EditorAgentActionResultRequest> {
+  if (
+    value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
+    value.kind !== "result" ||
+    !Object.keys(value).every((key) => EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS.has(key)) ||
+    !isEditorAgentActionResult(value.result)
+  ) {
+    return { ok: false, errors: ["action result request is invalid"] };
+  }
+  const capability = value.bridgeDecisionCapability;
+  if (capability !== undefined && !isEditorAgentBridgeDecisionCapability(capability)) {
+    return { ok: false, errors: ["bridgeDecisionCapability must be a bounded capability"] };
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      result: canonicalActionResult(value.result),
+      ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
+    },
+  };
+}
+
+function invalidActionsPostBody(): EditorAgentParseFail {
+  return {
+    ok: false,
+    errors: ["body must be an editor agent action, browser action request, or action result"],
+  };
+}
+
 export function parseEditorAgentActionsPostBody(
   value: unknown,
 ): EditorAgentParse<EditorAgentActionsPostBody> {
-  if (isEditorAgentAction(value)) return { ok: true, value };
-  if (isRecord(value) && value.kind === "result" && isEditorAgentActionResult(value.result)) {
-    return {
-      ok: true,
-      value: {
-        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-        kind: "result",
-        result: value.result,
-      },
-    };
+  if (isEditorAgentAction(value)) {
+    return { ok: true, value: canonicalEditorAgentAction(value) };
   }
-  return { ok: false, errors: ["body must be an editor agent action or action result"] };
+  if (!isRecord(value)) return invalidActionsPostBody();
+  if (value.kind === "action") return parseBridgeActionRequest(value);
+  return value.kind === "result" ? parseActionResultRequest(value) : invalidActionsPostBody();
+}
+
+export function isEditorAgentBridgeDecisionCapability(
+  value: unknown,
+): value is EditorAgentBridgeDecisionCapability {
+  return (
+    typeof value === "string" &&
+    value.length === EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS &&
+    /^[A-Za-z0-9_-]+$/u.test(value)
+  );
 }

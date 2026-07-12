@@ -1,6 +1,7 @@
 {
   "files": [],
   "references": [
+    { "path": "./packages/keiko-connectors" },
     { "path": "./packages/keiko-contracts" },
     { "path": "./packages/keiko-git" },
     { "path": "./packages/keiko-editor" },

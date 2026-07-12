@@ -380,6 +380,170 @@ function sanitizeEditorLayoutRoot(value: unknown): string {
   return isSecretShapedString(root) ? "" : root;
 }
 
+// Shared by every clamped numeric layout field (split ratios, sidebar width): parse an
+// unknown value as a finite number, round it, and clamp to [min, max], falling back when
+// the value isn't a finite number at all. Formula matches every call site this replaces.
+function sanitizeBoundedNumber(value: unknown, min: number, max: number, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, Math.round(value)))
+    : fallback;
+}
+
+type EditorLayoutPaneV2 = {
+  id: string;
+  activeFile: string;
+  openFiles: readonly string[];
+  tabOrder: readonly string[];
+};
+
+function resolveEditorLayoutPaneV2(
+  pane: Record<string, unknown>,
+): Omit<EditorLayoutPaneV2, "id"> | undefined {
+  const activeFiles =
+    typeof pane["activeFile"] === "string"
+      ? sanitizeEditorOpenFiles([pane["activeFile"]])
+      : undefined;
+  const activeFile = activeFiles?.[0];
+  const openFiles = sanitizeEditorOpenFiles(pane["openFiles"]);
+  const tabOrder = sanitizeEditorOpenFiles(pane["tabOrder"]) ?? openFiles;
+  if (openFiles === undefined && activeFile === undefined) return undefined;
+  const files = openFiles ?? activeFiles;
+  if (files === undefined) return undefined;
+  const resolvedActiveFile =
+    activeFile !== undefined && files.includes(activeFile) ? activeFile : files[0]!;
+  return {
+    activeFile: resolvedActiveFile,
+    openFiles: files,
+    tabOrder: tabOrder ?? files,
+  };
+}
+
+function buildEditorLayoutPanesV2(
+  rawPanes: Record<string, unknown>,
+): Record<string, EditorLayoutPaneV2> {
+  const panes: Record<string, EditorLayoutPaneV2> = {};
+  for (const [paneId, pane] of Object.entries(rawPanes)) {
+    if (!isRecord(pane)) continue;
+    const fields = resolveEditorLayoutPaneV2(pane);
+    if (fields === undefined) continue;
+    const id = paneId.slice(0, 48);
+    panes[id] = { id, ...fields };
+  }
+  return panes;
+}
+
+function isEditorLayoutPaneNode(
+  node: Record<string, unknown>,
+  paneIds: ReadonlySet<string>,
+): node is Record<string, unknown> & { paneId: string } {
+  return (
+    node["type"] === "pane" && typeof node["paneId"] === "string" && paneIds.has(node["paneId"])
+  );
+}
+
+function sanitizeEditorLayoutTreeNode(
+  node: unknown,
+  paneIds: ReadonlySet<string>,
+  depth = 0,
+): unknown {
+  // Fail closed on absurd nesting: a null child collapses the whole split
+  // chain, so an over-deep tree rejects the layout instead of recursing on.
+  if (depth > MAX_EDITOR_LAYOUT_SPLIT_DEPTH || !isRecord(node)) return null;
+  if (isEditorLayoutPaneNode(node, paneIds)) {
+    return { type: "pane", paneId: node["paneId"] };
+  }
+  if (node["type"] !== "split") return null;
+  const first = sanitizeEditorLayoutTreeNode(node["first"], paneIds, depth + 1);
+  const second = sanitizeEditorLayoutTreeNode(node["second"], paneIds, depth + 1);
+  if (first === null || second === null) return null;
+  return {
+    type: "split",
+    id: typeof node["id"] === "string" ? node["id"].slice(0, 48) : "split-1",
+    direction: node["direction"] === "column" ? "column" : "row",
+    ratio: sanitizeBoundedNumber(node["ratio"], 15, 85, 50),
+    first,
+    second,
+  };
+}
+
+function sanitizeEditorLayoutJsonV2(record: Record<string, unknown>): string | undefined {
+  const rawPanes = isRecord(record["panes"]) ? record["panes"] : {};
+  const panes = buildEditorLayoutPanesV2(rawPanes);
+  const paneIds = new Set(Object.keys(panes));
+  const tree = sanitizeEditorLayoutTreeNode(record["tree"], paneIds);
+  const firstPaneId = Object.keys(panes)[0];
+  if (tree === null || firstPaneId === undefined) return undefined;
+  const activePaneId =
+    typeof record["activePaneId"] === "string" && paneIds.has(record["activePaneId"])
+      ? record["activePaneId"]
+      : firstPaneId;
+  return JSON.stringify({
+    schemaVersion: 2,
+    root: sanitizeEditorLayoutRoot(record["root"]),
+    activePaneId,
+    tree,
+    panes,
+    sidebarWidth: sanitizeBoundedNumber(record["sidebarWidth"], 180, 440, 260),
+    sidebarCollapsed: record["sidebarCollapsed"] === true,
+  });
+}
+
+type LegacyEditorLayoutPane = { id: string; file: string; openFiles: readonly string[] };
+
+function resolveLegacyEditorLayoutPane(
+  paneRecord: Record<string, unknown>,
+  index: number,
+): LegacyEditorLayoutPane | undefined {
+  const file = typeof paneRecord["file"] === "string" ? paneRecord["file"].trim() : "";
+  const openFiles = sanitizeEditorOpenFiles(paneRecord["openFiles"]);
+  if (file.length > MAX_EDITOR_OPEN_FILE_LENGTH || isSecretShapedString(file)) return undefined;
+  const nextOpenFiles =
+    openFiles ?? (file.length > 0 ? sanitizeEditorOpenFiles([file]) : undefined);
+  if (nextOpenFiles === undefined) return undefined;
+  return {
+    id:
+      typeof paneRecord["id"] === "string" && paneRecord["id"].trim().length > 0
+        ? paneRecord["id"].trim().slice(0, 32)
+        : `pane-${index + 1}`,
+    file: file.length > 0 ? file.replace(/\\/gu, "/").replace(/^\/+/u, "") : nextOpenFiles[0]!,
+    openFiles: nextOpenFiles,
+  };
+}
+
+function buildEditorLayoutPanesLegacy(
+  rawPanes: readonly unknown[],
+): LegacyEditorLayoutPane[] | undefined {
+  const panes: LegacyEditorLayoutPane[] = [];
+  for (const [index, pane] of rawPanes.entries()) {
+    if (typeof pane !== "object" || pane === null || Array.isArray(pane)) return undefined;
+    const resolved = resolveLegacyEditorLayoutPane(pane as Record<string, unknown>, index);
+    if (resolved === undefined) continue;
+    panes.push(resolved);
+  }
+  return panes;
+}
+
+function sanitizeEditorLayoutJsonLegacy(record: Record<string, unknown>): string | undefined {
+  const rawPanes = Array.isArray(record["panes"]) ? record["panes"].slice(0, 2) : [];
+  const panes = buildEditorLayoutPanesLegacy(rawPanes);
+  if (panes === undefined || panes.length === 0) return undefined;
+  const direction = record["direction"] === "column" ? "column" : "row";
+  const activePaneId =
+    typeof record["activePaneId"] === "string" &&
+    panes.some((pane) => pane.id === record["activePaneId"])
+      ? record["activePaneId"]
+      : panes[0]!.id;
+  return JSON.stringify({
+    version: 1,
+    panes,
+    activePaneId,
+    direction,
+    splitRatio: sanitizeBoundedNumber(record["splitRatio"], 25, 75, 50),
+    sidebarWidth: sanitizeBoundedNumber(record["sidebarWidth"], 180, 440, 260),
+    sidebarCollapsed: record["sidebarCollapsed"] === true,
+  });
+}
+
 function sanitizeEditorLayoutJson(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length === 0) return undefined;
   let parsed: unknown;
@@ -391,128 +555,9 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
   const record = parsed as Record<string, unknown>;
   if (record["schemaVersion"] === 2 || record["version"] === 2) {
-    const rawPanes = isRecord(record["panes"]) ? record["panes"] : {};
-    const panes: Record<
-      string,
-      { id: string; activeFile: string; openFiles: readonly string[]; tabOrder: readonly string[] }
-    > = {};
-    for (const [paneId, pane] of Object.entries(rawPanes)) {
-      if (!isRecord(pane)) continue;
-      const activeFiles =
-        typeof pane["activeFile"] === "string"
-          ? sanitizeEditorOpenFiles([pane["activeFile"]])
-          : undefined;
-      const activeFile = activeFiles?.[0];
-      const openFiles = sanitizeEditorOpenFiles(pane["openFiles"]);
-      const tabOrder = sanitizeEditorOpenFiles(pane["tabOrder"]) ?? openFiles;
-      if (openFiles === undefined && activeFile === undefined) continue;
-      const files = openFiles ?? activeFiles;
-      if (files === undefined) continue;
-      const resolvedActiveFile =
-        activeFile !== undefined && files.includes(activeFile) ? activeFile : files[0]!;
-      panes[paneId.slice(0, 48)] = {
-        id: paneId.slice(0, 48),
-        activeFile: resolvedActiveFile,
-        openFiles: files,
-        tabOrder: tabOrder ?? files,
-      };
-    }
-    const paneIds = new Set(Object.keys(panes));
-    const sanitizeNode = (node: unknown, depth = 0): unknown => {
-      // Fail closed on absurd nesting: a null child collapses the whole split
-      // chain, so an over-deep tree rejects the layout instead of recursing on.
-      if (depth > MAX_EDITOR_LAYOUT_SPLIT_DEPTH || !isRecord(node)) return null;
-      if (
-        node["type"] === "pane" &&
-        typeof node["paneId"] === "string" &&
-        paneIds.has(node["paneId"])
-      ) {
-        return { type: "pane", paneId: node["paneId"] };
-      }
-      if (node["type"] === "split") {
-        const first = sanitizeNode(node["first"], depth + 1);
-        const second = sanitizeNode(node["second"], depth + 1);
-        if (first === null || second === null) return null;
-        const ratio =
-          typeof node["ratio"] === "number" && Number.isFinite(node["ratio"])
-            ? Math.min(85, Math.max(15, Math.round(node["ratio"])))
-            : 50;
-        return {
-          type: "split",
-          id: typeof node["id"] === "string" ? node["id"].slice(0, 48) : "split-1",
-          direction: node["direction"] === "column" ? "column" : "row",
-          ratio,
-          first,
-          second,
-        };
-      }
-      return null;
-    };
-    const tree = sanitizeNode(record["tree"]);
-    const firstPaneId = Object.keys(panes)[0];
-    if (tree === null || firstPaneId === undefined) return undefined;
-    const activePaneId =
-      typeof record["activePaneId"] === "string" && paneIds.has(record["activePaneId"])
-        ? record["activePaneId"]
-        : firstPaneId;
-    const sidebarWidth =
-      typeof record["sidebarWidth"] === "number" && Number.isFinite(record["sidebarWidth"])
-        ? Math.min(440, Math.max(180, Math.round(record["sidebarWidth"])))
-        : 260;
-    return JSON.stringify({
-      schemaVersion: 2,
-      root: sanitizeEditorLayoutRoot(record["root"]),
-      activePaneId,
-      tree,
-      panes,
-      sidebarWidth,
-      sidebarCollapsed: record["sidebarCollapsed"] === true,
-    });
+    return sanitizeEditorLayoutJsonV2(record);
   }
-  const rawPanes = Array.isArray(record["panes"]) ? record["panes"].slice(0, 2) : [];
-  const panes: { id: string; file: string; openFiles: readonly string[] }[] = [];
-  for (const [index, pane] of rawPanes.entries()) {
-    if (typeof pane !== "object" || pane === null || Array.isArray(pane)) return undefined;
-    const paneRecord = pane as Record<string, unknown>;
-    const file = typeof paneRecord["file"] === "string" ? paneRecord["file"].trim() : "";
-    const openFiles = sanitizeEditorOpenFiles(paneRecord["openFiles"]);
-    if (file.length > MAX_EDITOR_OPEN_FILE_LENGTH || isSecretShapedString(file)) continue;
-    const nextOpenFiles =
-      openFiles ?? (file.length > 0 ? sanitizeEditorOpenFiles([file]) : undefined);
-    if (nextOpenFiles === undefined) continue;
-    panes.push({
-      id:
-        typeof paneRecord["id"] === "string" && paneRecord["id"].trim().length > 0
-          ? paneRecord["id"].trim().slice(0, 32)
-          : `pane-${index + 1}`,
-      file: file.length > 0 ? file.replace(/\\/gu, "/").replace(/^\/+/u, "") : nextOpenFiles[0]!,
-      openFiles: nextOpenFiles,
-    });
-  }
-  if (panes.length === 0) return undefined;
-  const direction = record["direction"] === "column" ? "column" : "row";
-  const splitRatio =
-    typeof record["splitRatio"] === "number" && Number.isFinite(record["splitRatio"])
-      ? Math.min(75, Math.max(25, Math.round(record["splitRatio"])))
-      : 50;
-  const sidebarWidth =
-    typeof record["sidebarWidth"] === "number" && Number.isFinite(record["sidebarWidth"])
-      ? Math.min(440, Math.max(180, Math.round(record["sidebarWidth"])))
-      : 260;
-  const activePaneId =
-    typeof record["activePaneId"] === "string" &&
-    panes.some((pane) => pane.id === record["activePaneId"])
-      ? record["activePaneId"]
-      : panes[0]!.id;
-  return JSON.stringify({
-    version: 1,
-    panes,
-    activePaneId,
-    direction,
-    splitRatio,
-    sidebarWidth,
-    sidebarCollapsed: record["sidebarCollapsed"] === true,
-  });
+  return sanitizeEditorLayoutJsonLegacy(record);
 }
 
 function sanitizeConfigValue(

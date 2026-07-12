@@ -12,11 +12,11 @@ playback **state machine** (Issue #501); this document describes the **synthesis
 visible assistant message text
   → useAssistantSpeech (browser)            # binds the spoken layer to the rendered message (AC2)
   → POST /api/voice/speak (BFF)             # capability-gated, JSON + CSRF envelope
+  → toSpeakableText                         # keeps prose/link labels; removes URL/citation syntax
   → requestTextToSpeech (Model Gateway)     # one POST through the gatewayFetch egress seam
   → {endpoint}/audio/speech (provider)      # OpenAI-compatible text-to-speech contract
-  ← audio bytes + content-type
-  ← { audio: <base64>, mimeType }           # content-free; voice id and credential stay server-side
-  → HTMLAudioElement playback               # prepare → play-started → complete / fail
+  ← streamed PCM → AudioWorklet             # first-chunk playback, drain-aware, instant flush
+  ↳ buffered audio fallback                 # base64 + HTMLAudioElement when WebAudio is unavailable
 ```
 
 The audio is held only in memory: for the duration of the BFF response, and for one browser playback
@@ -47,10 +47,11 @@ that contract) is selected as the final implementation target because:
 | Field             | Source                                                                                   |
 | ----------------- | ---------------------------------------------------------------------------------------- |
 | `model`           | The configured speech-output provider model id (`selectSpeechOutputModel`).              |
-| `input`           | The exact visible assistant answer text (≤ 4096 characters).                             |
+| `input`           | Speech-safe prose derived from the bounded visible answer (≤ 4096 raw characters).       |
 | `voice`           | The server-resolved provider voice id (see persona mapping), or the adapter default.     |
 | `response_format` | `mp3` by default (broadest browser playback); `opus`/`aac`/`flac`/`wav`/`pcm` supported. |
 | `speed`           | Optional playback-speed multiplier when the caller pins one.                             |
+| `instructions`    | Capability-gated delivery guidance for language, emotion, pacing, and intonation.        |
 
 **Response**: binary audio bytes with an `audio/*` content type. The adapter reads them with the bounded
 `readBytesCapped` reader (default cap 6 MB) and labels the result from the response content type, falling
@@ -83,6 +84,17 @@ and is resolved **server-side** by `selectVoicePersonaVoice`. The BFF synthesis 
 The resolved voice id is forwarded to the provider but **never** returned to the browser — only the
 synthesized audio and a canonicalized MIME type cross the BFF boundary.
 
+## Speech-safe rendering
+
+The written answer remains the review surface and keeps its Markdown links and citations. Before
+synthesis, the BFF retains prose, headings, list text, link labels, and short inline identifiers, while
+removing URL destinations, citation markers, source/reference appendices, images, HTML, and fenced code.
+Realtime grounded-tool HTTP results carry both `answer` (the full local result) and `spokenAnswer` (the
+same speech-safe projection), so buffered TTS and full-realtime dialogue follow one rule. Only
+`spokenAnswer`, its delivery instruction, status, and no-evidence flag are returned to the realtime
+provider; URLs, citation metadata, and persistence ids stay local. A result containing no speakable
+content is not sent to a provider.
+
 ## Failure behavior (degrade to text)
 
 Provider and playback failures degrade the spoken layer to the visible text without breaking the
@@ -103,9 +115,9 @@ the written answer stays visible in the transcript.
 
 - **Input bound**: 4096 characters. Longer answers are rejected (`413`) and degrade to text rather than
   being truncated, so the spoken output can never diverge from the visible text.
-- **One bounded clip per turn**: the response is read as a capped stream, but per-sentence chunked
-  playback is a deliberate non-goal for this issue (it would add a gapless multi-clip queue and an AC2
-  reconstruction risk).
+- **One bounded stream per turn**: the preferred path streams 24 kHz PCM into an AudioWorklet with a
+  small jitter prime. Node backpressure waits for `drain`; stop, mute, or barge-in aborts the provider
+  stream and flushes the worklet. The buffered clip remains the compatibility fallback.
 - **No raw generated audio persistence** and **no dialogue-mode toggle UI** beyond the reusable playback
   plumbing — both are out of scope for this issue.
 
@@ -113,6 +125,8 @@ the written answer stays visible in the transcript.
 
 A deployment enables assistant speech output by configuring a `kind: "voice"` provider that advertises
 `supportsSpeechOutput: true` (and, optionally, `voiceProfiles` mapping personas to provider voice ids).
+Set `supportsSpeechSynthesisInstructions: true` only when the selected synthesis model accepts delivery
+instructions; otherwise Keiko omits that field for compatibility.
 See [`capability-configuration.md`](./capability-configuration.md) for the full provider configuration
 surface. With no speech-output provider configured, the synthesis route answers `VOICE_UNAVAILABLE`, the
 playback control is absent, and Keiko answers in text.

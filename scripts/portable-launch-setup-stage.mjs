@@ -1,14 +1,20 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import { PORTABLE_TARGETS, validatePortableManifest } from "./portable-runtime.mjs";
+import {
+  PORTABLE_TARGETS,
+  validatePortableCandidateManifest,
+  validatePortableStagingManifest,
+} from "./portable-runtime.mjs";
 
 function fail(message) {
   throw new Error(`portable launch/setup smoke failed: ${message}`);
 }
 
 function assertFile(path, label) {
-  if (!existsSync(path) || !statSync(path).isFile()) fail(`missing ${label}`);
+  if (!existsSync(path)) fail(`missing ${label}`);
+  const entry = lstatSync(path);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) fail(`unsafe ${label}`);
 }
 
 function supportLauncher(target) {
@@ -50,8 +56,7 @@ function validateSetupManifest(path, target) {
   if (manifest.stable !== true) fail(`${target.platformTarget} setup manifest must be stable`);
 }
 
-function validateStageTarget(stageRoot, target) {
-  const targetRoot = join(stageRoot, target.platformTarget);
+function validateTargetRoot(targetRoot, target, options) {
   const manifestPath = join(targetRoot, "manifest", "portable-manifest.json");
   const layout = payloadLayout(target, join(targetRoot, "payload", "Keiko"));
   assertFile(join(targetRoot, target.assetName), `${target.platformTarget} archive`);
@@ -59,11 +64,24 @@ function validateStageTarget(stageRoot, target) {
   for (const [label, path] of Object.entries(layout))
     assertFile(path, `${target.platformTarget} ${label}`);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const failures = validatePortableManifest(manifest, { allowUnverified: true });
+  const failures =
+    options.context === "candidate"
+      ? validatePortableCandidateManifest(manifest)
+      : validatePortableStagingManifest(manifest);
   if (failures.length > 0)
     fail(`${target.platformTarget} manifest invalid:\n  - ${failures.join("\n  - ")}`);
   validateSetupManifest(layout.setupManifest, target);
   return stageEvidence(target, manifest);
+}
+
+export function validatePortableTargetRoot(targetRoot, targetName, options = {}) {
+  if (!existsSync(targetRoot)) fail("target root is not a directory");
+  const rootEntry = lstatSync(targetRoot);
+  if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink())
+    fail("target root is not a directory");
+  const target = PORTABLE_TARGETS.find((candidate) => candidate.platformTarget === targetName);
+  if (target === undefined) fail(`unknown stage target ${targetName}`);
+  return validateTargetRoot(targetRoot, target, options);
 }
 
 function stageEvidence(target, manifest) {
@@ -79,7 +97,17 @@ function stageEvidence(target, manifest) {
 }
 
 export function validateStageRoot(stageRoot) {
+  return validateStageTargets(
+    stageRoot,
+    PORTABLE_TARGETS.map((target) => target.platformTarget),
+  );
+}
+
+export function validateStageTargets(stageRoot, targetNames) {
   if (!existsSync(stageRoot) || !statSync(stageRoot).isDirectory())
     fail("stage root is not a directory");
-  return PORTABLE_TARGETS.map((target) => validateStageTarget(stageRoot, target));
+  if (targetNames.length === 0) fail("at least one stage target is required");
+  return targetNames.map((name) => {
+    return validatePortableTargetRoot(join(stageRoot, name), name, { context: "staging" });
+  });
 }

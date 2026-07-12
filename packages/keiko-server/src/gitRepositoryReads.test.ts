@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { Readable } from "node:stream";
@@ -19,6 +19,7 @@ import {
   networkGitEnv,
   type GitProcessRunner,
 } from "./gitRoutes.js";
+import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
 
 let root: string;
 let store: UiStore;
@@ -722,18 +723,15 @@ describe("git process env factories", () => {
   it("uses the hardened network env at the actual fetch and pull spawn boundary", async () => {
     const binDir = await mkdtemp(join(tmpdir(), "keiko-git-network-bin-"));
     const capturePath = join(binDir, "git-env.jsonl");
-    const fakeGit = join(binDir, "git");
-    await writeFile(
-      fakeGit,
+    writeNodeExecutableFixture(
+      binDir,
+      "git",
       [
-        "#!/usr/bin/env node",
         'const fs = require("node:fs");',
         `fs.appendFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), env: process.env }) + "\\n");`,
         "process.exit(0);",
       ].join("\n"),
-      "utf8",
     );
-    await chmod(fakeGit, 0o755);
     vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
     vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");

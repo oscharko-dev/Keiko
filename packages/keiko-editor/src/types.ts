@@ -200,6 +200,7 @@ export interface EditorCompletionItem {
   readonly label: string;
   readonly kind: EditorCompletionItemKind;
   readonly insertText: string;
+  readonly insertAsSnippet?: boolean | undefined;
   readonly range?: EditorRange | undefined;
   readonly sortText?: string | undefined;
   readonly detail?: string | undefined;
@@ -784,11 +785,17 @@ export type EditorContextSourceKind =
   | "memory"
   | "quality-intelligence"
   | "workflow-context"
-  | "files-focus";
+  | "files-focus"
+  | "editor-state"
+  | "git-context";
+
+export type EditorContextSourceTier =
+  "first-party-workspace" | "indexed-knowledge" | "retained-memory" | "derived-evidence";
 
 /** Content-free provider provenance: a citation pointer and accounting, never the excerpt itself. */
 export interface EditorContextEntry {
   readonly sourceKind: EditorContextSourceKind;
+  readonly sourceTier: EditorContextSourceTier;
   readonly id: string;
   readonly score: number;
   readonly rank: number;

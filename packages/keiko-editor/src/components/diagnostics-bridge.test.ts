@@ -381,6 +381,31 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     expect(onSummary).not.toHaveBeenCalled();
   });
 
+  it("delivers the readonly EditorDiagnostic[] to onDiagnostics on every non-stale resolve (Issue #2213 fix-up)", async () => {
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    const onDiagnostics = vi.fn();
+    const { resolver } = register(editor, { onDiagnostics });
+    const found = [diagnostic(), diagnostic({ severity: "warning" })];
+    resolver.calls[0]?.settle(found);
+    await tick();
+    expect(onDiagnostics).toHaveBeenCalledWith(found);
+  });
+
+  it("does not call onDiagnostics for a stale (superseded) response (Issue #2213 fix-up)", async () => {
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    const onDiagnostics = vi.fn();
+    const { resolver } = register(editor, { onDiagnostics });
+    // The buffer version moves on while the initial request is in flight, so its response is stale —
+    // onDiagnostics must be guarded by the SAME staleness check as onSummary/onOverviewMarkers, since
+    // it is invoked in the same runDiagnostics function, after the same isStale guard.
+    model.bumpVersion();
+    resolver.calls[0]?.settle([diagnostic()]);
+    await tick();
+    expect(onDiagnostics).not.toHaveBeenCalled();
+  });
+
   it("rewrites markers to empty when diagnostics clear (a fixed error removes its squiggle)", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);

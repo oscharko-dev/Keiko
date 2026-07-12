@@ -155,6 +155,110 @@ export interface RelationshipActivityStreamState {
   disable(): void;
 }
 
+// ─── pruneState helpers ─────────────────────────────────────────────────────
+// Extracted so the `pruneState` callback below stays a short orchestration
+// step; each helper owns one concern (stale-activity expiry, over-capacity
+// eviction, eviction ordering, throughput-count cleanup). All map-mutating
+// helpers mutate the map passed in — same in-place semantics `pruneState`
+// used before extraction.
+
+interface PruneStageResult {
+  readonly deletedIds: Set<string>;
+  readonly throughputIdsToClear: Set<string>;
+  readonly activityChanged: boolean;
+}
+
+/**
+ * Mutates `activityMap` in place: entries idle for >= ACTIVITY_WINDOW_MS
+ * revert to "inactive"; when `keepInactive` is false, entries idle for
+ * >= 2x the window are removed entirely.
+ */
+function expireStaleActivity(
+  activityMap: Map<string, RelationshipActivityState>,
+  lastUpdate: ReadonlyMap<string, number>,
+  now: number,
+  keepInactive: boolean,
+): PruneStageResult {
+  const deletedIds = new Set<string>();
+  const throughputIdsToClear = new Set<string>();
+  let activityChanged = false;
+
+  for (const [id, state] of activityMap) {
+    const last = lastUpdate.get(id) ?? 0;
+    const age = now - last;
+
+    if (age >= ACTIVITY_WINDOW_MS && state !== "inactive") {
+      activityMap.set(id, "inactive");
+      throughputIdsToClear.add(id);
+      activityChanged = true;
+    }
+
+    if (!keepInactive && age >= ACTIVITY_WINDOW_MS * 2) {
+      activityMap.delete(id);
+      deletedIds.add(id);
+      throughputIdsToClear.add(id);
+      activityChanged = true;
+    }
+  }
+
+  return { deletedIds, throughputIdsToClear, activityChanged };
+}
+
+/** Eviction ordering: inactive entries first, then oldest-updated first. */
+function compareEvictionCandidates(
+  activityMap: ReadonlyMap<string, RelationshipActivityState>,
+  lastUpdate: ReadonlyMap<string, number>,
+  left: string,
+  right: string,
+): number {
+  const leftState = activityMap.get(left);
+  const rightState = activityMap.get(right);
+  if (leftState === "inactive" && rightState !== "inactive") return -1;
+  if (leftState !== "inactive" && rightState === "inactive") return 1;
+  return (lastUpdate.get(left) ?? 0) - (lastUpdate.get(right) ?? 0);
+}
+
+/**
+ * Mutates `activityMap` in place: when it exceeds MAX_TRACKED_RELATIONSHIPS,
+ * evicts the oldest / inactive-first entries down to the cap.
+ */
+function evictOverCapacity(
+  activityMap: Map<string, RelationshipActivityState>,
+  lastUpdate: ReadonlyMap<string, number>,
+): PruneStageResult {
+  const deletedIds = new Set<string>();
+  const throughputIdsToClear = new Set<string>();
+  let activityChanged = false;
+
+  if (activityMap.size > MAX_TRACKED_RELATIONSHIPS) {
+    const evictionCandidates = Array.from(activityMap.keys())
+      .sort((left, right) => compareEvictionCandidates(activityMap, lastUpdate, left, right))
+      .slice(0, activityMap.size - MAX_TRACKED_RELATIONSHIPS);
+
+    for (const id of evictionCandidates) {
+      activityMap.delete(id);
+      deletedIds.add(id);
+      throughputIdsToClear.add(id);
+      activityChanged = true;
+    }
+  }
+
+  return { deletedIds, throughputIdsToClear, activityChanged };
+}
+
+/** Removes `idsToClear` from a throughput map, returning the next map only if it changed. */
+function clearThroughputIds(
+  throughputMap: ReadonlyMap<string, number>,
+  idsToClear: ReadonlySet<string>,
+): { nextThroughputMap: Map<string, number>; changed: boolean } {
+  let changed = false;
+  const nextThroughputMap = new Map(throughputMap);
+  for (const id of idsToClear) {
+    if (nextThroughputMap.delete(id)) changed = true;
+  }
+  return { nextThroughputMap, changed };
+}
+
 // ─── Hook ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -196,46 +300,17 @@ export function useRelationshipActivityStream(
 
   const pruneState = useCallback((now: number, keepInactive: boolean): void => {
     const nextActivityMap = new Map(activityMapRef.current);
-    const deletedIds = new Set<string>();
-    const throughputIdsToClear = new Set<string>();
-    let activityChanged = false;
+    const lastUpdate = lastUpdateRef.current;
 
-    for (const [id, state] of nextActivityMap) {
-      const last = lastUpdateRef.current.get(id) ?? 0;
-      const age = now - last;
+    const expiry = expireStaleActivity(nextActivityMap, lastUpdate, now, keepInactive);
+    const eviction = evictOverCapacity(nextActivityMap, lastUpdate);
 
-      if (age >= ACTIVITY_WINDOW_MS && state !== "inactive") {
-        nextActivityMap.set(id, "inactive");
-        throughputIdsToClear.add(id);
-        activityChanged = true;
-      }
-
-      if (!keepInactive && age >= ACTIVITY_WINDOW_MS * 2) {
-        nextActivityMap.delete(id);
-        deletedIds.add(id);
-        throughputIdsToClear.add(id);
-        activityChanged = true;
-      }
-    }
-
-    if (nextActivityMap.size > MAX_TRACKED_RELATIONSHIPS) {
-      const evictionCandidates = Array.from(nextActivityMap.keys())
-        .sort((left, right) => {
-          const leftState = nextActivityMap.get(left);
-          const rightState = nextActivityMap.get(right);
-          if (leftState === "inactive" && rightState !== "inactive") return -1;
-          if (leftState !== "inactive" && rightState === "inactive") return 1;
-          return (lastUpdateRef.current.get(left) ?? 0) - (lastUpdateRef.current.get(right) ?? 0);
-        })
-        .slice(0, nextActivityMap.size - MAX_TRACKED_RELATIONSHIPS);
-
-      for (const id of evictionCandidates) {
-        nextActivityMap.delete(id);
-        deletedIds.add(id);
-        throughputIdsToClear.add(id);
-        activityChanged = true;
-      }
-    }
+    const deletedIds = new Set<string>([...expiry.deletedIds, ...eviction.deletedIds]);
+    const throughputIdsToClear = new Set<string>([
+      ...expiry.throughputIdsToClear,
+      ...eviction.throughputIdsToClear,
+    ]);
+    const activityChanged = expiry.activityChanged || eviction.activityChanged;
 
     if (activityChanged) {
       activityMapRef.current = nextActivityMap;
@@ -249,12 +324,11 @@ export function useRelationshipActivityStream(
     }
 
     if (throughputIdsToClear.size > 0) {
-      let throughputChanged = false;
-      const nextThroughputMap = new Map(throughputMapRef.current);
-      for (const id of throughputIdsToClear) {
-        if (nextThroughputMap.delete(id)) throughputChanged = true;
-      }
-      if (throughputChanged) {
+      const { nextThroughputMap, changed } = clearThroughputIds(
+        throughputMapRef.current,
+        throughputIdsToClear,
+      );
+      if (changed) {
         throughputMapRef.current = nextThroughputMap;
         setThroughputMap(nextThroughputMap);
       }

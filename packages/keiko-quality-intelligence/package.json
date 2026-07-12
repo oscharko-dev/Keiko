@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-quality-intelligence",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: pure-domain Keiko Quality Intelligence test-design logic. Not published independently.",
@@ -22,11 +22,11 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=22"
+    "node": ">=24.18.0 <25"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.14",
-    "@oscharko-dev/keiko-security": "0.2.14"
+    "@oscharko-dev/keiko-contracts": "0.2.15",
+    "@oscharko-dev/keiko-security": "0.2.15"
   },
   "private": true
 }

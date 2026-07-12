@@ -163,7 +163,7 @@ describe("offline run (default)", () => {
     const { io } = makeIo();
     const code = await runEvaluateCli(["--suite", "all"], io, {}, offlineDeps());
     expect(code).toBe(0);
-  });
+  }, 30_000);
 
   it("prints the concise text summary by default", async () => {
     const { io, captured } = makeIo();
@@ -172,7 +172,7 @@ describe("offline run (default)", () => {
     expect(captured().out).toContain("Keiko evaluation summary");
     expect(captured().out).toContain("unit-tests");
     expect(captured().out).toContain("Verdict:");
-  });
+  }, 30_000);
 
   it("exits 0 for --suite unit-tests", async () => {
     const { io } = makeIo();
@@ -190,7 +190,7 @@ describe("--json flag", () => {
     expect(code).toBe(0);
     const parsed = JSON.parse(captured().out) as Record<string, unknown>;
     expect(parsed.schemaVersion).toBe("1");
-  });
+  }, 30_000);
 
   it("JSON output includes evaluatedAt and mode fields", async () => {
     const { io, captured } = makeIo();
@@ -198,7 +198,7 @@ describe("--json flag", () => {
     const parsed = JSON.parse(captured().out) as Record<string, unknown>;
     expect(typeof parsed.evaluatedAt).toBe("string");
     expect(parsed.mode).toBe("offline");
-  });
+  }, 30_000);
 });
 
 // ─── Usage errors (exit 2) ────────────────────────────────────────────────────

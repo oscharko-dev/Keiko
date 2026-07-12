@@ -1,13 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { isSaveChord, wireEditorOnMount } from "./on-mount.js";
-import type { MountEditor, MountMonaco, WireEditorOnMountArgs } from "./on-mount.js";
+import type {
+  MonacoDocumentSemanticTokensProvider,
+  MountEditor,
+  MountMonaco,
+  WireEditorOnMountArgs,
+} from "./on-mount.js";
 import type {
   MonacoCompletionItemProvider,
   MonacoCancellationToken,
   MonacoLanguagesRegistrar,
 } from "./completion-bridge.js";
 import type { MonacoDefinitionProvider, MonacoUriForPath } from "./definition-bridge.js";
+import type { EditorInlayHintsResolver } from "./inlay-hints-bridge.js";
+import type { EditorCallHierarchyResolver } from "./call-hierarchy-bridge.js";
 import type {
   MonacoInlineCompletionsProvider,
   MonacoInlineCompletionsRegistrar,
@@ -80,8 +87,10 @@ interface FakeEditorContainer {
 interface FakeActionDescriptor {
   readonly id?: string;
   readonly label?: string;
+  readonly precondition?: string;
   readonly keybindings?: number[];
   readonly contextMenuGroupId?: string;
+  readonly contextMenuOrder?: number;
   readonly run: (editor?: unknown) => void;
 }
 
@@ -165,7 +174,7 @@ function buildFakes(): Fakes {
     monaco: {
       editor: { defineTheme: vi.fn() },
       KeyMod: { CtrlCmd: 2048, Alt: 512 },
-      KeyCode: { KeyS: 49, KeyT: 53, F2: 60 },
+      KeyCode: { KeyS: 49, KeyK: 41, KeyT: 53, F2: 60 },
     },
     cursorListener: null,
     selectionListener: null,
@@ -242,6 +251,40 @@ describe("wireEditorOnMount", () => {
     expect(generateTests).toHaveBeenCalledTimes(1);
   });
 
+  it("registers and invokes Ask Keiko with only the current selection (#2119)", () => {
+    const fakes = buildFakes();
+    const askKeikoAboutSelection = vi.fn();
+    wire(fakes, { commands: { askKeikoAboutSelection } });
+    const action = fakes
+      .actionDescriptors()
+      .find((descriptor) => descriptor.id === "keiko.editor.askKeikoAboutSelection");
+    expect(action).toMatchObject({
+      label: "Ask Keiko about this selection",
+      precondition: "editorHasSelection",
+      keybindings: [2048 | 512 | 41],
+      contextMenuGroupId: "1_modification",
+      contextMenuOrder: 3,
+    });
+    const selection = {
+      startLineNumber: 3,
+      startColumn: 2,
+      endLineNumber: 3,
+      endColumn: 8,
+      isEmpty: (): boolean => false,
+    };
+    const getValueInRange = vi.fn(() => "bounded");
+    action?.run({
+      getSelection: () => selection,
+      getModel: () => ({ getValueInRange }),
+    });
+    expect(getValueInRange).toHaveBeenCalledWith(selection);
+    expect(askKeikoAboutSelection).toHaveBeenCalledWith({
+      textMode: "selection",
+      range: { start: { line: 2, column: 1 }, end: { line: 2, column: 7 } },
+      text: "bounded",
+    });
+  });
+
   it("registers the Rename Symbol command action when the host wires it (#2105)", () => {
     const fakes = buildFakes();
     const renameSymbol = vi.fn();
@@ -262,6 +305,9 @@ describe("wireEditorOnMount", () => {
     expect(fakes.actionDescriptors().some((d) => d.id === "keiko.editor.generateTests")).toBe(
       false,
     );
+    expect(
+      fakes.actionDescriptors().some((d) => d.id === "keiko.editor.askKeikoAboutSelection"),
+    ).toBe(false);
   });
 
   it("disposes registered command actions on teardown (#1205)", () => {
@@ -718,6 +764,9 @@ interface FakeNavigationRegistrar {
   readonly registrar: MountMonaco["languages"];
   readonly definitions: () => readonly (string | readonly string[])[];
   readonly references: () => readonly (string | readonly string[])[];
+  readonly typeDefinitions: () => readonly (string | readonly string[])[];
+  readonly implementations: () => readonly (string | readonly string[])[];
+  readonly inlayHints: () => readonly (string | readonly string[])[];
   readonly definitionProviders: () => readonly MonacoDefinitionProvider[];
   readonly referenceProviders: () => readonly MonacoReferenceProvider[];
   readonly codeActions: () => readonly (string | readonly string[])[];
@@ -728,6 +777,9 @@ interface FakeNavigationRegistrar {
 function buildFakeNavigationRegistrar(withMethods = true): FakeNavigationRegistrar {
   const definitions: (string | readonly string[])[] = [];
   const references: (string | readonly string[])[] = [];
+  const typeDefinitions: (string | readonly string[])[] = [];
+  const implementations: (string | readonly string[])[] = [];
+  const inlayHints: (string | readonly string[])[] = [];
   const definitionProviders: MonacoDefinitionProvider[] = [];
   const referenceProviders: MonacoReferenceProvider[] = [];
   const codeActions: (string | readonly string[])[] = [];
@@ -757,6 +809,24 @@ function buildFakeNavigationRegistrar(withMethods = true): FakeNavigationRegistr
           referenceProviders.push(provider);
           return disposable;
         },
+        registerTypeDefinitionProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          typeDefinitions.push(selector);
+          return disposable;
+        },
+        registerImplementationProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          implementations.push(selector);
+          return disposable;
+        },
+        registerInlayHintsProvider: (
+          selector: string | readonly string[],
+        ): { dispose: () => void } => {
+          inlayHints.push(selector);
+          return disposable;
+        },
         registerCodeActionProvider: (
           selector: string | readonly string[],
         ): { dispose: () => void } => {
@@ -775,6 +845,9 @@ function buildFakeNavigationRegistrar(withMethods = true): FakeNavigationRegistr
     registrar: { ...methods } as unknown as MountMonaco["languages"],
     definitions: () => definitions,
     references: () => references,
+    typeDefinitions: () => typeDefinitions,
+    implementations: () => implementations,
+    inlayHints: () => inlayHints,
     definitionProviders: () => definitionProviders,
     referenceProviders: () => referenceProviders,
     codeActions: () => codeActions,
@@ -852,6 +925,26 @@ function signatureHelpArg(): NonNullable<WireEditorOnMountArgs["signatureHelp"]>
   return { resolve, isCurrentDocument: () => true, streamId: "sig", newRequestId: () => "sig-r" };
 }
 
+function inlayHintsArg(): NonNullable<WireEditorOnMountArgs["inlayHints"]> {
+  const resolve: EditorInlayHintsResolver = (query) =>
+    Promise.resolve({ request: query.request.request, hints: [] });
+  return { resolve, isCurrentDocument: () => true, streamId: "inlay", newRequestId: () => "i" };
+}
+
+function callHierarchyArg(): NonNullable<WireEditorOnMountArgs["callHierarchy"]> {
+  const resolve: EditorCallHierarchyResolver = (query) =>
+    Promise.resolve({ request: query.request.request, roots: [] });
+  return {
+    resolve,
+    isCurrentDocument: () => true,
+    streamId: "calls",
+    newRequestId: () => "c",
+    documentLanguage: "typescript",
+    labels: { command: "Show Call Hierarchy" },
+    onResult: vi.fn(),
+  };
+}
+
 describe("wireEditorOnMount navigation/action/signature providers (#2104)", () => {
   it("registers each provider per governed language when resolvers and registry exist", () => {
     const fakes = buildFakes();
@@ -867,6 +960,37 @@ describe("wireEditorOnMount navigation/action/signature providers (#2104)", () =
     expect(languages.references()).toEqual(["typescript", "javascript"]);
     expect(languages.codeActions()).toEqual(["typescript", "javascript"]);
     expect(languages.signatureHelp()).toEqual(["typescript", "javascript"]);
+  });
+
+  it("registers the additive navigation, inlay-hints, and call-hierarchy bridges", () => {
+    const fakes = buildFakes();
+    const languages = buildFakeNavigationRegistrar();
+    const model = {
+      getValue: (): string => "function target() {}",
+      uri: { toString: (): string => "keiko-editor://current" },
+      getLineCount: (): number => 1,
+      getLineMaxColumn: (): number => 21,
+    };
+    const editor = {
+      ...fakes.editor,
+      getPosition: (): { lineNumber: number; column: number } => ({ lineNumber: 1, column: 10 }),
+      getModel: () => model,
+    } as unknown as MountEditor;
+    wire(fakes, {
+      editor,
+      monaco: { ...fakes.monaco, languages: languages.registrar },
+      typeDefinition: definitionArg(),
+      implementation: definitionArg(),
+      inlayHints: inlayHintsArg(),
+      callHierarchy: callHierarchyArg(),
+    });
+
+    expect(languages.typeDefinitions()).toEqual(["typescript", "javascript"]);
+    expect(languages.implementations()).toEqual(["typescript", "javascript"]);
+    expect(languages.inlayHints()).toEqual(["typescript", "javascript"]);
+    expect(fakes.actionDescriptors().map((action) => action.id)).toContain(
+      "keiko.editor.showCallHierarchy",
+    );
   });
 
   it("registers no providers and no F12/Shift+F12 actions when the host supplies no resolvers", () => {
@@ -1000,6 +1124,55 @@ describe("wireEditorOnMount navigation/action/signature providers (#2104)", () =
     });
     dispose();
     expect(languages.disposeCount()).toBe(8);
+  });
+});
+
+describe("wireEditorOnMount semantic tokens (#2280)", () => {
+  it("registers and disposes the full-document provider for the selected language", () => {
+    const fakes = buildFakes();
+    const disposeProvider = vi.fn();
+    const providers: MonacoDocumentSemanticTokensProvider[] = [];
+    const languages = {
+      registerDocumentSemanticTokensProvider(
+        language: string,
+        provider: MonacoDocumentSemanticTokensProvider,
+      ): FakeDisposable {
+        expect(language).toBe("rust");
+        providers.push(provider);
+        return { dispose: disposeProvider };
+      },
+    };
+    const disposeHost = vi.fn();
+    const provider = {} as MonacoDocumentSemanticTokensProvider;
+    const dispose = wire(fakes, {
+      monaco: { ...fakes.monaco, languages: languages as unknown as MonacoLanguagesRegistrar },
+      semanticTokens: {
+        languages: ["rust"],
+        provider,
+        legendVersion: 1,
+        dispose: disposeHost,
+      },
+    });
+
+    expect(providers).toHaveLength(1);
+    dispose();
+    expect(disposeProvider).toHaveBeenCalledOnce();
+    expect(disposeHost).toHaveBeenCalledOnce();
+  });
+
+  it("keeps syntax fallback when Monaco has no semantic-token registration API", () => {
+    const fakes = buildFakes();
+    expect(() =>
+      wire(fakes, {
+        monaco: { ...fakes.monaco, languages: {} as MonacoLanguagesRegistrar },
+        semanticTokens: {
+          languages: ["rust"],
+          provider: {} as MonacoDocumentSemanticTokensProvider,
+          legendVersion: 1,
+          dispose: (): void => undefined,
+        },
+      }),
+    ).not.toThrow();
   });
 });
 

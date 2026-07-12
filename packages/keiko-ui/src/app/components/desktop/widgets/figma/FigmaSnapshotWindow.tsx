@@ -29,17 +29,19 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type DragEvent,
-  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import Image from "next/image";
 import { Icons } from "../../Icons";
 import { ApiError } from "@/lib/api";
 import { formatBytes, formatDate } from "@/lib/format";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   triggerFigmaSnapshot,
   loadFigmaSnapshotSummary,
@@ -82,6 +84,9 @@ import {
   type FigmaImageDropDetail,
 } from "../../figma-image-drag";
 import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
+
+type CurrentRef<T> = { current: T };
+type FormSubmitEvent = { preventDefault: () => void };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -147,15 +152,23 @@ function boardLinkFromSnapshot(snapshot: {
   return url.toString();
 }
 
-function snapshotDisplayName(snapshot: {
-  readonly displayName?: string | undefined;
-  readonly fetchedAt: string;
-}): string {
-  return snapshot.displayName ?? `Snapshot ${formatDate(snapshot.fetchedAt)}`;
+function snapshotDisplayName(
+  snapshot: {
+    readonly displayName?: string | undefined;
+    readonly fetchedAt: string;
+  },
+  t: I18nTranslate,
+): string {
+  return (
+    snapshot.displayName ??
+    t("figmaSnapshotWindow.snapshot.defaultName", { date: formatDate(snapshot.fetchedAt) })
+  );
 }
 
-function snapshotVersionLabel(version: string | undefined): string {
-  return version === undefined || version.length === 0 ? "Latest" : version;
+function snapshotVersionLabel(version: string | undefined, t: I18nTranslate): string {
+  return version === undefined || version.length === 0
+    ? t("figmaSnapshotWindow.version.latest")
+    : version;
 }
 
 function shortIntegrityHash(hash: string): string {
@@ -239,17 +252,16 @@ const FIGMA_PAT_ERRORS: ReadonlySet<string> = new Set([
   "FIGMA_INSUFFICIENT_SCOPE",
 ]);
 
-function formatSnapshotError(err: unknown): SnapshotErrorNotice {
+function formatSnapshotError(err: unknown, t: I18nTranslate): SnapshotErrorNotice {
   if (err instanceof ApiError) {
     // Issue #1399: surface PAT/credential problems as an actionable alert that links straight to
     // the Figma access-token settings, so the operator does not have to hunt for the setting.
     if (FIGMA_PAT_ERRORS.has(err.code)) {
       return {
-        title: "Figma access token needs attention",
+        title: t("figmaSnapshotWindow.error.tokenAttention.title"),
         detail: `${err.code}: ${err.message}`,
         status: `HTTP ${err.status.toString()}`,
-        remediation:
-          "Open the Figma access token settings to add or rotate the read-only token, then retry. No snapshot was stored.",
+        remediation: t("figmaSnapshotWindow.error.tokenAttention.remediation"),
         assertive: true,
         tokenConfig: true,
       };
@@ -257,56 +269,56 @@ function formatSnapshotError(err: unknown): SnapshotErrorNotice {
     // Fix #4: FIGMA_UPSTREAM_UNAVAILABLE is a plain Figma outage — not a proxy/CA issue.
     if (err.code === "FIGMA_UPSTREAM_UNAVAILABLE") {
       return {
-        title: "Figma is currently unavailable",
+        title: t("figmaSnapshotWindow.error.upstreamUnavailable.title"),
         detail: `${err.code}: ${err.message}`,
         status: `HTTP ${err.status.toString()}`,
-        remediation: "Retry later — no snapshot was stored.",
+        remediation: t("figmaSnapshotWindow.error.upstreamUnavailable.remediation"),
         assertive: true,
       };
     }
     if (FIGMA_PROXY_ERRORS.has(err.code)) {
       return {
-        title: "Figma snapshot blocked by outbound egress",
+        title: t("figmaSnapshotWindow.error.egressBlocked.title"),
         detail: `${err.code}: ${err.message}`,
         status: `HTTP ${err.status.toString()}`,
-        remediation:
-          "Check the configured proxy, NO_PROXY rules, and CA bundle, then retry. No snapshot was stored.",
+        remediation: t("figmaSnapshotWindow.error.egressBlocked.proxyRemediation"),
         assertive: true,
       };
     }
     if (FIGMA_CA_ERRORS.has(err.code)) {
       return {
-        title: "Figma snapshot blocked by outbound egress",
+        title: t("figmaSnapshotWindow.error.egressBlocked.title"),
         detail: `${err.code}: ${err.message}`,
         status: `HTTP ${err.status.toString()}`,
-        remediation:
-          "A TLS certificate verification failure blocked the request. Check the CA bundle configuration, then retry. No snapshot was stored.",
+        remediation: t("figmaSnapshotWindow.error.egressBlocked.caRemediation"),
         assertive: true,
       };
     }
     if (FIGMA_NETWORK_ERRORS.has(err.code)) {
       return {
-        title: "Figma snapshot blocked by outbound egress",
+        title: t("figmaSnapshotWindow.error.egressBlocked.title"),
         detail: `${err.code}: ${err.message}`,
         status: `HTTP ${err.status.toString()}`,
-        remediation:
-          "The outbound network request to Figma failed. Check DNS resolution and network connectivity, then retry. No snapshot was stored.",
+        remediation: t("figmaSnapshotWindow.error.egressBlocked.networkRemediation"),
         assertive: true,
       };
     }
     return {
-      title: "Figma snapshot failed",
+      title: t("figmaSnapshotWindow.error.generic.title"),
       detail: err.message,
     };
   }
   if (err instanceof Error) {
-    return { title: "Figma snapshot failed", detail: err.message };
+    return { title: t("figmaSnapshotWindow.error.generic.title"), detail: err.message };
   }
-  return { title: "Figma snapshot failed", detail: "An unexpected error occurred." };
+  return {
+    title: t("figmaSnapshotWindow.error.generic.title"),
+    detail: t("figmaSnapshotWindow.error.generic.unknownDetail"),
+  };
 }
 
-function formatError(err: unknown): string {
-  const notice = formatSnapshotError(err);
+function formatError(err: unknown, t: I18nTranslate): string {
+  const notice = formatSnapshotError(err, t);
   return notice.status === undefined ? notice.detail : `${notice.detail} (${notice.status})`;
 }
 
@@ -320,11 +332,60 @@ function formatElapsed(ms: number): string {
   return `${String(seconds)}s`;
 }
 
+function screenCardSizeLabel(
+  imageByteLength: number | undefined,
+  structuralReason: string | undefined,
+  t: I18nTranslate,
+): string {
+  if (imageByteLength !== undefined) return formatBytes(imageByteLength);
+  if (structuralReason !== undefined) {
+    return t("figmaSnapshotWindow.screenCard.structuralIrOnlyWithReason", {
+      reason: structuralReason,
+    });
+  }
+  return t("figmaSnapshotWindow.screenCard.structuralIrOnly");
+}
+
+function viewSourcePreviewLabel(
+  imageByteLength: number | undefined,
+  structuralReason: string | undefined,
+  t: I18nTranslate,
+): string {
+  if (imageByteLength !== undefined) return formatBytes(imageByteLength);
+  if (structuralReason !== undefined) {
+    return t("figmaSnapshotWindow.viewSource.structuralIrWithReason", {
+      reason: structuralReason,
+    });
+  }
+  return t("figmaSnapshotWindow.viewSource.structuralIrLabel");
+}
+
+function galleryAriaLabel({
+  displayedCount,
+  isScreenScopedSource,
+  totalCount,
+  t,
+}: {
+  readonly displayedCount: number;
+  readonly isScreenScopedSource: boolean;
+  readonly totalCount: number;
+  readonly t: I18nTranslate;
+}): string {
+  if (isScreenScopedSource) {
+    return displayedCount === 1
+      ? t("figmaSnapshotWindow.gallery.selectedScreenSingular", { count: displayedCount })
+      : t("figmaSnapshotWindow.gallery.selectedScreenPlural", { count: displayedCount });
+  }
+  return totalCount === 1
+    ? t("figmaSnapshotWindow.gallery.capturedScreenSingular", { count: totalCount })
+    : t("figmaSnapshotWindow.gallery.capturedScreenPlural", { count: totalCount });
+}
+
 /**
  * Differentiated validation microcopy (WCAG 3.3.1 Error Identification) for a
  * non-empty, invalid board link. Returns null when the link is empty or valid.
  */
-function figmaLinkValidationMessage(raw: string): string | null {
+function figmaLinkValidationMessage(raw: string, t: I18nTranslate): string | null {
   const trimmed = raw.trim();
   if (trimmed.length === 0 || isValidFigmaLink(trimmed)) return null;
   try {
@@ -335,12 +396,12 @@ function figmaLinkValidationMessage(raw: string): string | null {
       (host === "figma.com" || host === "www.figma.com") &&
       /^\/(design|file)\//u.test(url.pathname)
     ) {
-      return "Add a node-id by selecting a frame or section in Figma and copying its link (Copy link to selection).";
+      return t("figmaSnapshotWindow.validation.missingNodeId");
     }
   } catch {
     // not parseable as a URL — fall through to the generic message
   }
-  return "This doesn't look like a Figma board link. Use a figma.com design/file link that includes a node-id parameter.";
+  return t("figmaSnapshotWindow.validation.invalidLink");
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -412,6 +473,7 @@ function ScreenCard({
   isSourceSelected = false,
   dragPayload,
 }: ScreenCardProps): ReactNode {
+  const t = useTranslate();
   const pointerDragRef = useRef<{
     readonly pointerId: number;
     readonly startX: number;
@@ -429,8 +491,8 @@ function ScreenCard({
     [],
   );
   const previewLabel = isSourceSelected
-    ? `${name} preview is already the active scoped source`
-    : `Drag screen ${name} to the workspace, or click to add it as a Quality Intelligence source`;
+    ? t("figmaSnapshotWindow.screenCard.previewAlreadyActive", { name })
+    : t("figmaSnapshotWindow.screenCard.previewAddHint", { name });
   const handleAddClick = (event: MouseEvent<HTMLElement>): void => {
     if (suppressNextClickRef.current) {
       suppressNextClickRef.current = false;
@@ -531,7 +593,7 @@ function ScreenCard({
       <Image
         className="figma-snapshot-screen-image"
         src={imageSrc}
-        alt={`Captured preview for ${name}`}
+        alt={t("figmaSnapshotWindow.screenCard.capturedPreviewAlt", { name })}
         loading="lazy"
         width={72}
         height={54}
@@ -539,17 +601,19 @@ function ScreenCard({
     ) : (
       <div
         className="figma-snapshot-screen-image figma-snapshot-screen-placeholder"
-        aria-label={`Structural data only for ${name}`}
+        aria-label={t("figmaSnapshotWindow.screenCard.structuralDataOnlyAlt", { name })}
         role="img"
       >
         <Icons.layers className="figma-snapshot-screen-frame-icon" aria-hidden="true" />
-        <span className="figma-snapshot-screen-placeholder-label">IR</span>
+        <span className="figma-snapshot-screen-placeholder-label">
+          {t("figmaSnapshotWindow.screenCard.irBadge")}
+        </span>
       </div>
     );
   return (
     <article
       className="figma-snapshot-screen-card"
-      aria-label={`Screen ${String(index + 1)}: ${name}`}
+      aria-label={t("figmaSnapshotWindow.screenCard.ariaLabel", { index: index + 1, name })}
     >
       {onAddSource !== undefined ? (
         <button
@@ -583,9 +647,7 @@ function ScreenCard({
         {/* uiux-fix F045 C313: app-wide byte convention via lib/format (B/KB/MB) instead
             of an ad-hoc "KiB" — the only surface that used that spelling. */}
         <p className="figma-snapshot-screen-size">
-          {imageByteLength !== undefined
-            ? formatBytes(imageByteLength)
-            : `Structural IR only${structuralReason !== undefined ? ` (${structuralReason})` : ""}`}
+          {screenCardSizeLabel(imageByteLength, structuralReason, t)}
         </p>
         <p className="figma-snapshot-screen-id">{screenId}</p>
         {onAddSource !== undefined ? (
@@ -598,11 +660,13 @@ function ScreenCard({
               aria-disabled={isSourceSelected ? "true" : undefined}
               aria-label={
                 isSourceSelected
-                  ? `${name} is already the active scoped source`
-                  : `Add screen ${name} to the workspace as a Quality Intelligence source`
+                  ? t("figmaSnapshotWindow.screenCard.alreadyActiveSource", { name })
+                  : t("figmaSnapshotWindow.screenCard.addToWorkspaceAria", { name })
               }
             >
-              {isSourceSelected ? "Source active" : "Add to workspace"}
+              {isSourceSelected
+                ? t("figmaSnapshotWindow.screenCard.sourceActive")
+                : t("figmaSnapshotWindow.screenCard.addToWorkspace")}
             </button>
           </div>
         ) : null}
@@ -634,6 +698,7 @@ function FigmaViewSourceCard({
   capturedAt,
   imageDragPayload,
 }: FigmaViewSourceCardProps): ReactNode {
+  const t = useTranslate();
   const imagePointerDragRef = useRef<{
     readonly pointerId: number;
     readonly startX: number;
@@ -749,7 +814,7 @@ function FigmaViewSourceCard({
       <Image
         className="figma-view-preview-image"
         src={imageSrc}
-        alt={`Captured preview for ${name}`}
+        alt={t("figmaSnapshotWindow.screenCard.capturedPreviewAlt", { name })}
         loading="lazy"
         width={360}
         height={240}
@@ -758,16 +823,19 @@ function FigmaViewSourceCard({
     ) : (
       <div
         className="figma-view-preview-image figma-view-preview-placeholder"
-        aria-label={`Structural data only for ${name}`}
+        aria-label={t("figmaSnapshotWindow.screenCard.structuralDataOnlyAlt", { name })}
         role="img"
       >
         <Icons.layers className="figma-view-preview-icon" aria-hidden="true" />
-        <span>Structural IR</span>
+        <span>{t("figmaSnapshotWindow.viewSource.structuralIrLabel")}</span>
       </div>
     );
 
   return (
-    <article className="figma-view-source-card" aria-label={`Figma view source: ${name}`}>
+    <article
+      className="figma-view-source-card"
+      aria-label={t("figmaSnapshotWindow.viewSource.ariaLabel", { name })}
+    >
       {canDragImage ? (
         <button
           type="button"
@@ -781,8 +849,8 @@ function FigmaViewSourceCard({
           onPointerUp={handleImagePointerUp}
           onPointerCancel={handleImagePointerCancel}
           onMouseDown={handleImageMouseDown}
-          aria-label={`Create a standalone image source for ${name}`}
-          title={`Drag image for ${name} to the workspace`}
+          aria-label={t("figmaSnapshotWindow.viewSource.createImageSourceAria", { name })}
+          title={t("figmaSnapshotWindow.viewSource.dragImageTitle", { name })}
         >
           {previewContent}
         </button>
@@ -790,31 +858,27 @@ function FigmaViewSourceCard({
         <div className="figma-view-preview">{previewContent}</div>
       )}
       <div className="figma-view-source-meta">
-        <p className="figma-view-source-kicker">QI view source</p>
+        <p className="figma-view-source-kicker">{t("figmaSnapshotWindow.viewSource.kicker")}</p>
         <h2 className="figma-view-source-title" title={name}>
           {name}
         </h2>
         <p className="figma-view-source-summary">{irSummary}</p>
         <dl className="figma-view-source-facts">
           <div>
-            <dt>Screen</dt>
+            <dt>{t("figmaSnapshotWindow.viewSource.factScreen")}</dt>
             <dd>{screenId}</dd>
           </div>
           <div>
-            <dt>Snapshot</dt>
+            <dt>{t("figmaSnapshotWindow.viewSource.factSnapshot")}</dt>
             <dd>{snapshotRunId}</dd>
           </div>
           <div>
-            <dt>Captured</dt>
+            <dt>{t("figmaSnapshotWindow.viewSource.factCaptured")}</dt>
             <dd>{capturedAt}</dd>
           </div>
           <div>
-            <dt>Preview</dt>
-            <dd>
-              {imageByteLength !== undefined
-                ? formatBytes(imageByteLength)
-                : `Structural IR${structuralReason !== undefined ? ` (${structuralReason})` : ""}`}
-            </dd>
+            <dt>{t("figmaSnapshotWindow.viewSource.factPreview")}</dt>
+            <dd>{viewSourcePreviewLabel(imageByteLength, structuralReason, t)}</dd>
           </div>
         </dl>
       </div>
@@ -880,6 +944,170 @@ export interface FigmaSnapshotWindowProps {
 // reuse the "building" copy ("fetching screens from Figma…").
 type BuildState = "idle" | "loading" | "building" | "done" | "error";
 
+// ── Snapshot management (rename / delete) ───────────────────────────────────
+
+interface RenameFigmaSnapshotParams {
+  readonly runId: string;
+  readonly controller: AbortController;
+  readonly renameValue: string;
+  readonly summaryRunId: string | undefined;
+  readonly t: I18nTranslate;
+  readonly updateMetadataImpl: typeof updateFigmaSnapshotMetadata;
+  readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
+  readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
+  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setRenameValue: Dispatch<SetStateAction<string>>;
+  readonly setSnapshotManagementError: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementBusyRunId: Dispatch<SetStateAction<string | null>>;
+}
+
+// The AbortController and the snapshotManagementAbortRef assignment are handled by the caller
+// (kept in the component body) so the ref has a single, statically visible write site there —
+// see handleRenameSnapshot / handleDeleteSnapshot.
+function renameFigmaSnapshot(params: RenameFigmaSnapshotParams): void {
+  const {
+    runId,
+    controller,
+    renameValue,
+    summaryRunId,
+    t,
+    updateMetadataImpl,
+    snapshotManagementAbortRef,
+    setSummary,
+    setBoardSnapshots,
+    setRecentSnapshots,
+    setRenamingSnapshotRunId,
+    setRenameValue,
+    setSnapshotManagementError,
+    setSnapshotManagementBusyRunId,
+  } = params;
+  setSnapshotManagementBusyRunId(runId);
+  setSnapshotManagementError(null);
+  const nextDisplayName = renameValue.trim();
+  updateMetadataImpl(
+    runId,
+    nextDisplayName.length === 0 ? null : nextDisplayName,
+    controller.signal,
+  )
+    .then((result) => {
+      if (summaryRunId === runId) setSummary(result);
+      setBoardSnapshots((snapshots) =>
+        snapshots.map((snapshot) =>
+          snapshot.runId === runId ? listEntryWithSummaryManagement(snapshot, result) : snapshot,
+        ),
+      );
+      setRecentSnapshots((snapshots) =>
+        snapshots.map((snapshot) =>
+          snapshot.runId === runId ? listEntryWithSummaryManagement(snapshot, result) : snapshot,
+        ),
+      );
+      setRenamingSnapshotRunId(null);
+      setRenameValue("");
+    })
+    .catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setSnapshotManagementError(formatError(err, t));
+    })
+    .finally(() => {
+      if (snapshotManagementAbortRef.current === controller) {
+        snapshotManagementAbortRef.current = null;
+      }
+      setSnapshotManagementBusyRunId(null);
+    });
+}
+
+interface DeleteFigmaSnapshotByRunIdParams {
+  readonly runId: string;
+  readonly controller: AbortController;
+  readonly summaryRunId: string | undefined;
+  readonly currentSnapshotRunId: string | undefined;
+  readonly t: I18nTranslate;
+  readonly deleteImpl: typeof deleteFigmaSnapshot;
+  readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
+  readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
+  readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
+  readonly setBuildState: Dispatch<SetStateAction<BuildState>>;
+  readonly setCodeState: Dispatch<SetStateAction<"idle" | "generating" | "done" | "error">>;
+  readonly setCode: Dispatch<SetStateAction<FigmaCodegenResponse | null>>;
+  readonly setScreenJsonState: Dispatch<SetStateAction<"idle" | "loading" | "done" | "error">>;
+  readonly setScreenJson: Dispatch<SetStateAction<FigmaSnapshotScreenJsonResponse | null>>;
+  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setDeleteConfirmRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setDetailsSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementError: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementBusyRunId: Dispatch<SetStateAction<string | null>>;
+}
+
+function applyFigmaSnapshotDeletion(runId: string, params: DeleteFigmaSnapshotByRunIdParams): void {
+  const {
+    summaryRunId,
+    currentSnapshotRunId,
+    updateCfg,
+    setSummary,
+    setBuildState,
+    setCodeState,
+    setCode,
+    setScreenJsonState,
+    setScreenJson,
+    setBoardSnapshots,
+    setRecentSnapshots,
+    setDeleteConfirmRunId,
+    setRenamingSnapshotRunId,
+    setDetailsSnapshotRunId,
+  } = params;
+  setBoardSnapshots((snapshots) => snapshots.filter((snapshot) => snapshot.runId !== runId));
+  setRecentSnapshots((snapshots) => snapshots.filter((snapshot) => snapshot.runId !== runId));
+  setDeleteConfirmRunId(null);
+  setRenamingSnapshotRunId(null);
+  setDetailsSnapshotRunId(null);
+  if (summaryRunId === runId) {
+    setSummary(null);
+    setBuildState("idle");
+    setCodeState("idle");
+    setCode(null);
+    setScreenJsonState("idle");
+    setScreenJson(null);
+  }
+  if (summaryRunId === runId || currentSnapshotRunId === runId) {
+    updateCfg({ snapshotRunId: undefined });
+  }
+}
+
+// The AbortController and the snapshotManagementAbortRef assignment are handled by the caller
+// (kept in the component body) so the ref has a single, statically visible write site there —
+// see handleRenameSnapshot / handleDeleteSnapshot.
+function deleteFigmaSnapshotByRunId(params: DeleteFigmaSnapshotByRunIdParams): void {
+  const {
+    runId,
+    controller,
+    t,
+    deleteImpl,
+    snapshotManagementAbortRef,
+    setSnapshotManagementError,
+    setSnapshotManagementBusyRunId,
+  } = params;
+  setSnapshotManagementBusyRunId(runId);
+  setSnapshotManagementError(null);
+  deleteImpl(runId, controller.signal)
+    .then((_result: DeleteFigmaSnapshotResult) => {
+      applyFigmaSnapshotDeletion(runId, params);
+    })
+    .catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setSnapshotManagementError(formatError(err, t));
+    })
+    .finally(() => {
+      if (snapshotManagementAbortRef.current === controller) {
+        snapshotManagementAbortRef.current = null;
+      }
+      setSnapshotManagementBusyRunId(null);
+    });
+}
+
 export function FigmaSnapshotWindow({
   sourceWindowId,
   snapshotRunId,
@@ -897,6 +1125,7 @@ export function FigmaSnapshotWindow({
   codegenImpl = generateFigmaCode,
   revokeImpl = revokeFigmaToken,
 }: FigmaSnapshotWindowProps): ReactNode {
+  const t = useTranslate();
   const inputId = useId();
   const statusId = useId();
   const validationId = useId();
@@ -972,7 +1201,7 @@ export function FigmaSnapshotWindow({
   const selectedScreenIdKey = selectedScreenIds.join("\u0000");
 
   const linkValid = isValidFigmaLink(boardLink);
-  const linkError = figmaLinkValidationMessage(boardLink);
+  const linkError = figmaLinkValidationMessage(boardLink, t);
   const currentScope = useMemo(
     () =>
       summary !== null
@@ -1072,7 +1301,7 @@ export function FigmaSnapshotWindow({
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setRecentSnapshots([]);
-        setRecentSnapshotsError(formatError(err));
+        setRecentSnapshotsError(formatError(err, t));
       })
       .finally(() => {
         if (dashboardAbortRef.current === controller) setRecentSnapshotsLoading(false);
@@ -1099,12 +1328,12 @@ export function FigmaSnapshotWindow({
       .catch((err: unknown) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         setBoardSnapshots([]);
-        setBoardSnapshotsError(formatError(err));
+        setBoardSnapshotsError(formatError(err, t));
       })
       .finally(() => {
         if (dashboardAbortRef.current === controller) setBoardSnapshotsLoading(false);
       });
-  }, [currentScopeFileKey, currentScopeNodeId, listImpl]);
+  }, [currentScopeFileKey, currentScopeNodeId, listImpl, t]);
 
   useEffect(() => {
     refreshDashboard();
@@ -1140,19 +1369,19 @@ export function FigmaSnapshotWindow({
           if (err instanceof ApiError && err.code === "FIGMA_SNAPSHOT_NOT_FOUND") {
             if (snapshotRunId === runId) updateCfg({ snapshotRunId: undefined });
             setErrorNotice({
-              ...formatSnapshotError(err),
+              ...formatSnapshotError(err, t),
               detail:
                 snapshotRunId === runId
-                  ? `${err.message} The stored run ID has been cleared.`
+                  ? `${err.message} ${t("figmaSnapshotWindow.error.runIdClearedSuffix")}`
                   : err.message,
             });
           } else {
-            setErrorNotice(formatSnapshotError(err));
+            setErrorNotice(formatSnapshotError(err, t));
           }
           setBuildState("error");
         });
     },
-    [busy, loadImpl, snapshotRunId, updateCfg],
+    [busy, loadImpl, snapshotRunId, t, updateCfg],
   );
 
   useEffect(() => {
@@ -1207,34 +1436,32 @@ export function FigmaSnapshotWindow({
         // uiux-fix F038 C210: the server's 428 message names the policy but not the control —
         // extend it with an instruction that points at the checkbox, and highlight + focus it.
         if (err instanceof ApiError && err.code === "FIGMA_CONSENT_REQUIRED") {
-          const notice = formatSnapshotError(err);
+          const notice = formatSnapshotError(err, t);
           setErrorNotice({
             ...notice,
-            detail: `${notice.detail} Tick the acknowledgement checkbox below, then snapshot again.`,
+            detail: `${notice.detail} ${t("figmaSnapshotWindow.error.consentRequiredSuffix")}`,
           });
           flagConsentRequired();
         } else if (err instanceof ApiError && err.code === "FIGMA_BUILD_TIMEOUT") {
           setDetachedBuild({ link, isResnapshot });
           setErrorNotice({
-            title: "Figma snapshot is still running",
-            detail:
-              "This window stopped waiting for the snapshot result. The server may still finish the build in the background.",
+            title: t("figmaSnapshotWindow.error.buildTimeoutTitle"),
+            detail: t("figmaSnapshotWindow.error.buildTimeoutDetail"),
             status: `HTTP ${err.status.toString()}`,
-            remediation:
-              "Reconnect to the same board to keep waiting, or close this window and return later.",
+            remediation: t("figmaSnapshotWindow.error.buildTimeoutRemediation"),
           });
         } else {
-          setErrorNotice(formatSnapshotError(err));
+          setErrorNotice(formatSnapshotError(err, t));
         }
         setBuildState("error");
         activeBuildRef.current = null;
       }
     },
-    [triggerImpl, updateCfg, consentChecked, flagConsentRequired],
+    [triggerImpl, updateCfg, consentChecked, flagConsentRequired, t],
   );
 
   const handleSubmit = useCallback(
-    (e: FormEvent<HTMLFormElement>): void => {
+    (e: FormSubmitEvent): void => {
       e.preventDefault();
       if (!linkValid || busy) return;
       if (!consentChecked) {
@@ -1242,8 +1469,8 @@ export function FigmaSnapshotWindow({
         // on the first build for a board — fail inline instead of letting the first-run
         // happy path end in a guaranteed server-error roundtrip.
         setErrorNotice({
-          title: "Figma snapshot failed",
-          detail: "Tick the read-only acknowledgement checkbox below, then snapshot again.",
+          title: t("figmaSnapshotWindow.error.generic.title"),
+          detail: t("figmaSnapshotWindow.error.consentCheckboxRequired"),
         });
         setBuildState("error");
         // uiux-fix F038 C210: point at the control, don't just describe it — highlight the
@@ -1253,7 +1480,7 @@ export function FigmaSnapshotWindow({
       }
       void runBuild(boardLink, false);
     },
-    [boardLink, busy, consentChecked, linkValid, runBuild, flagConsentRequired],
+    [boardLink, busy, consentChecked, linkValid, runBuild, flagConsentRequired, t],
   );
 
   const handleResnapshot = useCallback((): void => {
@@ -1297,13 +1524,13 @@ export function FigmaSnapshotWindow({
           setCodeState("idle");
           return;
         }
-        setCodeError(formatError(err));
+        setCodeError(formatError(err, t));
         setCodeState("error");
       })
       .finally(() => {
         if (codeAbortRef.current === controller) codeAbortRef.current = null;
       });
-  }, [codegenImpl, codeState, snapshotRunId, summary]);
+  }, [codegenImpl, codeState, snapshotRunId, summary, t]);
 
   const handleInspectJson = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
@@ -1326,29 +1553,29 @@ export function FigmaSnapshotWindow({
           return;
         }
         setScreenJson(null);
-        setScreenJsonError(formatError(err));
+        setScreenJsonError(formatError(err, t));
         setScreenJsonState("error");
       })
       .finally(() => {
         if (screenJsonAbortRef.current === controller) screenJsonAbortRef.current = null;
       });
-  }, [inspectableScreenId, loadScreenJsonImpl, screenJsonState, snapshotRunId, summary?.runId]);
+  }, [inspectableScreenId, loadScreenJsonImpl, screenJsonState, snapshotRunId, summary?.runId, t]);
 
   const handleCopyJson = useCallback((): void => {
     if (screenJsonText.length === 0) return;
     if (navigator.clipboard === undefined) {
-      setScreenJsonCopyStatus("Clipboard unavailable");
+      setScreenJsonCopyStatus(t("figmaSnapshotWindow.jsonInspector.clipboardUnavailable"));
       return;
     }
     navigator.clipboard
       .writeText(screenJsonText)
       .then(() => {
-        setScreenJsonCopyStatus("Copied");
+        setScreenJsonCopyStatus(t("figmaSnapshotWindow.jsonInspector.copied"));
       })
       .catch(() => {
-        setScreenJsonCopyStatus("Copy failed");
+        setScreenJsonCopyStatus(t("figmaSnapshotWindow.jsonInspector.copyFailed"));
       });
-  }, [screenJsonText]);
+  }, [screenJsonText, t]);
 
   const jsonDragPayload = useMemo<FigmaJsonDragPayload | null>(() => {
     const runId = screenJson?.runId ?? summary?.runId ?? snapshotRunId;
@@ -1538,10 +1765,10 @@ export function FigmaSnapshotWindow({
         requestAnimationFrame(() => revokeTriggerRef.current?.focus());
       })
       .catch((err: unknown) => {
-        setRevokeError(formatError(err));
+        setRevokeError(formatError(err, t));
         requestAnimationFrame(() => revokeTriggerRef.current?.focus());
       });
-  }, [revokeImpl]);
+  }, [revokeImpl, t]);
 
   const handleRevokeCancel = useCallback((): void => {
     setRevokeConfirming(false);
@@ -1567,45 +1794,24 @@ export function FigmaSnapshotWindow({
       snapshotManagementAbortRef.current?.abort();
       const controller = new AbortController();
       snapshotManagementAbortRef.current = controller;
-      setSnapshotManagementBusyRunId(runId);
-      setSnapshotManagementError(null);
-      const nextDisplayName = renameValue.trim();
-      updateMetadataImpl(
+      renameFigmaSnapshot({
         runId,
-        nextDisplayName.length === 0 ? null : nextDisplayName,
-        controller.signal,
-      )
-        .then((result) => {
-          if (summary?.runId === runId) setSummary(result);
-          setBoardSnapshots((snapshots) =>
-            snapshots.map((snapshot) =>
-              snapshot.runId === runId
-                ? listEntryWithSummaryManagement(snapshot, result)
-                : snapshot,
-            ),
-          );
-          setRecentSnapshots((snapshots) =>
-            snapshots.map((snapshot) =>
-              snapshot.runId === runId
-                ? listEntryWithSummaryManagement(snapshot, result)
-                : snapshot,
-            ),
-          );
-          setRenamingSnapshotRunId(null);
-          setRenameValue("");
-        })
-        .catch((err: unknown) => {
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          setSnapshotManagementError(formatError(err));
-        })
-        .finally(() => {
-          if (snapshotManagementAbortRef.current === controller) {
-            snapshotManagementAbortRef.current = null;
-          }
-          setSnapshotManagementBusyRunId(null);
-        });
+        controller,
+        renameValue,
+        summaryRunId: summary?.runId,
+        t,
+        updateMetadataImpl,
+        snapshotManagementAbortRef,
+        setSummary,
+        setBoardSnapshots,
+        setRecentSnapshots,
+        setRenamingSnapshotRunId,
+        setRenameValue,
+        setSnapshotManagementError,
+        setSnapshotManagementBusyRunId,
+      });
     },
-    [renameValue, snapshotManagementBusyRunId, summary?.runId, updateMetadataImpl],
+    [renameValue, snapshotManagementBusyRunId, summary?.runId, t, updateMetadataImpl],
   );
 
   const handleToggleDetails = useCallback((runId: string): void => {
@@ -1628,43 +1834,31 @@ export function FigmaSnapshotWindow({
       snapshotManagementAbortRef.current?.abort();
       const controller = new AbortController();
       snapshotManagementAbortRef.current = controller;
-      setSnapshotManagementBusyRunId(runId);
-      setSnapshotManagementError(null);
-      deleteImpl(runId, controller.signal)
-        .then((_result: DeleteFigmaSnapshotResult) => {
-          setBoardSnapshots((snapshots) =>
-            snapshots.filter((snapshot) => snapshot.runId !== runId),
-          );
-          setRecentSnapshots((snapshots) =>
-            snapshots.filter((snapshot) => snapshot.runId !== runId),
-          );
-          setDeleteConfirmRunId(null);
-          setRenamingSnapshotRunId(null);
-          setDetailsSnapshotRunId(null);
-          if (summary?.runId === runId) {
-            setSummary(null);
-            setBuildState("idle");
-            setCodeState("idle");
-            setCode(null);
-            setScreenJsonState("idle");
-            setScreenJson(null);
-          }
-          if (summary?.runId === runId || snapshotRunId === runId) {
-            updateCfg({ snapshotRunId: undefined });
-          }
-        })
-        .catch((err: unknown) => {
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          setSnapshotManagementError(formatError(err));
-        })
-        .finally(() => {
-          if (snapshotManagementAbortRef.current === controller) {
-            snapshotManagementAbortRef.current = null;
-          }
-          setSnapshotManagementBusyRunId(null);
-        });
+      deleteFigmaSnapshotByRunId({
+        runId,
+        controller,
+        summaryRunId: summary?.runId,
+        currentSnapshotRunId: snapshotRunId,
+        t,
+        deleteImpl,
+        updateCfg,
+        snapshotManagementAbortRef,
+        setSummary,
+        setBuildState,
+        setCodeState,
+        setCode,
+        setScreenJsonState,
+        setScreenJson,
+        setBoardSnapshots,
+        setRecentSnapshots,
+        setDeleteConfirmRunId,
+        setRenamingSnapshotRunId,
+        setDetailsSnapshotRunId,
+        setSnapshotManagementError,
+        setSnapshotManagementBusyRunId,
+      });
     },
-    [deleteImpl, snapshotManagementBusyRunId, snapshotRunId, summary?.runId, updateCfg],
+    [deleteImpl, snapshotManagementBusyRunId, snapshotRunId, summary?.runId, t, updateCfg],
   );
 
   // Fix #1: keep the Load button mounted when buildState==="error" && summary===null so
@@ -1684,7 +1878,11 @@ export function FigmaSnapshotWindow({
     showScope: boolean,
   ): ReactNode => {
     if (loading) {
-      return <p className="figma-snapshot-dashboard-status">Loading snapshots…</p>;
+      return (
+        <p className="figma-snapshot-dashboard-status">
+          {t("figmaSnapshotWindow.dashboard.loadingSnapshots")}
+        </p>
+      );
     }
     if (error !== null) {
       return (
@@ -1705,7 +1903,7 @@ export function FigmaSnapshotWindow({
       <div className="figma-snapshot-dashboard-list" role="list">
         {snapshots.map((snapshot) => {
           const isCurrent = summary?.runId === snapshot.runId;
-          const title = snapshotDisplayName(snapshot);
+          const title = snapshotDisplayName(snapshot, t);
           const management = snapshotManagement(snapshot);
           const itemBusy = snapshotManagementBusyRunId === snapshot.runId;
           const detailsOpen = detailsSnapshotRunId === snapshot.runId;
@@ -1728,7 +1926,11 @@ export function FigmaSnapshotWindow({
                     {formatDate(snapshot.fetchedAt)}
                   </span>
                 </div>
-                {isCurrent && <span className="figma-snapshot-dashboard-item-badge">Current</span>}
+                {isCurrent && (
+                  <span className="figma-snapshot-dashboard-item-badge">
+                    {t("figmaSnapshotWindow.dashboard.currentBadge")}
+                  </span>
+                )}
                 <div className="figma-snapshot-dashboard-item-actions">
                   <button
                     type="button"
@@ -1738,17 +1940,17 @@ export function FigmaSnapshotWindow({
                     }}
                     disabled={busy}
                     aria-disabled={busy ? "true" : undefined}
-                    aria-label={`Load snapshot ${title}`}
+                    aria-label={t("figmaSnapshotWindow.dashboard.loadSnapshotAria", { title })}
                   >
-                    Load
+                    {t("figmaSnapshotWindow.dashboard.load")}
                   </button>
                   <button
                     type="button"
                     className="figma-snapshot-dashboard-icon-btn"
                     onClick={() => handleStartRename(snapshot)}
                     disabled={itemBusy}
-                    aria-label={`Rename snapshot ${title}`}
-                    title="Rename"
+                    aria-label={t("figmaSnapshotWindow.dashboard.renameSnapshotAria", { title })}
+                    title={t("figmaSnapshotWindow.dashboard.renameTitle")}
                   >
                     <Icons.edit aria-hidden="true" />
                   </button>
@@ -1757,8 +1959,12 @@ export function FigmaSnapshotWindow({
                     className="figma-snapshot-dashboard-icon-btn"
                     onClick={() => handleToggleDetails(snapshot.runId)}
                     aria-expanded={detailsOpen}
-                    aria-label={`${detailsOpen ? "Hide" : "Show"} metadata for snapshot ${title}`}
-                    title="Metadata"
+                    aria-label={
+                      detailsOpen
+                        ? t("figmaSnapshotWindow.dashboard.hideMetadataAria", { title })
+                        : t("figmaSnapshotWindow.dashboard.showMetadataAria", { title })
+                    }
+                    title={t("figmaSnapshotWindow.dashboard.metadataTitle")}
                   >
                     <Icons.info aria-hidden="true" />
                   </button>
@@ -1767,8 +1973,8 @@ export function FigmaSnapshotWindow({
                     className="figma-snapshot-dashboard-icon-btn figma-snapshot-dashboard-icon-btn-danger"
                     onClick={() => handleRequestDelete(snapshot.runId)}
                     disabled={itemBusy}
-                    aria-label={`Delete snapshot ${title}`}
-                    title="Delete"
+                    aria-label={t("figmaSnapshotWindow.dashboard.deleteSnapshotAria", { title })}
+                    title={t("common.delete")}
                   >
                     <Icons.trash aria-hidden="true" />
                   </button>
@@ -1776,10 +1982,14 @@ export function FigmaSnapshotWindow({
               </div>
               <p className="figma-snapshot-dashboard-item-hint">{snapshot.reductionHint}</p>
               <p className="figma-snapshot-dashboard-item-meta">
-                {snapshot.screenCount.toString()} screen{snapshot.screenCount !== 1 ? "s" : ""}
+                {snapshot.screenCount !== 1
+                  ? t("figmaSnapshotWindow.count.screenPlural", { count: snapshot.screenCount })
+                  : t("figmaSnapshotWindow.count.screenSingular", { count: snapshot.screenCount })}
                 {snapshot.skippedCount > 0
-                  ? `, ${snapshot.skippedCount.toString()} skipped`
-                  : ", no skipped renders"}
+                  ? t("figmaSnapshotWindow.dashboard.skippedCount", {
+                      count: snapshot.skippedCount,
+                    })
+                  : t("figmaSnapshotWindow.dashboard.noSkipped")}
               </p>
               {showScope && (
                 <p className="figma-snapshot-dashboard-item-scope">
@@ -1801,8 +2011,8 @@ export function FigmaSnapshotWindow({
                     onChange={(event) => setRenameValue(event.target.value)}
                     maxLength={120}
                     disabled={itemBusy}
-                    aria-label={`Snapshot name for ${title}`}
-                    placeholder="Snapshot name"
+                    aria-label={t("figmaSnapshotWindow.dashboard.renameInputAria", { title })}
+                    placeholder={t("figmaSnapshotWindow.dashboard.renameInputPlaceholder")}
                   />
                   <button
                     type="submit"
@@ -1810,7 +2020,7 @@ export function FigmaSnapshotWindow({
                     disabled={itemBusy}
                     aria-busy={itemBusy}
                   >
-                    Save
+                    {t("common.save")}
                   </button>
                   <button
                     type="button"
@@ -1818,13 +2028,13 @@ export function FigmaSnapshotWindow({
                     onClick={handleCancelRename}
                     disabled={itemBusy}
                   >
-                    Cancel
+                    {t("common.cancel")}
                   </button>
                 </form>
               ) : null}
               {deleteOpen ? (
                 <div className="figma-snapshot-dashboard-delete-confirm">
-                  <span>Delete this snapshot?</span>
+                  <span>{t("figmaSnapshotWindow.dashboard.deleteConfirmQuestion")}</span>
                   <button
                     type="button"
                     className="figma-snapshot-dashboard-delete-confirm-btn"
@@ -1832,7 +2042,7 @@ export function FigmaSnapshotWindow({
                     disabled={itemBusy}
                     aria-busy={itemBusy}
                   >
-                    Delete
+                    {t("common.delete")}
                   </button>
                   <button
                     type="button"
@@ -1840,33 +2050,33 @@ export function FigmaSnapshotWindow({
                     onClick={() => setDeleteConfirmRunId(null)}
                     disabled={itemBusy}
                   >
-                    Cancel
+                    {t("common.cancel")}
                   </button>
                 </div>
               ) : null}
               {detailsOpen ? (
                 <dl className="figma-snapshot-dashboard-details">
                   <div>
-                    <dt>Run</dt>
+                    <dt>{t("figmaSnapshotWindow.fact.run")}</dt>
                     <dd>{snapshot.runId}</dd>
                   </div>
                   <div>
-                    <dt>Version</dt>
-                    <dd>{snapshotVersionLabel(snapshot.version)}</dd>
+                    <dt>{t("figmaSnapshotWindow.fact.version")}</dt>
+                    <dd>{snapshotVersionLabel(snapshot.version, t)}</dd>
                   </div>
                   <div>
-                    <dt>Integrity</dt>
+                    <dt>{t("figmaSnapshotWindow.fact.integrity")}</dt>
                     <dd title={snapshot.integrityHash}>
                       {shortIntegrityHash(snapshot.integrityHash)}
                     </dd>
                   </div>
                   <div>
-                    <dt>Structural</dt>
+                    <dt>{t("figmaSnapshotWindow.fact.structural")}</dt>
                     <dd>{(snapshot.structuralOnlyCount ?? 0).toString()}</dd>
                   </div>
                   {management.updatedAt !== undefined ? (
                     <div>
-                      <dt>Name updated</dt>
+                      <dt>{t("figmaSnapshotWindow.fact.nameUpdated")}</dt>
                       <dd>{formatDate(management.updatedAt)}</dd>
                     </div>
                   ) : null}
@@ -1888,17 +2098,21 @@ export function FigmaSnapshotWindow({
     return (
       <section
         className="figma-snapshot-window figma-view-window"
-        aria-label={`Figma view source ${sourceName}`}
+        aria-label={t("figmaSnapshotWindow.viewSourceMode.ariaLabel", { name: sourceName })}
       >
         <div className="figma-view-source-header">
           <div>
-            <p className="figma-view-source-eyebrow">Figma view</p>
+            <p className="figma-view-source-eyebrow">
+              {t("figmaSnapshotWindow.viewSourceMode.eyebrow")}
+            </p>
             <h1 className="figma-view-source-heading" title={sourceName}>
               {sourceName}
             </h1>
           </div>
           <div className="figma-view-source-actions">
-            <span className="figma-view-source-badge">QI source</span>
+            <span className="figma-view-source-badge">
+              {t("figmaSnapshotWindow.viewSourceMode.badge")}
+            </span>
             <button
               type="button"
               className="figma-view-json-btn"
@@ -1907,7 +2121,9 @@ export function FigmaSnapshotWindow({
               aria-disabled={!canInspectJson ? "true" : undefined}
               aria-busy={screenJsonState === "loading" ? "true" : undefined}
             >
-              {screenJsonState === "loading" ? "Loading JSON…" : "Inspect JSON"}
+              {screenJsonState === "loading"
+                ? t("figmaSnapshotWindow.viewSourceMode.loadingJson")
+                : t("figmaSnapshotWindow.viewSourceMode.inspectJson")}
             </button>
           </div>
         </div>
@@ -1919,23 +2135,31 @@ export function FigmaSnapshotWindow({
           aria-atomic="true"
           className="figma-snapshot-status"
         >
-          {isLoading && <p className="figma-snapshot-progress">Loading view preview…</p>}
+          {isLoading && (
+            <p className="figma-snapshot-progress">
+              {t("figmaSnapshotWindow.viewSourceMode.loadingPreview")}
+            </p>
+          )}
           {buildState === "error" && errorNotice !== null && (
             <p className="figma-snapshot-error">{errorNotice.detail}</p>
           )}
           {buildState === "done" && summary !== null && (
-            <p className="sr-only">Figma view loaded — {sourceName}.</p>
+            <p className="sr-only">
+              {t("figmaSnapshotWindow.viewSourceMode.loadedAnnouncement", { name: sourceName })}
+            </p>
           )}
         </div>
 
         {summary === null ? (
           <div className="figma-view-source-empty">
             <p className="figma-view-source-empty-title">
-              {isLoading ? "Loading the selected view…" : "Selected view preview not loaded."}
+              {isLoading
+                ? t("figmaSnapshotWindow.viewSourceMode.loadingSelectedView")
+                : t("figmaSnapshotWindow.viewSourceMode.notLoaded")}
             </p>
             {!isLoading && (
               <button type="button" className="figma-snapshot-load-btn" onClick={handleLoadStored}>
-                Load view
+                {t("figmaSnapshotWindow.viewSourceMode.loadViewButton")}
               </button>
             )}
           </div>
@@ -1975,7 +2199,7 @@ export function FigmaSnapshotWindow({
         ) : (
           <div className="lk-empty">
             <p className="lk-empty-body">
-              The selected screen is not present in this stored snapshot.
+              {t("figmaSnapshotWindow.viewSourceMode.screenNotPresent")}
             </p>
           </div>
         )}
@@ -1989,7 +2213,9 @@ export function FigmaSnapshotWindow({
         {screenJsonState === "done" && screenJson !== null ? (
           <section
             className="figma-view-json-inspector"
-            aria-label={`Scoped JSON for ${screenJson.screen.name}`}
+            aria-label={t("figmaSnapshotWindow.jsonInspector.ariaLabel", {
+              name: screenJson.screen.name,
+            })}
           >
             <div className="figma-view-json-inspector-header">
               <div
@@ -2005,20 +2231,31 @@ export function FigmaSnapshotWindow({
                 onPointerUp={handleJsonPointerUp}
                 onPointerCancel={handleJsonPointerCancel}
                 onMouseDown={handleJsonMouseDown}
-                aria-label={`Create a standalone JSON source for ${screenJson.screen.name}`}
+                aria-label={t("figmaSnapshotWindow.jsonInspector.createJsonSourceAria", {
+                  name: screenJson.screen.name,
+                })}
                 aria-disabled={jsonDragPayload === null ? "true" : undefined}
-                title={`Drag JSON for ${screenJson.screen.name} to the workspace`}
+                title={t("figmaSnapshotWindow.jsonInspector.dragJsonTitle", {
+                  name: screenJson.screen.name,
+                })}
               >
-                <p className="figma-view-json-kicker">Stored Screen-IR JSON</p>
+                <p className="figma-view-json-kicker">
+                  {t("figmaSnapshotWindow.jsonInspector.kicker")}
+                </p>
                 <h2 className="figma-view-json-title">{screenJson.screen.screenId}</h2>
                 <p className="figma-view-json-meta">
                   {screenJson.screen.kind} · {formatBytes(screenJsonBytes)} ·{" "}
-                  {screenJson.relatedLinks.length.toString()} related link
-                  {screenJson.relatedLinks.length !== 1 ? "s" : ""}
+                  {screenJson.relatedLinks.length !== 1
+                    ? t("figmaSnapshotWindow.jsonInspector.relatedLinkPlural", {
+                        count: screenJson.relatedLinks.length,
+                      })
+                    : t("figmaSnapshotWindow.jsonInspector.relatedLinkSingular", {
+                        count: screenJson.relatedLinks.length,
+                      })}
                 </p>
               </div>
               <button type="button" className="figma-view-json-copy-btn" onClick={handleCopyJson}>
-                Copy JSON
+                {t("figmaSnapshotWindow.jsonInspector.copyJson")}
               </button>
             </div>
             {screenJsonCopyStatus !== null ? (
@@ -2029,7 +2266,9 @@ export function FigmaSnapshotWindow({
             <JsonSyntaxBlock
               text={screenJsonText}
               className="figma-view-json-code"
-              ariaLabel={`Screen-IR JSON for ${screenJson.screen.screenId}`}
+              ariaLabel={t("figmaSnapshotWindow.jsonInspector.screenJsonAriaLabel", {
+                screenId: screenJson.screen.screenId,
+              })}
             />
           </section>
         ) : null}
@@ -2038,18 +2277,18 @@ export function FigmaSnapshotWindow({
   }
 
   return (
-    <section className="figma-snapshot-window" aria-label="Figma Snapshot">
+    <section className="figma-snapshot-window" aria-label={t("rail.figma")}>
       {/* ── Board link input ────────────────────────────────────────────── */}
       <form className="figma-snapshot-form" onSubmit={handleSubmit} noValidate>
         <label className="figma-snapshot-label" htmlFor={inputId}>
-          Board link
+          {t("figmaSnapshotWindow.form.boardLinkLabel")}
         </label>
         <div className="figma-snapshot-input-row">
           <input
             id={inputId}
             type="url"
             className="figma-snapshot-input"
-            placeholder="https://www.figma.com/design/…?node-id=…"
+            placeholder={t("figmaSnapshotWindow.form.boardLinkPlaceholder")}
             value={boardLink}
             onChange={(e) => {
               setBoardLink(e.target.value);
@@ -2075,7 +2314,9 @@ export function FigmaSnapshotWindow({
             aria-disabled={!linkValid || busy ? "true" : undefined}
             aria-busy={isBuilding}
           >
-            {isBuilding ? "Building…" : "Snapshot"}
+            {isBuilding
+              ? t("figmaSnapshotWindow.form.building")
+              : t("figmaSnapshotWindow.form.snapshotButton")}
           </button>
         </div>
         {linkError !== null && (
@@ -2104,17 +2345,15 @@ export function FigmaSnapshotWindow({
             disabled={isBuilding}
           />
           <span>
-            I acknowledge the configured Figma PAT is read-only and least-privilege (
-            <code>file_content:read</code>).{" "}
+            {t("figmaSnapshotWindow.form.consentPrefix")}
+            <code>file_content:read</code>
+            {t("figmaSnapshotWindow.form.consentSuffix")}{" "}
             <span className="figma-snapshot-consent-required">
-              Required before the first snapshot of a board.
+              {t("figmaSnapshotWindow.form.consentRequired")}
             </span>
           </span>
         </label>
-        <p className="figma-snapshot-hint">
-          Paste a Figma board link with a node-id param (section or frame anchor). The access token
-          is resolved server-side — it never reaches this page.
-        </p>
+        <p className="figma-snapshot-hint">{t("figmaSnapshotWindow.form.hint")}</p>
       </form>
 
       {/* ── Fix #5: assertive egress alert is a SIBLING of the status region, not nested ── */}
@@ -2146,7 +2385,7 @@ export function FigmaSnapshotWindow({
               className="figma-snapshot-error-action"
               onClick={openTokenSettings}
             >
-              Open Figma access token settings
+              {t("figmaSnapshotWindow.error.openTokenSettings")}
             </button>
           )}
         </div>
@@ -2162,21 +2401,32 @@ export function FigmaSnapshotWindow({
       >
         {isBuilding && (
           <p className="figma-snapshot-progress">
-            Building snapshot — fetching screens from Figma…{" "}
-            {buildElapsedLabel !== null ? `${buildElapsedLabel} elapsed.` : ""} Large boards can
-            take several minutes.
+            {t("figmaSnapshotWindow.status.buildingProgress")}{" "}
+            {buildElapsedLabel !== null
+              ? t("figmaSnapshotWindow.status.elapsedSuffix", { elapsed: buildElapsedLabel })
+              : ""}{" "}
+            {t("figmaSnapshotWindow.status.largeBoardsNote")}
           </p>
         )}
-        {isLoading && <p className="figma-snapshot-progress">Loading stored snapshot…</p>}
+        {isLoading && (
+          <p className="figma-snapshot-progress">
+            {t("figmaSnapshotWindow.status.loadingStoredSnapshot")}
+          </p>
+        )}
         {/* WCAG 4.1.3: completion is announced here (visually hidden — the visible
             result renders below, outside this live region). */}
         {buildState === "done" && summary !== null && (
-          <p className="sr-only">Snapshot complete — {summary.reductionHint}.</p>
+          <p className="sr-only">
+            {t("figmaSnapshotWindow.status.snapshotCompleteAnnouncement", {
+              reductionHint: summary.reductionHint,
+            })}
+          </p>
         )}
         {codeState === "done" && code !== null && (
           <p className="sr-only">
-            Code generated — {String(code.fileCount)} file{code.fileCount !== 1 ? "s" : ""} ready
-            for review.
+            {code.fileCount !== 1
+              ? t("figmaSnapshotWindow.status.codeGeneratedPlural", { count: code.fileCount })
+              : t("figmaSnapshotWindow.status.codeGeneratedSingular", { count: code.fileCount })}
           </p>
         )}
         {/* Fix #7: status note when a cancel brings us back to idle. */}
@@ -2197,10 +2447,10 @@ export function FigmaSnapshotWindow({
       {isBuilding && (
         <div className="figma-snapshot-cancel-row">
           <button type="button" className="figma-snapshot-cancel-btn" onClick={handleCancel}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <p className="figma-snapshot-cancel-note" role="status" aria-live="polite">
-            Cancelling stops this window from waiting — the server-side build continues on demand.
+            {t("figmaSnapshotWindow.build.cancelNote")}
           </p>
         </div>
       )}
@@ -2208,11 +2458,10 @@ export function FigmaSnapshotWindow({
       {detachedBuild !== null && !busy && (
         <div className="figma-snapshot-stored-notice">
           <p className="figma-snapshot-stored-text">
-            This window is no longer waiting. The server may still be building the snapshot in the
-            background. You can close this window safely.
+            {t("figmaSnapshotWindow.build.detachedNotice")}
           </p>
           <button type="button" className="figma-snapshot-load-btn" onClick={handleReconnect}>
-            Reconnect build
+            {t("figmaSnapshotWindow.build.reconnect")}
           </button>
         </div>
       )}
@@ -2220,17 +2469,13 @@ export function FigmaSnapshotWindow({
       {/* ── First-run guidance (nothing captured or stored yet) ───────────── */}
       {buildState === "idle" && summary === null && detachedBuild === null && !showLoadStored && (
         <div className="figma-snapshot-empty">
-          <p className="figma-snapshot-empty-title">Capture screens from a Figma board</p>
+          <p className="figma-snapshot-empty-title">{t("figmaSnapshotWindow.empty.title")}</p>
           <ol className="figma-snapshot-empty-steps">
-            <li>In Figma, select the frame or section you want to capture.</li>
-            <li>Copy its link (Copy link to selection) — it contains the node-id.</li>
-            <li>Paste it above, acknowledge the read-only scope, then take the snapshot.</li>
+            <li>{t("figmaSnapshotWindow.empty.step1")}</li>
+            <li>{t("figmaSnapshotWindow.empty.step2")}</li>
+            <li>{t("figmaSnapshotWindow.empty.step3")}</li>
           </ol>
-          <p className="figma-snapshot-empty-note">
-            The snapshot stores the captured screens and their structure as immutable evidence —
-            connect this window to Quality Intelligence to ground generated tests in the design.
-            Requires a Figma access token configured on the server.
-          </p>
+          <p className="figma-snapshot-empty-note">{t("figmaSnapshotWindow.empty.note")}</p>
         </div>
       )}
 
@@ -2239,7 +2484,9 @@ export function FigmaSnapshotWindow({
           stays mounted after a load failure — it is the retry affordance. */}
       {showLoadStored && (
         <div className="figma-snapshot-stored-notice">
-          <p className="figma-snapshot-stored-text">A stored snapshot is available.</p>
+          <p className="figma-snapshot-stored-text">
+            {t("figmaSnapshotWindow.storedSnapshot.available")}
+          </p>
           <button
             type="button"
             className="figma-snapshot-load-btn"
@@ -2247,26 +2494,39 @@ export function FigmaSnapshotWindow({
             aria-disabled={isLoading ? "true" : undefined}
             aria-busy={isLoading}
           >
-            {isLoading ? "Loading…" : "Load snapshot"}
+            {isLoading
+              ? t("figmaSnapshotWindow.storedSnapshot.loading")
+              : t("figmaSnapshotWindow.storedSnapshot.loadButton")}
           </button>
         </div>
       )}
 
-      <section className="figma-snapshot-dashboard" aria-label="Snapshot dashboard">
+      <section
+        className="figma-snapshot-dashboard"
+        aria-label={t("figmaSnapshotWindow.dashboard.eyebrow")}
+      >
         <div className="figma-snapshot-dashboard-header">
           <div>
-            <p className="figma-snapshot-dashboard-eyebrow">Snapshot dashboard</p>
-            <h2 className="figma-snapshot-dashboard-title">Stored snapshots</h2>
+            <p className="figma-snapshot-dashboard-eyebrow">
+              {t("figmaSnapshotWindow.dashboard.eyebrow")}
+            </p>
+            <h2 className="figma-snapshot-dashboard-title">
+              {t("figmaSnapshotWindow.dashboard.title")}
+            </h2>
           </div>
           <button
             type="button"
             className="figma-snapshot-dashboard-refresh"
             onClick={refreshDashboard}
           >
-            Refresh
+            {t("figmaSnapshotWindow.dashboard.refresh")}
           </button>
         </div>
-        <div className="figma-snapshot-dashboard-tabs" role="tablist" aria-label="Snapshot views">
+        <div
+          className="figma-snapshot-dashboard-tabs"
+          role="tablist"
+          aria-label={t("figmaSnapshotWindow.dashboard.tabsAriaLabel")}
+        >
           <button
             type="button"
             className="figma-snapshot-dashboard-tab"
@@ -2279,7 +2539,7 @@ export function FigmaSnapshotWindow({
             }}
             disabled={currentScope === null}
           >
-            This board
+            {t("figmaSnapshotWindow.dashboard.tabBoard")}
           </button>
           <button
             type="button"
@@ -2292,7 +2552,7 @@ export function FigmaSnapshotWindow({
               setDashboardTab("recent");
             }}
           >
-            Recent
+            {t("figmaSnapshotWindow.dashboard.tabRecent")}
           </button>
         </div>
         {snapshotManagementError !== null ? (
@@ -2315,16 +2575,16 @@ export function FigmaSnapshotWindow({
                   [],
                   false,
                   null,
-                  "No board selected yet",
-                  "Paste a valid Figma board link or load a stored snapshot to see this board's history.",
+                  t("figmaSnapshotWindow.dashboard.noBoardSelectedTitle"),
+                  t("figmaSnapshotWindow.dashboard.noBoardSelectedDetail"),
                   false,
                 )
               : renderDashboardList(
                   boardSnapshots,
                   boardSnapshotsLoading,
                   boardSnapshotsError,
-                  "No snapshots stored for this board",
-                  "Take the first snapshot for this board to make it available here.",
+                  t("figmaSnapshotWindow.dashboard.noBoardSnapshotsTitle"),
+                  t("figmaSnapshotWindow.dashboard.noBoardSnapshotsDetail"),
                   false,
                 )}
           </div>
@@ -2339,8 +2599,8 @@ export function FigmaSnapshotWindow({
               recentSnapshots,
               recentSnapshotsLoading,
               recentSnapshotsError,
-              "No snapshots stored yet",
-              "Stored Figma snapshots will appear here once the first board capture completes.",
+              t("figmaSnapshotWindow.dashboard.noRecentSnapshotsTitle"),
+              t("figmaSnapshotWindow.dashboard.noRecentSnapshotsDetail"),
               true,
             )}
           </div>
@@ -2357,8 +2617,8 @@ export function FigmaSnapshotWindow({
           <div className="figma-snapshot-reduction">
             <div className="figma-snapshot-result-head">
               <div>
-                <h2 className="figma-snapshot-result-title" title={snapshotDisplayName(summary)}>
-                  {snapshotDisplayName(summary)}
+                <h2 className="figma-snapshot-result-title" title={snapshotDisplayName(summary, t)}>
+                  {snapshotDisplayName(summary, t)}
                 </h2>
                 <p className="figma-snapshot-result-run">{summary.runId}</p>
               </div>
@@ -2369,36 +2629,45 @@ export function FigmaSnapshotWindow({
             <p className="figma-snapshot-reduction-hint">{summary.reductionHint}</p>
             {/* uiux-fix F045 C250: snapshot age — the information the re-snapshot
                 decision hinges on. Same date presenter as the rest of the app. */}
-            <p className="figma-snapshot-captured-at">Captured {formatDate(summary.fetchedAt)}</p>
+            <p className="figma-snapshot-captured-at">
+              {t("figmaSnapshotWindow.result.captured", { date: formatDate(summary.fetchedAt) })}
+            </p>
             <dl className="figma-snapshot-result-metadata">
               <div>
-                <dt>File</dt>
+                <dt>{t("figmaSnapshotWindow.fact.file")}</dt>
                 <dd>{summary.fileKey}</dd>
               </div>
               <div>
-                <dt>Node</dt>
+                <dt>{t("figmaSnapshotWindow.fact.node")}</dt>
                 <dd>{summary.nodeId}</dd>
               </div>
               <div>
-                <dt>Version</dt>
-                <dd>{snapshotVersionLabel(summary.version)}</dd>
+                <dt>{t("figmaSnapshotWindow.fact.version")}</dt>
+                <dd>{snapshotVersionLabel(summary.version, t)}</dd>
               </div>
               {summaryManagement.updatedAt !== undefined ? (
                 <div>
-                  <dt>Name updated</dt>
+                  <dt>{t("figmaSnapshotWindow.fact.nameUpdated")}</dt>
                   <dd>{formatDate(summaryManagement.updatedAt)}</dd>
                 </div>
               ) : null}
             </dl>
             {isScreenScopedSource && (
               <p className="figma-snapshot-scope-note">
-                QI source scope: {selectedScreenName ?? selectedScreenIds.join(", ")}
+                {t("figmaSnapshotWindow.result.scopeNote", {
+                  scope: selectedScreenName ?? selectedScreenIds.join(", "),
+                })}
               </p>
             )}
             {summary.skippedCount > 0 && (
               <p className="figma-snapshot-skipped-notice">
-                {String(summary.skippedCount)} screen{summary.skippedCount !== 1 ? "s" : ""} could
-                not be rendered and were skipped.
+                {summary.skippedCount !== 1
+                  ? t("figmaSnapshotWindow.result.skippedPlural", {
+                      count: summary.skippedCount,
+                    })
+                  : t("figmaSnapshotWindow.result.skippedSingular", {
+                      count: summary.skippedCount,
+                    })}
               </p>
             )}
           </div>
@@ -2410,9 +2679,11 @@ export function FigmaSnapshotWindow({
             onClick={handleResnapshot}
             aria-disabled={busy ? "true" : undefined}
             aria-busy={isBuilding}
-            aria-label="Re-snapshot this board"
+            aria-label={t("figmaSnapshotWindow.result.resnapshotAria")}
           >
-            {isBuilding ? "Building…" : "Re-snapshot"}
+            {isBuilding
+              ? t("figmaSnapshotWindow.form.building")
+              : t("figmaSnapshotWindow.result.resnapshotButton")}
           </button>
 
           {/* Design-to-code (#755): generate reviewable HTML/CSS + design tokens from the stored
@@ -2426,7 +2697,9 @@ export function FigmaSnapshotWindow({
                 aria-disabled={codeState === "generating" ? "true" : undefined}
                 aria-busy={codeState === "generating"}
               >
-                {codeState === "generating" ? "Generating code…" : "Generate code"}
+                {codeState === "generating"
+                  ? t("figmaSnapshotWindow.codegen.generating")
+                  : t("figmaSnapshotWindow.codegen.generateButton")}
               </button>
               {codeState === "generating" && (
                 <button
@@ -2434,7 +2707,7 @@ export function FigmaSnapshotWindow({
                   className="figma-snapshot-codegen-cancel-btn"
                   onClick={handleCancelCodegen}
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               )}
             </div>
@@ -2446,9 +2719,18 @@ export function FigmaSnapshotWindow({
             {codeState === "done" && code !== null && (
               <div className="figma-snapshot-code-result">
                 <p className="figma-snapshot-code-summary">
-                  {String(code.fileCount)} reviewable file{code.fileCount !== 1 ? "s" : ""} (
-                  {String(code.screenCount)} screen{code.screenCount !== 1 ? "s" : ""},{" "}
-                  {code.adapterName}) — proposal only, never auto-applied.
+                  {code.fileCount !== 1
+                    ? t("figmaSnapshotWindow.codegen.reviewableFilePlural", {
+                        count: code.fileCount,
+                      })
+                    : t("figmaSnapshotWindow.codegen.reviewableFileSingular", {
+                        count: code.fileCount,
+                      })}{" "}
+                  (
+                  {code.screenCount !== 1
+                    ? t("figmaSnapshotWindow.count.screenPlural", { count: code.screenCount })
+                    : t("figmaSnapshotWindow.count.screenSingular", { count: code.screenCount })}
+                  , {code.adapterName}) {t("figmaSnapshotWindow.codegen.proposalNote")}
                 </p>
                 {code.files.map((file) => (
                   <details key={file.path} className="figma-snapshot-code-file">
@@ -2464,17 +2746,18 @@ export function FigmaSnapshotWindow({
 
           {/* PAT scopes info + Fix #3: revoke action ─ operator-facing */}
           <details className="figma-snapshot-scopes">
-            <summary className="figma-snapshot-scopes-summary">Required Figma PAT scopes</summary>
+            <summary className="figma-snapshot-scopes-summary">
+              {t("figmaSnapshotWindow.scopes.summary")}
+            </summary>
             <ul className="figma-snapshot-scopes-list">
               <li>
-                <code>file_content:read</code> — read design file structure, node metadata, and
-                rendered images
+                <code>file_content:read</code>{" "}
+                {t("figmaSnapshotWindow.scopes.readScopeDescription")}
               </li>
             </ul>
             <p className="figma-snapshot-scopes-note">
-              The token is read server-side from the vault, Keiko config, or{" "}
-              <code>FIGMA_ACCESS_TOKEN</code> environment variable. This window never holds or
-              transmits the token.
+              {t("figmaSnapshotWindow.scopes.tokenSourcePrefix")} <code>FIGMA_ACCESS_TOKEN</code>{" "}
+              {t("figmaSnapshotWindow.scopes.tokenSourceSuffix")}
             </p>
             {/* Fix #3: two-step inline confirm for PAT revoke.
                 Revoke removes the stored encrypted PAT from the server vault (#758). */}
@@ -2482,7 +2765,7 @@ export function FigmaSnapshotWindow({
               {revokeConfirming ? (
                 <span className="figma-snapshot-revoke-confirm">
                   <span className="figma-snapshot-revoke-confirm-label">
-                    Really revoke the stored token?
+                    {t("figmaSnapshotWindow.revoke.confirmQuestion")}
                   </span>
                   <button
                     ref={revokeConfirmRef}
@@ -2490,14 +2773,14 @@ export function FigmaSnapshotWindow({
                     className="figma-snapshot-revoke-confirm-btn"
                     onClick={handleRevokeConfirmed}
                   >
-                    Yes, revoke
+                    {t("figmaSnapshotWindow.revoke.confirmYes")}
                   </button>
                   <button
                     type="button"
                     className="figma-snapshot-revoke-cancel-btn"
                     onClick={handleRevokeCancel}
                   >
-                    Cancel
+                    {t("common.cancel")}
                   </button>
                 </span>
               ) : (
@@ -2511,7 +2794,7 @@ export function FigmaSnapshotWindow({
                     setRevokeError(null);
                   }}
                 >
-                  Revoke stored token
+                  {t("figmaSnapshotWindow.revoke.trigger")}
                 </button>
               )}
               {/* aria-live status region for revoke outcome */}
@@ -2531,11 +2814,12 @@ export function FigmaSnapshotWindow({
             <>
               <section
                 className="figma-snapshot-gallery"
-                aria-label={
-                  isScreenScopedSource
-                    ? `${String(displayedScreens.length)} selected screen${displayedScreens.length !== 1 ? "s" : ""}`
-                    : `${String(totalScreenSummaryCount)} captured and structural screen${totalScreenSummaryCount !== 1 ? "s" : ""}`
-                }
+                aria-label={galleryAriaLabel({
+                  displayedCount: displayedScreens.length,
+                  isScreenScopedSource,
+                  totalCount: totalScreenSummaryCount,
+                  t,
+                })}
               >
                 {displayedScreens.slice(0, visibleScreenCount).map((entry, displayIndex) => {
                   const onAddSource =
@@ -2590,7 +2874,7 @@ export function FigmaSnapshotWindow({
                     )
                   }
                 >
-                  Show more screens
+                  {t("figmaSnapshotWindow.gallery.showMore")}
                 </button>
               ) : null}
             </>
@@ -2598,8 +2882,8 @@ export function FigmaSnapshotWindow({
             <div className="lk-empty">
               <p className="lk-empty-body">
                 {isScreenScopedSource
-                  ? "The selected screen is not present in this stored snapshot."
-                  : "No screens were captured from this board section."}
+                  ? t("figmaSnapshotWindow.viewSourceMode.screenNotPresent")
+                  : t("figmaSnapshotWindow.gallery.noScreensCaptured")}
               </p>
             </div>
           )}

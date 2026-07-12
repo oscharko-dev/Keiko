@@ -60,6 +60,9 @@ export interface TextToSpeechRequest {
   readonly responseFormat?: SpeechResponseFormat;
   // Optional playback speed multiplier the OpenAI contract accepts in [0.25, 4.0].
   readonly speed?: number;
+  // Optional provider-supported delivery guidance. Capability-gated by the caller because older
+  // OpenAI-compatible synthesis models reject this field.
+  readonly instructions?: string | undefined;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
@@ -174,6 +177,7 @@ function buildRequest(request: TextToSpeechRequest): BuiltRequest {
     voice: request.voice ?? "alloy",
     response_format: responseFormat,
     ...(request.speed !== undefined ? { speed: request.speed } : {}),
+    ...(request.instructions !== undefined ? { instructions: request.instructions } : {}),
   };
   const body = JSON.stringify(payload);
   const headers: Record<string, string> = {

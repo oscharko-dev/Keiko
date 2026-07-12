@@ -10,7 +10,7 @@
 // artifact is loadable. The serializers are deterministic and formula-injection safe.
 
 import type { IncomingMessage } from "node:http";
-import { type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import { sortedStrings, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   appendQualityIntelligenceExportRow,
@@ -209,7 +209,7 @@ function recordTraceabilityExportEvidence(
 }
 
 function resultWarnings(warnings: readonly string[]): { readonly warnings?: readonly string[] } {
-  return warnings.length > 0 ? { warnings: [...warnings].sort() } : {};
+  return warnings.length > 0 ? { warnings: sortedStrings(warnings) } : {};
 }
 
 // eslint-disable-next-line max-lines-per-function, complexity

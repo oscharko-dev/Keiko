@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,24 @@ const STATIC_DIR = join(REPO_ROOT, "dist", "ui", "static");
 // The full start→health→stop path needs the built assets and a free socket; in the `ci` job dist/ is
 // absent (it does not build), so that one test skips there and runs wherever the package is built.
 const DIST_READY = existsSync(ENTRY) && existsSync(STATIC_DIR);
-const LIFECYCLE_PORT = 4388;
+
+function freeLoopbackPort(): Promise<number> {
+  return new Promise<number>((resolvePort, reject) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      server.close(() => {
+        if (typeof address === "object" && address !== null) {
+          resolvePort(address.port);
+          return;
+        }
+        reject(new Error("failed to allocate a loopback test port"));
+      });
+    });
+  });
+}
 
 function run(
   args: readonly string[],
@@ -32,9 +50,11 @@ function run(
 
 describe("scripts/keiko.sh", () => {
   let stateDir: string;
+  let lifecyclePort: number;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     stateDir = mkdtempSync(join(tmpdir(), "keiko-script-"));
+    lifecyclePort = await freeLoopbackPort();
   });
 
   afterEach(() => {
@@ -143,7 +163,7 @@ describe("scripts/keiko.sh", () => {
       }
       const r = run(["start"], {
         KEIKO_STATE_DIR: stateDir,
-        KEIKO_UI_PORT: String(LIFECYCLE_PORT),
+        KEIKO_UI_PORT: String(lifecyclePort),
       });
       expect(r.status).toBe(1);
       expect(r.stderr).toContain("build assets missing");
@@ -153,7 +173,9 @@ describe("scripts/keiko.sh", () => {
   describe.skipIf(!DIST_READY)("full lifecycle (requires built dist/)", () => {
     const lifecycleEnv = (): Record<string, string> => ({
       KEIKO_STATE_DIR: stateDir,
-      KEIKO_UI_PORT: String(LIFECYCLE_PORT),
+      KEIKO_UI_PORT: String(lifecyclePort),
+      KEIKO_START_TIMEOUT_SECS: "60",
+      KEIKO_STOP_TIMEOUT_SECS: "30",
     });
 
     afterEach(() => {
@@ -162,10 +184,10 @@ describe("scripts/keiko.sh", () => {
 
     it("starts healthy, reports running, and stops cleanly", async () => {
       const start = run(["start"], lifecycleEnv());
-      expect(start.status).toBe(0);
+      expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
       expect(start.stdout).toContain("running");
 
-      const health = await fetch(`http://127.0.0.1:${String(LIFECYCLE_PORT)}/api/health`);
+      const health = await fetch(`http://127.0.0.1:${String(lifecyclePort)}/api/health`);
       expect(health.status).toBe(200);
       const body = (await health.json()) as { status?: string };
       expect(body.status).toBe("ok");

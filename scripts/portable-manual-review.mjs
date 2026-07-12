@@ -9,6 +9,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
@@ -19,6 +20,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
+import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -64,9 +66,16 @@ function fail(message) {
 }
 
 function nextPatchVersion(version) {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
-  if (match === null) fail(`root version is not stable semver: ${version}`);
-  return `${match[1]}.${match[2]}.${String(Number(match[3]) + 1)}`;
+  const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
+  if (stable !== null) {
+    return `${stable[1]}.${stable[2]}.${String(Number(stable[3]) + 1)}`;
+  }
+  // Prerelease root (for example 0.2.15-beta.0 during release-branch stabilization): the
+  // simulated next portable release is that version's stable base, and importing this module
+  // must not throw at load time.
+  const prerelease = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-[0-9A-Za-z.-]+$/u.exec(version);
+  if (prerelease === null) fail(`root version is not semver: ${version}`);
+  return `${prerelease[1]}.${prerelease[2]}.${prerelease[3]}`;
 }
 
 function parseArgs(argv) {
@@ -354,14 +363,13 @@ function copyCurrentArtifacts(outDir) {
   return copied;
 }
 
-function latestManualArtifactRoot() {
-  const runtimeRoot = join(repoRoot, ".portable-runtime");
+export function latestManualArtifactRoot(runtimeRoot = join(repoRoot, ".portable-runtime")) {
   if (!existsSync(runtimeRoot)) return undefined;
-  const candidates = spawnSync("find", [runtimeRoot, "-maxdepth", "1", "-name", "manual-*"], {
-    encoding: "utf8",
-  });
-  if (candidates.status !== 0) return undefined;
-  return candidates.stdout.split(/\r?\n/u).filter(Boolean).sort().at(-1);
+  return readdirSync(runtimeRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("manual-"))
+    .map((entry) => join(runtimeRoot, entry.name))
+    .sort((left, right) => left.localeCompare(right, "en"))
+    .at(-1);
 }
 
 function findCurrentAsset(root, target) {
@@ -497,12 +505,10 @@ function writeSidecarPayload(root, target, sidecar) {
 }
 
 function zipDirectory(sourceRoot, zipPath) {
-  rmSync(zipPath, { force: true });
-  const result = spawnSync("zip", ["-qr", "-D", zipPath, "Keiko"], {
-    cwd: sourceRoot,
-    encoding: "utf8",
+  writeZipArchiveFromDirectory(join(sourceRoot, "Keiko"), zipPath, {
+    followSymlinks: true,
+    rootName: "Keiko",
   });
-  if (result.status !== 0) fail(result.stderr || "zip command failed");
 }
 
 export function prepareScenarioFixture(root, target, scenario) {
@@ -516,14 +522,12 @@ export function prepareScenarioFixture(root, target, scenario) {
 
 function createHostileZip(workRoot, zipPath) {
   const parent = mkdtempSync(join(workRoot, "hostile-parent-"));
-  const child = join(parent, "child");
-  ensureDir(child);
   writeFileSync(join(parent, "evil.txt"), "hostile\n");
-  const result = spawnSync("zip", ["-q", zipPath, "../evil.txt"], {
-    cwd: child,
-    encoding: "utf8",
-  });
-  if (result.status !== 0) fail(result.stderr || "hostile zip command failed");
+  writeZipArchiveEntries(
+    zipPath,
+    [{ name: "../evil.txt", data: readFileSync(join(parent, "evil.txt")) }],
+    { allowUnsafeEntryNames: true },
+  );
 }
 
 function sha256File(path) {
@@ -742,7 +746,7 @@ function portableManifestArtifact(input) {
 
 function portableManifestRuntime(target) {
   return {
-    nodeVersion: "22.23.1",
+    nodeVersion: "24.18.0",
     nodePlatform: targetByName(target).nodePlatform,
     nodeArchitecture: targetByName(target).nodeArchitecture,
     nodeDistribution: "official-nodejs-dist",

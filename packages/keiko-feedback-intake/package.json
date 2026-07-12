@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-feedback-intake",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Private operator-hosted governed feedback intake service.",
@@ -87,11 +87,11 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=22"
+    "node": ">=24.18.0 <25"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.14",
-    "@oscharko-dev/keiko-security": "0.2.14",
+    "@oscharko-dev/keiko-contracts": "0.2.15",
+    "@oscharko-dev/keiko-security": "0.2.15",
     "openid-client": "6.8.4",
     "pg": "8.22.0"
   },

@@ -10,12 +10,13 @@ enforced and recorded in the BFF
 [`agentActionAudit.ts`](../packages/keiko-server/src/editor/agentActionAudit.ts)), and displayed by the
 browser panel
 ([`EditorAgentActionsPanel.tsx`](../packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorAgentActionsPanel.tsx)).
-The governing decision record is
-[ADR-0062](./adr/ADR-0062-agent-editor-action-governance-and-audit.md); it builds on the action
-contract ([ADR-0059](./adr/ADR-0059-agent-editor-public-contracts.md)), the safe apply-edits gates
-([ADR-0058](./adr/ADR-0058-safe-apply-edits-and-patch-workflow.md)), the session registry/queue
-([ADR-0060](./adr/ADR-0060-agent-editor-session-registry-and-queue.md)), and the browser bridge
-([ADR-0061](./adr/ADR-0061-browser-editor-agent-bridge.md)).
+The governing decision records are
+[ADR-0062](./adr/ADR-0062-agent-editor-action-governance-and-audit.md) and its current authority
+amendment, [ADR-0125](./adr/ADR-0125-governed-agent-docking-and-editor-changesets.md). They build on
+the action contract ([ADR-0059](./adr/ADR-0059-agent-editor-public-contracts.md)), the safe
+apply-edits gates ([ADR-0058](./adr/ADR-0058-safe-apply-edits-and-patch-workflow.md)), the session
+registry/queue ([ADR-0060](./adr/ADR-0060-agent-editor-session-registry-and-queue.md)), and the
+browser bridge ([ADR-0061](./adr/ADR-0061-browser-editor-agent-bridge.md)).
 
 Owner: Issue #1395 (Epic #1491). This is the product differentiator: not just agent power, but
 controlled, explainable, recoverable agent power.
@@ -26,39 +27,45 @@ Every action type maps to exactly one effect class
 (`EDITOR_AGENT_ACTION_EFFECT_CLASS`, a `Record` keyed by action type so the table is exhaustive at
 compile time):
 
-| Effect class       | Action types                                     | Audited | Default disposition |
-| ------------------ | ------------------------------------------------ | ------- | ------------------- |
-| `navigation`       | `openFile`, `focusTab`, `setSelection`           | no      | `allowed`           |
-| `layout`           | `moveTab`, `splitPane`                           | no      | `allowed`           |
-| `content-mutation` | `format`, `save`, `applyTextEdits`, `applyPatch` | yes     | `review-required`   |
-| `external-effect`  | _(future Git / command actions — none today)_    | yes     | `review-required`   |
+| Effect class       | Action types                                                       | Audited | Security baseline                                                          |
+| ------------------ | ------------------------------------------------------------------ | ------- | -------------------------------------------------------------------------- |
+| `navigation`       | `openFile`, `focusTab`, `setSelection`                             | no      | `allowed`                                                                  |
+| `layout`           | `moveTab`, `splitPane`                                             | no      | `allowed`                                                                  |
+| `content-mutation` | `format`, `save`, `applyTextEdits`, `applyPatch`, `applyChangeset` | yes     | `allowed` when contained and non-sensitive, then composed with mode policy |
+| `external-effect`  | _(future Git / command actions — none today)_                      | yes     | `review-required`                                                          |
 
-The mutating set (`isMutatingEditorAgentAction`) is `content-mutation` ∪ `external-effect`. The issue
-scope names Git actions and command-execution references "when available"; the action contract defines
-no such action types on this branch, so `external-effect` is declared but empty. When concrete
-Git/command actions are added later, each must be assigned an effect class explicitly, and the only
-mutating classes default to a human gate (`review-required`), never to `allowed` — the fail-closed
-posture.
+The mutating set (`isMutatingEditorAgentAction`) is `content-mutation` ∪ `external-effect`. The
+action contract currently defines no Git or command action, so `external-effect` remains empty.
+Adding one requires an explicit class, resource scope, risk, producer, enforcement path, and tests;
+classification alone never grants execution authority.
 
 ## Policy taxonomy
 
-`classifyEditorAgentAction(type, context)` is a pure, deterministic, fail-closed classifier returning
-an `EditorAgentActionDisposition` and a content-free reason:
+`classifyEditorAgentAction(type, context)` is a pure, deterministic classifier that establishes the
+mode-independent security baseline and a content-free reason:
 
 - `navigation` / `layout` → **allowed**.
 - `content-mutation` whose resolved target escapes the workspace root → **denied**
   (`workspace-boundary-escape`).
 - `content-mutation` whose resolved target matches the always-on workspace deny-list → **denied**
   (`denied-sensitive-path`).
-- `content-mutation` otherwise → **review-required** (`content-mutation-requires-review`): the action
-  is admitted to the queue and the existing browser diff-review (Accept/Reject, ADR-0058) is the human
-  review gate.
+- `content-mutation` otherwise → baseline **allowed**.
 - `external-effect` → **review-required** (`external-effect-requires-review`).
 
-The classifier governs **policy posture only**. It does not re-check the structural preconditions
-(version/hash/overlap/dirty) owned by ADR-0058/0059; those remain upstream gates. Determinism is a
-requirement: the same `(type, context)` always yields the same decision, so the policy is replay-safe
-and the audit is reproducible.
+`composeEditorAgentActionPolicyDecision` then maps the concrete action to the shared Coding Workbench
+resource/risk matrix and chooses the stricter result (`denied` > `approval-required` > `allowed`):
+
+| Mode                 | Workspace-contained                                 | External file / internet                            | Delivery                    |
+| -------------------- | --------------------------------------------------- | --------------------------------------------------- | --------------------------- |
+| **Ask for approval** | all risks allowed                                   | all risks approval-required                         | all risks approval-required |
+| **Approve for me**   | low/medium allowed; high/critical approval-required | low/medium allowed; high/critical approval-required | all risks approval-required |
+| **Full access**      | all risks allowed                                   | all risks allowed inside the validated envelope     | all risks approval-required |
+
+For editor actions, `format` and `save` are low risk, `applyTextEdits` and `applyPatch` are medium
+risk, and `applyChangeset` is high risk. Structural preconditions (version/hash/overlap/dirty), live
+bridge capability, Authority Envelope validity and budget, realpath containment, and transaction
+checks remain independent gates. The same `(type, context, authority)` yields the same policy result,
+so admission is replay-safe and audit is reproducible.
 
 ### Reuse
 
@@ -66,16 +73,21 @@ Containment reuses the existing `isContainedAgentPath` contract guard. Sensitivi
 `keiko-workspace`'s always-on `isDenied` deny-list (`.env`, `.ssh`, `.keiko`, credentials, …). Because
 `keiko-contracts` is a leaf package it cannot import `keiko-workspace`, so the BFF computes the
 `targetSensitive` boolean and passes it into the pure classifier. The three-way disposition mirrors
-the established `voice-action-governance` taxonomy.
+the established `voice-action-governance` taxonomy. Mode, resource, risk, and effect vocabulary come
+directly from `CODING_WORKBENCH_MODE_POLICIES`; the editor does not maintain a second autonomy policy.
 
 ### Enforcement
 
-The sensitive-path denial is enforced in the BFF preflight (`sensitivePathConflict`): a write action
-whose contained target matches the deny-list is refused across **all** write action types
-(`format` / `save` / `applyTextEdits` / `applyPatch`). Previously the deny-list was checked only on
-the `applyPatch` path via `validatePatch`; this closes the gap and is a strict security strengthening.
-It is surfaced as the existing `OUT_OF_SCOPE` conflict code (no new wire code); the fine-grained
-governance reason (`denied-sensitive-path` vs `workspace-boundary-escape`) lives in the audit record.
+The BFF composes the baseline and mode policy before queueing. A policy-required review is admitted
+only for an action with an implemented review path (`applyPatch` or `applyChangeset`); other action
+types fail closed as `APPROVAL_REQUIRED`. An allowed patch or changeset may proceed without visible
+review, but uses the same current-hash check, bridge confirmation, server-side revalidation, atomic
+transaction, terminal result, and Monaco reconciliation as the reviewed path. Omitted legacy
+`requiresReview` values still mean review-required.
+
+Sensitive-path denial applies across every write action, including every declared member of an
+`applyChangeset`. It is surfaced as the existing `OUT_OF_SCOPE` conflict code; the fine-grained
+governance reason (`denied-sensitive-path` vs `workspace-boundary-escape`) stays in the audit record.
 
 ## Audit record
 
@@ -85,8 +97,8 @@ identifiers, a workspace-relative path, and a bounded summary — it is never ha
 or a patch body, so the record **cannot** carry raw source text. Fields:
 
 - identity: `auditId`, `occurredAt`, `sessionId`, `actionId`;
-- classification: `actionType`, `effectClass`, `mutating`, `disposition`, optional `denyReason` /
-  `reviewReason`;
+- classification: `actionType`, bounded `origin` (`agent` or `chat`), `effectClass`, `mutating`,
+  `disposition`, optional `denyReason` / `reviewReason`;
 - outcome: `outcome` (`queued` / `succeeded` / `failed` / `conflict`), optional `conflictCode` /
   `failureCode`;
 - bounded metadata: optional workspace-relative `targetPath`, content-free counts (`editCount`,
@@ -132,7 +144,8 @@ existing design tokens (no global stylesheet change; CSP `script-src 'self'` com
   compliance archive. Durable persistence is a documented follow-up.
 - **Git / command actions are future work.** The taxonomy defines an `external-effect` class for them,
   but no audit fires until those action types exist in the action contract.
-- **Lexical containment.** Workspace containment is lexical (`isContainedAgentPath`) plus the always-on
-  deny-list; symlink realpath escape is handled by the workspace discovery layer, not re-checked here.
+- **Layered containment.** `isContainedAgentPath` is only the first lexical gate. Server preflight and
+  commit-time patch handling re-resolve targets through the workspace boundary, reject symlink and
+  hard-link escape, and revalidate the atomic transaction before disk mutation.
 - **Fixed deny-list.** The deny-list is the always-on `keiko-workspace` set; user-configurable
   per-workspace policy is out of scope for this issue.

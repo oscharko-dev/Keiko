@@ -8,6 +8,7 @@
 // / cancellation / unit count) trips.
 
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
 
 import {
   decodeUtf8,
@@ -30,51 +31,7 @@ const PARSER_VERSION = "1";
 // binary extensions fall through to the unsupported adapter rather than being mis-parsed as
 // "plain text". `languageHint` is emitted for source / config files so #195 (chunker) can
 // route them through code-aware splitters when those land.
-const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
-  "txt",
-  "log",
-  "md",
-  "markdown",
-  "rst",
-  "adoc",
-  "asciidoc",
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mjs",
-  "cjs",
-  "py",
-  "rb",
-  "go",
-  "rs",
-  "java",
-  "kt",
-  "swift",
-  "c",
-  "cc",
-  "cpp",
-  "h",
-  "hpp",
-  "cs",
-  "php",
-  "sh",
-  "bash",
-  "zsh",
-  "fish",
-  "ps1",
-  "yaml",
-  "yml",
-  "toml",
-  "ini",
-  "cfg",
-  "conf",
-  "env",
-  "properties",
-  "sql",
-  "graphql",
-  "gql",
-]);
+const TEXT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS);
 
 const TEXT_MEDIA_PREFIXES: readonly string[] = ["text/"];
 
@@ -284,7 +241,57 @@ function emitMarkdownSections(
   return { units, diagnostics };
 }
 
-// eslint-disable-next-line complexity
+function isBlankOrNonTableRow(text: string): boolean {
+  return !text.includes("|") || text.trim().length === 0;
+}
+
+interface TableRowScan {
+  readonly units: readonly ParsedUnit[];
+  readonly diagnostics: readonly ParserDiagnostic[];
+  readonly nextIndex: number;
+  readonly stopped: boolean;
+}
+
+// Consumes the row lines of a single markdown table starting at `startIndex` (the first line
+// after the header + separator). Stops at the first non-row line or once `shouldStop` trips.
+function scanTableRows(
+  lines: readonly MarkdownLine[],
+  startIndex: number,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+  baseUnitCount: number,
+): TableRowScan {
+  const units: ParsedUnit[] = [];
+  const diagnostics: ParserDiagnostic[] = [];
+  const tableName = "markdown-table";
+  let rowIndex = 0;
+  let i = startIndex;
+  while (i < lines.length) {
+    const row = lines[i];
+    if (row === undefined || isBlankOrNonTableRow(row.text)) {
+      i -= 1;
+      break;
+    }
+    const limit = shouldStop(startedAt, options, baseUnitCount + units.length);
+    if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
+      diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
+      return { units, diagnostics, nextIndex: i, stopped: true };
+    }
+    units.push({
+      kind: "csv-row",
+      documentId: input.documentId,
+      tableName,
+      rowIndex,
+      characterStart: row.start,
+      characterEnd: row.end,
+    });
+    rowIndex += 1;
+    i += 1;
+  }
+  return { units, diagnostics, nextIndex: i, stopped: false };
+}
+
 function emitMarkdownTableRows(
   text: string,
   input: ParserSelectionInput,
@@ -296,40 +303,35 @@ function emitMarkdownTableRows(
   const diagnostics: ParserDiagnostic[] = [];
   const lines = markdownLines(text);
   let inFence = false;
-  for (let i = 0; i < lines.length; i += 1) {
+  let i = 0;
+  while (i < lines.length) {
     const line = lines[i];
     if (line === undefined) break;
     if (isFenceLine(line.text)) {
       inFence = !inFence;
+      i += 1;
       continue;
     }
-    if (inFence) continue;
-    if (!isMarkdownTableHeader(line.text, lines[i + 1]?.text)) continue;
-    const tableName = "markdown-table";
-    let rowIndex = 0;
-    i += 2;
-    while (i < lines.length) {
-      const row = lines[i];
-      if (row === undefined || !row.text.includes("|") || row.text.trim().length === 0) {
-        i -= 1;
-        break;
-      }
-      const limit = shouldStop(startedAt, options, initialUnitCount + units.length);
-      if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-        diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
-        return { units, diagnostics };
-      }
-      units.push({
-        kind: "csv-row",
-        documentId: input.documentId,
-        tableName,
-        rowIndex,
-        characterStart: row.start,
-        characterEnd: row.end,
-      });
-      rowIndex += 1;
+    if (inFence) {
       i += 1;
+      continue;
     }
+    if (!isMarkdownTableHeader(line.text, lines[i + 1]?.text)) {
+      i += 1;
+      continue;
+    }
+    const scan = scanTableRows(
+      lines,
+      i + 2,
+      input,
+      options,
+      startedAt,
+      initialUnitCount + units.length,
+    );
+    units.push(...scan.units);
+    diagnostics.push(...scan.diagnostics);
+    i = scan.nextIndex;
+    if (scan.stopped) return { units, diagnostics };
   }
   return { units, diagnostics };
 }

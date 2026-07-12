@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { replaceViaDurableTempFile } from "./durable-write.js";
@@ -89,7 +90,7 @@ export function createInMemoryEvidenceStore(): EvidenceStore {
       data.set(runId, next);
       return `${runId}${MANIFEST_SUFFIX}`;
     },
-    list: (): readonly string[] => [...data.keys()].sort(),
+    list: (): readonly string[] => sortedStrings(data.keys()),
     get: (runId: string): string | undefined => {
       assertValidRunId(runId);
       return data.get(runId);
@@ -183,7 +184,7 @@ function listManifestRunIds(
       `cannot list evidence manifests: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  return runIds.sort();
+  return sortedStrings(runIds);
 }
 
 function atomicWrite(target: string, json: string, randomSuffix: () => string): void {

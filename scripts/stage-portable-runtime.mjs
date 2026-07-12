@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -29,9 +30,10 @@ import {
   PORTABLE_TARGET_NAMES,
   portableVerificationSummaryForManifest,
   sha256File,
-  validatePortableManifest,
+  validatePortableStagingManifest,
   verifySha256File,
 } from "./portable-runtime.mjs";
+import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -88,10 +90,12 @@ function parseArgs(argv) {
     nodeSha256: undefined,
     nodeVersion: undefined,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
-    releaseId: Number(process.env.GITHUB_RUN_ID ?? 0),
+    releaseId: 0,
     releaseTag: `v${rootPackage.version}`,
     sidecarRuntimeSpecs: [],
     target: undefined,
+    workflowRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 0),
+    workflowRunId: Number(process.env.GITHUB_RUN_ID ?? 0),
   };
   for (let index = 0; index < argv.length; index += 1) {
     index = applyArg(argv, index, options);
@@ -129,11 +133,15 @@ function applyArg(argv, index, options) {
     ["--release-id", "releaseId"],
     ["--release-tag", "releaseTag"],
     ["--target", "target"],
+    ["--workflow-run-attempt", "workflowRunAttempt"],
+    ["--workflow-run-id", "workflowRunId"],
   ]);
   const field = fields.get(arg);
   if (field === undefined) fail(`unsupported argument: ${arg}`);
   const value = requiredArgValue(argv, index, arg);
-  options[field] = field === "releaseId" ? Number(value) : value;
+  options[field] = ["releaseId", "workflowRunAttempt", "workflowRunId"].includes(field)
+    ? Number(value)
+    : value;
   return index + 1;
 }
 
@@ -180,11 +188,21 @@ function validateReleaseOptions(options) {
   if (!Number.isSafeInteger(options.releaseId) || options.releaseId < 0) {
     fail("--release-id must be a non-negative safe integer");
   }
+  validateWorkflowIdentityOptions(options);
   if (typeof options.releaseTag !== "string" || options.releaseTag.length === 0) {
     fail("--release-tag must be a non-empty release tag");
   }
   if (rootPackage.version.includes("-") || options.releaseTag !== `v${rootPackage.version}`) {
     fail("--release-tag must match the stable package version for portable v1");
+  }
+}
+
+function validateWorkflowIdentityOptions(options) {
+  if (!Number.isSafeInteger(options.workflowRunId) || options.workflowRunId < 0) {
+    fail("--workflow-run-id must be a non-negative safe integer");
+  }
+  if (!Number.isSafeInteger(options.workflowRunAttempt) || options.workflowRunAttempt < 0) {
+    fail("--workflow-run-attempt must be a non-negative safe integer");
   }
 }
 
@@ -407,14 +425,18 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
+// npm is `npm.cmd` on Windows, which spawnSync can only launch through a shell (a bare "npm"
+// yields spawnSync ENOENT); POSIX resolves the bare "npm" directly. The staging temp/pack paths are
+// created by mkdtempSync under the OS temp root, so no npm argument contains spaces — shell
+// arg-splitting is safe here. This is the only place staging shells out to npm.
+// SECURITY-SHELL-OK: shell is enabled only on win32 to resolve npm.cmd; all args are static
+// literals or mkdtemp-generated paths (no user/network input), so there is no injection surface.
+function runNpm(args, options = {}) {
+  return run("npm", args, { ...options, shell: process.platform === "win32" });
+}
+
 function packRoot(packDir) {
-  const result = run("npm", [
-    "pack",
-    "--silent",
-    "--ignore-scripts",
-    "--pack-destination",
-    packDir,
-  ]);
+  const result = runNpm(["pack", "--silent", "--ignore-scripts", "--pack-destination", packDir]);
   const tarballName = result.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
   if (tarballName === undefined) fail("npm pack did not report a tarball name");
   const tarball = join(packDir, tarballName);
@@ -423,12 +445,12 @@ function packRoot(packDir) {
 }
 
 function preparePackageSurface() {
-  run("npm", ["run", "build"]);
-  run("npm", ["run", "build:ui"]);
-  run("npm", ["run", "prepare:bin"]);
-  run("npm", ["run", "prune:package-build-artifacts"]);
-  run("npm", ["run", "prune:package-native-optionals"]);
-  run("npm", ["run", "check:package-surface"]);
+  runNpm(["run", "build"]);
+  runNpm(["run", "build:ui"]);
+  runNpm(["run", "prepare:bin"]);
+  runNpm(["run", "prune:package-build-artifacts"]);
+  runNpm(["run", "prune:package-native-optionals"]);
+  runNpm(["run", "check:package-surface"]);
 }
 
 function stagePackedPackage(tarball, extractRoot, stageRoot) {
@@ -868,7 +890,8 @@ function provenanceStatementFor(options, target, digests, sidecarRuntimes) {
   return (
     JSON.stringify({
       artifact: target.assetName,
-      buildWorkflowRunId: options.releaseId,
+      buildWorkflowAttempt: options.workflowRunAttempt ?? 0,
+      buildWorkflowRunId: options.workflowRunId ?? 0,
       packageVersion: rootPackage.version,
       sourceCommitSha: options.commitSha,
       sidecarRuntimeNames: sidecarRuntimes.map((runtime) => runtime.name),
@@ -884,7 +907,10 @@ function sha256Text(text) {
 
 function createZipArchive(payloadContainer, assetName, outRoot) {
   const assetPath = join(outRoot, assetName);
-  run("zip", ["-qr", assetPath, "Keiko"], { cwd: payloadContainer });
+  writeZipArchiveFromDirectory(join(payloadContainer, "Keiko"), assetPath, {
+    followSymlinks: true,
+    rootName: "Keiko",
+  });
   if (!existsSync(assetPath)) fail(`expected ZIP asset at ${assetPath}`);
   return assetPath;
 }
@@ -1118,8 +1144,8 @@ function manifestProvenance(options, digests) {
     rootPackageVersion: rootPackage.version,
     rootPackageTarballSha256: digests.tarballSha256,
     packagedAppTreeSha256: digests.appTreeSha256,
-    buildWorkflowRunId: options.releaseId,
-    buildWorkflowAttempt: 1,
+    buildWorkflowRunId: options.workflowRunId ?? 0,
+    buildWorkflowAttempt: options.workflowRunAttempt ?? 0,
     provenanceStatementPath: "evidence/provenance.intoto.jsonl",
     provenanceStatementSha256: digests.provenanceSha256,
   };
@@ -1432,14 +1458,36 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
 }
 
 function validateGeneratedManifest(manifest) {
-  const failures = validatePortableManifest(manifest, { allowUnverified: true });
+  const failures = validatePortableStagingManifest(manifest);
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
+}
+
+export function isCrossDeviceError(error) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EXDEV" || error.code === "ENOTSUP")
+  );
+}
+
+// Windows CI stages under the OS temp drive (C:) but promotes into the workspace checkout (D:),
+// so a same-filesystem rename fails with EXDEV. Fall back to a filesystem-agnostic recursive
+// copy + remove; macOS/Linux keep the atomic rename fast path. `renameImpl` is a seam for tests.
+export function moveStagedDirectory(sourceDir, destDir, renameImpl = renameSync) {
+  try {
+    renameImpl(sourceDir, destDir);
+  } catch (error) {
+    if (!isCrossDeviceError(error)) throw error;
+    cpSync(sourceDir, destDir, { recursive: true });
+    rmSync(sourceDir, { recursive: true, force: true });
+  }
 }
 
 function promoteStageRoot(options, paths) {
   if (options.dryRun) return;
   mkdirSync(resolve(options.outDir), { recursive: true });
-  renameSync(paths.stageRoot, paths.finalRoot);
+  moveStagedDirectory(paths.stageRoot, paths.finalRoot);
 }
 
 export async function runPortableStage(argv = process.argv.slice(2)) {

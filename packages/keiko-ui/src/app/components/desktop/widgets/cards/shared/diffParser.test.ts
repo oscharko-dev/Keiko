@@ -40,6 +40,19 @@ describe("parseUnifiedDiff", () => {
     expect(file.hunks).toHaveLength(1);
 
     const hunk = assertDefined(file.hunks[0], "hunk");
+    expect(file).toMatchObject({
+      layer: "worktree",
+      status: "modified",
+      binary: false,
+      truncated: false,
+    });
+    expect(hunk).toMatchObject({
+      oldStart: 10,
+      oldCount: 4,
+      newStart: 10,
+      newCount: 5,
+      truncated: false,
+    });
     expect(hunk.lines).toHaveLength(5);
 
     // context line: both sides advance
@@ -163,6 +176,20 @@ describe("parseUnifiedDiff", () => {
     expect(metaLine?.oldLine).toBeNull();
     expect(metaLine?.newLine).toBeNull();
     expect(metaLine?.text).toBe("\\ No newline at end of file");
+  });
+
+  it("preserves binary state in the shared contract without fabricating hunks", () => {
+    const result = parseUnifiedDiff(
+      "diff --git a/image.png b/image.png\nBinary files a/image.png and b/image.png differ\n",
+    );
+
+    expect(result.files[0]).toMatchObject({
+      path: "image.png",
+      binary: true,
+      hunks: [],
+      addedLines: 0,
+      removedLines: 0,
+    });
   });
 
   it("preserves hunk body text that resembles file headers", () => {
@@ -300,5 +327,89 @@ describe("parseUnifiedDiff", () => {
     const file = assertDefined(result.files[0], "file");
     expect(file.addedLines).toBe(2);
     expect(file.removedLines).toBe(1);
+  });
+
+  // Covers the "--- /dev/null" branch of handleFileHeaderMinusLine: an added
+  // file has no prior version, so status must be "added".
+  it("marks a new file as status:added when --- /dev/null is encountered", () => {
+    const raw = [
+      "diff --git a/new.ts b/new.ts",
+      "new file mode 100644",
+      "--- /dev/null",
+      "+++ b/new.ts",
+      "@@ -0,0 +1,1 @@",
+      "+hello",
+      "",
+    ].join("\n");
+    const result = parseUnifiedDiff(raw);
+    const file = assertDefined(result.files[0], "file");
+    expect(file.status).toBe("added");
+    expect(file.addedLines).toBe(1);
+  });
+
+  // Covers the "+++ /dev/null" branch of handleFileHeaderPlusLine: a deleted
+  // file has no target version, so status must be "deleted".
+  it("marks a deleted file as status:deleted when +++ /dev/null is encountered", () => {
+    const raw = [
+      "diff --git a/old.ts b/old.ts",
+      "deleted file mode 100644",
+      "--- a/old.ts",
+      "+++ /dev/null",
+      "@@ -1,1 +0,0 @@",
+      "-was here",
+      "",
+    ].join("\n");
+    const result = parseUnifiedDiff(raw);
+    const file = assertDefined(result.files[0], "file");
+    expect(file.status).toBe("deleted");
+    expect(file.removedLines).toBe(1);
+  });
+
+  // Covers handleBinaryMarkerLine's alternative binary-patch signature.
+  it("recognises the 'GIT binary patch' marker as binary content", () => {
+    const raw = [
+      "diff --git a/blob.bin b/blob.bin",
+      "index 0000000..1111111 100644",
+      "GIT binary patch",
+      "literal 0",
+      "HcmV?d00001",
+      "",
+    ].join("\n");
+    const result = parseUnifiedDiff(raw);
+    const file = assertDefined(result.files[0], "file");
+    expect(file.binary).toBe(true);
+    expect(file.hunks).toEqual([]);
+  });
+
+  // Covers the "hunk without prior file header" branch of handleHunkHeaderLine:
+  // an anonymous file entry is synthesised.
+  it("creates an anonymous file entry when a hunk header appears without a diff --git header", () => {
+    const raw = ["@@ -1,1 +1,1 @@", "-a", "+b", ""].join("\n");
+    const result = parseUnifiedDiff(raw);
+    const file = assertDefined(result.files[0], "file");
+    expect(file.path).toBe("(unknown)");
+    expect(file.addedLines).toBe(1);
+    expect(file.removedLines).toBe(1);
+  });
+
+  // Covers the empty-line context branch of handleHunkContentLine: an empty
+  // line inside a hunk (no space prefix) must still be recorded as a "ctx"
+  // line with matched old/new line numbers advanced.
+  it("records an empty line inside a hunk as a context line", () => {
+    const raw = [
+      "diff --git a/e.txt b/e.txt",
+      "--- a/e.txt",
+      "+++ b/e.txt",
+      "@@ -1,3 +1,3 @@",
+      " one",
+      "",
+      " three",
+      "",
+    ].join("\n");
+    const result = parseUnifiedDiff(raw);
+    const file = assertDefined(result.files[0], "file");
+    const hunk = assertDefined(file.hunks[0], "hunk");
+    const ctxLines = hunk.lines.filter((l) => l.kind === "ctx");
+    expect(ctxLines.map((l) => l.text)).toEqual(["one", "", "three"]);
   });
 });

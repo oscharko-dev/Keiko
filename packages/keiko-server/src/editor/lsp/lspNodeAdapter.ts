@@ -15,9 +15,9 @@
 
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, isAbsolute, join, resolve as resolvePath } from "node:path";
+import { delimiter, extname, isAbsolute, join, resolve as resolvePath } from "node:path";
 import { isCommandAllowed, buildSandboxEnv } from "@oscharko-dev/keiko-tools";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
@@ -55,6 +55,11 @@ export interface EphemeralHome {
   cleanup(): void;
 }
 
+export interface ApprovedExecutablePath {
+  readonly path: string;
+  cleanup(): void;
+}
+
 // Minimal child surface `escalateKill` needs. Both a real `ChildProcess` and the in-memory fake
 // satisfy it, so the escalation sequence is unit-testable with an injected kill tracker.
 export interface KillableChild {
@@ -67,8 +72,11 @@ function pathEntries(processEnv: NodeJS.ProcessEnv): readonly string[] {
   return pathValue.length === 0 ? [] : pathValue.split(delimiter).filter(Boolean);
 }
 
-function executableExtensions(processEnv: NodeJS.ProcessEnv): readonly string[] {
-  if (process.platform !== "win32") {
+function executableExtensions(
+  processEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): readonly string[] {
+  if (platform !== "win32") {
     return [""];
   }
   return (processEnv.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
@@ -123,6 +131,7 @@ export function resolveExecutableOutsideWorkspace(
   name: string,
   workspace: WorkspaceInfo,
   processEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
 ): string {
   if (name.length === 0 || name.includes("/") || name.includes("\\") || name.includes(" ")) {
     throw new LspProcessError("EXECUTABLE_NOT_FOUND");
@@ -130,7 +139,7 @@ export function resolveExecutableOutsideWorkspace(
   const lexicalRoot = workspace.root;
   const realRoot = realWorkspaceRoot(lexicalRoot);
   for (const directory of pathEntries(processEnv)) {
-    for (const ext of executableExtensions(processEnv)) {
+    for (const ext of executableExtensions(processEnv, platform)) {
       const candidate = probeCandidate(directory, name, ext);
       if (candidate === undefined) {
         continue;
@@ -158,6 +167,43 @@ export function createEphemeralHome(): EphemeralHome {
       }
     },
   };
+}
+
+function privateExecutableName(name: string, resolved: string): string {
+  return process.platform === "win32" ? `${name}${extname(resolved)}` : name;
+}
+
+// Builds a private PATH containing only reviewed, workspace-external executable links. This closes
+// the descendant-tool gap left by resolving only the top-level language server: a managed server
+// can launch an approved helper by name, but cannot discover a planted workspace binary or an
+// unrelated executable that happens to share the operator tool directory.
+export function createApprovedExecutablePath(
+  names: readonly string[],
+  rules: readonly CommandRule[],
+  workspace: WorkspaceInfo,
+  processEnv: NodeJS.ProcessEnv,
+): ApprovedExecutablePath {
+  const path = mkdtempSync(join(tmpdir(), "keiko-lsp-tools-"));
+  const cleanup = (): void => {
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; process containment does not depend on retaining the directory.
+    }
+  };
+  try {
+    for (const name of names) {
+      if (!isCommandAllowed(rules, name, []).allowed) {
+        throw new LspProcessError("EXECUTABLE_NOT_FOUND");
+      }
+      const resolved = resolveExecutableOutsideWorkspace(name, workspace, processEnv);
+      symlinkSync(resolved, join(path, privateExecutableName(name, resolved)), "file");
+    }
+    return { path, cleanup };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
 }
 
 // POSIX group kill: signals the whole process group (`-pid`) so the LSP server's grandchildren are
@@ -243,6 +289,10 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
   if (stdin === null || stdout === null || stderr === null) {
     throw new LspProcessError("SPAWN_FAILED");
   }
+  // A crashing or already-disposed language server may close stdin while the JSON-RPC client is
+  // settling an in-flight request. The manager observes the child exit separately; the write-side
+  // broken pipe must not escape as an unhandled process error.
+  stdin.on("error", () => undefined);
   return {
     stdin: { write: (chunk: Buffer): void => void stdin.write(chunk) },
     stdout,

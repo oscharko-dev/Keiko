@@ -217,6 +217,16 @@ export function formatRunSummary(
   return { workflowStatus: "completed", shortResult: "Completed." };
 }
 
+// The manifest does not always carry the rich per-kind details that `formatCompleted` produces
+// from a full RunReport, so the manifest-fallback path uses a static per-kind default instead.
+function formatManifestCompletedText(kind: ReturnType<typeof classifyKind>): string {
+  if (kind === "bug") return formatBugCompleted();
+  if (kind === "verify") return "Verification passed.";
+  if (kind === "explain") return "Plan generated.";
+  if (kind === "unit-tests") return "Generated tests.";
+  return "Completed.";
+}
+
 /**
  * Issue #66 — Build the summary from an EvidenceManifest's terminal `run.outcome`. Used by the
  * sync hook's 404-fallback path where /api/runs/:runId no longer holds the record but the
@@ -243,18 +253,10 @@ export function formatRunSummaryFromManifest(
     return { workflowStatus: "failed", shortResult: "Run failed." };
   }
   if (outcome === "completed") {
-    // The manifest does not always carry the rich per-kind details, so we use the kind default.
-    const text =
-      kind === "bug"
-        ? formatBugCompleted()
-        : kind === "verify"
-          ? "Verification passed."
-          : kind === "explain"
-            ? "Plan generated."
-            : kind === "unit-tests"
-              ? "Generated tests."
-              : "Completed.";
-    return { workflowStatus: "completed", shortResult: truncate(text) };
+    return {
+      workflowStatus: "completed",
+      shortResult: truncate(formatManifestCompletedText(kind)),
+    };
   }
   return { workflowStatus: "completed", shortResult: "Completed." };
 }

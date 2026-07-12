@@ -16,16 +16,29 @@ npm run typecheck  # strict type-checking for src + tests
 
 ## Pull requests
 
-All eight required CI status checks must pass before a change can merge into `dev`:
+All 15 app-bound required status checks must pass on the current pull-request head before a change
+can merge into `dev`:
 
 1. `ci`
 2. `actionlint`
 3. `Verify pinned action SHAs`
-4. `Analyze (actions)`
-5. `Analyze (javascript-typescript)`
-6. `Build, scan, SBOM, smoke`
-7. `Review dependency diff (dev/main)`
-8. `ui`
+4. `zizmor`
+5. `Analyze (actions)`
+6. `Analyze (javascript-typescript)`
+7. `Build, scan, SBOM, smoke`
+8. `Review dependency diff (dev/main)`
+9. `ui`
+10. `Scan dependency lockfiles`
+11. `Mutation quality gate`
+12. `SonarCloud Code Analysis`
+13. `Socket Security: Project Report`
+14. `Socket Security: Pull Request Alerts`
+15. `Gitar`
+
+During the Banking Quality Gate recovery, the maintainer/contributor approval bypass is disabled,
+so the applicable review requirement also remains blocking. It may be restored only after the
+independent app-bound aggregate gate and its negative live probes are complete. See
+[`docs/qa/banking-quality-gate.md`](docs/qa/banking-quality-gate.md).
 
 The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
 [ADR-0019](docs/adr/ADR-0019-modular-package-architecture.md),

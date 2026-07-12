@@ -16,6 +16,7 @@ import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EditorAgentAction,
+  EditorAgentActionResult,
   FilesContentResponse,
   LanguageServiceCapabilities,
 } from "../../../../../lib/types";
@@ -23,13 +24,19 @@ import {
   ApiError,
   fetchEditorLanguageCapabilities,
   fetchFilesContent,
+  fetchGitStatus,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
   saveFilesContent,
 } from "../../../../../lib/api";
+import { I18N_STORAGE_KEY, I18nProvider } from "../../../../../lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import {
+  _resetEditorAgentBridgeStateForTests,
+  EDITOR_AGENT_ACTIVITY_RECENCY_MS,
+} from "./editorAgentBridge";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -38,6 +45,7 @@ vi.mock("../../../../../lib/api", async () => {
     ...actual,
     fetchEditorLanguageCapabilities: vi.fn(),
     fetchFilesContent: vi.fn(),
+    fetchGitStatus: vi.fn(),
     postEditorAgentActionResult: vi.fn(),
     postEditorAgentSessionSnapshot: vi.fn(),
     saveFilesContent: vi.fn(),
@@ -85,6 +93,15 @@ vi.mock("next/dynamic", () => {
 });
 
 const BASE_VERSION = { sizeBytes: 12, modifiedAt: 1, contentHash: "a".repeat(64) };
+const BRIDGE_DECISION_CAPABILITY = "A".repeat(43);
+const INITIAL_CONTENT_HASH = "8de5c07db8deb3b75dedd9b5bc999669936cea181ae0033c27c4e2071a6e434d";
+const WRITE_ACTION_TYPES = new Set<EditorAgentAction["type"]>([
+  "format",
+  "save",
+  "applyTextEdits",
+  "applyPatch",
+  "applyChangeset",
+]);
 
 const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
@@ -139,6 +156,24 @@ class FakeEventSource {
       }
     }
   }
+
+  emitResult(result: EditorAgentActionResult): void {
+    const event = new MessageEvent<string>("editor-agent:result", {
+      data: JSON.stringify({
+        schemaVersion: "1",
+        eventId: `evt-${result.actionId}-${result.status}`,
+        type: "result",
+        result,
+      }),
+    });
+    for (const listener of this.listeners.get("editor-agent:result") ?? []) {
+      if (typeof listener === "function") {
+        listener(event);
+      } else {
+        listener.handleEvent(event);
+      }
+    }
+  }
 }
 
 const ORIGINAL_EVENT_SOURCE = globalThis.EventSource;
@@ -160,6 +195,14 @@ function restoreEventSource(): void {
   });
 }
 
+function latestAgentEventSource(instances: readonly FakeEventSource[]): FakeEventSource {
+  for (let index = instances.length - 1; index >= 0; index -= 1) {
+    const source = instances[index];
+    if (source?.url.includes("/api/editor/agent/events") === true) return source;
+  }
+  throw new Error("agent EventSource was not opened");
+}
+
 let agentActionSeq = 0;
 
 function agentAction(
@@ -174,6 +217,7 @@ function agentAction(
     idempotencyKey: `a11y-ik-${agentActionSeq}`,
     sessionId,
     type,
+    ...(WRITE_ACTION_TYPES.has(type) ? { expectedContentHash: INITIAL_CONTENT_HASH } : {}),
     ...overrides,
   };
 }
@@ -196,8 +240,31 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
 }
 
 beforeEach(() => {
+  _resetEditorAgentBridgeStateForTests();
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
-  vi.mocked(postEditorAgentSessionSnapshot).mockResolvedValue({ snapshot: null });
+  vi.mocked(fetchGitStatus).mockResolvedValue({
+    schemaVersion: "1",
+    root: "/repo",
+    state: "available",
+    available: true,
+    detached: false,
+    clean: true,
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    conflictedCount: 0,
+    changes: [],
+    truncated: false,
+    maxChanges: 500,
+  });
+  vi.mocked(postEditorAgentSessionSnapshot).mockImplementation((_snapshot, currentCapability) =>
+    Promise.resolve({
+      snapshot: null,
+      ...(currentCapability === undefined
+        ? { bridgeDecisionCapability: BRIDGE_DECISION_CAPABILITY }
+        : {}),
+    }),
+  );
   vi.mocked(postEditorAgentActionResult).mockResolvedValue({
     result: { schemaVersion: "1", actionId: "queued", sessionId: "queued", status: "queued" },
   });
@@ -206,9 +273,12 @@ beforeEach(() => {
 afterEach(() => {
   surface.props = null;
   diffSurface.props = null;
+  _resetEditorAgentBridgeStateForTests();
   restoreEventSource();
   agentActionSeq = 0;
   vi.clearAllMocks();
+  vi.useRealTimers();
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
 });
 
 /**
@@ -229,17 +299,17 @@ async function renderWithPatchReview(): Promise<{
   await screen.findByTestId("editor-surface");
   await waitFor(() => {
     expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-    expect(FakeSource.instances.length).toBeGreaterThan(0);
+    expect(() => latestAgentEventSource(FakeSource.instances)).not.toThrow();
   });
   const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
   const sessionId = String(snapshot?.sessionId);
-  const source = FakeSource.instances.at(-1) as FakeEventSource;
+  const source = latestAgentEventSource(FakeSource.instances);
 
   // Emit a queued applyPatch action with textEdits to enter the patch-review state.
   act(() => {
     source.emitAction(
       agentAction(sessionId, "applyPatch", {
-        target: { file: "src/app.ts" },
+        target: { file: "src/app.ts", paneId: "pane-1" },
         textEdits: [
           {
             range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
@@ -263,6 +333,106 @@ describe("EditorRuntimeWidget patch-review buttons — accessibility (jest-axe)"
     const { container } = await renderWithPatchReview();
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+});
+
+describe("EditorRuntimeWidget agent presence — accessibility (Issue #2120)", () => {
+  it("shows no attachment before the bridge observes an agent frame", async () => {
+    installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="a11y-presence-empty"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+      />,
+    );
+
+    const indicator = await screen.findByTestId("agent-presence-indicator");
+    expect(indicator).toHaveAttribute("data-presence-state", "detached");
+    expect(indicator).toHaveTextContent("Agent not attached - no recent activity");
+  });
+
+  it("renders the localized German presence label when Deutsch is selected", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <I18nProvider>
+        <EditorRuntimeWidget
+          windowId="a11y-presence-de"
+          root="/repo"
+          file="src/app.ts"
+          paneId="pane-1"
+        />
+      </I18nProvider>,
+    );
+
+    await screen.findByTestId("agent-presence-indicator");
+    // The locale catalog readiness flips asynchronously, so the presence label localizes on a
+    // later render than the indicator's first paint — wait for the German text to settle.
+    await waitFor(() => {
+      expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+        "Agent nicht verbunden - keine aktuelle Aktivität",
+      );
+    });
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveAttribute(
+      "data-presence-state",
+      "detached",
+    );
+  });
+
+  it("is axe-clean and names an attached staged review without relying on colour", async () => {
+    const { container } = await renderWithPatchReview();
+    const indicator = screen.getByTestId("agent-presence-indicator");
+    expect(indicator).toHaveAttribute("data-presence-state", "review");
+    expect(indicator).toHaveTextContent("Agent attached - review required");
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("transitions from active to idle and expires attachment with fake timers", async () => {
+    const FakeSource = installFakeEventSource();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget
+        windowId="a11y-presence-transition"
+        root="/repo"
+        file="src/app.ts"
+        paneId="pane-1"
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => expect(() => latestAgentEventSource(FakeSource.instances)).not.toThrow());
+    const snapshot = vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0];
+    const sessionId = String(snapshot?.sessionId);
+    const source = latestAgentEventSource(FakeSource.instances);
+    const action = agentAction(sessionId, "format", {
+      target: { file: "src/app.ts", paneId: "pane-1" },
+    });
+    vi.useFakeTimers();
+
+    act(() => source.emitAction(action));
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+      "Agent attached - 1 action in progress",
+    );
+
+    act(() =>
+      source.emitResult({
+        schemaVersion: "1",
+        actionId: action.actionId,
+        sessionId,
+        status: "succeeded",
+      }),
+    );
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+      "Agent attached - idle",
+    );
+
+    act(() => vi.advanceTimersByTime(EDITOR_AGENT_ACTIVITY_RECENCY_MS));
+    expect(screen.getByTestId("agent-presence-indicator")).toHaveTextContent(
+      "Agent not attached - no recent activity",
+    );
   });
 });
 
@@ -316,12 +486,12 @@ describe("EditorRuntimeWidget agent actions — focus management (A11Y)", () => 
     await screen.findByTestId("editor-surface");
     await waitFor(() => {
       expect(postEditorAgentSessionSnapshot).toHaveBeenCalled();
-      expect(FakeSource.instances.length).toBeGreaterThan(0);
+      expect(() => latestAgentEventSource(FakeSource.instances)).not.toThrow();
     });
     const sessionId = String(
       vi.mocked(postEditorAgentSessionSnapshot).mock.calls.at(-1)?.[0]?.sessionId,
     );
-    const source = FakeSource.instances.at(-1) as FakeEventSource;
+    const source = latestAgentEventSource(FakeSource.instances);
 
     // Capture whatever element currently owns focus before the agent action.
     const before = document.activeElement;
@@ -332,6 +502,8 @@ describe("EditorRuntimeWidget agent actions — focus management (A11Y)", () => 
       source.emitAction(
         agentAction(sessionId, "setSelection", {
           target: {
+            file: "src/app.ts",
+            paneId: "pane-1",
             selection: {
               start: { line: 1, character: 2 },
               end: { line: 1, character: 5 },

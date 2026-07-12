@@ -43,13 +43,30 @@ import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorOutlinePanel } from "./EditorOutlinePanel";
 import { EditorEmptyState } from "./EditorEmptyState";
 import { useRegisterEditorPaletteHost } from "../../EditorPaletteHostRegistryContext";
-import { useEditorQuickAccessTrigger } from "../../EditorQuickAccessTriggerContext";
+import {
+  useEditorQuickAccessTrigger,
+  type EditorQuickAccessTrigger,
+} from "../../EditorQuickAccessTriggerContext";
 import {
   sameEditorOutlineSnapshot,
   type EditorOutlineRevealRequest,
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
 import { type EditorPaletteHost } from "./editorCommands";
+import { useEditorVerificationRun } from "./useEditorVerificationRun";
+import { useEditorSettings } from "./useEditorSettings";
+import {
+  bindingFromKeyboardEvent,
+  resolveEffectiveKeyboardShortcuts,
+  type EffectiveKeyboardShortcutRegistry,
+} from "../../keyboardShortcutsRegistry";
+import {
+  completeEditorAgentReconciliation,
+  enqueueEditorAgentReconciliation,
+  pruneEditorAgentReconciliation,
+  type EditorAgentReconciliationEntry,
+  type EditorAgentReconciliationQueues,
+} from "./editorAgentReconciliationQueue";
 import { FileIcon } from "../shared/projectTree";
 import {
   allDirtyFiles,
@@ -66,6 +83,7 @@ import {
   normalizeEditorOpenFiles,
   openFilesPatchValue,
   paneIdFromPoint,
+  rovingTabTargetFile,
   sameStringList,
   tabInsertionTargetFromPoint,
   type DraggedTab,
@@ -91,6 +109,7 @@ export interface EditorWidgetWorkspacePatch {
 export interface EditorWidgetProps extends EditorRuntimeWidgetProps {
   readonly layoutJson?: string | undefined;
   readonly onWorkspaceChange?: ((patch: EditorWidgetWorkspacePatch) => void) | undefined;
+  readonly onOpenProblems?: ((projectPath: string) => void) | undefined;
 }
 
 interface PendingDirtyClose {
@@ -111,6 +130,50 @@ const TAB_POINTER_DRAG_THRESHOLD_PX = 6;
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
 const CLOSED_TAB_HISTORY_LIMIT = 20;
+
+function editorShortcutCommandId(
+  registry: EffectiveKeyboardShortcutRegistry,
+  event: globalThis.KeyboardEvent,
+): string | null {
+  const binding = bindingFromKeyboardEvent(event);
+  if (binding === null) return null;
+  const match = registry.commands.find(
+    (entry) =>
+      entry.binding === binding &&
+      entry.command.dispatchOwner === "keiko" &&
+      entry.command.contexts.includes("editor"),
+  );
+  return match?.command.id ?? null;
+}
+
+function dispatchEditorShortcut(
+  commandId: string,
+  host: EditorPaletteHost,
+  trigger: EditorQuickAccessTrigger | null,
+): boolean {
+  if (commandId === "quick-access.files") return dispatchQuickAccess(trigger, "files");
+  if (commandId === "quick-access.commands") return dispatchQuickAccess(trigger, "commands");
+  if (commandId === "view.splitRight") host.splitActive("row");
+  else if (commandId === "view.splitDown") host.splitActive("column");
+  else if (commandId === "view.closeSplit") host.closeActiveSplit();
+  else if (commandId === "tab.next") host.nextTab();
+  else if (commandId === "tab.prev") host.prevTab();
+  else if (commandId === "tab.close") host.closeActiveTab();
+  else if (commandId === "tab.reopenClosed") host.reopenClosed();
+  else if (commandId === "files.saveAll") host.saveAll();
+  else return false;
+  return true;
+}
+
+function dispatchQuickAccess(
+  trigger: EditorQuickAccessTrigger | null,
+  mode: "files" | "commands",
+): boolean {
+  if (trigger === null) return false;
+  if (mode === "files") trigger.openFiles();
+  else trigger.openCommands();
+  return true;
+}
 
 function DirtyCloseDialog(props: {
   readonly pending: PendingDirtyClose;
@@ -230,6 +293,73 @@ function renderPaneActions(
   );
 }
 
+// Plain ArrowLeft/ArrowRight/Home/End (no Alt) roam the roving tab-stop within the pane's visible
+// tab order and activate the target (automatic activation, WCAG 2.1.1 + APG tablist). Split out of
+// handleTabKeyDown (GEN-MAINT-COMPLEXITY-002) so the alt/non-alt key paths are independently
+// readable; takes its callbacks as explicit params rather than closing over component state.
+function handleRovingTabKey(
+  paneId: string,
+  path: string,
+  order: readonly string[],
+  event: KeyboardEvent<HTMLButtonElement>,
+  selectOpenFile: (paneId: string, file: string) => void,
+  focusTabButton: (paneId: string, file: string) => void,
+): void {
+  if (order.length === 0) return;
+  const key = event.key;
+  if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") return;
+  const targetFile = rovingTabTargetFile(order, path, key);
+  event.preventDefault();
+  if (targetFile === undefined || targetFile === path) {
+    focusTabButton(paneId, path);
+    return;
+  }
+  selectOpenFile(paneId, targetFile);
+  focusTabButton(paneId, targetFile);
+}
+
+// Alt+Arrow tab-key handling: Alt+Shift+Arrow moves the tab to the adjacent pane, plain Alt+Arrow
+// reorders it within the pane. Split out of handleTabKeyDown (GEN-MAINT-COMPLEXITY-002) alongside
+// handleRovingTabKey; takes the layout snapshot and commitLayout as explicit params.
+function handleAltArrowTabKey(
+  paneId: string,
+  path: string,
+  pane: EditorPaneStateV2,
+  event: KeyboardEvent<HTMLButtonElement>,
+  layout: EditorLayoutStateV2,
+  commitLayout: (nextLayout: EditorLayoutStateV2) => void,
+): void {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  const paneIds = editorLayoutPaneIds(layout);
+  if (event.shiftKey) {
+    const paneIndex = paneIds.indexOf(paneId);
+    const targetPaneId =
+      event.key === "ArrowLeft" ? paneIds[paneIndex - 1] : paneIds[paneIndex + 1];
+    if (targetPaneId !== undefined) {
+      commitLayout(
+        editorLayoutReducer(layout, {
+          type: "move-tab",
+          fromPaneId: paneId,
+          toPaneId: targetPaneId,
+          file: path,
+        }),
+      );
+    }
+    return;
+  }
+  const index = pane.tabOrder.indexOf(path);
+  const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1;
+  commitLayout(
+    editorLayoutReducer(layout, {
+      type: "reorder-tab",
+      paneId,
+      file: path,
+      targetIndex: nextIndex,
+    }),
+  );
+}
+
 // The stable per-pane prop bundle the memoized editor host receives, built once per pane set.
 interface PaneBinding {
   readonly onSelectOpenFile: (file: string) => void;
@@ -237,6 +367,7 @@ interface PaneBinding {
   readonly onDirtyChange: (path: string, dirty: boolean) => void;
   readonly onMoveTab: (fromPaneId: string, file: string, toPaneId: string) => void;
   readonly onSplitPane: (paneId: string, direction: "row" | "column") => void;
+  readonly onAgentChangesetCommitted: (entries: readonly EditorAgentReconciliationEntry[]) => void;
   readonly toolbarExtras: ReactNode;
   readonly renderTabHandle: NonNullable<EditorRuntimeWidgetProps["renderTabHandle"]>;
 }
@@ -247,6 +378,7 @@ export function EditorWidget({
   openFiles: configuredOpenFiles,
   layoutJson,
   onWorkspaceChange,
+  onOpenProblems,
   windowId,
   ...props
 }: EditorWidgetProps): ReactNode {
@@ -264,6 +396,13 @@ export function EditorWidget({
     layoutJson,
   });
   const [workspaceRoot, setWorkspaceRoot] = useState(initialRoot);
+  const editorSettings = useEditorSettings(workspaceRoot.length > 0 ? workspaceRoot : undefined);
+  const editorShortcutRegistry = useMemo(
+    () => resolveEffectiveKeyboardShortcuts(editorSettings.applied.keybindingOverrides),
+    [editorSettings.applied.keybindingOverrides],
+  );
+  const editorShortcutRegistryRef = useRef(editorShortcutRegistry);
+  editorShortcutRegistryRef.current = editorShortcutRegistry;
   const [layout, setLayout] = useState<EditorLayoutStateV2>(initialLayout);
   const [outlineByPane, setOutlineByPane] = useState<
     Readonly<Record<string, EditorOutlineSnapshot>>
@@ -294,7 +433,10 @@ export function EditorWidget({
   const [tabDropTargetPaneId, setTabDropTargetPaneId] = useState<string | null>(null);
   const [tabInsertTarget, setTabInsertTargetState] = useState<TabInsertTarget | null>(null);
   const [saveRequest, setSaveRequest] = useState<EditorExternalSaveRequest | null>(null);
+  const [agentReconciliationQueues, setAgentReconciliationQueues] =
+    useState<EditorAgentReconciliationQueues>({});
   const saveSeqRef = useRef(0);
+  const agentReconciliationSeqRef = useRef(0);
   const saveResolversRef = useRef(new Map<number, (ok: boolean) => void>());
   const lastPropRootRef = useRef(root?.trim() ?? "");
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -359,6 +501,7 @@ export function EditorWidget({
       setDirtyByPane({});
       setOutlineByPane({});
       setOutlineRevealByPane({});
+      setAgentReconciliationQueues({});
     }
     if (nextRoot.length === 0 || onWorkspaceChange === undefined) return;
     const normalizedFileChanged = (file?.trim() ?? "") !== nextActivePane.activeFile;
@@ -425,6 +568,36 @@ export function EditorWidget({
     },
     [markDirty],
   );
+
+  const queueAgentReconciliation = useCallback(
+    (sourcePaneId: string, entries: readonly EditorAgentReconciliationEntry[]): void => {
+      agentReconciliationSeqRef.current += 1;
+      const request = {
+        requestId: agentReconciliationSeqRef.current,
+        entries: entries.map((entry) => ({ file: entry.file, kind: entry.kind })),
+      };
+      setAgentReconciliationQueues((current) =>
+        enqueueEditorAgentReconciliation(
+          current,
+          Object.values(layoutRef.current.panes),
+          sourcePaneId,
+          request,
+        ),
+      );
+    },
+    [],
+  );
+
+  const completeAgentReconciliation = useCallback((requestId: number, paneId: string): void => {
+    setAgentReconciliationQueues((current) =>
+      completeEditorAgentReconciliation(current, paneId, requestId),
+    );
+  }, []);
+
+  useEffect(() => {
+    const paneIds = new Set(Object.keys(layout.panes));
+    setAgentReconciliationQueues((current) => pruneEditorAgentReconciliation(current, paneIds));
+  }, [layout.panes]);
 
   const requestDirtyClose = useCallback(
     (input: {
@@ -905,64 +1078,13 @@ export function EditorWidget({
     (paneId: string, path: string, event: KeyboardEvent<HTMLButtonElement>): void => {
       const pane = layoutRef.current.panes[paneId];
       if (pane === undefined) return;
-      // Plain ArrowLeft/ArrowRight/Home/End (no Alt) roam the roving tab-stop within the pane's
-      // visible tab order and activate the target (automatic activation, WCAG 2.1.1 + APG tablist).
-      // Alt+Arrow keeps its existing reorder/move-across-pane behavior (handled below).
+      // Alt-less navigation roams the roving tab-stop; Alt+Arrow reorders/moves the tab across
+      // panes (handleRovingTabKey / handleAltArrowTabKey, GEN-MAINT-COMPLEXITY-002).
       if (!event.altKey) {
-        const order = pane.tabOrder;
-        if (order.length === 0) return;
-        const index = order.indexOf(path);
-        let targetFile: string | undefined;
-        if (event.key === "ArrowLeft") {
-          targetFile = order[index <= 0 ? order.length - 1 : index - 1];
-        } else if (event.key === "ArrowRight") {
-          targetFile = order[index < 0 || index >= order.length - 1 ? 0 : index + 1];
-        } else if (event.key === "Home") {
-          targetFile = order[0];
-        } else if (event.key === "End") {
-          targetFile = order[order.length - 1];
-        } else {
-          return;
-        }
-        event.preventDefault();
-        if (targetFile === undefined || targetFile === path) {
-          focusTabButton(paneId, path);
-          return;
-        }
-        selectOpenFile(paneId, targetFile);
-        focusTabButton(paneId, targetFile);
+        handleRovingTabKey(paneId, path, pane.tabOrder, event, selectOpenFile, focusTabButton);
         return;
       }
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault();
-        const paneIds = editorLayoutPaneIds(layoutRef.current);
-        if (event.shiftKey) {
-          const paneIndex = paneIds.indexOf(paneId);
-          const targetPaneId =
-            event.key === "ArrowLeft" ? paneIds[paneIndex - 1] : paneIds[paneIndex + 1];
-          if (targetPaneId !== undefined) {
-            commitLayout(
-              editorLayoutReducer(layoutRef.current, {
-                type: "move-tab",
-                fromPaneId: paneId,
-                toPaneId: targetPaneId,
-                file: path,
-              }),
-            );
-          }
-          return;
-        }
-        const index = pane.tabOrder.indexOf(path);
-        const nextIndex = event.key === "ArrowLeft" ? index - 1 : index + 1;
-        commitLayout(
-          editorLayoutReducer(layoutRef.current, {
-            type: "reorder-tab",
-            paneId,
-            file: path,
-            targetIndex: nextIndex,
-          }),
-        );
-      }
+      handleAltArrowTabKey(paneId, path, pane, event, layoutRef.current, commitLayout);
     },
     [commitLayout, focusTabButton, selectOpenFile],
   );
@@ -1226,6 +1348,12 @@ export function EditorWidget({
   const nextTab = useCallback((): void => cycleActiveTab(1), [cycleActiveTab]);
   const prevTab = useCallback((): void => cycleActiveTab(-1), [cycleActiveTab]);
 
+  // Issue #2212 (ADR-0126) — run-affordance state + actions through the governed verification route.
+  const verification = useEditorVerificationRun({
+    root: workspaceRoot,
+    activeFile: activeFile.length > 0 ? activeFile : null,
+  });
+
   // Content-free host snapshot consumed by the palette + keybinding layer. Memoized so the command
   // palette does not receive a new object on unrelated editor chrome renders.
   const commandHost: EditorPaletteHost = useMemo(
@@ -1236,6 +1364,9 @@ export function EditorWidget({
       activeFile: activeFile.length > 0 ? activeFile : null,
       closedTabCount: closedTabsRef.current.length,
       dirtyCount: dirtyFileList.length,
+      verificationRunning: verification.verificationRunning,
+      verifiableTarget: verification.verifiableTarget,
+      verificationCatalog: verification.catalog,
       splitActive: splitActivePane,
       closeActiveSplit: closeActivePane,
       closeActiveTab,
@@ -1243,6 +1374,12 @@ export function EditorWidget({
       prevTab,
       reopenClosed: reopenClosedTab,
       saveAll: saveAllDirty,
+      runFileTests: verification.runFileTests,
+      runWorkspaceVerification: verification.runWorkspaceVerification,
+      cancelVerification: verification.cancelVerification,
+      trustWorkspaceScripts: verification.trustWorkspaceScripts,
+      revokeWorkspaceScriptTrust: verification.revokeWorkspaceScriptTrust,
+      openProblems: () => onOpenProblems?.(workspaceRoot),
     }),
     [
       activeFile,
@@ -1251,10 +1388,19 @@ export function EditorWidget({
       dirtyFileList.length,
       layout,
       nextTab,
+      onOpenProblems,
       prevTab,
       reopenClosedTab,
       saveAllDirty,
       splitActivePane,
+      verification.cancelVerification,
+      verification.catalog,
+      verification.revokeWorkspaceScriptTrust,
+      verification.runFileTests,
+      verification.runWorkspaceVerification,
+      verification.trustWorkspaceScripts,
+      verification.verifiableTarget,
+      verification.verificationRunning,
       workspaceRoot,
     ],
   );
@@ -1272,35 +1418,17 @@ export function EditorWidget({
     const node = workspaceRef.current;
     if (node === null) return;
     const onKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (!(event.metaKey || event.ctrlKey)) return;
-      const host = commandHostRef.current;
-      const key = event.key.toLowerCase();
-      // Cmd/Ctrl+P must still open the unified quick-access palette while the cursor is inside
-      // the editor. This listener is a capture-phase DOM listener on the editor container, so it
-      // fires before Monaco sees the event and regardless of useKeyboardShortcuts' editable-target
-      // guard (which would otherwise swallow the shell-level chord — see
-      // EditorQuickAccessTriggerContext.tsx).
-      if (key === "p" && !event.altKey) {
-        const trigger = quickAccessTriggerRef.current;
-        if (trigger !== null) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.shiftKey) trigger.openCommands();
-          else trigger.openFiles();
-        }
-        return;
-      }
-      if (!event.altKey) return;
-      const handled = (action: () => void): void => {
+      const commandId = editorShortcutCommandId(editorShortcutRegistryRef.current, event);
+      if (commandId === null) return;
+      const dispatched = dispatchEditorShortcut(
+        commandId,
+        commandHostRef.current,
+        quickAccessTriggerRef.current,
+      );
+      if (dispatched) {
         event.preventDefault();
         event.stopPropagation();
-        action();
-      };
-      if (key === "arrowright") handled(host.nextTab);
-      else if (key === "arrowleft") handled(host.prevTab);
-      else if (key === "t") handled(host.reopenClosed);
-      else if (key === "\\") handled(() => host.splitActive("row"));
-      else if (key === "s") handled(host.saveAll);
+      }
     };
     node.addEventListener("keydown", onKeyDown, true);
     return () => node.removeEventListener("keydown", onKeyDown, true);
@@ -1337,6 +1465,7 @@ export function EditorWidget({
           moveTabAction(fromPaneId, toPaneId, file),
         onSplitPane: (targetPaneId: string, direction: "row" | "column") =>
           splitPane(targetPaneId, direction),
+        onAgentChangesetCommitted: (entries) => queueAgentReconciliation(paneId, entries),
         toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane),
         // GEN-PERF-EDITOR-003 — the full drag-capable tab handle lives HERE (in the
         // pane-memoized closure) instead of as a per-render inline closure in renderPane,
@@ -1370,6 +1499,7 @@ export function EditorWidget({
             heldTabRef.current?.paneId === paneId && heldTabRef.current.file === path
               ? "true"
               : "false",
+          "data-merge-conflicts": String(context?.mergeConflicts ?? 0),
         }),
       });
     }
@@ -1382,6 +1512,7 @@ export function EditorWidget({
     markDirty,
     moveTabAction,
     splitPane,
+    queueAgentReconciliation,
     closePane,
     handleTabKeyDown,
     beginTabPointerDrag,
@@ -1416,6 +1547,9 @@ export function EditorWidget({
       externalSaveRequest:
         saveRequest !== null && saveRequest.paneId === pane.id ? saveRequest : undefined,
       onExternalSaveComplete,
+      agentReconciliationRequest: agentReconciliationQueues[pane.id]?.[0],
+      onAgentChangesetCommitted: binding.onAgentChangesetCommitted,
+      onAgentReconciliationComplete: completeAgentReconciliation,
       tabInsertTarget:
         tabInsertTarget?.paneId === pane.id
           ? { file: tabInsertTarget.file, edge: tabInsertTarget.edge }

@@ -21,12 +21,15 @@ import {
 import { selectScoredTextByByteBudget } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import {
+  runEditorStateProvider,
+  runGitContextProvider,
   runLocalKnowledgeProvider,
   runMemoryProvider,
   runRepoSearchProvider,
   type ProviderContext,
   type ProviderOutcome,
   type RawExcerpt,
+  type GitContextReader,
 } from "./codingContextProviders.js";
 
 const DEFERRED_CONTEXT_PROVIDERS: readonly CodingContextOmission["sourceKind"][] = [
@@ -42,6 +45,7 @@ export interface AssembleCodingContextDeps {
   readonly nowMs: number;
   readonly budgetBytes?: number | undefined;
   readonly allowEmbeddingProviders?: boolean | undefined;
+  readonly gitContextReader?: GitContextReader | undefined;
 }
 
 // Greedy byte-budget packer: highest score first, ties broken by id for determinism, dropped when the
@@ -129,6 +133,7 @@ export async function assembleCodingContext(
     signal: context.signal,
     maxBytesPerExcerpt: budget.maxBytesPerSource,
     nowMs: context.nowMs,
+    gitContextReader: context.gitContextReader,
   };
 
   const candidates: RawExcerpt[] = [];
@@ -141,6 +146,9 @@ export async function assembleCodingContext(
     changedFiles: request.changedFiles,
   });
   collect(repo, candidates, omissions);
+
+  collectEditorStateContext(request, providerCtx, candidates, omissions);
+  await collectGitContext(request, providerCtx, candidates, omissions);
 
   const allowEmbeddingProviders =
     context.allowEmbeddingProviders ?? embeddingProvidersAllowed(request.purpose);
@@ -163,6 +171,38 @@ export async function assembleCodingContext(
     droppedForBudget: packed.droppedForBudget,
     omissions,
   };
+}
+
+async function collectGitContext(
+  request: CodingContextRequest,
+  providerCtx: ProviderContext,
+  candidates: RawExcerpt[],
+  omissions: CodingContextOmission[],
+): Promise<void> {
+  if (request.editorSessionId === undefined) {
+    return;
+  }
+  collect(
+    await runGitContextProvider(providerCtx, { sessionId: request.editorSessionId }),
+    candidates,
+    omissions,
+  );
+}
+
+function collectEditorStateContext(
+  request: CodingContextRequest,
+  providerCtx: ProviderContext,
+  candidates: RawExcerpt[],
+  omissions: CodingContextOmission[],
+): void {
+  if (request.editorSessionId === undefined) {
+    return;
+  }
+  collect(
+    runEditorStateProvider(providerCtx, { sessionId: request.editorSessionId }),
+    candidates,
+    omissions,
+  );
 }
 
 function collect(

@@ -1,10 +1,99 @@
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 
 import {
   APPROVED_LICENSES,
+  addTypeScriptRuntimeToSbom,
   isLicenseExpressionApproved,
   offendersForComponent,
+  typescriptToolchainSbomFailures,
 } from "../check-workspace-supply-chain.mjs";
+
+const TYPESCRIPT_LOCK_ENTRY = {
+  version: "6.0.3",
+  resolved: "https://registry.npmjs.org/typescript/-/typescript-6.0.3.tgz",
+  integrity: `sha512-${Buffer.alloc(64, 7).toString("base64")}`,
+  license: "Apache-2.0",
+};
+
+describe("addTypeScriptRuntimeToSbom", () => {
+  it("adds the packaged runtime component and dependency edge deterministically", () => {
+    const sbom = {
+      metadata: { component: { "bom-ref": "keiko@1.0.0" } },
+      components: [],
+      dependencies: [{ ref: "keiko@1.0.0", dependsOn: [] }],
+    };
+    const result = addTypeScriptRuntimeToSbom(sbom, TYPESCRIPT_LOCK_ENTRY);
+    expect(result.components).toContainEqual(
+      expect.objectContaining({
+        "bom-ref": "typescript@6.0.3",
+        name: "typescript",
+        version: "6.0.3",
+        scope: "required",
+      }),
+    );
+    expect(result.dependencies).toContainEqual({
+      ref: "keiko@1.0.0",
+      dependsOn: ["typescript@6.0.3"],
+    });
+    expect(result.dependencies).toContainEqual({ ref: "typescript@6.0.3", dependsOn: [] });
+  });
+
+  it("does not duplicate an existing runtime component or dependency edge", () => {
+    const sbom = {
+      metadata: { component: { "bom-ref": "keiko@1.0.0" } },
+      components: [{ name: "typescript", version: "6.0.3", "bom-ref": "typescript@6.0.3" }],
+      dependencies: [
+        { ref: "keiko@1.0.0", dependsOn: ["typescript@6.0.3"] },
+        { ref: "typescript@6.0.3", dependsOn: [] },
+      ],
+    };
+    const result = addTypeScriptRuntimeToSbom(sbom, TYPESCRIPT_LOCK_ENTRY);
+    expect(result.components).toHaveLength(1);
+    expect(result.dependencies).toHaveLength(2);
+  });
+
+  it.each([
+    {},
+    { ...TYPESCRIPT_LOCK_ENTRY, integrity: "sha256-invalid" },
+    { ...TYPESCRIPT_LOCK_ENTRY, license: "unknown" },
+  ])("fails closed for incomplete lock metadata", (lockEntry) => {
+    expect(() => addTypeScriptRuntimeToSbom({ components: [] }, lockEntry)).toThrow(
+      "TypeScript runtime lock metadata is incomplete.",
+    );
+  });
+});
+
+describe("typescriptToolchainSbomFailures", () => {
+  it("accepts exactly the productive TypeScript 6 API runtime", () => {
+    expect(
+      typescriptToolchainSbomFailures(
+        { components: [{ name: "typescript", version: "6.0.3" }] },
+        "6.0.3",
+      ),
+    ).toEqual([]);
+  });
+
+  it("fails when the productive API runtime is absent", () => {
+    expect(typescriptToolchainSbomFailures({ components: [] }, "6.0.3")).not.toEqual([]);
+  });
+
+  it.each([
+    { group: "@typescript", name: "native", version: "7.0.2" },
+    { group: "@typescript", name: "typescript-linux-x64", version: "7.0.2" },
+    { name: "@typescript/native", version: "7.0.2" },
+  ])("rejects native compiler component $group/$name", (nativeComponent) => {
+    const sbom = {
+      components: [{ name: "typescript", version: "6.0.3" }, nativeComponent],
+    };
+    expect(typescriptToolchainSbomFailures(sbom, "6.0.3")).not.toEqual([]);
+  });
+
+  it("rejects an unexpected productive TypeScript API version", () => {
+    const sbom = { components: [{ name: "typescript", version: "7.0.2" }] };
+    expect(typescriptToolchainSbomFailures(sbom, "6.0.3")).not.toEqual([]);
+  });
+});
 
 describe("isLicenseExpressionApproved (SPDX expression evaluation)", () => {
   it("accepts a dual-licensed OR expression when one operand is approved", () => {

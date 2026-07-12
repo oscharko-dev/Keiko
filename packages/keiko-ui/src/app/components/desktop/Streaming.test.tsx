@@ -1239,10 +1239,10 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     });
 
     // Cancel — onCancelled fires.
-    act(() => {
+    await act(async () => {
       capturedHandlers?.onCancelled();
+      await sendPromise;
     });
-    await sendPromise;
 
     expect(view.result.current.sendStatus).toBe("cancelled");
     // AC#3: no partial assistant content.

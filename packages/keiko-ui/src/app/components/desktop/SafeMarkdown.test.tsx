@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { SafeMarkdown } from "./SafeMarkdown";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  SafeMarkdown,
+  type AssistantCodeBlockApply,
+  type AssistantCodeBlockApplyOutcome,
+} from "./SafeMarkdown";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type { LocalKnowledgeEvidenceCitation } from "@/lib/types";
 
@@ -57,6 +61,7 @@ describe("SafeMarkdown — code block", () => {
     expect(copyBtn).toBeDefined();
     const langBadge = document.querySelector(".sm-code-lang");
     expect(langBadge?.textContent).toBe("typescript");
+    expect(screen.queryByRole("button", { name: "Apply to editor" })).toBeNull();
   });
 
   it("renders highlighted token spans and non-selectable line numbers", () => {
@@ -103,6 +108,141 @@ describe("SafeMarkdown — code block", () => {
   });
 });
 
+describe("SafeMarkdown — assistant code apply", () => {
+  it("renders Apply beside Copy for canonical code and diff fences", () => {
+    const onApplyCodeBlock = vi.fn<AssistantCodeBlockApply>().mockResolvedValue({ kind: "queued" });
+    const source = [
+      "```typescript",
+      "const answer = 42;",
+      "```",
+      "",
+      "```diff",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "```",
+    ].join("\n");
+
+    render(<SafeMarkdown source={source} onApplyCodeBlock={onApplyCodeBlock} />);
+
+    const headers = document.querySelectorAll<HTMLElement>(".sm-code-block-header");
+    expect(headers).toHaveLength(2);
+    for (const header of headers) {
+      expect(within(header).getByRole("button", { name: "Apply to editor" })).toBeInTheDocument();
+      expect(within(header).getByRole("button", { name: "Copy code block" })).toBeInTheDocument();
+    }
+  });
+
+  it("passes the exact block text and language to the callback", async () => {
+    const onApplyCodeBlock = vi.fn<AssistantCodeBlockApply>().mockResolvedValue({ kind: "queued" });
+    const patch = "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new";
+    render(
+      <SafeMarkdown source={`\`\`\`diff\n${patch}\n\`\`\``} onApplyCodeBlock={onApplyCodeBlock} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to editor" }));
+
+    await waitFor(() => {
+      expect(onApplyCodeBlock).toHaveBeenCalledOnce();
+    });
+    expect(onApplyCodeBlock).toHaveBeenCalledWith({ codeBlockText: patch, language: "diff" });
+  });
+
+  it("suppresses duplicate clicks while preparing and settles queued for review", async () => {
+    let resolveOutcome!: (outcome: AssistantCodeBlockApplyOutcome) => void;
+    const pending = new Promise<AssistantCodeBlockApplyOutcome>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    const onApplyCodeBlock = vi.fn<AssistantCodeBlockApply>(() => pending);
+    render(
+      <SafeMarkdown
+        source={"```typescript\nconst answer = 42;\n```"}
+        onApplyCodeBlock={onApplyCodeBlock}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to editor" }));
+    const preparing = screen.getByRole("button", { name: "Preparing" });
+    expect(preparing).toBeDisabled();
+    fireEvent.click(preparing);
+    await waitFor(() => expect(onApplyCodeBlock).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      resolveOutcome({ kind: "queued" });
+      await pending;
+    });
+    expect(await screen.findByRole("button", { name: "Queued for review" })).toBeDisabled();
+    expect(onApplyCodeBlock).toHaveBeenCalledOnce();
+  });
+
+  it("shows only a bounded conflict code and offers retry", async () => {
+    const rawMessage = "private source body must not render";
+    const onApplyCodeBlock = vi
+      .fn<AssistantCodeBlockApply>()
+      .mockResolvedValueOnce({ kind: "conflict", code: "DIRTY", message: rawMessage })
+      .mockResolvedValueOnce({ kind: "queued" });
+    render(
+      <SafeMarkdown source={"```ts\nconst x = 1;\n```"} onApplyCodeBlock={onApplyCodeBlock} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to editor" }));
+
+    expect(await screen.findByText("Conflict: DIRTY")).toBeInTheDocument();
+    expect(screen.queryByText(rawMessage)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "Queued for review" })).toBeDisabled();
+    expect(onApplyCodeBlock).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps rejected results to unavailable without exposing raw content", async () => {
+    const rawMessage = "provider response with private content";
+    const onApplyCodeBlock = vi
+      .fn<AssistantCodeBlockApply>()
+      .mockResolvedValue({ kind: "rejected", message: rawMessage });
+    render(
+      <SafeMarkdown source={"```ts\nconst x = 1;\n```"} onApplyCodeBlock={onApplyCodeBlock} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to editor" }));
+
+    expect(await screen.findByText("Editor unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+    expect(screen.queryByText(rawMessage)).toBeNull();
+  });
+
+  it("locks an outcome-unknown action and directs the user to the editor", async () => {
+    const onApplyCodeBlock = vi
+      .fn<AssistantCodeBlockApply>()
+      .mockResolvedValue({ kind: "outcome-unknown" });
+    const source = "```ts\nconst x = 1;\n```";
+    const view = render(
+      <SafeMarkdown
+        source={source}
+        applyScopeId="chat-unknown:message-unknown"
+        onApplyCodeBlock={onApplyCodeBlock}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Apply to editor" }));
+
+    expect(await screen.findByText("Outcome unknown. Check the editor.")).toBeInTheDocument();
+    const locked = screen.getByRole("button", { name: "Outcome unknown" });
+    expect(locked).toBeDisabled();
+    fireEvent.click(locked);
+    expect(onApplyCodeBlock).toHaveBeenCalledOnce();
+
+    view.unmount();
+    render(
+      <SafeMarkdown
+        source={source}
+        applyScopeId="chat-unknown:message-unknown"
+        onApplyCodeBlock={onApplyCodeBlock}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Outcome unknown" })).toBeDisabled();
+    expect(onApplyCodeBlock).toHaveBeenCalledOnce();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 3. Copy button calls navigator.clipboard.writeText
 // ---------------------------------------------------------------------------
@@ -117,12 +257,19 @@ describe("SafeMarkdown — copy button interaction", () => {
       configurable: true,
     });
 
-    render(<SafeMarkdown source={"```js\nconsole.log('hi');\n```"} />);
+    const onApplyCodeBlock = vi.fn<AssistantCodeBlockApply>().mockResolvedValue({ kind: "queued" });
+    render(
+      <SafeMarkdown
+        source={"```js\nconsole.log('hi');\n```"}
+        onApplyCodeBlock={onApplyCodeBlock}
+      />,
+    );
     const copyBtn = screen.getByRole("button", { name: "Copy code block" });
     fireEvent.click(copyBtn);
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("console.log('hi');");
     });
+    expect(onApplyCodeBlock).not.toHaveBeenCalled();
     expect(await screen.findByText("Code copied")).toBeInTheDocument();
 
     // Restore original descriptor

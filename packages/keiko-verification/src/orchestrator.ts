@@ -21,6 +21,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { classifyOutcome, type AbortReason } from "./classify.js";
 import { classifyScripts } from "./detect.js";
+import { extractFailureLocations } from "./failure-location.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";
 import type {
@@ -401,7 +402,7 @@ function networkEnforcedOf(result: CommandResult | undefined): boolean {
   return result?.attestation?.networkEnforced ?? false;
 }
 
-function toResult(step: VerificationStep, run: StepRun): VerificationResult {
+function toResult(step: VerificationStep, run: StepRun, workspaceRoot: string): VerificationResult {
   const status = classifyOutcome({
     skipped: false,
     result: run.result,
@@ -410,6 +411,10 @@ function toResult(step: VerificationStep, run: StepRun): VerificationResult {
   });
   const breached = breachedDimension(status, run.abortReason, run.result);
   const networkEnforced = networkEnforcedOf(run.result);
+  // Issue #2211 (ADR-0126 D3): populate structured failure locations from the already-redacted output
+  // before outputDigest discards it. Only attached when non-empty, so a result with no parseable
+  // failure keeps its exact prior shape (additive, backward-compatible).
+  const locations = extractFailureLocations(step.kind, run.result, workspaceRoot);
   return {
     kind: step.kind,
     scriptName: step.scriptName,
@@ -424,6 +429,7 @@ function toResult(step: VerificationStep, run: StepRun): VerificationResult {
     outputSummary: outputDigest(run.result),
     appliedLimits: buildAppliedLimits(step.limits, breached, networkEnforced),
     detail: detailFor(status, run),
+    ...(locations.length > 0 ? { locations } : {}),
   };
 }
 
@@ -543,6 +549,7 @@ async function runPlanSteps(
     const result = toResult(
       step,
       await runStep(step, deps, baseSpawn, monitor, resolution.network),
+      deps.workspace.root,
     );
     results.push(result);
     cancelled ||= result.status === "cancelled";

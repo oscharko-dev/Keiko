@@ -18,6 +18,8 @@ const SOURCE_LABEL: Readonly<Record<CodingContextSourceKind, string>> = {
   memory: "Engineering memory",
   "quality-intelligence": "Quality evidence",
   "workflow-context": "Workflow context",
+  "editor-state": "Editor state",
+  "git-context": "Git context",
 };
 
 const HEADER =

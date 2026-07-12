@@ -38,6 +38,7 @@ import {
   type EditorDocumentVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { containsPath } from "@oscharko-dev/keiko-git";
+import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOperation.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import {
   STREAMING,
@@ -865,6 +866,15 @@ async function hasGitMarker(directory: string): Promise<boolean> {
   }
 }
 
+function settleNearestGitRoot(
+  visited: readonly string[],
+  cache: Map<string, string | null>,
+  result: string | null,
+): string | null {
+  for (const directory of visited) cache.set(directory, result);
+  return result;
+}
+
 async function nearestGitRoot(
   startDirectory: string,
   cache: Map<string, string | null>,
@@ -873,20 +883,11 @@ async function nearestGitRoot(
   const visited: string[] = [];
   for (;;) {
     const cached = cache.get(current);
-    if (cached !== undefined) {
-      for (const directory of visited) cache.set(directory, cached);
-      return cached;
-    }
+    if (cached !== undefined) return settleNearestGitRoot(visited, cache, cached);
     visited.push(current);
-    if (await hasGitMarker(current)) {
-      for (const directory of visited) cache.set(directory, current);
-      return current;
-    }
+    if (await hasGitMarker(current)) return settleNearestGitRoot(visited, cache, current);
     const parent = dirname(current);
-    if (parent === current) {
-      for (const directory of visited) cache.set(directory, null);
-      return null;
-    }
+    if (parent === current) return settleNearestGitRoot(visited, cache, null);
     current = parent;
   }
 }
@@ -2221,16 +2222,15 @@ async function writeFilesContentRoute(
     }
     baseVersion = parsed.value;
   }
-  return {
-    status: 200,
-    body: await writeResolvedFilesContent({
-      target,
-      content: fields.content,
-      expectedModifiedAt:
-        typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
-      baseVersion,
-    }),
-  };
+  const response = await writeResolvedFilesContent({
+    target,
+    content: fields.content,
+    expectedModifiedAt:
+      typeof body.expectedModifiedAt === "number" ? body.expectedModifiedAt : undefined,
+    baseVersion,
+  });
+  notifyHostLspWorkspaceFileChanged(target.realRoot, target.path);
+  return { status: 200, body: response };
 }
 
 export async function handleFilesContent(

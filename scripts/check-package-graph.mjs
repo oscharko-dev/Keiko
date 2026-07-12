@@ -4,9 +4,10 @@ import { basename, join, resolve } from "node:path";
 import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
 const UI_PACKAGE = "@oscharko-dev/keiko-ui";
-const BUILD_PACKAGES_SCRIPT = "tsc -b tsconfig.packages.json";
-const TYPECHECK_SCRIPT =
-  "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit";
+const NATIVE_TSC = "node node_modules/@typescript/native/bin/tsc";
+const BUILD_PACKAGES_SCRIPT =
+  "npm run check:typescript-toolchain && node scripts/build-packages.mjs";
+const TYPECHECK_SCRIPT = `npm run build:packages && npm run check:package-graph && ${NATIVE_TSC} -p tsconfig.json --noEmit`;
 const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
   [
     "@oscharko-dev/keiko-cli",
@@ -25,6 +26,15 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-verification",
       "@oscharko-dev/keiko-memory-vault",
     ],
+  ],
+  // Governed Atlassian connector domain leaf (ADR-0128 D1): credential custody over the shared
+  // secret vault, the injectable AtlassianHttpPort seam, and the bounded verification probe. It
+  // may depend only on keiko-contracts and keiko-security — never on keiko-model-gateway,
+  // keiko-local-knowledge, or the server; keiko-server is the sole composition root that
+  // implements its ports (vault, metadata store, gatewayFetch-backed transport).
+  [
+    "@oscharko-dev/keiko-connectors",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
   ],
   ["@oscharko-dev/keiko-contracts", []],
   // Reusable OS/container egress-isolation strategy (ADR-0043). A near-leaf: its only workspace
@@ -135,6 +145,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
   [
     "@oscharko-dev/keiko-server",
     [
+      "@oscharko-dev/keiko-connectors",
       "@oscharko-dev/keiko-contracts",
       "@oscharko-dev/keiko-git",
       "@oscharko-dev/keiko-security",
@@ -201,7 +212,7 @@ async function readJson(path) {
 function workspaceDeps(manifest) {
   return Object.keys(manifest.dependencies ?? {})
     .filter((name) => name.startsWith("@oscharko-dev/keiko-"))
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function workspaceRefs(tsconfig) {

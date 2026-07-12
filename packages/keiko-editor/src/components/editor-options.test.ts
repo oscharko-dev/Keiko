@@ -22,6 +22,7 @@ describe("buildEditorOptions", () => {
 
   it("turns line numbers on", () => {
     expect(options.lineNumbers).toBe("on");
+    expect(options.glyphMargin).toBe(true);
   });
 
   it("enables auto folding", () => {
@@ -137,6 +138,15 @@ describe("buildEditorOptions", () => {
     expect(options.minimap).toEqual({ enabled: false });
   });
 
+  it("enables Monaco inlay-hint rendering only when the governed provider is wired", () => {
+    expect(buildEditorOptions({ readOnly: false, ariaPath: "a.ts" }).inlayHints).toEqual({
+      enabled: "off",
+    });
+    expect(
+      buildEditorOptions({ readOnly: false, ariaPath: "a.ts", inlayHintsEnabled: true }).inlayHints,
+    ).toEqual({ enabled: "on" });
+  });
+
   it("keeps every other markdown-capable helper surface off even when hover is enabled (#1201)", () => {
     const withHover = buildEditorOptions({
       readOnly: false,
@@ -217,6 +227,27 @@ describe("buildEditorOptions", () => {
     expect(options.wordWrap).toBe("off");
   });
 
+  it("applies server-resolved M7 preferences live through Monaco options", () => {
+    const customized = buildEditorOptions({
+      readOnly: false,
+      ariaPath: "src/app.ts",
+      preferences: {
+        fontSize: 16,
+        tabSize: 4,
+        insertSpaces: false,
+        wordWrap: "on",
+        renderWhitespace: "all",
+        minimap: true,
+      },
+    });
+    expect(customized.fontSize).toBe(16);
+    expect(customized.tabSize).toBe(4);
+    expect(customized.insertSpaces).toBe(false);
+    expect(customized.wordWrap).toBe("on");
+    expect(customized.renderWhitespace).toBe("all");
+    expect(customized.minimap).toEqual({ enabled: true });
+  });
+
   it("engages Monaco large-file optimizations explicitly (ADR-0042 D3.6)", () => {
     expect(options.largeFileOptimizations).toBe(true);
   });
@@ -240,6 +271,26 @@ describe("buildEditorOptions large-file degraded mode (Issue #1207, ADR-0042 D3.
     expect(degraded.folding).toBe(false);
     expect(degraded.occurrencesHighlight).toBe("off");
     expect(degraded.renderWhitespace).toBe("none");
+    expect(degraded.glyphMargin).toBe(false);
+  });
+
+  it("keeps degraded mode ceilings above user preferences", () => {
+    const degradedWithPreferences = buildEditorOptions({
+      readOnly: false,
+      ariaPath: "src/app.ts",
+      degraded: true,
+      preferences: {
+        fontSize: 16,
+        tabSize: 4,
+        insertSpaces: true,
+        wordWrap: "on",
+        renderWhitespace: "all",
+        minimap: true,
+      },
+    });
+    expect(degradedWithPreferences.renderWhitespace).toBe("none");
+    expect(degradedWithPreferences.minimap).toEqual({ enabled: false });
+    expect(degradedWithPreferences.wordWrap).toBe("on");
   });
 
   it("keeps large-file optimizations and core affordances on in degraded mode", () => {

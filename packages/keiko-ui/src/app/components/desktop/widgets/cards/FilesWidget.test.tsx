@@ -16,11 +16,13 @@ import {
   renameFilesEntry,
   updateChatConnectedScopes,
 } from "../../../../../lib/api";
-import type { Chat } from "../../../../../lib/types";
+import type { Chat, GitChangedFile, GitRepositoryStatusResponse } from "../../../../../lib/types";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
 import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
 import { FilesWidget, filesWidgetTestInternals } from "./FilesWidget";
+import { resetSharedEventSourcesForTests } from "./sharedEventSource";
+import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -47,6 +49,47 @@ const treeEntryBase = {
   symlink: false,
   readable: true,
 };
+
+function availableGitStatus(
+  changes: readonly GitChangedFile[],
+  overrides: Partial<GitRepositoryStatusResponse> = {},
+): GitRepositoryStatusResponse {
+  return {
+    schemaVersion: "1",
+    root: "/repo",
+    repositoryRoot: "/repo",
+    state: "available",
+    available: true,
+    branch: "main",
+    detached: false,
+    clean: changes.length === 0,
+    stagedCount: changes.filter((change) => change.staged).length,
+    unstagedCount: changes.filter((change) => change.unstaged).length,
+    untrackedCount: changes.filter((change) => change.untracked).length,
+    conflictedCount: changes.filter((change) => change.conflicted).length,
+    changes,
+    truncated: false,
+    maxChanges: 500,
+    ...overrides,
+  };
+}
+
+function gitChange(
+  path: string,
+  worktreeStatus: GitChangedFile["worktreeStatus"],
+  overrides: Partial<GitChangedFile> = {},
+): GitChangedFile {
+  return {
+    path,
+    indexStatus: " ",
+    worktreeStatus,
+    staged: false,
+    unstaged: worktreeStatus !== "?" && worktreeStatus !== "!",
+    untracked: worktreeStatus === "?",
+    conflicted: false,
+    ...overrides,
+  };
+}
 
 function deferred<T>(): {
   readonly promise: Promise<T>;
@@ -124,6 +167,64 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     ...overrides,
   };
 }
+
+class FakeEventSource {
+  static instances: FakeEventSource[] = [];
+  readonly listeners = new Map<string, Set<EventListener>>();
+  readonly close = vi.fn();
+
+  constructor(readonly url: string) {
+    FakeEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListener): void {
+    const listeners = this.listeners.get(type) ?? new Set<EventListener>();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  emit(type: string, data: unknown): void {
+    const event = new MessageEvent<string>(type, { data: JSON.stringify(data) });
+    for (const listener of this.listeners.get(type) ?? []) listener(event);
+  }
+}
+
+const ORIGINAL_EVENT_SOURCE = globalThis.EventSource;
+
+function installFakeEventSource(): void {
+  FakeEventSource.instances = [];
+  Object.defineProperty(globalThis, "EventSource", {
+    configurable: true,
+    value: FakeEventSource,
+  });
+}
+
+function restoreEventSource(): void {
+  if (ORIGINAL_EVENT_SOURCE === undefined) {
+    Reflect.deleteProperty(globalThis, "EventSource");
+    return;
+  }
+  Object.defineProperty(globalThis, "EventSource", {
+    configurable: true,
+    value: ORIGINAL_EVENT_SOURCE,
+  });
+}
+
+function workspaceWatchEventSources(): readonly FakeEventSource[] {
+  return FakeEventSource.instances.filter((source) =>
+    source.url.startsWith("/api/editor/workspace-watch/events"),
+  );
+}
+
+afterEach(() => {
+  resetSharedEventSourcesForTests();
+  FakeEventSource.instances = [];
+  restoreEventSource();
+});
 
 function renderWithSession(ui: ReactElement, session = makeSession()): ChatSessionApi {
   render(<ChatSessionProvider value={session}>{ui}</ChatSessionProvider>);
@@ -286,7 +387,65 @@ describe("FilesWidget", () => {
     expect(fetchFilesTree).toHaveBeenCalledTimes(1);
     expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
     expect(fetchGitStatus).toHaveBeenCalledTimes(1);
-    expect(fetchGitStatus).toHaveBeenCalledWith("/repo");
+    expect(fetchGitStatus).toHaveBeenCalledWith("/repo", { includeIgnored: true });
+
+    window.dispatchEvent(new Event("focus"));
+
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
+    expect(fetchGitStatus).toHaveBeenLastCalledWith("/repo", { includeIgnored: true });
+
+    notifyWorkspaceFileMutated("/other-repo");
+    expect(fetchGitStatus).toHaveBeenCalledTimes(2);
+    notifyWorkspaceFileMutated("/repo");
+
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(3));
+    expect(fetchGitStatus).toHaveBeenLastCalledWith("/repo", { includeIgnored: true });
+  });
+
+  it("refreshes only the watch event's parent directory while preserving explorer state", async () => {
+    installFakeEventSource();
+    vi.mocked(fetchFilesTree)
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "src",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "app.ts", path: "src/app.ts", kind: "file" }],
+      })
+      .mockResolvedValueOnce({
+        root: "/repo",
+        path: "src",
+        truncated: false,
+        entries: [
+          { ...treeEntryBase, name: "app.ts", path: "src/app.ts", kind: "file" },
+          { ...treeEntryBase, name: "new.ts", path: "src/new.ts", kind: "file" },
+        ],
+      });
+
+    render(<FilesWidget root="/repo" />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /expand folder: src/i }));
+    expect(await screen.findByRole("treeitem", { name: /app\.ts/i })).toBeInTheDocument();
+    await waitFor(() => expect(workspaceWatchEventSources()).toHaveLength(1));
+
+    act(() => {
+      workspaceWatchEventSources()[0]?.emit("editor-watch:changed", {
+        schemaVersion: "1",
+        sequence: 10,
+        kind: "changed",
+        relativePath: "src/app.ts",
+        metadataHash: "0123456789abcdef",
+      });
+    });
+
+    expect(await screen.findByRole("treeitem", { name: /new\.ts/i })).toBeInTheDocument();
+    expect(screen.getByRole("treeitem", { name: /src/i })).toHaveAttribute("aria-expanded", "true");
+    expect(fetchFilesTree).not.toHaveBeenLastCalledWith("/repo", "");
   });
 
   it("settles Git status after the root tree resolves to the same root", async () => {
@@ -424,7 +583,7 @@ describe("FilesWidget", () => {
     await userEvent.click(await screen.findByRole("treeitem", { name: "SpringAI Showcase" }));
 
     expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
-    expect(fetchGitStatus).toHaveBeenCalledWith(nestedRoot);
+    expect(fetchGitStatus).toHaveBeenCalledWith(nestedRoot, { includeIgnored: true });
     expect(screen.getByText("M")).toBeInTheDocument();
 
     await userEvent.click(
@@ -540,6 +699,122 @@ describe("FilesWidget", () => {
     expect(await screen.findByRole("region", { name: "Git diff: package.json" })).toHaveTextContent(
       "+new",
     );
+  });
+
+  it("renders complete file badges and collapsed descendant folder aggregates", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([
+        gitChange("modified.ts", "M"),
+        gitChange("added.ts", " ", { indexStatus: "A", staged: true, unstaged: false }),
+        gitChange("untracked.ts", "?"),
+        gitChange("renamed.ts", " ", {
+          oldPath: "old-name.ts",
+          indexStatus: "R",
+          staged: true,
+          unstaged: false,
+        }),
+        gitChange("conflicted.ts", "U", { conflicted: true }),
+        gitChange("src/deep.ts", "M"),
+        gitChange("removed/gone.ts", "D"),
+      ]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        { ...treeEntryBase, name: "removed", path: "removed", kind: "directory" },
+        { ...treeEntryBase, name: "modified.ts", path: "modified.ts", kind: "file" },
+        { ...treeEntryBase, name: "added.ts", path: "added.ts", kind: "file" },
+        { ...treeEntryBase, name: "untracked.ts", path: "untracked.ts", kind: "file" },
+        { ...treeEntryBase, name: "renamed.ts", path: "renamed.ts", kind: "file" },
+        { ...treeEntryBase, name: "conflicted.ts", path: "conflicted.ts", kind: "file" },
+      ],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByLabelText("Git modified: modified.ts")).toHaveTextContent("M");
+    expect(screen.getByLabelText("Git added: added.ts")).toHaveTextContent("A");
+    expect(screen.getByLabelText("Git untracked: untracked.ts")).toHaveTextContent("?");
+    expect(screen.getByLabelText("Git renamed: renamed.ts")).toHaveTextContent("R");
+    const conflict = screen.getByLabelText("Git conflict: conflicted.ts");
+    expect(conflict).toHaveTextContent("U");
+    expect(conflict).toHaveAttribute("data-git-state", "conflicted");
+    expect(screen.getByLabelText("Folder contains 1 Git changes")).toHaveTextContent("Δ");
+    expect(
+      screen.getByLabelText("Folder contains 1 Git changes, including deleted files"),
+    ).toHaveTextContent("Δ");
+    expect(screen.getByText("src").closest("button")).toHaveAttribute("aria-expanded", "false");
+    expect(fetchGitStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("dims ignored files semantically without removing their interaction", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([gitChange("ignored.log", "!")]),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "ignored.log",
+          path: "ignored.log",
+          kind: "file",
+          extension: "log",
+        },
+      ],
+    });
+    const onOpenFile = vi.fn();
+
+    render(<FilesWidget root="/repo" openFilesDirectly onOpenFile={onOpenFile} />);
+
+    const row = await screen.findByRole("treeitem", { name: "ignored.log, Ignored by Git" });
+    expect(row.closest("[data-git-ignored='true']")).toHaveStyle({ opacity: "0.55" });
+    expect(screen.queryByLabelText(/Git changed: ignored\.log/iu)).toBeNull();
+    await userEvent.click(row);
+    expect(onOpenFile).toHaveBeenCalledWith("/repo", "ignored.log");
+  });
+
+  it("leaves ordinary rows undecorated when ignored entries are not requested by the response", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(availableGitStatus([]));
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "ordinary.ts", path: "ordinary.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    const row = await screen.findByRole("treeitem", { name: /ordinary\.ts/iu });
+    expect(row).not.toHaveAttribute("aria-label");
+    expect(row.closest(".tr-file-wrap")).not.toHaveAttribute("data-git-ignored");
+    expect(row.closest(".tr-file-wrap")).not.toHaveAttribute("style");
+  });
+
+  it("renders an honest incomplete affordance for truncated Git status", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue(
+      availableGitStatus([gitChange("visible.ts", "M")], {
+        truncated: true,
+        maxChanges: 500,
+      }),
+    );
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "visible.ts", path: "visible.ts", kind: "file" }],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(
+      await screen.findByText("Git decorations incomplete: showing only the first 500 changes."),
+    ).toBeInTheDocument();
   });
 
   it("opens the previewed file in the editor on demand", async () => {
@@ -754,6 +1029,7 @@ describe("FilesWidget", () => {
     expect(await screen.findByRole("treeitem", { name: /inside\.ts/i })).toBeInTheDocument();
     expect(screen.queryByRole("treeitem", { name: /package\.json/i })).toBeNull();
     onActiveFileChange.mockClear();
+    const gitStatusCallsBeforeRefresh = vi.mocked(fetchGitStatus).mock.calls.length;
 
     await userEvent.click(screen.getByRole("button", { name: "Refresh folder" }));
 
@@ -766,6 +1042,9 @@ describe("FilesWidget", () => {
       "/resolved-repo/src",
     );
     expect(onActiveFileChange).not.toHaveBeenCalledWith(null, "/resolved-repo", null);
+    await waitFor(() =>
+      expect(fetchGitStatus).toHaveBeenCalledTimes(gitStatusCallsBeforeRefresh + 1),
+    );
   });
 
   it("expands a folder from the caret without changing the chat-visible folder scope", async () => {
@@ -1268,6 +1547,16 @@ describe("FilePreview", () => {
     expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
   });
 
+  it("renders the unreadable fallback for opaque preview failures", async () => {
+    vi.mocked(fetchFilesPreview).mockRejectedValueOnce("opaque preview failure");
+
+    render(<FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Unable to read this file.");
+    expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
+  });
+
   it("refreshes the open preview and confirms the updated file content", async () => {
     vi.mocked(fetchFilesPreview)
       .mockResolvedValueOnce({
@@ -1504,6 +1793,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     fireEvent.contextMenu(await screen.findByText("app.ts"));
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "Rename…" }));
     const input = await screen.findByLabelText("Rename app.ts");
@@ -1521,6 +1811,7 @@ describe("FilesWidget file operations", () => {
       op: "rename",
       mutation: expect.objectContaining({ path: "renamed.ts", previousPath: "app.ts" }),
     });
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   it("deletes a file from the context menu after confirmation", async () => {
@@ -1528,6 +1819,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     fireEvent.contextMenu(await screen.findByText("app.ts"));
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "Delete…" }));
     // The confirm dialog gates the destructive action.
@@ -1540,6 +1832,9 @@ describe("FilesWidget file operations", () => {
       op: "delete",
       mutation: { root: "/repo", path: "app.ts", kind: "file" },
     });
+    // AC2 (Epic #2093 audit) — deletion must invalidate the shared git status the same way
+    // rename already does, so decorations re-fetch instead of going stale.
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   // GEN-UI-FOCUS-002 — the delete-confirmation dialog must trap focus, focus a button on open,
@@ -1647,6 +1942,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     fireEvent.contextMenu(await screen.findByText("app.ts"));
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     await userEvent.click(await screen.findByRole("menuitem", { name: "Duplicate" }));
 
@@ -1662,6 +1958,9 @@ describe("FilesWidget file operations", () => {
       op: "create",
       mutation: { root: "/repo", path: "app copy.ts", kind: "file" },
     });
+    // AC2 (Epic #2093 audit) — duplication must invalidate the shared git status the same way
+    // rename already does, so decorations re-fetch instead of going stale.
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   it("moves a file into a folder when dropped on its row (drag-move = rename)", async () => {
@@ -1674,6 +1973,7 @@ describe("FilesWidget file operations", () => {
     const onFilesMutated = vi.fn();
     render(<FilesWidget root="/repo" onFilesMutated={onFilesMutated} />);
     await screen.findByText("app.ts");
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(1));
 
     const source = screen.getByRole("treeitem", { name: /app\.ts/ });
     const target = screen.getByRole("treeitem", { name: /src/ });
@@ -1693,6 +1993,9 @@ describe("FilesWidget file operations", () => {
       op: "rename",
       mutation: expect.objectContaining({ path: "src/app.ts", previousPath: "app.ts" }),
     });
+    // AC2 (Epic #2093 audit) — a drag-move must invalidate the shared git status the same way
+    // the context-menu rename already does, so decorations re-fetch instead of going stale.
+    await waitFor(() => expect(fetchGitStatus).toHaveBeenCalledTimes(2));
   });
 
   // GEN-PERF-WIDGET-004 — while a tooltip is visible, pointer motion must not commit a React

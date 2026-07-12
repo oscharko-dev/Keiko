@@ -195,33 +195,42 @@ function candidateTestsFor(path: string): readonly string[] {
   return out;
 }
 
-// Map a test-shaped path back to its paired source path. The marker (".test." / ".spec.")
-// and trailing extension are stripped to recover the stem; conventions are inverted to
-// produce candidates in priority order.
-// eslint-disable-next-line complexity -- Mirrors common test/source path conventions in priority order.
-function candidateSourcesFor(path: string): readonly string[] {
-  const parts = extractExtension(path);
-  if (parts === undefined || !isTestPath(path)) {
-    return [];
-  }
-  const { stem, ext } = parts;
-  const { dir, base } = basenameOf(stem);
+// Candidates derived from stripping a JS-like test marker (".test." / ".spec.") back to the
+// source stem, including the __tests__/tests directory conventions for that stem.
+function candidateSourcesFromTestMarker(
+  path: string,
+  stem: string,
+  ext: string,
+): readonly string[] {
   const out: string[] = [];
-  if (JS_LIKE_EXTENSIONS.has(ext) && TEST_MARKER_RE.test(path)) {
-    const marker = TEST_MARKER_RE.exec(path);
-    const sourceStem = marker === null ? stem : path.slice(0, marker.index);
-    const sourceDir = basenameOf(sourceStem).dir;
-    const sourceBase = basenameOf(sourceStem).base;
-    if (sourceStem.startsWith("tests/")) {
-      pushUnique(out, `src/${sourceStem.slice(6)}${ext}`);
-    }
-    if (sourceDir.endsWith("/__tests__")) {
-      pushUnique(out, `${sourceDir.slice(0, -"/__tests__".length)}/${sourceBase}${ext}`);
-    } else if (sourceDir === "__tests__") {
-      pushUnique(out, `${sourceBase}${ext}`);
-    }
-    pushUnique(out, `${sourceStem}${ext}`);
+  if (!(JS_LIKE_EXTENSIONS.has(ext) && TEST_MARKER_RE.test(path))) {
+    return out;
   }
+  const marker = TEST_MARKER_RE.exec(path);
+  const sourceStem = marker === null ? stem : path.slice(0, marker.index);
+  const sourceDir = basenameOf(sourceStem).dir;
+  const sourceBase = basenameOf(sourceStem).base;
+  if (sourceStem.startsWith("tests/")) {
+    pushUnique(out, `src/${sourceStem.slice(6)}${ext}`);
+  }
+  if (sourceDir.endsWith("/__tests__")) {
+    pushUnique(out, `${sourceDir.slice(0, -"/__tests__".length)}/${sourceBase}${ext}`);
+  } else if (sourceDir === "__tests__") {
+    pushUnique(out, `${sourceBase}${ext}`);
+  }
+  pushUnique(out, `${sourceStem}${ext}`);
+  return out;
+}
+
+// Candidates derived from stripped test-name suffixes/prefixes (Test/Spec/IT/test_/_test),
+// mapped back through the main/test directory conventions in priority order.
+function candidateSourcesFromNamingConvention(
+  stem: string,
+  dir: string,
+  base: string,
+  ext: string,
+): readonly string[] {
+  const out: string[] = [];
   for (const sourceBase of stripTestBase(base)) {
     for (const mapped of mapTestToMainStem(stem, sourceBase)) {
       pushUnique(out, `${mapped}${ext}`);
@@ -233,6 +242,26 @@ function candidateSourcesFor(path: string): readonly string[] {
       pushUnique(out, `${sourceBase}${ext}`);
     }
     pushUnique(out, `${dir === "" ? sourceBase : `${dir}/${sourceBase}`}${ext}`);
+  }
+  return out;
+}
+
+// Map a test-shaped path back to its paired source path. The marker (".test." / ".spec.")
+// and trailing extension are stripped to recover the stem; conventions are inverted to
+// produce candidates in priority order.
+function candidateSourcesFor(path: string): readonly string[] {
+  const parts = extractExtension(path);
+  if (parts === undefined || !isTestPath(path)) {
+    return [];
+  }
+  const { stem, ext } = parts;
+  const { dir, base } = basenameOf(stem);
+  const out: string[] = [];
+  for (const candidate of candidateSourcesFromTestMarker(path, stem, ext)) {
+    pushUnique(out, candidate);
+  }
+  for (const candidate of candidateSourcesFromNamingConvention(stem, dir, base, ext)) {
+    pushUnique(out, candidate);
   }
   return out;
 }

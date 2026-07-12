@@ -74,6 +74,11 @@ so it is present in the published closure (the root uses `bundleDependencies`, w
 package's third-party dependencies — ADR-0021 D1). The compiler runs server-side only, model-free and
 offline.
 
+During the TypeScript 7 transition, this runtime dependency remains the stable TypeScript 6
+programmatic API. Root and package-reference compilation use the separate development-only native
+TypeScript 7 compiler. The role split, identity gate, upgrade sequence, and rollback procedure are
+defined in the [TypeScript toolchain contract](typescript-toolchain.md).
+
 ### Staged expansion to other languages (#1213/#1381/#1382, governed by ADR-0045 and ADR-0069)
 
 Deep deterministic intelligence for additional languages is a **staged expansion** tracked by

@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -14,6 +14,7 @@ import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createLspFrameReader, writeLspFrame } from "./lspFrameCodec.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
 import type { FakeLspBehavior, FakeLspController } from "./testing/fakeLspProcess.js";
+import { writeExecutableFixture } from "./testing/executableFixture.js";
 
 // `resolveExecutableOutsideWorkspace` runs against the real filesystem even when the spawn function is
 // faked, so the manager only proceeds to spawn if `fakelsp` actually resolves on PATH outside the
@@ -25,9 +26,8 @@ let WORKSPACE_ROOT = "";
 beforeAll(() => {
   BIN_DIR = mkdtempSync(join(tmpdir(), "keiko-lsp-bin-"));
   WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), "keiko-lsp-ws-"));
-  const exe = join(BIN_DIR, "fakelsp");
-  writeFileSync(exe, "#!/bin/sh\n");
-  chmodSync(exe, 0o755);
+  writeExecutableFixture(BIN_DIR, "fakelsp");
+  writeExecutableFixture(BIN_DIR, "approvedtool");
 });
 
 afterAll(() => {
@@ -219,6 +219,141 @@ function makeDeps(
 }
 
 describe("createLspProcessManager", () => {
+  it("uses the prepared executable and arguments and cleans generation resources on dispose", async () => {
+    const controller = createFakeLspProcess();
+    const cleanup = vi.fn();
+    let received: { executable: string; args: readonly string[] } | undefined;
+    const spawn: LspSpawnFn = (executable, args) => {
+      received = { executable, args };
+      return controller.handle;
+    };
+    const manager = createLspProcessManager({
+      ...makeDeps(spawn, makeConfig()),
+      prepareSpawn: (input) => ({
+        executable: "/usr/bin/sandbox-wrapper",
+        args: ["--deny-egress", input.executable, ...input.args],
+        env: input.env,
+        cleanup,
+      }),
+    });
+    await settle();
+
+    expect(received).toEqual({
+      executable: "/usr/bin/sandbox-wrapper",
+      args: ["--deny-egress", realpathSync(join(BIN_DIR, "fakelsp")), "--stdio"],
+    });
+    await manager.dispose();
+    expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("kills the process and fails closed when its runtime-state budget is exceeded", async () => {
+    const controller = createFakeLspProcess({ results: { "textDocument/hover": null } });
+    let budgetSatisfied = true;
+    let spawnCount = 0;
+    const events: LspLifecycleEvent[] = [];
+    const manager = createLspProcessManager({
+      ...makeDeps(
+        () => {
+          spawnCount += 1;
+          return controller.handle;
+        },
+        makeConfig(),
+        (event) => events.push(event),
+      ),
+      prepareSpawn: (input) => ({
+        executable: input.executable,
+        args: input.args,
+        env: input.env,
+        resourceBudgetSatisfied: (): boolean => budgetSatisfied,
+      }),
+    });
+    await settle();
+    expect(manager.getLspProcessStatus()).toBe("READY");
+
+    budgetSatisfied = false;
+    await expect(
+      manager.sendRequest("textDocument/hover", {}, new AbortController().signal),
+    ).rejects.toMatchObject({ code: "RESOURCE_BUDGET_EXCEEDED" });
+    expect(manager.getLspProcessStatus()).toBe("CRASHED");
+    expect(controller.killed()).toContain("SIGKILL");
+    await settle();
+    expect(spawnCount).toBe(1);
+    expect(events.filter((event) => event.errorCode === "RESOURCE_BUDGET_EXCEEDED")).toHaveLength(
+      1,
+    );
+    await manager.dispose();
+  });
+
+  it("continues lifecycle teardown when one prepared resource cleanup throws", async () => {
+    const controller = createFakeLspProcess();
+    const cleanup = vi.fn((): void => {
+      throw new Error("cleanup sentinel");
+    });
+    const manager = createLspProcessManager({
+      ...makeDeps(() => controller.handle, makeConfig()),
+      approvedDescendantExecutables: ["approvedtool"],
+      commandRules: [...RULES, { executable: "approvedtool" }],
+      prepareSpawn: (input) => ({ ...input, cleanup }),
+    });
+    await settle();
+
+    await expect(manager.dispose()).resolves.toBeUndefined();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(manager.getLspProcessStatus()).toBe("DISPOSED");
+  });
+
+  it("retains an empty negotiated snapshot when a server advertises no capabilities", async () => {
+    const controller = createFakeLspProcess({ initializeResult: { capabilities: {} } });
+    const manager = createLspProcessManager({
+      ...makeDeps(() => controller.handle, makeConfig()),
+      protocol: {
+        language: "python",
+        candidateOperations: ["completion", "hover"],
+        semanticTokensCandidate: true,
+        configurationRevision: 8,
+        configuration: {},
+      },
+    });
+    await settle();
+
+    expect(manager.getNegotiatedCapabilities()).toMatchObject({
+      configurationRevision: 8,
+      negotiatedOperations: [],
+      textSync: "none",
+    });
+    expect(manager.getHealthSnapshot()).toMatchObject({
+      language: "python",
+      status: "READY",
+      configurationRevision: 8,
+      negotiatedOperations: [],
+      requestCount: 0,
+    });
+    await manager.dispose();
+  });
+
+  it("records content-free request outcome and latency counters", async () => {
+    const { spawn } = fakeSpawnHarness(["normal"]);
+    const manager = createLspProcessManager({
+      ...makeDeps(spawn, makeConfig()),
+      protocol: {
+        language: "python",
+        candidateOperations: ["hover"],
+        semanticTokensCandidate: false,
+        configurationRevision: 2,
+        configuration: {},
+      },
+    });
+    await settle();
+    await manager.sendRequest("textDocument/hover", {}, new AbortController().signal);
+
+    const health = manager.getHealthSnapshot();
+    if (health === undefined) throw new Error("Expected LSP health snapshot");
+    expect(health).toMatchObject({ requestCount: 1, successCount: 1, failureCount: 0 });
+    expect(health.latency).toMatchObject({ count: 1, lessThanOrEqual10Ms: 1 });
+    expect(JSON.stringify(health)).not.toContain(WORKSPACE_ROOT);
+    await manager.dispose();
+  });
+
   it("reaches READY after a successful initialize handshake", async () => {
     const { spawn } = fakeSpawnHarness(["normal"]);
     const manager = createLspProcessManager(makeDeps(spawn, makeConfig()));
@@ -311,6 +446,34 @@ describe("createLspProcessManager", () => {
     await manager.dispose();
   });
 
+  it("rotates and removes the private descendant PATH across crash and disposal", async () => {
+    const paths: string[] = [];
+    const controllers: FakeLspController[] = [];
+    const spawn: LspSpawnFn = (_executable, _args, env) => {
+      paths.push(env.PATH ?? "");
+      const controller = createFakeLspProcess();
+      controllers.push(controller);
+      return controller.handle;
+    };
+    const manager = createLspProcessManager({
+      ...makeDeps(spawn, makeConfig()),
+      commandRules: [...RULES, { executable: "approvedtool" }],
+      approvedDescendantExecutables: ["approvedtool"],
+    });
+    await settle();
+    const firstPath = paths[0] ?? "";
+    expect(existsSync(firstPath)).toBe(true);
+
+    controllers[0]?.crash();
+    await settle();
+    const secondPath = paths[1] ?? "";
+    expect(existsSync(firstPath)).toBe(false);
+    expect(existsSync(secondPath)).toBe(true);
+
+    await manager.dispose();
+    expect(existsSync(secondPath)).toBe(false);
+  });
+
   it("rejects an in-flight request PROMPTLY when the child crashes before responding (FIX 3)", async () => {
     // A request is in flight when the server crashes. On restart, spawnAndInitialize disposes the OLD
     // transport, whose client.dispose() rejects every pending request with LspRpcDisposedError →
@@ -383,7 +546,7 @@ describe("createLspProcessManager", () => {
   });
 
   it("rejects an oversized response frame without crashing the request path", async () => {
-    const { spawn } = fakeSpawnHarness(["oversized"], 8_000_000);
+    const { spawn, controllers } = fakeSpawnHarness(["oversized"], 8_000_000);
     const manager = createLspProcessManager(makeDeps(spawn, makeConfig({ maxFrameBytes: 4_096 })));
     await settle();
 
@@ -392,6 +555,7 @@ describe("createLspProcessManager", () => {
     // here: the oversized fake never returns a valid initialize response, so the manager can only land
     // in CRASHED or (after the restart budget is spent) RESTART_THROTTLED (FIX 5).
     expect(["CRASHED", "RESTART_THROTTLED"]).toContain(manager.getLspProcessStatus());
+    expect(controllers.every((controller) => controller.killed().includes("SIGKILL"))).toBe(true);
     await manager.dispose();
   });
 

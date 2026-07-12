@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -521,7 +521,49 @@ function seedConnectionsN(count: number): readonly SeedConnection[] {
 
 const SCALE_WINDOWS = Number.parseInt(process.env.KEIKO_PERF_SCALE_WINDOWS ?? "0", 10);
 
-// eslint-disable-next-line max-lines-per-function -- Playwright describe block holds the skip guard plus the single scale-tier evidence test; keeping them together preserves the suite structure.
+async function attachScalePerfEvidence(
+  testInfo: TestInfo,
+  evidence: {
+    readonly throttleRate: number;
+    readonly mountMs: number;
+    readonly gestures: readonly GestureEvidence[];
+  },
+): Promise<void> {
+  await testInfo.attach("workspace-scale-perf-evidence", {
+    body: JSON.stringify(
+      {
+        commit: resolveCommit(),
+        windows: SCALE_WINDOWS,
+        throttleRate: evidence.throttleRate,
+        mountMs: evidence.mountMs,
+        gestures: evidence.gestures,
+      },
+      null,
+      2,
+    ),
+    contentType: "application/json",
+  });
+}
+
+function assertScaleGestureBudgets(
+  gestures: readonly GestureEvidence[],
+  drag: GestureEvidence,
+  projectName: string,
+): void {
+  const p75Budget = SCALE_WINDOWS >= 80 ? 50 : 40;
+  const maxBudget = SCALE_WINDOWS >= 80 ? 250 : 180;
+  for (const gesture of gestures) {
+    expect(gesture.frameGapSamples, `${gesture.label} samples`).toBeGreaterThan(3);
+    if (projectName !== "webkit") {
+      expect(gesture.frameGapP75Ms, `${gesture.label} p75`).toBeLessThanOrEqual(p75Budget);
+      expect(gesture.frameGapMaxMs, `${gesture.label} max`).toBeLessThanOrEqual(maxBudget);
+    }
+    expect(gesture.viewWrites, `${gesture.label} view writes`).toBeLessThanOrEqual(1);
+    expect(gesture.workspacePuts, `${gesture.label} PUTs`).toBeLessThanOrEqual(1);
+  }
+  expect(drag.workspaceWrites, "drag write coalescing holds at scale").toBeLessThanOrEqual(1);
+}
+
 test.describe("workspace scale + low-end tier", () => {
   test.skip(
     !(Number.isFinite(SCALE_WINDOWS) && SCALE_WINDOWS >= 20),
@@ -530,7 +572,6 @@ test.describe("workspace scale + low-end tier", () => {
 
   test("keeps gestures bounded at declared-capacity window counts @release-evidence-scale", async ({
     page,
-    // eslint-disable-next-line max-lines-per-function -- one end-to-end scale-tier gesture measurement: seed windows, mount, record pan/drag, attach evidence, then assert every budget in sequence.
   }, testInfo) => {
     test.setTimeout(240_000);
     await page.setViewportSize({ width: 1400, height: 900 });
@@ -567,34 +608,9 @@ test.describe("workspace scale + low-end tier", () => {
       testInfo.project.name,
     );
 
-    await testInfo.attach("workspace-scale-perf-evidence", {
-      body: JSON.stringify(
-        {
-          commit: resolveCommit(),
-          windows: SCALE_WINDOWS,
-          throttleRate,
-          mountMs,
-          gestures: [pan, drag],
-        },
-        null,
-        2,
-      ),
-      contentType: "application/json",
-    });
+    await attachScalePerfEvidence(testInfo, { throttleRate, mountMs, gestures: [pan, drag] });
 
     // Ceiling budgets: scale by count but stay bounded. Write coalescing must NOT degrade with count.
-    const p75Budget = SCALE_WINDOWS >= 80 ? 50 : 40;
-    const maxBudget = SCALE_WINDOWS >= 80 ? 250 : 180;
-    for (const gesture of [pan, drag]) {
-      expect(gesture.frameGapSamples, `${gesture.label} samples`).toBeGreaterThan(3);
-      // Timing budgets are chromium-only (headless WebKit software-renders on CI; see assertGesture).
-      if (testInfo.project.name !== "webkit") {
-        expect(gesture.frameGapP75Ms, `${gesture.label} p75`).toBeLessThanOrEqual(p75Budget);
-        expect(gesture.frameGapMaxMs, `${gesture.label} max`).toBeLessThanOrEqual(maxBudget);
-      }
-      expect(gesture.viewWrites, `${gesture.label} view writes`).toBeLessThanOrEqual(1);
-      expect(gesture.workspacePuts, `${gesture.label} PUTs`).toBeLessThanOrEqual(1);
-    }
-    expect(drag.workspaceWrites, "drag write coalescing holds at scale").toBeLessThanOrEqual(1);
+    assertScaleGestureBudgets([pan, drag], drag, testInfo.project.name);
   });
 });

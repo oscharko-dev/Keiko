@@ -7,7 +7,7 @@
  * DOM/Monaco edges are touched only inside the returned callbacks/effect, never at module scope.
  */
 import { type OnChange, type OnMount } from "@monaco-editor/react";
-import { useCallback, useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
 
 import { buildSaveRequest } from "./save-state.js";
 import type { KeikoCodeEditorProps } from "./types.js";
@@ -27,10 +27,18 @@ import type {
   WireEditorFormatting,
   WireEditorHover,
   WireEditorInlineCompletion,
+  WireEditorInlayHints,
+  WireEditorCallHierarchy,
   WireEditorReferences,
   WireEditorSignatureHelp,
   WireEditorSymbols,
+  WireEditorGitGutter,
+  WireEditorBlame,
+  WireEditorConflicts,
 } from "./on-mount.js";
+import type { EditorGitGutterBridge, EditorGitGutterChanges } from "./git-gutter-bridge.js";
+import type { EditorCallHierarchyResponse } from "./call-hierarchy-bridge.js";
+import type { EditorInlayHintsResponse } from "./inlay-hints-bridge.js";
 import type {
   EditorCodeActionsResponse,
   EditorCompletionResponse,
@@ -64,12 +72,23 @@ import {
   createInlineCompletionTelemetry,
   type InlineCompletionTelemetry,
 } from "./inline-completion-telemetry.js";
+import { deriveLargeFileMode } from "./large-file-mode.js";
+import {
+  attachRetainedEditorModel,
+  updateRetainedEditorModelProtection,
+  type EditorModelProtection,
+  type RetainedEditorModelAttachment,
+  type RetainedEditorModel,
+  type RetainedEditorModelEditor,
+  type RetainedEditorModelNamespace,
+} from "./editor-model-registry.js";
 
 export interface EditorHandlers {
   readonly onChange: OnChange;
   readonly onMount: OnMount;
   readonly formatDocument: () => void;
   readonly revealDiagnosticMarker: (marker: DiagnosticOverviewMarker) => void;
+  readonly refreshGitGutter: () => void;
 }
 
 // A single module-scope UTF-8 encoder shared across every change event. `TextEncoder` is stateless
@@ -80,22 +99,36 @@ export interface EditorHandlers {
 const CHANGE_UTF8_ENCODER = new TextEncoder();
 
 type OverviewMarkersHandler = (markers: readonly DiagnosticOverviewMarker[]) => void;
+type CallHierarchyResultHandler = (response: EditorCallHierarchyResponse) => void;
 
 interface ProgrammaticEditorChange {
   readonly text: string;
-  readonly origin: EditorChangeOrigin;
+  readonly origin?: EditorChangeOrigin;
+  readonly suppress?: boolean;
 }
 
-type ProgrammaticEditorChangeRef = MutableRefObject<ProgrammaticEditorChange | null>;
+type ProgrammaticEditorChangeRef = RefObject<ProgrammaticEditorChange | null>;
+
+function consumeProgrammaticChange(
+  value: string,
+  programmaticChangeRef: ProgrammaticEditorChangeRef | undefined,
+): ProgrammaticEditorChange | null {
+  const programmatic = programmaticChangeRef?.current;
+  if (programmatic?.text !== value) return null;
+  if (programmaticChangeRef !== undefined) programmaticChangeRef.current = null;
+  return programmatic;
+}
 
 interface EditorRefs {
-  readonly editorRef: MutableRefObject<MountEditor | null>;
-  readonly monacoRef: MutableRefObject<MountMonaco | null>;
-  readonly containerRef: MutableRefObject<HTMLElement | null>;
-  readonly viewStateRef: MutableRefObject<unknown>;
-  readonly disposeRef: MutableRefObject<(() => void) | null>;
-  readonly revealDecorationIdsRef: MutableRefObject<string[]>;
-  readonly revealTimeoutRef: MutableRefObject<number | null>;
+  readonly editorRef: RefObject<MountEditor | null>;
+  readonly monacoRef: RefObject<MountMonaco | null>;
+  readonly containerRef: RefObject<HTMLElement | null>;
+  readonly viewStateRef: RefObject<unknown>;
+  readonly disposeRef: RefObject<(() => void) | null>;
+  readonly modelAttachmentRef: RefObject<RetainedEditorModelAttachment | null>;
+  readonly revealDecorationIdsRef: RefObject<string[]>;
+  readonly revealTimeoutRef: RefObject<number | null>;
+  readonly gitGutterBridgeRef: RefObject<EditorGitGutterBridge | null>;
 }
 
 function useEditorRefs(): EditorRefs {
@@ -104,8 +137,10 @@ function useEditorRefs(): EditorRefs {
   const containerRef = useRef<HTMLElement | null>(null);
   const viewStateRef = useRef<unknown>(null);
   const disposeRef = useRef<(() => void) | null>(null);
+  const modelAttachmentRef = useRef<RetainedEditorModelAttachment | null>(null);
   const revealDecorationIdsRef = useRef<string[]>([]);
   const revealTimeoutRef = useRef<number | null>(null);
+  const gitGutterBridgeRef = useRef<EditorGitGutterBridge | null>(null);
   return useMemo(
     () => ({
       editorRef,
@@ -113,8 +148,10 @@ function useEditorRefs(): EditorRefs {
       containerRef,
       viewStateRef,
       disposeRef,
+      modelAttachmentRef,
       revealDecorationIdsRef,
       revealTimeoutRef,
+      gitGutterBridgeRef,
     }),
     [
       editorRef,
@@ -122,8 +159,10 @@ function useEditorRefs(): EditorRefs {
       containerRef,
       viewStateRef,
       disposeRef,
+      modelAttachmentRef,
       revealDecorationIdsRef,
       revealTimeoutRef,
+      gitGutterBridgeRef,
     ],
   );
 }
@@ -157,7 +196,12 @@ function applyRevealRequest(
   clearRevealDecoration(refs);
   editor.focus();
   editor.setSelection(safeRange);
-  editor.setPosition({ lineNumber: safeRange.startLineNumber, column: safeRange.startColumn });
+  // Keep the whole-line highlight, but place the cursor at the actual symbol/reference column so
+  // cursor-derived breadcrumbs can resolve an indented nested symbol instead of only its parent.
+  editor.setPosition({
+    lineNumber: safeRange.startLineNumber,
+    column: Math.max(1, monacoRange.startColumn),
+  });
   editor.revealRangeInCenterIfOutsideViewport(safeRange);
   refs.revealDecorationIdsRef.current = editor.deltaDecorations(
     [],
@@ -192,7 +236,7 @@ function revealDiagnosticMarker(refs: EditorRefs, marker: DiagnosticOverviewMark
 
 function useSaveEmitter(
   props: KeikoCodeEditorProps,
-  editorRef: MutableRefObject<MountEditor | null>,
+  editorRef: RefObject<MountEditor | null>,
   readOnly: boolean,
 ): () => void {
   // The save command is registered into Monaco ONCE at mount: `@monaco-editor/react` captures the
@@ -230,11 +274,9 @@ export function useChangeHandler(
       if (value === undefined || readOnly) {
         return;
       }
-      const programmatic = programmaticChangeRef?.current;
-      const origin = programmatic?.text === value ? programmatic.origin : "human";
-      if (programmaticChangeRef !== undefined && programmatic?.text === value) {
-        programmaticChangeRef.current = null;
-      }
+      const programmatic = consumeProgrammaticChange(value, programmaticChangeRef);
+      if (programmatic?.suppress === true) return;
+      const origin = programmatic?.origin ?? "human";
       onContentChange({ text: value, sizeBytes: CHANGE_UTF8_ENCODER.encode(value).length }, origin);
     },
     [readOnly, onContentChange, programmaticChangeRef],
@@ -307,13 +349,55 @@ function useHostEditRequest(
   }, [programmaticChangeRef, props.hostEditRequest, props.onContentChange, refs]);
 }
 
+function useControlledModelValueSync(
+  props: KeikoCodeEditorProps,
+  refs: EditorRefs,
+  programmaticChangeRef: ProgrammaticEditorChangeRef,
+): void {
+  useEffect(() => {
+    const expected = props.buffer.content.text;
+    const syncChange: ProgrammaticEditorChange =
+      props.fileModel.lastChangeOrigin === null
+        ? { text: expected, suppress: true }
+        : { text: expected, origin: props.fileModel.lastChangeOrigin, suppress: true };
+    let frame: number | null = null;
+    let cancelled = false;
+    const syncIfMounted = (): boolean => {
+      const model = refs.editorRef.current?.getModel?.();
+      if (model === undefined || model === null) return false;
+      if (model.getValue() === expected || model.setValue === undefined) return true;
+      programmaticChangeRef.current = syncChange;
+      model.setValue(expected);
+      queueMicrotask(() => {
+        if (programmaticChangeRef.current === syncChange) programmaticChangeRef.current = null;
+      });
+      return true;
+    };
+    const syncWhenMounted = (): void => {
+      if (cancelled || syncIfMounted()) return;
+      frame = window.requestAnimationFrame(syncWhenMounted);
+    };
+    syncWhenMounted();
+    return (): void => {
+      cancelled = true;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [
+    programmaticChangeRef,
+    props.buffer.content.text,
+    props.fileModel.identity.uri,
+    props.fileModel.lastChangeOrigin,
+    refs,
+  ]);
+}
+
 // Builds the completion wiring from the live props ref so a resolver swap (e.g. the host opening a
 // different file in the same editor mount, #1196) is always honoured — `@monaco-editor/react`
 // captures `onMount` once, so the registered provider must read the latest resolver, not a
 // mount-time closure. Returns undefined when the host supplies no resolver, so no provider is
 // registered (no silent or placeholder completion affordance).
 function buildCompletionWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorCompletion | undefined {
   if (latestProps.current.provideCompletions === undefined) {
@@ -340,7 +424,7 @@ function buildCompletionWiring(
 // provider is registered. The telemetry accumulator is created once per mount and forwards each
 // content-free snapshot to the live `onInlineCompletionTelemetry` prop.
 function buildInlineCompletionWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
   telemetry: InlineCompletionTelemetry,
 ): WireEditorInlineCompletion | undefined {
@@ -367,7 +451,7 @@ function buildInlineCompletionWiring(
 // Builds the diagnostics wiring from the live props ref (Issue #1201), mirroring the completion
 // builders. Returns undefined when the host supplies no diagnostics resolver, so no markers run.
 function buildDiagnosticsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
   onOverviewMarkers: OverviewMarkersHandler | undefined,
 ): WireEditorDiagnostics | undefined {
@@ -389,6 +473,9 @@ function buildDiagnosticsWiring(
     onSummary: (summary): void => {
       latestProps.current.onDiagnosticsSummary?.(summary);
     },
+    onDiagnostics: (diagnostics): void => {
+      latestProps.current.onDiagnostics?.(diagnostics);
+    },
     ...(onOverviewMarkers === undefined ? {} : { onOverviewMarkers }),
   };
 }
@@ -397,10 +484,11 @@ function buildDiagnosticsWiring(
 // command handler, so no Keiko action is registered into Monaco's palette. Each run reads the live
 // prop so a handler swap (e.g. the host opening a different file) is honoured.
 function buildCommandsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
 ): WireEditorCommands | undefined {
   if (
     latestProps.current.onGenerateTests === undefined &&
+    latestProps.current.onAskKeikoAboutSelection === undefined &&
     latestProps.current.onRenameSymbol === undefined
   ) {
     return undefined;
@@ -411,6 +499,13 @@ function buildCommandsWiring(
       : {
           generateTests: (): void => {
             latestProps.current.onGenerateTests?.();
+          },
+        }),
+    ...(latestProps.current.onAskKeikoAboutSelection === undefined
+      ? {}
+      : {
+          askKeikoAboutSelection: (selection): void => {
+            latestProps.current.onAskKeikoAboutSelection?.(selection);
           },
         }),
     ...(latestProps.current.onRenameSymbol === undefined
@@ -424,7 +519,7 @@ function buildCommandsWiring(
 }
 
 function isCurrentDocument(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
 ): (documentUri: string) => boolean {
   return (documentUri): boolean => latestProps.current.fileModel.identity.uri === documentUri;
 }
@@ -432,7 +527,7 @@ function isCurrentDocument(
 // Builds the hover wiring from the live props ref (Issue #1201). Returns undefined when the host
 // supplies no hover resolver, so no hover provider is registered.
 function buildHoverWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorHover | undefined {
   if (latestProps.current.provideHover === undefined) {
@@ -454,7 +549,7 @@ function buildHoverWiring(
 // Builds the document-symbol wiring from the live props ref (Issue #1201). Returns undefined when the
 // host supplies no symbols resolver, so no symbol provider is registered.
 function buildSymbolsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorSymbols | undefined {
   if (latestProps.current.provideSymbols === undefined) {
@@ -476,7 +571,7 @@ function buildSymbolsWiring(
 // Builds the document-formatting wiring from the live props ref (Issue #1201). Returns undefined when
 // the host supplies no formatting resolver, so no formatting provider is registered.
 function buildFormattingWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorFormatting | undefined {
   if (latestProps.current.provideFormatting === undefined) {
@@ -496,7 +591,7 @@ function buildFormattingWiring(
 }
 
 function buildDefinitionWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorDefinition | undefined {
   if (latestProps.current.provideDefinition === undefined) {
@@ -516,8 +611,92 @@ function buildDefinitionWiring(
   };
 }
 
+function buildTypeDefinitionWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorDefinition | undefined {
+  if (latestProps.current.provideTypeDefinition === undefined) return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorDefinitionResponse> => {
+      const live = latestProps.current.provideTypeDefinition;
+      return live === undefined
+        ? Promise.reject(new Error("type-definition resolver unavailable"))
+        : live(query, signal);
+    },
+    uriForPath: latestProps.current.uriForPath,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildImplementationWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorDefinition | undefined {
+  if (latestProps.current.provideImplementation === undefined) return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorDefinitionResponse> => {
+      const live = latestProps.current.provideImplementation;
+      return live === undefined
+        ? Promise.reject(new Error("implementation resolver unavailable"))
+        : live(query, signal);
+    },
+    uriForPath: latestProps.current.uriForPath,
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildInlayHintsWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+  streamId: string,
+): WireEditorInlayHints | undefined {
+  if (latestProps.current.provideInlayHints === undefined) return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorInlayHintsResponse> => {
+      const live = latestProps.current.provideInlayHints;
+      return live === undefined
+        ? Promise.reject(new Error("inlay-hints resolver unavailable"))
+        : live(query, signal);
+    },
+    streamId,
+    newRequestId: createEditorRequestId,
+  };
+}
+
+function buildCallHierarchyWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+  streamId: string,
+  onResult: CallHierarchyResultHandler | undefined,
+): WireEditorCallHierarchy | undefined {
+  const labels = latestProps.current.callHierarchyLabels;
+  if (
+    latestProps.current.provideCallHierarchy === undefined ||
+    labels === undefined ||
+    onResult === undefined
+  )
+    return undefined;
+  return {
+    isCurrentDocument: isCurrentDocument(latestProps),
+    resolve: (query, signal): Promise<EditorCallHierarchyResponse> => {
+      const live = latestProps.current.provideCallHierarchy;
+      return live === undefined
+        ? Promise.reject(new Error("call-hierarchy resolver unavailable"))
+        : live(query, signal);
+    },
+    documentLanguage: latestProps.current.fileModel.identity.language,
+    streamId,
+    newRequestId: createEditorRequestId,
+    labels: { command: labels.command },
+    onResult,
+  };
+}
+
 function buildReferencesWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorReferences | undefined {
   if (latestProps.current.provideReferences === undefined) {
@@ -538,7 +717,7 @@ function buildReferencesWiring(
 }
 
 function buildCodeActionsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorCodeActions | undefined {
   if (latestProps.current.provideCodeActions === undefined) {
@@ -558,7 +737,7 @@ function buildCodeActionsWiring(
 }
 
 function buildSignatureHelpWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorSignatureHelp | undefined {
   if (latestProps.current.provideSignatureHelp === undefined) {
@@ -577,12 +756,72 @@ function buildSignatureHelpWiring(
   };
 }
 
+function buildGitGutterWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+): WireEditorGitGutter | undefined {
+  const gutter = latestProps.current.editorGitGutter;
+  if (gutter === undefined) return undefined;
+  const content = latestProps.current.buffer.content;
+  const degraded =
+    deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text }) === "degraded";
+  return {
+    degraded,
+    labels: gutter.labels,
+    onPeek: (peek): void => latestProps.current.editorGitGutter?.onPeek(peek),
+    resolve: (): Promise<EditorGitGutterChanges> => {
+      const live = latestProps.current.editorGitGutter;
+      return live === undefined ? Promise.resolve({ staged: [], unstaged: [] }) : live.resolve();
+    },
+    onError: (message) => latestProps.current.onRuntimeError?.(message),
+  };
+}
+
+function buildBlameWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+): WireEditorBlame | undefined {
+  const blame = latestProps.current.editorBlame;
+  if (blame === undefined) return undefined;
+  const content = latestProps.current.buffer.content;
+  return {
+    ...blame,
+    degraded:
+      deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text }) === "degraded",
+    dirty: () => latestProps.current.fileModel.dirty,
+    resolve: () =>
+      latestProps.current.editorBlame?.resolve() ?? Promise.reject(new Error("Blame unavailable")),
+    onCommit: (hash) => latestProps.current.editorBlame?.onCommit(hash),
+    onError: (message) => latestProps.current.onRuntimeError?.(message),
+  };
+}
+
+function buildConflictWiring(
+  latestProps: RefObject<KeikoCodeEditorProps>,
+): WireEditorConflicts | undefined {
+  const conflicts = latestProps.current.editorConflicts;
+  if (conflicts === undefined) return undefined;
+  const content = latestProps.current.buffer.content;
+  return {
+    degraded:
+      deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text }) === "degraded",
+    labels: conflicts.labels,
+    onChange: (count, truncated): void =>
+      latestProps.current.editorConflicts?.onChange(count, truncated),
+    onStale: (): void => latestProps.current.editorConflicts?.onStale?.(),
+  };
+}
+
+function captureGitGutterBridge(refs: EditorRefs): (bridge: EditorGitGutterBridge | null) => void {
+  return (bridge): void => {
+    refs.gitGutterBridgeRef.current = bridge;
+  };
+}
+
 function availabilityBit(value: unknown): string {
   return value === undefined ? "0" : "1";
 }
 
 function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
-  return [
+  const availability = [
     props.provideCompletions,
     props.provideInlineCompletions,
     props.provideDiagnostics,
@@ -590,21 +829,35 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
     props.provideSymbols,
     props.provideFormatting,
     props.provideDefinition,
+    props.provideTypeDefinition,
+    props.provideImplementation,
+    props.provideCallHierarchy,
+    props.provideInlayHints,
+    props.semanticTokens,
     props.provideReferences,
     props.provideCodeActions,
     props.provideSignatureHelp,
     props.onGenerateTests,
+    props.onAskKeikoAboutSelection,
     props.onRenameSymbol,
+    props.editorGitGutter,
+    props.editorBlame,
+    props.editorConflicts,
+    deriveLargeFileMode({
+      sizeBytes: props.buffer.content.sizeBytes,
+      text: props.buffer.content.text,
+    }),
   ]
     .map(availabilityBit)
     .join("");
+  return `${availability}:${String(props.semanticTokens?.legendVersion ?? 0)}`;
 }
 
 // Stable per-editor-instance stream ids and the content-free telemetry accumulator. The completion
 // and inline-completion streams are distinct so inline supersession never aliases the completion
 // stream; the telemetry observer reads the live prop so a later `onInlineCompletionTelemetry`
 // identity is honoured without re-registering the provider.
-function useMountStreams(latestProps: MutableRefObject<KeikoCodeEditorProps>): {
+function useMountStreams(latestProps: RefObject<KeikoCodeEditorProps>): {
   readonly streamId: string;
   readonly inlineStreamId: string;
   readonly telemetry: InlineCompletionTelemetry;
@@ -620,33 +873,146 @@ function useMountStreams(latestProps: MutableRefObject<KeikoCodeEditorProps>): {
   return { streamId, inlineStreamId, telemetry };
 }
 
+function modelProtectionForProps(props: KeikoCodeEditorProps): EditorModelProtection {
+  const extra = props.modelRetentionProtection;
+  return {
+    dirty: props.fileModel.dirty,
+    active: true,
+    pendingSave: props.saveStatus === "saving",
+    pendingConflict: props.saveStatus === "conflict",
+    hotExitRecovery: extra?.hotExitRecovery === true,
+    agentReview: extra?.agentReview === true,
+    pinned: extra?.pinned === true,
+  };
+}
+
+function modelRootKey(props: KeikoCodeEditorProps): string {
+  const root = props.fileModel.identity.uri.split("/").slice(0, -1).join("/");
+  return root.length === 0 ? props.fileModel.identity.uri : root;
+}
+
+function modelViewStateKey(props: KeikoCodeEditorProps): string {
+  return props.modelViewStateKey ?? props.fileModel.identity.uri;
+}
+
+function hasModelNamespace(
+  editor: MountMonaco["editor"],
+): editor is MountMonaco["editor"] &
+  Required<Pick<MountMonaco["editor"], "createModel" | "getModel">> {
+  return typeof editor.createModel === "function" && typeof editor.getModel === "function";
+}
+
+function monacoModelNamespace(monaco: MountMonaco): RetainedEditorModelNamespace | null {
+  const editorNamespace = monaco.editor;
+  if (!hasModelNamespace(editorNamespace)) return null;
+  return {
+    createModel: (text, language, uri) => editorNamespace.createModel(text, language, uri),
+    getModel: (uri) => editorNamespace.getModel(uri),
+  };
+}
+
+function isRetainedEditorModel(value: unknown): value is RetainedEditorModel {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "uri" in value &&
+    "getValue" in value &&
+    "dispose" in value
+  );
+}
+
+function retainedModelEditor(editor: MountEditor): RetainedEditorModelEditor {
+  return {
+    getModel: (): RetainedEditorModel | null => {
+      const model = editor.getModel?.();
+      return isRetainedEditorModel(model) ? model : null;
+    },
+    setModel: (model): void => {
+      editor.setModel?.(model);
+    },
+    saveViewState: () => editor.saveViewState(),
+    restoreViewState: (state): void => {
+      editor.restoreViewState(state);
+    },
+  };
+}
+
+function attachRegistryModel(args: {
+  readonly editor: MountEditor;
+  readonly monaco: MountMonaco;
+  readonly props: KeikoCodeEditorProps;
+}): RetainedEditorModelAttachment | null {
+  const namespace = monacoModelNamespace(args.monaco);
+  const uri = args.monaco.Uri?.parse(args.props.fileModel.identity.uri);
+  if (namespace === null || uri === undefined || args.editor.setModel === undefined) return null;
+  const content = args.props.buffer.content;
+  const degraded = deriveLargeFileMode({ sizeBytes: content.sizeBytes, text: content.text });
+  return attachRetainedEditorModel({
+    key: args.props.fileModel.identity.uri,
+    rootKey: modelRootKey(args.props),
+    uri,
+    language: args.props.fileModel.identity.language,
+    text: content.text,
+    sizeBytes: content.sizeBytes,
+    degraded: degraded === "degraded",
+    viewStateKey: modelViewStateKey(args.props),
+    namespace,
+    editor: retainedModelEditor(args.editor),
+    protection: modelProtectionForProps(args.props),
+  });
+}
+
+function attachModelOnMount(args: MountRuntimeArgs, monaco: MountMonaco): void {
+  const modelAttachment = attachRegistryModel({
+    editor: args.editor,
+    monaco,
+    props: args.latestProps.current,
+  });
+  args.refs.modelAttachmentRef.current = modelAttachment;
+  if (modelAttachment === null) applyViewState(args.editor, args.refs.viewStateRef.current);
+}
+
 interface MountRuntimeArgs {
   readonly editor: MountEditor;
   readonly monaco: unknown;
   readonly refs: EditorRefs;
   readonly emitSave: () => void;
-  readonly latestProps: MutableRefObject<KeikoCodeEditorProps>;
+  readonly latestProps: RefObject<KeikoCodeEditorProps>;
   readonly streamId: string;
   readonly inlineStreamId: string;
   readonly telemetry: InlineCompletionTelemetry;
   readonly onOverviewMarkers: OverviewMarkersHandler | undefined;
+  readonly onCallHierarchyResult: CallHierarchyResultHandler | undefined;
   readonly onCursorChange: KeikoCodeEditorProps["onCursorChange"];
   readonly onSelectionChange: KeikoCodeEditorProps["onSelectionChange"];
   readonly onRuntimeError: KeikoCodeEditorProps["onRuntimeError"];
   readonly themeVariant: KeikoCodeEditorProps["themeVariant"];
   readonly autoFocus: KeikoCodeEditorProps["autoFocus"];
+  readonly attachModel?: boolean;
+}
+
+function attachModelForRuntimeMount(args: MountRuntimeArgs): void {
+  if (args.attachModel === false) {
+    applyViewState(args.editor, args.refs.viewStateRef.current);
+  } else {
+    attachModelOnMount(args, args.monaco as MountMonaco);
+  }
+}
+
+function initializeRuntimeMountRefs(args: MountRuntimeArgs): HTMLElement {
+  args.refs.editorRef.current = args.editor;
+  args.refs.monacoRef.current = args.monaco as MountMonaco;
+  args.refs.containerRef.current = args.editor.getContainerDomNode();
+  return args.refs.containerRef.current;
 }
 
 function mountEditorRuntime(args: MountRuntimeArgs): void {
-  const mountMonaco = args.monaco as MountMonaco;
-  args.refs.editorRef.current = args.editor;
-  args.refs.monacoRef.current = mountMonaco;
-  args.refs.containerRef.current = args.editor.getContainerDomNode();
-  applyViewState(args.editor, args.refs.viewStateRef.current);
+  const container = initializeRuntimeMountRefs(args);
+  attachModelForRuntimeMount(args);
   args.refs.disposeRef.current = wireEditorOnMount({
     editor: args.editor,
-    monaco: mountMonaco,
-    container: args.refs.containerRef.current,
+    monaco: args.monaco as MountMonaco,
+    container,
     themeVariant: args.themeVariant ?? "dark",
     autoFocus: args.autoFocus ?? false,
     onSave: args.emitSave,
@@ -668,10 +1034,23 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
     symbols: buildSymbolsWiring(args.latestProps, `${args.streamId}:symbols`),
     formatting: buildFormattingWiring(args.latestProps, `${args.streamId}:formatting`),
     definition: buildDefinitionWiring(args.latestProps, `${args.streamId}:definition`),
+    typeDefinition: buildTypeDefinitionWiring(args.latestProps, `${args.streamId}:type-definition`),
+    implementation: buildImplementationWiring(args.latestProps, `${args.streamId}:implementation`),
+    callHierarchy: buildCallHierarchyWiring(
+      args.latestProps,
+      `${args.streamId}:call-hierarchy`,
+      args.onCallHierarchyResult,
+    ),
+    inlayHints: buildInlayHintsWiring(args.latestProps, `${args.streamId}:inlay-hints`),
+    semanticTokens: args.latestProps.current.semanticTokens,
     references: buildReferencesWiring(args.latestProps, `${args.streamId}:references`),
     codeActions: buildCodeActionsWiring(args.latestProps, `${args.streamId}:codeActions`),
     signatureHelp: buildSignatureHelpWiring(args.latestProps, `${args.streamId}:signatureHelp`),
     commands: buildCommandsWiring(args.latestProps),
+    gitGutter: buildGitGutterWiring(args.latestProps),
+    blame: buildBlameWiring(args.latestProps),
+    conflicts: buildConflictWiring(args.latestProps),
+    onGitGutterBridge: captureGitGutterBridge(args.refs),
   });
   applyRevealRequest(args.refs, args.latestProps.current.revealRequest);
 }
@@ -690,10 +1069,17 @@ function refreshEditorRuntime(args: RuntimeWiringRefreshArgs): void {
   const monaco = args.refs.monacoRef.current;
   const container = args.refs.containerRef.current;
   if (editor === null || monaco === null || container === null) return;
+  const preserveModelAttachment = args.refs.modelAttachmentRef.current !== null;
   args.refs.viewStateRef.current = captureViewState(editor);
   args.refs.disposeRef.current?.();
   args.refs.disposeRef.current = null;
-  mountEditorRuntime({ ...args, editor, monaco, autoFocus: false });
+  mountEditorRuntime({
+    ...args,
+    editor,
+    monaco,
+    autoFocus: false,
+    attachModel: !preserveModelAttachment,
+  });
 }
 
 function useRuntimeWiringRefresh(args: RuntimeWiringRefreshArgs): void {
@@ -717,10 +1103,12 @@ function useRuntimeWiringBaseArgs(args: RuntimeWiringBaseArgs): RuntimeWiringBas
       args.inlineStreamId,
       args.telemetry,
       args.onOverviewMarkers,
+      args.onCallHierarchyResult,
       args.onCursorChange,
       args.onSelectionChange,
       args.onRuntimeError,
       args.themeVariant,
+      args.refs.gitGutterBridgeRef,
     ],
   );
 }
@@ -730,6 +1118,7 @@ function useMountHandler(
   refs: EditorRefs,
   emitSave: () => void,
   onOverviewMarkers: OverviewMarkersHandler | undefined,
+  onCallHierarchyResult: CallHierarchyResultHandler | undefined,
 ): OnMount {
   const { onCursorChange, onSelectionChange, onRuntimeError, themeVariant, autoFocus } = props;
   const latestProps = useRef(props);
@@ -744,6 +1133,7 @@ function useMountHandler(
     inlineStreamId,
     telemetry,
     onOverviewMarkers,
+    onCallHierarchyResult,
     onCursorChange,
     onSelectionChange,
     onRuntimeError,
@@ -763,7 +1153,7 @@ function useMountHandler(
 }
 
 function useUnmountDisposal(refs: EditorRefs): void {
-  const { editorRef, viewStateRef, disposeRef } = refs;
+  const { editorRef, viewStateRef, disposeRef, modelAttachmentRef } = refs;
   useEffect((): (() => void) => {
     return (): void => {
       clearRevealDecoration(refs);
@@ -772,9 +1162,11 @@ function useUnmountDisposal(refs: EditorRefs): void {
       }
       disposeRef.current?.();
       disposeRef.current = null;
+      modelAttachmentRef.current?.detach();
+      modelAttachmentRef.current = null;
       editorRef.current = null;
     };
-  }, [editorRef, viewStateRef, disposeRef]);
+  }, [editorRef, viewStateRef, disposeRef, modelAttachmentRef]);
 }
 
 function useRevealRequest(props: KeikoCodeEditorProps, refs: EditorRefs): void {
@@ -807,17 +1199,34 @@ function useThemeReapply(props: KeikoCodeEditorProps, refs: EditorRefs): void {
   }, [themeVariant, onRuntimeError, refs.monacoRef, refs.containerRef]);
 }
 
+function useModelProtectionSync(props: KeikoCodeEditorProps): void {
+  useEffect(() => {
+    updateRetainedEditorModelProtection(
+      props.fileModel.identity.uri,
+      modelProtectionForProps(props),
+    );
+  }, [
+    props.fileModel.dirty,
+    props.fileModel.identity.uri,
+    props.modelRetentionProtection?.agentReview,
+    props.modelRetentionProtection?.hotExitRecovery,
+    props.modelRetentionProtection?.pinned,
+    props.saveStatus,
+  ]);
+}
+
 /** Wire change/mount handlers and unmount disposal; returns the handlers for `<Editor>`. */
 export function useEditorHandlers(
   props: KeikoCodeEditorProps,
   readOnly: boolean,
   onOverviewMarkers?: OverviewMarkersHandler,
+  onCallHierarchyResult?: CallHierarchyResultHandler,
 ): EditorHandlers {
   const refs = useEditorRefs();
   const programmaticChangeRef = useRef<ProgrammaticEditorChange | null>(null);
   const emitSave = useSaveEmitter(props, refs.editorRef, readOnly);
   const onChange = useChangeHandler(props.onContentChange, readOnly, programmaticChangeRef);
-  const onMount = useMountHandler(props, refs, emitSave, onOverviewMarkers);
+  const onMount = useMountHandler(props, refs, emitSave, onOverviewMarkers, onCallHierarchyResult);
   const formatDocument = useCallback((): void => {
     const editor = refs.editorRef.current;
     if (editor === null || readOnly) return;
@@ -829,9 +1238,20 @@ export function useEditorHandlers(
     },
     [refs],
   );
+  const refreshGitGutter = useCallback((): void => {
+    refs.gitGutterBridgeRef.current?.refresh();
+  }, [refs.gitGutterBridgeRef]);
   useUnmountDisposal(refs);
   useHostEditRequest(props, refs, programmaticChangeRef);
+  useControlledModelValueSync(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);
   useThemeReapply(props, refs);
-  return { onChange, onMount, formatDocument, revealDiagnosticMarker: revealDiagnostic };
+  useModelProtectionSync(props);
+  return {
+    onChange,
+    onMount,
+    formatDocument,
+    revealDiagnosticMarker: revealDiagnostic,
+    refreshGitGutter,
+  };
 }

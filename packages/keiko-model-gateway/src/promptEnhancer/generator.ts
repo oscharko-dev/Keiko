@@ -90,7 +90,7 @@ const GOAL_BY_TASK_CLASS: Readonly<Record<PromptTaskClass, string>> = {
   "creative-writing": "Create original writing that fulfills the brief in the Input section.",
   "decision-support": "Help the user reason through the decision described in the Input section.",
   "agentic-tool-use":
-    "Plan how to accomplish the task in the Input section, deferring any side-effecting action to explicit human approval.",
+    "Plan how to accomplish the task in the Input section using only actions authorized by the governing runtime mode and Authority Envelope, requesting approval whenever policy requires it.",
   "prompt-optimization":
     "Improve the prompt described in the Input section while preserving its intent.",
   "safety-critical":
@@ -135,8 +135,8 @@ const DECOMPOSITION_BY_STRATEGY: Readonly<Record<ReasoningStrategy, readonly str
   "plan-act-checkpoint": [
     "Draft a step-by-step plan before taking any action.",
     "Mark which steps would require tools, writes, or external calls.",
-    "Pause for explicit human approval before any risky or irreversible step.",
-    "Carry out only the steps that have been approved.",
+    "Check every side-effecting step against the governing runtime policy and request explicit human approval when its effect is approval-required.",
+    "Carry out only steps that policy allows or a human explicitly approves.",
     "Report results and list the steps still pending approval.",
   ],
 };
@@ -841,7 +841,7 @@ function buildConstraints(
   }
   if (plan.safetyPosture.requiresHumanApproval) {
     profileSpecific.push(
-      "Do not assume authority to run tools, write files, or make external calls without explicit approval.",
+      "Do not assume authority to run tools, write files, or use network access; follow the human-approved mode and Authority Envelope, and request additional explicit approval when runtime policy requires it.",
     );
   }
   // The critical constraints are always kept (dropping a "do not fabricate" or scope rule would
@@ -1012,7 +1012,7 @@ function buildSafetyRules(plan: PromptEnhancementPlan): string[] {
   ];
   if (plan.safetyPosture.requiresHumanApproval) {
     rules.push(
-      "Any action with side effects — running tools, writing files, making network calls, or other irreversible changes — requires explicit human approval first; never self-authorize.",
+      "Side effects require a human-approved mode and Authority Envelope; request additional explicit human approval whenever runtime policy requires it, and never self-authorize or widen scope.",
     );
   }
   if (plan.safetyPosture.safetyCritical) {

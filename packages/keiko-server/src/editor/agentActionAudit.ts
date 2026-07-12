@@ -33,6 +33,8 @@ export interface EditorAgentAuditInput {
   readonly conflictCode?: EditorAgentConflictCode | undefined;
   readonly failureCode?: EditorAgentFailureCode | undefined;
   readonly targetPath?: string | null | undefined;
+  readonly targetBasename?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   readonly editCount?: number | undefined;
   readonly patchByteLength?: number | undefined;
 }
@@ -66,13 +68,24 @@ function appendRecord(sessionId: string, record: EditorAgentActionAuditRecord): 
 
 // Record one content-free audit entry for an agent editor action. Best-effort and throw-free: a
 // ledger failure must never break the action path. AC1: every mutating action is audited. A denied
-// action is audited even if it is not mutating, so a blocked attempt stays visible. Allowed
-// navigation/layout actions are not recorded — the ledger is for governance-relevant activity.
-// Returns the stored (redacted) record, or null when the action is not audited or recording failed.
+// action is audited even if it is not mutating, so a blocked attempt stays visible. Agent-triggered
+// EXECUTION actions (Issue #2214: a governed verification run) are audited when admitted too — they are
+// non-mutating but governance-relevant (they consume the sandboxed execution boundary and the
+// Authority Envelope budget). Allowed navigation/layout actions remain unrecorded — the ledger is for
+// governance-relevant activity. Returns the stored (redacted) record, or null when not audited/failed.
 export function recordEditorAgentActionAudit(
   input: EditorAgentAuditInput,
 ): EditorAgentActionAuditRecord | null {
-  if (!isMutatingEditorAgentAction(input.actionType) && input.decision.disposition !== "denied") {
+  const serverResolved =
+    input.actionType === "navigateSymbol" ||
+    input.actionType === "searchWorkspace" ||
+    input.actionType === "queryGit";
+  if (
+    !isMutatingEditorAgentAction(input.actionType) &&
+    input.decision.effectClass !== "execution" &&
+    input.decision.disposition !== "denied" &&
+    !serverResolved
+  ) {
     return null;
   }
   try {
@@ -88,6 +101,8 @@ export function recordEditorAgentActionAudit(
       conflictCode: input.conflictCode,
       failureCode: input.failureCode,
       targetPath: input.targetPath,
+      targetBasename: input.targetBasename,
+      targetPathHash: input.targetPathHash,
       editCount: input.editCount,
       patchByteLength: input.patchByteLength,
     });

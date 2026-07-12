@@ -55,6 +55,14 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "durable.ui",
   },
+  // Issue #2213 (Epic #2092, ADR-0126) — read-only workspace Problems panel: a transient UI
+  // aggregation over open-file diagnostics and the latest verification report; no persisted state.
+  problems: {
+    lifecycle: ["idle", "live"],
+    trustBoundary: ["ui"],
+    authority: "read-only",
+    persistence: "transient",
+  },
   editor: {
     lifecycle: ["viewing", "editing", "unsaved", "saved", "error"],
     trustBoundary: ["ui", "fs"],
