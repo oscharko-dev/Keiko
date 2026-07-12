@@ -106,7 +106,7 @@ export function readNpmVersionFromPath(pathValue, platform = process.platform) {
   return undefined;
 }
 
-function runtimeInput(root) {
+export function runtimeInput(root) {
   const manifest = readJson(join(root, "package.json"));
   const approvals = readJson(join(root, "portable-runtime-approvals.json"));
   return {

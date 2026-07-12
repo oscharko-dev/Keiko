@@ -7,6 +7,7 @@ import {
   evaluateRuntimeToolchain,
   readNpmVersionFromPath,
   readWorkspaceNodeEngines,
+  runtimeInput,
 } from "../check-runtime-toolchain.mjs";
 
 const fixtureRoots = [];
@@ -140,5 +141,49 @@ describe("readWorkspaceNodeEngines", () => {
       { name: "@oscharko-dev/zeta", value: ">=24.18.0 <25" },
       { name: "beta", value: undefined },
     ]);
+  });
+});
+
+describe("runtimeInput", () => {
+  it("assembles declared, approved, executed, and workspace runtime metadata", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-runtime-input-"));
+    fixtureRoots.push(root);
+    const npm = npmFixture("11.16.0");
+    symlinkSync(npm.npmCli, join(npm.root, "npm"));
+    mkdirSync(join(root, "packages", "alpha"), { recursive: true });
+    writeFileSync(
+      join(root, "package.json"),
+      `${JSON.stringify({
+        engines: { node: ">=24.18.0 <25", npm: "11.16.0" },
+        packageManager: "npm@11.16.0",
+      })}\n`,
+    );
+    writeFileSync(
+      join(root, "portable-runtime-approvals.json"),
+      `${JSON.stringify({ node: { version: "24.18.0" } })}\n`,
+    );
+    writeFileSync(
+      join(root, "packages", "alpha", "package.json"),
+      `${JSON.stringify({
+        name: "@oscharko-dev/alpha",
+        engines: { node: ">=24.18.0 <25" },
+      })}\n`,
+    );
+    const previousPath = process.env.PATH;
+    process.env.PATH = npm.root;
+    try {
+      expect(runtimeInput(root)).toEqual({
+        rootNodeEngine: ">=24.18.0 <25",
+        rootNpmEngine: "11.16.0",
+        packageManager: "npm@11.16.0",
+        portableNodeVersion: "24.18.0",
+        runtimeNodeVersion: process.versions.node,
+        runtimeNpmVersion: "11.16.0",
+        workspaceNodeEngines: [{ name: "@oscharko-dev/alpha", value: ">=24.18.0 <25" }],
+      });
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
   });
 });
