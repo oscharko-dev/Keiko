@@ -344,6 +344,45 @@ describe("CodingRuntimeAuthorityService", () => {
     );
   });
 
+  it("mints distinct run-scoped gateway and tool capabilities that cannot cross audiences", () => {
+    const capabilities = createInMemoryRuntimeCapabilityStore();
+    const authority = new CodingRuntimeAuthorityService(
+      new EditorAgentAuthorityRegistry(),
+      () => "run-1",
+      () => "nonce-1",
+      undefined,
+      capabilities,
+    );
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const privateResult = minted as typeof minted & {
+      readonly modelGatewayCapability?: string;
+      readonly toolFacadeCapability?: string;
+    };
+
+    expect(privateResult.modelGatewayCapability).toMatch(/^[A-Za-z0-9_-]{32,256}$/u);
+    expect(privateResult.toolFacadeCapability).toMatch(/^[A-Za-z0-9_-]{32,256}$/u);
+    expect(privateResult.modelGatewayCapability).not.toBe(privateResult.toolFacadeCapability);
+    expect(
+      capabilities.resolve({
+        capability: privateResult.modelGatewayCapability,
+        ...capabilityBinding(minted.authorityRef),
+        audience: "tool-facade",
+        nowMs: Date.parse(NOW),
+      } as never),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(
+      capabilities.resolve({
+        capability: privateResult.toolFacadeCapability,
+        ...capabilityBinding(minted.authorityRef),
+        audience: "model-gateway",
+        nowMs: Date.parse(NOW),
+      } as never),
+    ).toEqual({ ok: false, reason: "invalid" });
+    expect(JSON.stringify(authority.state())).not.toContain(privateResult.modelGatewayCapability);
+    expect(JSON.stringify(authority.state())).not.toContain(privateResult.toolFacadeCapability);
+  });
+
   it("derives the private capability adapter kind from the trusted Codex runtime source", () => {
     const capabilities = createInMemoryRuntimeCapabilityStore();
     const authority = new CodingRuntimeAuthorityService(
@@ -757,6 +796,7 @@ describe("CodingRuntimeAuthorityService", () => {
       workspaceRootDigest: createHash("sha256").update(ROOT).digest("hex"),
       envelopeDigest: minted.authorityRef.envelopeDigest,
       adapterKind: "model-gateway-sidecar",
+      audience: "tool-facade",
       expiresAtMs: Date.parse(context().expiresAt),
     });
     if (!capability.ok) throw new Error("expected capability");
@@ -798,6 +838,7 @@ function capabilityBinding(reference: {
     workspaceRootDigest: createHash("sha256").update(ROOT).digest("hex"),
     envelopeDigest: reference.envelopeDigest,
     adapterKind: "model-gateway-sidecar" as const,
+    audience: "tool-facade",
     expiresAtMs: Date.parse(context().expiresAt),
   };
 }

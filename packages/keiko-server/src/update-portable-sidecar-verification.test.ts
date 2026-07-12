@@ -4,6 +4,12 @@ import {
   evaluatePortableSidecarAvailability,
   type PortableSidecarRuntimeVerification,
 } from "./update-portable-sidecar-verification.js";
+import {
+  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+} from "./coding-runtime/opencodeProtocolSurface.js";
+
+const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 
 function verifiedSidecar(): PortableSidecarRuntimeVerification {
   return {
@@ -15,6 +21,9 @@ function verifiedSidecar(): PortableSidecarRuntimeVerification {
     licenseEvidenceSha256: "a".repeat(64),
     sbomEvidencePath: "runtime/sidecars/opencode-compatible/sbom.cdx.json",
     sbomEvidenceSha256: "b".repeat(64),
+    protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
+    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
     summary: {
       name: "opencode-compatible",
       kind: "coding-runtime",

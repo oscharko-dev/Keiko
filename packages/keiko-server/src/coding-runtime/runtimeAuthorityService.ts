@@ -39,6 +39,7 @@ import {
 } from "./supervisedCodingApprovalStore.js";
 import {
   createInMemoryRuntimeCapabilityStore,
+  type RuntimeCapabilityAudience,
   type RuntimeCapabilityStore,
 } from "./runtimeCapabilityStore.js";
 import { verifyRuntimeReapReceipt, type RuntimeReapReceipt } from "./runtimeProcessSupervisor.js";
@@ -75,6 +76,10 @@ export type CodingRuntimeMintResult =
       readonly authorityRef: CodingRuntimeAuthorityRef;
       /** Server-private runtime-to-BFF secret; never forward to browser-safe contracts or evidence. */
       readonly runtimeCapability: string;
+      /** Server-private audience-separated Model Gateway secret. */
+      readonly modelGatewayCapability: string;
+      /** Server-private audience-separated governed-tool secret. */
+      readonly toolFacadeCapability: string;
       /** Server-private per-launch supervisor binding; never project to browser or evidence. */
       readonly treeBindingId: string;
     }
@@ -173,9 +178,8 @@ export class CodingRuntimeAuthorityService {
     }
     const registered = this.registry.registerRuntime(envelope, context.deploymentCeiling, nowIso);
     if (!registered.ok) return { ok: false, reason: "authority-resolution-failed" };
-    const capability = this.issueCapability(envelope, registered.authorityRef);
-    if (!capability.ok) {
-      this.registry.revoke(registered.authorityRef);
+    const capabilities = this.issueCapabilities(envelope, registered.authorityRef);
+    if (capabilities === undefined) {
       return { ok: false, reason: "authority-resolution-failed" };
     }
     const treeBindingId = randomBytes(32).toString("hex");
@@ -185,7 +189,9 @@ export class CodingRuntimeAuthorityService {
     return {
       ok: true,
       authorityRef: registered.authorityRef,
-      runtimeCapability: capability.capability,
+      runtimeCapability: capabilities.toolFacadeCapability,
+      modelGatewayCapability: capabilities.modelGatewayCapability,
+      toolFacadeCapability: capabilities.toolFacadeCapability,
       treeBindingId,
     };
   }
@@ -232,7 +238,11 @@ export class CodingRuntimeAuthorityService {
       input.capability,
       Date.parse(input.nowIso),
     );
-    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") {
+      return authenticated.ok
+        ? capabilityFailure("invalid")
+        : capabilityFailure(authenticated.reason);
+    }
     const reference = this.activeAuthorityRef;
     if (
       this.runtimeState.state !== "running" ||
@@ -261,7 +271,11 @@ export class CodingRuntimeAuthorityService {
       input.capability,
       Date.parse(input.nowIso),
     );
-    if (!authenticated.ok) return capabilityFailure(authenticated.reason);
+    if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") {
+      return authenticated.ok
+        ? capabilityFailure("invalid")
+        : capabilityFailure(authenticated.reason);
+    }
     const reference = this.activeAuthorityRef;
     if (
       this.runtimeState.state !== "running" ||
@@ -385,6 +399,7 @@ export class CodingRuntimeAuthorityService {
   private issueCapability(
     envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
     authorityRef: CodingRuntimeAuthorityRef,
+    audience: RuntimeCapabilityAudience,
   ): ReturnType<RuntimeCapabilityStore["issue"]> {
     const adapterKind = runtimeAdapterKind(envelope.authority.runtimeSource);
     if (adapterKind === undefined) return { ok: false, reason: "invalid" };
@@ -393,8 +408,27 @@ export class CodingRuntimeAuthorityService {
       workspaceRootDigest: envelope.binding.workspaceRootDigest,
       envelopeDigest: authorityRef.envelopeDigest,
       adapterKind,
+      audience,
       expiresAtMs: Date.parse(envelope.authority.expiresAt),
     });
+  }
+
+  private issueCapabilities(
+    envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
+    authorityRef: CodingRuntimeAuthorityRef,
+  ):
+    { readonly modelGatewayCapability: string; readonly toolFacadeCapability: string } | undefined {
+    const modelGateway = this.issueCapability(envelope, authorityRef, "model-gateway");
+    const toolFacade = this.issueCapability(envelope, authorityRef, "tool-facade");
+    if (modelGateway.ok && toolFacade.ok) {
+      return {
+        modelGatewayCapability: modelGateway.capability,
+        toolFacadeCapability: toolFacade.capability,
+      };
+    }
+    this.registry.revoke(authorityRef);
+    this.capabilities.revokeRun(authorityRef.runId);
+    return undefined;
   }
 
   private settleStateAfterObservedReap(runId: string, nowIso: string): boolean {

@@ -10,6 +10,10 @@ import {
   recordAt,
   signatureKind,
 } from "./update-portable-staging-shared.js";
+import {
+  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
+} from "./coding-runtime/opencodeProtocolSurface.js";
 
 export interface PortableSidecarRuntimeVerification {
   readonly summary: UpdatePortableSidecarSummary;
@@ -21,6 +25,9 @@ export interface PortableSidecarRuntimeVerification {
   readonly licenseEvidenceSha256: string;
   readonly sbomEvidencePath: string;
   readonly sbomEvidenceSha256: string;
+  readonly protocolSchemaRawSha256: string;
+  readonly protocolHandshakeDigest: string;
+  readonly protocolHandshakeAlgorithm: typeof OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM;
   /**
    * Server-owned provenance facts. This projection is intentionally content-free and is the
    * only portable-runtime evidence a launch path may consume.
@@ -461,6 +468,9 @@ function parseNamedRuntime(
     licenseEvidenceSha256: evidence.license.sha256,
     sbomEvidencePath: evidence.sbom.path,
     sbomEvidenceSha256: evidence.sbom.sha256,
+    protocolSchemaRawSha256: OPENCODE_SCHEMA_SHA256,
+    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeAlgorithm: OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
     availability: {
       redistributionApproved: true,
       payloadPresent: true,
