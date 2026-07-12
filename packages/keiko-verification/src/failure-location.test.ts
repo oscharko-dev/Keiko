@@ -104,6 +104,27 @@ describe("extractFailureLocations — test (best-effort)", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.line).toBe(5);
   });
+
+  it("parses Vitest 4 frames when ANSI styling splits the line and column coordinates", () => {
+    const esc = "\u001b";
+    const out = extract(
+      "targeted-test",
+      cmd(
+        [
+          `${esc}[41m${esc}[1m FAIL ${esc}[22m${esc}[49m src/sum.test.ts${esc}[2m > ${esc}[22msum`,
+          `${esc}[36m ${esc}[2m❯${esc}[22m src/sum.test.ts:${esc}[2m3:31${esc}[22m${esc}[39m`,
+        ].join("\n"),
+      ),
+    );
+    expect(out).toEqual([
+      {
+        file: "src/sum.test.ts",
+        line: 3,
+        column: 31,
+        message: "src/sum.test.ts > sum",
+      },
+    ]);
+  });
 });
 
 describe("extractFailureLocations — degrade to empty, never throw (AC11)", () => {

@@ -21,6 +21,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
 import { posix as posixPath, win32 as win32Path } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 
 // A defensive per-line length ceiling: a pathological single line is skipped rather than matched.
 const MAX_LINE_LENGTH = 4_096;
@@ -260,6 +261,12 @@ export function extractFailureLocations(
   if (result === undefined) return [];
   const lines = `${result.stdout}\n${result.stderr}`
     .split(/\r?\n/u)
+    // Vitest 4 inserts ANSI styling between a path's colon and its line/column digits on Linux.
+    // Strip terminal presentation controls before parsing so colored and non-colored reporters have
+    // identical semantics. Keep both pre- and post-strip bounds: pathological raw control streams do
+    // not receive extra parser work, and the parser never sees an oversized normalized line.
+    .filter((line) => line.length <= MAX_LINE_LENGTH)
+    .map((line) => stripVTControlCharacters(line))
     .filter((line) => line.length <= MAX_LINE_LENGTH);
   return clamp(extractByKind(kind, lines), workspaceRoot);
 }

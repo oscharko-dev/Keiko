@@ -226,8 +226,16 @@ test("cancelling a run mid-flight through the command palette settles without le
       response.request().method() === "DELETE" &&
       /\/api\/editor\/verification\/runs\/[^/]+$/u.test(response.url()),
   );
+  const startedResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/editor/verification/runs"),
+  );
   await runPaletteCommand(page, "Run Build");
-  await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="run"]`)).toBeVisible();
+  expect((await startedResponse).ok()).toBe(true);
+  await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="run"]`)).toHaveText(
+    "Verification: build…",
+  );
   await runPaletteCommand(page, "Cancel Verification");
   expect((await cancelledResponse).status()).toBe(200);
   await expect(pane.locator(`${EDITOR_SELECTORS.statusBar} [data-field="run"]`)).toHaveText(

@@ -383,6 +383,15 @@ jobs:
           package-manager-cache: false
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci --ignore-scripts
+      - name: Install sandbox isolation backend (bubblewrap)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          # The #2215 real-BFF E2E executes verification commands through the same mandatory
+          # network:none boundary as production. Ubuntu 24.04 restricts unprivileged user
+          # namespaces via AppArmor, so enable the proven Bubblewrap path exactly as the required
+          # ci job does; never weaken the verification runner to inherited networking for tests.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Build internal packages so contracts dist resolves for UI tsc
         run: npm run build:packages
       - name: Security audit UI dependencies (moderate and above)
