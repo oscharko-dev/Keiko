@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -288,5 +289,37 @@ describe("managed Eclipse JDT LS provider", () => {
         },
       ),
     ).toThrow("minimum supported JDK version");
+  });
+
+  it("bounds the real java -version probe with a timeout instead of stalling indefinitely", () => {
+    const hungJava = join(root, "java");
+    writeFileSync(hungJava, "#!/bin/sh\nsleep 30\n", "utf8");
+    chmodSync(hungJava, 0o755);
+    const startedAt = Date.now();
+
+    expect(() =>
+      prepareJavaSpawn(
+        {
+          executable: "/opt/jdtls/bin/jdtls",
+          args: [],
+          env: { PATH: root },
+          workspace: workspace(),
+          processEnv: {},
+        },
+        {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => hungJava,
+          validateLayout: () => true,
+          // validateJavaVersion intentionally not overridden: exercises the real
+          // defaultJavaVersionValid probe (and its bounded timeout) against a hung executable.
+        },
+      ),
+    ).toThrow("minimum supported JDK version");
+
+    // The probe's own timeout is 5s; a generous 10s upper bound proves the process was killed
+    // rather than left to run for the fixture's full 30s sleep.
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
   });
 });

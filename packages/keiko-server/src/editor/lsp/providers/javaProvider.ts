@@ -259,9 +259,15 @@ function javaMajorVersion(output: string): number {
   return Number(match?.groups?.major ?? 0);
 }
 
+const JAVA_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
 function defaultJavaVersionValid(executable: string): boolean {
-  const probe = spawnSync(executable, ["-version"], { encoding: "utf8" });
-  if (probe.status !== 0) return false;
+  const probe = spawnSync(executable, ["-version"], {
+    encoding: "utf8",
+    timeout: JAVA_VERSION_PROBE_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
+  if (probe.error !== undefined || probe.status !== 0) return false;
   return javaMajorVersion(`${probe.stdout}${probe.stderr}`) >= MINIMUM_JDK_MAJOR_VERSION;
 }
 
