@@ -495,10 +495,11 @@ async function enforceRedirectTargetPolicy(
   response: Response,
   egress: OutboundHttpEgressConfig | undefined,
   options: { readonly resolveDns: boolean },
-): Promise<void> {
+): Promise<URL | undefined> {
   const redirected = redirectTarget(original, response);
-  if (redirected === undefined) return;
+  if (redirected === undefined) return undefined;
   await enforceOutboundTargetPolicy(redirected, egress, options);
+  return redirected;
 }
 
 // Resolves and validates the target's DNS records, returning the vetted address set so the
