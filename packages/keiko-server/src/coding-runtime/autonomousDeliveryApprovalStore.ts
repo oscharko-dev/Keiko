@@ -19,6 +19,9 @@ interface ApprovalRecord {
   readonly expiresAt: string;
 }
 
+// Domain-separation label for the envelope-digest HMAC. Not a secret; the actual key is `secret`.
+const ENVELOPE_DIGEST_DOMAIN = "keiko-autonomous-delivery-envelope-v1";
+
 export function createAutonomousDeliveryApprovalStore(
   secret: Buffer = randomBytes(32),
 ): AutonomousDeliveryApprovalStore {
@@ -51,9 +54,7 @@ function expired(nowIso: string, expiresAt: string): boolean {
 }
 
 function digestEnvelope(envelope: CodingWorkbenchAuthorityEnvelope): string {
-  return createHmac("sha256", "keiko-autonomous-delivery-envelope-v1")
-    .update(canonicalJson(envelope))
-    .digest("hex");
+  return createHmac("sha256", ENVELOPE_DIGEST_DOMAIN).update(canonicalJson(envelope)).digest("hex");
 }
 
 function canonicalJson(value: unknown): string {

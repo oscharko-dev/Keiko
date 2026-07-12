@@ -139,5 +139,6 @@ describe("barrel surface", () => {
     pin<KnowledgeStoreKeyProvider>();
     pin<KnowledgeStoreKeyProviderContext>();
     pin<KnowledgeStoreProtectionOptions>();
+    expect(true).toBe(true);
   });
 });

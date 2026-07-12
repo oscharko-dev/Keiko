@@ -392,9 +392,11 @@ describe("SearchPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace" }));
 
-    await screen.findByText(
-      "0 files applied. 1 files reported conflicts. Conflicts: src/app.ts (write-conflict).",
-    );
+    expect(
+      await screen.findByText(
+        "0 files applied. 1 files reported conflicts. Conflicts: src/app.ts (write-conflict).",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("surfaces replace apply route failures", async () => {
@@ -407,7 +409,7 @@ describe("SearchPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Apply reviewed replace" }));
 
-    await screen.findByText("Replace apply unavailable.");
+    expect(await screen.findByText("Replace apply unavailable.")).toBeInTheDocument();
   });
 
   it("applies reviewed replacements to open buffers before writing closed files", async () => {

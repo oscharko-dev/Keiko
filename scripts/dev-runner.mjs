@@ -92,7 +92,10 @@ export function canonicalLocalhostRedirectLocation(req, port) {
   if (requestHost !== `${host}:${String(port)}`) return undefined;
   const url = new URL(req.url ?? "/", `http://${host}:${String(port)}`);
   if (!isDocumentPath(url.pathname) || !acceptsDocument(req)) return undefined;
-  return `${publicBrowserUrl(port)}${url.pathname}${url.search}`;
+  const target = new URL(publicBrowserUrl(port));
+  target.pathname = url.pathname;
+  target.search = url.search;
+  return target.toString();
 }
 
 function redirectToCanonicalLocalhost(req, res) {
@@ -361,12 +364,53 @@ function rewriteOriginHeader(value, targetPort) {
   }
 }
 
+const UNSAFE_HEADER_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+function copyHeadersSafely(source) {
+  const safe = Object.create(null);
+  if (source === null || typeof source !== "object") return safe;
+  for (const name of Object.keys(source)) {
+    if (UNSAFE_HEADER_NAMES.has(name.toLowerCase())) continue;
+    if (!Object.hasOwn(source, name)) continue;
+    safe[name] = source[name];
+  }
+  return safe;
+}
+
 function proxiedHeaders(req, targetPort) {
-  const headers = { ...req.headers, host: `${host}:${String(targetPort)}` };
+  const headers = copyHeadersSafely(req.headers);
+  headers.host = `${host}:${String(targetPort)}`;
   if (typeof headers.origin === "string") {
     headers.origin = rewriteOriginHeader(headers.origin, targetPort);
   }
   return headers;
+}
+
+function normalizeUpstreamLocation(rawLocation, targetPort) {
+  if (typeof rawLocation !== "string") return undefined;
+  const upstreamBase = `http://${host}:${String(targetPort)}`;
+  try {
+    const resolved = new URL(rawLocation, upstreamBase);
+    if (resolved.hostname !== host || resolved.port !== String(targetPort)) {
+      return undefined;
+    }
+    return resolved.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function forwardedUpstreamHeaders(upstreamHeaders, targetPort) {
+  const safe = copyHeadersSafely(upstreamHeaders);
+  if ("location" in safe) {
+    const normalized = normalizeUpstreamLocation(safe.location, targetPort);
+    if (normalized === undefined) {
+      delete safe.location;
+    } else {
+      safe.location = normalized;
+    }
+  }
+  return safe;
 }
 
 function proxyHttp(req, res, targetPort) {
@@ -380,7 +424,10 @@ function proxyHttp(req, res, targetPort) {
       headers,
     },
     (upstreamRes) => {
-      res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
+      res.writeHead(
+        upstreamRes.statusCode ?? 502,
+        forwardedUpstreamHeaders(upstreamRes.headers, targetPort),
+      );
       upstreamRes.pipe(res);
     },
   );

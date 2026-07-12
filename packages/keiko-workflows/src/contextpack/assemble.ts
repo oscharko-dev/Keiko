@@ -374,7 +374,7 @@ function buildPlan(
   for (const candidate of ordered) {
     const outcome = processCandidate(plan, candidate, ctx);
     if (outcome === "budget-clipped") {
-      return plan;
+      break;
     }
   }
   return plan;

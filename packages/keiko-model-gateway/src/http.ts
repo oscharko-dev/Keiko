@@ -495,11 +495,10 @@ async function enforceRedirectTargetPolicy(
   response: Response,
   egress: OutboundHttpEgressConfig | undefined,
   options: { readonly resolveDns: boolean },
-): Promise<Response> {
+): Promise<void> {
   const redirected = redirectTarget(original, response);
-  if (redirected === undefined) return response;
+  if (redirected === undefined) return;
   await enforceOutboundTargetPolicy(redirected, egress, options);
-  return response;
 }
 
 // Resolves and validates the target's DNS records, returning the vetted address set so the
@@ -1029,7 +1028,8 @@ export async function gatewayFetch(
   const redirectPolicy = { resolveDns };
   if (proxy !== undefined) {
     const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
-    return enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+    await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+    return response;
   }
   const response = await fetchDirectWithCaFallback(
     url,
@@ -1040,7 +1040,8 @@ export async function gatewayFetch(
     maxResponseBytes,
     pinnedAddresses,
   );
-  return enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+  await enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
+  return response;
 }
 
 export async function readJsonCapped(

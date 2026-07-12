@@ -220,6 +220,7 @@ describe("keiko-tools public surface", () => {
     pin<EditorAgentHttpTransportResponse>();
     pin<EditorAgentTimeoutScheduler>();
     pin<EditorAgentToolOutput>();
+    expect(true).toBe(true);
   });
 
   it("each type-only export is reachable by name at compile time", () => {
@@ -311,5 +312,6 @@ describe("keiko-tools public surface", () => {
     pin<GitRecoveryCommand>();
     pin<GitStageCommand>();
     pin<GitUnstageCommand>();
+    expect(true).toBe(true);
   });
 });

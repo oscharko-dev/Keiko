@@ -112,43 +112,39 @@ class KeikoPlaybackProcessor extends AudioWorkletProcessor {
 
   process(_inputs, outputs) {
     const channel = outputs[0][0];
-    if (channel === undefined) {
-      return true;
-    }
-    const need = channel.length;
-
-    // Before the prime threshold is reached, output silence (the source node stays alive).
-    if (!this.primed) {
-      channel.fill(0);
-      return true;
-    }
-
-    let i = 0;
-    for (; i < need && this.size > 0; i += 1) {
-      channel[i] = this.ring[this.head];
-      this.head = (this.head + 1) % this.capacity;
-      this.size -= 1;
-    }
-    const produced = i;
-    for (; i < need; i += 1) {
-      channel[i] = 0; // underrun → silence rather than a glitch
-    }
-
-    if (produced > 0) {
-      this.everPlayed = true;
-      this.framesPlayed += produced;
-      this.sinceReport += produced;
-      // Report position roughly every ~50ms so the main thread has a fresh media offset.
-      if (this.sinceReport >= 1200) {
-        this.sinceReport = 0;
-        this.port.postMessage({ type: "position", frames: this.framesPlayed });
+    if (channel !== undefined) {
+      const need = channel.length;
+      if (!this.primed) {
+        // Before the prime threshold is reached, output silence (the source node stays alive).
+        channel.fill(0);
+      } else {
+        let i = 0;
+        for (; i < need && this.size > 0; i += 1) {
+          channel[i] = this.ring[this.head];
+          this.head = (this.head + 1) % this.capacity;
+          this.size -= 1;
+        }
+        const produced = i;
+        for (; i < need; i += 1) {
+          channel[i] = 0; // underrun → silence rather than a glitch
+        }
+        if (produced > 0) {
+          this.everPlayed = true;
+          this.framesPlayed += produced;
+          this.sinceReport += produced;
+          // Report position roughly every ~50ms so the main thread has a fresh media offset.
+          if (this.sinceReport >= 1200) {
+            this.sinceReport = 0;
+            this.port.postMessage({ type: "position", frames: this.framesPlayed });
+          }
+        }
+        // Natural completion: the sender marked the end and the buffer has fully drained.
+        if (this.draining && this.size === 0) {
+          this.finish();
+        }
       }
     }
-
-    // Natural completion: the sender marked the end and the buffer has fully drained.
-    if (this.draining && this.size === 0) {
-      this.finish();
-    }
+    // Web Audio contract: return true to keep the processor node alive across quanta.
     return true;
   }
 }
