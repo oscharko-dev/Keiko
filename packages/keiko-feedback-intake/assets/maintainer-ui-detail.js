@@ -22,8 +22,14 @@ export function renderMaintainerDetail(options, focus = false) {
     heading,
     button(copy.back, onBack),
     metadata(state.detail, copy, statusLabel),
-    element("h3", { textContent: copy.payload }),
-    element("pre", { className: "mq-payload", textContent: state.detail.canonicalPayload }),
+    element("h3", { id: "mq-payload-heading", textContent: copy.payload }),
+    element("pre", {
+      className: "mq-payload",
+      role: "region",
+      tabIndex: "0",
+      "aria-labelledby": "mq-payload-heading",
+      textContent: state.detail.canonicalPayload,
+    }),
   ];
   const surface = publication.render(state.detail, state.detailGeneration);
   if (surface) content.push(surface);

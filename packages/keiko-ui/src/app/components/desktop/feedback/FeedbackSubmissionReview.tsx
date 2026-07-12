@@ -22,10 +22,10 @@ export interface FeedbackSubmissionReviewControls {
   readonly reviewed: boolean;
   readonly step: FeedbackSubmissionStep;
   readonly busy: boolean;
-  readonly confirmationHeadingRef: RefObject<HTMLHeadingElement>;
-  readonly acceptedStatusRef: RefObject<HTMLParagraphElement>;
-  readonly copiedStatusRef: RefObject<HTMLParagraphElement>;
-  readonly resultRef: RefObject<HTMLElement>;
+  readonly confirmationHeadingRef: RefObject<HTMLHeadingElement | null>;
+  readonly acceptedStatusRef: RefObject<HTMLParagraphElement | null>;
+  readonly copiedStatusRef: RefObject<HTMLParagraphElement | null>;
+  readonly resultRef: RefObject<HTMLElement | null>;
   readonly receipt: FeedbackReceiptV1;
   readonly receiptCopyState: FeedbackReceiptCopyState;
   readonly onReviewedChange: (reviewed: boolean) => void;
@@ -47,7 +47,7 @@ function FeedbackSubmissionResult({
     "unavailable" | "rejected" | "rate-limited" | "error"
   >;
   readonly busy: boolean;
-  readonly resultRef: RefObject<HTMLElement>;
+  readonly resultRef: RefObject<HTMLElement | null>;
   readonly onRetry: () => void;
   readonly onEditAndRescan: () => void;
 }): ReactNode {

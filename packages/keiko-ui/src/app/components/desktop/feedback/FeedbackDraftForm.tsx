@@ -187,9 +187,9 @@ export function FeedbackDraftForm({
   readonly attachmentError: FeedbackAttachmentStagingError | undefined;
   readonly removedAttachmentOrdinal: number | undefined;
   readonly optionalRemovalStatus: FeedbackOptionalTextField | undefined;
-  readonly attachmentInputRef: RefObject<HTMLInputElement>;
+  readonly attachmentInputRef: RefObject<HTMLInputElement | null>;
   readonly attachmentBusy: boolean;
-  readonly headingRef: RefObject<HTMLHeadingElement>;
+  readonly headingRef: RefObject<HTMLHeadingElement | null>;
   readonly onControlRef: (
     field: FeedbackTextField,
     node: FeedbackTextControlElement | null,

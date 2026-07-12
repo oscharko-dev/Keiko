@@ -127,10 +127,10 @@ function previewNode(preview) {
     { className: "mq-publication-preview", "aria-labelledby": "mq-preview" },
     [
       element("h4", { id: "mq-preview", textContent: copy("preview") }),
-      element("h5", { textContent: copy("issueTitle") }),
-      element("pre", { className: "mq-payload", textContent: preview.title }),
-      element("h5", { textContent: copy("issueBody") }),
-      element("pre", { className: "mq-payload", textContent: preview.body }),
+      element("h5", { id: "mq-preview-title-heading", textContent: copy("issueTitle") }),
+      element("pre", { className: "mq-payload", role: "region", tabIndex: "0", "aria-labelledby": "mq-preview-title-heading", textContent: preview.title }),
+      element("h5", { id: "mq-preview-body-heading", textContent: copy("issueBody") }),
+      element("pre", { className: "mq-payload", role: "region", tabIndex: "0", "aria-labelledby": "mq-preview-body-heading", textContent: preview.body }),
       element("h5", { textContent: copy("targetDetails") }),
       element(
         "dl",

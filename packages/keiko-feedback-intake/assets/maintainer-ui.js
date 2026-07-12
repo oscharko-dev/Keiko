@@ -104,10 +104,7 @@ function queueView(message) {
     element("div", {}, [audit ?? text(""), button(copy.signOut, () => void logout())]),
   ]);
   const table = element("table", { className: "mq-table" }, [
-    element("caption", {
-      className: "mq-label",
-      textContent: `${state.items.length} ${copy.loaded}`,
-    }),
+    element("caption", { id: "mq-queue-caption", className: "mq-label", textContent: `${state.items.length} ${copy.loaded}` }),
     element("thead", {}, [
       element(
         "tr",
@@ -122,7 +119,10 @@ function queueView(message) {
   const children = [heading, toolbar];
   if (message) children.push(notice(message));
   if (state.items.length === 0) children.push(notice(copy.empty));
-  else children.push(element("div", { className: "mq-table-wrap" }, [table]));
+  else
+    children.push(
+      element("div", { className: "mq-table-wrap", role: "region", tabIndex: "0", "aria-labelledby": "mq-queue-caption" }, [table]),
+    );
   if (state.cursor)
     children.push(
       element("div", { className: "mq-footer" }, [button(copy.load, () => void loadQueue(true))]),

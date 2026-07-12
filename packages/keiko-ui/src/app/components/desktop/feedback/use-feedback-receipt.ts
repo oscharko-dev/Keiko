@@ -17,7 +17,7 @@ function clipboardText(receipt: FeedbackReceiptV1): string {
 export function useFeedbackReceipt(writeClipboard: FeedbackClipboardWriter) {
   const [receipt, setReceipt] = useState<FeedbackReceiptV1 | undefined>();
   const [copyState, setCopyState] = useState<FeedbackReceiptCopyState>("idle");
-  const receiptRef = useRef<FeedbackReceiptV1 | undefined>();
+  const receiptRef = useRef<FeedbackReceiptV1 | undefined>(undefined);
   const clear = useCallback((): void => {
     receiptRef.current = undefined;
     setReceipt(undefined);

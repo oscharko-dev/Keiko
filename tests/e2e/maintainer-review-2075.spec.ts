@@ -146,7 +146,8 @@ async function fixture(
         ...item,
         legalHold: { status: "none" },
         canonicalPayload:
-          '<img src="https://tracker.invalid/x"><a href="https://tracker.invalid">x</a><script>window.__xss=1</script>',
+          '<img src="https://tracker.invalid/x"><a href="https://tracker.invalid">x</a><script>window.__xss=1</script>\n' +
+          "review-safe-line\n".repeat(80),
       });
       return;
     }
@@ -234,9 +235,22 @@ test("maintainer queue uses production assets, inert payload rendering, keyboard
   });
   await page.goto("/maintainer/");
   await expect(page.getByRole("heading", { name: "Review queue" })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const queueScroller = page.getByRole("region", { name: "1 items loaded" });
+  await queueScroller.focus();
+  await expect(queueScroller).toBeFocused();
+  await expect
+    .poll(() => queueScroller.evaluate((node) => node.scrollWidth > node.clientWidth))
+    .toBe(true);
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByRole("button", { name: item.itemId }).click();
   await expect(page.getByRole("heading", { name: "Review detail" })).toBeFocused();
-  const payload = page.locator("pre.mq-payload");
+  const payload = page.getByRole("region", { name: "Canonical payload" });
+  await payload.focus();
+  await expect(payload).toBeFocused();
+  await expect
+    .poll(() => payload.evaluate((node) => node.scrollHeight > node.clientHeight))
+    .toBe(true);
   await expect(payload).toContainText("<script>");
   await expect(page.locator("pre img, pre a, pre script")).toHaveCount(0);
   await capture(page, "01-dark-desktop-detail-xss");

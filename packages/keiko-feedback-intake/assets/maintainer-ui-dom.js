@@ -24,6 +24,7 @@ export function element(name, properties, children = []) {
         "htmlFor",
         "required",
         "placeholder",
+        "role",
       ].includes(key)
     )
       node[key] = value;

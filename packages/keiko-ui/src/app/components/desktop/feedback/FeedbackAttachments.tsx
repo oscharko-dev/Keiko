@@ -36,7 +36,7 @@ export function FeedbackAttachments({
   readonly attachments: readonly StagedFeedbackAttachment[];
   readonly error: FeedbackAttachmentStagingError | undefined;
   readonly removedOrdinal: number | undefined;
-  readonly inputRef: RefObject<HTMLInputElement>;
+  readonly inputRef: RefObject<HTMLInputElement | null>;
   readonly disabled: boolean;
   readonly preparationErrorId: string | undefined;
   readonly onControlRef: (index: number, node: HTMLButtonElement | null) => void;

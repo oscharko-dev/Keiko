@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
@@ -25,7 +25,7 @@ describe("feedback feature translations", () => {
     expect(translateFeedback("de", "feedback.public.reservationStatus")).toContain("GitHub");
   });
 
-  it("uses the current global locale when the lazy feedback window opens", () => {
+  it("uses the current global locale when the lazy feedback window opens", async () => {
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
     render(
       <I18nProvider>
@@ -33,6 +33,8 @@ describe("feedback feature translations", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByRole("heading", { name: "Bevor du fortfaehrst" })).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Bevor du fortfaehrst" })).toBeVisible();
+    });
   });
 });

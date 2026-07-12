@@ -65,7 +65,7 @@ export function FeedbackPreview({
 }: {
   readonly prepared: PreparedFeedbackSnapshotV1;
   readonly attachmentCount: number;
-  readonly headingRef: RefObject<HTMLHeadingElement>;
+  readonly headingRef: RefObject<HTMLHeadingElement | null>;
   readonly submission: FeedbackSubmissionReviewControls;
   readonly onEditField: (field: FeedbackTextField) => void;
   readonly onEditAndRescan: () => void;

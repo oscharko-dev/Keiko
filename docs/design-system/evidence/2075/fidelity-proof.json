@@ -3,19 +3,19 @@
   "assets": {
     "keiko-tokens.css": {
       "identityBytes": 20112,
-      "gzipBytes": 5096,
+      "gzipBytes": 5098,
       "brotliBytes": 4223,
       "sha256": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76"
     },
     "keiko-semantic-tokens.css": {
       "identityBytes": 16141,
-      "gzipBytes": 4302,
+      "gzipBytes": 4278,
       "brotliBytes": 3556,
       "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
     },
     "maintainer-ui.css": {
       "identityBytes": 10975,
-      "gzipBytes": 2219,
+      "gzipBytes": 2217,
       "brotliBytes": 1861,
       "sha256": "f223619127aedd1299129e53c202125933a08e695deb2d6ad328a744abe59a6e"
     },
@@ -26,34 +26,34 @@
       "sha256": "3f497a3754ae9876169d2ab04586093110742360dd09ad908288b483829e57e1"
     },
     "maintainer-ui.js": {
-      "identityBytes": 12802,
-      "gzipBytes": 3817,
-      "brotliBytes": 3325,
-      "sha256": "2e75c4e67a39fc4b9d7c3b9c825bf6000254cd5ca89d27949d5fba9c09dd27e2"
+      "identityBytes": 12896,
+      "gzipBytes": 3821,
+      "brotliBytes": 3348,
+      "sha256": "1fcc4babb0bcc2e2e39e0eaf0b08b65e330a72131ccc55a99e971ad8cd15ad14"
     },
     "maintainer-ui-copy.js": {
-      "identityBytes": 13847,
-      "gzipBytes": 4014,
-      "brotliBytes": 3507,
-      "sha256": "7699a532395d049cf709e13acaca4c8e7d00a8977234d8d760d069dff9e4c2c9"
+      "identityBytes": 13711,
+      "gzipBytes": 4029,
+      "brotliBytes": 3532,
+      "sha256": "3ef6220bfb8e006a5d79c37df360f8c9b77bbca133f3686a6eec4b0d35c843fa"
     },
     "maintainer-ui-detail.js": {
-      "identityBytes": 2468,
-      "gzipBytes": 925,
-      "brotliBytes": 764,
-      "sha256": "a5cd2210023df3b9422f746c061ee5cceaa502706181100ace92aefd0dfd7948"
+      "identityBytes": 2629,
+      "gzipBytes": 974,
+      "brotliBytes": 809,
+      "sha256": "f7f78240f0f904ee81a02076664a1470539600e6a15d9f39346b50a602b1f60c"
     },
     "maintainer-ui-dom.js": {
-      "identityBytes": 4761,
-      "gzipBytes": 1670,
-      "brotliBytes": 1407,
-      "sha256": "8252cce42202221b3f131c13d341e443b3c33440e82bb4af539cb76a8240444a"
+      "identityBytes": 4777,
+      "gzipBytes": 1667,
+      "brotliBytes": 1410,
+      "sha256": "134cfdb092d7085c19cfb70b268d65d983c11c66a5ad5223735dd36401895eb0"
     },
     "maintainer-ui-publication.js": {
-      "identityBytes": 12970,
-      "gzipBytes": 3461,
-      "brotliBytes": 3011,
-      "sha256": "0e687f2127e828f92e17252e9bef2d45faafb979b107deab3bfbb2bd67120a0c"
+      "identityBytes": 14614,
+      "gzipBytes": 3732,
+      "brotliBytes": 3255,
+      "sha256": "4cbdc78b8755f616c070c4145a74d0c01247e16ed14099defc0d48b2fee13641"
     }
   },
   "screenshots": [
@@ -80,12 +80,12 @@
     "21-private-security-item.png"
   ],
   "screenshotSha256": {
-    "01-dark-desktop-detail-xss.png": "5ba382ee8cf87cc58d40d3447e4c24b270027b75dc52b58ae46b6aaceba12462",
-    "02-light-desktop-success.png": "212120791cc5dff56a829bcfeccffa78aa6a64d77cc8ff54255b575c5132c7e5",
-    "03-dark-high-contrast.png": "eacdbee2ace789ed50b61ddfc22d625cf28d899d9b98bd9ba14930b6d2b45ba8",
-    "04-light-high-contrast.png": "7b39cf4d17c85ac363d131ea45f9040b70a1f4a2caf484f8ecdd4ce2ad3c1621",
-    "05-forced-colors.png": "59bbf30386840661d701e0fb6497e2036d3cfcde462bbc9a36a85e372458d3bb",
-    "06-reduced-motion.png": "a41ed0f1fce27b73d7a2c2c81a896418a53181aadb3ebe9d53deb7d02f055359",
+    "01-dark-desktop-detail-xss.png": "3d46e14767d1c67a6c7f56415367984868cb1caa1089666147c3d23988d739eb",
+    "02-light-desktop-success.png": "d5030144aaeee264cd37574b0684d7af33135f31d8c2407e392d6b8bff1dfb10",
+    "03-dark-high-contrast.png": "38643c03ce4e9e3a1d2af1d499837b91b450599bef1d23758b188f06db84af1e",
+    "04-light-high-contrast.png": "ecab28675d8084a981618441830bf73b9d67d1329939fc09459b597042f80f5a",
+    "05-forced-colors.png": "261f1895415a59b598ce06cf45efdeeeb54c383f1700c79dd19197a5ab1e22bb",
+    "06-reduced-motion.png": "3e284b1e45c7d95e621af46a60ace9dd269f3e51730948683bbe36c7a9f0959c",
     "07-de-mobile-empty-forced-colors.png": "5345f58b9cb9d4ddcaef853097e241bbcdcf6f05d7c22162d827755ac60f0896",
     "08-de-unauthenticated.png": "8532f6368631e13b78fd8ead6f154b4167ecfdf5d7476d6155f5f7dcc0d3aa32",
     "09-forbidden-error.png": "2c11f560980d9cc903b821b75cfe589e199944d71443f446cf3dd19c09fc41d9",
@@ -95,8 +95,8 @@
     "13-audit.png": "ce730c584d6e333bd7f67d898de3beacba77e7e0b33fbadd3fe33f2cf6f00154",
     "14-private-security-active-hold.png": "bf28ac0a408cf242b95dfbe9cbf79dab69fc467c78a16f163899bd46cf2dc5dd",
     "15-expired-hold-cleanup.png": "dbd8cb84d0c9aaa7da266652d018a59dd6670f65eb9bb2d79d517f7647b9e2d2",
-    "16-native-validation-error.png": "44043129f9acee89904b372c4ca3a85f06610a71282d2d5541f8da1739b39405",
-    "17-submitting-busy.png": "7537cd1461db1ac7102bbff13993e2f2549c4edc6e05f2a2b64c97ba85b58c79",
+    "16-native-validation-error.png": "b0ca00951e74b171be34c1f50c912989df4b7b6df33aa5ed3785799651e28b80",
+    "17-submitting-busy.png": "4bd9a1d8764a2d32f34b34ddd789a90f36bac746ac6bb25e0fc7daee05a80942",
     "18-loading.png": "2029b6344b44393a7898ba3dfbeb43d08441058c169cee51dc22215371971c85",
     "19-filtered-empty.png": "d8ba87c1174373744fd2df50c3279b7f4f6da184f83c7009368b0b1719f4ee39",
     "20-stale-detail-not-found.png": "78447f6e9399853a74b7efb636072c3053ec369215abdfa6da824cc6f2a28d90",

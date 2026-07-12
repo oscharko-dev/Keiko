@@ -51,7 +51,9 @@ const prepared = {
   targetPolicyDigest: "c".repeat(64),
   reconciliationMarker: "never-rendered",
   title: '<img src="https://tracker.invalid/title"> exact <b>title</b>',
-  body: '<script>window.__publicationXss = true</script><a href="https://tracker.invalid">exact body</a>',
+  body:
+    '<script>window.__publicationXss = true</script><a href="https://tracker.invalid">exact body</a>\n' +
+    "public-safe-line\n".repeat(80),
   targetDisplay: {
     owner: "keiko",
     repository: "public-feedback",
@@ -344,6 +346,12 @@ test("prepare, exact inert preview, approve, and public link use only the govern
   ).toHaveCount(0);
   await expect(page.locator(".mq-publication-preview pre").first()).toHaveText(prepared.title);
   await expect(page.locator(".mq-publication-preview pre").nth(1)).toHaveText(prepared.body);
+  const publicBody = page.getByRole("region", { name: "Body" });
+  await publicBody.focus();
+  await expect(publicBody).toBeFocused();
+  await expect
+    .poll(() => publicBody.evaluate((node) => node.scrollHeight > node.clientHeight))
+    .toBe(true);
   expectPreparedRequest(ledger.requests[0], "one-target");
   await capture(page, "02-dark-preview-inert");
   await page.getByRole("button", { name: "Approve public publication" }).click();
