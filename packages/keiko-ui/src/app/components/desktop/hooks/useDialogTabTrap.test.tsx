@@ -20,6 +20,20 @@ function TestDialog({ disabled = false }: { readonly disabled?: boolean }): Reac
   );
 }
 
+function TestDialogWithFormControl(): ReactElement {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogTabTrap(dialogRef);
+  return (
+    <div ref={dialogRef} tabIndex={-1} data-testid="dialog">
+      <label>
+        Name
+        <input type="text" />
+      </label>
+      <button type="button">Submit</button>
+    </div>
+  );
+}
+
 describe("useDialogTabTrap", () => {
   it("wraps Tab from the last focusable element back to the first", () => {
     render(<TestDialog />);
@@ -74,5 +88,18 @@ describe("useDialogTabTrap", () => {
 
     expect(notCanceled).toBe(true);
     expect(document.activeElement).toBe(first);
+  });
+
+  it("treats non-button focusable controls (inputs) as part of the containment boundary", () => {
+    render(<TestDialogWithFormControl />);
+    const input = screen.getByRole("textbox", { name: "Name" });
+    const submit = screen.getByRole("button", { name: "Submit" });
+
+    submit.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(submit);
   });
 });
