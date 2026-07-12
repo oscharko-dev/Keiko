@@ -34,6 +34,7 @@ export const DE_MESSAGES = {
   "editor.command.cancelVerification": "Verifizierung abbrechen",
   "editor.command.trustWorkspaceScripts": "Arbeitsbereichsskripten vertrauen",
   "editor.command.revokeWorkspaceScriptTrust": "Vertrauen in Arbeitsbereichsskripte widerrufen",
+  "editor.m7.personalizationSurface": "Editor-Personalisierung und Resilienz",
   "rail.figma": "Figma-Snapshot",
   "rail.lightMode": "Heller Modus",
   "rail.darkMode": "Dunkler Modus",
