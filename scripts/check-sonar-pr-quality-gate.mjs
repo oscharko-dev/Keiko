@@ -32,28 +32,54 @@ function hasAnalyzableNewCode(measures) {
 }
 
 function findingFailures(issuesTotal, measures) {
-  const failures = [];
-  if (issuesTotal === undefined) failures.push("SonarCloud issue total is missing.");
-  else if (issuesTotal !== 0)
-    failures.push(`SonarCloud reports ${String(issuesTotal)} unresolved issue(s).`);
-  if (measures.new_violations === undefined) failures.push("New-code violation metric is missing.");
-  else if (measures.new_violations !== 0)
-    failures.push(`SonarCloud reports ${String(measures.new_violations)} new violation(s).`);
-  if (measures.new_lines === undefined) failures.push("New-code line count metric is missing.");
-  const analyzable = hasAnalyzableNewCode(measures);
-  const analysisTrusted = measures.new_lines !== undefined;
-  if (measures.new_duplicated_lines_density === undefined) {
-    if (analyzable || !analysisTrusted) failures.push("New-code duplication metric is missing.");
-  } else if (measures.new_duplicated_lines_density > 3) {
-    failures.push("New-code duplication exceeds 3%.");
-  }
-  if (measures.new_security_hotspots_reviewed === undefined) {
-    if (analyzable || !analysisTrusted)
-      failures.push("New-code security-hotspot review metric is missing.");
-  } else if (measures.new_security_hotspots_reviewed < 100) {
-    failures.push("Not all new security hotspots are reviewed.");
-  }
-  return failures;
+  return [
+    ...issueTotalFailures(issuesTotal),
+    ...violationFailures(measures),
+    ...lineCountFailures(measures),
+    ...newCodeQualityFailures(measures),
+  ];
+}
+
+function issueTotalFailures(issuesTotal) {
+  if (issuesTotal === undefined) return ["SonarCloud issue total is missing."];
+  if (issuesTotal !== 0) return [`SonarCloud reports ${String(issuesTotal)} unresolved issue(s).`];
+  return [];
+}
+
+function violationFailures(measures) {
+  if (measures.new_violations === undefined) return ["New-code violation metric is missing."];
+  if (measures.new_violations !== 0)
+    return [`SonarCloud reports ${String(measures.new_violations)} new violation(s).`];
+  return [];
+}
+
+function lineCountFailures(measures) {
+  return measures.new_lines === undefined ? ["New-code line count metric is missing."] : [];
+}
+
+function newCodeQualityFailures(measures) {
+  const enforceMissing = hasAnalyzableNewCode(measures) || measures.new_lines === undefined;
+  return [
+    ...missingOrExceedingFailure(
+      measures.new_duplicated_lines_density,
+      enforceMissing,
+      "New-code duplication metric is missing.",
+      (value) => value > 3,
+      "New-code duplication exceeds 3%.",
+    ),
+    ...missingOrExceedingFailure(
+      measures.new_security_hotspots_reviewed,
+      enforceMissing,
+      "New-code security-hotspot review metric is missing.",
+      (value) => value < 100,
+      "Not all new security hotspots are reviewed.",
+    ),
+  ];
+}
+
+function missingOrExceedingFailure(value, enforceMissing, missingLabel, exceeds, exceededLabel) {
+  if (value === undefined) return enforceMissing ? [missingLabel] : [];
+  return exceeds(value) ? [exceededLabel] : [];
 }
 
 function coverageFailures(measures) {
