@@ -14,6 +14,10 @@ async function exists(path) {
   }
 }
 
+function portableRelativePath(root, path) {
+  return relative(root, path).replaceAll("\\", "/");
+}
+
 describe("removeRuntimeJavaScriptSourceMaps", () => {
   let root = "";
 
@@ -43,7 +47,7 @@ describe("removeRuntimeJavaScriptSourceMaps", () => {
 
     const removed = await removeRuntimeJavaScriptSourceMaps(root);
 
-    expect(removed.map((path) => relative(root, path)).sort()).toEqual([
+    expect(removed.map((path) => portableRelativePath(root, path)).sort()).toEqual([
       "_next/static/chunks/app.js.map",
       "_next/static/chunks/vendor.js.map",
     ]);

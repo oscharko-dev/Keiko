@@ -155,7 +155,7 @@ describe("detectRuntimeCapabilities", () => {
 
   it("classifies package-script names without exposing or executing script bodies", () => {
     const packageJson = JSON.stringify({
-      packageManager: "npm@10.9.8",
+      packageManager: "npm@11.16.0",
       scripts: {
         pretest: "node should-not-run.js",
         test: "node writes-sentinel.js",

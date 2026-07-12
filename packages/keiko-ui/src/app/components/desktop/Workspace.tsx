@@ -68,7 +68,7 @@ const WorkspaceShader = dynamic(
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
-  readonly wsRef: RefObject<HTMLDivElement>;
+  readonly wsRef: RefObject<HTMLDivElement | null>;
   readonly openPalette: () => void;
   readonly palette?: ReactNode;
   readonly children?: ReactNode;

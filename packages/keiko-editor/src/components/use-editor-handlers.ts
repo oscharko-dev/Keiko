@@ -7,7 +7,7 @@
  * DOM/Monaco edges are touched only inside the returned callbacks/effect, never at module scope.
  */
 import { type OnChange, type OnMount } from "@monaco-editor/react";
-import { useCallback, useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
 
 import { buildSaveRequest } from "./save-state.js";
 import type { KeikoCodeEditorProps } from "./types.js";
@@ -107,7 +107,7 @@ interface ProgrammaticEditorChange {
   readonly suppress?: boolean;
 }
 
-type ProgrammaticEditorChangeRef = MutableRefObject<ProgrammaticEditorChange | null>;
+type ProgrammaticEditorChangeRef = RefObject<ProgrammaticEditorChange | null>;
 
 function consumeProgrammaticChange(
   value: string,
@@ -120,15 +120,15 @@ function consumeProgrammaticChange(
 }
 
 interface EditorRefs {
-  readonly editorRef: MutableRefObject<MountEditor | null>;
-  readonly monacoRef: MutableRefObject<MountMonaco | null>;
-  readonly containerRef: MutableRefObject<HTMLElement | null>;
-  readonly viewStateRef: MutableRefObject<unknown>;
-  readonly disposeRef: MutableRefObject<(() => void) | null>;
-  readonly modelAttachmentRef: MutableRefObject<RetainedEditorModelAttachment | null>;
-  readonly revealDecorationIdsRef: MutableRefObject<string[]>;
-  readonly revealTimeoutRef: MutableRefObject<number | null>;
-  readonly gitGutterBridgeRef: MutableRefObject<EditorGitGutterBridge | null>;
+  readonly editorRef: RefObject<MountEditor | null>;
+  readonly monacoRef: RefObject<MountMonaco | null>;
+  readonly containerRef: RefObject<HTMLElement | null>;
+  readonly viewStateRef: RefObject<unknown>;
+  readonly disposeRef: RefObject<(() => void) | null>;
+  readonly modelAttachmentRef: RefObject<RetainedEditorModelAttachment | null>;
+  readonly revealDecorationIdsRef: RefObject<string[]>;
+  readonly revealTimeoutRef: RefObject<number | null>;
+  readonly gitGutterBridgeRef: RefObject<EditorGitGutterBridge | null>;
 }
 
 function useEditorRefs(): EditorRefs {
@@ -236,7 +236,7 @@ function revealDiagnosticMarker(refs: EditorRefs, marker: DiagnosticOverviewMark
 
 function useSaveEmitter(
   props: KeikoCodeEditorProps,
-  editorRef: MutableRefObject<MountEditor | null>,
+  editorRef: RefObject<MountEditor | null>,
   readOnly: boolean,
 ): () => void {
   // The save command is registered into Monaco ONCE at mount: `@monaco-editor/react` captures the
@@ -397,7 +397,7 @@ function useControlledModelValueSync(
 // mount-time closure. Returns undefined when the host supplies no resolver, so no provider is
 // registered (no silent or placeholder completion affordance).
 function buildCompletionWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorCompletion | undefined {
   if (latestProps.current.provideCompletions === undefined) {
@@ -424,7 +424,7 @@ function buildCompletionWiring(
 // provider is registered. The telemetry accumulator is created once per mount and forwards each
 // content-free snapshot to the live `onInlineCompletionTelemetry` prop.
 function buildInlineCompletionWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
   telemetry: InlineCompletionTelemetry,
 ): WireEditorInlineCompletion | undefined {
@@ -451,7 +451,7 @@ function buildInlineCompletionWiring(
 // Builds the diagnostics wiring from the live props ref (Issue #1201), mirroring the completion
 // builders. Returns undefined when the host supplies no diagnostics resolver, so no markers run.
 function buildDiagnosticsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
   onOverviewMarkers: OverviewMarkersHandler | undefined,
 ): WireEditorDiagnostics | undefined {
@@ -484,7 +484,7 @@ function buildDiagnosticsWiring(
 // command handler, so no Keiko action is registered into Monaco's palette. Each run reads the live
 // prop so a handler swap (e.g. the host opening a different file) is honoured.
 function buildCommandsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
 ): WireEditorCommands | undefined {
   if (
     latestProps.current.onGenerateTests === undefined &&
@@ -519,7 +519,7 @@ function buildCommandsWiring(
 }
 
 function isCurrentDocument(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
 ): (documentUri: string) => boolean {
   return (documentUri): boolean => latestProps.current.fileModel.identity.uri === documentUri;
 }
@@ -527,7 +527,7 @@ function isCurrentDocument(
 // Builds the hover wiring from the live props ref (Issue #1201). Returns undefined when the host
 // supplies no hover resolver, so no hover provider is registered.
 function buildHoverWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorHover | undefined {
   if (latestProps.current.provideHover === undefined) {
@@ -549,7 +549,7 @@ function buildHoverWiring(
 // Builds the document-symbol wiring from the live props ref (Issue #1201). Returns undefined when the
 // host supplies no symbols resolver, so no symbol provider is registered.
 function buildSymbolsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorSymbols | undefined {
   if (latestProps.current.provideSymbols === undefined) {
@@ -571,7 +571,7 @@ function buildSymbolsWiring(
 // Builds the document-formatting wiring from the live props ref (Issue #1201). Returns undefined when
 // the host supplies no formatting resolver, so no formatting provider is registered.
 function buildFormattingWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorFormatting | undefined {
   if (latestProps.current.provideFormatting === undefined) {
@@ -591,7 +591,7 @@ function buildFormattingWiring(
 }
 
 function buildDefinitionWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorDefinition | undefined {
   if (latestProps.current.provideDefinition === undefined) {
@@ -612,7 +612,7 @@ function buildDefinitionWiring(
 }
 
 function buildTypeDefinitionWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorDefinition | undefined {
   if (latestProps.current.provideTypeDefinition === undefined) return undefined;
@@ -631,7 +631,7 @@ function buildTypeDefinitionWiring(
 }
 
 function buildImplementationWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorDefinition | undefined {
   if (latestProps.current.provideImplementation === undefined) return undefined;
@@ -650,7 +650,7 @@ function buildImplementationWiring(
 }
 
 function buildInlayHintsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorInlayHints | undefined {
   if (latestProps.current.provideInlayHints === undefined) return undefined;
@@ -668,7 +668,7 @@ function buildInlayHintsWiring(
 }
 
 function buildCallHierarchyWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
   onResult: CallHierarchyResultHandler | undefined,
 ): WireEditorCallHierarchy | undefined {
@@ -696,7 +696,7 @@ function buildCallHierarchyWiring(
 }
 
 function buildReferencesWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorReferences | undefined {
   if (latestProps.current.provideReferences === undefined) {
@@ -717,7 +717,7 @@ function buildReferencesWiring(
 }
 
 function buildCodeActionsWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorCodeActions | undefined {
   if (latestProps.current.provideCodeActions === undefined) {
@@ -737,7 +737,7 @@ function buildCodeActionsWiring(
 }
 
 function buildSignatureHelpWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
   streamId: string,
 ): WireEditorSignatureHelp | undefined {
   if (latestProps.current.provideSignatureHelp === undefined) {
@@ -757,7 +757,7 @@ function buildSignatureHelpWiring(
 }
 
 function buildGitGutterWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
 ): WireEditorGitGutter | undefined {
   const gutter = latestProps.current.editorGitGutter;
   if (gutter === undefined) return undefined;
@@ -777,7 +777,7 @@ function buildGitGutterWiring(
 }
 
 function buildBlameWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
 ): WireEditorBlame | undefined {
   const blame = latestProps.current.editorBlame;
   if (blame === undefined) return undefined;
@@ -795,7 +795,7 @@ function buildBlameWiring(
 }
 
 function buildConflictWiring(
-  latestProps: MutableRefObject<KeikoCodeEditorProps>,
+  latestProps: RefObject<KeikoCodeEditorProps>,
 ): WireEditorConflicts | undefined {
   const conflicts = latestProps.current.editorConflicts;
   if (conflicts === undefined) return undefined;
@@ -857,7 +857,7 @@ function runtimeWiringAvailabilityKey(props: KeikoCodeEditorProps): string {
 // and inline-completion streams are distinct so inline supersession never aliases the completion
 // stream; the telemetry observer reads the live prop so a later `onInlineCompletionTelemetry`
 // identity is honoured without re-registering the provider.
-function useMountStreams(latestProps: MutableRefObject<KeikoCodeEditorProps>): {
+function useMountStreams(latestProps: RefObject<KeikoCodeEditorProps>): {
   readonly streamId: string;
   readonly inlineStreamId: string;
   readonly telemetry: InlineCompletionTelemetry;
@@ -977,7 +977,7 @@ interface MountRuntimeArgs {
   readonly monaco: unknown;
   readonly refs: EditorRefs;
   readonly emitSave: () => void;
-  readonly latestProps: MutableRefObject<KeikoCodeEditorProps>;
+  readonly latestProps: RefObject<KeikoCodeEditorProps>;
   readonly streamId: string;
   readonly inlineStreamId: string;
   readonly telemetry: InlineCompletionTelemetry;

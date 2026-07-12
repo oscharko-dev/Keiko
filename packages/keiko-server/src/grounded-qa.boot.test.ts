@@ -11,7 +11,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const distEntry = join(
@@ -25,7 +25,7 @@ describe("grounded modules — native Node ESM boot", () => {
   it.skipIf(!existsSync(distEntry))(
     "initializes grounded-qa-hybrid (cyclic with grounded-qa) with no temporal-dead-zone error",
     () => {
-      const script = `await import(${JSON.stringify(distEntry)}); console.log("BOOT_OK");`;
+      const script = `await import(${JSON.stringify(pathToFileURL(distEntry).href)}); console.log("BOOT_OK");`;
       const out = execFileSync(
         process.execPath,
         ["--experimental-sqlite", "--input-type=module", "-e", script],

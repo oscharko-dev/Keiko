@@ -167,10 +167,9 @@ workspace-index-*.json.*.tmp
 # the parent .env; never commit.
 /.keiko-e2e/
 
-# Wave 1 UI build artifacts (ADR-0011 D3; relocated to packages/keiko-ui by issue #167). Only
-# the package's source + package.json are committed. Build outputs, the Next typegen file, and
-# the incremental tsbuildinfo are generated and must never be committed.
-packages/keiko-ui/.next/
+# Next.js build artifacts are generated for current and future applications and must never be
+# committed. The repository-hygiene gate also rejects any already tracked .next path.
+.next/
 packages/keiko-ui/out/
 packages/keiko-ui/next-env.d.ts
 

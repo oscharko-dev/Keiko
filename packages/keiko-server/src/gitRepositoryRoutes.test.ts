@@ -1,12 +1,4 @@
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -16,6 +8,7 @@ import { createCloneRepositoryHandler } from "./gitRepositoryRoutes.js";
 import type { RouteContext } from "./routes.js";
 import { createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
 
 let tmp: string;
 let store: UiStore;
@@ -82,19 +75,16 @@ describe("git repository routes", () => {
   it("uses the shared hardened network git env for the clone spawn boundary", async () => {
     const destination = join(tmp, "app");
     const capturePath = join(tmp, "clone-env.json");
-    const fakeGit = join(tmp, "git");
-    writeFileSync(
-      fakeGit,
+    writeNodeExecutableFixture(
+      tmp,
+      "git",
       [
-        "#!/usr/bin/env node",
         'const fs = require("node:fs");',
         `fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), env: process.env }));`,
         "fs.mkdirSync(process.argv.at(-1), { recursive: true });",
         "process.exit(0);",
       ].join("\n"),
-      "utf8",
     );
-    chmodSync(fakeGit, 0o755);
     vi.stubEnv("PATH", `${tmp}${delimiter}${process.env.PATH ?? ""}`);
     vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
     vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");
@@ -132,17 +122,14 @@ describe("git repository routes", () => {
     // path end to end with an option-like URL and proves git is never spawned: a fake git on PATH
     // writes a marker file if invoked, and the marker must never appear.
     const capturePath = join(tmp, "should-not-spawn.marker");
-    const fakeGit = join(tmp, "git");
-    writeFileSync(
-      fakeGit,
+    writeNodeExecutableFixture(
+      tmp,
+      "git",
       [
-        "#!/usr/bin/env node",
         `require("node:fs").writeFileSync(${JSON.stringify(capturePath)}, "spawned");`,
         "process.exit(0);",
       ].join("\n"),
-      "utf8",
     );
-    chmodSync(fakeGit, 0o755);
     vi.stubEnv("PATH", `${tmp}${delimiter}${process.env.PATH ?? ""}`);
     try {
       const result = await createCloneRepositoryHandler()(

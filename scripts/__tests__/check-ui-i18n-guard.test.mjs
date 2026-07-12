@@ -11,6 +11,7 @@ import {
   changedFilesFromGit,
   changedFilesFromInput,
   checkUiI18nGuard,
+  hasI18nRelevantAddedLine,
   hasUserFacingTextLine,
   isUiProductionSource,
 } from "../check-ui-i18n-guard.mjs";
@@ -92,6 +93,15 @@ test("recognizes user-facing JSX, a11y attributes, and return strings", () => {
   assert.equal(hasUserFacingTextLine('return "Enter a name.";'), true);
   assert.equal(hasUserFacingTextLine('<g transform="translate(10 10)">'), false);
   assert.equal(hasUserFacingTextLine("// Called when the user opens a file."), false);
+});
+
+test("requires catalog review only for i18n-relevant added lines", () => {
+  expect(hasI18nRelevantAddedLine('return <p>{t("feature.title")}</p>;')).toBe(true);
+  expect(hasI18nRelevantAddedLine('<button aria-label="Open">')).toBe(true);
+  expect(hasI18nRelevantAddedLine("readonly titleRef: RefObject<HTMLElement | null>;")).toBe(false);
+  expect(hasI18nRelevantAddedLine("// Improve compatibility with the current renderer.")).toBe(
+    false,
+  );
 });
 
 test("detects changed files from the push event before SHA", () => {

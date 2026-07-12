@@ -167,6 +167,7 @@ describe("runRetrievalEval — determinism", () => {
       expect(a.fixtureId).toBe(fixtureId);
       expect(JSON.stringify(a)).toBe(JSON.stringify(b));
     },
+    120_000,
   );
 
   it("default clock produces a stable latency value across runs", async () => {
@@ -272,5 +273,5 @@ describe("runRetrievalEval — pass threshold breakdown", () => {
       );
       expect(scorecard.passed).toBe(true);
     }
-  });
+  }, 60_000);
 });

@@ -927,10 +927,9 @@ function AppShellInner(): ReactNode {
   // Palette itself. `inert` implies aria-hidden in modern engines; the explicit aria-hidden is a
   // fallback for older assistive tech that has not yet adopted inert.
   const modalOpen = pending !== null || quickAccessMode !== null || needsGatewaySetup;
-  // GEN-UI-A11Y-003 — React 18's DOM renderer does not whitelist `inert`, so a JSX `inert` prop is
-  // dropped (with a warning). Toggle the attribute imperatively on the `.stage` element instead: set
-  // it while a modal dialog is open, remove it otherwise. `aria-hidden` is a normal, typed JSX prop
-  // that pairs with `inert` for older assistive tech that has not yet adopted inert.
+  // GEN-UI-A11Y-003 — toggle `inert` imperatively so the modal lifecycle owns the exact presence of
+  // the boolean attribute across supported renderers: set it while a modal dialog is open and remove
+  // it otherwise. `aria-hidden` pairs with `inert` for older assistive technology.
   const stageRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const stage = stageRef.current;

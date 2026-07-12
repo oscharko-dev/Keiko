@@ -72,8 +72,11 @@ function pathEntries(processEnv: NodeJS.ProcessEnv): readonly string[] {
   return pathValue.length === 0 ? [] : pathValue.split(delimiter).filter(Boolean);
 }
 
-function executableExtensions(processEnv: NodeJS.ProcessEnv): readonly string[] {
-  if (process.platform !== "win32") {
+function executableExtensions(
+  processEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): readonly string[] {
+  if (platform !== "win32") {
     return [""];
   }
   return (processEnv.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
@@ -128,6 +131,7 @@ export function resolveExecutableOutsideWorkspace(
   name: string,
   workspace: WorkspaceInfo,
   processEnv: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
 ): string {
   if (name.length === 0 || name.includes("/") || name.includes("\\") || name.includes(" ")) {
     throw new LspProcessError("EXECUTABLE_NOT_FOUND");
@@ -135,7 +139,7 @@ export function resolveExecutableOutsideWorkspace(
   const lexicalRoot = workspace.root;
   const realRoot = realWorkspaceRoot(lexicalRoot);
   for (const directory of pathEntries(processEnv)) {
-    for (const ext of executableExtensions(processEnv)) {
+    for (const ext of executableExtensions(processEnv, platform)) {
       const candidate = probeCandidate(directory, name, ext);
       if (candidate === undefined) {
         continue;
@@ -285,6 +289,10 @@ function wrapChild(child: ChildProcess): ReturnType<LspSpawnFn> {
   if (stdin === null || stdout === null || stderr === null) {
     throw new LspProcessError("SPAWN_FAILED");
   }
+  // A crashing or already-disposed language server may close stdin while the JSON-RPC client is
+  // settling an in-flight request. The manager observes the child exit separately; the write-side
+  // broken pipe must not escape as an unhandled process error.
+  stdin.on("error", () => undefined);
   return {
     stdin: { write: (chunk: Buffer): void => void stdin.write(chunk) },
     stdout,

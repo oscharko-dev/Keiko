@@ -1,9 +1,15 @@
 import dynamic from "next/dynamic";
 import { gitObjectId } from "./gitObjectId";
 import type { ReactNode } from "react";
+import type {
+  QualityIntelligenceInlineSource,
+  QualityIntelligenceUiRegenerateResult,
+} from "@oscharko-dev/keiko-contracts";
 import { useTranslate } from "@/lib/i18n";
+import type { Chat } from "@/lib/types";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
+import type { WindowCfgValue } from "../windows/types";
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import { requestGatewaySetup } from "./shared/gatewaySetupBus";
 import {
@@ -271,7 +277,7 @@ function toAgentCfg(cfg: Record<string, unknown>): AgentRunCfg {
 registerWindowRender("chat", (cfg, ctx) => <ChatWindowSessionHost cfg={cfg} ctx={ctx} />);
 registerWindowRender("chatHistory", (_cfg, ctx) => (
   <ChatHistoryPanel
-    openChatWindow={(chat) => {
+    openChatWindow={(chat: Chat) => {
       ctx.openWindow("chat", { chatId: chat.id, title: chat.title });
     }}
   />
@@ -335,7 +341,7 @@ registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
 // opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
 registerWindowRender("quality", (_cfg, ctx) => (
   <QiHubPanel
-    openRun={(runId, recheckableSources) => {
+    openRun={(runId: string, recheckableSources?: readonly QualityIntelligenceInlineSource[]) => {
       const sourceCfg =
         recheckableSources !== undefined
           ? connectedRunSourcesCfgFromInlineSources(recheckableSources)
@@ -370,7 +376,7 @@ registerWindowRender("qiRun", (cfg, ctx) => {
     <QiRunCard
       runId={runId}
       connectedSources={connectedSources}
-      onRegenerated={(result) => {
+      onRegenerated={(result: QualityIntelligenceUiRegenerateResult) => {
         ctx.openWindow("qiRun", {
           runId: result.runId,
           ...sourceCfg,
@@ -483,17 +489,19 @@ registerWindowRender("runtime", (cfg, ctx) => {
   return (
     <RuntimeHubWidget
       projectPath={projectPath}
-      onProjectPathChange={(nextProjectPath) => ctx.updateCfg({ projectPath: nextProjectPath })}
-      onOpenFiles={(root) => {
+      onProjectPathChange={(nextProjectPath: string) =>
+        ctx.updateCfg({ projectPath: nextProjectPath })
+      }
+      onOpenFiles={(root: string | undefined) => {
         ctx.openWindow("files", root !== undefined ? { root } : undefined);
       }}
-      onOpenCommands={(root) => openWithProject("commands", root)}
-      onOpenContainers={(root) => {
+      onOpenCommands={(root: string) => openWithProject("commands", root)}
+      onOpenContainers={(root: string | undefined) => {
         ctx.openWindow("containerStatus", root !== undefined ? { projectPath: root } : undefined);
       }}
-      onOpenGovernedGit={(root) => openWithProject("governedGit", root)}
-      onOpenPullRequest={(root) => openWithProject("governedPullRequest", root)}
-      onOpenMerge={(root) => openWithProject("governedMerge", root)}
+      onOpenGovernedGit={(root: string) => openWithProject("governedGit", root)}
+      onOpenPullRequest={(root: string) => openWithProject("governedPullRequest", root)}
+      onOpenMerge={(root: string) => openWithProject("governedMerge", root)}
     />
   );
 });
@@ -516,10 +524,10 @@ registerWindowRender("governedGit", (cfg, ctx) => {
       projectId={projectId}
       initialPath={initialPath}
       initialCommit={initialCommit}
-      onOpenFiles={(root) => ctx.openWindow("files", { root })}
-      onOpenEditor={(root) => ctx.openWindow("editor", { root })}
+      onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
+      onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
       onOpenEditorFile={ctx.openEditorFile}
-      updateCfg={(patch) => ctx.updateCfg(patch)}
+      updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
     />
   );
 });
@@ -581,7 +589,15 @@ registerWindowRender("figma", (cfg, ctx) => {
       snapshotRunId={snapshotRunId}
       selectedScreenIds={selectedScreenIds}
       selectedScreenName={selectedScreenName}
-      openScreenSource={({ snapshotRunId: runId, screenId, name }) => {
+      openScreenSource={({
+        snapshotRunId: runId,
+        screenId,
+        name,
+      }: {
+        readonly snapshotRunId: string;
+        readonly screenId: string;
+        readonly name: string;
+      }) => {
         ctx.openWindow("figmaView", {
           snapshotRunId: runId,
           selectedScreenIdsJson: JSON.stringify([screenId]),
@@ -593,7 +609,7 @@ registerWindowRender("figma", (cfg, ctx) => {
         requestGatewaySetup();
         ctx.openWindow("settings");
       }}
-      updateCfg={(patch) => {
+      updateCfg={(patch: Record<string, string | number | boolean | undefined>) => {
         ctx.updateCfg(patch);
       }}
     />
@@ -615,7 +631,7 @@ registerWindowRender("figmaView", (cfg, ctx) => {
         requestGatewaySetup();
         ctx.openWindow("settings");
       }}
-      updateCfg={(patch) => {
+      updateCfg={(patch: Record<string, string | number | boolean | undefined>) => {
         ctx.updateCfg(patch);
       }}
     />
@@ -656,7 +672,7 @@ registerWindowRender("connector", (cfg, ctx) => {
       selectedId={selectedId}
       selectedLabel={selectedLabel}
       selectedState={selectedState}
-      onSelect={(patch) => {
+      onSelect={(patch: { selectedKind: string; selectedId: string }) => {
         ctx.updateCfg(patch);
       }}
       onManageConnectors={() => {

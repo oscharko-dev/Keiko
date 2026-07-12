@@ -85,7 +85,7 @@ function listSourceFilesRecursively(rootDir, prefix = "") {
 
 function sha256(relativePath) {
   return createHash("sha256")
-    .update(readFileSync(join(repoRoot, relativePath)))
+    .update(readFileSync(join(repoRoot, relativePath), "utf8").replaceAll("\r\n", "\n"))
     .digest("hex");
 }
 

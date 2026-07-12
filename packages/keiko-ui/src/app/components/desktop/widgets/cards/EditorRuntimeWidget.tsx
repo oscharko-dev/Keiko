@@ -36,8 +36,8 @@ import {
   type ButtonHTMLAttributes,
   type CSSProperties,
   type ReactNode,
-  type Reducer,
 } from "react";
+import { toExactArrayBuffer } from "@/lib/bytes";
 import {
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   applyTextEditsToText,
@@ -718,7 +718,7 @@ async function deleteHotExitSnapshotBestEffort(root: string, file: string): Prom
 async function sha256HexBytes(bytes: Uint8Array, fallbackText: string): Promise<string> {
   const cryptoLike = globalThis.crypto;
   if (cryptoLike?.subtle !== undefined) {
-    const digest = await cryptoLike.subtle.digest("SHA-256", bytes);
+    const digest = await cryptoLike.subtle.digest("SHA-256", toExactArrayBuffer(bytes));
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   let hash = 0x811c9dc5;
@@ -1644,7 +1644,8 @@ function EditorRuntimeWidget({
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
-    Reducer<TestGenerationFlowState, TestGenerationFlowAction>
+    TestGenerationFlowState,
+    [TestGenerationFlowAction]
   >(testGenerationReducer, IDLE_TEST_GENERATION_STATE);
   const testGenSeqRef = useRef(0);
   const testGenAbortRef = useRef<AbortController | null>(null);

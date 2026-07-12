@@ -4,9 +4,10 @@ import { basename, join, resolve } from "node:path";
 import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
 const UI_PACKAGE = "@oscharko-dev/keiko-ui";
-const BUILD_PACKAGES_SCRIPT = "tsc -b tsconfig.packages.json";
-const TYPECHECK_SCRIPT =
-  "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit";
+const NATIVE_TSC = "node node_modules/@typescript/native/bin/tsc";
+const BUILD_PACKAGES_SCRIPT =
+  "npm run check:typescript-toolchain && node scripts/build-packages.mjs";
+const TYPECHECK_SCRIPT = `npm run build:packages && npm run check:package-graph && ${NATIVE_TSC} -p tsconfig.json --noEmit`;
 const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
   [
     "@oscharko-dev/keiko-cli",

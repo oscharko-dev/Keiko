@@ -58,6 +58,11 @@ function expectSingleHandlerDeps(captured: readonly UiHandlerDeps[]): UiHandlerD
   return handlerDeps;
 }
 
+function closeHandlerDeps(handlerDeps: UiHandlerDeps | undefined): void {
+  handlerDeps?.store.close();
+  handlerDeps?.memoryVault?.close();
+}
+
 describe("parseUiArgs", () => {
   it("defaults the port to 1983", () => {
     expect(parseUiArgs([])).toEqual({
@@ -195,7 +200,7 @@ describe("runUiCli", () => {
     const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-checkout-"));
     const localStaticRoot = join(cwd, "dist", "ui", "static");
     const localCliRoot = join(cwd, "dist", "cli");
-    const captured: { staticRoot?: string } = {};
+    const captured: { staticRoot?: string; handlerDeps?: UiHandlerDeps } = {};
     try {
       await writeFile(join(cwd, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
       await mkdir(localStaticRoot, { recursive: true });
@@ -211,8 +216,9 @@ describe("runUiCli", () => {
         {
           cwd,
           hashesFile: join(staticRoot, "csp-hashes.json"),
-          createServer: ({ staticRoot: resolvedStaticRoot }) => {
+          createServer: ({ staticRoot: resolvedStaticRoot, handlerDeps }) => {
             captured.staticRoot = resolvedStaticRoot;
+            captured.handlerDeps = handlerDeps;
             return fakeServer({});
           },
         },
@@ -221,6 +227,7 @@ describe("runUiCli", () => {
       expect(captured.staticRoot).toBe(localStaticRoot);
       expect(out.join("")).toContain("http://127.0.0.1:1983");
     } finally {
+      closeHandlerDeps(captured.handlerDeps);
       await rm(cwd, { recursive: true, force: true });
     }
   });
@@ -265,19 +272,26 @@ describe("runUiCli", () => {
   it("starts the server, listens on the parsed port, and prints the URL", async () => {
     const { io, out } = captureIo();
     const record: { port?: number; csp?: string } = {};
+    let handlerDeps: UiHandlerDeps | undefined;
     const deps: UiCliDeps = {
       staticRoot,
       hashesFile: join(staticRoot, "csp-hashes.json"),
-      createServer: ({ csp }) => {
+      cwd: staticRoot,
+      createServer: ({ csp, handlerDeps: createdHandlerDeps }) => {
         record.csp = csp;
+        handlerDeps = createdHandlerDeps;
         return fakeServer(record);
       },
     };
-    const code = await runUiCli(["--port", "4399"], io, {}, deps);
-    expect(code).toBe(0);
-    expect(record.port).toBe(4399);
-    expect(record.csp).toContain("script-src");
-    expect(out.join("")).toContain("http://127.0.0.1:4399");
+    try {
+      const code = await runUiCli(["--port", "4399"], io, {}, deps);
+      expect(code).toBe(0);
+      expect(record.port).toBe(4399);
+      expect(record.csp).toContain("script-src");
+      expect(out.join("")).toContain("http://127.0.0.1:4399");
+    } finally {
+      closeHandlerDeps(handlerDeps);
+    }
   });
 
   it("defaults UI and memory state to the workspace-local .keiko runtime root", async () => {
@@ -535,6 +549,7 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
     let spawned = 0;
     const record: { port?: number } = {};
     const dir = await mkdtemp(join(tmpdir(), "keiko-ui-cli-noexec-"));
+    let handlerDeps: UiHandlerDeps | undefined;
     await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
     try {
       const code = await runUiCli(
@@ -544,7 +559,11 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
         {
           staticRoot: dir,
           hashesFile: join(dir, "csp-hashes.json"),
-          createServer: () => fakeServer(record),
+          cwd: dir,
+          createServer: ({ handlerDeps: createdHandlerDeps }) => {
+            handlerDeps = createdHandlerDeps;
+            return fakeServer(record);
+          },
           currentExecArgv: () => [],
           sqliteProbe: () => false, // would normally trigger re-exec
           spawnFn: () => {
@@ -556,6 +575,7 @@ describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
       expect(code).toBe(0);
       expect(spawned).toBe(0);
     } finally {
+      closeHandlerDeps(handlerDeps);
       await rm(dir, { recursive: true, force: true });
     }
   });

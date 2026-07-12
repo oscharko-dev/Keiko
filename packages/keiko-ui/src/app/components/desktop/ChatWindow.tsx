@@ -3337,7 +3337,7 @@ interface MemoryDisclosureState {
   readonly open: boolean;
   readonly actionStatus: string;
   readonly disclosureId: string;
-  readonly disclosureButtonRef: RefObject<HTMLButtonElement>;
+  readonly disclosureButtonRef: RefObject<HTMLButtonElement | null>;
   readonly memoryCount: number;
   readonly memoryCountLabel: string;
   readonly memoryDisclosureLabel: string;
