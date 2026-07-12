@@ -1073,7 +1073,7 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").EditorM7WatchEvent>();
     pin<import("./index.js").EditorM7ModelEvictionPlan>();
     pin<import("./index.js").EditorM7CommandDefinition>();
-    pin<import("./index.js").EditorM7SnippetCollection>();
+    pin<import("./index.js").EditorM7WorkspaceSnippetCollection>();
     pin<import("./index.js").EditorM7AiActivationStatus>();
     pin<import("./index.js").EditorM7AiActivationSummary>();
   });

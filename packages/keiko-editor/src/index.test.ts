@@ -257,6 +257,10 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "MAX_TRACKED_CONFLICTS",
       "conflictReplacement",
       "parseConflictMarkers",
+      // Bounded Monaco model registry (#2322).
+      "configureEditorModelRegistry",
+      "disposeAllUnattachedEditorModels",
+      "disposeEditorModelRegistryRoot",
     ];
     expect(Object.keys(editor).sort()).toEqual([...expected].sort());
   });

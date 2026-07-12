@@ -192,4 +192,67 @@ describe("useWorkspaceSnippets", () => {
 
     expect(failedMutation.result.current.issue).toBe("mutation");
   });
+
+  it("surfaces conflict/invalid/unavailable mutation outcomes and refreshes on conflict", async () => {
+    api.fetchWorkspaceSnippets.mockResolvedValue(snapshot(1));
+    api.mutateWorkspaceSnippets.mockResolvedValueOnce({
+      kind: "conflict",
+      code: "STALE_REVISION",
+      etag: '"edsn-1-test"',
+    });
+    const conflict = renderHook(() => useWorkspaceSnippets("/repo"));
+    await waitFor(() => {
+      expect(conflict.result.current.snapshot?.revision).toBe(1);
+    });
+    const fetchCallsBefore = api.fetchWorkspaceSnippets.mock.calls.length;
+    let succeeded = true;
+    await act(async () => {
+      succeeded = await conflict.result.current.replace([snippet("next")]);
+    });
+    expect(succeeded).toBe(false);
+    expect(conflict.result.current.issue).toBe("conflict");
+    await waitFor(() => {
+      expect(api.fetchWorkspaceSnippets.mock.calls.length).toBeGreaterThan(fetchCallsBefore);
+    });
+
+    api.mutateWorkspaceSnippets.mockResolvedValueOnce({
+      kind: "invalid",
+      code: "UNSAFE_SNIPPET",
+    });
+    await act(async () => {
+      succeeded = await conflict.result.current.replace([snippet("bad")]);
+    });
+    expect(succeeded).toBe(false);
+    expect(conflict.result.current.issue).toBe("invalid");
+
+    api.mutateWorkspaceSnippets.mockResolvedValueOnce({
+      kind: "unavailable",
+      code: "STATE_UNAVAILABLE",
+    });
+    await act(async () => {
+      succeeded = await conflict.result.current.replace([snippet("bad")]);
+    });
+    expect(succeeded).toBe(false);
+    expect(conflict.result.current.issue).toBe("unavailable");
+  });
+
+  it("resolves replace/reset to true only on a confirmed successful mutation", async () => {
+    api.currentSnapshot = snapshot(1);
+    api.mutateWorkspaceSnippets.mockResolvedValueOnce({
+      kind: "ok",
+      changed: true,
+      revision: 2,
+      etag: '"edsn-2-test"',
+      snapshot: snapshot(2),
+    });
+    const { result } = renderHook(() => useWorkspaceSnippets("/repo"));
+    await waitFor(() => {
+      expect(result.current.snapshot?.revision).toBe(1);
+    });
+    let succeeded = false;
+    await act(async () => {
+      succeeded = await result.current.replace([snippet("next")]);
+    });
+    expect(succeeded).toBe(true);
+  });
 });
