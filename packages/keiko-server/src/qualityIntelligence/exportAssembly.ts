@@ -258,7 +258,7 @@ function winAnsiEncode(text: string): Uint8Array {
 
 // Hard-break a single over-length word into full-width chunks; returns the emitted chunks and the
 // trailing remainder (which fits within maxChars and seeds the next in-progress line).
-function hardBreakWord(word: string, maxChars: number): readonly [string[], string] {
+export function hardBreakWord(word: string, maxChars: number): readonly [string[], string] {
   const chunks: string[] = [];
   let rest = word;
   while (rest.length > maxChars) {
@@ -270,7 +270,12 @@ function hardBreakWord(word: string, maxChars: number): readonly [string[], stri
 
 // Append `word` to the in-progress `current` line, flushing it to `out` when it would overflow.
 // Returns the (possibly new) in-progress line.
-function appendWrappedWord(out: string[], current: string, word: string, maxChars: number): string {
+export function appendWrappedWord(
+  out: string[],
+  current: string,
+  word: string,
+  maxChars: number,
+): string {
   const candidate = current.length === 0 ? word : `${current} ${word}`;
   if (candidate.length > maxChars) {
     out.push(current);
@@ -280,7 +285,7 @@ function appendWrappedWord(out: string[], current: string, word: string, maxChar
 }
 
 // Greedy word-aware wrap to `maxChars`; a single over-long token is hard-broken. Preserves blanks.
-function wrapText(line: string, maxChars: number): string[] {
+export function wrapText(line: string, maxChars: number): string[] {
   if (line.length <= maxChars) return [line];
   const out: string[] = [];
   let current = "";

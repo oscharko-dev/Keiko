@@ -11,7 +11,11 @@
 // contract invariant holds. Path-/formula-safety lives in the pure adapters.
 
 import type { IncomingMessage } from "node:http";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import {
+  QualityIntelligence,
+  sortedStrings,
+  type QualityIntelligence as QI,
+} from "@oscharko-dev/keiko-contracts";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import {
@@ -250,9 +254,6 @@ function buildFindingRefsByCandidate(
   diagnostics: Set<string>,
 ): ReadonlyMap<string, ReadonlySet<QI.QualityIntelligenceValidationFindingId>> {
   const refs = new Map<string, Set<QI.QualityIntelligenceValidationFindingId>>();
-  if (manifest.findings.length === 0) {
-    return refs;
-  }
   const candidateIds = new Set<string>(candidates.map((candidate) => candidate.id));
   const candidateIdsByAtom = buildCandidateIdsByAtom(manifest, candidates, candidateIds);
   for (const finding of manifest.findings) {
@@ -492,7 +493,7 @@ function resultWithWarnings(result: RouteResult, warnings: readonly string[]): R
     ...result,
     body: {
       ...result.body,
-      warnings: [...new Set([...existing, ...warnings])].sort((a, b) => a.localeCompare(b)),
+      warnings: sortedStrings(new Set([...existing, ...warnings])),
     },
   };
 }
@@ -669,9 +670,7 @@ function binaryResponse(
         byteLen: bytes.length,
         encoding: "base64" as const,
         body: bodyBase64,
-        ...(warnings.size > 0
-          ? { warnings: [...warnings].sort((a, b) => a.localeCompare(b)) }
-          : {}),
+        ...(warnings.size > 0 ? { warnings: sortedStrings(warnings) } : {}),
       },
     },
     evidence: buildExportEvidenceRow(

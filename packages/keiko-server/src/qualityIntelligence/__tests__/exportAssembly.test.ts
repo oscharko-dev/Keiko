@@ -13,7 +13,14 @@
 
 import { describe, expect, it } from "vitest";
 import { crc32 as zlibCrc32 } from "node:zlib";
-import { assemblePdf, assembleZipBundle, safeZipEntryName } from "../exportAssembly.js";
+import {
+  appendWrappedWord,
+  assemblePdf,
+  assembleZipBundle,
+  hardBreakWord,
+  safeZipEntryName,
+  wrapText,
+} from "../exportAssembly.js";
 
 const ENC = new TextEncoder();
 
@@ -42,6 +49,11 @@ function zipCentralNames(bytes: Uint8Array): string[] {
     i += 46 + nameLen + extraLen + commentLen - 1;
   }
   return names;
+}
+
+function pdfTextLines(bytes: Uint8Array): readonly string[] {
+  const text = new TextDecoder("latin1").decode(bytes);
+  return [...text.matchAll(/\(([^()]*)\) Tj/gu)].map((match) => match[1] ?? "");
 }
 
 // ─── PDF ────────────────────────────────────────────────────────────────────────
@@ -108,6 +120,52 @@ describe("assemblePdf", () => {
     const text = new TextDecoder("latin1").decode(pdf);
     expect(text).toContain("\\(paren\\)");
     expect(text).toContain("\\\\backslash");
+  });
+
+  it("hard-breaks a single word longer than the PDF line width", () => {
+    const body = "x".repeat(170);
+    const lines = pdfTextLines(assemblePdf(body, "qi-run-wrap"));
+
+    expect(lines).toContain("x".repeat(80));
+    expect(lines.filter((line) => line === "x".repeat(80))).toHaveLength(2);
+    expect(lines).toContain("x".repeat(10));
+  });
+
+  it("keeps an exact-width wrapped candidate on one line and flushes an overflowing word", () => {
+    const exact = `${"a".repeat(40)} ${"b".repeat(39)}`;
+    const overflowFirst = "c".repeat(40);
+    const overflowSecond = "d".repeat(40);
+    const lines = pdfTextLines(
+      assemblePdf(`${exact}\n${overflowFirst} ${overflowSecond}`, "qi-run-wrap"),
+    );
+
+    expect(lines).toContain(exact);
+    expect(lines).toContain(overflowFirst);
+    expect(lines).toContain(overflowSecond);
+    expect(lines).not.toContain(`${overflowFirst} ${overflowSecond}`);
+  });
+});
+
+describe("PDF text wrapping helpers", () => {
+  it("hard-breaks exact multiples with the last chunk kept as the remainder", () => {
+    const [chunks, remainder] = hardBreakWord("x".repeat(160), 80);
+
+    expect(chunks).toEqual(["x".repeat(80)]);
+    expect(remainder).toBe("x".repeat(80));
+  });
+
+  it("wrapText emits no synthetic chunks while hard-breaking long words", () => {
+    expect(wrapText("x".repeat(170), 80)).toEqual(["x".repeat(80), "x".repeat(80), "x".repeat(10)]);
+  });
+
+  it("appendWrappedWord keeps exact-width candidates and flushes overflow", () => {
+    const out: string[] = [];
+    const exact = appendWrappedWord(out, "a".repeat(40), "b".repeat(39), 80);
+    const next = appendWrappedWord(out, exact, "c", 80);
+
+    expect(exact).toBe(`${"a".repeat(40)} ${"b".repeat(39)}`);
+    expect(out).toEqual([exact]);
+    expect(next).toBe("c");
   });
 });
 

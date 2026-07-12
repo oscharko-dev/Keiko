@@ -33,6 +33,51 @@ describe("classifyOutboundHost consumes normalizeHost", () => {
   });
 });
 
+describe("classifyOutboundHost IPv4 edge ranges", () => {
+  it.each([
+    ["8.8.8.8", "public"],
+    ["8.8.8.254", "public"],
+    ["127.0.0.1", "loopback"],
+    ["127.255.255.255", "loopback"],
+    ["169.254.169.254", "metadata"],
+    ["1.254.169.254", "public"],
+    ["1.2.169.254", "public"],
+    ["169.1.169.254", "public"],
+    ["169.254.169.253", "link-local"],
+    ["169.254.1.254", "link-local"],
+    ["169.254.1.2", "link-local"],
+    ["169.1.2.3", "public"],
+    ["1.254.2.3", "public"],
+    ["10.0.0.1", "private"],
+    ["172.15.255.255", "public"],
+    ["172.16.0.0", "private"],
+    ["172.31.255.255", "private"],
+    ["172.32.0.0", "public"],
+    ["192.168.0.1", "private"],
+    ["8.168.0.1", "public"],
+    ["100.63.255.255", "public"],
+    ["100.64.0.0", "private"],
+    ["100.127.255.255", "private"],
+    ["100.128.0.0", "public"],
+    ["8.64.0.1", "public"],
+    ["0.0.0.1", "private"],
+    ["223.255.255.255", "public"],
+    ["224.0.0.0", "private"],
+    ["255.255.255.255", "private"],
+    ["192.0.0.1", "private"],
+    ["192.0.1.1", "public"],
+    ["8.0.0.1", "public"],
+    ["192.1.0.1", "public"],
+    ["198.17.255.255", "public"],
+    ["198.18.0.0", "private"],
+    ["198.19.255.255", "private"],
+    ["198.20.0.0", "public"],
+    ["8.18.0.1", "public"],
+  ] as const)("classifies %s as %s", (host, expected) => {
+    expect(classifyOutboundHost(host)).toBe(expected);
+  });
+});
+
 describe("classifyOutboundHost IPv6 edge ranges (AUDIT-SEC-003)", () => {
   it("classifies IPv6 multicast (ff00::/8) instead of defaulting to public", () => {
     expect(classifyOutboundHost("[ff02::1]")).toBe("multicast");

@@ -1159,6 +1159,41 @@ describe("cleanScopedNodesToScreenIr — design tokens (sort/boundary)", () => {
     expect(result.tokens.radius.map((r) => r.value)).toEqual([4, 12]);
   });
 
+  it("orders spacing and radius tokens numerically instead of lexicographically", () => {
+    const radiusTwo: FigmaSourceNode = {
+      id: "1:2",
+      name: "radius-two",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 2,
+    };
+    const radiusHundred: FigmaSourceNode = {
+      id: "1:3",
+      name: "radius-hundred",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 10, 10),
+      fills: [solidFill(0, 0, 0)],
+      cornerRadius: 100,
+    };
+    const spacingTwo = frame("1:4", "spacing-two", [], {
+      fills: [solidFill(0, 0, 0)],
+      paddingLeft: 2,
+      cornerRadius: 10,
+    });
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [
+        screenFrame("1:1", "A", [radiusHundred, spacingTwo, radiusTwo], {
+          itemSpacing: 10,
+          paddingTop: 100,
+        }),
+      ]),
+    );
+
+    expect(result.tokens.spacing.map((s) => s.value)).toEqual([2, 10, 100]);
+    expect(result.tokens.radius.map((r) => r.value)).toEqual([2, 10, 100]);
+  });
+
   it("omits a zero itemSpacing from layout and from spacing tokens", () => {
     const sf = screenFrame("1:1", "A", [text("1:2", "x")], {
       layoutMode: "HORIZONTAL",

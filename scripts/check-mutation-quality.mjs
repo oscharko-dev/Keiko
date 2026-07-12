@@ -105,6 +105,13 @@ export function mutantTouchesChangedLine(file, mutant, ranges) {
   return fileRanges.some((range) => overlaps(mutantRange, range));
 }
 
+function changedLineRangeCount(changedLines) {
+  if (changedLines === undefined) return 0;
+  let count = 0;
+  for (const ranges of changedLines.values()) count += ranges.length;
+  return count;
+}
+
 export function evaluateMutationBaseline(report, baseline) {
   const current = summarizeMutationReport(report);
   const accepted = new Set(baseline.acceptedDebt ?? []);
@@ -131,7 +138,12 @@ export function evaluateScopedMutation(report, options = {}) {
         : (file, mutant) => mutantTouchesChangedLine(file, mutant, options.changedLines),
   });
   const failures = [...current.errors.map((value) => `Unexpected mutant result: ${value}`)];
-  if (current.summary.total === 0) failures.push("Scoped mutation run produced no mutants.");
+  if (current.summary.total === 0) {
+    if (changedLineRangeCount(options.changedLines) === 0) {
+      failures.push("Scoped mutation run produced no mutants.");
+    }
+    return { current, failures };
+  }
   if (current.score < 80)
     failures.push(`Mutation score ${current.score.toFixed(2)}% is below 80%.`);
   if (current.summary.survived > 0) failures.push("Critical changed code has surviving mutants.");

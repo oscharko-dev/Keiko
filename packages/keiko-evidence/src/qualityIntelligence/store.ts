@@ -25,6 +25,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, lstatSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
@@ -78,7 +79,7 @@ export function createInMemoryQualityIntelligenceLocalStore(): QualityIntelligen
       assertValidRunId(runId);
       return data.get(runId);
     },
-    list: (): readonly string[] => [...data.keys()].sort((a, b) => a.localeCompare(b)),
+    list: (): readonly string[] => sortedStrings(data.keys()),
     location: (runId: string): string => {
       assertValidRunId(runId);
       return `${runId}${QI_MANIFEST_SUFFIX}`;
@@ -156,7 +157,7 @@ function listQiRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
       `cannot list QI manifests: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  return runIds.sort((a, b) => a.localeCompare(b));
+  return sortedStrings(runIds);
 }
 
 function atomicWriteQiManifest(target: string, json: string, randomSuffix: () => string): void {

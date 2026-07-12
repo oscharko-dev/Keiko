@@ -137,7 +137,11 @@ describe("mutation quality", () => {
       current: { score: 100, summary: { killed: 1, survived: 0, total: 1 } },
       failures: [],
     });
-    expect(evaluateScopedMutation(report(legacy), { changedLines }).failures).toContain(
+    expect(evaluateScopedMutation(report(legacy), { changedLines })).toMatchObject({
+      current: { score: 0, summary: { killed: 0, survived: 0, total: 0 } },
+      failures: [],
+    });
+    expect(evaluateScopedMutation(report(legacy), { changedLines: new Map() }).failures).toContain(
       "Scoped mutation run produced no mutants.",
     );
   });

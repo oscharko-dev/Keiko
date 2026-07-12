@@ -17,8 +17,6 @@ import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   applyReviewDecision,
-  candidateReviewStateOf,
-  loadRunReviewState,
   QualityIntelligenceReviewCandidateNotFound,
   QualityIntelligenceReviewGovernanceRejected,
   QualityIntelligenceReviewIntegrityError,
@@ -88,7 +86,7 @@ function parseDecision(body: Record<string, unknown>): ParsedDecision | undefine
     scope,
     ...(rawLabel.length > 0 ? { reviewerLabel: rawLabel.slice(0, 80) } : {}),
     ...(rawReason.length > 0 ? { reason: rawReason.slice(0, MAX_REASON_LEN) } : {}),
-    ...(candidateId ? { candidateId } : {}),
+    ...(candidateId !== undefined ? { candidateId } : {}),
   };
 }
 
@@ -131,30 +129,6 @@ async function readDecision(req: IncomingMessage): Promise<DecisionOutcome> {
   return { ok: true, decision };
 }
 
-const runApprovalBlockedByCandidates = (
-  runId: string,
-  candidateIds: readonly string[],
-  evidenceDir: string,
-): RouteResult | null => {
-  if (candidateIds.length === 0) return null;
-  const review = loadRunReviewState(runId, evidenceDir);
-  const hasUnapprovedCandidate = candidateIds.some(
-    (candidateId) => candidateReviewStateOf(review, candidateId) !== "approved",
-  );
-  return hasUnapprovedCandidate
-    ? errorResult(
-        409,
-        "QI_REVIEW_RUN_APPROVAL_BLOCKED",
-        "Approve every candidate before approving the Quality Intelligence run.",
-      )
-    : null;
-};
-
-const isCandidateOutOfScope = (
-  decision: ParsedDecision,
-  candidateIds: readonly string[] | undefined,
-): boolean => decision.scope === "candidate" && !candidateIds?.includes(decision.candidateId ?? "");
-
 function buildApplyReviewDecisionInput(
   id: string,
   decision: ParsedDecision,
@@ -171,10 +145,10 @@ function buildApplyReviewDecisionInput(
     actor: principal,
     now: new Date().toISOString(),
     redact: deps.redactor,
-    ...(candidateIds !== undefined ? { candidateIds } : {}),
-    ...(decision.candidateId ? { candidateId: decision.candidateId } : {}),
-    ...(decision.reviewerLabel !== undefined ? { reviewerLabel: decision.reviewerLabel } : {}),
-    ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+    candidateIds: candidateIds ?? [],
+    ...(decision.candidateId !== undefined ? { candidateId: decision.candidateId } : {}),
+    reviewerLabel: decision.reviewerLabel ?? "",
+    reason: decision.reason ?? "",
   };
 }
 
@@ -190,13 +164,6 @@ function performReviewDecision(
   }
   const candidateArtifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
   const candidateIds = candidateArtifact?.candidates.map((candidate) => candidate.id);
-  if (isCandidateOutOfScope(decision, candidateIds)) {
-    return errorResult(404, "QI_CANDIDATE_NOT_FOUND", "Candidate not found for this run.");
-  }
-  if (decision.scope === "run" && decision.action === "approve") {
-    const blocked = runApprovalBlockedByCandidates(id, candidateIds ?? [], evidenceDir);
-    if (blocked !== null) return blocked;
-  }
   const principal = resolveQualityIntelligenceReviewPrincipal(ctx.req, deps);
   const next = applyReviewDecision(
     buildApplyReviewDecisionInput(id, decision, evidenceDir, principal, candidateIds, deps),
@@ -233,7 +200,7 @@ function mapGovernanceRejection(error: QualityIntelligenceReviewGovernanceReject
   );
 }
 
-function mapReviewError(error: unknown): RouteResult {
+export function mapReviewError(error: unknown): RouteResult {
   if (error instanceof QualityIntelligenceReviewTransitionRejected) {
     return errorResult(
       409,

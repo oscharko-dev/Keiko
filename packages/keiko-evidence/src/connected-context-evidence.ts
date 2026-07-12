@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 
 import {
   HARNESS_VERSION,
+  sortedStrings,
   type AuditSummary,
   type ConnectedContextPack,
   type ContextAssemblyDiagnostics,
@@ -159,7 +160,7 @@ function toolsUsed(pack: ConnectedContextPack, redact: Redactor): readonly strin
       tools.add(redactString(redact, excerpt.atom.provenance.tool));
     }
   }
-  return [...tools].sort((a, b) => a.localeCompare(b));
+  return sortedStrings(tools);
 }
 
 function scopeOf(
@@ -199,12 +200,12 @@ function planOf(
   const anchors = input.plan.anchors ?? [];
   const rings = input.plan.rings ?? [];
   const anchorKinds: Record<string, number> = {};
-  const anchorTermHashes = anchors
-    .map((anchor) => {
+  const anchorTermHashes = sortedStrings(
+    anchors.map((anchor) => {
       anchorKinds[anchor.kind] = (anchorKinds[anchor.kind] ?? 0) + 1;
       return sha256Hex(redactString(redact, anchor.term));
-    })
-    .sort((a, b) => a.localeCompare(b));
+    }),
+  );
   return {
     planIdHash: sha256Hex(redactString(redact, input.plan.planId)),
     state: input.plan.state,
@@ -213,7 +214,7 @@ function planOf(
     anchorCount: anchorTermHashes.length,
     anchorKinds,
     anchorTermHashes,
-    ringKinds: rings.map((ring) => ring.kind).sort((a, b) => a.localeCompare(b)),
+    ringKinds: sortedStrings(rings.map((ring) => ring.kind)),
     clarificationReason:
       typeof input.plan.clarification?.reason === "string"
         ? input.plan.clarification.reason

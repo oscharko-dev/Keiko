@@ -78,21 +78,23 @@ interface Ipv4ClassificationRule {
 // Explicit, named network ranges keep SSRF/private-address policy auditable. Order matters only
 // where ranges overlap: the /32 cloud-metadata address is a subset of the /16 link-local block,
 // so it must be checked first to win the more specific classification.
-const IPV4_CLASSIFICATION_RULES: readonly Ipv4ClassificationRule[] = [
-  { targetClass: "loopback", matches: isLoopbackIpv4 },
-  { targetClass: "metadata", matches: isMetadataIpv4 },
-  { targetClass: "link-local", matches: isLinkLocalIpv4 },
-  { targetClass: "private", matches: isRfc1918TenIpv4 },
-  { targetClass: "private", matches: isRfc1918OneSeventyTwoIpv4 },
-  { targetClass: "private", matches: isRfc1918OneNinetyTwoIpv4 },
-  { targetClass: "private", matches: isCarrierGradeNatIpv4 },
-  { targetClass: "private", matches: isReservedOrMulticastIpv4 },
-  { targetClass: "private", matches: isIetfProtocolAssignmentIpv4 },
-  { targetClass: "private", matches: isBenchmarkingIpv4 },
-];
+function ipv4ClassificationRules(): readonly Ipv4ClassificationRule[] {
+  return [
+    { targetClass: "loopback", matches: isLoopbackIpv4 },
+    { targetClass: "metadata", matches: isMetadataIpv4 },
+    { targetClass: "link-local", matches: isLinkLocalIpv4 },
+    { targetClass: "private", matches: isRfc1918TenIpv4 },
+    { targetClass: "private", matches: isRfc1918OneSeventyTwoIpv4 },
+    { targetClass: "private", matches: isRfc1918OneNinetyTwoIpv4 },
+    { targetClass: "private", matches: isCarrierGradeNatIpv4 },
+    { targetClass: "private", matches: isReservedOrMulticastIpv4 },
+    { targetClass: "private", matches: isIetfProtocolAssignmentIpv4 },
+    { targetClass: "private", matches: isBenchmarkingIpv4 },
+  ];
+}
 
 function classifyIpv4(parts: readonly [number, number, number, number]): OutboundTargetClass {
-  const rule = IPV4_CLASSIFICATION_RULES.find((candidate) => candidate.matches(parts));
+  const rule = ipv4ClassificationRules().find((candidate) => candidate.matches(parts));
   return rule?.targetClass ?? "public";
 }
 

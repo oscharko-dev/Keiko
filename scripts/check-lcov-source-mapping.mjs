@@ -14,6 +14,14 @@ const defaultReports = [
   // write to or clean).
   "coverage/scripts/lcov.info",
 ];
+const coveredScriptSources = new Set([
+  "scripts/banking-quality-gate-core.mjs",
+  "scripts/banking-quality-gate-worker.mjs",
+  "scripts/check-lcov-source-mapping.mjs",
+  "scripts/check-mutation-quality.mjs",
+  "scripts/check-mutation-scope.mjs",
+  "scripts/check-sonar-pr-quality-gate.mjs",
+]);
 
 export function parseLcovSources(contents, root) {
   return new Set(
@@ -33,6 +41,8 @@ function normalizeRepoPath(path, root) {
 export function isExecutableSource(path) {
   return (
     /\.(?:[cm]?js|jsx|mjs|ts|tsx)$/u.test(path) &&
+    (path.startsWith("packages/") || coveredScriptSources.has(path)) &&
+    (coveredScriptSources.has(path) || path.includes("/src/")) &&
     !/\.(?:test|spec)\.[^.]+$/u.test(path) &&
     !path.endsWith(".d.ts") &&
     !path.includes("/__tests__/") &&

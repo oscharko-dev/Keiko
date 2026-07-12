@@ -3,7 +3,7 @@
 // - The totals-vs-collection-length invariant fails closed.
 // - Schema validation rejects a stored manifest with an unknown top-level key (defensive read).
 
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -203,6 +203,17 @@ describe("recordQualityIntelligenceRun + load + list", () => {
       "run-crud-b",
       "run-crud-c",
     ]);
+  });
+
+  it("wraps QI directory listing failures as EvidenceReadError", async () => {
+    if (process.platform === "win32") return;
+    await mkdir(join(evidenceDir, QI_SUBDIR), { recursive: true });
+    await chmod(join(evidenceDir, QI_SUBDIR), 0);
+    try {
+      expect(() => listQualityIntelligenceRuns({ evidenceDir })).toThrow(EvidenceReadError);
+    } finally {
+      await chmod(join(evidenceDir, QI_SUBDIR), 0o700);
+    }
   });
 
   it("rejects an invalid runId at the record boundary (assertValidRunId)", () => {

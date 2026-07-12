@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "lint": "eslint . --max-warnings=0",
+    "lint": "node --max-old-space-size=8192 ../../node_modules/eslint/bin/eslint.js . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

@@ -28,6 +28,9 @@ export const KEIKO_PRODUCT_VERSION = "0.2.15" as const;
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
 
+// ─── Shared stable ordering helpers ─────────────────────────────────────────────
+export { sortedStrings } from "./stable-order.js";
+
 // ─── Shared coded-HTTP-error mechanism (GEN-DUP-NEAR-008) ───────────────────────
 export { CodedHttpError, httpStatusFor } from "./http-error.js";
 

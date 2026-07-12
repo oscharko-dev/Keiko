@@ -14,6 +14,7 @@
 
 import { lstatSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { sortedStrings } from "@oscharko-dev/keiko-contracts";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { removeOwnedRunDirectory } from "../fs-safety.js";
@@ -143,11 +144,10 @@ export function applyQualityIntelligenceRetention(
     decisions.push(...decideOneBucket(bucket, input.now));
   }
   const expired = new Set(decisions.map((d) => d.runId));
-  const expiredRunIds = [...expired].sort((a, b) => a.localeCompare(b));
-  const retainedRunIds = input.snapshot
-    .map((entry) => entry.runId)
-    .filter((runId) => !expired.has(runId))
-    .sort((a, b) => a.localeCompare(b));
+  const expiredRunIds = sortedStrings(expired);
+  const retainedRunIds = sortedStrings(
+    input.snapshot.map((entry) => entry.runId).filter((runId) => !expired.has(runId)),
+  );
   return { expiredRunIds, retainedRunIds, decisions };
 }
 
@@ -239,7 +239,7 @@ function removeRunCompanions(
       removed.push(suffix);
     }
   }
-  return removed.sort((a, b) => a.localeCompare(b));
+  return sortedStrings(removed);
 }
 
 // Idempotent removal of a single QI run's local state. Returns a structured receipt rather than
@@ -576,8 +576,8 @@ export function enforceQualityIntelligenceQuarantineRetention(
   }
   return {
     removed,
-    retainedPaths: retainedPaths.sort((a, b) => a.localeCompare(b)),
-    skippedPaths: skippedPaths.sort((a, b) => a.localeCompare(b)),
+    retainedPaths: sortedStrings(retainedPaths),
+    skippedPaths: sortedStrings(skippedPaths),
   };
 }
 
@@ -614,7 +614,7 @@ export function snapshotQualityIntelligenceRunsForRecovery(
     loaded.push(runId);
   }
   return {
-    loadedRunIds: loaded.sort((a, b) => a.localeCompare(b)),
-    skippedRunIds: skipped.sort((a, b) => a.localeCompare(b)),
+    loadedRunIds: sortedStrings(loaded),
+    skippedRunIds: sortedStrings(skipped),
   };
 }

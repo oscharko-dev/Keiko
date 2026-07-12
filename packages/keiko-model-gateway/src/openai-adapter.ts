@@ -416,16 +416,13 @@ function* emitRedactedDelta(
   acc.content += content;
   buffer.pending += content;
   const holdLength = longestSecretPrefixSuffix(buffer.pending, activeSecrets);
-  if (buffer.pending.length <= holdLength) {
+  if (buffer.pending.length === holdLength) {
     return;
   }
   const emitLength = buffer.pending.length - holdLength;
   const emitNow = buffer.pending.slice(0, emitLength);
   buffer.pending = buffer.pending.slice(emitLength);
-  const redacted = redact(emitNow, secrets);
-  if (redacted.length > 0) {
-    yield redacted;
-  }
+  yield redact(emitNow, secrets);
 }
 
 // Records the finish-reason/usage carried on a streaming chunk onto the
@@ -452,10 +449,7 @@ function* flushPendingBuffer(
   if (buffer.pending.length === 0) {
     return;
   }
-  const redacted = redact(buffer.pending, secrets);
-  if (redacted.length > 0) {
-    yield redacted;
-  }
+  yield redact(buffer.pending, secrets);
 }
 
 export class OpenAiAdapter implements ProviderAdapter {

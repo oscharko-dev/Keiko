@@ -4,9 +4,11 @@
 // handler directly. Verifies approve / bad-action / not-found / missing-id / non-JSON
 // body / run-scope approve paths. No network or SSE — pure function + real fs.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
@@ -21,7 +23,7 @@ import { STREAMING } from "../../routes.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
-import { handleQiReview } from "../reviewRoutes.js";
+import { handleQiReview, mapReviewError } from "../reviewRoutes.js";
 import {
   applyReviewDecision,
   appendEditAudit,
@@ -29,6 +31,7 @@ import {
   runReviewStateOf,
   candidateReviewStateOf,
   verifyQiReviewAuditIntegrity,
+  hashQiReviewAuditEntry,
   QualityIntelligenceReviewCandidateNotFound,
   QualityIntelligenceReviewRunApprovalRejected,
   QualityIntelligenceReviewGovernanceRejected,
@@ -109,6 +112,10 @@ function ctxNoId(req: IncomingMessage): RouteContext {
 function asResult(outcome: RouteResult | typeof STREAMING): RouteResult {
   if (outcome === STREAMING) throw new Error("expected RouteResult, got STREAMING");
   return outcome;
+}
+
+function errorOf(result: RouteResult): { readonly code: string; readonly message: string } {
+  return (result.body as { error: { code: string; message: string } }).error;
 }
 
 /** Minimal record input. totals must satisfy the findings/exports invariant. */
@@ -201,6 +208,11 @@ function seedLegacyEditAuditWithoutActor(runId: string, candidateId: string): vo
   );
 }
 
+function reviewLockPath(runId: string): string {
+  const digest = createHash("sha256").update(runId).digest("hex").slice(0, 32);
+  return join(evidenceDir, "qi", ".review-locks", `${digest}.lock`);
+}
+
 // ─── Test lifecycle ───────────────────────────────────────────────────────────
 
 let evidenceDir: string;
@@ -223,7 +235,10 @@ describe("handleQiReview — missing id param", () => {
     const req = makeReq({ action: "approve" });
     const result = asResult(await handleQiReview(ctxNoId(req), deps(evidenceDir)));
     expect(result.status).toBe(400);
-    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_REQUEST",
+      message: "Run id is required.",
+    });
   });
 
   it("returns 400 when id param is an empty string", async () => {
@@ -236,6 +251,10 @@ describe("handleQiReview — missing id param", () => {
     };
     const result = asResult(await handleQiReview(c, deps(evidenceDir)));
     expect(result.status).toBe(400);
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_REQUEST",
+      message: "Run id is required.",
+    });
   });
 
   it("returns 400 when id param is only whitespace", async () => {
@@ -248,6 +267,10 @@ describe("handleQiReview — missing id param", () => {
     };
     const result = asResult(await handleQiReview(c, deps(evidenceDir)));
     expect(result.status).toBe(400);
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_REQUEST",
+      message: "Run id is required.",
+    });
   });
 });
 
@@ -258,16 +281,30 @@ describe("handleQiReview — non-JSON body", () => {
     const req = makeRawReq("not json at all");
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(400);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_BAD_REQUEST");
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_REQUEST",
+      message: "Review body is not valid JSON.",
+    });
   });
 
   it("returns 400 QI_BAD_REQUEST when body is a JSON array (not an object)", async () => {
     const req = makeRawReq(JSON.stringify([{ action: "approve" }]));
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(400);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_BAD_REQUEST");
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_REQUEST",
+      message: "Review body must be an object.",
+    });
+  });
+
+  it("returns 413 QI_BODY_TOO_LARGE when the review body exceeds the byte cap", async () => {
+    const req = makeRawReq("x".repeat(16 * 1024 + 1));
+    const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
+    expect(result.status).toBe(413);
+    expect(errorOf(result)).toEqual({
+      code: "QI_BODY_TOO_LARGE",
+      message: "Review body is too large.",
+    });
   });
 });
 
@@ -278,24 +315,30 @@ describe("handleQiReview — bad action", () => {
     const req = makeReq({ action: "invalid-action" });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(400);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_BAD_ACTION");
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_ACTION",
+      message: "A valid review action is required.",
+    });
   });
 
   it("returns 400 QI_BAD_ACTION when the action field is missing", async () => {
     const req = makeReq({ candidateId: "cand-1" });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(400);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_BAD_ACTION");
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_ACTION",
+      message: "A valid review action is required.",
+    });
   });
 
   it("returns 400 QI_BAD_ACTION when action is an empty string", async () => {
     const req = makeReq({ action: "" });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(400);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_BAD_ACTION");
+    expect(errorOf(result)).toEqual({
+      code: "QI_BAD_ACTION",
+      message: "A valid review action is required.",
+    });
   });
 });
 
@@ -308,16 +351,34 @@ describe("handleQiReview — not found", () => {
       await handleQiReview(ctx("run-does-not-exist", req), deps(evidenceDir)),
     );
     expect(result.status).toBe(404);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_NOT_FOUND");
+    expect(errorOf(result)).toEqual({
+      code: "QI_NOT_FOUND",
+      message: "Quality Intelligence run not found.",
+    });
   });
 
   it("returns 404 QI_CANDIDATE_NOT_FOUND for a candidate id outside the persisted artifact", async () => {
     const req = makeReq({ action: "approve", candidateId: "missing-candidate" });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(404);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_CANDIDATE_NOT_FOUND");
+    expect(errorOf(result)).toEqual({
+      code: "QI_CANDIDATE_NOT_FOUND",
+      message: "Candidate not found for this run.",
+    });
+  });
+
+  it("returns 404 for candidate-scope review when the run has no candidate artifact", async () => {
+    recordQualityIntelligenceRun(minimalRecordInput("run-review-no-artifact", 0), { evidenceDir });
+    const req = makeReq({ action: "approve", candidateId: "cand-1" });
+    const result = asResult(
+      await handleQiReview(ctx("run-review-no-artifact", req), deps(evidenceDir)),
+    );
+
+    expect(result.status).toBe(404);
+    expect(errorOf(result)).toEqual({
+      code: "QI_CANDIDATE_NOT_FOUND",
+      message: "Candidate not found for this run.",
+    });
   });
 });
 
@@ -328,8 +389,53 @@ describe("handleQiReview — no evidence dir", () => {
     const req = makeReq({ action: "approve" });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), depsNoDir()));
     expect(result.status).toBe(500);
-    const body = result.body as { error: { code: string } };
-    expect(body.error.code).toBe("QI_NO_EVIDENCE_DIR");
+    expect(errorOf(result)).toEqual({
+      code: "QI_NO_EVIDENCE_DIR",
+      message: "The evidence directory is not configured.",
+    });
+  });
+});
+
+describe("mapReviewError", () => {
+  it("maps store-level candidate and run precondition failures for defensive callers", () => {
+    const missingCandidate = mapReviewError(
+      new QualityIntelligenceReviewCandidateNotFound("cand-missing"),
+    );
+    const blockedRun = mapReviewError(new QualityIntelligenceReviewRunApprovalRejected(["cand-1"]));
+
+    expect(missingCandidate.status).toBe(404);
+    expect(errorOf(missingCandidate)).toEqual({
+      code: "QI_CANDIDATE_NOT_FOUND",
+      message: "Candidate not found for this run.",
+    });
+    expect(blockedRun.status).toBe(409);
+    expect(errorOf(blockedRun)).toEqual({
+      code: "QI_REVIEW_RUN_APPROVAL_BLOCKED",
+      message: "Approve every candidate before approving the Quality Intelligence run.",
+    });
+  });
+
+  it("maps reopen actor governance and unknown errors without leaking details", () => {
+    const actorMissing = mapReviewError(
+      new QualityIntelligenceReviewGovernanceRejected(
+        "REOPEN_ACTOR_REQUIRED",
+        "reopen",
+        "cand-1",
+        "missing actor",
+      ),
+    );
+    const fallback = mapReviewError(new Error("redactor secret path"));
+
+    expect(actorMissing.status).toBe(409);
+    expect(errorOf(actorMissing)).toEqual({
+      code: "QI_REVIEW_REOPEN_ACTOR_REQUIRED",
+      message: "Reopening a review requires a server-resolved reviewer principal.",
+    });
+    expect(fallback.status).toBe(500);
+    expect(errorOf(fallback)).toEqual({
+      code: "QI_REVIEW_FAILED",
+      message: "Failed to record the review decision.",
+    });
   });
 });
 
@@ -399,6 +505,115 @@ describe("handleQiReview — candidate-scope approve", () => {
     expect(report.issues.map((issue) => issue.code)).toContain("ENTRY_HASH_MISMATCH");
   });
 
+  it("reports each audit-chain integrity issue with its exact code and message", async () => {
+    const d = deps(evidenceDir);
+    await handleQiReview(
+      ctx("run-review-001", makeReq({ action: "approve", candidateId: "cand-1" })),
+      d,
+    );
+    await handleQiReview(
+      ctx("run-review-001", makeReq({ action: "reject", candidateId: "cand-2" })),
+      d,
+    );
+    const review = loadRunReviewState("run-review-001", evidenceDir);
+    const first = review?.auditLog[0];
+    const second = review?.auditLog[1];
+    if (review === undefined || first === undefined || second === undefined) {
+      throw new Error("expected two audit entries");
+    }
+    const {
+      sequence: _sequence,
+      priorHashSha256Hex: _priorHash,
+      entryHashSha256Hex: _entryHash,
+      ...unchainedSecond
+    } = second;
+    void _sequence;
+    void _priorHash;
+    void _entryHash;
+
+    expect(
+      verifyQiReviewAuditIntegrity({
+        ...review,
+        auditLog: [first, unchainedSecond],
+      }).issues,
+    ).toEqual([
+      {
+        index: 1,
+        code: "MISSING_CHAIN_FIELD",
+        message: "Unchained audit entry appears after chained entries.",
+      },
+    ]);
+    expect(
+      verifyQiReviewAuditIntegrity({
+        ...review,
+        auditLog: [first, { ...second, sequence: 7 }],
+      }).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          index: 1,
+          code: "SEQUENCE_NOT_MONOTONE",
+          message: "Expected audit sequence 2, got 7.",
+        },
+      ]),
+    );
+    expect(
+      verifyQiReviewAuditIntegrity({
+        ...review,
+        auditLog: [first, { ...second, priorHashSha256Hex: "f".repeat(64) }],
+      }).issues,
+    ).toEqual(
+      expect.arrayContaining([
+        {
+          index: 1,
+          code: "PRIOR_HASH_MISMATCH",
+          message: "Audit entry prior hash does not match the previous entry.",
+        },
+      ]),
+    );
+  });
+
+  it("reconstructs the prior hash for a legacy previous entry without stored entry hash", async () => {
+    const d = deps(evidenceDir);
+    await handleQiReview(
+      ctx("run-review-001", makeReq({ action: "approve", candidateId: "cand-1" })),
+      d,
+    );
+    await handleQiReview(
+      ctx("run-review-001", makeReq({ action: "reject", candidateId: "cand-2" })),
+      d,
+    );
+    const review = loadRunReviewState("run-review-001", evidenceDir);
+    const first = review?.auditLog[0];
+    const second = review?.auditLog[1];
+    if (review === undefined || first === undefined || second === undefined) {
+      throw new Error("expected two audit entries");
+    }
+    const { entryHashSha256Hex: _firstEntryHash, ...firstWithoutEntryHash } = first;
+    void _firstEntryHash;
+    const secondWithFallbackPrior = {
+      ...second,
+      priorHashSha256Hex: hashQiReviewAuditEntry(firstWithoutEntryHash),
+    };
+    const secondWithRecomputedHash = {
+      ...secondWithFallbackPrior,
+      entryHashSha256Hex: hashQiReviewAuditEntry(secondWithFallbackPrior),
+    };
+
+    expect(
+      verifyQiReviewAuditIntegrity({
+        ...review,
+        auditLog: [firstWithoutEntryHash, secondWithRecomputedHash],
+      }).issues,
+    ).toEqual([
+      {
+        index: 0,
+        code: "ENTRY_HASH_MISMATCH",
+        message: "Audit entry hash does not match its content.",
+      },
+    ]);
+  });
+
   it("fails closed when materialized candidate state is forged without an audit entry", () => {
     mkdirSync(join(evidenceDir, "qi"), { recursive: true });
     writeFileSync(
@@ -440,6 +655,94 @@ describe("handleQiReview — candidate-scope approve", () => {
   });
 });
 
+describe("handleQiReview — review persistence failures", () => {
+  it("maps a live foreign review lock to QI_REVIEW_WRITE_CONFLICT", async () => {
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000);"], {
+      stdio: "ignore",
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+    if (child.pid === undefined) throw new Error("expected child pid");
+    const lockPath = reviewLockPath("run-review-001");
+
+    try {
+      mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
+      writeFileSync(lockPath, `${String(child.pid)}\n`, "utf8");
+      const result = asResult(
+        await handleQiReview(
+          ctx("run-review-001", makeReq({ action: "approve", candidateId: "cand-1" })),
+          deps(evidenceDir),
+        ),
+      );
+
+      expect(result.status).toBe(409);
+      expect(errorOf(result)).toEqual({
+        code: "QI_REVIEW_WRITE_CONFLICT",
+        message: "Another review update is in progress. Retry the review action.",
+      });
+      expect(existsSync(lockPath)).toBe(true);
+    } finally {
+      child.kill();
+      rmSync(lockPath, { force: true });
+    }
+  });
+
+  it("maps a tampered review artifact to QI_REVIEW_TAMPERED", async () => {
+    mkdirSync(join(evidenceDir, "qi"), { recursive: true });
+    writeFileSync(
+      join(evidenceDir, "qi", "run-review-001.review.json"),
+      JSON.stringify({
+        qiReviewSchemaVersion: 1,
+        runId: "run-review-001",
+        runState: "open",
+        candidateStates: { "cand-1": "approved" },
+        auditLog: [],
+        lastUpdatedAt: "2026-06-01T10:30:00.000Z",
+      }),
+      "utf8",
+    );
+
+    const result = asResult(
+      await handleQiReview(
+        ctx("run-review-001", makeReq({ action: "approve", candidateId: "cand-1" })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_TAMPERED",
+      message: "The review artifact failed integrity validation.",
+    });
+  });
+
+  it("maps redactor failures to QI_REVIEW_FAILED and removes the review lock", async () => {
+    const lockPath = reviewLockPath("run-review-001");
+    const failingDeps = {
+      ...deps(evidenceDir),
+      redactor: (): unknown => {
+        throw new Error("redactor failed");
+      },
+    };
+
+    const result = asResult(
+      await handleQiReview(
+        ctx("run-review-001", makeReq({ action: "approve", candidateId: "cand-1" })),
+        failingDeps,
+      ),
+    );
+
+    expect(result.status).toBe(500);
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_FAILED",
+      message: "Failed to record the review decision.",
+    });
+    expect(existsSync(lockPath)).toBe(false);
+  });
+});
+
 // ─── Happy path: run-scope approve → 200 ─────────────────────────────────────
 
 describe("handleQiReview — run-scope approve", () => {
@@ -447,9 +750,10 @@ describe("handleQiReview — run-scope approve", () => {
     const req = makeReq({ action: "approve" });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_REVIEW_RUN_APPROVAL_BLOCKED",
-    );
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_RUN_APPROVAL_BLOCKED",
+      message: "Approve every candidate before approving the Quality Intelligence run.",
+    });
     expect(loadRunReviewState("run-review-001", evidenceDir)).toBeUndefined();
   });
 
@@ -460,6 +764,19 @@ describe("handleQiReview — run-scope approve", () => {
     expect(result.status).toBe(200);
     const body = result.body as { runState: string };
     expect(body.runState).toBe("approved");
+  });
+
+  it("treats a non-string candidateId as absent and applies a run-scope decision", async () => {
+    recordQualityIntelligenceRun(minimalRecordInput("run-review-non-string", 0), { evidenceDir });
+    const req = makeReq({ action: "approve", candidateId: 42 });
+    const result = asResult(
+      await handleQiReview(ctx("run-review-non-string", req), deps(evidenceDir)),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { runState: string; candidateStates: Record<string, string> };
+    expect(body.runState).toBe("approved");
+    expect(body.candidateStates).toEqual({});
   });
 
   it("run-scope approve does NOT change already-approved individual candidate states", async () => {
@@ -530,6 +847,47 @@ describe("reviewStore — store-level governance gates", () => {
     }).toThrow(QualityIntelligenceReviewGovernanceRejected);
     expect(loadRunReviewState("run-review-001", evidenceDir)).toBeUndefined();
   });
+
+  it("trims and caps a store-level reopen reason before persisting audit", () => {
+    applyReviewDecision({
+      runId: "run-review-001",
+      evidenceDir,
+      action: "request-changes",
+      scope: "run",
+      actor: { actorId: "reviewer", displayLabel: "Reviewer" },
+      now: "2026-06-01T10:20:00.000Z",
+      redact: (value: unknown): unknown => value,
+    });
+    applyReviewDecision({
+      runId: "run-review-001",
+      evidenceDir,
+      action: "reopen",
+      scope: "run",
+      actor: { actorId: "reviewer", displayLabel: "Reviewer" },
+      reason: `  ${"r".repeat(600)}  `,
+      now: "2026-06-01T10:21:00.000Z",
+      redact: (value: unknown): unknown => value,
+    });
+
+    const review = loadRunReviewState("run-review-001", evidenceDir);
+    const reopen = review?.auditLog.find((entry) => entry.action === "reopen");
+    expect(reopen?.reason).toBe("r".repeat(512));
+  });
+
+  it("omits reason from store-level audit entries when no reason is supplied", () => {
+    applyReviewDecision({
+      runId: "run-review-001",
+      evidenceDir,
+      action: "reject",
+      scope: "run",
+      actor: { actorId: "reviewer", displayLabel: "Reviewer" },
+      now: "2026-06-01T10:20:00.000Z",
+      redact: (value: unknown): unknown => value,
+    });
+
+    const review = loadRunReviewState("run-review-001", evidenceDir);
+    expect(review?.auditLog[0]?.reason).toBeUndefined();
+  });
 });
 
 // ─── Legal first transitions from OPEN (Issue #282 FIX A) ────────────────────
@@ -560,9 +918,10 @@ describe("handleQiReview — first transition from OPEN", () => {
     const req = makeReq({ action: "reopen", reason: "Reviewer wants another pass." });
     const result = asResult(await handleQiReview(ctx("run-review-001", req), deps(evidenceDir)));
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_REVIEW_TRANSITION_NOT_ALLOWED",
-    );
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_TRANSITION_NOT_ALLOWED",
+      message: 'Review transition not permitted: cannot reopen a run/candidate in state "open".',
+    });
     // A first illegal action must not even create the `.review.json` companion (no audit log).
     expect(loadRunReviewState("run-review-001", evidenceDir)).toBeUndefined();
   });
@@ -586,9 +945,11 @@ describe("handleQiReview — illegal transitions are rejected (run scope)", () =
       await handleQiReview(ctx(transitionRunId, makeReq({ action: "reject" })), d),
     );
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_REVIEW_TRANSITION_NOT_ALLOWED",
-    );
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_TRANSITION_NOT_ALLOWED",
+      message:
+        'Review transition not permitted: cannot reject a run/candidate in state "approved".',
+    });
     // State unchanged (still approved) and the audit log did NOT grow past the single approve.
     const after = loadRunReviewState(transitionRunId, evidenceDir);
     expect(runReviewStateOf(after)).toBe("approved");
@@ -644,9 +1005,10 @@ describe("handleQiReview — illegal transitions are rejected (run scope)", () =
       await handleQiReview(ctx(transitionRunId, makeReq({ action: "reopen" })), d),
     );
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_REVIEW_REOPEN_REASON_REQUIRED",
-    );
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_REOPEN_REASON_REQUIRED",
+      message: "Reopening a review requires a non-empty reason.",
+    });
     const after = loadRunReviewState(transitionRunId, evidenceDir);
     expect(runReviewStateOf(after)).toBe("changes-requested");
     expect(after?.auditLog).toHaveLength(1);
@@ -728,9 +1090,10 @@ describe("handleQiReview — four-eyes governance", () => {
     );
 
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_REVIEW_FOUR_EYES_FORBIDDEN",
-    );
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_FOUR_EYES_FORBIDDEN",
+      message: "Review governance requires a different server principal for this approval.",
+    });
     const after = loadRunReviewState("run-review-001", evidenceDir);
     expect(candidateReviewStateOf(after, "cand-1")).toBe("open");
     expect(after?.auditLog).toHaveLength(1);
@@ -776,9 +1139,10 @@ describe("handleQiReview — four-eyes governance", () => {
     );
 
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_REVIEW_FOUR_EYES_FORBIDDEN",
-    );
+    expect(errorOf(result)).toEqual({
+      code: "QI_REVIEW_FOUR_EYES_FORBIDDEN",
+      message: "Review governance requires a different server principal for this approval.",
+    });
     const after = loadRunReviewState("run-review-001", evidenceDir);
     expect(after?.auditLog).toHaveLength(1);
     expect(candidateReviewStateOf(after, "cand-1")).toBe("open");

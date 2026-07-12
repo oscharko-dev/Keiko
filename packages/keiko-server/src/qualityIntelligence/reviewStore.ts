@@ -620,18 +620,6 @@ const stampReviewLockOwner = (fd: number): void => {
   }
 };
 
-// Closes and removes a lock handle that failed mid-acquisition. Extracted so
-// withReviewArtifactLock stays under the cognitive-complexity bound.
-const cleanupFailedLockHandle = (fd: number | undefined, lockPath: string): void => {
-  if (fd === undefined) return;
-  try {
-    closeSync(fd);
-  } catch {
-    // Ignore close failures while unwinding a failed lock holder.
-  }
-  rmSync(lockPath, { force: true });
-};
-
 // Only EEXIST ("another writer already holds the lock") is retryable; anything else is a real
 // failure and must propagate unchanged.
 const assertRetryableLockError = (error: unknown): void => {
@@ -640,10 +628,8 @@ const assertRetryableLockError = (error: unknown): void => {
 
 // Reclaim a dead/ownerless lock immediately instead of busy-waiting; a live foreign holder still
 // gets the short poll so real cross-writer contention stays serialised.
-const reclaimDeadReviewLock = (lockPath: string): boolean => {
-  if (!reviewLockOwnerIsDead(lockPath)) return false;
-  rmSync(lockPath, { force: true });
-  return true;
+const reclaimDeadReviewLock = (lockPath: string): void => {
+  rmSync(lockPath);
 };
 
 const withReviewArtifactLock = <T>(evidenceDir: string, runId: string, operation: () => T): T => {
@@ -651,21 +637,22 @@ const withReviewArtifactLock = <T>(evidenceDir: string, runId: string, operation
   const lockPath = join(lockDir, `${sha256Hex(runId).slice(0, 32)}.lock`);
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   for (let attempt = 0; attempt < REVIEW_LOCK_ATTEMPTS; attempt += 1) {
-    let fd: number | undefined;
     try {
-      fd = openSync(lockPath, "wx", 0o600);
+      const fd = openSync(lockPath, "wx", 0o600);
       stampReviewLockOwner(fd);
       try {
         return operation();
       } finally {
         closeSync(fd);
-        rmSync(lockPath, { force: true });
+        rmSync(lockPath);
       }
     } catch (error) {
-      cleanupFailedLockHandle(fd, lockPath);
       assertRetryableLockError(error);
-      if (reclaimDeadReviewLock(lockPath)) continue;
-      sleepSync(REVIEW_LOCK_SLEEP_MS);
+      if (reviewLockOwnerIsDead(lockPath)) {
+        reclaimDeadReviewLock(lockPath);
+        continue;
+      }
+      if (attempt + 1 < REVIEW_LOCK_ATTEMPTS) sleepSync(REVIEW_LOCK_SLEEP_MS);
     }
   }
   throw new QualityIntelligenceReviewWriteConflict(runId);
