@@ -159,13 +159,15 @@ describe("runRetrievalEval — determinism", () => {
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
   });
 
-  it("identical scorecards across every shipped fixture", async () => {
-    for (const fixture of ALL_FIXTURES) {
+  it.each(ALL_FIXTURES.map((fixture) => [fixture.id, fixture] as const))(
+    "identical scorecard for shipped fixture %s",
+    async (fixtureId, fixture) => {
       const a = await runRetrievalEval(fixture);
       const b = await runRetrievalEval(fixture);
+      expect(a.fixtureId).toBe(fixtureId);
       expect(JSON.stringify(a)).toBe(JSON.stringify(b));
-    }
-  });
+    },
+  );
 
   it("default clock produces a stable latency value across runs", async () => {
     const a = await runRetrievalEval(singleTopicFixture);

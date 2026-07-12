@@ -110,9 +110,7 @@ export function EditorSettingsPanel({ root }: { readonly root?: string | undefin
         </div>
       ) : null}
       {view.loading && view.snapshot === undefined ? (
-        <p className={styles.empty} role="status">
-          {t("settings.editor.loading")}
-        </p>
+        <output className={styles.empty}>{t("settings.editor.loading")}</output>
       ) : null}
       {view.snapshot !== undefined && rows.length === 0 ? (
         <p className={styles.empty}>{t("settings.editor.empty")}</p>
@@ -351,13 +349,13 @@ function requiresAiConfirmation(id: EditorM7SettingId): boolean {
 }
 
 function confirmAiActivation(id: EditorM7SettingId, t: I18nTranslate): boolean {
-  const message =
-    id === "inlineCompletion"
-      ? t("settings.editor.confirmInlineCompletion")
-      : id === "testGeneration"
-        ? t("settings.editor.confirmTestGeneration")
-        : t("settings.editor.confirmPatchApply");
-  return window.confirm(message);
+  return window.confirm(aiActivationMessage(id, t));
+}
+
+function aiActivationMessage(id: EditorM7SettingId, t: I18nTranslate): string {
+  if (id === "inlineCompletion") return t("settings.editor.confirmInlineCompletion");
+  if (id === "testGeneration") return t("settings.editor.confirmTestGeneration");
+  return t("settings.editor.confirmPatchApply");
 }
 
 function unavailable(

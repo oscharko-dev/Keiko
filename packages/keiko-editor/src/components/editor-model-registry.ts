@@ -149,8 +149,10 @@ export function estimateEditorModelBytes(input: {
 function fnv1a32(value: string): string {
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
+    const code = value.codePointAt(index) ?? 0;
+    hash ^= code;
     hash = Math.imul(hash, 0x01000193) >>> 0;
+    if (code > 0xffff) index += 1;
   }
   return hash.toString(16).padStart(8, "0");
 }
@@ -214,7 +216,7 @@ export class EditorModelRegistry {
   }
 
   disposeRoot(rootKey: string, reason: EditorModelDisposalReason = "root-disposed"): void {
-    for (const entry of [...this.entries.values()]) {
+    for (const entry of this.entries.values()) {
       if (entry.rootKey === rootKey && entry.attachmentCount === 0) {
         this.disposeEntry(entry, reason);
       }
@@ -222,7 +224,7 @@ export class EditorModelRegistry {
   }
 
   disposeAll(reason: EditorModelDisposalReason = "shutdown"): void {
-    for (const entry of [...this.entries.values()]) {
+    for (const entry of this.entries.values()) {
       if (entry.attachmentCount === 0) this.disposeEntry(entry, reason);
     }
   }

@@ -44,7 +44,7 @@ function snapshotEvent(type: string): boolean {
   return type === "editor-watch:snapshot" || type === "editor-watch:snapshot-required";
 }
 
-function parseEventData(data: string): unknown | null {
+function parseEventData(data: string): unknown {
   try {
     return JSON.parse(data) as unknown;
   } catch {

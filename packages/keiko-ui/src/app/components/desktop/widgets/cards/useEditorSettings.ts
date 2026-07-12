@@ -223,24 +223,7 @@ async function executeMutation(args: MutationArgs): Promise<void> {
   const expectedRevision =
     args.scope === "user" ? args.snapshot.userRevision : args.snapshot.workspaceRevision;
   try {
-    const body =
-      args.action === "set"
-        ? {
-            schemaVersion: EDITOR_M7_SCHEMA_VERSION,
-            ...(args.root === undefined ? {} : { root: args.root }),
-            scope: args.scope,
-            action: args.action,
-            expectedRevision,
-            values: { [id as EditorM7SettingId]: value as EditorM7SettingValue },
-          }
-        : {
-            schemaVersion: EDITOR_M7_SCHEMA_VERSION,
-            ...(args.root === undefined ? {} : { root: args.root }),
-            scope: args.scope,
-            action: args.action,
-            expectedRevision,
-            settingIds: args.ids ?? [],
-          };
+    const body = mutationBody(args, expectedRevision, id, value);
     const result = await mutateEditorSettings(
       body,
       args.snapshot.etag,
@@ -258,6 +241,26 @@ async function executeMutation(args: MutationArgs): Promise<void> {
   } finally {
     if (!controller.signal.aborted) args.setMutating(false);
   }
+}
+
+function mutationBody(
+  args: MutationArgs,
+  expectedRevision: number,
+  id: EditorM7SettingId | undefined,
+  value: EditorM7SettingValue | undefined,
+): Parameters<typeof mutateEditorSettings>[0] {
+  const base = {
+    schemaVersion: EDITOR_M7_SCHEMA_VERSION,
+    ...(args.root === undefined ? {} : { root: args.root }),
+    scope: args.scope,
+    expectedRevision,
+  };
+  if (args.action !== "set") return { ...base, action: args.action, settingIds: args.ids ?? [] };
+  return {
+    ...base,
+    action: args.action,
+    values: { [id as EditorM7SettingId]: value as EditorM7SettingValue },
+  };
 }
 
 export function appliedEditorSettings(

@@ -723,8 +723,10 @@ async function sha256HexBytes(bytes: Uint8Array, fallbackText: string): Promise<
   }
   let hash = 0x811c9dc5;
   for (let index = 0; index < fallbackText.length; index += 1) {
-    hash ^= fallbackText.charCodeAt(index);
+    const code = fallbackText.codePointAt(index) ?? 0;
+    hash ^= code;
     hash = Math.imul(hash, 0x01000193) >>> 0;
+    if (code > 0xffff) index += 1;
   }
   return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
 }
@@ -1049,7 +1051,13 @@ function completionContextSelectors(input: {
 function completionPrefixAt(text: string, line: number, character: number): string {
   const currentLine = lineAtIndex(text, line);
   const beforeCursor = currentLine.slice(0, Math.max(0, character));
-  return /[A-Za-z0-9._:-]+$/u.exec(beforeCursor)?.[0] ?? "";
+  let start = beforeCursor.length;
+  while (start > 0 && completionPrefixChar(beforeCursor[start - 1] ?? "")) start -= 1;
+  return beforeCursor.slice(start);
+}
+
+function completionPrefixChar(value: string): boolean {
+  return /^[A-Za-z0-9._:-]$/u.test(value);
 }
 
 function snippetCompletionItems(input: {
@@ -4900,8 +4908,7 @@ function EditorRuntimeWidget({
     const externalDiffModel = buildAgentPatchDiffModel(externalCompareBaseline, content, file);
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <div
-          role="group"
+        <fieldset
           aria-label={`Compare external changes for ${file ?? "this file"}`}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
         >
@@ -4914,7 +4921,7 @@ function EditorRuntimeWidget({
             loadState={{ status: "ready" }}
             themeVariant={themeVariant}
           />
-        </div>
+        </fieldset>
         <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           <button
             ref={externalCompareButtonRef}
@@ -4950,8 +4957,7 @@ function EditorRuntimeWidget({
     );
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <div
-          role="group"
+        <fieldset
           aria-label={`Compare recovered changes for ${file ?? "this file"}`}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
         >
@@ -4964,7 +4970,7 @@ function EditorRuntimeWidget({
             loadState={{ status: "ready" }}
             themeVariant={themeVariant}
           />
-        </div>
+        </fieldset>
         <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           <button
             ref={recoveryCompareButtonRef}
@@ -4986,8 +4992,7 @@ function EditorRuntimeWidget({
   } else if (agentChangesetPending !== null) {
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
-        <div
-          role="group"
+        <fieldset
           aria-label="Agent changeset review"
           aria-busy={agentChangesetPending.applying}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
@@ -5013,7 +5018,7 @@ function EditorRuntimeWidget({
             onReject={handleAgentChangesetReject}
             onRunVerification={runChangesetVerification}
           />
-        </div>
+        </fieldset>
       </div>
     );
   } else if (agentPatchPending !== null) {
@@ -5025,8 +5030,7 @@ function EditorRuntimeWidget({
     panel = (
       <div style={EDITOR_REVIEW_SURFACE_STYLE}>
         {/* A11Y-3: label the diff review surface and provide an sr-only instruction */}
-        <div
-          role="group"
+        <fieldset
           aria-label={`Agent patch review for ${agentPatchPending.action.target?.file ?? "this file"}`}
           aria-busy={agentPatchPending.applying}
           style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
@@ -5044,7 +5048,7 @@ function EditorRuntimeWidget({
             loadState={{ status: "ready" }}
             themeVariant={themeVariant}
           />
-        </div>
+        </fieldset>
         <div className="ed-toolbar-actions" style={EDITOR_REVIEW_ACTIONS_STYLE}>
           {/* A11Y-1: explicit aria-labels; A11Y-2: ref for focus management */}
           <button
@@ -5209,11 +5213,7 @@ function EditorRuntimeWidget({
       </div>
     );
   } else if (hasTarget) {
-    panel = (
-      <div className="ed-host-loading" role="status">
-        Loading file…
-      </div>
-    );
+    panel = <output className="ed-host-loading">Loading file…</output>;
   } else {
     panel = (
       <div className="ed-empty" role="note">
@@ -5486,7 +5486,7 @@ function EditorRuntimeWidget({
         {toolbarNotice}
       </div>
       {workspaceWatchNeedsAttention ? (
-        <div className="ed-recovery" role="status" data-testid="editor-workspace-watch-status">
+        <output className="ed-recovery" data-testid="editor-workspace-watch-status">
           <span>
             {workspaceWatch.snapshotRequired
               ? "Workspace file events require a refresh."
@@ -5496,10 +5496,10 @@ function EditorRuntimeWidget({
           <button type="button" className="ed-reload" onClick={requestReload}>
             Refresh
           </button>
-        </div>
+        </output>
       ) : null}
       {showExternalChangeBanner ? (
-        <div className="ed-recovery" role="status" data-testid="editor-external-change-banner">
+        <output className="ed-recovery" data-testid="editor-external-change-banner">
           <span>{externalChangeMessage(externalChange, file)}</span>
           <span className="spacer" />
           {externalChangeCanCompare(externalChange) ? (
@@ -5518,10 +5518,10 @@ function EditorRuntimeWidget({
           >
             Reload
           </button>
-        </div>
+        </output>
       ) : null}
       {recoverySnapshot !== null && !recoveryCompare ? (
-        <div className="ed-recovery" role="status">
+        <output className="ed-recovery">
           <span>
             {recoveryDiskChanged
               ? "Recovered editor changes are available, and the disk file changed."
@@ -5552,7 +5552,7 @@ function EditorRuntimeWidget({
               Cancel
             </button>
           ) : null}
-        </div>
+        </output>
       ) : null}
       {reloadConfirm ? (
         <div className="ed-dialog-backdrop" role="presentation">

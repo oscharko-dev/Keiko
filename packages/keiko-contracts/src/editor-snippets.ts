@@ -127,10 +127,10 @@ function validRevision(value: unknown): value is number {
 function utf8ByteLength(value: string): number {
   let bytes = 0;
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = value.codePointAt(index) ?? 0;
     if (code <= 0x7f) bytes += 1;
     else if (code <= 0x7ff) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
+    else if (code > 0xffff) {
       bytes += 4;
       index += 1;
     } else bytes += 3;
@@ -244,7 +244,7 @@ function safeSnippetPlaceholders(line: string): boolean {
   for (const raw of placeholders) {
     const inner = raw.slice(2, -1);
     if (inner.includes("/") || inner.includes("$(") || inner.includes("`")) return false;
-    if (/^[0-9]+(?::.*)?$/u.test(inner) || /^[0-9]+\|[^|]*\|$/u.test(inner)) continue;
+    if (/^\d+(?::.*)?$/u.test(inner) || /^\d+\|[^|]*\|$/u.test(inner)) continue;
     if (!SAFE_VARIABLES.includes(inner as (typeof SAFE_VARIABLES)[number])) return false;
   }
   return true;

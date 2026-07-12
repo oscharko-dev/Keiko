@@ -417,10 +417,10 @@ function safeSettingPathToken(value: string, maxBytes: number): boolean {
 function utf8ByteLength(value: string): number {
   let bytes = 0;
   for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+    const code = value.codePointAt(index) ?? 0;
     if (code <= 0x7f) bytes += 1;
     else if (code <= 0x7ff) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
+    else if (code > 0xffff) {
       bytes += 4;
       index += 1;
     } else bytes += 3;
@@ -513,12 +513,7 @@ function resolveOneSetting(
   const lockedReason = ceiling?.locked[definition.id];
   const workspaceValue = layerValue(definition.id, workspace);
   const userValue = layerValue(definition.id, user);
-  const source =
-    workspaceValue !== undefined
-      ? "workspace"
-      : userValue !== undefined
-        ? "user"
-        : "builtInDefault";
+  const source = settingSource(workspaceValue, userValue);
   const value = workspaceValue ?? userValue ?? definition.defaultValue;
   return {
     id: definition.id,
@@ -529,6 +524,14 @@ function resolveOneSetting(
     ...(lockedReason === undefined ? {} : { reasonCode: lockedReason }),
     effect: definition.effect,
   };
+}
+
+function settingSource(
+  workspaceValue: EditorM7SettingValue | undefined,
+  userValue: EditorM7SettingValue | undefined,
+): EditorM7ResolvedSetting["source"] {
+  if (workspaceValue !== undefined) return "workspace";
+  return userValue === undefined ? "builtInDefault" : "user";
 }
 
 export function resolveEditorM7Settings(args: {
@@ -978,227 +981,169 @@ export interface EditorM7CommandDefinition {
   readonly dispatchOwner: EditorM7CommandDispatchOwner;
 }
 
+function editorCommand(
+  id: string,
+  labelKey: string,
+  scope: EditorM7CommandScope,
+  contexts: readonly EditorM7CommandContext[],
+  defaultBindings: readonly string[],
+  rebindable: boolean,
+  dispatchOwner: EditorM7CommandDispatchOwner = "keiko",
+): EditorM7CommandDefinition {
+  return {
+    id,
+    labelKey,
+    descriptionKey: `${labelKey}.description`,
+    scope,
+    contexts: Object.freeze([...contexts]),
+    defaultBindings: Object.freeze([...defaultBindings]),
+    rebindable,
+    dispatchOwner,
+  };
+}
+
 export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = Object.freeze([
-  {
-    id: "undo",
-    labelKey: "command.undo",
-    descriptionKey: "command.undo.description",
-    scope: "global",
-    contexts: Object.freeze(["global"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Z"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "redo",
-    labelKey: "command.redo",
-    descriptionKey: "command.redo.description",
-    scope: "global",
-    contexts: Object.freeze(["global"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Shift+Z"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "focus-status",
-    labelKey: "command.focusStatus",
-    descriptionKey: "command.focusStatus.description",
-    scope: "global",
-    contexts: Object.freeze(["global"] as const),
-    defaultBindings: Object.freeze(["Alt+S"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "focus-workspace-search",
-    labelKey: "command.focusWorkspaceSearch",
-    descriptionKey: "command.focusWorkspaceSearch.description",
-    scope: "global",
-    contexts: Object.freeze(["global"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Shift+F"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "quick-access.files",
-    labelKey: "command.quickAccessFiles",
-    descriptionKey: "command.quickAccessFiles.description",
-    scope: "global",
-    contexts: Object.freeze(["global", "editor"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+P"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "quick-access.commands",
-    labelKey: "command.quickAccessCommands",
-    descriptionKey: "command.quickAccessCommands.description",
-    scope: "global",
-    contexts: Object.freeze(["global", "editor"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Shift+P"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "open-editor-settings",
-    labelKey: "command.openEditorSettings",
-    descriptionKey: "command.openEditorSettings.description",
-    scope: "settings",
-    contexts: Object.freeze(["settings"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+,"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "view.splitRight",
-    labelKey: "command.splitEditorRight",
-    descriptionKey: "command.splitEditorRight.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Alt+\\"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "view.splitDown",
-    labelKey: "command.splitEditorDown",
-    descriptionKey: "command.splitEditorDown.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze([]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "view.closeSplit",
-    labelKey: "command.closeEditorSplit",
-    descriptionKey: "command.closeEditorSplit.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze([]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "tab.next",
-    labelKey: "command.nextEditorTab",
-    descriptionKey: "command.nextEditorTab.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Alt+ArrowRight"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "tab.prev",
-    labelKey: "command.previousEditorTab",
-    descriptionKey: "command.previousEditorTab.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Alt+ArrowLeft"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "tab.close",
-    labelKey: "command.closeEditorTab",
-    descriptionKey: "command.closeEditorTab.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze([]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "tab.reopenClosed",
-    labelKey: "command.reopenClosedEditor",
-    descriptionKey: "command.reopenClosedEditor.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Alt+R"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "files.saveAll",
-    labelKey: "command.saveAllEditors",
-    descriptionKey: "command.saveAllEditors.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Alt+S"]),
-    rebindable: true,
-    dispatchOwner: "keiko",
-  },
-  {
-    id: "editor.save",
-    labelKey: "command.editorSave",
-    descriptionKey: "command.editorSave.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor", "monaco"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+S"]),
-    rebindable: false,
-    dispatchOwner: "monaco",
-  },
-  {
-    id: "editor.find",
-    labelKey: "command.editorFind",
-    descriptionKey: "command.editorFind.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor", "monaco"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+F"]),
-    rebindable: false,
-    dispatchOwner: "monaco",
-  },
-  {
-    id: "editor.format",
-    labelKey: "command.editorFormat",
-    descriptionKey: "command.editorFormat.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor", "monaco"] as const),
-    defaultBindings: Object.freeze(["Shift+Alt+F"]),
-    rebindable: false,
-    dispatchOwner: "monaco",
-  },
-  {
-    id: "editor.generateTests",
-    labelKey: "command.editorGenerateTests",
-    descriptionKey: "command.editorGenerateTests.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor", "monaco"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Alt+T"]),
-    rebindable: false,
-    dispatchOwner: "monaco",
-  },
-  {
-    id: "editor.askKeikoAboutSelection",
-    labelKey: "command.editorAskSelection",
-    descriptionKey: "command.editorAskSelection.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor", "monaco"] as const),
-    defaultBindings: Object.freeze(["CtrlOrMeta+Alt+K"]),
-    rebindable: false,
-    dispatchOwner: "monaco",
-  },
-  {
-    id: "editor.renameSymbol",
-    labelKey: "command.editorRenameSymbol",
-    descriptionKey: "command.editorRenameSymbol.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor", "monaco"] as const),
-    defaultBindings: Object.freeze(["F2"]),
-    rebindable: false,
-    dispatchOwner: "monaco",
-  },
-  {
-    id: "editor.action.accessibilityHelp",
-    labelKey: "command.editorAccessibilityHelp",
-    descriptionKey: "command.editorAccessibilityHelp.description",
-    scope: "editor",
-    contexts: Object.freeze(["editor", "monaco"] as const),
-    defaultBindings: Object.freeze(["Alt+F1"]),
-    rebindable: false,
-    dispatchOwner: "monaco",
-  },
+  editorCommand("undo", "command.undo", "global", ["global"], ["CtrlOrMeta+Z"], true),
+  editorCommand("redo", "command.redo", "global", ["global"], ["CtrlOrMeta+Shift+Z"], true),
+  editorCommand("focus-status", "command.focusStatus", "global", ["global"], ["Alt+S"], true),
+  editorCommand(
+    "focus-workspace-search",
+    "command.focusWorkspaceSearch",
+    "global",
+    ["global"],
+    ["CtrlOrMeta+Shift+F"],
+    true,
+  ),
+  editorCommand(
+    "quick-access.files",
+    "command.quickAccessFiles",
+    "global",
+    ["global", "editor"],
+    ["CtrlOrMeta+P"],
+    true,
+  ),
+  editorCommand(
+    "quick-access.commands",
+    "command.quickAccessCommands",
+    "global",
+    ["global", "editor"],
+    ["CtrlOrMeta+Shift+P"],
+    true,
+  ),
+  editorCommand(
+    "open-editor-settings",
+    "command.openEditorSettings",
+    "settings",
+    ["settings"],
+    ["CtrlOrMeta+,"],
+    true,
+  ),
+  editorCommand(
+    "view.splitRight",
+    "command.splitEditorRight",
+    "editor",
+    ["editor"],
+    ["CtrlOrMeta+Alt+\\"],
+    true,
+  ),
+  editorCommand("view.splitDown", "command.splitEditorDown", "editor", ["editor"], [], true),
+  editorCommand("view.closeSplit", "command.closeEditorSplit", "editor", ["editor"], [], true),
+  editorCommand(
+    "tab.next",
+    "command.nextEditorTab",
+    "editor",
+    ["editor"],
+    ["CtrlOrMeta+Alt+ArrowRight"],
+    true,
+  ),
+  editorCommand(
+    "tab.prev",
+    "command.previousEditorTab",
+    "editor",
+    ["editor"],
+    ["CtrlOrMeta+Alt+ArrowLeft"],
+    true,
+  ),
+  editorCommand("tab.close", "command.closeEditorTab", "editor", ["editor"], [], true),
+  editorCommand(
+    "tab.reopenClosed",
+    "command.reopenClosedEditor",
+    "editor",
+    ["editor"],
+    ["CtrlOrMeta+Alt+R"],
+    true,
+  ),
+  editorCommand(
+    "files.saveAll",
+    "command.saveAllEditors",
+    "editor",
+    ["editor"],
+    ["CtrlOrMeta+Alt+S"],
+    true,
+  ),
+  editorCommand(
+    "editor.save",
+    "command.editorSave",
+    "editor",
+    ["editor", "monaco"],
+    ["CtrlOrMeta+S"],
+    false,
+    "monaco",
+  ),
+  editorCommand(
+    "editor.find",
+    "command.editorFind",
+    "editor",
+    ["editor", "monaco"],
+    ["CtrlOrMeta+F"],
+    false,
+    "monaco",
+  ),
+  editorCommand(
+    "editor.format",
+    "command.editorFormat",
+    "editor",
+    ["editor", "monaco"],
+    ["Shift+Alt+F"],
+    false,
+    "monaco",
+  ),
+  editorCommand(
+    "editor.generateTests",
+    "command.editorGenerateTests",
+    "editor",
+    ["editor", "monaco"],
+    ["CtrlOrMeta+Alt+T"],
+    false,
+    "monaco",
+  ),
+  editorCommand(
+    "editor.askKeikoAboutSelection",
+    "command.editorAskSelection",
+    "editor",
+    ["editor", "monaco"],
+    ["CtrlOrMeta+Alt+K"],
+    false,
+    "monaco",
+  ),
+  editorCommand(
+    "editor.renameSymbol",
+    "command.editorRenameSymbol",
+    "editor",
+    ["editor", "monaco"],
+    ["F2"],
+    false,
+    "monaco",
+  ),
+  editorCommand(
+    "editor.action.accessibilityHelp",
+    "command.editorAccessibilityHelp",
+    "editor",
+    ["editor", "monaco"],
+    ["Alt+F1"],
+    false,
+    "monaco",
+  ),
 ] as const satisfies readonly EditorM7CommandDefinition[]);
 
 export const EDITOR_M7_KEYBINDING_OVERRIDE_VERSION = "1" as const;

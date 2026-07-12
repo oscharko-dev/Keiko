@@ -85,7 +85,7 @@ export function createEditorSettingsEventBus(): EditorSettingsEventBus {
       sequence += 1;
       const payload = eventFromPublish(sequence, args);
       const encoded = frame(payload);
-      for (const subscriber of [...subscribers]) {
+      for (const subscriber of subscribers) {
         if (eventMatches(subscriber, args)) {
           writeOrDestroy(subscriber.res, encoded, subscriber.controller);
         }

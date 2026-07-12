@@ -3,541 +3,938 @@
 import { useMemo } from "react";
 import { useLocale, type Locale, type MessageValues } from "@/lib/i18n";
 
-const SETTINGS_EN_MESSAGES = {
-  "settings.models.gatewayTitle": "Model gateway",
-  "settings.models.gatewayDescription":
-    "Credentials are stored locally by the Keiko loopback server; secrets are never returned to the browser.",
-  "settings.models.updateCredentials": "Update credentials",
-  "settings.models.connectGateway": "Connect gateway",
-  "settings.models.setupRequired": "Gateway setup required",
-  "settings.models.connected": "Gateway connected",
-  "settings.models.configured": "Gateway configured",
-  "settings.models.detailSetup":
-    "Enter the gateway base URL and API token before using chat or agent workflows.",
-  "settings.models.detailNoModels":
-    "The gateway is configured, but no conversation-capable models are currently available.",
-  "settings.models.detailNoChat":
-    "Gateway connected, but none of the discovered models can be used for conversation. Add a chat-capable deployment.",
-  "settings.models.detailReady":
-    "Keiko can use the configured gateway models for chat and agent workflows.",
-  "settings.models.modelCount": "{count} models",
-  "settings.models.chatCount": "{count} chat",
-  "settings.models.statusConfigured": "gateway configured",
-  "settings.models.statusSetupRequired": "setup required",
-  "settings.models.statusConversationEligible": "conversation-eligible",
-  "settings.models.statusEmbedding": "available for embeddings",
-  "settings.models.statusNotSelectable": "not selectable for conversation",
-  "settings.models.loadError":
-    "Could not load gateway settings - the local Keiko backend did not respond.",
-  "settings.models.retry": "Retry",
-  "settings.models.loading": "Loading gateway models...",
-  "settings.models.emptyConfigured":
-    "No conversation-capable models are currently available. Review the gateway configuration or discovered model set.",
-  "settings.models.emptyUnconfigured":
-    "No models are configured yet. Connect the gateway to load configured model capabilities.",
-  "settings.models.eligibilityOk": "Conversation-eligible",
-  "settings.models.eligibilityOkAria": "Model eligibility: eligible for conversation",
-  "settings.models.eligibilityPrefix": "Model eligibility: {label}",
-  "settings.models.embeddingLabel": "Embedding-ready",
-  "settings.models.embeddingAvailable":
-    "Available for embeddings; not shown in the chat model picker",
-  "settings.models.ineligibleEmbedding": "Embedding model - not selectable for text conversation",
-  "settings.models.ineligibleOcr": "OCR/vision-only - not selectable for text conversation",
-  "settings.models.ineligibleGeneric": "Not a chat model - not selectable for text conversation",
-  "settings.models.ineligibleShortOcr": "OCR/vision-only",
-  "settings.models.ineligibleShortGeneric": "not a chat model",
-  "settings.models.notSelectable": "Not selectable - {reason}",
-  "settings.models.voiceProviderAvailable":
-    "Voice provider - available for {capabilities}{personas}",
-  "settings.models.voiceProviderBadge": "Voice provider - {label}",
-  "settings.models.voiceCapabilitySpeechToText": "speech-to-text",
-  "settings.models.voiceCapabilitySpeechOutput": "speech output",
-  "settings.models.voiceCapabilityRealtimeDialogue": "realtime dialogue",
-  "settings.models.voiceCapabilityVoice": "voice",
-  "settings.models.voicePersonas": "; voices: {personas}",
-  "settings.models.readinessError":
-    "Readiness check failed. The gateway configuration was not changed.",
-  "settings.models.copyReport": "Copy report",
-  "settings.models.copied": "Copied",
-  "settings.models.reportCopied": "Readiness report copied.",
-  "settings.models.reportCopyFailed":
-    "Clipboard access failed. Select and copy the report details manually.",
-  "settings.models.checkingReadiness": "Checking {mode} readiness...",
-  "settings.models.readinessModeDeep": "deep",
-  "settings.models.readinessModeBasic": "basic",
-  "settings.models.workingToday": "Working today",
-  "settings.models.notVerified": "Not verified",
-  "settings.models.verifiedCapabilities": "Verified capabilities",
-  "settings.models.capabilityStreaming": "Streaming",
-  "settings.models.capabilityTools": "Tools",
-  "settings.models.capabilityJson": "JSON",
-  "settings.models.capabilityReasoning": "Reasoning",
-  "settings.models.capabilityImage": "Image",
-  "settings.models.capabilityPdf": "PDF",
-  "settings.models.contextTokensShort": "{count} ctx",
-  "settings.models.runReadiness": "Run readiness check",
-  "settings.models.deepProbes": "Deep probes",
-  "settings.models.capabilitySummary":
-    "tools {tools} · structured {structured} · {costClass}/{latencyClass}",
-  "settings.models.yes": "yes",
-  "settings.models.no": "no",
-  "settings.selfHosted": "Self-hosted",
-  "settings.selfHostedTitle": "Runs inside your network",
-  "settings.tabs.models": "Models",
-  "settings.tabs.general": "General",
-  "settings.tabs.editor": "Editor",
-  "settings.tabs.languages": "Languages",
-  "settings.tabs.security": "Security",
-  "settings.editor.title": "Editor settings",
-  "settings.editor.description":
-    "Search, scope, change, and reset server-owned editor preferences. Values apply only after Keiko returns the matching effective snapshot.",
-  "settings.editor.search": "Search editor settings",
-  "settings.editor.scope": "Scope",
-  "settings.editor.scopeUser": "User",
-  "settings.editor.scopeWorkspace": "Workspace",
-  "settings.editor.modifiedOnly": "Modified only",
-  "settings.editor.resetAll": "Reset visible settings",
-  "settings.editor.noWorkspace": "Open a workspace to edit workspace-scoped settings.",
-  "settings.editor.loading": "Loading editor settings...",
-  "settings.editor.empty": "No editor settings match the current filter.",
-  "settings.editor.loadError": "Editor settings could not be loaded.",
-  "settings.editor.mutationError": "Editor settings could not be saved.",
-  "settings.editor.conflict":
-    "Editor settings changed elsewhere. The latest snapshot was reloaded.",
-  "settings.editor.retry": "Retry",
-  "settings.editor.reset": "Reset at selected scope",
-  "settings.editor.applying": "Applying editor setting...",
-  "settings.editor.applied": "Editor setting applied.",
-  "settings.editor.source": "Source: {source}",
-  "settings.editor.sourceBuiltInDefault": "built-in default",
-  "settings.editor.sourceUser": "user",
-  "settings.editor.sourceWorkspace": "workspace",
-  "settings.editor.effectLive": "Live",
-  "settings.editor.effectRestart": "Restart",
-  "settings.editor.policyLocked": "Locked by policy: {reason}",
-  "settings.editor.aiStatus": "AI status: {state} ({reason})",
-  "settings.editor.confirmInlineCompletion":
-    "Enable inline AI completion for this user? Keiko will route optional ghost-text requests through the governed Model Gateway only when operator policy, model capability, budget, and health allow it. This does not grant patch, execution, delivery, or wider authority.",
-  "settings.editor.confirmTestGeneration":
-    "Enable AI test generation for this workspace? Generated tests remain review-only, use the governed Model Gateway when available, and cannot execute or apply without the existing review and verification gates.",
-  "settings.editor.confirmPatchApply":
-    "Enable governed AI patch apply for this workspace? Keiko will still require explicit human review for each patch, revalidate the diff server-side, and will not grant delivery, merge, or authority-widening rights.",
-  "settings.editor.scopeUnavailable": "This setting cannot be changed at the selected scope.",
-  "settings.editor.followupExternalReload":
-    "External reload automation is enabled in the watcher milestone; this release shows the effective policy.",
-  "settings.editor.setting.fontSize": "Font size",
-  "settings.editor.setting.tabSize": "Tab size",
-  "settings.editor.setting.insertSpaces": "Insert spaces",
-  "settings.editor.setting.wordWrap": "Word wrap",
-  "settings.editor.setting.renderWhitespace": "Render whitespace",
-  "settings.editor.setting.minimap": "Minimap",
-  "settings.editor.setting.formatOnSave": "Format on save",
-  "settings.editor.setting.externalReload": "External reload",
-  "settings.editor.setting.inlineCompletion": "Inline AI completion",
-  "settings.editor.setting.testGeneration": "AI test generation",
-  "settings.editor.setting.patchApply": "AI patch apply",
-  "settings.editor.setting.watcherExclusions": "Watcher exclusions",
-  "settings.editor.setting.largeFileMode": "Large-file mode",
-  "settings.editor.setting.modelRetentionCount": "Retained model count",
-  "settings.editor.setting.modelRetentionBytes": "Retained model bytes",
-  "settings.editor.setting.keybindingOverrides": "Keyboard shortcut overrides",
-  "settings.keyboard.title": "Keyboard shortcuts",
-  "settings.keyboard.description":
-    "Search effective shell, editor, and supported Monaco shortcuts. Rebindable commands persist through the server-owned M7 settings control plane.",
-  "settings.keyboard.search": "Search keyboard shortcuts",
-  "settings.keyboard.modifiedOnly": "Modified only",
-  "settings.keyboard.resetAll": "Reset keyboard shortcuts",
-  "settings.keyboard.fallback":
-    "Keyboard shortcut overrides were ignored and defaults are active: {reason}.",
-  "settings.keyboard.recordingLive": "Recording keyboard shortcut.",
-  "settings.keyboard.reason": "Shortcut rejected: {reason}",
-  "settings.keyboard.sourceDefault": "default",
-  "settings.keyboard.sourceUser": "modified",
-  "settings.keyboard.scopeGlobal": "global",
-  "settings.keyboard.scopeEditor": "editor",
-  "settings.keyboard.scopeSettings": "settings",
-  "settings.keyboard.scopeExplorer": "explorer",
-  "settings.keyboard.scopeGit": "git",
-  "settings.keyboard.conflict": "Conflicts with: {commands}",
-  "settings.keyboard.pressShortcut": "Press shortcut",
-  "settings.keyboard.cancel": "Cancel",
-  "settings.keyboard.record": "Record",
-  "settings.keyboard.remove": "Remove",
-  "settings.keyboard.protected": "Protected",
-  "command.undo": "Undo",
-  "command.undo.description": "Undo the last workspace window or panel action.",
-  "command.redo": "Redo",
-  "command.redo.description": "Redo the last reverted workspace window or panel action.",
-  "command.focusStatus": "Focus status",
-  "command.focusStatus.description": "Move keyboard focus to the workspace status field.",
-  "command.focusWorkspaceSearch": "Focus workspace search",
-  "command.focusWorkspaceSearch.description": "Open or focus workspace search.",
-  "command.quickAccessFiles": "Quick Access: files",
-  "command.quickAccessFiles.description": "Open the unified quick-access file picker.",
-  "command.quickAccessCommands": "Quick Access: commands",
-  "command.quickAccessCommands.description": "Open the unified command palette.",
-  "command.openEditorSettings": "Open editor settings",
-  "command.openEditorSettings.description": "Open Settings on the editor preferences view.",
-  "command.splitEditorRight": "Split editor right",
-  "command.splitEditorRight.description": "Split the active editor pane to the right.",
-  "command.splitEditorDown": "Split editor down",
-  "command.splitEditorDown.description": "Split the active editor pane downward.",
-  "command.closeEditorSplit": "Close editor split",
-  "command.closeEditorSplit.description": "Close the active editor split.",
-  "command.nextEditorTab": "Next editor tab",
-  "command.nextEditorTab.description": "Move to the next tab in the active editor pane.",
-  "command.previousEditorTab": "Previous editor tab",
-  "command.previousEditorTab.description": "Move to the previous tab in the active editor pane.",
-  "command.closeEditorTab": "Close editor tab",
-  "command.closeEditorTab.description": "Close the active editor tab.",
-  "command.reopenClosedEditor": "Reopen closed editor",
-  "command.reopenClosedEditor.description": "Reopen the most recently closed editor tab.",
-  "command.saveAllEditors": "Save all editors",
-  "command.saveAllEditors.description": "Save every dirty editor tab.",
-  "command.editorSave": "Save document",
-  "command.editorSave.description": "Monaco save action owned by the editor surface.",
-  "command.editorFind": "Find in document",
-  "command.editorFind.description": "Monaco find action.",
-  "command.editorFormat": "Format document",
-  "command.editorFormat.description": "Monaco format action backed by governed formatting.",
-  "command.editorGenerateTests": "Generate tests",
-  "command.editorGenerateTests.description":
-    "Host-injected Monaco action for governed test generation.",
-  "command.editorAskSelection": "Ask Keiko about selection",
-  "command.editorAskSelection.description":
-    "Host-injected Monaco action for selected text context.",
-  "command.editorRenameSymbol": "Rename symbol",
-  "command.editorRenameSymbol.description": "Monaco rename-symbol action.",
-  "command.editorAccessibilityHelp": "Accessibility help",
-  "command.editorAccessibilityHelp.description": "Monaco accessibility help remains protected.",
-  "settings.snippets.title": "Workspace snippets",
-  "settings.snippets.description":
-    "Create governed workspace snippets. Keiko validates the bounded TextMate-compatible subset before it appears in completions.",
-  "settings.snippets.noWorkspace": "Open a workspace to manage workspace snippets.",
-  "settings.snippets.issue": "Snippet operation failed: {issue}",
-  "settings.snippets.name": "Name",
-  "settings.snippets.prefix": "Prefix",
-  "settings.snippets.language": "Language",
-  "settings.snippets.include": "Include glob",
-  "settings.snippets.body": "Body",
-  "settings.snippets.preview": "Preview",
-  "settings.snippets.save": "Save snippet",
-  "settings.snippets.reset": "Reset snippets",
-  "settings.snippets.empty": "No workspace snippets are defined.",
-  "settings.snippets.lines": "{count} lines",
-  "settings.snippets.delete": "Delete",
-  "settings.language.title": "Language",
-  "settings.language.description": "Choose the language used by the Keiko browser interface.",
-  "settings.language.label": "Interface language",
-  "settings.language.help": "Saved on this device and applied immediately.",
-  "settings.voice.title": "Assistant voice",
-  "settings.voice.description": "Choose the voice used by Voice Dialogue.",
-  "settings.voice.label": "Voice",
-  "settings.voice.help": "Saved on this device and used the next time Voice Dialogue speaks.",
-  "settings.voice.unavailable":
-    "Voice choices become available after a configured voice provider exposes speech output.",
-  "settings.wallpaper.title": "Workspace wallpaper",
-  "settings.wallpaper.description":
-    "Liquid Chrome - a subtle metallic flow behind the grid that reacts to your cursor and clicks. Turn it off to stop the WebGL animation completely.",
-  "settings.wallpaper.toggle": "Liquid wallpaper",
-  "settings.wallpaper.running": "Running",
-  "settings.wallpaper.stopped": "Stopped",
-  "settings.wallpaper.opacity": "Wallpaper opacity",
-  "settings.scale.off": "Off",
-  "settings.scale.full": "Full",
-  "settings.scale.base": "Base",
-  "settings.scale.lighter": "Lighter",
-  "settings.scale.subtle": "Subtle",
-  "settings.scale.strong": "Strong",
-  "settings.workspace.backgroundBrightness": "Workspace background brightness",
-  "settings.workspace.gridStrength": "Workspace grid strength",
-  "settings.workspace.cameraAnimation": "Workspace camera smoothness",
-  "settings.workspace.cameraAnimationMinimal": "Minimal",
-  "settings.workspace.cameraAnimationSmooth": "Smooth",
-  "settings.workspace.cameraAnimationHelp":
-    "Move right to make pan and zoom transitions softer. Minimal applies changes immediately.",
-  "settings.workspace.borderStrength": "Workspace border strength",
-  "settings.workspace.innerGlow": "Workspace inner glow",
-  "settings.updates.title": "Updates",
-  "settings.updates.description": "Check for Keiko updates and install them when available.",
-  "settings.updates.open": "Review updates",
-  "settings.security.placeholder": "SSO · audit log · data residency - coming soon.",
-} as const;
+const SETTINGS_MESSAGES = {
+  "settings.models.gatewayTitle": {
+    en: "Model gateway",
+    de: "Modell-Gateway",
+  },
+  "settings.models.gatewayDescription": {
+    en: "Credentials are stored locally by the Keiko loopback server; secrets are never returned to the browser.",
+    de: "Zugangsdaten werden lokal vom Keiko-Loopback-Server gespeichert; Secrets werden nie an den Browser zurückgegeben.",
+  },
+  "settings.models.updateCredentials": {
+    en: "Update credentials",
+    de: "Zugangsdaten aktualisieren",
+  },
+  "settings.models.connectGateway": {
+    en: "Connect gateway",
+    de: "Gateway verbinden",
+  },
+  "settings.models.setupRequired": {
+    en: "Gateway setup required",
+    de: "Gateway-Einrichtung erforderlich",
+  },
+  "settings.models.connected": {
+    en: "Gateway connected",
+    de: "Gateway verbunden",
+  },
+  "settings.models.configured": {
+    en: "Gateway configured",
+    de: "Gateway konfiguriert",
+  },
+  "settings.models.detailSetup": {
+    en: "Enter the gateway base URL and API token before using chat or agent workflows.",
+    de: "Gib Gateway-Basis-URL und API-Token ein, bevor du Chat- oder Agent-Workflows nutzt.",
+  },
+  "settings.models.detailNoModels": {
+    en: "The gateway is configured, but no conversation-capable models are currently available.",
+    de: "Das Gateway ist konfiguriert, aber aktuell sind keine dialogfähigen Modelle verfügbar.",
+  },
+  "settings.models.detailNoChat": {
+    en: "Gateway connected, but none of the discovered models can be used for conversation. Add a chat-capable deployment.",
+    de: "Gateway verbunden, aber keines der gefundenen Modelle kann für Konversationen genutzt werden. Füge ein chatfähiges Deployment hinzu.",
+  },
+  "settings.models.detailReady": {
+    en: "Keiko can use the configured gateway models for chat and agent workflows.",
+    de: "Keiko kann die konfigurierten Gateway-Modelle für Chat- und Agent-Workflows nutzen.",
+  },
+  "settings.models.modelCount": {
+    en: "{count} models",
+    de: "{count} Modelle",
+  },
+  "settings.models.chatCount": {
+    en: "{count} chat",
+    de: "{count} Chat",
+  },
+  "settings.models.statusConfigured": {
+    en: "gateway configured",
+    de: "Gateway konfiguriert",
+  },
+  "settings.models.statusSetupRequired": {
+    en: "setup required",
+    de: "Einrichtung erforderlich",
+  },
+  "settings.models.statusConversationEligible": {
+    en: "conversation-eligible",
+    de: "konversationsfähig",
+  },
+  "settings.models.statusEmbedding": {
+    en: "available for embeddings",
+    de: "für Embeddings verfügbar",
+  },
+  "settings.models.statusNotSelectable": {
+    en: "not selectable for conversation",
+    de: "nicht für Konversationen auswählbar",
+  },
+  "settings.models.loadError": {
+    en: "Could not load gateway settings - the local Keiko backend did not respond.",
+    de: "Gateway-Einstellungen konnten nicht geladen werden - das lokale Keiko-Backend hat nicht geantwortet.",
+  },
+  "settings.models.retry": {
+    en: "Retry",
+    de: "Erneut versuchen",
+  },
+  "settings.models.loading": {
+    en: "Loading gateway models...",
+    de: "Gateway-Modelle werden geladen…",
+  },
+  "settings.models.emptyConfigured": {
+    en: "No conversation-capable models are currently available. Review the gateway configuration or discovered model set.",
+    de: "Aktuell sind keine dialogfähigen Modelle verfügbar. Prüfe die Gateway-Konfiguration oder die gefundenen Modelle.",
+  },
+  "settings.models.emptyUnconfigured": {
+    en: "No models are configured yet. Connect the gateway to load configured model capabilities.",
+    de: "Noch sind keine Modelle konfiguriert. Verbinde das Gateway, um konfigurierte Modellfähigkeiten zu laden.",
+  },
+  "settings.models.eligibilityOk": {
+    en: "Conversation-eligible",
+    de: "Konversationsfähig",
+  },
+  "settings.models.eligibilityOkAria": {
+    en: "Model eligibility: eligible for conversation",
+    de: "Modelleignung: für Konversationen geeignet",
+  },
+  "settings.models.eligibilityPrefix": {
+    en: "Model eligibility: {label}",
+    de: "Modelleignung: {label}",
+  },
+  "settings.models.embeddingLabel": {
+    en: "Embedding-ready",
+    de: "Embedding-bereit",
+  },
+  "settings.models.embeddingAvailable": {
+    en: "Available for embeddings; not shown in the chat model picker",
+    de: "Für Embeddings verfügbar; nicht in der Chat-Modellauswahl sichtbar",
+  },
+  "settings.models.ineligibleEmbedding": {
+    en: "Embedding model - not selectable for text conversation",
+    de: "Embedding-Modell - nicht für Textkonversationen auswählbar",
+  },
+  "settings.models.ineligibleOcr": {
+    en: "OCR/vision-only - not selectable for text conversation",
+    de: "Nur OCR/Vision - nicht für Textkonversationen auswählbar",
+  },
+  "settings.models.ineligibleGeneric": {
+    en: "Not a chat model - not selectable for text conversation",
+    de: "Kein Chat-Modell - nicht für Textkonversationen auswählbar",
+  },
+  "settings.models.ineligibleShortOcr": {
+    en: "OCR/vision-only",
+    de: "nur OCR/Vision",
+  },
+  "settings.models.ineligibleShortGeneric": {
+    en: "not a chat model",
+    de: "kein Chat-Modell",
+  },
+  "settings.models.notSelectable": {
+    en: "Not selectable - {reason}",
+    de: "Nicht auswählbar - {reason}",
+  },
+  "settings.models.voiceProviderAvailable": {
+    en: "Voice provider - available for {capabilities}{personas}",
+    de: "Sprachanbieter - verfügbar für {capabilities}{personas}",
+  },
+  "settings.models.voiceProviderBadge": {
+    en: "Voice provider - {label}",
+    de: "Sprachanbieter - {label}",
+  },
+  "settings.models.voiceCapabilitySpeechToText": {
+    en: "speech-to-text",
+    de: "Speech-to-Text",
+  },
+  "settings.models.voiceCapabilitySpeechOutput": {
+    en: "speech output",
+    de: "Sprachausgabe",
+  },
+  "settings.models.voiceCapabilityRealtimeDialogue": {
+    en: "realtime dialogue",
+    de: "Echtzeitdialog",
+  },
+  "settings.models.voiceCapabilityVoice": {
+    en: "voice",
+    de: "Sprache",
+  },
+  "settings.models.voicePersonas": {
+    en: "; voices: {personas}",
+    de: "; Stimmen: {personas}",
+  },
+  "settings.models.readinessError": {
+    en: "Readiness check failed. The gateway configuration was not changed.",
+    de: "Bereitschaftsprüfung fehlgeschlagen. Die Gateway-Konfiguration wurde nicht geändert.",
+  },
+  "settings.models.copyReport": {
+    en: "Copy report",
+    de: "Bericht kopieren",
+  },
+  "settings.models.copied": {
+    en: "Copied",
+    de: "Kopiert",
+  },
+  "settings.models.reportCopied": {
+    en: "Readiness report copied.",
+    de: "Bereitschaftsbericht kopiert.",
+  },
+  "settings.models.reportCopyFailed": {
+    en: "Clipboard access failed. Select and copy the report details manually.",
+    de: "Zugriff auf die Zwischenablage fehlgeschlagen. Wähle die Berichtdetails aus und kopiere sie manuell.",
+  },
+  "settings.models.checkingReadiness": {
+    en: "Checking {mode} readiness...",
+    de: "Bereitschaftsprüfung läuft ({mode})…",
+  },
+  "settings.models.readinessModeDeep": {
+    en: "deep",
+    de: "tief",
+  },
+  "settings.models.readinessModeBasic": {
+    en: "basic",
+    de: "einfach",
+  },
+  "settings.models.workingToday": {
+    en: "Working today",
+    de: "Heute funktionsfähig",
+  },
+  "settings.models.notVerified": {
+    en: "Not verified",
+    de: "Nicht verifiziert",
+  },
+  "settings.models.verifiedCapabilities": {
+    en: "Verified capabilities",
+    de: "Verifizierte Fähigkeiten",
+  },
+  "settings.models.capabilityStreaming": {
+    en: "Streaming",
+    de: "Streaming",
+  },
+  "settings.models.capabilityTools": {
+    en: "Tools",
+    de: "Tools",
+  },
+  "settings.models.capabilityJson": {
+    en: "JSON",
+    de: "JSON",
+  },
+  "settings.models.capabilityReasoning": {
+    en: "Reasoning",
+    de: "Reasoning",
+  },
+  "settings.models.capabilityImage": {
+    en: "Image",
+    de: "Bild",
+  },
+  "settings.models.capabilityPdf": {
+    en: "PDF",
+    de: "PDF",
+  },
+  "settings.models.contextTokensShort": {
+    en: "{count} ctx",
+    de: "{count} ctx",
+  },
+  "settings.models.runReadiness": {
+    en: "Run readiness check",
+    de: "Bereitschaft prüfen",
+  },
+  "settings.models.deepProbes": {
+    en: "Deep probes",
+    de: "Tiefe Prüfungen",
+  },
+  "settings.models.capabilitySummary": {
+    en: "tools {tools} · structured {structured} · {costClass}/{latencyClass}",
+    de: "Tools {tools} · strukturiert {structured} · {costClass}/{latencyClass}",
+  },
+  "settings.models.yes": {
+    en: "yes",
+    de: "ja",
+  },
+  "settings.models.no": {
+    en: "no",
+    de: "nein",
+  },
+  "settings.selfHosted": {
+    en: "Self-hosted",
+    de: "Self-hosted",
+  },
+  "settings.selfHostedTitle": {
+    en: "Runs inside your network",
+    de: "Läuft in deinem Netzwerk",
+  },
+  "settings.tabs.models": {
+    en: "Models",
+    de: "Modelle",
+  },
+  "settings.tabs.general": {
+    en: "General",
+    de: "Allgemein",
+  },
+  "settings.tabs.editor": {
+    en: "Editor",
+    de: "Editor",
+  },
+  "settings.tabs.languages": {
+    en: "Languages",
+    de: "Sprachen",
+  },
+  "settings.tabs.security": {
+    en: "Security",
+    de: "Sicherheit",
+  },
+  "settings.editor.title": {
+    en: "Editor settings",
+    de: "Editor-Einstellungen",
+  },
+  "settings.editor.description": {
+    en: "Search, scope, change, and reset server-owned editor preferences. Values apply only after Keiko returns the matching effective snapshot.",
+    de: "Suche, ändere und setze serververwaltete Editor-Einstellungen je nach Geltungsbereich zurück. Werte gelten erst, wenn Keiko den passenden effektiven Snapshot zurückgibt.",
+  },
+  "settings.editor.search": {
+    en: "Search editor settings",
+    de: "Editor-Einstellungen suchen",
+  },
+  "settings.editor.scope": {
+    en: "Scope",
+    de: "Geltungsbereich",
+  },
+  "settings.editor.scopeUser": {
+    en: "User",
+    de: "Benutzer",
+  },
+  "settings.editor.scopeWorkspace": {
+    en: "Workspace",
+    de: "Arbeitsbereich",
+  },
+  "settings.editor.modifiedOnly": {
+    en: "Modified only",
+    de: "Nur geänderte",
+  },
+  "settings.editor.resetAll": {
+    en: "Reset visible settings",
+    de: "Sichtbare Einstellungen zurücksetzen",
+  },
+  "settings.editor.noWorkspace": {
+    en: "Open a workspace to edit workspace-scoped settings.",
+    de: "Öffne einen Arbeitsbereich, um arbeitsbereichsbezogene Einstellungen zu ändern.",
+  },
+  "settings.editor.loading": {
+    en: "Loading editor settings...",
+    de: "Editor-Einstellungen werden geladen…",
+  },
+  "settings.editor.empty": {
+    en: "No editor settings match the current filter.",
+    de: "Keine Editor-Einstellung passt zum aktuellen Filter.",
+  },
+  "settings.editor.loadError": {
+    en: "Editor settings could not be loaded.",
+    de: "Editor-Einstellungen konnten nicht geladen werden.",
+  },
+  "settings.editor.mutationError": {
+    en: "Editor settings could not be saved.",
+    de: "Editor-Einstellungen konnten nicht gespeichert werden.",
+  },
+  "settings.editor.conflict": {
+    en: "Editor settings changed elsewhere. The latest snapshot was reloaded.",
+    de: "Editor-Einstellungen wurden anderswo geändert. Der aktuelle Snapshot wurde neu geladen.",
+  },
+  "settings.editor.retry": {
+    en: "Retry",
+    de: "Erneut versuchen",
+  },
+  "settings.editor.reset": {
+    en: "Reset at selected scope",
+    de: "Im ausgewählten Geltungsbereich zurücksetzen",
+  },
+  "settings.editor.applying": {
+    en: "Applying editor setting...",
+    de: "Editor-Einstellung wird angewendet…",
+  },
+  "settings.editor.applied": {
+    en: "Editor setting applied.",
+    de: "Editor-Einstellung angewendet.",
+  },
+  "settings.editor.source": {
+    en: "Source: {source}",
+    de: "Quelle: {source}",
+  },
+  "settings.editor.sourceBuiltInDefault": {
+    en: "built-in default",
+    de: "eingebaute Vorgabe",
+  },
+  "settings.editor.sourceUser": {
+    en: "user",
+    de: "Benutzer",
+  },
+  "settings.editor.sourceWorkspace": {
+    en: "workspace",
+    de: "Arbeitsbereich",
+  },
+  "settings.editor.effectLive": {
+    en: "Live",
+    de: "Live",
+  },
+  "settings.editor.effectRestart": {
+    en: "Restart",
+    de: "Neustart",
+  },
+  "settings.editor.policyLocked": {
+    en: "Locked by policy: {reason}",
+    de: "Durch Richtlinie gesperrt: {reason}",
+  },
+  "settings.editor.aiStatus": {
+    en: "AI status: {state} ({reason})",
+    de: "KI-Status: {state} ({reason})",
+  },
+  "settings.editor.confirmInlineCompletion": {
+    en: "Enable inline AI completion for this user? Keiko will route optional ghost-text requests through the governed Model Gateway only when operator policy, model capability, budget, and health allow it. This does not grant patch, execution, delivery, or wider authority.",
+    de: "Inline-KI-Vervollständigung für diesen Benutzer aktivieren? Keiko sendet optionale Ghost-Text-Anfragen nur über das governte Model Gateway, wenn Operator-Policy, Modellfähigkeit, Budget und Health es erlauben. Das gewährt keine Patch-, Ausführungs-, Delivery- oder weitergehende Autorität.",
+  },
+  "settings.editor.confirmTestGeneration": {
+    en: "Enable AI test generation for this workspace? Generated tests remain review-only, use the governed Model Gateway when available, and cannot execute or apply without the existing review and verification gates.",
+    de: "KI-Testgenerierung für diesen Arbeitsbereich aktivieren? Generierte Tests bleiben review-pflichtig, nutzen bei Verfügbarkeit das governte Model Gateway und können ohne bestehende Review- und Verification-Gates nicht ausgeführt oder angewendet werden.",
+  },
+  "settings.editor.confirmPatchApply": {
+    en: "Enable governed AI patch apply for this workspace? Keiko will still require explicit human review for each patch, revalidate the diff server-side, and will not grant delivery, merge, or authority-widening rights.",
+    de: "Governten KI-Patch-Apply für diesen Arbeitsbereich aktivieren? Keiko verlangt weiterhin explizites menschliches Review für jeden Patch, validiert den Diff serverseitig erneut und gewährt keine Delivery-, Merge- oder Authority-Erweiterung.",
+  },
+  "settings.editor.scopeUnavailable": {
+    en: "This setting cannot be changed at the selected scope.",
+    de: "Diese Einstellung kann im ausgewählten Geltungsbereich nicht geändert werden.",
+  },
+  "settings.editor.followupExternalReload": {
+    en: "External reload automation is enabled in the watcher milestone; this release shows the effective policy.",
+    de: "Automatisches externes Neuladen wird im Watcher-Meilenstein aktiviert; diese Version zeigt die effektive Richtlinie.",
+  },
+  "settings.editor.setting.fontSize": {
+    en: "Font size",
+    de: "Schriftgröße",
+  },
+  "settings.editor.setting.tabSize": {
+    en: "Tab size",
+    de: "Tabulatorbreite",
+  },
+  "settings.editor.setting.insertSpaces": {
+    en: "Insert spaces",
+    de: "Leerzeichen einfügen",
+  },
+  "settings.editor.setting.wordWrap": {
+    en: "Word wrap",
+    de: "Zeilenumbruch",
+  },
+  "settings.editor.setting.renderWhitespace": {
+    en: "Render whitespace",
+    de: "Leerzeichen anzeigen",
+  },
+  "settings.editor.setting.minimap": {
+    en: "Minimap",
+    de: "Minimap",
+  },
+  "settings.editor.setting.formatOnSave": {
+    en: "Format on save",
+    de: "Beim Speichern formatieren",
+  },
+  "settings.editor.setting.externalReload": {
+    en: "External reload",
+    de: "Externes Neuladen",
+  },
+  "settings.editor.setting.inlineCompletion": {
+    en: "Inline AI completion",
+    de: "Inline-KI-Vervollständigung",
+  },
+  "settings.editor.setting.testGeneration": {
+    en: "AI test generation",
+    de: "KI-Testgenerierung",
+  },
+  "settings.editor.setting.patchApply": {
+    en: "AI patch apply",
+    de: "KI-Patch-Apply",
+  },
+  "settings.editor.setting.watcherExclusions": {
+    en: "Watcher exclusions",
+    de: "Watcher-Ausschlüsse",
+  },
+  "settings.editor.setting.largeFileMode": {
+    en: "Large-file mode",
+    de: "Große Dateien",
+  },
+  "settings.editor.setting.modelRetentionCount": {
+    en: "Retained model count",
+    de: "Behaltene Modellanzahl",
+  },
+  "settings.editor.setting.modelRetentionBytes": {
+    en: "Retained model bytes",
+    de: "Behaltene Modellbytes",
+  },
+  "settings.editor.setting.keybindingOverrides": {
+    en: "Keyboard shortcut overrides",
+    de: "Tastenkürzel-Overrides",
+  },
+  "settings.keyboard.title": {
+    en: "Keyboard shortcuts",
+    de: "Tastenkürzel",
+  },
+  "settings.keyboard.description": {
+    en: "Search effective shell, editor, and supported Monaco shortcuts. Rebindable commands persist through the server-owned M7 settings control plane.",
+    de: "Suche effektive Shell-, Editor- und unterstützte Monaco-Kürzel. Änderbare Befehle werden über die serververwaltete M7-Einstellungssteuerung gespeichert.",
+  },
+  "settings.keyboard.search": {
+    en: "Search keyboard shortcuts",
+    de: "Tastenkürzel suchen",
+  },
+  "settings.keyboard.modifiedOnly": {
+    en: "Modified only",
+    de: "Nur geänderte",
+  },
+  "settings.keyboard.resetAll": {
+    en: "Reset keyboard shortcuts",
+    de: "Tastenkürzel zurücksetzen",
+  },
+  "settings.keyboard.fallback": {
+    en: "Keyboard shortcut overrides were ignored and defaults are active: {reason}.",
+    de: "Tastenkürzel-Overrides wurden ignoriert und Vorgaben sind aktiv: {reason}.",
+  },
+  "settings.keyboard.recordingLive": {
+    en: "Recording keyboard shortcut.",
+    de: "Tastenkürzel wird aufgezeichnet.",
+  },
+  "settings.keyboard.reason": {
+    en: "Shortcut rejected: {reason}",
+    de: "Tastenkürzel abgelehnt: {reason}",
+  },
+  "settings.keyboard.sourceDefault": {
+    en: "default",
+    de: "Vorgabe",
+  },
+  "settings.keyboard.sourceUser": {
+    en: "modified",
+    de: "geändert",
+  },
+  "settings.keyboard.scopeGlobal": {
+    en: "global",
+    de: "global",
+  },
+  "settings.keyboard.scopeEditor": {
+    en: "editor",
+    de: "Editor",
+  },
+  "settings.keyboard.scopeSettings": {
+    en: "settings",
+    de: "Einstellungen",
+  },
+  "settings.keyboard.scopeExplorer": {
+    en: "explorer",
+    de: "Explorer",
+  },
+  "settings.keyboard.scopeGit": {
+    en: "git",
+    de: "Git",
+  },
+  "settings.keyboard.conflict": {
+    en: "Conflicts with: {commands}",
+    de: "Konflikt mit: {commands}",
+  },
+  "settings.keyboard.pressShortcut": {
+    en: "Press shortcut",
+    de: "Tastenkürzel drücken",
+  },
+  "settings.keyboard.cancel": {
+    en: "Cancel",
+    de: "Abbrechen",
+  },
+  "settings.keyboard.record": {
+    en: "Record",
+    de: "Aufzeichnen",
+  },
+  "settings.keyboard.remove": {
+    en: "Remove",
+    de: "Entfernen",
+  },
+  "settings.keyboard.protected": {
+    en: "Protected",
+    de: "Geschützt",
+  },
+  "command.undo": {
+    en: "Undo",
+    de: "Rückgängig",
+  },
+  "command.undo.description": {
+    en: "Undo the last workspace window or panel action.",
+    de: "Macht die letzte Arbeitsbereichs-Fenster- oder Panel-Aktion rückgängig.",
+  },
+  "command.redo": {
+    en: "Redo",
+    de: "Wiederholen",
+  },
+  "command.redo.description": {
+    en: "Redo the last reverted workspace window or panel action.",
+    de: "Stellt die letzte rückgängig gemachte Fenster- oder Panel-Aktion wieder her.",
+  },
+  "command.focusStatus": {
+    en: "Focus status",
+    de: "Status fokussieren",
+  },
+  "command.focusStatus.description": {
+    en: "Move keyboard focus to the workspace status field.",
+    de: "Bewegt den Tastaturfokus zum Statusfeld.",
+  },
+  "command.focusWorkspaceSearch": {
+    en: "Focus workspace search",
+    de: "Arbeitsbereichssuche fokussieren",
+  },
+  "command.focusWorkspaceSearch.description": {
+    en: "Open or focus workspace search.",
+    de: "Öffnet oder fokussiert die Arbeitsbereichssuche.",
+  },
+  "command.quickAccessFiles": {
+    en: "Quick Access: files",
+    de: "Schnellzugriff: Dateien",
+  },
+  "command.quickAccessFiles.description": {
+    en: "Open the unified quick-access file picker.",
+    de: "Öffnet den einheitlichen Datei-Schnellzugriff.",
+  },
+  "command.quickAccessCommands": {
+    en: "Quick Access: commands",
+    de: "Schnellzugriff: Befehle",
+  },
+  "command.quickAccessCommands.description": {
+    en: "Open the unified command palette.",
+    de: "Öffnet die einheitliche Befehlspalette.",
+  },
+  "command.openEditorSettings": {
+    en: "Open editor settings",
+    de: "Editor-Einstellungen öffnen",
+  },
+  "command.openEditorSettings.description": {
+    en: "Open Settings on the editor preferences view.",
+    de: "Öffnet die Einstellungen in der Editor-Ansicht.",
+  },
+  "command.splitEditorRight": {
+    en: "Split editor right",
+    de: "Editor rechts teilen",
+  },
+  "command.splitEditorRight.description": {
+    en: "Split the active editor pane to the right.",
+    de: "Teilt den aktiven Editorbereich nach rechts.",
+  },
+  "command.splitEditorDown": {
+    en: "Split editor down",
+    de: "Editor nach unten teilen",
+  },
+  "command.splitEditorDown.description": {
+    en: "Split the active editor pane downward.",
+    de: "Teilt den aktiven Editorbereich nach unten.",
+  },
+  "command.closeEditorSplit": {
+    en: "Close editor split",
+    de: "Editor-Teilung schließen",
+  },
+  "command.closeEditorSplit.description": {
+    en: "Close the active editor split.",
+    de: "Schließt die aktive Editor-Teilung.",
+  },
+  "command.nextEditorTab": {
+    en: "Next editor tab",
+    de: "Nächster Editor-Tab",
+  },
+  "command.nextEditorTab.description": {
+    en: "Move to the next tab in the active editor pane.",
+    de: "Wechselt zum nächsten Tab im aktiven Editorbereich.",
+  },
+  "command.previousEditorTab": {
+    en: "Previous editor tab",
+    de: "Vorheriger Editor-Tab",
+  },
+  "command.previousEditorTab.description": {
+    en: "Move to the previous tab in the active editor pane.",
+    de: "Wechselt zum vorherigen Tab im aktiven Editorbereich.",
+  },
+  "command.closeEditorTab": {
+    en: "Close editor tab",
+    de: "Editor-Tab schließen",
+  },
+  "command.closeEditorTab.description": {
+    en: "Close the active editor tab.",
+    de: "Schließt den aktiven Editor-Tab.",
+  },
+  "command.reopenClosedEditor": {
+    en: "Reopen closed editor",
+    de: "Geschlossenen Editor erneut öffnen",
+  },
+  "command.reopenClosedEditor.description": {
+    en: "Reopen the most recently closed editor tab.",
+    de: "Öffnet den zuletzt geschlossenen Editor-Tab erneut.",
+  },
+  "command.saveAllEditors": {
+    en: "Save all editors",
+    de: "Alle Editoren speichern",
+  },
+  "command.saveAllEditors.description": {
+    en: "Save every dirty editor tab.",
+    de: "Speichert alle geänderten Editor-Tabs.",
+  },
+  "command.editorSave": {
+    en: "Save document",
+    de: "Dokument speichern",
+  },
+  "command.editorSave.description": {
+    en: "Monaco save action owned by the editor surface.",
+    de: "Von der Editorfläche verwaltete Monaco-Speicheraktion.",
+  },
+  "command.editorFind": {
+    en: "Find in document",
+    de: "Im Dokument suchen",
+  },
+  "command.editorFind.description": {
+    en: "Monaco find action.",
+    de: "Monaco-Suchaktion.",
+  },
+  "command.editorFormat": {
+    en: "Format document",
+    de: "Dokument formatieren",
+  },
+  "command.editorFormat.description": {
+    en: "Monaco format action backed by governed formatting.",
+    de: "Monaco-Formataktion mit governter Formatierung.",
+  },
+  "command.editorGenerateTests": {
+    en: "Generate tests",
+    de: "Tests generieren",
+  },
+  "command.editorGenerateTests.description": {
+    en: "Host-injected Monaco action for governed test generation.",
+    de: "Host-injizierte Monaco-Aktion für governte Testgenerierung.",
+  },
+  "command.editorAskSelection": {
+    en: "Ask Keiko about selection",
+    de: "Keiko zur Auswahl fragen",
+  },
+  "command.editorAskSelection.description": {
+    en: "Host-injected Monaco action for selected text context.",
+    de: "Host-injizierte Monaco-Aktion für ausgewählten Textkontext.",
+  },
+  "command.editorRenameSymbol": {
+    en: "Rename symbol",
+    de: "Symbol umbenennen",
+  },
+  "command.editorRenameSymbol.description": {
+    en: "Monaco rename-symbol action.",
+    de: "Monaco-Aktion zum Umbenennen von Symbolen.",
+  },
+  "command.editorAccessibilityHelp": {
+    en: "Accessibility help",
+    de: "Barrierefreiheitshilfe",
+  },
+  "command.editorAccessibilityHelp.description": {
+    en: "Monaco accessibility help remains protected.",
+    de: "Monaco-Barrierefreiheitshilfe bleibt geschützt.",
+  },
+  "settings.snippets.title": {
+    en: "Workspace snippets",
+    de: "Arbeitsbereichs-Snippets",
+  },
+  "settings.snippets.description": {
+    en: "Create governed workspace snippets. Keiko validates the bounded TextMate-compatible subset before it appears in completions.",
+    de: "Erstelle governte Arbeitsbereichs-Snippets. Keiko validiert die begrenzte TextMate-kompatible Teilmenge, bevor sie in Vervollständigungen erscheint.",
+  },
+  "settings.snippets.noWorkspace": {
+    en: "Open a workspace to manage workspace snippets.",
+    de: "Öffne einen Arbeitsbereich, um Arbeitsbereichs-Snippets zu verwalten.",
+  },
+  "settings.snippets.issue": {
+    en: "Snippet operation failed: {issue}",
+    de: "Snippet-Aktion fehlgeschlagen: {issue}",
+  },
+  "settings.snippets.name": {
+    en: "Name",
+    de: "Name",
+  },
+  "settings.snippets.prefix": {
+    en: "Prefix",
+    de: "Präfix",
+  },
+  "settings.snippets.language": {
+    en: "Language",
+    de: "Sprache",
+  },
+  "settings.snippets.include": {
+    en: "Include glob",
+    de: "Include-Glob",
+  },
+  "settings.snippets.body": {
+    en: "Body",
+    de: "Body",
+  },
+  "settings.snippets.preview": {
+    en: "Preview",
+    de: "Vorschau",
+  },
+  "settings.snippets.save": {
+    en: "Save snippet",
+    de: "Snippet speichern",
+  },
+  "settings.snippets.reset": {
+    en: "Reset snippets",
+    de: "Snippets zurücksetzen",
+  },
+  "settings.snippets.empty": {
+    en: "No workspace snippets are defined.",
+    de: "Keine Arbeitsbereichs-Snippets definiert.",
+  },
+  "settings.snippets.lines": {
+    en: "{count} lines",
+    de: "{count} Zeilen",
+  },
+  "settings.snippets.delete": {
+    en: "Delete",
+    de: "Löschen",
+  },
+  "settings.language.title": {
+    en: "Language",
+    de: "Sprache",
+  },
+  "settings.language.description": {
+    en: "Choose the language used by the Keiko browser interface.",
+    de: "Wähle die Sprache der Keiko-Oberfläche.",
+  },
+  "settings.language.label": {
+    en: "Interface language",
+    de: "Sprache der Oberfläche",
+  },
+  "settings.language.help": {
+    en: "Saved on this device and applied immediately.",
+    de: "Wird auf diesem Gerät gespeichert und sofort angewendet.",
+  },
+  "settings.voice.title": {
+    en: "Assistant voice",
+    de: "Assistenzstimme",
+  },
+  "settings.voice.description": {
+    en: "Choose the voice used by Voice Dialogue.",
+    de: "Wähle die Stimme für den Sprachdialog.",
+  },
+  "settings.voice.label": {
+    en: "Voice",
+    de: "Stimme",
+  },
+  "settings.voice.help": {
+    en: "Saved on this device and used the next time Voice Dialogue speaks.",
+    de: "Wird auf diesem Gerät gespeichert und beim nächsten Sprachdialog genutzt.",
+  },
+  "settings.voice.unavailable": {
+    en: "Voice choices become available after a configured voice provider exposes speech output.",
+    de: "Stimmen sind verfügbar, sobald ein verbundener Sprachanbieter Sprachausgabe bereitstellt.",
+  },
+  "settings.wallpaper.title": {
+    en: "Workspace wallpaper",
+    de: "Arbeitsbereich-Hintergrund",
+  },
+  "settings.wallpaper.description": {
+    en: "Liquid Chrome - a subtle metallic flow behind the grid that reacts to your cursor and clicks. Turn it off to stop the WebGL animation completely.",
+    de: "Liquid Chrome ist ein dezenter metallischer Hintergrund hinter dem Raster, der auf Cursor und Klicks reagiert. Schalte ihn aus, um die WebGL-Animation vollständig zu stoppen.",
+  },
+  "settings.wallpaper.toggle": {
+    en: "Liquid wallpaper",
+    de: "Liquid-Hintergrund",
+  },
+  "settings.wallpaper.running": {
+    en: "Running",
+    de: "Aktiv",
+  },
+  "settings.wallpaper.stopped": {
+    en: "Stopped",
+    de: "Gestoppt",
+  },
+  "settings.wallpaper.opacity": {
+    en: "Wallpaper opacity",
+    de: "Deckkraft des Hintergrunds",
+  },
+  "settings.scale.off": {
+    en: "Off",
+    de: "Aus",
+  },
+  "settings.scale.full": {
+    en: "Full",
+    de: "Voll",
+  },
+  "settings.scale.base": {
+    en: "Base",
+    de: "Basis",
+  },
+  "settings.scale.lighter": {
+    en: "Lighter",
+    de: "Heller",
+  },
+  "settings.scale.subtle": {
+    en: "Subtle",
+    de: "Dezent",
+  },
+  "settings.scale.strong": {
+    en: "Strong",
+    de: "Stark",
+  },
+  "settings.workspace.backgroundBrightness": {
+    en: "Workspace background brightness",
+    de: "Helligkeit des Arbeitsbereichs",
+  },
+  "settings.workspace.gridStrength": {
+    en: "Workspace grid strength",
+    de: "Rasterstärke",
+  },
+  "settings.workspace.cameraAnimation": {
+    en: "Workspace camera smoothness",
+    de: "Kamera-Animation",
+  },
+  "settings.workspace.cameraAnimationMinimal": {
+    en: "Minimal",
+    de: "Minimal",
+  },
+  "settings.workspace.cameraAnimationSmooth": {
+    en: "Smooth",
+    de: "Sanft",
+  },
+  "settings.workspace.cameraAnimationHelp": {
+    en: "Move right to make pan and zoom transitions softer. Minimal applies changes immediately.",
+    de: "Weiter rechts werden Schwenken und Zoomen weicher animiert. Minimal wendet Änderungen direkt an.",
+  },
+  "settings.workspace.borderStrength": {
+    en: "Workspace border strength",
+    de: "Rahmenstärke",
+  },
+  "settings.workspace.innerGlow": {
+    en: "Workspace inner glow",
+    de: "Inneres Leuchten",
+  },
+  "settings.updates.title": {
+    en: "Updates",
+    de: "Updates",
+  },
+  "settings.updates.description": {
+    en: "Check for Keiko updates and install them when available.",
+    de: "Prüfe verfügbare Keiko-Updates und installiere sie bei Bedarf.",
+  },
+  "settings.updates.open": {
+    en: "Review updates",
+    de: "Updates prüfen",
+  },
+  "settings.security.placeholder": {
+    en: "SSO · audit log · data residency - coming soon.",
+    de: "SSO · Audit-Log · Datenresidenz - bald verfügbar.",
+  },
+} as const satisfies Readonly<Record<string, Readonly<Record<Locale, string>>>>;
 
-const SETTINGS_DE_MESSAGES: SettingsMessageCatalog = {
-  "settings.models.gatewayTitle": "Modell-Gateway",
-  "settings.models.gatewayDescription":
-    "Zugangsdaten werden lokal vom Keiko-Loopback-Server gespeichert; Secrets werden nie an den Browser zurückgegeben.",
-  "settings.models.updateCredentials": "Zugangsdaten aktualisieren",
-  "settings.models.connectGateway": "Gateway verbinden",
-  "settings.models.setupRequired": "Gateway-Einrichtung erforderlich",
-  "settings.models.connected": "Gateway verbunden",
-  "settings.models.configured": "Gateway konfiguriert",
-  "settings.models.detailSetup":
-    "Gib Gateway-Basis-URL und API-Token ein, bevor du Chat- oder Agent-Workflows nutzt.",
-  "settings.models.detailNoModels":
-    "Das Gateway ist konfiguriert, aber aktuell sind keine dialogfähigen Modelle verfügbar.",
-  "settings.models.detailNoChat":
-    "Gateway verbunden, aber keines der gefundenen Modelle kann für Konversationen genutzt werden. Füge ein chatfähiges Deployment hinzu.",
-  "settings.models.detailReady":
-    "Keiko kann die konfigurierten Gateway-Modelle für Chat- und Agent-Workflows nutzen.",
-  "settings.models.modelCount": "{count} Modelle",
-  "settings.models.chatCount": "{count} Chat",
-  "settings.models.statusConfigured": "Gateway konfiguriert",
-  "settings.models.statusSetupRequired": "Einrichtung erforderlich",
-  "settings.models.statusConversationEligible": "konversationsfähig",
-  "settings.models.statusEmbedding": "für Embeddings verfügbar",
-  "settings.models.statusNotSelectable": "nicht für Konversationen auswählbar",
-  "settings.models.loadError":
-    "Gateway-Einstellungen konnten nicht geladen werden - das lokale Keiko-Backend hat nicht geantwortet.",
-  "settings.models.retry": "Erneut versuchen",
-  "settings.models.loading": "Gateway-Modelle werden geladen…",
-  "settings.models.emptyConfigured":
-    "Aktuell sind keine dialogfähigen Modelle verfügbar. Prüfe die Gateway-Konfiguration oder die gefundenen Modelle.",
-  "settings.models.emptyUnconfigured":
-    "Noch sind keine Modelle konfiguriert. Verbinde das Gateway, um konfigurierte Modellfähigkeiten zu laden.",
-  "settings.models.eligibilityOk": "Konversationsfähig",
-  "settings.models.eligibilityOkAria": "Modelleignung: für Konversationen geeignet",
-  "settings.models.eligibilityPrefix": "Modelleignung: {label}",
-  "settings.models.embeddingLabel": "Embedding-bereit",
-  "settings.models.embeddingAvailable":
-    "Für Embeddings verfügbar; nicht in der Chat-Modellauswahl sichtbar",
-  "settings.models.ineligibleEmbedding":
-    "Embedding-Modell - nicht für Textkonversationen auswählbar",
-  "settings.models.ineligibleOcr": "Nur OCR/Vision - nicht für Textkonversationen auswählbar",
-  "settings.models.ineligibleGeneric": "Kein Chat-Modell - nicht für Textkonversationen auswählbar",
-  "settings.models.ineligibleShortOcr": "nur OCR/Vision",
-  "settings.models.ineligibleShortGeneric": "kein Chat-Modell",
-  "settings.models.notSelectable": "Nicht auswählbar - {reason}",
-  "settings.models.voiceProviderAvailable":
-    "Sprachanbieter - verfügbar für {capabilities}{personas}",
-  "settings.models.voiceProviderBadge": "Sprachanbieter - {label}",
-  "settings.models.voiceCapabilitySpeechToText": "Speech-to-Text",
-  "settings.models.voiceCapabilitySpeechOutput": "Sprachausgabe",
-  "settings.models.voiceCapabilityRealtimeDialogue": "Echtzeitdialog",
-  "settings.models.voiceCapabilityVoice": "Sprache",
-  "settings.models.voicePersonas": "; Stimmen: {personas}",
-  "settings.models.readinessError":
-    "Bereitschaftsprüfung fehlgeschlagen. Die Gateway-Konfiguration wurde nicht geändert.",
-  "settings.models.copyReport": "Bericht kopieren",
-  "settings.models.copied": "Kopiert",
-  "settings.models.reportCopied": "Bereitschaftsbericht kopiert.",
-  "settings.models.reportCopyFailed":
-    "Zugriff auf die Zwischenablage fehlgeschlagen. Wähle die Berichtdetails aus und kopiere sie manuell.",
-  "settings.models.checkingReadiness": "Bereitschaftsprüfung läuft ({mode})…",
-  "settings.models.readinessModeDeep": "tief",
-  "settings.models.readinessModeBasic": "einfach",
-  "settings.models.workingToday": "Heute funktionsfähig",
-  "settings.models.notVerified": "Nicht verifiziert",
-  "settings.models.verifiedCapabilities": "Verifizierte Fähigkeiten",
-  "settings.models.capabilityStreaming": "Streaming",
-  "settings.models.capabilityTools": "Tools",
-  "settings.models.capabilityJson": "JSON",
-  "settings.models.capabilityReasoning": "Reasoning",
-  "settings.models.capabilityImage": "Bild",
-  "settings.models.capabilityPdf": "PDF",
-  "settings.models.contextTokensShort": "{count} ctx",
-  "settings.models.runReadiness": "Bereitschaft prüfen",
-  "settings.models.deepProbes": "Tiefe Prüfungen",
-  "settings.models.capabilitySummary":
-    "Tools {tools} · strukturiert {structured} · {costClass}/{latencyClass}",
-  "settings.models.yes": "ja",
-  "settings.models.no": "nein",
-  "settings.selfHosted": "Self-hosted",
-  "settings.selfHostedTitle": "Läuft in deinem Netzwerk",
-  "settings.tabs.models": "Modelle",
-  "settings.tabs.general": "Allgemein",
-  "settings.tabs.editor": "Editor",
-  "settings.tabs.languages": "Sprachen",
-  "settings.tabs.security": "Sicherheit",
-  "settings.editor.title": "Editor-Einstellungen",
-  "settings.editor.description":
-    "Suche, ändere und setze serververwaltete Editor-Einstellungen je nach Geltungsbereich zurück. Werte gelten erst, wenn Keiko den passenden effektiven Snapshot zurückgibt.",
-  "settings.editor.search": "Editor-Einstellungen suchen",
-  "settings.editor.scope": "Geltungsbereich",
-  "settings.editor.scopeUser": "Benutzer",
-  "settings.editor.scopeWorkspace": "Arbeitsbereich",
-  "settings.editor.modifiedOnly": "Nur geänderte",
-  "settings.editor.resetAll": "Sichtbare Einstellungen zurücksetzen",
-  "settings.editor.noWorkspace":
-    "Öffne einen Arbeitsbereich, um arbeitsbereichsbezogene Einstellungen zu ändern.",
-  "settings.editor.loading": "Editor-Einstellungen werden geladen…",
-  "settings.editor.empty": "Keine Editor-Einstellung passt zum aktuellen Filter.",
-  "settings.editor.loadError": "Editor-Einstellungen konnten nicht geladen werden.",
-  "settings.editor.mutationError": "Editor-Einstellungen konnten nicht gespeichert werden.",
-  "settings.editor.conflict":
-    "Editor-Einstellungen wurden anderswo geändert. Der aktuelle Snapshot wurde neu geladen.",
-  "settings.editor.retry": "Erneut versuchen",
-  "settings.editor.reset": "Im ausgewählten Geltungsbereich zurücksetzen",
-  "settings.editor.applying": "Editor-Einstellung wird angewendet…",
-  "settings.editor.applied": "Editor-Einstellung angewendet.",
-  "settings.editor.source": "Quelle: {source}",
-  "settings.editor.sourceBuiltInDefault": "eingebaute Vorgabe",
-  "settings.editor.sourceUser": "Benutzer",
-  "settings.editor.sourceWorkspace": "Arbeitsbereich",
-  "settings.editor.effectLive": "Live",
-  "settings.editor.effectRestart": "Neustart",
-  "settings.editor.policyLocked": "Durch Richtlinie gesperrt: {reason}",
-  "settings.editor.aiStatus": "KI-Status: {state} ({reason})",
-  "settings.editor.confirmInlineCompletion":
-    "Inline-KI-Vervollständigung für diesen Benutzer aktivieren? Keiko sendet optionale Ghost-Text-Anfragen nur über das governte Model Gateway, wenn Operator-Policy, Modellfähigkeit, Budget und Health es erlauben. Das gewährt keine Patch-, Ausführungs-, Delivery- oder weitergehende Autorität.",
-  "settings.editor.confirmTestGeneration":
-    "KI-Testgenerierung für diesen Arbeitsbereich aktivieren? Generierte Tests bleiben review-pflichtig, nutzen bei Verfügbarkeit das governte Model Gateway und können ohne bestehende Review- und Verification-Gates nicht ausgeführt oder angewendet werden.",
-  "settings.editor.confirmPatchApply":
-    "Governten KI-Patch-Apply für diesen Arbeitsbereich aktivieren? Keiko verlangt weiterhin explizites menschliches Review für jeden Patch, validiert den Diff serverseitig erneut und gewährt keine Delivery-, Merge- oder Authority-Erweiterung.",
-  "settings.editor.scopeUnavailable":
-    "Diese Einstellung kann im ausgewählten Geltungsbereich nicht geändert werden.",
-  "settings.editor.followupExternalReload":
-    "Automatisches externes Neuladen wird im Watcher-Meilenstein aktiviert; diese Version zeigt die effektive Richtlinie.",
-  "settings.editor.setting.fontSize": "Schriftgröße",
-  "settings.editor.setting.tabSize": "Tabulatorbreite",
-  "settings.editor.setting.insertSpaces": "Leerzeichen einfügen",
-  "settings.editor.setting.wordWrap": "Zeilenumbruch",
-  "settings.editor.setting.renderWhitespace": "Leerzeichen anzeigen",
-  "settings.editor.setting.minimap": "Minimap",
-  "settings.editor.setting.formatOnSave": "Beim Speichern formatieren",
-  "settings.editor.setting.externalReload": "Externes Neuladen",
-  "settings.editor.setting.inlineCompletion": "Inline-KI-Vervollständigung",
-  "settings.editor.setting.testGeneration": "KI-Testgenerierung",
-  "settings.editor.setting.patchApply": "KI-Patch-Apply",
-  "settings.editor.setting.watcherExclusions": "Watcher-Ausschlüsse",
-  "settings.editor.setting.largeFileMode": "Große Dateien",
-  "settings.editor.setting.modelRetentionCount": "Behaltene Modellanzahl",
-  "settings.editor.setting.modelRetentionBytes": "Behaltene Modellbytes",
-  "settings.editor.setting.keybindingOverrides": "Tastenkürzel-Overrides",
-  "settings.keyboard.title": "Tastenkürzel",
-  "settings.keyboard.description":
-    "Suche effektive Shell-, Editor- und unterstützte Monaco-Kürzel. Änderbare Befehle werden über die serververwaltete M7-Einstellungssteuerung gespeichert.",
-  "settings.keyboard.search": "Tastenkürzel suchen",
-  "settings.keyboard.modifiedOnly": "Nur geänderte",
-  "settings.keyboard.resetAll": "Tastenkürzel zurücksetzen",
-  "settings.keyboard.fallback":
-    "Tastenkürzel-Overrides wurden ignoriert und Vorgaben sind aktiv: {reason}.",
-  "settings.keyboard.recordingLive": "Tastenkürzel wird aufgezeichnet.",
-  "settings.keyboard.reason": "Tastenkürzel abgelehnt: {reason}",
-  "settings.keyboard.sourceDefault": "Vorgabe",
-  "settings.keyboard.sourceUser": "geändert",
-  "settings.keyboard.scopeGlobal": "global",
-  "settings.keyboard.scopeEditor": "Editor",
-  "settings.keyboard.scopeSettings": "Einstellungen",
-  "settings.keyboard.scopeExplorer": "Explorer",
-  "settings.keyboard.scopeGit": "Git",
-  "settings.keyboard.conflict": "Konflikt mit: {commands}",
-  "settings.keyboard.pressShortcut": "Tastenkürzel drücken",
-  "settings.keyboard.cancel": "Abbrechen",
-  "settings.keyboard.record": "Aufzeichnen",
-  "settings.keyboard.remove": "Entfernen",
-  "settings.keyboard.protected": "Geschützt",
-  "command.undo": "Rückgängig",
-  "command.undo.description":
-    "Macht die letzte Arbeitsbereichs-Fenster- oder Panel-Aktion rückgängig.",
-  "command.redo": "Wiederholen",
-  "command.redo.description":
-    "Stellt die letzte rückgängig gemachte Fenster- oder Panel-Aktion wieder her.",
-  "command.focusStatus": "Status fokussieren",
-  "command.focusStatus.description": "Bewegt den Tastaturfokus zum Statusfeld.",
-  "command.focusWorkspaceSearch": "Arbeitsbereichssuche fokussieren",
-  "command.focusWorkspaceSearch.description": "Öffnet oder fokussiert die Arbeitsbereichssuche.",
-  "command.quickAccessFiles": "Schnellzugriff: Dateien",
-  "command.quickAccessFiles.description": "Öffnet den einheitlichen Datei-Schnellzugriff.",
-  "command.quickAccessCommands": "Schnellzugriff: Befehle",
-  "command.quickAccessCommands.description": "Öffnet die einheitliche Befehlspalette.",
-  "command.openEditorSettings": "Editor-Einstellungen öffnen",
-  "command.openEditorSettings.description": "Öffnet die Einstellungen in der Editor-Ansicht.",
-  "command.splitEditorRight": "Editor rechts teilen",
-  "command.splitEditorRight.description": "Teilt den aktiven Editorbereich nach rechts.",
-  "command.splitEditorDown": "Editor nach unten teilen",
-  "command.splitEditorDown.description": "Teilt den aktiven Editorbereich nach unten.",
-  "command.closeEditorSplit": "Editor-Teilung schließen",
-  "command.closeEditorSplit.description": "Schließt die aktive Editor-Teilung.",
-  "command.nextEditorTab": "Nächster Editor-Tab",
-  "command.nextEditorTab.description": "Wechselt zum nächsten Tab im aktiven Editorbereich.",
-  "command.previousEditorTab": "Vorheriger Editor-Tab",
-  "command.previousEditorTab.description": "Wechselt zum vorherigen Tab im aktiven Editorbereich.",
-  "command.closeEditorTab": "Editor-Tab schließen",
-  "command.closeEditorTab.description": "Schließt den aktiven Editor-Tab.",
-  "command.reopenClosedEditor": "Geschlossenen Editor erneut öffnen",
-  "command.reopenClosedEditor.description": "Öffnet den zuletzt geschlossenen Editor-Tab erneut.",
-  "command.saveAllEditors": "Alle Editoren speichern",
-  "command.saveAllEditors.description": "Speichert alle geänderten Editor-Tabs.",
-  "command.editorSave": "Dokument speichern",
-  "command.editorSave.description": "Von der Editorfläche verwaltete Monaco-Speicheraktion.",
-  "command.editorFind": "Im Dokument suchen",
-  "command.editorFind.description": "Monaco-Suchaktion.",
-  "command.editorFormat": "Dokument formatieren",
-  "command.editorFormat.description": "Monaco-Formataktion mit governter Formatierung.",
-  "command.editorGenerateTests": "Tests generieren",
-  "command.editorGenerateTests.description":
-    "Host-injizierte Monaco-Aktion für governte Testgenerierung.",
-  "command.editorAskSelection": "Keiko zur Auswahl fragen",
-  "command.editorAskSelection.description":
-    "Host-injizierte Monaco-Aktion für ausgewählten Textkontext.",
-  "command.editorRenameSymbol": "Symbol umbenennen",
-  "command.editorRenameSymbol.description": "Monaco-Aktion zum Umbenennen von Symbolen.",
-  "command.editorAccessibilityHelp": "Barrierefreiheitshilfe",
-  "command.editorAccessibilityHelp.description": "Monaco-Barrierefreiheitshilfe bleibt geschützt.",
-  "settings.snippets.title": "Arbeitsbereichs-Snippets",
-  "settings.snippets.description":
-    "Erstelle governte Arbeitsbereichs-Snippets. Keiko validiert die begrenzte TextMate-kompatible Teilmenge, bevor sie in Vervollständigungen erscheint.",
-  "settings.snippets.noWorkspace":
-    "Öffne einen Arbeitsbereich, um Arbeitsbereichs-Snippets zu verwalten.",
-  "settings.snippets.issue": "Snippet-Aktion fehlgeschlagen: {issue}",
-  "settings.snippets.name": "Name",
-  "settings.snippets.prefix": "Präfix",
-  "settings.snippets.language": "Sprache",
-  "settings.snippets.include": "Include-Glob",
-  "settings.snippets.body": "Body",
-  "settings.snippets.preview": "Vorschau",
-  "settings.snippets.save": "Snippet speichern",
-  "settings.snippets.reset": "Snippets zurücksetzen",
-  "settings.snippets.empty": "Keine Arbeitsbereichs-Snippets definiert.",
-  "settings.snippets.lines": "{count} Zeilen",
-  "settings.snippets.delete": "Löschen",
-  "settings.language.title": "Sprache",
-  "settings.language.description": "Wähle die Sprache der Keiko-Oberfläche.",
-  "settings.language.label": "Sprache der Oberfläche",
-  "settings.language.help": "Wird auf diesem Gerät gespeichert und sofort angewendet.",
-  "settings.voice.title": "Assistenzstimme",
-  "settings.voice.description": "Wähle die Stimme für den Sprachdialog.",
-  "settings.voice.label": "Stimme",
-  "settings.voice.help":
-    "Wird auf diesem Gerät gespeichert und beim nächsten Sprachdialog genutzt.",
-  "settings.voice.unavailable":
-    "Stimmen sind verfügbar, sobald ein verbundener Sprachanbieter Sprachausgabe bereitstellt.",
-  "settings.wallpaper.title": "Arbeitsbereich-Hintergrund",
-  "settings.wallpaper.description":
-    "Liquid Chrome ist ein dezenter metallischer Hintergrund hinter dem Raster, der auf Cursor und Klicks reagiert. Schalte ihn aus, um die WebGL-Animation vollständig zu stoppen.",
-  "settings.wallpaper.toggle": "Liquid-Hintergrund",
-  "settings.wallpaper.running": "Aktiv",
-  "settings.wallpaper.stopped": "Gestoppt",
-  "settings.wallpaper.opacity": "Deckkraft des Hintergrunds",
-  "settings.scale.off": "Aus",
-  "settings.scale.full": "Voll",
-  "settings.scale.base": "Basis",
-  "settings.scale.lighter": "Heller",
-  "settings.scale.subtle": "Dezent",
-  "settings.scale.strong": "Stark",
-  "settings.workspace.backgroundBrightness": "Helligkeit des Arbeitsbereichs",
-  "settings.workspace.gridStrength": "Rasterstärke",
-  "settings.workspace.cameraAnimation": "Kamera-Animation",
-  "settings.workspace.cameraAnimationMinimal": "Minimal",
-  "settings.workspace.cameraAnimationSmooth": "Sanft",
-  "settings.workspace.cameraAnimationHelp":
-    "Weiter rechts werden Schwenken und Zoomen weicher animiert. Minimal wendet Änderungen direkt an.",
-  "settings.workspace.borderStrength": "Rahmenstärke",
-  "settings.workspace.innerGlow": "Inneres Leuchten",
-  "settings.updates.title": "Updates",
-  "settings.updates.description": "Prüfe verfügbare Keiko-Updates und installiere sie bei Bedarf.",
-  "settings.updates.open": "Updates prüfen",
-  "settings.security.placeholder": "SSO · Audit-Log · Datenresidenz - bald verfügbar.",
-};
-
-export type SettingsMessageKey = keyof typeof SETTINGS_EN_MESSAGES;
+export type SettingsMessageKey = keyof typeof SETTINGS_MESSAGES;
 export type I18nTranslate = (key: SettingsMessageKey, values?: MessageValues) => string;
-type SettingsMessageCatalog = Readonly<Record<SettingsMessageKey, string>>;
 
-function catalogFor(locale: Locale): SettingsMessageCatalog {
-  return locale === "de" ? SETTINGS_DE_MESSAGES : SETTINGS_EN_MESSAGES;
+function messageFor(locale: Locale, key: SettingsMessageKey): string {
+  return SETTINGS_MESSAGES[key][locale] ?? SETTINGS_MESSAGES[key].en;
 }
 
 function interpolate(template: string, values: MessageValues = {}): string {
@@ -550,7 +947,6 @@ function interpolate(template: string, values: MessageValues = {}): string {
 export function useSettingsTranslate(): I18nTranslate {
   const locale = useLocale();
   return useMemo<I18nTranslate>(() => {
-    const catalog = catalogFor(locale);
-    return (key, values) => interpolate(catalog[key] ?? SETTINGS_EN_MESSAGES[key], values);
+    return (key, values) => interpolate(messageFor(locale, key), values);
   }, [locale]);
 }

@@ -289,16 +289,17 @@ function changeEvent(
 }
 
 function affectedIds(mutation: EditorSettingsControlMutation): readonly EditorM7SettingId[] {
-  return mutation.action === "set"
-    ? (Object.keys(mutation.values ?? {}) as EditorM7SettingId[])
-    : (mutation.settingIds ?? []);
+  if (mutation.action !== "set") return mutation.settingIds ?? [];
+  return mutation.values === undefined ? [] : (Object.keys(mutation.values) as EditorM7SettingId[]);
 }
 
 function changedValues(
   record: MutableRecord,
   mutation: EditorSettingsControlMutation,
 ): Readonly<Partial<Record<EditorM7SettingId, EditorM7SettingValue>>> {
-  if (mutation.action === "set") return { ...record.values, ...(mutation.values ?? {}) };
+  if (mutation.action === "set") {
+    return mutation.values === undefined ? record.values : { ...record.values, ...mutation.values };
+  }
   const resetIds = new Set(mutation.settingIds ?? []);
   return Object.fromEntries(
     Object.entries(record.values).filter(([id]) => !hasSettingId(resetIds, id)),

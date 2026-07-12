@@ -1,8 +1,13 @@
 "use client";
 
 import type { WorkspaceKeyChord, WorkspaceKeyChordModifier } from "@oscharko-dev/keiko-contracts";
+import {
+  detectKeyboardShortcutPlatform as detectPlatform,
+  shortcutLabelForPlatform,
+  type KeyboardShortcutPlatformLabel,
+} from "./keyboardShortcutLabels";
 
-export type GlobalKeyboardShortcutPlatform = "mac" | "other";
+export type GlobalKeyboardShortcutPlatform = KeyboardShortcutPlatformLabel;
 
 type GlobalCommandId =
   | "undo"
@@ -115,33 +120,9 @@ export function shortcutLabel(
   binding: string | null,
   platform: GlobalKeyboardShortcutPlatform,
 ): string {
-  if (binding === null) return "Unbound";
-  return binding
-    .split("+")
-    .map((part) => labelPart(part, platform))
-    .join(platform === "mac" ? "" : "+");
-}
-
-function labelPart(part: string, platform: GlobalKeyboardShortcutPlatform): string {
-  if (platform === "mac") {
-    if (part === "CtrlOrMeta" || part === "Meta") return "⌘";
-    if (part === "Ctrl") return "⌃";
-    if (part === "Alt") return "⌥";
-    if (part === "Shift") return "⇧";
-  } else if (part === "CtrlOrMeta" || part === "Meta") {
-    return "Ctrl";
-  }
-  if (part === "Alt") return platform === "mac" ? "⌥" : "Alt";
-  if (part === "Shift") return platform === "mac" ? "⇧" : "Shift";
-  return keyForWorkspaceLabel(part);
-}
-
-function keyForWorkspaceLabel(part: string): string {
-  if (part.startsWith("Arrow")) return part.replace("Arrow", "");
-  return part.length === 1 ? part.toUpperCase() : part;
+  return shortcutLabelForPlatform(binding, platform);
 }
 
 export function detectKeyboardShortcutPlatform(): GlobalKeyboardShortcutPlatform {
-  if (typeof navigator === "undefined") return "other";
-  return /Mac|iPhone|iPad|iPod/iu.test(navigator.platform) ? "mac" : "other";
+  return detectPlatform();
 }

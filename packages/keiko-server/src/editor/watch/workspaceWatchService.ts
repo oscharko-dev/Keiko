@@ -1,6 +1,4 @@
-import type { FSWatcher } from "node:fs";
-import { watch } from "node:fs";
-import type { Stats } from "node:fs";
+import { type FSWatcher, type Stats, watch } from "node:fs";
 import { readdir, realpath, stat, lstat } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { isAbsolute, join, posix as pathPosix, relative, resolve } from "node:path";
@@ -20,9 +18,11 @@ import { pathIsDenied } from "../../files-deny.js";
 
 export interface WorkspaceWatchRawEvent {
   readonly eventType: "rename" | "change" | "overflow";
-  readonly filename?: string | Buffer | null | undefined;
-  readonly oldFilename?: string | Buffer | null | undefined;
+  readonly filename?: WorkspaceWatchEventPath;
+  readonly oldFilename?: WorkspaceWatchEventPath;
 }
+
+type WorkspaceWatchEventPath = string | Buffer | null | undefined;
 
 export interface WorkspaceNativeWatchHandle {
   readonly recursive: boolean;
@@ -281,6 +281,7 @@ class WorkspaceWatchSession {
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private flushing = false;
   private disposed = false;
 
   public constructor(
@@ -322,7 +323,7 @@ class WorkspaceWatchSession {
       replayOldestSequence: replayOldestSequence(this.replay, this.sequence),
       eventCount: this.eventCount,
       requiresSnapshot,
-      degradedReasons: [...this.degradedReasons].sort(),
+      degradedReasons: [...this.degradedReasons].sort((left, right) => left.localeCompare(right)),
     };
   }
 
@@ -403,7 +404,7 @@ class WorkspaceWatchSession {
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer !== null) return;
+    if (this.flushTimer !== null || this.flushing) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
       void this.flushPending();
@@ -412,10 +413,18 @@ class WorkspaceWatchSession {
   }
 
   private async flushPending(): Promise<void> {
-    const batch = [...this.pending.values()].slice(0, this.config.maxBatchSize);
-    for (const change of batch) this.pending.delete(change.relativePath);
-    for (const change of batch) await this.reconcileChange(change);
-    if (this.pending.size > 0) this.scheduleFlush();
+    if (this.flushing) return;
+    this.flushing = true;
+    try {
+      while (this.pending.size > 0 && !this.disposed) {
+        const batch = [...this.pending.values()].slice(0, this.config.maxBatchSize);
+        for (const change of batch) this.pending.delete(change.relativePath);
+        for (const change of batch) await this.reconcileChange(change);
+      }
+    } finally {
+      this.flushing = false;
+      if (this.pending.size > 0) this.scheduleFlush();
+    }
   }
 
   private async reconcileChange(change: PendingChange): Promise<void> {
@@ -497,7 +506,7 @@ class WorkspaceWatchSession {
       const current = queue.shift() ?? "";
       if (found.size > this.config.maxScanEntries) {
         this.emitRescan("event-overflow", "overflow");
-        return found;
+        break;
       }
       await this.scanOneDirectory(current, found, queue);
     }

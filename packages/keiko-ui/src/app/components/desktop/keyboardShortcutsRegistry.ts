@@ -14,9 +14,14 @@ import {
   type WorkspaceKeyChord,
   type WorkspaceKeyChordModifier,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  detectKeyboardShortcutPlatform as detectPlatform,
+  shortcutLabelForPlatform,
+  type KeyboardShortcutPlatformLabel,
+} from "./keyboardShortcutLabels";
 
 export type KeyboardShortcutSource = "default" | "user";
-export type KeyboardShortcutPlatform = "mac" | "other";
+export type KeyboardShortcutPlatform = KeyboardShortcutPlatformLabel;
 
 export interface EffectiveKeyboardShortcut {
   readonly command: EditorM7CommandDefinition;
@@ -200,31 +205,11 @@ export function activeWorkspaceBindingsForContext(
 }
 
 export function shortcutLabel(binding: string | null, platform: KeyboardShortcutPlatform): string {
-  if (binding === null) return "Unbound";
-  return binding
-    .split("+")
-    .map((part) => labelPart(part, platform))
-    .join(platform === "mac" ? "" : "+");
-}
-
-function labelPart(part: string, platform: KeyboardShortcutPlatform): string {
-  if (platform === "mac") {
-    if (part === "CtrlOrMeta" || part === "Meta") return "⌘";
-    if (part === "Ctrl") return "⌃";
-    if (part === "Alt") return "⌥";
-    if (part === "Shift") return "⇧";
-  } else if (part === "CtrlOrMeta" || part === "Meta") {
-    return "Ctrl";
-  }
-  if (part === "Alt") return platform === "mac" ? "⌥" : "Alt";
-  if (part === "Shift") return platform === "mac" ? "⇧" : "Shift";
-  if (part.startsWith("Arrow")) return part.replace("Arrow", "");
-  return part.length === 1 ? part.toUpperCase() : part;
+  return shortcutLabelForPlatform(binding, platform);
 }
 
 export function detectKeyboardShortcutPlatform(): KeyboardShortcutPlatform {
-  if (typeof navigator === "undefined") return "other";
-  return /Mac|iPhone|iPad|iPod/iu.test(navigator.platform) ? "mac" : "other";
+  return detectPlatform();
 }
 
 export function bindingFromKeyboardEvent(event: KeyboardEvent): string | null {

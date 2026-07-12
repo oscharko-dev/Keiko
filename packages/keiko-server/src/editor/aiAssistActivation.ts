@@ -103,11 +103,8 @@ function modelCapability(
   feature: EditorM7AiFeature,
   gatewayConfigured: boolean,
 ): EditorM7AiActivationInput["modelCapability"] {
-  return feature === "inlineCompletion" || feature === "testGeneration"
-    ? gatewayConfigured
-      ? "available"
-      : "missing"
-    : "available";
+  if (feature !== "inlineCompletion" && feature !== "testGeneration") return "available";
+  return gatewayConfigured ? "available" : "missing";
 }
 
 export function resolveEditorAiAssistStatuses(args: {

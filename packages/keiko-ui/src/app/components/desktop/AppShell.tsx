@@ -356,56 +356,58 @@ export function buildAppShellCommands(
       }
     },
   });
-  out.push({
-    id: "tile",
-    label: "Tile all windows",
-    group: "Layout",
-    icon: "tile",
-    run: api.tileAll,
-  });
-  out.push({
-    id: "split",
-    label: "Split front windows",
-    group: "Layout",
-    icon: "split",
-    run: api.splitFront,
-  });
-  out.push({
-    id: "cascade",
-    label: "Cascade windows",
-    group: "Layout",
-    icon: "cascade",
-    run: api.cascade,
-  });
-  out.push({
-    id: "theme",
-    label: "Toggle light / dark theme",
-    group: "View",
-    icon: theme === "light" ? "moon" : "sun",
-    run: toggleTheme,
-  });
-  out.push({
-    id: "undo",
-    label:
-      undoStack.undoLabel !== null
-        ? `Undo: ${undoStack.undoLabel}`
-        : "Undo (window and panel changes only)",
-    group: "Edit",
-    icon: "back",
-    shortcut: "⌘Z",
-    run: undoStack.undo,
-  });
-  out.push({
-    id: "redo",
-    label:
-      undoStack.redoLabel !== null
-        ? `Redo: ${undoStack.redoLabel}`
-        : "Redo (window and panel changes only)",
-    group: "Edit",
-    icon: "fwd",
-    shortcut: "⇧⌘Z",
-    run: undoStack.redo,
-  });
+  out.push(
+    {
+      id: "tile",
+      label: "Tile all windows",
+      group: "Layout",
+      icon: "tile",
+      run: api.tileAll,
+    },
+    {
+      id: "split",
+      label: "Split front windows",
+      group: "Layout",
+      icon: "split",
+      run: api.splitFront,
+    },
+    {
+      id: "cascade",
+      label: "Cascade windows",
+      group: "Layout",
+      icon: "cascade",
+      run: api.cascade,
+    },
+    {
+      id: "theme",
+      label: "Toggle light / dark theme",
+      group: "View",
+      icon: theme === "light" ? "moon" : "sun",
+      run: toggleTheme,
+    },
+    {
+      id: "undo",
+      label:
+        undoStack.undoLabel !== null
+          ? `Undo: ${undoStack.undoLabel}`
+          : "Undo (window and panel changes only)",
+      group: "Edit",
+      icon: "back",
+      shortcut: "⌘Z",
+      run: undoStack.undo,
+    },
+    {
+      id: "redo",
+      label:
+        undoStack.redoLabel !== null
+          ? `Redo: ${undoStack.redoLabel}`
+          : "Redo (window and panel changes only)",
+      group: "Edit",
+      icon: "fwd",
+      shortcut: "⇧⌘Z",
+      run: undoStack.redo,
+    },
+  );
   return out;
 }
 

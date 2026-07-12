@@ -146,9 +146,9 @@ function ShortcutHeader({
       </h3>
       <p className={styles.description}>{t("settings.keyboard.description")}</p>
       {status.kind === "fallback" ? (
-        <div className={styles.alert} role="status">
+        <output className={styles.alert}>
           {t("settings.keyboard.fallback", { reason: status.reasonCode ?? "invalid" })}
-        </div>
+        </output>
       ) : null}
     </header>
   );
@@ -342,9 +342,9 @@ function ShortcutDiagnostics({
     );
   }
   return (
-    <div className={styles.alert} role="status">
+    <output className={styles.alert}>
       {t("settings.keyboard.conflict", { commands: entry.conflictCommandIds.join(", ") })}
-    </div>
+    </output>
   );
 }
 
