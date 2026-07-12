@@ -882,6 +882,22 @@ describe("EditorWidget workspace session", () => {
     expect(document.activeElement).toBe(cancelButton);
   });
 
+  it("wraps Shift+Tab to the last button when focus is still on the dialog container itself", async () => {
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close a" }));
+    const dialog = await screen.findByRole("dialog", { name: "Unsaved editor changes" });
+    const cancelButton = within(dialog).getByRole("button", { name: "Cancel" });
+
+    // Initial focus lands on the dialog container (not a button) right after it opens. Pressing
+    // Shift+Tab at that point, before ever pressing Tab, must still wrap inside the dialog instead
+    // of escaping to whatever was focusable behind it.
+    expect(document.activeElement).toBe(dialog);
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(cancelButton);
+  });
+
   it("saves dirty files before applying a pending tab close", async () => {
     const onWorkspaceChange = vi.fn();
     render(
