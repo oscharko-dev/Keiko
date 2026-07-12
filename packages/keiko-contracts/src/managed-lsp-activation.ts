@@ -78,6 +78,7 @@ export const MANAGED_LSP_ACTIVATION_REASON_CODES: readonly ManagedLspActivationR
   ] as const satisfies readonly ManagedLspActivationReasonCode[]);
 
 export type ManagedLspProductSupport = "supported" | "unsupported";
+export type ManagedLspCanonicalState = "available" | "unavailable" | "rejected";
 export type ManagedLspDeploymentPolicy = "allowed" | "denied";
 export type ManagedLspProvisioning = "provisioned" | "notProvisioned";
 export type ManagedLspWorkspaceActivation = "enabled" | "disabled" | "unset";
@@ -92,6 +93,7 @@ export interface ManagedLspActivationInput {
   readonly language: ManagedLspLanguage;
   readonly configurationRevision: number;
   readonly productSupport: ManagedLspProductSupport;
+  readonly canonicalState?: ManagedLspCanonicalState;
   readonly deploymentPolicy: ManagedLspDeploymentPolicy;
   readonly provisioning: ManagedLspProvisioning;
   readonly workspaceActivation: ManagedLspWorkspaceActivation;
@@ -144,6 +146,11 @@ function isRevision(value: unknown): value is number {
 }
 
 const PRODUCT_SUPPORT: readonly ManagedLspProductSupport[] = ["supported", "unsupported"];
+const CANONICAL_STATES: readonly ManagedLspCanonicalState[] = [
+  "available",
+  "unavailable",
+  "rejected",
+];
 const DEPLOYMENT_POLICIES: readonly ManagedLspDeploymentPolicy[] = ["allowed", "denied"];
 const PROVISIONING_STATES: readonly ManagedLspProvisioning[] = ["provisioned", "notProvisioned"];
 const WORKSPACE_ACTIVATIONS: readonly ManagedLspWorkspaceActivation[] = [
@@ -246,6 +253,9 @@ function canonicalActivationInput(value: UnknownRecord): ManagedLspActivationInp
     negotiation: value.negotiation as ManagedLspNegotiation,
     runtimeHealth: value.runtimeHealth as ManagedLspRuntimeHealth,
     restartRequired: value.restartRequired as boolean,
+    ...(value.canonicalState !== undefined
+      ? { canonicalState: value.canonicalState as ManagedLspCanonicalState }
+      : {}),
   };
 }
 
@@ -258,6 +268,7 @@ function parseActivationInputUnsafe(
     "language",
     "configurationRevision",
     "productSupport",
+    "canonicalState",
     "deploymentPolicy",
     "provisioning",
     "workspaceActivation",
@@ -272,6 +283,7 @@ function parseActivationInputUnsafe(
     memberOf(value.language, MANAGED_LSP_LANGUAGES),
     isRevision(value.configurationRevision),
     memberOf(value.productSupport, PRODUCT_SUPPORT),
+    value.canonicalState === undefined || memberOf(value.canonicalState, CANONICAL_STATES),
     memberOf(value.deploymentPolicy, DEPLOYMENT_POLICIES),
     memberOf(value.provisioning, PROVISIONING_STATES),
     memberOf(value.workspaceActivation, WORKSPACE_ACTIVATIONS),
@@ -298,6 +310,8 @@ function status(
 ): ManagedLspActivationStatus {
   const policyResult =
     input.productSupport === "unsupported" ||
+    input.canonicalState === "unavailable" ||
+    input.canonicalState === "rejected" ||
     input.deploymentPolicy === "denied" ||
     input.legacyEnvironment === "disabled"
       ? "denied"
@@ -324,6 +338,12 @@ const ACTIVATION_RULES: readonly ActivationRule[] = Object.freeze([
     matches: (input) => input.productSupport === "unsupported",
     state: "disabled",
     reason: "PRODUCT_UNSUPPORTED",
+  },
+  {
+    matches: (input) =>
+      input.canonicalState === "unavailable" || input.canonicalState === "rejected",
+    state: "disabled",
+    reason: "STATE_UNAVAILABLE",
   },
   {
     matches: (input) => input.deploymentPolicy === "denied",

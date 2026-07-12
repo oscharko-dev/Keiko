@@ -1442,6 +1442,16 @@ describe("FilePreview", () => {
     expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
   });
 
+  it("renders the unreadable fallback for opaque preview failures", async () => {
+    vi.mocked(fetchFilesPreview).mockRejectedValueOnce("opaque preview failure");
+
+    render(<FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Unable to read this file.");
+    expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
+  });
+
   it("refreshes the open preview and confirms the updated file content", async () => {
     vi.mocked(fetchFilesPreview)
       .mockResolvedValueOnce({

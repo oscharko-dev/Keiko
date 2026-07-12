@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
@@ -95,6 +95,23 @@ describe("detectHostLanguageProviderDescriptors", () => {
     expect(descriptor.unavailableReason).toBe(HOST_LSP_MISSING_REASON);
   });
 
+  it("fails closed for the shell provider (entire provider unavailable) when only ShellCheck is missing", () => {
+    const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((entry) => entry.id === "shell-lsp");
+    if (spec === undefined) throw new Error("expected shell provider spec");
+    makeExecutable("bash-language-server");
+    makeExecutable("node");
+
+    const descriptor = detect(
+      spec,
+      spec.requiredExecutables.map((executable) => ({ executable })),
+      { PATH: binDir, KEIKO_EDITOR_LSP_SHELL: "1" },
+    );
+
+    expect(descriptor.availability).toBe("unavailable");
+    expect(descriptor.unavailableReason).toBe(HOST_LSP_MISSING_REASON);
+    expect(descriptor.operations).toEqual(spec.operations);
+  });
+
   it("reports policy-blocked when the command rule does not allow the provider executable", () => {
     const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((entry) => entry.id === "rust-lsp");
     if (spec === undefined) throw new Error("expected rust provider spec");
@@ -155,6 +172,78 @@ describe("detectHostLanguageProviderDescriptors", () => {
       PATH: binDir,
       KEIKO_EDITOR_LSP_PYTHON: "1",
     });
+
+    expect(descriptor.availability).toBe("unavailable");
+    expect(descriptor.unavailableReason).toBe(HOST_LSP_MISSING_REASON);
+  });
+
+  it("does not treat a workspace-local secondary executable as available for the Java provider", () => {
+    const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((entry) => entry.id === "java-lsp");
+    if (spec === undefined) throw new Error("expected java provider spec");
+    makeExecutable("jdtls");
+    makeExecutable("python3");
+    makeExecutable("java", workspaceRoot);
+
+    const descriptor = detect(
+      spec,
+      spec.requiredExecutables.map((executable) => ({ executable })),
+      { PATH: `${binDir}${delimiter}${workspaceRoot}`, KEIKO_EDITOR_LSP_JAVA: "1" },
+    );
+
+    expect(descriptor.availability).toBe("unavailable");
+    expect(descriptor.unavailableReason).toBe(HOST_LSP_MISSING_REASON);
+  });
+
+  it("does not treat a PATH symlink to a workspace executable as available for a Java secondary executable", () => {
+    const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((entry) => entry.id === "java-lsp");
+    if (spec === undefined) throw new Error("expected java provider spec");
+    makeExecutable("jdtls");
+    const target = makeExecutable("inside-python3", workspaceRoot);
+    symlinkSync(target, join(binDir, "python3"));
+    makeExecutable("java");
+
+    const descriptor = detect(
+      spec,
+      spec.requiredExecutables.map((executable) => ({ executable })),
+      { PATH: binDir, KEIKO_EDITOR_LSP_JAVA: "1" },
+    );
+
+    expect(descriptor.availability).toBe("unavailable");
+    expect(descriptor.unavailableReason).toBe(HOST_LSP_MISSING_REASON);
+  });
+
+  it("does not treat a workspace-local secondary executable as available for the Rust provider", () => {
+    const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((entry) => entry.id === "rust-lsp");
+    if (spec === undefined) throw new Error("expected rust provider spec");
+    makeExecutable("rust-analyzer");
+    makeExecutable("rustc");
+    makeExecutable("rustfmt");
+    makeExecutable("cargo", workspaceRoot);
+
+    const descriptor = detect(
+      spec,
+      spec.requiredExecutables.map((executable) => ({ executable })),
+      { PATH: `${binDir}${delimiter}${workspaceRoot}`, KEIKO_EDITOR_LSP_RUST: "1" },
+    );
+
+    expect(descriptor.availability).toBe("unavailable");
+    expect(descriptor.unavailableReason).toBe(HOST_LSP_MISSING_REASON);
+  });
+
+  it("does not treat a PATH symlink to a workspace executable as available for a Rust secondary executable", () => {
+    const spec = HOST_LANGUAGE_PROVIDER_SPECS.find((entry) => entry.id === "rust-lsp");
+    if (spec === undefined) throw new Error("expected rust provider spec");
+    makeExecutable("rust-analyzer");
+    makeExecutable("cargo");
+    makeExecutable("rustfmt");
+    const target = makeExecutable("inside-rustc", workspaceRoot);
+    symlinkSync(target, join(binDir, "rustc"));
+
+    const descriptor = detect(
+      spec,
+      spec.requiredExecutables.map((executable) => ({ executable })),
+      { PATH: binDir, KEIKO_EDITOR_LSP_RUST: "1" },
+    );
 
     expect(descriptor.availability).toBe("unavailable");
     expect(descriptor.unavailableReason).toBe(HOST_LSP_MISSING_REASON);

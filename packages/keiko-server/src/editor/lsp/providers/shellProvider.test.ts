@@ -60,6 +60,7 @@ describe("managed Bash Language Server provider", () => {
         includeAllWorkspaceSymbols: false,
         logLevel: "error",
         shellcheckArguments: [
+          "--shell=bash",
           "--severity=warning",
           "--exclude=SC1090,SC1091",
           "--source-path=/workspace/scripts/lib",
@@ -76,6 +77,19 @@ describe("managed Bash Language Server provider", () => {
 
     expect(result.settings).toMatchObject({
       bashIde: { shellcheckArguments: [], shellcheckPath: "", shellcheckExternalSources: false },
+    });
+  });
+
+  it("forwards the governed dialect to ShellCheck as a --shell override", () => {
+    const posixConfig: ManagedLspShellConfiguration = {
+      ...configuration("workspace"),
+      settings: { ...configuration("workspace").settings, dialect: "posix" },
+    };
+
+    const result = shellProtocolConfiguration(posixConfig, "/workspace");
+
+    expect(result.settings).toMatchObject({
+      bashIde: { shellcheckArguments: expect.arrayContaining(["--shell=sh"]) as unknown },
     });
   });
 });

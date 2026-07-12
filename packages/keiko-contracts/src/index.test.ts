@@ -874,4 +874,170 @@ describe("keiko-contracts package surface", () => {
     expect(m.isGitPullRequestReadinessSummary(readiness)).toBe(true);
     expect(readiness.objectExists).toBe(false);
   });
+
+  it("managed LSP activation contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_ACTIVATION_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_LANGUAGES).toEqual(["python", "go", "shell", "java", "rust"]);
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(m.MANAGED_LSP_EFFECTIVE_STATES).toHaveLength(9);
+    expect(m.MANAGED_LSP_ACTIVATION_REASON_CODES).toHaveLength(16);
+    expect(typeof m.parseManagedLspActivationInput).toBe("function");
+    expect(typeof m.parseManagedLspActivationStatus).toBe("function");
+    expect(typeof m.resolveManagedLspActivation).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspLanguage>();
+    pin<import("./index.js").ManagedLspEffectiveState>();
+    pin<import("./index.js").ManagedLspActivationReasonCode>();
+    pin<import("./index.js").ManagedLspProductSupport>();
+    pin<import("./index.js").ManagedLspCanonicalState>();
+    pin<import("./index.js").ManagedLspDeploymentPolicy>();
+    pin<import("./index.js").ManagedLspProvisioning>();
+    pin<import("./index.js").ManagedLspWorkspaceActivation>();
+    pin<import("./index.js").ManagedLspLegacyEnvironment>();
+    pin<import("./index.js").ManagedLspNegotiation>();
+    pin<import("./index.js").ManagedLspRuntimeHealth>();
+    pin<import("./index.js").ManagedLspPolicyResult>();
+    pin<import("./index.js").ManagedLspActivationInput>();
+    pin<import("./index.js").ManagedLspActivationStatus>();
+    pin<import("./index.js").ManagedLspActivationDenied>();
+    pin<import("./index.js").ManagedLspActivationResolution>();
+    pin<import("./index.js").ManagedLspActivationParseResult<unknown>>();
+  });
+
+  it("managed LSP runtime configuration contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_RUNTIME_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_RUNTIME_ID_MAX_CHARS).toBe(128);
+    expect(m.MANAGED_LSP_ETAG_MAX_CHARS).toBe(96);
+    expect(m.MANAGED_LSP_BUILD_TAG_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_BUILD_TAG_MAX_CHARS).toBe(64);
+    expect(m.MANAGED_LSP_PYTHON_EXTRA_PATH_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_GO_DIRECTORY_FILTER_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_SHELLCHECK_EXCLUDE_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_SHELL_INCLUDE_PATH_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_JAVA_CLASSPATH_MAX_COUNT).toBe(128);
+    expect(m.MANAGED_LSP_JAVA_PROJECT_ROOT_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_RUST_FEATURE_MAX_COUNT).toBe(64);
+    expect(m.MANAGED_LSP_RUST_CFG_MAX_COUNT).toBe(64);
+    expect(m.MANAGED_LSP_RUST_LINKED_PROJECT_MAX_COUNT).toBe(32);
+    expect(m.MANAGED_LSP_RUST_MAX_PROJECT_FILES).toBe(100_000);
+    expect(m.MANAGED_LSP_RUST_MAX_CARGO_METADATA_BYTES).toBe(16_777_216);
+    expect(m.MANAGED_LSP_RUST_MAX_MEMORY_MB).toBe(4_096);
+    expect(m.MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS).toBe(120_000);
+    expect(m.MANAGED_LSP_SETTING_PRECEDENCE).toEqual([
+      "builtInDefault",
+      "legacyEnvironment",
+      "operatorProvisioning",
+      "workspace",
+    ]);
+    expect(typeof m.resolveManagedLspSetting).toBe("function");
+    expect(typeof m.parseManagedLspRuntimeConfiguration).toBe("function");
+    expect(typeof m.matchesManagedLspConfigurationPrecondition).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspSettingSource>();
+    pin<import("./index.js").ManagedLspPersistedSettingSource>();
+    pin<import("./index.js").ManagedLspSettingLayers<unknown>>();
+    pin<import("./index.js").ManagedLspResolvedSetting<unknown>>();
+    pin<import("./index.js").ManagedLspWorkspaceActivationSetting>();
+    pin<import("./index.js").ManagedLspApprovedRuntimeReference>();
+    pin<import("./index.js").ManagedLspWorkspaceRelativePath>();
+    pin<import("./index.js").ManagedLspConfigurationProvenance>();
+    pin<import("./index.js").ManagedLspPythonSettings>();
+    pin<import("./index.js").ManagedLspGoBuildFlags>();
+    pin<import("./index.js").ManagedLspGoOperatingSystem>();
+    pin<import("./index.js").ManagedLspGoArchitecture>();
+    pin<import("./index.js").ManagedLspGoTarget>();
+    pin<import("./index.js").ManagedLspGoDirectoryFilter>();
+    pin<import("./index.js").ManagedLspGoSettings>();
+    pin<import("./index.js").ManagedLspShellCheckSettings>();
+    pin<import("./index.js").ManagedLspShellSettings>();
+    pin<import("./index.js").ManagedLspJavaLanguageLevel>();
+    pin<import("./index.js").ManagedLspJavaSettings>();
+    pin<import("./index.js").ManagedLspRustCfg>();
+    pin<import("./index.js").ManagedLspRustResourceBudget>();
+    pin<import("./index.js").ManagedLspRustSettings>();
+    pin<import("./index.js").ManagedLspRestartField>();
+    pin<import("./index.js").ManagedLspPythonConfiguration>();
+    pin<import("./index.js").ManagedLspGoConfiguration>();
+    pin<import("./index.js").ManagedLspShellConfiguration>();
+    pin<import("./index.js").ManagedLspJavaConfiguration>();
+    pin<import("./index.js").ManagedLspRustConfiguration>();
+    pin<import("./index.js").ManagedLspRuntimeConfiguration>();
+    pin<import("./index.js").ManagedLspConfigurationPrecondition>();
+    pin<import("./index.js").ManagedLspRuntimeParseResult>();
+  });
+
+  it("managed LSP capability negotiation contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_CAPABILITY_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES).toBe(64);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS).toBe(16);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS).toBe(10_000);
+    // Count assertions are intentional surface pins; bump deliberately when the surface changes.
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_TYPES).toHaveLength(23);
+    expect(m.MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS).toHaveLength(10);
+    expect(typeof m.parseManagedLspCandidateCapabilities).toBe("function");
+    expect(typeof m.parseManagedLspNegotiatedCapabilitySnapshot).toBe("function");
+    expect(typeof m.isManagedLspOperationNegotiated).toBe("function");
+    expect(typeof m.parseManagedLspSemanticTokenLegend).toBe("function");
+    expect(typeof m.parseManagedLspSemanticTokenData).toBe("function");
+    expect(typeof m.managedLspSemanticTokensFitDocument).toBe("function");
+    expect(typeof m.parseManagedLspSemanticTokenRequest).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspProtocolVersion>();
+    pin<import("./index.js").ManagedLspPositionEncoding>();
+    pin<import("./index.js").ManagedLspTextSync>();
+    pin<import("./index.js").ManagedLspCandidateCapabilities>();
+    pin<import("./index.js").ManagedLspNegotiatedSemanticTokens>();
+    pin<import("./index.js").ManagedLspNegotiatedCapabilitySnapshot>();
+    pin<import("./index.js").ManagedLspSemanticTokenType>();
+    pin<import("./index.js").ManagedLspSemanticTokenModifier>();
+    pin<import("./index.js").ManagedLspSemanticTokenLegend>();
+    pin<import("./index.js").ManagedLspSemanticTokenData>();
+    pin<import("./index.js").ManagedLspSemanticTokenRequest>();
+    pin<import("./index.js").ManagedLspSemanticTokenResponse>();
+    pin<import("./index.js").ManagedLspCapabilityParseResult<unknown>>();
+  });
+
+  it("managed LSP evidence contracts are reachable through the barrel (#2271)", async () => {
+    const m = await import("./index.js");
+    expect(m.MANAGED_LSP_EVIDENCE_SCHEMA_VERSION).toBe("1");
+    expect(m.MANAGED_LSP_EVIDENCE_ACTOR_CLASSES).toEqual([
+      "localHuman",
+      "operator",
+      "policyEngine",
+      "system",
+    ]);
+    expect(m.MANAGED_LSP_EVIDENCE_ACTIONS).toEqual([
+      "activate",
+      "deactivate",
+      "configure",
+      "reset",
+      "rollback",
+      "restart",
+      "lifecycle",
+    ]);
+    expect(m.MANAGED_LSP_EVIDENCE_OUTCOMES).toEqual([
+      "accepted",
+      "denied",
+      "noOp",
+      "failed",
+      "conflict",
+    ]);
+    expect(typeof m.parseManagedLspEvidence).toBe("function");
+
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<import("./index.js").ManagedLspEvidenceActorClass>();
+    pin<import("./index.js").ManagedLspEvidenceKind>();
+    pin<import("./index.js").ManagedLspEvidenceAction>();
+    pin<import("./index.js").ManagedLspEvidenceOutcome>();
+    pin<import("./index.js").ManagedLspActivationEvidence>();
+    pin<import("./index.js").ManagedLspLifecycleEvidence>();
+    pin<import("./index.js").ManagedLspEvidence>();
+    pin<import("./index.js").ManagedLspEvidenceParseResult>();
+  });
 });

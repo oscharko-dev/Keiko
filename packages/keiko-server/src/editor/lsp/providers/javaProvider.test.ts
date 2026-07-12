@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -90,6 +91,23 @@ describe("managed Eclipse JDT LS provider", () => {
     expect(JAVA_PROVIDER_SPEC.operations).toHaveLength(15);
   });
 
+  it("documents why python3 is an approved descendant of the java/jdtls launcher", () => {
+    const source = readFileSync(new URL("./javaProvider.ts", import.meta.url), "utf8");
+    const specSource = source.slice(0, source.indexOf("export const JAVA_PROVIDER_SPEC"));
+    expect(specSource).toMatch(/python3.+jdtls`? launcher/is);
+    expect(specSource).toMatch(/general-purpose[\s\S]*?script-execution grant/i);
+  });
+
+  it("surfaces the python3 descendant-executable rationale in the operator troubleshooting doc", () => {
+    const docUrl = new URL(
+      "../../../../../../docs/troubleshooting/managed-java-language-provider.md",
+      import.meta.url,
+    );
+    const doc = readFileSync(docUrl, "utf8");
+    expect(doc).toMatch(/python3.+jdtls`? launcher/is);
+    expect(doc).toMatch(/general-purpose[\s\S]*?script-execution grant/i);
+  });
+
   it("projects every active JDT import and command default into a closed safe profile", () => {
     const result = javaProtocolConfiguration(configuration());
 
@@ -136,6 +154,7 @@ describe("managed Eclipse JDT LS provider", () => {
         resolveExecutable: () => "/usr/bin/bwrap",
         resolveJava: () => javaPath,
         validateLayout: () => true,
+        validateJavaVersion: () => true,
       },
     );
     const configurationIndex = prepared.args.indexOf("-configuration");
@@ -154,7 +173,7 @@ describe("managed Eclipse JDT LS provider", () => {
     expect(existsSync(configurationPath)).toBe(false);
   });
 
-  it.each(["pom.xml", "build.gradle.kts", ".project", ".factorypath"])(
+  it.each(["pom.xml", "build.gradle.kts", ".project", ".factorypath", "gradlew", "mvnw"])(
     "fails before spawn when %s exposes an execution-requiring project importer",
     (entry) => {
       const path = join(root, entry);
@@ -174,6 +193,7 @@ describe("managed Eclipse JDT LS provider", () => {
             resolveExecutable: () => "/usr/bin/bwrap",
             resolveJava: () => "/opt/jdk-21/bin/java",
             validateLayout: () => true,
+            validateJavaVersion: () => true,
           },
         ),
       ).toThrow();
@@ -199,6 +219,7 @@ describe("managed Eclipse JDT LS provider", () => {
           resolveExecutable: () => "/usr/bin/bwrap",
           resolveJava: () => "/opt/jdk-21/bin/java",
           validateLayout: () => true,
+          validateJavaVersion: () => true,
         },
       ),
     ).toThrow();
@@ -221,6 +242,7 @@ describe("managed Eclipse JDT LS provider", () => {
           resolveExecutable: () => "/usr/bin/bwrap",
           resolveJava: () => "/opt/jdk-21/bin/java",
           validateLayout: () => true,
+          validateJavaVersion: () => true,
         },
       ),
     ).toThrow();
@@ -245,5 +267,90 @@ describe("managed Eclipse JDT LS provider", () => {
         },
       ),
     ).toThrow("supported distribution");
+  });
+
+  it("fails closed when the resolved JDK does not meet the minimum supported version", () => {
+    expect(() =>
+      prepareJavaSpawn(
+        {
+          executable: "/opt/jdtls/bin/jdtls",
+          args: [],
+          env: { PATH: root },
+          workspace: workspace(),
+          processEnv: {},
+        },
+        {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => "/opt/jdk-17/bin/java",
+          validateLayout: () => true,
+          validateJavaVersion: () => false,
+        },
+      ),
+    ).toThrow("minimum supported JDK version");
+  });
+
+  it("bounds the real java -version probe with a timeout instead of stalling indefinitely", () => {
+    const hungJava = join(root, "java");
+    writeFileSync(hungJava, "#!/bin/sh\nsleep 30\n", "utf8");
+    chmodSync(hungJava, 0o755);
+    const startedAt = Date.now();
+
+    expect(() =>
+      prepareJavaSpawn(
+        {
+          executable: "/opt/jdtls/bin/jdtls",
+          args: [],
+          env: { PATH: root },
+          workspace: workspace(),
+          processEnv: {},
+        },
+        {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => hungJava,
+          validateLayout: () => true,
+          // validateJavaVersion intentionally not overridden: exercises the real
+          // defaultJavaVersionValid probe (and its bounded timeout) against a hung executable.
+        },
+      ),
+    ).toThrow("minimum supported JDK version");
+
+    // The probe's own timeout is 5s; a generous 10s upper bound proves the process was killed
+    // rather than left to run for the fixture's full 30s sleep.
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+
+  it("accepts a real java executable whose reported version meets the minimum", () => {
+    const realJava = join(root, "java");
+    writeFileSync(
+      realJava,
+      "#!/bin/sh\necho 'openjdk version \"21.0.1\" 2024-01-16' 1>&2\nexit 0\n",
+      "utf8",
+    );
+    chmodSync(realJava, 0o755);
+
+    expect(() =>
+      prepareJavaSpawn(
+        {
+          executable: "/opt/jdtls/bin/jdtls",
+          args: [],
+          env: { PATH: root },
+          workspace: workspace(),
+          processEnv: {},
+        },
+        {
+          availability: NATIVE,
+          platform: "linux",
+          resolveExecutable: () => "/usr/bin/bwrap",
+          resolveJava: () => realJava,
+          validateLayout: () => true,
+          // validateJavaVersion intentionally not overridden: exercises the real
+          // defaultJavaVersionValid probe's success path parsing a real -version reply.
+        },
+      ),
+    ).not.toThrow();
   });
 });

@@ -48,7 +48,14 @@ Keiko never executes shell documents to repair or improve analysis.
 
 1. Provision the pinned binaries outside the workspace without modifying project files.
 2. Remove workspace PATH shadows and correct missing or escaping include paths.
-3. Select the governed dialect, severity, exclusions, and contained include paths.
+3. Select the governed dialect, severity, exclusions, and contained include paths. The dialect
+   setting (`posix` or `bash`) is forwarded to Bash Language Server both as `shfmt.languageDialect`
+   and as a ShellCheck `--shell` override (`posix` → `--shell=sh`, `bash` → `--shell=bash`), so it
+   is an active diagnostic control: ShellCheck applies the configured dialect instead of inferring
+   `bash` vs. POSIX `sh` from each script's own shebang line. A script whose shebang disagrees with
+   the configured dialect (for example `#!/bin/sh` under `dialect: bash`) is still analyzed under
+   the configured dialect, not the shebang. The `shfmt.languageDialect` forwarding only matters for
+   shfmt-driven formatting, which Keiko keeps unavailable by design (see Root Cause above).
 4. Activate Shell, then use the targeted Shell restart when requested.
 5. For rollback, restore the previous settings revision and restart only Shell, or deactivate it.
 

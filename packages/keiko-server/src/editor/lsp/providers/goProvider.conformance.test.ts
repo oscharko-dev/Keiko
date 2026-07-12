@@ -119,4 +119,63 @@ describe("gopls provider fake-protocol conformance", () => {
       )
       .toBe(1);
   });
+
+  it("disables cgo so a hostile #cgo directive cannot spawn a host C toolchain", async () => {
+    writeFileSync(
+      join(root, "cgo.go"),
+      [
+        "package main",
+        "",
+        "/*",
+        "#cgo CFLAGS: -fplugin=./evil.so",
+        "*/",
+        'import "C"',
+        "",
+        "func value() int { return 1 }",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(join(root, "evil.so"), "not-a-real-plugin", "utf8");
+    const controller = createFakeLspProcess({
+      initializeResult: providerConformanceCapabilities(true),
+      results: providerConformanceResults(join(root, "main.go"), true),
+    });
+    let spawnCount = 0;
+    let childEnvironment: Readonly<Record<string, string>> | undefined;
+    const spawn: LspSpawnFn = (_executable, _args, env) => {
+      spawnCount += 1;
+      childEnvironment = env;
+      return controller.handle;
+    };
+    const outcome = await runHostLanguageOperation(
+      { operation: "diagnostics", root, document: { path: "main.go", languageId: "go", text: "" } },
+      {
+        workspace: {
+          root,
+          name: undefined,
+          version: undefined,
+          testFramework: "unknown",
+          sourceDirs: [],
+          testDirs: [],
+          languages: ["go"],
+          ignoreLines: [],
+        },
+        processEnv: { PATH: binDir, CGO_ENABLED: "1" },
+        commandRules: [{ executable: "gopls" }],
+        overlayAbsolutePath: join(root, "main.go"),
+        signal: new AbortController().signal,
+        spawn,
+        activationAuthorized: true,
+        protocolConfiguration: {
+          revision: 4,
+          initializationOptions: { pullDiagnostics: true },
+          settings: { gopls: { staticcheck: true } },
+        },
+      },
+    );
+    expect(outcome).toMatchObject({ kind: "diagnostics" });
+    expect(spawnCount).toBe(1);
+    expect(childEnvironment).toMatchObject({ CGO_ENABLED: "0" });
+  });
 });

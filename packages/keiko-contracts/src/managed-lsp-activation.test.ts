@@ -80,8 +80,41 @@ describe("resolveManagedLspActivation", () => {
     ["degraded health", { runtimeHealth: "degraded" }, "degraded"],
     ["unhealthy runtime", { runtimeHealth: "unhealthy" }, "unhealthy"],
     ["pending restart", { restartRequired: true }, "restartRequired"],
+    ["canonical state unavailable", { canonicalState: "unavailable" }, "disabled"],
+    ["canonical state rejected", { canonicalState: "rejected" }, "disabled"],
   ] as const)("downgrades active for %s", (_label, change, expected) => {
     expect(resolvedState({ ...activeInput(), ...change })).toBe(expected);
+  });
+
+  it.each(["unavailable", "rejected"] as const)(
+    "resolves canonical state %s to disabled/STATE_UNAVAILABLE",
+    (canonicalState) => {
+      expect(resolveManagedLspActivation({ ...activeInput(), canonicalState })).toMatchObject({
+        state: "disabled",
+        reasonCode: "STATE_UNAVAILABLE",
+        policyResult: "denied",
+      });
+    },
+  );
+
+  it("prioritizes product-unsupported (order 1) over canonical-state-unavailable (order 1a)", () => {
+    expect(
+      resolveManagedLspActivation({
+        ...activeInput(),
+        productSupport: "unsupported",
+        canonicalState: "unavailable",
+      }),
+    ).toMatchObject({ state: "disabled", reasonCode: "PRODUCT_UNSUPPORTED" });
+  });
+
+  it("prioritizes canonical-state-unavailable (order 1a) over policy denial (order 2)", () => {
+    expect(
+      resolveManagedLspActivation({
+        ...activeInput(),
+        canonicalState: "rejected",
+        deploymentPolicy: "denied",
+      }),
+    ).toMatchObject({ state: "disabled", reasonCode: "STATE_UNAVAILABLE" });
   });
 
   it.each(["allowed", "denied"] as const)(
@@ -134,6 +167,7 @@ describe("resolveManagedLspActivation", () => {
     { ...activeInput(), schemaVersion: "2" },
     { ...activeInput(), deploymentPolicy: "admin-override" },
     { ...activeInput(), workspaceActivation: "enabled", extra: true },
+    { ...activeInput(), canonicalState: "missing" },
   ])("fails closed for malformed, unknown, or schema-skewed input", (input) => {
     expect(resolveManagedLspActivation(input)).toStrictEqual({
       ok: false,

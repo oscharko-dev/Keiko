@@ -9,6 +9,9 @@ export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/"];
 const I18N_USAGE_PATTERNS = [/\buseTranslate\s*\(/, /\buseI18n\s*\(/, /<\s*I18nTranslate\b/];
+// Matches a translate-function call with a message-key literal, e.g. t("feature.title") — the
+// pattern a new translation key is introduced through in an already-translated component.
+const I18N_CALL_KEY_PATTERN = /\bt\s*\(\s*["'`][^"'`]/;
 const USER_FACING_JSX_TEXT_PATTERN = />\s*[^<>{}]*[A-Za-z][^<>{}]*</;
 const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
@@ -100,11 +103,23 @@ function sourceHasUserFacingText(source) {
   return source.split(/\r?\n/).some(hasUserFacingTextLine);
 }
 
+function hasI18nApiUsageLine(line) {
+  return (
+    I18N_USAGE_PATTERNS.some((pattern) => pattern.test(line)) || I18N_CALL_KEY_PATTERN.test(line)
+  );
+}
+
+// When a real diff is available, only the ADDED lines decide relevance: a change is i18n-relevant
+// only if it introduces new user-facing text or a new i18n API call, not merely because the file
+// already used i18n elsewhere (e.g. a pure focus-management or logic refactor of an already
+// translated component must not force an unrelated catalog touch). Fixture-driven callers with no
+// git history (addedLines === null) fall back to whole-file detection, matching prior behavior.
 function hasI18nRelevantChange(repoRoot, file) {
-  if (hasI18nUsage(repoRoot, file)) return true;
   const addedLines = gitAddedLinesForFile(repoRoot, file);
-  if (addedLines !== null) return addedLines.some(hasUserFacingTextLine);
-  return sourceHasUserFacingText(readText(repoRoot, file));
+  if (addedLines !== null) {
+    return addedLines.some((line) => hasUserFacingTextLine(line) || hasI18nApiUsageLine(line));
+  }
+  return hasI18nUsage(repoRoot, file) || sourceHasUserFacingText(readText(repoRoot, file));
 }
 
 function isSafeGitSha(value) {

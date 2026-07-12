@@ -199,6 +199,25 @@ describe("Bash Language Server fake-protocol security conformance", () => {
     expect(existsSync(join(root, SENTINEL))).toBe(false);
   });
 
+  it("fails closed when the primary bash-language-server executable is shadowed by a planted workspace executable", async () => {
+    writeExecutable(root, "bash-language-server");
+    let spawnCount = 0;
+    const spawn: LspSpawnFn = () => {
+      spawnCount += 1;
+      return createFakeLspProcess().handle;
+    };
+    const request = firstShellRequest();
+
+    const outcome = await runHostLanguageOperation(request, {
+      ...options(spawn),
+      processEnv: { PATH: `${root}${delimiter}${binDir}` },
+    });
+
+    expect(outcome).toBeUndefined();
+    expect(spawnCount).toBe(0);
+    expect(existsSync(join(root, SENTINEL))).toBe(false);
+  });
+
   it("cancels promptly without exposing content in the outcome", async () => {
     const controller = new AbortController();
     controller.abort();

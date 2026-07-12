@@ -9,6 +9,7 @@ import {
   PYTHON_PROVIDER_SPEC,
   detectPythonConfigurationPrecedence,
   pythonProtocolConfiguration,
+  resolvePythonRuntimeIdentitySource,
 } from "./pythonProvider.js";
 
 const roots: string[] = [];
@@ -111,5 +112,16 @@ describe("Python/Pyright managed provider", () => {
     symlinkSync(outside, join(root, "pyrightconfig.json"));
     writeFileSync(join(root, "pyproject.toml"), "x".repeat(1_048_577));
     expect(detectPythonConfigurationPrecedence(root)).toBe("workspaceConfiguration");
+  });
+
+  it("deterministically prefers an approved venv over the bare interpreter identity", () => {
+    const settings = configuration().settings;
+    expect(resolvePythonRuntimeIdentitySource(settings)).toBe("interpreter");
+    expect(
+      resolvePythonRuntimeIdentitySource({
+        ...settings,
+        venv: { kind: "operatorApproved", runtimeId: "python-venv-lsp" },
+      }),
+    ).toBe("venv");
   });
 });
