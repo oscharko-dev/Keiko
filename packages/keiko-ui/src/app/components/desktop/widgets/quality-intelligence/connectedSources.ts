@@ -231,13 +231,110 @@ function sourceKey(source: ConnectedRunSource): string {
                 ids.map((screenId) => screenId.trim()).filter((screenId) => screenId.length > 0),
               ),
             ]
-              .sort()
+              .sort((a, b) => a.localeCompare(b))
               .join(",");
       return `figma-snapshot:${source.snapshotRunId}:${scope}`;
     }
     case "image":
       return `image:${source.sourceKind}:${source.snapshotRunId}:${source.screenId}`;
   }
+}
+
+interface ResolvedFileAndFolderRoots {
+  /** Focused file resolved to an absolute path, or null when no file is focused. */
+  readonly connectedFile: string | null;
+  /** Every connected folder root, minus the focused file's own (canonicalised) root. */
+  readonly folderRoots: readonly string[];
+}
+
+// Resolve the focused file and the folder-root list it supersedes. Split out of
+// buildConnectedRunSources so the root-canonicalisation / file-supersedes-own-folder logic is its
+// own unit (Epic #729 N+1 dedup robustness; keeps the lone-file #709 path one element).
+function resolveFileAndFolderRoots(props: ConnectedSourceProps): ResolvedFileAndFolderRoots {
+  const connectedRootRaw = props.connectedRoot ?? null;
+  // resolveConnectedFilePath canonicalises the root internally, so it receives the RAW value.
+  const connectedFile = resolveConnectedFilePath(connectedRootRaw, props.connectedFilePath ?? null);
+  // Canonicalise every folder root (strip trailing separators, normalise slashes) BEFORE the
+  // file-supersedes-own-folder filter and the dedupe below. Two Files windows whose roots differ
+  // only by a trailing separator (".../spec" vs ".../spec/") would otherwise survive as two
+  // workspace sources and the same folder would be ingested twice; likewise a focused file whose own
+  // folder root carried a trailing slash would not be superseded.
+  const connectedRoot = connectedRootRaw !== null ? trimTrailingSeparators(connectedRootRaw) : null;
+
+  const rawRoots =
+    props.connectedRoots !== undefined &&
+    props.connectedRoots !== null &&
+    props.connectedRoots.length > 0
+      ? props.connectedRoots
+      : connectedRootRaw !== null
+        ? [connectedRootRaw]
+        : [];
+  const allRoots = rawRoots.map(trimTrailingSeparators);
+  // The focused file supersedes its own (canonicalised) folder root; other connected folders remain.
+  const folderRoots =
+    connectedFile !== null ? allRoots.filter((r) => r !== connectedRoot) : allRoots;
+
+  return { connectedFile, folderRoots };
+}
+
+// Figma sources: a scoped `connectedFigmaSnapshotSources` list supersedes the run-id-only list.
+function resolveFigmaSources(
+  props: ConnectedSourceProps,
+): readonly QualityIntelligenceFigmaSnapshotSource[] {
+  if (props.connectedFigmaSnapshotSources !== undefined) {
+    return props.connectedFigmaSnapshotSources;
+  }
+  return (props.connectedFigmaSnapshotRunIds ?? []).map((id) => ({
+    kind: "figma-snapshot" as const,
+    label: id,
+    snapshotRunId: id,
+  }));
+}
+
+// Assemble the ordered (pre-dedupe, pre-cap) source list: file, then folders, then capsules,
+// capsule-sets, figma snapshots, and image descriptions — the precedence order the cap below relies
+// on when the global MAX_SCOPES cap is hit.
+function assembleOrderedSources(
+  props: ConnectedSourceProps,
+  connectedFile: string | null,
+  folderRoots: readonly string[],
+): ConnectedRunSource[] {
+  const ordered: ConnectedRunSource[] = [];
+  if (connectedFile !== null) {
+    ordered.push({ kind: "file", label: baseName(connectedFile), path: connectedFile });
+  }
+  for (const root of folderRoots) {
+    ordered.push({ kind: "workspace", label: baseName(root), path: root });
+  }
+  for (const id of props.connectedCapsuleIds ?? []) {
+    ordered.push({ kind: "capsule", label: id, capsuleId: id });
+  }
+  for (const id of props.connectedCapsuleSetIds ?? []) {
+    ordered.push({ kind: "capsule-set", label: id, capsuleSetId: id });
+  }
+  for (const source of resolveFigmaSources(props)) {
+    ordered.push(source);
+  }
+  for (const source of props.connectedImageSources ?? []) {
+    ordered.push(source);
+  }
+  return ordered;
+}
+
+// Dedupe by sourceKey() and cap ONCE across all kinds, mirroring the server's single 16-source cap.
+function dedupeAndCapSources(
+  ordered: readonly ConnectedRunSource[],
+): readonly ConnectedRunSource[] {
+  const seen = new Set<string>();
+  const result: ConnectedRunSource[] = [];
+  for (const source of ordered) {
+    if (result.length >= MAX_SCOPES) break;
+    const key = sourceKey(source);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(source);
+  }
+  return result;
 }
 
 /**
@@ -254,66 +351,7 @@ function sourceKey(source: ConnectedRunSource): string {
 export function buildConnectedRunSources(
   props: ConnectedSourceProps,
 ): readonly ConnectedRunSource[] {
-  const connectedRootRaw = props.connectedRoot ?? null;
-  // resolveConnectedFilePath canonicalises the root internally, so it receives the RAW value.
-  const connectedFile = resolveConnectedFilePath(connectedRootRaw, props.connectedFilePath ?? null);
-  // Canonicalise every folder root (strip trailing separators, normalise slashes) BEFORE the
-  // file-supersedes-own-folder filter and the dedupe below. Two Files windows whose roots differ
-  // only by a trailing separator (".../spec" vs ".../spec/") would otherwise survive as two
-  // workspace sources and the same folder would be ingested twice; likewise a focused file whose own
-  // folder root carried a trailing slash would not be superseded. Canonicalising collapses both
-  // (Epic #729 N+1 dedup robustness; keeps the lone-file #709 path one element).
-  const connectedRoot = connectedRootRaw !== null ? trimTrailingSeparators(connectedRootRaw) : null;
-
-  const rawRoots =
-    props.connectedRoots !== undefined &&
-    props.connectedRoots !== null &&
-    props.connectedRoots.length > 0
-      ? props.connectedRoots
-      : connectedRootRaw !== null
-        ? [connectedRootRaw]
-        : [];
-  const allRoots = rawRoots.map(trimTrailingSeparators);
-  // The focused file supersedes its own (canonicalised) folder root; other connected folders remain.
-  const folderRoots =
-    connectedFile !== null ? allRoots.filter((r) => r !== connectedRoot) : allRoots;
-
-  const ordered: ConnectedRunSource[] = [];
-  if (connectedFile !== null) {
-    ordered.push({ kind: "file", label: baseName(connectedFile), path: connectedFile });
-  }
-  for (const root of folderRoots) {
-    ordered.push({ kind: "workspace", label: baseName(root), path: root });
-  }
-  for (const id of props.connectedCapsuleIds ?? []) {
-    ordered.push({ kind: "capsule", label: id, capsuleId: id });
-  }
-  for (const id of props.connectedCapsuleSetIds ?? []) {
-    ordered.push({ kind: "capsule-set", label: id, capsuleSetId: id });
-  }
-  const figmaSources =
-    props.connectedFigmaSnapshotSources !== undefined
-      ? props.connectedFigmaSnapshotSources
-      : (props.connectedFigmaSnapshotRunIds ?? []).map((id) => ({
-          kind: "figma-snapshot" as const,
-          label: id,
-          snapshotRunId: id,
-        }));
-  for (const source of figmaSources) {
-    ordered.push(source);
-  }
-  for (const source of props.connectedImageSources ?? []) {
-    ordered.push(source);
-  }
-
-  const seen = new Set<string>();
-  const result: ConnectedRunSource[] = [];
-  for (const source of ordered) {
-    if (result.length >= MAX_SCOPES) break;
-    const key = sourceKey(source);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    result.push(source);
-  }
-  return result;
+  const { connectedFile, folderRoots } = resolveFileAndFolderRoots(props);
+  const ordered = assembleOrderedSources(props, connectedFile, folderRoots);
+  return dedupeAndCapSources(ordered);
 }

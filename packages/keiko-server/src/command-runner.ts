@@ -152,7 +152,7 @@ function readPackageScripts(workspace: WorkspaceInfo, fs: WorkspaceFs): readonly
     .filter(([, value]) => typeof value === "string")
     .map(([name]) => name)
     .filter((name) => name.length > 0 && name.length <= MAX_SCRIPT_NAME_LENGTH)
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function classifyScriptKind(name: string): CommandTaskKind {

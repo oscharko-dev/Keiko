@@ -29,12 +29,13 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type DragEvent,
-  type FormEvent,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import Image from "next/image";
 import { Icons } from "../../Icons";
@@ -83,6 +84,9 @@ import {
   type FigmaImageDropDetail,
 } from "../../figma-image-drag";
 import { JsonSyntaxBlock, jsonTextByteLength } from "./JsonSyntaxBlock";
+
+type CurrentRef<T> = { current: T };
+type FormSubmitEvent = { preventDefault: () => void };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -940,6 +944,170 @@ export interface FigmaSnapshotWindowProps {
 // reuse the "building" copy ("fetching screens from Figma…").
 type BuildState = "idle" | "loading" | "building" | "done" | "error";
 
+// ── Snapshot management (rename / delete) ───────────────────────────────────
+
+interface RenameFigmaSnapshotParams {
+  readonly runId: string;
+  readonly controller: AbortController;
+  readonly renameValue: string;
+  readonly summaryRunId: string | undefined;
+  readonly t: I18nTranslate;
+  readonly updateMetadataImpl: typeof updateFigmaSnapshotMetadata;
+  readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
+  readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
+  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setRenameValue: Dispatch<SetStateAction<string>>;
+  readonly setSnapshotManagementError: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementBusyRunId: Dispatch<SetStateAction<string | null>>;
+}
+
+// The AbortController and the snapshotManagementAbortRef assignment are handled by the caller
+// (kept in the component body) so the ref has a single, statically visible write site there —
+// see handleRenameSnapshot / handleDeleteSnapshot.
+function renameFigmaSnapshot(params: RenameFigmaSnapshotParams): void {
+  const {
+    runId,
+    controller,
+    renameValue,
+    summaryRunId,
+    t,
+    updateMetadataImpl,
+    snapshotManagementAbortRef,
+    setSummary,
+    setBoardSnapshots,
+    setRecentSnapshots,
+    setRenamingSnapshotRunId,
+    setRenameValue,
+    setSnapshotManagementError,
+    setSnapshotManagementBusyRunId,
+  } = params;
+  setSnapshotManagementBusyRunId(runId);
+  setSnapshotManagementError(null);
+  const nextDisplayName = renameValue.trim();
+  updateMetadataImpl(
+    runId,
+    nextDisplayName.length === 0 ? null : nextDisplayName,
+    controller.signal,
+  )
+    .then((result) => {
+      if (summaryRunId === runId) setSummary(result);
+      setBoardSnapshots((snapshots) =>
+        snapshots.map((snapshot) =>
+          snapshot.runId === runId ? listEntryWithSummaryManagement(snapshot, result) : snapshot,
+        ),
+      );
+      setRecentSnapshots((snapshots) =>
+        snapshots.map((snapshot) =>
+          snapshot.runId === runId ? listEntryWithSummaryManagement(snapshot, result) : snapshot,
+        ),
+      );
+      setRenamingSnapshotRunId(null);
+      setRenameValue("");
+    })
+    .catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setSnapshotManagementError(formatError(err, t));
+    })
+    .finally(() => {
+      if (snapshotManagementAbortRef.current === controller) {
+        snapshotManagementAbortRef.current = null;
+      }
+      setSnapshotManagementBusyRunId(null);
+    });
+}
+
+interface DeleteFigmaSnapshotByRunIdParams {
+  readonly runId: string;
+  readonly controller: AbortController;
+  readonly summaryRunId: string | undefined;
+  readonly currentSnapshotRunId: string | undefined;
+  readonly t: I18nTranslate;
+  readonly deleteImpl: typeof deleteFigmaSnapshot;
+  readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
+  readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
+  readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
+  readonly setBuildState: Dispatch<SetStateAction<BuildState>>;
+  readonly setCodeState: Dispatch<SetStateAction<"idle" | "generating" | "done" | "error">>;
+  readonly setCode: Dispatch<SetStateAction<FigmaCodegenResponse | null>>;
+  readonly setScreenJsonState: Dispatch<SetStateAction<"idle" | "loading" | "done" | "error">>;
+  readonly setScreenJson: Dispatch<SetStateAction<FigmaSnapshotScreenJsonResponse | null>>;
+  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setDeleteConfirmRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setDetailsSnapshotRunId: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementError: Dispatch<SetStateAction<string | null>>;
+  readonly setSnapshotManagementBusyRunId: Dispatch<SetStateAction<string | null>>;
+}
+
+function applyFigmaSnapshotDeletion(runId: string, params: DeleteFigmaSnapshotByRunIdParams): void {
+  const {
+    summaryRunId,
+    currentSnapshotRunId,
+    updateCfg,
+    setSummary,
+    setBuildState,
+    setCodeState,
+    setCode,
+    setScreenJsonState,
+    setScreenJson,
+    setBoardSnapshots,
+    setRecentSnapshots,
+    setDeleteConfirmRunId,
+    setRenamingSnapshotRunId,
+    setDetailsSnapshotRunId,
+  } = params;
+  setBoardSnapshots((snapshots) => snapshots.filter((snapshot) => snapshot.runId !== runId));
+  setRecentSnapshots((snapshots) => snapshots.filter((snapshot) => snapshot.runId !== runId));
+  setDeleteConfirmRunId(null);
+  setRenamingSnapshotRunId(null);
+  setDetailsSnapshotRunId(null);
+  if (summaryRunId === runId) {
+    setSummary(null);
+    setBuildState("idle");
+    setCodeState("idle");
+    setCode(null);
+    setScreenJsonState("idle");
+    setScreenJson(null);
+  }
+  if (summaryRunId === runId || currentSnapshotRunId === runId) {
+    updateCfg({ snapshotRunId: undefined });
+  }
+}
+
+// The AbortController and the snapshotManagementAbortRef assignment are handled by the caller
+// (kept in the component body) so the ref has a single, statically visible write site there —
+// see handleRenameSnapshot / handleDeleteSnapshot.
+function deleteFigmaSnapshotByRunId(params: DeleteFigmaSnapshotByRunIdParams): void {
+  const {
+    runId,
+    controller,
+    t,
+    deleteImpl,
+    snapshotManagementAbortRef,
+    setSnapshotManagementError,
+    setSnapshotManagementBusyRunId,
+  } = params;
+  setSnapshotManagementBusyRunId(runId);
+  setSnapshotManagementError(null);
+  deleteImpl(runId, controller.signal)
+    .then((_result: DeleteFigmaSnapshotResult) => {
+      applyFigmaSnapshotDeletion(runId, params);
+    })
+    .catch((err: unknown) => {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setSnapshotManagementError(formatError(err, t));
+    })
+    .finally(() => {
+      if (snapshotManagementAbortRef.current === controller) {
+        snapshotManagementAbortRef.current = null;
+      }
+      setSnapshotManagementBusyRunId(null);
+    });
+}
+
 export function FigmaSnapshotWindow({
   sourceWindowId,
   snapshotRunId,
@@ -1293,7 +1461,7 @@ export function FigmaSnapshotWindow({
   );
 
   const handleSubmit = useCallback(
-    (e: FormEvent<HTMLFormElement>): void => {
+    (e: FormSubmitEvent): void => {
       e.preventDefault();
       if (!linkValid || busy) return;
       if (!consentChecked) {
@@ -1626,43 +1794,22 @@ export function FigmaSnapshotWindow({
       snapshotManagementAbortRef.current?.abort();
       const controller = new AbortController();
       snapshotManagementAbortRef.current = controller;
-      setSnapshotManagementBusyRunId(runId);
-      setSnapshotManagementError(null);
-      const nextDisplayName = renameValue.trim();
-      updateMetadataImpl(
+      renameFigmaSnapshot({
         runId,
-        nextDisplayName.length === 0 ? null : nextDisplayName,
-        controller.signal,
-      )
-        .then((result) => {
-          if (summary?.runId === runId) setSummary(result);
-          setBoardSnapshots((snapshots) =>
-            snapshots.map((snapshot) =>
-              snapshot.runId === runId
-                ? listEntryWithSummaryManagement(snapshot, result)
-                : snapshot,
-            ),
-          );
-          setRecentSnapshots((snapshots) =>
-            snapshots.map((snapshot) =>
-              snapshot.runId === runId
-                ? listEntryWithSummaryManagement(snapshot, result)
-                : snapshot,
-            ),
-          );
-          setRenamingSnapshotRunId(null);
-          setRenameValue("");
-        })
-        .catch((err: unknown) => {
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          setSnapshotManagementError(formatError(err, t));
-        })
-        .finally(() => {
-          if (snapshotManagementAbortRef.current === controller) {
-            snapshotManagementAbortRef.current = null;
-          }
-          setSnapshotManagementBusyRunId(null);
-        });
+        controller,
+        renameValue,
+        summaryRunId: summary?.runId,
+        t,
+        updateMetadataImpl,
+        snapshotManagementAbortRef,
+        setSummary,
+        setBoardSnapshots,
+        setRecentSnapshots,
+        setRenamingSnapshotRunId,
+        setRenameValue,
+        setSnapshotManagementError,
+        setSnapshotManagementBusyRunId,
+      });
     },
     [renameValue, snapshotManagementBusyRunId, summary?.runId, t, updateMetadataImpl],
   );
@@ -1687,41 +1834,29 @@ export function FigmaSnapshotWindow({
       snapshotManagementAbortRef.current?.abort();
       const controller = new AbortController();
       snapshotManagementAbortRef.current = controller;
-      setSnapshotManagementBusyRunId(runId);
-      setSnapshotManagementError(null);
-      deleteImpl(runId, controller.signal)
-        .then((_result: DeleteFigmaSnapshotResult) => {
-          setBoardSnapshots((snapshots) =>
-            snapshots.filter((snapshot) => snapshot.runId !== runId),
-          );
-          setRecentSnapshots((snapshots) =>
-            snapshots.filter((snapshot) => snapshot.runId !== runId),
-          );
-          setDeleteConfirmRunId(null);
-          setRenamingSnapshotRunId(null);
-          setDetailsSnapshotRunId(null);
-          if (summary?.runId === runId) {
-            setSummary(null);
-            setBuildState("idle");
-            setCodeState("idle");
-            setCode(null);
-            setScreenJsonState("idle");
-            setScreenJson(null);
-          }
-          if (summary?.runId === runId || snapshotRunId === runId) {
-            updateCfg({ snapshotRunId: undefined });
-          }
-        })
-        .catch((err: unknown) => {
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          setSnapshotManagementError(formatError(err, t));
-        })
-        .finally(() => {
-          if (snapshotManagementAbortRef.current === controller) {
-            snapshotManagementAbortRef.current = null;
-          }
-          setSnapshotManagementBusyRunId(null);
-        });
+      deleteFigmaSnapshotByRunId({
+        runId,
+        controller,
+        summaryRunId: summary?.runId,
+        currentSnapshotRunId: snapshotRunId,
+        t,
+        deleteImpl,
+        updateCfg,
+        snapshotManagementAbortRef,
+        setSummary,
+        setBuildState,
+        setCodeState,
+        setCode,
+        setScreenJsonState,
+        setScreenJson,
+        setBoardSnapshots,
+        setRecentSnapshots,
+        setDeleteConfirmRunId,
+        setRenamingSnapshotRunId,
+        setDetailsSnapshotRunId,
+        setSnapshotManagementError,
+        setSnapshotManagementBusyRunId,
+      });
     },
     [deleteImpl, snapshotManagementBusyRunId, snapshotRunId, summary?.runId, t, updateCfg],
   );

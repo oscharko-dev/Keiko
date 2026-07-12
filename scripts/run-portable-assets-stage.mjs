@@ -46,7 +46,7 @@ export function collectSidecarSpecPaths(payloadRoot, target) {
     const specPath = join(targetRoot, entry, `${entry}.spec.json`);
     if (existsSync(specPath) && statSync(specPath).isFile()) specs.push(specPath);
   }
-  return specs.sort();
+  return specs.sort((a, b) => a.localeCompare(b));
 }
 
 function resolveCommitSha(env) {

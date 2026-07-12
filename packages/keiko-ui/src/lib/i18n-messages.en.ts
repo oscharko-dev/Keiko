@@ -1192,6 +1192,11 @@ export const EN_MESSAGES = {
   "managedLanguage.announcedApplied": "{action} completed for {language}.",
   // The voice-dialogue composer motion update adds no user-facing copy; this
   // catalog touch records the required English-copy review for ChatWindow.tsx.
+  // The SonarCloud cognitive-complexity refactor (S3776) reflows JSX in
+  // ChatWindow.tsx, GatewaySetupDialog.tsx, UpdateWindow.tsx, EditorDiffSurface.tsx,
+  // GitClientWindow.tsx, FigmaSnapshotWindow.tsx, QiRunCard.tsx, RunLauncher.tsx, and
+  // HealthScanFindings.tsx without changing any user-facing copy; this catalog touch
+  // records the required English-copy review.
   // New i18n keys for the quality-widgets retrofit: AgentRunWidget, FilePreview,
   // FilesWidget, PdfCitationPreviewWindow, ReviewWidget, FigmaSnapshotWindow.
   "agentRunWidget.workflow.verify": "Verify",

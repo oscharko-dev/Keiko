@@ -7,7 +7,7 @@
 // Empty state when queue is clear. motion-safe on any animated element.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
@@ -19,6 +19,15 @@ import {
 } from "@/lib/memory-api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
+
+type ReviewAction = "accept" | "reject" | "archive";
+
+const REVIEW_ACTION_FIELDSET_STYLE: CSSProperties = {
+  border: 0,
+  margin: 0,
+  minInlineSize: 0,
+  padding: 0,
+};
 
 function typeLabel(type: MemoryRecord["type"], t: I18nTranslate): string {
   switch (type) {
@@ -93,7 +102,7 @@ function sensitivityLabel(
 
 interface ReviewRowProps {
   readonly record: MemoryRecord;
-  readonly busyAction: "accept" | "reject" | "archive" | null;
+  readonly busyAction: ReviewAction | null;
   readonly rowError: string | null;
   readonly onAccept: (record: MemoryRecord) => void;
   readonly onReject: (record: MemoryRecord) => void;
@@ -101,6 +110,218 @@ interface ReviewRowProps {
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly t: I18nTranslate;
 }
+
+// ---------------------------------------------------------------------------
+// StaleIndicator / CaptureRationale / RowDetailLink / RowError
+// ---------------------------------------------------------------------------
+// Small conditional-render pieces of a row's meta block, each extracted as an
+// early-return component instead of an inline ternary (mirrors StatusBadge /
+// HeaderActionLink in MemoryList.tsx).
+
+function StaleIndicator({
+  record,
+  t,
+}: {
+  readonly record: MemoryRecord;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const isStale = record.staleReason !== undefined || record.status === "expired";
+  if (!isStale) return null;
+  return (
+    <span className="mc-row-stale">
+      {record.staleReason !== undefined
+        ? t("memoria.staleWithReason", { reason: record.staleReason })
+        : t("memoria.stale")}
+    </span>
+  );
+}
+
+function CaptureRationale({
+  record,
+  t,
+}: {
+  readonly record: MemoryRecord;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (record.provenance.captureRationale === undefined) return null;
+  return (
+    <span>
+      {t("memoria.rationale")}: {record.provenance.captureRationale}
+    </span>
+  );
+}
+
+// Full text + provenance/conflict context before deciding — unlike the list,
+// queue rows are not links (uiux-fix F035).
+function RowDetailLink({
+  record,
+  onOpenDetail,
+  label,
+  t,
+}: {
+  readonly record: MemoryRecord;
+  readonly onOpenDetail?: ((id: string) => void) | undefined;
+  readonly label: string;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (onOpenDetail !== undefined) {
+    return (
+      <button
+        type="button"
+        className="mc-row-detail-link mc-link-button"
+        aria-label={label}
+        onClick={() => onOpenDetail(record.id)}
+      >
+        {t("memoria.viewDetails")}
+      </button>
+    );
+  }
+  return (
+    <Link
+      href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`}
+      className="mc-row-detail-link"
+      aria-label={label}
+    >
+      {t("memoria.viewDetails")}
+    </Link>
+  );
+}
+
+function RowError({ rowError }: { readonly rowError: string | null }): ReactNode {
+  if (rowError === null) return null;
+  return (
+    <p role="alert" className="mc-action-error">
+      {rowError}
+    </p>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReviewRowActions
+// ---------------------------------------------------------------------------
+
+// aria-disabled + click guard instead of native disabled: disabling the
+// focused button would throw keyboard focus to <body> (uiux-fix F005, pattern
+// from PR #823).
+function RowActionButton({
+  variant,
+  busyAction,
+  isBusy,
+  busyLabel,
+  idleLabel,
+  onClick,
+}: {
+  readonly variant: "primary" | "ghost";
+  readonly busyAction: "accept" | "reject" | "archive" | null;
+  readonly isBusy: boolean;
+  readonly busyLabel: string;
+  readonly idleLabel: string;
+  readonly onClick: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      className={`lk-btn lk-btn-${variant}`}
+      aria-disabled={busyAction !== null}
+      aria-busy={isBusy}
+      onClick={() => {
+        if (busyAction !== null) return;
+        onClick();
+      }}
+    >
+      {isBusy ? busyLabel : idleLabel}
+    </button>
+  );
+}
+
+// One of three mutually exclusive action sets per row status — extracted as
+// early returns instead of a nested ternary chain (mirrors MemoryListBody).
+function ReviewRowActions({
+  record,
+  busyAction,
+  labelId,
+  onAccept,
+  onReject,
+  onArchive,
+  t,
+}: {
+  readonly record: MemoryRecord;
+  readonly busyAction: ReviewAction | null;
+  readonly labelId: string;
+  readonly onAccept: (record: MemoryRecord) => void;
+  readonly onReject: (record: MemoryRecord) => void;
+  readonly onArchive: (record: MemoryRecord) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (record.status === "proposed") {
+    return (
+      <fieldset
+        className="mc-review-actions"
+        aria-labelledby={labelId}
+        style={REVIEW_ACTION_FIELDSET_STYLE}
+      >
+        <RowActionButton
+          variant="primary"
+          busyAction={busyAction}
+          isBusy={busyAction === "accept"}
+          busyLabel={t("memoria.approving")}
+          idleLabel={t("memoria.approve")}
+          onClick={() => onAccept(record)}
+        />
+        <RowActionButton
+          variant="ghost"
+          busyAction={busyAction}
+          isBusy={busyAction === "reject"}
+          busyLabel={t("memoria.rejecting")}
+          idleLabel={t("memoria.reject")}
+          onClick={() => onReject(record)}
+        />
+      </fieldset>
+    );
+  }
+
+  if (record.status === "conflicted") {
+    return (
+      <fieldset
+        className="mc-review-actions"
+        aria-labelledby={labelId}
+        style={REVIEW_ACTION_FIELDSET_STYLE}
+      >
+        {/* Honest label: this action permanently sets status=rejected (no UI
+            path back) — "Dismiss" suggested a mere hide (uiux-fix F035). */}
+        <RowActionButton
+          variant="ghost"
+          busyAction={busyAction}
+          isBusy={busyAction === "reject"}
+          busyLabel={t("memoria.rejecting")}
+          idleLabel={t("memoria.rejectConflict")}
+          onClick={() => onReject(record)}
+        />
+      </fieldset>
+    );
+  }
+
+  return (
+    <fieldset
+      className="mc-review-actions"
+      aria-labelledby={labelId}
+      style={REVIEW_ACTION_FIELDSET_STYLE}
+    >
+      <RowActionButton
+        variant="ghost"
+        busyAction={busyAction}
+        isBusy={busyAction === "archive"}
+        busyLabel={t("memoria.archiving")}
+        idleLabel={t("memoria.archiveStale")}
+        onClick={() => onArchive(record)}
+      />
+    </fieldset>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReviewRow
+// ---------------------------------------------------------------------------
 
 function ReviewRow({
   record,
@@ -117,7 +338,6 @@ function ReviewRow({
     id: record.id,
     preview: record.body.slice(0, 80),
   });
-  const isStale = record.staleReason !== undefined || record.status === "expired";
   return (
     <li data-review-row-id={record.id}>
       <article className="mc-review-row">
@@ -145,106 +365,26 @@ function ReviewRow({
             <span>
               {t("memoria.sourceKind")}: {record.provenance.sourceKind}
             </span>
-            {record.provenance.captureRationale !== undefined ? (
-              <span>
-                {t("memoria.rationale")}: {record.provenance.captureRationale}
-              </span>
-            ) : null}
-            {isStale ? (
-              <span className="mc-row-stale">
-                {record.staleReason !== undefined
-                  ? t("memoria.staleWithReason", { reason: record.staleReason })
-                  : t("memoria.stale")}
-              </span>
-            ) : null}
-            {/* full text + provenance/conflict context before deciding —
-                unlike the list, queue rows are not links (uiux-fix F035) */}
-            {onOpenDetail !== undefined ? (
-              <button
-                type="button"
-                className="mc-row-detail-link mc-link-button"
-                aria-label={detailLinkLabel}
-                onClick={() => onOpenDetail(record.id)}
-              >
-                {t("memoria.viewDetails")}
-              </button>
-            ) : (
-              <Link
-                href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`}
-                className="mc-row-detail-link"
-                aria-label={detailLinkLabel}
-              >
-                {t("memoria.viewDetails")}
-              </Link>
-            )}
+            <CaptureRationale record={record} t={t} />
+            <StaleIndicator record={record} t={t} />
+            <RowDetailLink
+              record={record}
+              onOpenDetail={onOpenDetail}
+              label={detailLinkLabel}
+              t={t}
+            />
           </div>
-          {rowError !== null ? (
-            <p role="alert" className="mc-action-error">
-              {rowError}
-            </p>
-          ) : null}
+          <RowError rowError={rowError} />
         </div>
-        {/* aria-disabled + click guard instead of native disabled: disabling the
-            focused button would throw keyboard focus to <body> (uiux-fix F005,
-            pattern from PR #823). */}
-        <div className="mc-review-actions" role="group" aria-labelledby={labelId}>
-          {record.status === "proposed" ? (
-            <>
-              <button
-                type="button"
-                className="lk-btn lk-btn-primary"
-                aria-disabled={busyAction !== null}
-                aria-busy={busyAction === "accept"}
-                onClick={() => {
-                  if (busyAction !== null) return;
-                  onAccept(record);
-                }}
-              >
-                {busyAction === "accept" ? t("memoria.approving") : t("memoria.approve")}
-              </button>
-              <button
-                type="button"
-                className="lk-btn lk-btn-ghost"
-                aria-disabled={busyAction !== null}
-                aria-busy={busyAction === "reject"}
-                onClick={() => {
-                  if (busyAction !== null) return;
-                  onReject(record);
-                }}
-              >
-                {busyAction === "reject" ? t("memoria.rejecting") : t("memoria.reject")}
-              </button>
-            </>
-          ) : record.status === "conflicted" ? (
-            // Honest label: this action permanently sets status=rejected (no
-            // UI path back) — "Dismiss" suggested a mere hide (uiux-fix F035).
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost"
-              aria-disabled={busyAction !== null}
-              aria-busy={busyAction === "reject"}
-              onClick={() => {
-                if (busyAction !== null) return;
-                onReject(record);
-              }}
-            >
-              {busyAction === "reject" ? t("memoria.rejecting") : t("memoria.rejectConflict")}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="lk-btn lk-btn-ghost"
-              aria-disabled={busyAction !== null}
-              aria-busy={busyAction === "archive"}
-              onClick={() => {
-                if (busyAction !== null) return;
-                onArchive(record);
-              }}
-            >
-              {busyAction === "archive" ? t("memoria.archiving") : t("memoria.archiveStale")}
-            </button>
-          )}
-        </div>
+        <ReviewRowActions
+          record={record}
+          busyAction={busyAction}
+          labelId={labelId}
+          onAccept={onAccept}
+          onReject={onReject}
+          onArchive={onArchive}
+          t={t}
+        />
       </article>
     </li>
   );
@@ -271,9 +411,7 @@ export function ReviewQueue({
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyById, setBusyById] = useState<
-    Partial<Record<string, "accept" | "reject" | "archive">>
-  >({});
+  const [busyById, setBusyById] = useState<Partial<Record<string, ReviewAction>>>({});
   const [rowErrorsById, setRowErrorsById] = useState<Partial<Record<string, string>>>({});
   // Result announcement + focus management after a row is removed: the pressed
   // button unmounts with its row, which would drop focus to <body> and leave

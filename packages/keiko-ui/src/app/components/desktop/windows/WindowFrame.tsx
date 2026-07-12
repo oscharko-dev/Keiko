@@ -42,6 +42,8 @@ import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 
+type CurrentRef<T> = { current: T };
+
 const HANDLES = ["n", "s", "e", "w", "ne", "nw", "se", "sw"] as const;
 type Handle = (typeof HANDLES)[number];
 
@@ -332,6 +334,13 @@ function cancelDragFrame(frame: number): void {
   }
 }
 
+function cancelPendingDragFrame(frame: number | null): null {
+  if (frame !== null) {
+    cancelDragFrame(frame);
+  }
+  return null;
+}
+
 function attachDragListeners(
   api: WorkspaceApi,
   geo: DragGeometry,
@@ -372,11 +381,6 @@ function attachDragListeners(
     if (frame !== null) return;
     frame = requestDragFrame(flush);
   };
-  const cancelFrame = (): void => {
-    if (frame === null) return;
-    cancelDragFrame(frame);
-    frame = null;
-  };
   const move = (ev: PointerEvent): void => {
     const px = geo.toWX(ev.clientX);
     const py = geo.toWY(ev.clientY);
@@ -402,7 +406,7 @@ function attachDragListeners(
     // last coordinates are applied; commitSnap then overrides them only when a
     // snap zone is armed (it is a no-op for free drags). Cancel the scheduled
     // frame first so flush() cannot also run on the next tick.
-    cancelFrame();
+    frame = cancelPendingDragFrame(frame);
     flush();
     api.commitSnap(session.winId);
     releaseBodyStyle();
@@ -447,11 +451,6 @@ function attachGroupDragListeners(
     if (frame !== null) return;
     frame = requestDragFrame(flush);
   };
-  const cancelFrame = (): void => {
-    if (frame === null) return;
-    cancelDragFrame(frame);
-    frame = null;
-  };
   const move = (ev: PointerEvent): void => {
     pendingX = geo.toWX(ev.clientX);
     pendingY = geo.toWY(ev.clientY);
@@ -462,7 +461,7 @@ function attachGroupDragListeners(
     window.removeEventListener("pointermove", move);
     window.removeEventListener("pointerup", up);
     window.removeEventListener("pointercancel", up);
-    cancelFrame();
+    frame = cancelPendingDragFrame(frame);
     flush();
     releaseBodyStyle();
     onDragEnd?.();
@@ -521,6 +520,99 @@ function applyResizeDelta(
     h = minH;
   }
   return { x, y, w, h };
+}
+
+interface ResizeGestureConfig {
+  readonly winId: string;
+  readonly type: WindowType;
+  readonly dir: Handle;
+  readonly start: ResizeStart;
+  readonly sx: number;
+  readonly sy: number;
+  readonly zoom: number;
+}
+
+// Mirrors attachDragListeners/attachGroupDragListeners above: the resize pointer
+// session (rAF-coalesced commit, cursor pin/restore, listener teardown) lives here
+// as a module-scope helper instead of an inline closure tree in startResize, so the
+// gesture logic is a plain function of its explicit inputs rather than nested
+// closures over the component's render scope. `resizeCleanupRef` is passed through
+// so the returned/stored cleanup can null out the ref exactly when IT is still the
+// active session (same identity guard the inline version used).
+function attachResizeListeners(
+  api: WorkspaceApi,
+  config: ResizeGestureConfig,
+  suppressAutoGrowForManualResize: () => void,
+  resizeCleanupRef: CurrentRef<((flushPending?: boolean) => void) | null>,
+): void {
+  const { winId, type, dir, start, sx, sy, zoom } = config;
+  let last = start;
+  const previousCursor = document.body.style.cursor;
+  let active = true;
+  let pending: ResizeStart | null = null;
+  let frame: number | null = null;
+  const flushPendingResize = (): void => {
+    frame = null;
+    if (pending === null) return;
+    const next = pending;
+    pending = null;
+    if (sameResizeGeometry(last, next)) return;
+    last = next;
+    api.update(winId, { ...next, max: false });
+  };
+  const cancelScheduledResize = (): void => {
+    if (frame === null) return;
+    cancelDragFrame(frame);
+    frame = null;
+  };
+  const scheduleResize = (next: ResizeStart): void => {
+    if (pending !== null && sameResizeGeometry(pending, next)) return;
+    if (pending === null && sameResizeGeometry(last, next)) return;
+    suppressAutoGrowForManualResize();
+    pending = next;
+    if (frame !== null) return;
+    frame = requestDragFrame(flushPendingResize);
+  };
+  const schedulePendingFlush = (): void => {
+    if (pending === null || frame !== null) return;
+    frame = requestDragFrame(flushPendingResize);
+  };
+  const cleanup = (flushPending = false): void => {
+    if (!active) return;
+    active = false;
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    window.removeEventListener("blur", end);
+    if (flushPending) {
+      schedulePendingFlush();
+    } else {
+      cancelScheduledResize();
+      pending = null;
+    }
+    document.body.style.cursor = previousCursor;
+    if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
+  };
+  const end = (): void => {
+    cleanup(true);
+  };
+  const move = (ev: PointerEvent): void => {
+    if (!active) return;
+    if (ev.buttons === 0) {
+      cleanup(true);
+      return;
+    }
+    const dx = (ev.clientX - sx) / zoom;
+    const dy = (ev.clientY - sy) / zoom;
+    const next = applyResizeDelta(start, dir, dx, dy, type);
+    scheduleResize(next);
+  };
+  document.body.style.cursor = resizeCursor(dir);
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+  window.addEventListener("blur", end);
+  resizeCleanupRef.current = cleanup;
 }
 
 // Frozen shared empty so a window with no linked context of a given kind always
@@ -635,7 +727,7 @@ function WindowFrameImpl({
   const activeBinding = activeWorkspace?.activeBinding ?? null;
   const [draggingWindow, setDraggingWindow] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const resizeCleanupRef = useRef<((flushPending?: boolean) => void) | null>(null);
   const autoGrowSuppressedKeyRef = useRef<string | null>(null);
   const zoom = win.zoom ?? 1;
   const currentAutoGrowContentKey = autoGrowContentKey(win.type, win.cfg);
@@ -872,87 +964,20 @@ function WindowFrameImpl({
         resizeCleanupRef.current?.();
         resizeCleanupRef.current = null;
         api.focus(win.id);
-        const start: ResizeStart = { x: win.x, y: win.y, w: win.w, h: win.h };
-        let last = start;
-        const sx = e.clientX;
-        const sy = e.clientY;
-        const z = api.currentView().zoom;
-        const previousCursor = document.body.style.cursor;
-        let active = true;
-        let pending: ResizeStart | null = null;
-        let frame: number | null = null;
-        const flushPendingResize = (): void => {
-          frame = null;
-          if (pending === null) return;
-          const next = pending;
-          pending = null;
-          if (sameResizeGeometry(last, next)) return;
-          last = next;
-          api.update(win.id, { ...next, max: false });
-        };
-        const cancelScheduledResize = (): void => {
-          if (frame === null) return;
-          if (typeof window.cancelAnimationFrame === "function") {
-            window.cancelAnimationFrame(frame);
-          } else {
-            window.clearTimeout(frame);
-          }
-          frame = null;
-        };
-        const scheduleResize = (next: ResizeStart): void => {
-          if (pending !== null && sameResizeGeometry(pending, next)) return;
-          if (pending === null && sameResizeGeometry(last, next)) return;
-          suppressAutoGrowForManualResize();
-          pending = next;
-          if (frame !== null) return;
-          frame =
-            typeof window.requestAnimationFrame === "function"
-              ? window.requestAnimationFrame(flushPendingResize)
-              : window.setTimeout(flushPendingResize, 0);
-        };
-        const schedulePendingFlush = (): void => {
-          if (pending === null || frame !== null) return;
-          frame =
-            typeof window.requestAnimationFrame === "function"
-              ? window.requestAnimationFrame(flushPendingResize)
-              : window.setTimeout(flushPendingResize, 0);
-        };
-        const cleanup = (flushPending = false): void => {
-          if (!active) return;
-          active = false;
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", end);
-          window.removeEventListener("pointercancel", end);
-          window.removeEventListener("blur", end);
-          if (flushPending) {
-            schedulePendingFlush();
-          } else {
-            cancelScheduledResize();
-            pending = null;
-          }
-          document.body.style.cursor = previousCursor;
-          if (resizeCleanupRef.current === cleanup) resizeCleanupRef.current = null;
-        };
-        const end = (): void => {
-          cleanup(true);
-        };
-        const move = (ev: PointerEvent): void => {
-          if (!active) return;
-          if (ev.buttons === 0) {
-            cleanup(true);
-            return;
-          }
-          const dx = (ev.clientX - sx) / z;
-          const dy = (ev.clientY - sy) / z;
-          const next = applyResizeDelta(start, dir, dx, dy, win.type);
-          scheduleResize(next);
-        };
-        document.body.style.cursor = resizeCursor(dir);
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", end);
-        window.addEventListener("pointercancel", end);
-        window.addEventListener("blur", end);
-        resizeCleanupRef.current = cleanup;
+        attachResizeListeners(
+          api,
+          {
+            winId: win.id,
+            type: win.type,
+            dir,
+            start: { x: win.x, y: win.y, w: win.w, h: win.h },
+            sx: e.clientX,
+            sy: e.clientY,
+            zoom: api.currentView().zoom,
+          },
+          suppressAutoGrowForManualResize,
+          resizeCleanupRef,
+        );
       },
     [api, win.id, win.x, win.y, win.w, win.h, win.type, suppressAutoGrowForManualResize],
   );

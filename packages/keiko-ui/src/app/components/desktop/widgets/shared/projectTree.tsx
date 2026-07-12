@@ -3,37 +3,55 @@
 import type { ReactNode } from "react";
 import { Icons } from "../../Icons";
 
+interface FileIconRule {
+  test: (n: string) => boolean;
+  key: string;
+}
+
+const FILE_ICON_RULES: FileIconRule[] = [
+  {
+    test: (n) => n === "dockerfile" || n.includes("docker-compose") || n.endsWith(".dockerignore"),
+    key: "docker",
+  },
+  { test: (n) => n.endsWith(".json"), key: "json" },
+  { test: (n) => n.endsWith(".yml") || n.endsWith(".yaml"), key: "yaml" },
+  { test: (n) => n.endsWith(".md"), key: "markdown" },
+  {
+    test: (n) => n.endsWith(".properties") || n.endsWith(".env") || n.startsWith(".env."),
+    key: "properties",
+  },
+  { test: (n) => n.endsWith(".java"), key: "java" },
+  { test: (n) => n.endsWith(".tsx"), key: "react" },
+  { test: (n) => n.endsWith(".ts"), key: "typescript" },
+  {
+    test: (n) =>
+      n.endsWith(".jsx") || n.endsWith(".js") || n.endsWith(".mjs") || n.endsWith(".cjs"),
+    key: "javascript",
+  },
+  { test: (n) => n.endsWith(".py"), key: "python" },
+  { test: (n) => n.endsWith(".go"), key: "go" },
+  { test: (n) => n.endsWith(".rs"), key: "rust" },
+  { test: (n) => n.endsWith(".gradle"), key: "gradle" },
+  { test: (n) => n.endsWith(".sql"), key: "postgresql" },
+  { test: (n) => n.endsWith(".html"), key: "html5" },
+  { test: (n) => n.endsWith(".css"), key: "css3" },
+  { test: (n) => n.endsWith(".graphql") || n.endsWith(".gql"), key: "graphql" },
+  {
+    test: (n) =>
+      n.endsWith(".png") ||
+      n.endsWith(".jpg") ||
+      n.endsWith(".jpeg") ||
+      n.endsWith(".gif") ||
+      n.endsWith(".webp") ||
+      n.endsWith(".svg"),
+    key: "image",
+  },
+];
+
 export function fileIconKey(name: string): string | null {
   const n = name.toLowerCase();
-  if (n === "dockerfile" || n.includes("docker-compose") || n.endsWith(".dockerignore"))
-    return "docker";
-  if (n.endsWith(".json")) return "json";
-  if (n.endsWith(".yml") || n.endsWith(".yaml")) return "yaml";
-  if (n.endsWith(".md")) return "markdown";
-  if (n.endsWith(".properties") || n.endsWith(".env") || n.startsWith(".env.")) return "properties";
-  if (n.endsWith(".java")) return "java";
-  if (n.endsWith(".tsx")) return "react";
-  if (n.endsWith(".ts")) return "typescript";
-  if (n.endsWith(".jsx") || n.endsWith(".js") || n.endsWith(".mjs") || n.endsWith(".cjs"))
-    return "javascript";
-  if (n.endsWith(".py")) return "python";
-  if (n.endsWith(".go")) return "go";
-  if (n.endsWith(".rs")) return "rust";
-  if (n.endsWith(".gradle")) return "gradle";
-  if (n.endsWith(".sql")) return "postgresql";
-  if (n.endsWith(".html")) return "html5";
-  if (n.endsWith(".css")) return "css3";
-  if (n.endsWith(".graphql") || n.endsWith(".gql")) return "graphql";
-  if (
-    n.endsWith(".png") ||
-    n.endsWith(".jpg") ||
-    n.endsWith(".jpeg") ||
-    n.endsWith(".gif") ||
-    n.endsWith(".webp") ||
-    n.endsWith(".svg")
-  )
-    return "image";
-  return null;
+  const rule = FILE_ICON_RULES.find(({ test }) => test(n));
+  return rule ? rule.key : null;
 }
 
 export function FileIcon({ name, icon }: { name: string; icon?: string | undefined }): ReactNode {

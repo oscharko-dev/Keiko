@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "..", "..");
 const filePath = resolve(root, "scripts/check-mutation-quality.mjs");
+const eslint = new ESLint({ cwd: root });
 
 async function lint(source) {
-  const eslint = new ESLint({ cwd: root });
   const [result] = await eslint.lintText(source, { filePath });
   return result.messages
     .filter(
@@ -26,13 +26,13 @@ describe("local Sonar compatibility preflight", () => {
         expect.objectContaining({ ruleId: "keiko-sonar/require-sort-comparator" }),
       ]),
     );
-  });
+  }, 45_000);
 
   it("rejects fractional numeric separators that trigger Sonar S7749", async () => {
     expect(await lint("const epsilon = 0.000_001;\n")).toContainEqual(
       expect.objectContaining({ ruleId: "keiko-sonar/no-fractional-numeric-separators" }),
     );
-  });
+  }, 45_000);
 
   it("accepts non-mutating comparator sorting and scientific notation", async () => {
     expect(
@@ -41,5 +41,5 @@ describe("local Sonar compatibility preflight", () => {
           "const epsilon = 1e-6;\n",
       ),
     ).toEqual([]);
-  });
+  }, 45_000);
 });

@@ -180,44 +180,77 @@ interface RowEmission {
   readonly normalizedText: string;
 }
 
-function parseRowValues(rowText: string, delimiter: string): readonly string[] {
-  const fields: string[] = [];
-  let cursor = 0;
-  let current = "";
-  let quoted = false;
-  while (cursor < rowText.length) {
-    const ch = rowText.charAt(cursor);
-    if (quoted) {
-      if (ch === '"') {
-        if (cursor + 1 < rowText.length && rowText.charAt(cursor + 1) === '"') {
-          current += '"';
-          cursor += 2;
-          continue;
-        }
-        quoted = false;
-        cursor += 1;
-        continue;
-      }
-      current += ch;
-      cursor += 1;
-      continue;
+interface FieldSplitState {
+  readonly rowText: string;
+  readonly delimiter: string;
+  readonly fields: string[];
+  cursor: number;
+  current: string;
+  quoted: boolean;
+}
+
+// Inside a quoted field: `""` decodes to a literal `"`, a lone `"` closes the quote, and
+// anything else is copied through verbatim.
+function consumeQuotedChar(state: FieldSplitState): void {
+  const ch = state.rowText.charAt(state.cursor);
+  if (ch === '"') {
+    const next = state.cursor + 1;
+    if (next < state.rowText.length && state.rowText.charAt(next) === '"') {
+      state.current += '"';
+      state.cursor += 2;
+      return;
     }
-    if (ch === '"' && current.length === 0) {
-      quoted = true;
-      cursor += 1;
-      continue;
-    }
-    if (ch === delimiter) {
-      fields.push(current.trim());
-      current = "";
-      cursor += 1;
-      continue;
-    }
-    current += ch;
-    cursor += 1;
+    state.quoted = false;
+    state.cursor += 1;
+    return;
   }
-  fields.push(current.trim());
-  return fields;
+  state.current += ch;
+  state.cursor += 1;
+}
+
+// A field only opens as quoted when the `"` is the very first character collected so far.
+function tryStartQuotedField(state: FieldSplitState): boolean {
+  const ch = state.rowText.charAt(state.cursor);
+  if (ch !== '"' || state.current.length !== 0) return false;
+  state.quoted = true;
+  state.cursor += 1;
+  return true;
+}
+
+function tryConsumeDelimiter(state: FieldSplitState): boolean {
+  const ch = state.rowText.charAt(state.cursor);
+  if (ch !== state.delimiter) return false;
+  state.fields.push(state.current.trim());
+  state.current = "";
+  state.cursor += 1;
+  return true;
+}
+
+function consumeBareChar(state: FieldSplitState): void {
+  state.current += state.rowText.charAt(state.cursor);
+  state.cursor += 1;
+}
+
+function parseRowValues(rowText: string, delimiter: string): readonly string[] {
+  const state: FieldSplitState = {
+    rowText,
+    delimiter,
+    fields: [],
+    cursor: 0,
+    current: "",
+    quoted: false,
+  };
+  while (state.cursor < state.rowText.length) {
+    if (state.quoted) {
+      consumeQuotedChar(state);
+      continue;
+    }
+    if (tryStartQuotedField(state)) continue;
+    if (tryConsumeDelimiter(state)) continue;
+    consumeBareChar(state);
+  }
+  state.fields.push(state.current.trim());
+  return state.fields;
 }
 
 function readParsedRows(text: string, delimiter: string): readonly ParsedCsvRow[] {

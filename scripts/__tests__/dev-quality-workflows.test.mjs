@@ -15,9 +15,16 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain('node-version: "24.18.0"');
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain('-- --mutate "$MUTATION_FILES"');
+    expect(mutation).toContain('check:mutation:scoped -- --base "$BASE_SHA" --head "$HEAD_SHA"');
     expect(mutation).not.toContain('"${mutation_files[@]}"');
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
     expect(mutation).not.toContain("continue-on-error: true");
+
+    const install = mutation.indexOf("npm ci --ignore-scripts");
+    const buildPackages = mutation.indexOf("npm run build:packages");
+    const scope = mutation.indexOf("Determine whether critical production logic changed");
+    expect(buildPackages).toBeGreaterThan(install);
+    expect(buildPackages).toBeLessThan(scope);
   });
 
   it("runs Sonar and LCOV mapping only for dev pull requests", () => {

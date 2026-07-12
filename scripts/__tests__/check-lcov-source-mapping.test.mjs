@@ -16,11 +16,15 @@ describe("LCOV source mapping", () => {
   });
 
   it("classifies executable source without counting tests, fixtures, declarations, or configs", () => {
-    expect(isExecutableSource("scripts/gate.mjs")).toBe(true);
+    expect(isExecutableSource("scripts/gate.mjs")).toBe(false);
+    expect(isExecutableSource("scripts/check-lcov-source-mapping.mjs")).toBe(true);
     expect(isExecutableSource("packages/a/src/a.tsx")).toBe(true);
+    expect(isExecutableSource("packages/a/public/sw.js")).toBe(false);
     expect(isExecutableSource("packages/a/src/a.test.ts")).toBe(false);
     expect(isExecutableSource("packages/a/src/a.d.ts")).toBe(false);
     expect(isExecutableSource("tests/fixtures/a.ts")).toBe(false);
+    expect(isExecutableSource("tests/e2e/support/editorWorkspace.ts")).toBe(false);
+    expect(isExecutableSource("docs/design-system/evidence/1300/browser/capture.mjs")).toBe(false);
     expect(isExecutableSource("vitest.config.ts")).toBe(false);
     expect(isExecutableSource("docs/qa/gate.md")).toBe(false);
   });
@@ -28,10 +32,10 @@ describe("LCOV source mapping", () => {
   it("fails closed when changed production source is absent from LCOV", () => {
     expect(
       missingCoverageMappings(
-        ["scripts/gate.mjs", "scripts/gate.test.mjs"],
+        ["scripts/check-lcov-source-mapping.mjs", "scripts/gate.mjs", "scripts/gate.test.mjs"],
         new Set(["scripts/other.mjs"]),
       ),
-    ).toEqual(["scripts/gate.mjs"]);
+    ).toEqual(["scripts/check-lcov-source-mapping.mjs"]);
   });
 
   it("validates renamed and added sources against both coverage reports", () => {
@@ -41,16 +45,18 @@ describe("LCOV source mapping", () => {
       base: "base",
       execute: (file, args, options) => {
         calls.push([file, args, options]);
-        return "R100\tscripts/old.mjs\tscripts/gate.mjs\nA\tpackages/ui/src/view.tsx\n";
+        return "R100\tscripts/old.mjs\tscripts/check-lcov-source-mapping.mjs\nA\tpackages/ui/src/view.tsx\n";
       },
       head: "head",
       log: (message) => logs.push(message),
       read: (path) =>
-        path.includes("keiko-ui") ? "SF:packages/ui/src/view.tsx\n" : "SF:scripts/gate.mjs\n",
+        path.includes("keiko-ui")
+          ? "SF:packages/ui/src/view.tsx\n"
+          : "SF:scripts/check-lcov-source-mapping.mjs\n",
       root: "/repo",
     });
     expect(result).toEqual({
-      changed: ["scripts/gate.mjs", "packages/ui/src/view.tsx"],
+      changed: ["scripts/check-lcov-source-mapping.mjs", "packages/ui/src/view.tsx"],
       missing: [],
     });
     expect(calls).toEqual([
@@ -67,12 +73,15 @@ describe("LCOV source mapping", () => {
     expect(() =>
       runLcovSourceMapping({
         base: "base",
-        execute: () => "A\tscripts/one.mjs\nA\tscripts/two.mjs\n",
+        execute: () =>
+          "A\tscripts/check-lcov-source-mapping.mjs\nA\tpackages/keiko-server/src/routes.ts\n",
         head: "head",
         read: () => "",
         root: "/repo",
       }),
-    ).toThrow("LCOV mapping missing for: scripts/one.mjs, scripts/two.mjs");
+    ).toThrow(
+      "LCOV mapping missing for: scripts/check-lcov-source-mapping.mjs, packages/keiko-server/src/routes.ts",
+    );
   });
 
   it("adapts CLI arguments and reports missing base input", () => {

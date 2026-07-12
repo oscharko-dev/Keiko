@@ -10,7 +10,7 @@ import type {
   ReactNode,
   RefObject,
 } from "react";
-import { useTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { EmptyWorkspaceBlob } from "./EmptyWorkspaceBlob";
 import { Icons } from "./Icons";
 import {
@@ -26,7 +26,7 @@ import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
-import type { AppWindow, ConnState, ConnectingState, Connection } from "./windows/types";
+import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
@@ -226,6 +226,31 @@ interface ConnectAnnouncerProps {
   readonly conns: readonly Connection[];
 }
 
+// GEN-UI-KEYBOARD-011 — spell out the keyboard completion path so it is
+// discoverable to screen-reader/keyboard users: Tab to a highlighted target
+// window, then Enter (on the window or one of its connection ports) to
+// complete, or Escape to cancel. Sighted users get the ws-connect-hint below.
+function describeConnectStart(
+  wins: readonly AppWindow[] | null,
+  connecting: ConnectingState,
+): string {
+  const from = wins?.find((w) => w.id === connecting.from);
+  const title = from !== undefined ? WIN_TYPES[from.type].title : "window";
+  return `Connecting from ${title}. Tab to a highlighted window and press Enter on it or one of its connection ports to connect. Press Escape to cancel.`;
+}
+
+function describeConnectEnd(
+  wins: readonly AppWindow[] | null,
+  conns: readonly Connection[],
+  wasConnCount: number,
+): string {
+  if (conns.length <= wasConnCount) return "Connection cancelled";
+  const added = conns[conns.length - 1];
+  const a = added !== undefined ? wins?.find((w) => w.id === added.a) : undefined;
+  const b = added !== undefined ? wins?.find((w) => w.id === added.b) : undefined;
+  return a !== undefined && b !== undefined ? `Connected: ${relLabel(a, b)}` : "Connected";
+}
+
 // The click-to-connect state machine is otherwise purely visual (crosshair
 // cursor, rubber-band path, valid/invalid window rings). This visually-hidden
 // live region announces start, completion and cancellation of a connect flow
@@ -241,28 +266,11 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
     const wasLen = prevConnsLen.current;
     prevConnsLen.current = conns.length;
     if (was === null && connecting !== null) {
-      const from = wins?.find((w) => w.id === connecting.from);
-      const title = from !== undefined ? WIN_TYPES[from.type].title : "window";
-      // GEN-UI-KEYBOARD-011 — spell out the keyboard completion path so it is
-      // discoverable to screen-reader/keyboard users: Tab to a highlighted target
-      // window, then Enter (on the window or one of its connection ports) to
-      // complete, or Escape to cancel. Sighted users get the ws-connect-hint below.
-      setMessage(
-        `Connecting from ${title}. Tab to a highlighted window and press Enter on it or one of its connection ports to connect. Press Escape to cancel.`,
-      );
+      setMessage(describeConnectStart(wins, connecting));
       return;
     }
     if (was !== null && connecting === null) {
-      if (conns.length > wasLen) {
-        const added = conns[conns.length - 1];
-        const a = added !== undefined ? wins?.find((w) => w.id === added.a) : undefined;
-        const b = added !== undefined ? wins?.find((w) => w.id === added.b) : undefined;
-        setMessage(
-          a !== undefined && b !== undefined ? `Connected: ${relLabel(a, b)}` : "Connected",
-        );
-      } else {
-        setMessage("Connection cancelled");
-      }
+      setMessage(describeConnectEnd(wins, conns, wasLen));
     }
   }, [connecting, conns, wins]);
 
@@ -396,6 +404,246 @@ function mergeMarqueeSelection(
   return [...kept, ...hits.filter((id) => !currentSet.has(id))];
 }
 
+function resolveConnectionSource(
+  connecting: ConnectingState | null,
+  visibleWins: readonly AppWindow[] | null,
+): AppWindow | null {
+  if (connecting === null || visibleWins === null) return null;
+  return visibleWins.find((w) => w.id === connecting.from) ?? null;
+}
+
+function tryHandleWorkspaceEscapeShortcut(
+  event: ReactKeyboardEvent<HTMLElement>,
+  selection: UseWorkspaceResult["selection"],
+  api: UseWorkspaceResult["api"],
+): boolean {
+  if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (selection.selectedWindowIds.length > 0) {
+      api.clearSelection();
+      event.preventDefault();
+    }
+    return true;
+  }
+  return false;
+}
+
+function tryHandleWorkspaceClipboardShortcut(
+  event: ReactKeyboardEvent<HTMLElement>,
+  api: UseWorkspaceResult["api"],
+): boolean {
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
+    const key = event.key.toLowerCase();
+    if (key === "c") {
+      if (api.copySelectedWindows()) event.preventDefault();
+      return true;
+    }
+    if (key === "v") {
+      if (api.pasteCopiedWindows()) event.preventDefault();
+      return true;
+    }
+  }
+  return false;
+}
+
+// Issue #2150 — selection commands (Escape/Ctrl+C/Ctrl+V) must fire from
+// anywhere in the workspace subtree, not only when the bare <main> surface
+// itself is focused: completing a marquee-select calls preventDefault() on
+// pointerdown (Workspace.tsx startMarqueeSelection), which suppresses the
+// browser's default focus-on-mousedown onto <main>, and clicking a window
+// focuses that window's own section instead. Requiring literal
+// target === currentTarget therefore made Ctrl+C/Ctrl+V no-op after the
+// exact gestures users perform to build a selection. Per ADR-0123 D6, the
+// only thing these commands must not steal is an embedded editor/terminal/
+// text-input's own clipboard behavior — isTextEntryTarget is the existing
+// guard for that, so it (not exact-target) is the right gate here.
+function handleWorkspaceSelectionShortcut(
+  event: ReactKeyboardEvent<HTMLElement>,
+  selection: UseWorkspaceResult["selection"],
+  api: UseWorkspaceResult["api"],
+): boolean {
+  if (workspaceInteractionLocked() || isTextEntryTarget(event.target)) return false;
+  if (tryHandleWorkspaceEscapeShortcut(event, selection, api)) return true;
+  return tryHandleWorkspaceClipboardShortcut(event, api);
+}
+
+function describeSelectionStatus(t: I18nTranslate, selectedWindowCount: number): string {
+  if (selectedWindowCount === 0) return t("workspace.selection.none");
+  if (selectedWindowCount === 1) return t("workspace.selection.one");
+  return t("workspace.selection.many", { count: selectedWindowCount });
+}
+
+function isWorkspaceEmpty(wins: readonly AppWindow[] | null): boolean {
+  return wins !== null && wins.length === 0;
+}
+
+function hasAnyMaximizedWindow(wins: readonly AppWindow[] | null): boolean {
+  return wins?.some((win) => win.max) ?? false;
+}
+
+interface WorkspaceMainDataAttributes {
+  readonly windowMaxed: "true" | undefined;
+  readonly canvasOverlaysHidden: "true" | "false";
+  readonly connecting: "true" | undefined;
+  readonly panning: "true" | undefined;
+  readonly handTool: "true" | undefined;
+  readonly marquee: "true" | undefined;
+}
+
+function workspaceMainDataAttributes(state: {
+  readonly hasMaximizedWindow: boolean;
+  readonly connecting: ConnectingState | null;
+  readonly panning: boolean;
+  readonly handTool: boolean;
+  readonly marquee: MarqueeSession | null;
+}): WorkspaceMainDataAttributes {
+  return {
+    windowMaxed: state.hasMaximizedWindow ? "true" : undefined,
+    canvasOverlaysHidden: state.hasMaximizedWindow ? "true" : "false",
+    connecting: state.connecting !== null ? "true" : undefined,
+    panning: state.panning ? "true" : undefined,
+    handTool: state.handTool ? "true" : undefined,
+    marquee: state.marquee !== null ? "true" : undefined,
+  };
+}
+
+interface WorkspaceMarqueeOverlayProps {
+  readonly marquee: MarqueeSession | null;
+}
+
+function WorkspaceMarqueeOverlay({ marquee }: WorkspaceMarqueeOverlayProps): ReactNode {
+  if (marquee === null || !marqueeIsActive(marquee.rect)) return null;
+  return (
+    <div
+      className={selectionStyles.marquee}
+      style={{
+        left: marquee.rect.left,
+        top: marquee.rect.top,
+        width: marquee.rect.width,
+        height: marquee.rect.height,
+      }}
+      aria-hidden="true"
+      data-testid="workspace-marquee"
+    />
+  );
+}
+
+interface WorkspaceConnectHintProps {
+  readonly connecting: ConnectingState | null;
+  readonly t: I18nTranslate;
+}
+
+// Visible counterpart to ConnectAnnouncer for sighted users — connect mode
+// otherwise only signals via cursor/dimming, leaving the exits (Escape,
+// background click) undiscoverable (audit F052/C411). aria-hidden: the live
+// region above already announces this.
+function WorkspaceConnectHint({ connecting, t }: WorkspaceConnectHintProps): ReactNode {
+  if (connecting === null) return null;
+  return (
+    <div className="ws-connect-hint" aria-hidden="true">
+      {t("workspace.connectHint")}
+    </div>
+  );
+}
+
+interface WorkspaceEmptyStateProps {
+  readonly empty: boolean;
+  readonly onNewWindow: () => void;
+}
+
+function WorkspaceEmptyState({ empty, onNewWindow }: WorkspaceEmptyStateProps): ReactNode {
+  if (!empty) return null;
+  return (
+    <div className="ws-empty">
+      <EmptyWorkspaceBlob onNewWindow={onNewWindow} />
+    </div>
+  );
+}
+
+interface WorkspaceSceneProps {
+  readonly style: CSSProperties;
+  readonly snapPrev: SnapPrev | null;
+  readonly visibleWins: readonly AppWindow[] | null;
+  readonly conns: readonly Connection[];
+  readonly connecting: ConnectingState | null;
+  readonly api: UseWorkspaceResult["api"];
+  readonly top: AppWindow | null;
+  readonly connStateById: ReadonlyMap<string, ConnState>;
+  readonly wsRef: RefObject<HTMLDivElement | null>;
+  readonly linkRevision: number;
+  readonly selectedWindowIds: ReadonlySet<string>;
+}
+
+function WorkspaceScene({
+  style,
+  snapPrev,
+  visibleWins,
+  conns,
+  connecting,
+  api,
+  top,
+  connStateById,
+  wsRef,
+  linkRevision,
+  selectedWindowIds,
+}: WorkspaceSceneProps): ReactNode {
+  return (
+    <div className="ws-scene" style={style}>
+      {snapPrev !== null ? (
+        <div
+          className="snap-ghost"
+          style={{ left: snapPrev.x, top: snapPrev.y, width: snapPrev.w, height: snapPrev.h }}
+        />
+      ) : null}
+      {visibleWins !== null ? (
+        <ConnectionsLayer wins={visibleWins} conns={conns} connecting={connecting} api={api} />
+      ) : null}
+      {visibleWins !== null
+        ? visibleWins.map((w) => (
+            <WindowFrame
+              key={w.id}
+              win={w}
+              top={top !== null && w.id === top.id}
+              connState={connStateById.get(w.id) ?? null}
+              api={api}
+              wsRef={wsRef}
+              linkRevision={linkRevision}
+              selected={selectedWindowIds.has(w.id)}
+              selectedWindowCount={selectedWindowIds.size}
+            />
+          ))
+        : null}
+      {/* Issue #2150 — selection rings render as sibling overlays above every
+          window (z above the topmost window's own z) instead of as styling on
+          each window, so an overlapping higher-z window can never paint over a
+          selected-but-lower-z window's ring. See WorkspaceSelection.module.css
+          .selectionRing. */}
+      {visibleWins !== null
+        ? visibleWins
+            .filter((w) => selectedWindowIds.has(w.id))
+            .map((w) => (
+              <div
+                key={`selection-ring-${w.id}`}
+                className={selectionStyles.selectionRing}
+                aria-hidden="true"
+                data-testid={`selection-ring-${w.id}`}
+                style={{
+                  width: w.w,
+                  height: w.h,
+                  zIndex: (top?.z ?? 0) + 1,
+                  transform: `translate3d(${String(w.x)}px, ${String(w.y)}px, 0)`,
+                }}
+              />
+            ))
+        : null}
+    </div>
+  );
+}
+
+function resolvePaletteOverlay(hasMaximizedWindow: boolean, palette: ReactNode): ReactNode {
+  if (hasMaximizedWindow) return null;
+  return palette ?? null;
+}
+
 export function Workspace({
   ws,
   wsRef,
@@ -427,10 +675,7 @@ export function Workspace({
     () => new Set(selection.selectedWindowIds),
     [selection.selectedWindowIds],
   );
-  const connFrom: AppWindow | null =
-    connecting !== null && visibleWins !== null
-      ? (visibleWins.find((w) => w.id === connecting.from) ?? null)
-      : null;
+  const connFrom = resolveConnectionSource(connecting, visibleWins);
   const connStateById = useMemo(() => {
     const stateById = new Map<string, ConnState>();
     if (connFrom === null || visibleWins === null) return stateById;
@@ -541,37 +786,7 @@ export function Workspace({
   }, []);
 
   const onSurfaceKeyDown = (event: ReactKeyboardEvent<HTMLElement>): void => {
-    // Issue #2150 — selection commands (Escape/Ctrl+C/Ctrl+V) must fire from
-    // anywhere in the workspace subtree, not only when the bare <main> surface
-    // itself is focused: completing a marquee-select calls preventDefault() on
-    // pointerdown (Workspace.tsx startMarqueeSelection), which suppresses the
-    // browser's default focus-on-mousedown onto <main>, and clicking a window
-    // focuses that window's own section instead. Requiring literal
-    // target === currentTarget therefore made Ctrl+C/Ctrl+V no-op after the
-    // exact gestures users perform to build a selection. Per ADR-0123 D6, the
-    // only thing these commands must not steal is an embedded editor/terminal/
-    // text-input's own clipboard behavior — isTextEntryTarget is the existing
-    // guard for that, so it (not exact-target) is the right gate here.
-    if (!workspaceInteractionLocked() && !isTextEntryTarget(event.target)) {
-      if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) {
-        if (selection.selectedWindowIds.length > 0) {
-          api.clearSelection();
-          event.preventDefault();
-        }
-        return;
-      }
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey) {
-        const key = event.key.toLowerCase();
-        if (key === "c") {
-          if (api.copySelectedWindows()) event.preventDefault();
-          return;
-        }
-        if (key === "v") {
-          if (api.pasteCopiedWindows()) event.preventDefault();
-          return;
-        }
-      }
-    }
+    if (handleWorkspaceSelectionShortcut(event, selection, api)) return;
     // WCAG 2.1.1 (WC-01): keyboard pan when the workspace surface itself is
     // focused. Guard event.target === event.currentTarget so arrow keys inside a
     // focused window child are not captured here (those are handled by WindowFrame).
@@ -951,15 +1166,17 @@ export function Workspace({
     }
   };
 
-  const empty = wins !== null && wins.length === 0;
-  const hasMaximizedWindow = wins?.some((win) => win.max) ?? false;
+  const empty = isWorkspaceEmpty(wins);
+  const hasMaximizedWindow = hasAnyMaximizedWindow(wins);
   const selectedWindowCount = selection.selectedWindowIds.length;
-  const selectionStatusText =
-    selectedWindowCount === 0
-      ? t("workspace.selection.none")
-      : selectedWindowCount === 1
-        ? t("workspace.selection.one")
-        : t("workspace.selection.many", { count: selectedWindowCount });
+  const selectionStatusText = describeSelectionStatus(t, selectedWindowCount);
+  const mainDataAttrs = workspaceMainDataAttributes({
+    hasMaximizedWindow,
+    connecting,
+    panning,
+    handTool,
+    marquee,
+  });
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
@@ -968,12 +1185,12 @@ export function Workspace({
       ref={wsRef}
       aria-label={t("workspace.surface")}
       tabIndex={0}
-      data-window-maxed={hasMaximizedWindow ? "true" : undefined}
-      data-canvas-overlays-hidden={hasMaximizedWindow ? "true" : "false"}
-      data-connecting={connecting !== null ? "true" : undefined}
-      data-panning={panning ? "true" : undefined}
-      data-hand-tool={handTool ? "true" : undefined}
-      data-marquee={marquee !== null ? "true" : undefined}
+      data-window-maxed={mainDataAttrs.windowMaxed}
+      data-canvas-overlays-hidden={mainDataAttrs.canvasOverlaysHidden}
+      data-connecting={mainDataAttrs.connecting}
+      data-panning={mainDataAttrs.panning}
+      data-hand-tool={mainDataAttrs.handTool}
+      data-marquee={mainDataAttrs.marquee}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
       onKeyDown={onSurfaceKeyDown}
@@ -982,19 +1199,7 @@ export function Workspace({
     >
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
-      {marquee !== null && marqueeIsActive(marquee.rect) ? (
-        <div
-          className={selectionStyles.marquee}
-          style={{
-            left: marquee.rect.left,
-            top: marquee.rect.top,
-            width: marquee.rect.width,
-            height: marquee.rect.height,
-          }}
-          aria-hidden="true"
-          data-testid="workspace-marquee"
-        />
-      ) : null}
+      <WorkspaceMarqueeOverlay marquee={marquee} />
       <ConnectAnnouncer wins={visibleWins} connecting={connecting} conns={conns} />
       <p
         className="sr-only"
@@ -1005,70 +1210,22 @@ export function Workspace({
       >
         {selectionStatusText}
       </p>
-      {connecting !== null ? (
-        // Visible counterpart to ConnectAnnouncer for sighted users — connect
-        // mode otherwise only signals via cursor/dimming, leaving the exits
-        // (Escape, background click) undiscoverable (audit F052/C411).
-        // aria-hidden: the live region above already announces this.
-        <div className="ws-connect-hint" aria-hidden="true">
-          {t("workspace.connectHint")}
-        </div>
-      ) : null}
-      {empty ? (
-        <div className="ws-empty">
-          <EmptyWorkspaceBlob onNewWindow={openPalette} />
-        </div>
-      ) : null}
+      <WorkspaceConnectHint connecting={connecting} t={t} />
+      <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
 
-      <div className="ws-scene" style={sceneStyle}>
-        {snapPrev !== null ? (
-          <div
-            className="snap-ghost"
-            style={{ left: snapPrev.x, top: snapPrev.y, width: snapPrev.w, height: snapPrev.h }}
-          />
-        ) : null}
-        {visibleWins !== null ? (
-          <ConnectionsLayer wins={visibleWins} conns={conns} connecting={connecting} api={api} />
-        ) : null}
-        {visibleWins !== null
-          ? visibleWins.map((w) => (
-              <WindowFrame
-                key={w.id}
-                win={w}
-                top={top !== null && w.id === top.id}
-                connState={connStateById.get(w.id) ?? null}
-                api={api}
-                wsRef={wsRef}
-                linkRevision={linkRevision}
-                selected={selectedWindowIds.has(w.id)}
-                selectedWindowCount={selectedWindowIds.size}
-              />
-            ))
-          : null}
-        {/* Issue #2150 — selection rings render as sibling overlays above every
-            window (z above the topmost window's own z) instead of as styling on
-            each window, so an overlapping higher-z window can never paint over a
-            selected-but-lower-z window's ring. See WorkspaceSelection.module.css
-            .selectionRing. */}
-        {visibleWins !== null
-          ? visibleWins
-              .filter((w) => selectedWindowIds.has(w.id))
-              .map((w) => (
-                <div
-                  key={`selection-ring-${w.id}`}
-                  className={selectionStyles.selectionRing}
-                  aria-hidden="true"
-                  data-testid={`selection-ring-${w.id}`}
-                  style={{
-                    width: w.w,
-                    height: w.h,
-                    zIndex: (top?.z ?? 0) + 1,
-                    transform: `translate3d(${String(w.x)}px, ${String(w.y)}px, 0)`,
-                  }}
-                />
-              ))
-          : null}
-      </div>
+      <WorkspaceScene
+        style={sceneStyle}
+        snapPrev={snapPrev}
+        visibleWins={visibleWins}
+        conns={conns}
+        connecting={connecting}
+        api={api}
+        top={top}
+        connStateById={connStateById}
+        wsRef={wsRef}
+        linkRevision={linkRevision}
+        selectedWindowIds={selectedWindowIds}
+      />
 
       <div className="ws-zoom">
         <button
@@ -1123,7 +1280,7 @@ export function Workspace({
         <Icons.add size={20} />
       </button>
 
-      {hasMaximizedWindow ? null : (palette ?? null)}
+      {resolvePaletteOverlay(hasMaximizedWindow, palette)}
       {children}
     </main>
   );

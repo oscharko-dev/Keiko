@@ -7,15 +7,22 @@
 // PRE-FIX: a pre-created fresh lock file made applyReviewDecision retry 40×5ms then throw a write
 // conflict. POST-FIX: the ownerless lock is reclaimed and the decision persists.
 
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import { applyReviewDecision, loadRunReviewState } from "../reviewStore.js";
+import {
+  applyReviewDecision,
+  loadRunReviewState,
+  QualityIntelligenceReviewWriteConflict,
+} from "../reviewStore.js";
 
 const RUN_ID = "run-lock-persistence-007";
 const DEAD_LOCK_RECLAIM_BUDGET_MS = 250;
+const LIVE_LOCK_EXPECTED_POLLS = 40;
+const LIVE_LOCK_EXPECTED_SLEEPS = 39;
 const dirs: string[] = [];
 
 function freshEvidenceDir(): string {
@@ -85,5 +92,54 @@ describe("withReviewArtifactLock — non-blocking reclaim (GEN-PERF-PERSISTENCE-
       `${sha256Hex(RUN_ID).slice(0, 32)}.lock`,
     );
     expect(() => readFileSync(lockPath, "utf8")).toThrow();
+  });
+
+  it("does not reclaim a lock held by a live foreign process", () => {
+    const evidenceDir = freshEvidenceDir();
+    const lockPath = reviewLockPath(evidenceDir);
+    const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+      stdio: "ignore",
+    });
+    const killSpy = vi.spyOn(process, "kill");
+    const sleepSpy = vi.spyOn(Atomics, "wait");
+    try {
+      if (holder.pid === undefined) throw new Error("expected child process pid");
+      writeFileSync(lockPath, `${String(holder.pid)}\n`);
+
+      expect((): void => {
+        approveRun(evidenceDir);
+      }).toThrow(QualityIntelligenceReviewWriteConflict);
+      expect(killSpy).toHaveBeenCalledTimes(LIVE_LOCK_EXPECTED_POLLS);
+      expect(killSpy.mock.calls.every(([pid, signal]) => pid === holder.pid && signal === 0)).toBe(
+        true,
+      );
+      expect(sleepSpy).toHaveBeenCalledTimes(LIVE_LOCK_EXPECTED_SLEEPS);
+      expect(sleepSpy.mock.calls.every(([_view, _index, _value, ms]) => ms === 5)).toBe(true);
+      expect(readFileSync(lockPath, "utf8")).toBe(`${String(holder.pid)}\n`);
+    } finally {
+      sleepSpy.mockRestore();
+      killSpy.mockRestore();
+      holder.kill();
+    }
+  });
+
+  it("removes a lock when the protected review write fails after acquisition", () => {
+    const evidenceDir = freshEvidenceDir();
+    const expected = new Error("redactor failed");
+
+    expect(() =>
+      applyReviewDecision({
+        runId: RUN_ID,
+        evidenceDir,
+        action: "approve",
+        scope: "run",
+        actor: { actorId: "reviewer", displayLabel: "Reviewer" },
+        now: "2026-07-03T10:00:00.000Z",
+        redact: () => {
+          throw expected;
+        },
+      }),
+    ).toThrow(expected);
+    expect(() => readFileSync(reviewLockPath(evidenceDir), "utf8")).toThrow();
   });
 });

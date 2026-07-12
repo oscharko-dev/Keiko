@@ -93,207 +93,259 @@ function mutableFile(path: string): MutableFile {
   };
 }
 
+// --- parser state -------------------------------------------------------------
+
+interface ParserState {
+  files: MutableFile[];
+  current: MutableFile | null;
+  currentHunk: MutableHunk | null;
+  oldLine: number;
+  newLine: number;
+  truncated: boolean;
+}
+
+function flushHunk(state: ParserState): void {
+  if (state.current !== null && state.currentHunk !== null) {
+    state.current.hunks.push(state.currentHunk);
+  }
+  state.currentHunk = null;
+}
+
+function flushFile(state: ParserState): void {
+  flushHunk(state);
+  if (state.current !== null) {
+    if (state.files.length < MAX_DIFF_FILES) {
+      state.files.push(state.current);
+    } else {
+      state.truncated = true;
+    }
+  }
+  state.current = null;
+}
+
+// --- byte truncation and line splitting --------------------------------------
+
+interface TruncateResult {
+  input: string;
+  truncated: boolean;
+  byteTruncated: boolean;
+}
+
+/** Slice raw input to the MAX_DIFF_BYTES boundary, then trim to the last complete line. */
+function truncateToByteLimit(raw: string, totalBytes: number): TruncateResult {
+  if (totalBytes <= MAX_DIFF_BYTES) {
+    return { input: raw, truncated: false, byteTruncated: false };
+  }
+  const bytes = new TextEncoder().encode(raw);
+  const slice = new TextDecoder().decode(bytes.slice(0, MAX_DIFF_BYTES));
+  const lastNl = slice.lastIndexOf("\n");
+  const input = lastNl === -1 ? slice : slice.slice(0, lastNl + 1);
+  return { input, truncated: true, byteTruncated: true };
+}
+
+function splitDiffLines(input: string): string[] {
+  const rawLines = input.split("\n");
+  // Remove the single trailing empty string that results from a terminal newline.
+  return rawLines.at(-1) === "" ? rawLines.slice(0, -1) : rawLines;
+}
+
+function markLastFileTruncated(files: MutableFile[]): void {
+  const file = files.at(-1);
+  if (file !== undefined) {
+    file.truncated = true;
+    const hunk = file.hunks.at(-1);
+    if (hunk !== undefined) hunk.truncated = true;
+  }
+}
+
+// --- per-line handlers ---------------------------------------------------------
+
+// git diff header: diff --git a/<path> b/<path>
+function handleDiffGitLine(line: string, state: ParserState): boolean {
+  if (!line.startsWith("diff --git ")) return false;
+  flushFile(state);
+  const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+  if (m !== null && m[1] !== undefined && m[2] !== undefined) {
+    const aPath = m[1];
+    const bPath = m[2];
+    const path = stripGitPrefix(`b/${bPath}`);
+    const oldPath = stripGitPrefix(`a/${aPath}`);
+    const base = mutableFile(path);
+    if (oldPath !== path) {
+      base.oldPath = oldPath;
+      base.status = "renamed";
+    }
+    state.current = base;
+  }
+  return true;
+}
+
+// Hunk content lines must be recognized before ---/+++ file headers: valid
+// added or deleted source text can begin with those header-like prefixes.
+function handleHunkContentLine(line: string, state: ParserState): boolean {
+  if (state.currentHunk === null) return false;
+  const hunk = state.currentHunk;
+  if (line.startsWith("+")) {
+    const dl: DiffLine = {
+      kind: "add",
+      oldLine: null,
+      newLine: state.newLine,
+      text: line.slice(1),
+    };
+    hunk.lines.push(dl);
+    if (state.current !== null) state.current.addedLines++;
+    state.newLine++;
+    return true;
+  }
+  if (line.startsWith("-")) {
+    const dl: DiffLine = {
+      kind: "del",
+      oldLine: state.oldLine,
+      newLine: null,
+      text: line.slice(1),
+    };
+    hunk.lines.push(dl);
+    if (state.current !== null) state.current.removedLines++;
+    state.oldLine++;
+    return true;
+  }
+  if (line.startsWith("\\ ")) {
+    // "\ No newline at end of file"
+    const dl: DiffLine = { kind: "meta", oldLine: null, newLine: null, text: line };
+    hunk.lines.push(dl);
+    return true;
+  }
+  // Context line (space prefix) or empty line within hunk
+  if (line.startsWith(" ") || line === "") {
+    const dl: DiffLine = {
+      kind: "ctx",
+      oldLine: state.oldLine,
+      newLine: state.newLine,
+      text: line.startsWith(" ") ? line.slice(1) : line,
+    };
+    hunk.lines.push(dl);
+    state.oldLine++;
+    state.newLine++;
+    return true;
+  }
+  return false;
+}
+
+// --- a/path line (may start a file when no diff --git header)
+function handleFileHeaderMinusLine(line: string, state: ParserState): boolean {
+  if (!line.startsWith("--- ")) return false;
+  const rest = line.slice(4);
+  if (rest !== "/dev/null" && state.current === null) {
+    flushFile(state);
+    const path = stripGitPrefix(rest);
+    state.current = mutableFile(path);
+  } else if (rest !== "/dev/null" && state.current !== null) {
+    // Update oldPath when we see the --- line after diff --git
+    const oldPath = stripGitPrefix(rest);
+    if (oldPath !== state.current.path) {
+      state.current.oldPath = oldPath;
+      state.current.status = "renamed";
+    }
+  } else if (rest === "/dev/null" && state.current !== null) {
+    state.current.status = "added";
+  }
+  return true;
+}
+
+// +++ b/path line
+function handleFileHeaderPlusLine(line: string, state: ParserState): boolean {
+  if (!line.startsWith("+++ ")) return false;
+  const rest = line.slice(4);
+  if (rest !== "/dev/null" && state.current !== null) {
+    state.current.path = stripGitPrefix(rest);
+  } else if (rest !== "/dev/null") {
+    flushFile(state);
+    state.current = mutableFile(stripGitPrefix(rest));
+  } else if (state.current !== null) {
+    state.current.status = "deleted";
+  }
+  return true;
+}
+
+// Hunk header
+function handleHunkHeaderLine(line: string, state: ParserState): boolean {
+  if (!line.startsWith("@@ ")) return false;
+  // Hunk without a file header — create an anonymous file entry
+  state.current ??= mutableFile("(unknown)");
+  flushHunk(state);
+  const pos = parseHunkHeader(line);
+  state.oldLine = pos?.oldStart ?? 1;
+  state.newLine = pos?.newStart ?? 1;
+  state.currentHunk = {
+    header: line,
+    oldStart: pos?.oldStart ?? 1,
+    oldCount: pos?.oldCount ?? 1,
+    newStart: pos?.newStart ?? 1,
+    newCount: pos?.newCount ?? 1,
+    lines: [],
+    truncated: false,
+  };
+  return true;
+}
+
+function handleBinaryMarkerLine(line: string, state: ParserState): boolean {
+  if (
+    state.current === null ||
+    !(/^Binary files .+ differ$/u.test(line) || line === "GIT binary patch")
+  ) {
+    return false;
+  }
+  state.current.binary = true;
+  return true;
+}
+
+function processDiffLine(line: string, state: ParserState): void {
+  if (handleDiffGitLine(line, state)) return;
+  if (handleHunkContentLine(line, state)) return;
+  if (handleFileHeaderMinusLine(line, state)) return;
+  if (handleFileHeaderPlusLine(line, state)) return;
+  if (handleHunkHeaderLine(line, state)) return;
+  handleBinaryMarkerLine(line, state);
+}
+
 // --- main parser ------------------------------------------------------------
 
 export function parseUnifiedDiff(raw: string): DiffParseResult {
-  const encoder = new TextEncoder();
-  const totalBytes = encoder.encode(raw).byteLength;
+  const totalBytes = new TextEncoder().encode(raw).byteLength;
 
   if (raw.length === 0) {
     return { files: [], truncated: false, totalBytes: 0 };
   }
 
-  let input = raw;
-  let truncated = false;
-  let byteTruncated = false;
+  const {
+    input,
+    truncated: initialTruncated,
+    byteTruncated,
+  } = truncateToByteLimit(raw, totalBytes);
+  const lines = splitDiffLines(input);
 
-  if (totalBytes > MAX_DIFF_BYTES) {
-    truncated = true;
-    byteTruncated = true;
-    // Slice to byte boundary then trim to last complete line.
-    const bytes = encoder.encode(raw);
-    const slice = new TextDecoder().decode(bytes.slice(0, MAX_DIFF_BYTES));
-    const lastNl = slice.lastIndexOf("\n");
-    input = lastNl === -1 ? slice : slice.slice(0, lastNl + 1);
-  }
-
-  const rawLines = input.split("\n");
-  // Remove the single trailing empty string that results from a terminal newline.
-  const lines =
-    rawLines.length > 0 && rawLines[rawLines.length - 1] === "" ? rawLines.slice(0, -1) : rawLines;
-  const files: MutableFile[] = [];
-  let current: MutableFile | null = null;
-  let currentHunk: MutableHunk | null = null;
-  let oldLine = 0;
-  let newLine = 0;
-
-  const flushHunk = (): void => {
-    if (current !== null && currentHunk !== null) {
-      current.hunks.push(currentHunk);
-    }
-    currentHunk = null;
-  };
-
-  const flushFile = (): void => {
-    flushHunk();
-    if (current !== null) {
-      if (files.length < MAX_DIFF_FILES) {
-        files.push(current);
-      } else {
-        truncated = true;
-      }
-    }
-    current = null;
+  const state: ParserState = {
+    files: [],
+    current: null,
+    currentHunk: null,
+    oldLine: 0,
+    newLine: 0,
+    truncated: initialTruncated,
   };
 
   let i = 0;
   while (i < lines.length) {
     // noUncheckedIndexedAccess: the while guard ensures i is in bounds.
     const line = lines[i] ?? "";
-
-    // git diff header: diff --git a/<path> b/<path>
-    if (line.startsWith("diff --git ")) {
-      flushFile();
-      const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-      if (m !== null && m[1] !== undefined && m[2] !== undefined) {
-        const aPath = m[1];
-        const bPath = m[2];
-        const path = stripGitPrefix(`b/${bPath}`);
-        const oldPath = stripGitPrefix(`a/${aPath}`);
-        const base = mutableFile(path);
-        if (oldPath !== path) {
-          base.oldPath = oldPath;
-          base.status = "renamed";
-        }
-        current = base;
-      }
-      i++;
-      continue;
-    }
-
-    // Hunk content lines must be recognized before ---/+++ file headers: valid
-    // added or deleted source text can begin with those header-like prefixes.
-    if (currentHunk !== null) {
-      if (line.startsWith("+")) {
-        const dl: DiffLine = { kind: "add", oldLine: null, newLine: newLine, text: line.slice(1) };
-        currentHunk.lines.push(dl);
-        if (current !== null) current.addedLines++;
-        newLine++;
-        i++;
-        continue;
-      }
-      if (line.startsWith("-")) {
-        const dl: DiffLine = { kind: "del", oldLine: oldLine, newLine: null, text: line.slice(1) };
-        currentHunk.lines.push(dl);
-        if (current !== null) current.removedLines++;
-        oldLine++;
-        i++;
-        continue;
-      }
-      if (line.startsWith("\\ ")) {
-        // "\ No newline at end of file"
-        const dl: DiffLine = { kind: "meta", oldLine: null, newLine: null, text: line };
-        currentHunk.lines.push(dl);
-        i++;
-        continue;
-      }
-      // Context line (space prefix) or empty line within hunk
-      if (line.startsWith(" ") || line === "") {
-        const dl: DiffLine = {
-          kind: "ctx",
-          oldLine: oldLine,
-          newLine: newLine,
-          text: line.startsWith(" ") ? line.slice(1) : line,
-        };
-        currentHunk.lines.push(dl);
-        oldLine++;
-        newLine++;
-        i++;
-        continue;
-      }
-    }
-
-    // --- a/path line (may start a file when no diff --git header)
-    if (line.startsWith("--- ")) {
-      const rest = line.slice(4);
-      if (rest !== "/dev/null" && current === null) {
-        flushFile();
-        const path = stripGitPrefix(rest);
-        current = mutableFile(path);
-      } else if (rest !== "/dev/null" && current !== null) {
-        // Update oldPath when we see the --- line after diff --git
-        const oldPath = stripGitPrefix(rest);
-        if (oldPath !== current.path) {
-          current.oldPath = oldPath;
-          current.status = "renamed";
-        }
-      } else if (rest === "/dev/null" && current !== null) {
-        current.status = "added";
-      }
-      i++;
-      continue;
-    }
-
-    // +++ b/path line
-    if (line.startsWith("+++ ")) {
-      const rest = line.slice(4);
-      if (rest !== "/dev/null" && current !== null) {
-        current.path = stripGitPrefix(rest);
-      } else if (rest !== "/dev/null") {
-        flushFile();
-        current = mutableFile(stripGitPrefix(rest));
-      } else if (current !== null) {
-        current.status = "deleted";
-      }
-      i++;
-      continue;
-    }
-
-    // Hunk header
-    if (line.startsWith("@@ ")) {
-      if (current === null) {
-        // Hunk without a file header — create an anonymous file entry
-        current = mutableFile("(unknown)");
-      }
-      flushHunk();
-      const pos = parseHunkHeader(line);
-      oldLine = pos?.oldStart ?? 1;
-      newLine = pos?.newStart ?? 1;
-      currentHunk = {
-        header: line,
-        oldStart: pos?.oldStart ?? 1,
-        oldCount: pos?.oldCount ?? 1,
-        newStart: pos?.newStart ?? 1,
-        newCount: pos?.newCount ?? 1,
-        lines: [],
-        truncated: false,
-      };
-      i++;
-      continue;
-    }
-
-    if (
-      current !== null &&
-      (/^Binary files .+ differ$/u.test(line) || line === "GIT binary patch")
-    ) {
-      current.binary = true;
-      i++;
-      continue;
-    }
-
+    processDiffLine(line, state);
     i++;
   }
 
-  flushFile();
+  flushFile(state);
 
   if (byteTruncated) {
-    const file = files.at(-1);
-    if (file !== undefined) {
-      file.truncated = true;
-      const hunk = file.hunks.at(-1);
-      if (hunk !== undefined) hunk.truncated = true;
-    }
+    markLastFileTruncated(state.files);
   }
 
-  return { files, truncated, totalBytes };
+  return { files: state.files, truncated: state.truncated, totalBytes };
 }

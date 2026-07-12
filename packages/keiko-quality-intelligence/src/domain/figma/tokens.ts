@@ -98,16 +98,21 @@ const visit = (pruned: PrunedNode, acc: TokenAccumulator): void => {
 };
 
 const toColorTokens = (values: ReadonlySet<string>): readonly ColorToken[] =>
-  [...values].sort().map((value) => ({ id: `color:${value}`, kind: "color", value }));
+  [...values]
+    .sort((a, b) => a.localeCompare(b))
+    .map((value) => ({ id: `color:${value}`, kind: "color", value }));
+
+const compareTokenNumbersLexically = (a: number, b: number): number =>
+  String(a).localeCompare(String(b));
 
 const toSpacingTokens = (values: ReadonlySet<number>): readonly SpacingToken[] =>
   [...values]
-    .sort((a, b) => a - b)
+    .sort(compareTokenNumbersLexically)
     .map((value) => ({ id: `spacing:${String(value)}`, kind: "spacing", value }));
 
 const toRadiusTokens = (values: ReadonlySet<number>): readonly RadiusToken[] =>
   [...values]
-    .sort((a, b) => a - b)
+    .sort(compareTokenNumbersLexically)
     .map((value) => ({ id: `radius:${String(value)}`, kind: "radius", value }));
 
 /** Extract deduped, stable-ordered design tokens from the pruned screen roots. */

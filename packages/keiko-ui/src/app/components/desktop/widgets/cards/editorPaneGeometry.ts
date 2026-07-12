@@ -336,18 +336,30 @@ export function tabOrderWithInsertion(
   return [...without.slice(0, clamped), file, ...without.slice(clamped)];
 }
 
-export function tabInsertionTargetFromPoint(
-  drag: PointerTabDrag,
-  clientX: number,
-  clientY: number,
-  layout: EditorLayoutStateV2,
-): TabInsertTarget | null {
-  const targetPaneId = paneIdFromPoint(clientX, clientY);
-  if (targetPaneId === null) return null;
-  const pane = layout.panes[targetPaneId];
-  if (pane === undefined || pane.tabOrder.length < 1) return null;
+// Roving tab-stop target for plain (Alt-less) ArrowLeft/ArrowRight/Home/End within a pane's visible
+// tab order (WCAG 2.1.1 + APG tablist automatic activation). `order.length > 0` is a precondition
+// enforced by the caller; every branch below then indexes within bounds.
+export function rovingTabTargetFile(
+  order: readonly string[],
+  path: string,
+  key: "ArrowLeft" | "ArrowRight" | "Home" | "End",
+): string | undefined {
+  const index = order.indexOf(path);
+  if (key === "ArrowLeft") return order[index <= 0 ? order.length - 1 : index - 1];
+  if (key === "ArrowRight") return order[index < 0 || index >= order.length - 1 ? 0 : index + 1];
+  if (key === "Home") return order[0];
+  return order.at(-1);
+}
 
-  const tabNodes = Array.from(
+interface TabNodeRect {
+  readonly node: HTMLElement;
+  readonly rect: DOMRect;
+}
+
+// Live tab nodes for a pane, deduped by file (a tab can render in more than one place, e.g.
+// during a transition) and stripped of zero-size nodes (hidden/detached during layout thrash).
+function collectPaneTabNodes(targetPaneId: string): readonly TabNodeRect[] {
+  return Array.from(
     document.querySelectorAll<HTMLElement>(
       ".ed-tab[data-pane-id][data-tab-file], button[data-pane-id][data-tab-file]",
     ),
@@ -361,12 +373,14 @@ export function tabInsertionTargetFromPoint(
     })
     .map((node) => ({ node, rect: node.getBoundingClientRect() }))
     .filter(({ rect }) => rect.width > 0 && rect.height > 0);
-  if (tabNodes.length === 0) return null;
+}
 
-  const sameRowNodes = tabNodes.filter(
-    ({ rect }) => clientY >= rect.top - 10 && clientY <= rect.bottom + 10,
-  );
-  const candidates = sameRowNodes.length > 0 ? sameRowNodes : tabNodes;
+// Nearest candidate tab to the pointer, by center-to-pointer distance.
+function closestTabNode(
+  candidates: readonly TabNodeRect[],
+  clientX: number,
+  clientY: number,
+): TabNodeRect | undefined {
   let best = candidates[0];
   for (const candidate of candidates) {
     if (best === undefined) {
@@ -381,15 +395,49 @@ export function tabInsertionTargetFromPoint(
     const bestDistance = Math.hypot(clientX - bestCenterX, clientY - bestCenterY);
     if (candidateDistance < bestDistance) best = candidate;
   }
+  return best;
+}
+
+// Index the dragged file would land at within the target pane's tab order, or null when the
+// target tab is not (any longer) part of that order.
+function tabInsertionIndex(
+  pane: EditorPaneStateV2,
+  drag: PointerTabDrag,
+  targetFile: string,
+  edge: "before" | "after",
+): number | null {
+  const targetOrder = pane.tabOrder.filter((entry) => entry !== drag.file);
+  const targetFileIndex = targetOrder.indexOf(targetFile);
+  if (targetFileIndex < 0) return null;
+  return targetFileIndex + (edge === "after" ? 1 : 0);
+}
+
+export function tabInsertionTargetFromPoint(
+  drag: PointerTabDrag,
+  clientX: number,
+  clientY: number,
+  layout: EditorLayoutStateV2,
+): TabInsertTarget | null {
+  const targetPaneId = paneIdFromPoint(clientX, clientY);
+  if (targetPaneId === null) return null;
+  const pane = layout.panes[targetPaneId];
+  if (pane === undefined || pane.tabOrder.length < 1) return null;
+
+  const tabNodes = collectPaneTabNodes(targetPaneId);
+  if (tabNodes.length === 0) return null;
+
+  const sameRowNodes = tabNodes.filter(
+    ({ rect }) => clientY >= rect.top - 10 && clientY <= rect.bottom + 10,
+  );
+  const candidates = sameRowNodes.length > 0 ? sameRowNodes : tabNodes;
+  const best = closestTabNode(candidates, clientX, clientY);
   if (best === undefined) return null;
 
   const targetFile = best.node.dataset.tabFile;
   if (targetFile === undefined || targetFile === drag.file) return null;
   const edge = clientX < best.rect.left + best.rect.width / 2 ? "before" : "after";
-  const targetOrder = pane.tabOrder.filter((entry) => entry !== drag.file);
-  const targetFileIndex = targetOrder.indexOf(targetFile);
-  if (targetFileIndex < 0) return null;
-  const targetIndex = targetFileIndex + (edge === "after" ? 1 : 0);
+  const targetIndex = tabInsertionIndex(pane, drag, targetFile, edge);
+  if (targetIndex === null) return null;
 
   if (
     targetPaneId === drag.paneId &&

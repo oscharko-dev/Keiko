@@ -24,18 +24,24 @@ import {
   useState,
   type ChangeEvent,
   type CSSProperties,
+  type Dispatch,
   type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
   type Ref,
   type RefObject,
+  type SetStateAction,
   type SyntheticEvent,
 } from "react";
-import type { VoiceSessionGroundingContext } from "@oscharko-dev/keiko-contracts";
+import type {
+  VoiceSessionChatContext,
+  VoiceSessionGroundingContext,
+} from "@oscharko-dev/keiko-contracts";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
   useChatSessionContext,
+  type ChatSessionComposerApi,
 } from "./context/ChatSessionContext";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
@@ -70,8 +76,12 @@ import {
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, RunSummaryCard } from "./WorkflowHandoff";
 import { FileIcon } from "./widgets/shared/projectTree";
-import type { ChatSessionApi, SendStatus } from "./hooks/useChatSession";
-import type { AttachmentRejectionReason } from "./hooks/useChatSession";
+import type {
+  AttachmentRejectionReason,
+  ChatSessionApi,
+  SendStatus,
+  SentDocumentDisclosure,
+} from "./hooks/useChatSession";
 import {
   supportsDictation,
   supportsRealtimeVoice,
@@ -86,9 +96,10 @@ import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./Voi
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
-import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
+import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
 import {
   usePdfCitationPreviewController,
+  type CitationPreviewController,
   type PdfCitationPreviewWindowApi,
 } from "./hooks/usePdfCitationPreview";
 import { registerPdfCitationPreviewMessageTarget } from "./widgets/cards/pdf-citation-preview-session";
@@ -96,6 +107,9 @@ import {
   deriveVoiceAuraState,
   deriveVoiceDialogState,
   voiceAuraStateHeadline,
+  type VoiceAuraIntensity,
+  type VoiceAuraState,
+  type VoiceAuraStateSnapshot,
 } from "./hooks/voice-dialog-state";
 import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import styles from "./ChatWindow.module.css";
@@ -123,7 +137,10 @@ import type {
   GroundedAnswer as GroundedAnswerWire,
   GroundedAnswerContextSummary as GroundedAnswerContextSummaryWire,
   ModelCapability,
+  VoiceCapabilityResolution,
 } from "@/lib/types";
+
+type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
@@ -443,6 +460,209 @@ function MessageRegenerateButton({
   );
 }
 
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — pure predicate, no JSX/hooks involved.
+function canCollapseAssistantAnswer(
+  streaming: boolean,
+  isUser: boolean,
+  isRunSummary: boolean,
+  content: string,
+): boolean {
+  return !streaming && !isUser && !isRunSummary && isCollapsibleAssistantAnswer(content);
+}
+
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — the branchy body of
+// openDocumentationTarget's useCallback, kept as a plain function so the callback itself is a
+// one-line delegation.
+function resolveDocumentationTarget(
+  previewWindows: PdfCitationPreviewWindowApi | undefined,
+  target: string,
+): boolean {
+  if (previewWindows === undefined) return false;
+  return previewWindows.add("docbrowser", { target }) !== null;
+}
+
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — registers the bubble element as the PDF
+// citation preview's scroll target for its assistant message. Same effect body/deps as before,
+// now isolated as a named hook so the orchestrating component reads as a flat list of steps.
+function useRegisterPdfCitationPreviewTarget(
+  message: ChatMessage,
+  activeChatId: string | undefined,
+  windowId: string | undefined,
+  bubbleRef: RefObject<HTMLElement | null>,
+): void {
+  useEffect(() => {
+    const assistantMessageId = message.groundedAnswer?.assistantMessageId ?? message.id;
+    if (
+      message.role !== "assistant" ||
+      activeChatId === undefined ||
+      windowId === undefined ||
+      bubbleRef.current === null
+    ) {
+      return;
+    }
+    return registerPdfCitationPreviewMessageTarget({
+      assistantMessageId,
+      chatId: activeChatId,
+      chatWindowId: windowId,
+      element: bubbleRef.current,
+    });
+  }, [
+    activeChatId,
+    bubbleRef,
+    message.groundedAnswer?.assistantMessageId,
+    message.id,
+    message.role,
+    windowId,
+  ]);
+}
+
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text while
+// streaming/for the user, otherwise safe markdown, plus the streaming caret.
+function ChatBubbleContentArea({
+  message,
+  isUser,
+  streaming,
+  contentId,
+  collapsed,
+  canCollapse,
+  repositoryRoots,
+  openRepositoryReference,
+  citationPreview,
+  onApplyCodeBlock,
+}: {
+  readonly message: ChatMessage;
+  readonly isUser: boolean;
+  readonly streaming: boolean;
+  readonly contentId: string;
+  readonly collapsed: boolean;
+  readonly canCollapse: boolean;
+  readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly citationPreview: CitationPreviewController | undefined;
+  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
+}): ReactNode {
+  return (
+    <div
+      id={isUser ? undefined : contentId}
+      className="chat-msg-content"
+      data-collapsed={!isUser && collapsed ? "true" : "false"}
+      data-collapsible={canCollapse ? "true" : "false"}
+    >
+      {isUser || streaming ? (
+        message.content
+      ) : (
+        // AC #1 / #2: assistant responses render as safe markdown.
+        // User messages remain plain text — no markdown interpretation.
+        // The live streaming assistant turn also stays plain text until the
+        // canonical message arrives, avoiding full Markdown parse/highlight
+        // work on every token while retaining React's escaping guarantees.
+        // SM-1: wrapped in a per-message boundary so a parser/render defect
+        // degrades this one bubble to plain text instead of crashing the view.
+        <SafeMarkdownBoundary
+          source={message.content}
+          applyScopeId={`${message.chatId}:${message.id}`}
+          repositoryRoots={repositoryRoots}
+          openRepositoryReference={openRepositoryReference}
+          citationPreview={citationPreview}
+          onApplyCodeBlock={onApplyCodeBlock}
+        />
+      )}
+      {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
+          assistant turn. Decorative (the lifecycle status announces "Receiving
+          response…" politely), so it is hidden from assistive tech. */}
+      {streaming && !isUser ? <span className="ai-stream-cursor" aria-hidden="true" /> : null}
+    </div>
+  );
+}
+
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — the assistant-only action row (regenerate,
+// copy, collapse). Returns null for user messages, mirroring the original `isUser ? null : (…)`.
+function ChatBubbleFooterActions({
+  isUser,
+  message,
+  showRegenerate,
+  regenerating,
+  onRegenerate,
+  onCancelRegenerate,
+  canCollapse,
+  collapsed,
+  onToggleCollapsed,
+  contentId,
+}: {
+  readonly isUser: boolean;
+  readonly message: ChatMessage;
+  readonly showRegenerate: boolean;
+  readonly regenerating: boolean;
+  readonly onRegenerate: ((assistantMessageId: string) => Promise<void>) | undefined;
+  readonly onCancelRegenerate: (() => void) | undefined;
+  readonly canCollapse: boolean;
+  readonly collapsed: boolean;
+  readonly onToggleCollapsed: () => void;
+  readonly contentId: string;
+}): ReactNode {
+  const t = useTranslate();
+  if (isUser) return null;
+  return (
+    <div className="chat-msg-actions">
+      {showRegenerate && onRegenerate !== undefined && onCancelRegenerate !== undefined ? (
+        <MessageRegenerateButton
+          messageId={message.id}
+          regenerating={regenerating}
+          onRegenerate={onRegenerate}
+          onCancel={onCancelRegenerate}
+        />
+      ) : null}
+      <MessageCopyButton content={message.content} />
+      {canCollapse ? (
+        <button
+          type="button"
+          className="chat-msg-collapse"
+          aria-controls={contentId}
+          aria-expanded={!collapsed}
+          onClick={onToggleCollapsed}
+        >
+          <Icons.chevron size={12} aria-hidden="true" />
+          <span>{collapsed ? t("chat.answer.expand") : t("chat.answer.collapse")}</span>
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — the inline grounded-answer panel. Returns
+// null for user messages or messages without a grounded answer, mirroring the original
+// `!isUser && message.groundedAnswer !== undefined ? (…) : null`.
+function ChatBubbleGroundedSection({
+  message,
+  isUser,
+  repositoryRoots,
+  openRepositoryReference,
+  citationPreview,
+  openDocumentationTarget,
+}: {
+  readonly message: ChatMessage;
+  readonly isUser: boolean;
+  readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly citationPreview: CitationPreviewController | undefined;
+  readonly openDocumentationTarget: (target: string) => boolean;
+}): ReactNode {
+  if (isUser || message.groundedAnswer === undefined) return null;
+  return (
+    <div className="chatw-grounded chatw-grounded-inline">
+      <GroundedAnswer
+        answer={message.groundedAnswer}
+        busy={false}
+        repositoryRoots={repositoryRoots}
+        openRepositoryReference={openRepositoryReference}
+        citationPreview={citationPreview}
+        openDocumentationTarget={openDocumentationTarget}
+      />
+      <ContextStatusPanel contextSummary={contextSummaryOf(message.groundedAnswer)} />
+    </div>
+  );
+}
+
 function ChatBubbleImpl({
   message,
   onOpenRunResult,
@@ -495,38 +715,12 @@ function ChatBubbleImpl({
   // (ADR-0113) rather than calling navigateDocumentation directly, so the widget's own reason/
   // severity rendering stays the single source of truth for the navigation outcome.
   const openDocumentationTarget = useCallback(
-    (target: string): boolean => {
-      if (previewWindows === undefined) return false;
-      return previewWindows.add("docbrowser", { target }) !== null;
-    },
+    (target: string): boolean => resolveDocumentationTarget(previewWindows, target),
     [previewWindows],
   );
-  const canCollapse =
-    !streaming && !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
+  const canCollapse = canCollapseAssistantAnswer(streaming, isUser, isRunSummary, message.content);
 
-  useEffect(() => {
-    const assistantMessageId = message.groundedAnswer?.assistantMessageId ?? message.id;
-    if (
-      message.role !== "assistant" ||
-      activeChat?.id === undefined ||
-      windowId === undefined ||
-      bubbleRef.current === null
-    ) {
-      return;
-    }
-    return registerPdfCitationPreviewMessageTarget({
-      assistantMessageId,
-      chatId: activeChat.id,
-      chatWindowId: windowId,
-      element: bubbleRef.current,
-    });
-  }, [
-    activeChat?.id,
-    message.groundedAnswer?.assistantMessageId,
-    message.id,
-    message.role,
-    windowId,
-  ]);
+  useRegisterPdfCitationPreviewTarget(message, activeChat?.id, windowId, bubbleRef);
 
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
@@ -545,83 +739,47 @@ function ChatBubbleImpl({
     >
       <div className="chat-msg-bubble">
         {isUser ? <div className="chat-msg-role">{t("chat.role.user")}</div> : <KeikoMessageMark />}
-        <div
-          id={isUser ? undefined : contentId}
-          className="chat-msg-content"
-          data-collapsed={!isUser && collapsed ? "true" : "false"}
-          data-collapsible={canCollapse ? "true" : "false"}
-        >
-          {isUser || streaming ? (
-            message.content
-          ) : (
-            // AC #1 / #2: assistant responses render as safe markdown.
-            // User messages remain plain text — no markdown interpretation.
-            // The live streaming assistant turn also stays plain text until the
-            // canonical message arrives, avoiding full Markdown parse/highlight
-            // work on every token while retaining React's escaping guarantees.
-            // SM-1: wrapped in a per-message boundary so a parser/render defect
-            // degrades this one bubble to plain text instead of crashing the view.
-            <SafeMarkdownBoundary
-              source={message.content}
-              applyScopeId={`${message.chatId}:${message.id}`}
-              repositoryRoots={repositoryRoots}
-              openRepositoryReference={openRepositoryReference}
-              citationPreview={citationPreview}
-              onApplyCodeBlock={onApplyCodeBlock}
-            />
-          )}
-          {/* Issue #1296 — DS 0.4.0 streaming caret at the live edge of the growing
-              assistant turn. Decorative (the lifecycle status announces "Receiving
-              response…" politely), so it is hidden from assistive tech. */}
-          {streaming && !isUser ? <span className="ai-stream-cursor" aria-hidden="true" /> : null}
-        </div>
+        <ChatBubbleContentArea
+          message={message}
+          isUser={isUser}
+          streaming={streaming}
+          contentId={contentId}
+          collapsed={collapsed}
+          canCollapse={canCollapse}
+          repositoryRoots={repositoryRoots}
+          openRepositoryReference={openRepositoryReference}
+          citationPreview={citationPreview}
+          onApplyCodeBlock={onApplyCodeBlock}
+        />
         {/* uiux-fix F041 (C176) — full date+time stays reachable via title.
             uiux-fix F042 (C208) — footer row: timestamp left, assistant-only actions right. */}
         <div className="chat-msg-foot">
           <div className="chat-msg-time" title={new Date(message.timestamp).toLocaleString()}>
             {timeLabel(message.timestamp)}
           </div>
-          {isUser ? null : (
-            <div className="chat-msg-actions">
-              {showRegenerate && onRegenerate !== undefined && onCancelRegenerate !== undefined ? (
-                <MessageRegenerateButton
-                  messageId={message.id}
-                  regenerating={regenerating}
-                  onRegenerate={onRegenerate}
-                  onCancel={onCancelRegenerate}
-                />
-              ) : null}
-              <MessageCopyButton content={message.content} />
-              {canCollapse ? (
-                <button
-                  type="button"
-                  className="chat-msg-collapse"
-                  aria-controls={contentId}
-                  aria-expanded={!collapsed}
-                  onClick={() => {
-                    setCollapsed((current) => !current);
-                  }}
-                >
-                  <Icons.chevron size={12} aria-hidden="true" />
-                  <span>{collapsed ? t("chat.answer.expand") : t("chat.answer.collapse")}</span>
-                </button>
-              ) : null}
-            </div>
-          )}
+          <ChatBubbleFooterActions
+            isUser={isUser}
+            message={message}
+            showRegenerate={showRegenerate}
+            regenerating={regenerating}
+            onRegenerate={onRegenerate}
+            onCancelRegenerate={onCancelRegenerate}
+            canCollapse={canCollapse}
+            collapsed={collapsed}
+            onToggleCollapsed={() => {
+              setCollapsed((current) => !current);
+            }}
+            contentId={contentId}
+          />
         </div>
-        {!isUser && message.groundedAnswer !== undefined ? (
-          <div className="chatw-grounded chatw-grounded-inline">
-            <GroundedAnswer
-              answer={message.groundedAnswer}
-              busy={false}
-              repositoryRoots={repositoryRoots}
-              openRepositoryReference={openRepositoryReference}
-              citationPreview={citationPreview}
-              openDocumentationTarget={openDocumentationTarget}
-            />
-            <ContextStatusPanel contextSummary={contextSummaryOf(message.groundedAnswer)} />
-          </div>
-        ) : null}
+        <ChatBubbleGroundedSection
+          message={message}
+          isUser={isUser}
+          repositoryRoots={repositoryRoots}
+          openRepositoryReference={openRepositoryReference}
+          citationPreview={citationPreview}
+          openDocumentationTarget={openDocumentationTarget}
+        />
       </div>
     </article>
   );
@@ -1745,6 +1903,79 @@ function VoiceDialogComposerControls({
   );
 }
 
+// Extracted from ComposerBar (SonarCloud S3776) — AC #2's aria-describedby chain as a small
+// sequence of checks instead of a 3-deep nested ternary.
+function sendDescribedById(
+  noEligibleModels: boolean,
+  loading: boolean,
+  draftEmpty: boolean,
+): string | undefined {
+  if (noEligibleModels) return NO_MODEL_ALERT_ID;
+  if (loading) return LOADING_STATUS_ID;
+  if (draftEmpty) return SEND_HINT_ID;
+  return undefined;
+}
+
+// Extracted from ComposerBar (SonarCloud S3776) — the send button's data-tip label, previously a
+// 2-deep nested ternary inline in JSX.
+function sendButtonTip(noEligibleModels: boolean, loading: boolean, t: I18nTranslate): string {
+  if (noEligibleModels) return t("chat.send.noModel");
+  if (loading) return t("chat.send.connecting");
+  return t("chat.send.label");
+}
+
+// Extracted from ComposerBar (SonarCloud S3776) — the primary action button, which flips between
+// "cancel in-flight send" and "submit" (Issue #152). Same markup/behavior, now isolated so the
+// sending/type/data-tip branching lives in one small component instead of inline in ComposerBar.
+function ComposerSendButton({
+  sending,
+  cancelSend,
+  sendBlocked,
+  noEligibleModels,
+  loading,
+  sendDescribedBy,
+}: {
+  readonly sending: boolean;
+  readonly cancelSend: () => void;
+  readonly sendBlocked: boolean;
+  readonly noEligibleModels: boolean;
+  readonly loading: boolean;
+  readonly sendDescribedBy: string | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  // Issue #152 — while a send is in flight the primary action button
+  // flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
+  // submits the surrounding form; onClick calls cancelSend which is a
+  // safe no-op when the status is already terminal.
+  if (sending) {
+    return (
+      <button
+        type="button"
+        className="cmp-send cmp-send-cancel cmp-tip-end"
+        data-on
+        aria-label={t("chat.send.cancel")}
+        data-tip={t("chat.send.cancel")}
+        onClick={cancelSend}
+      >
+        <Icons.close size={16} />
+      </button>
+    );
+  }
+  return (
+    <button
+      type={sendBlocked ? "button" : "submit"}
+      className="cmp-send cmp-tip-end"
+      data-on={!sendBlocked}
+      data-tip={sendButtonTip(noEligibleModels, loading, t)}
+      aria-disabled={sendBlocked}
+      aria-describedby={sendDescribedBy}
+      aria-label={t("chat.send.label")}
+    >
+      <Icons.arrowUp size={16} />
+    </button>
+  );
+}
+
 function ComposerBar({
   session,
   ready,
@@ -1777,13 +2008,7 @@ function ComposerBar({
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
   //                  LOADING_STATUS_ID while bootstrapping,
   //                  else SEND_HINT_ID when only the draft is empty
-  const sendDescribedBy = noEligibleModels
-    ? NO_MODEL_ALERT_ID
-    : loading
-      ? LOADING_STATUS_ID
-      : draftEmpty
-        ? SEND_HINT_ID
-        : undefined;
+  const sendDescribedBy = sendDescribedById(noEligibleModels, loading, draftEmpty);
 
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
@@ -1834,40 +2059,14 @@ function ComposerBar({
             compact={controlsNarrow}
           />
         ) : null}
-        {/* Issue #152 — while a send is in flight the primary action button
-            flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
-            submits the surrounding form; onClick calls cancelSend which is a
-            safe no-op when the status is already terminal. */}
-        {sending ? (
-          <button
-            type="button"
-            className="cmp-send cmp-send-cancel cmp-tip-end"
-            data-on
-            aria-label={t("chat.send.cancel")}
-            data-tip={t("chat.send.cancel")}
-            onClick={cancelSend}
-          >
-            <Icons.close size={16} />
-          </button>
-        ) : (
-          <button
-            type={sendBlocked ? "button" : "submit"}
-            className="cmp-send cmp-tip-end"
-            data-on={!sendBlocked}
-            data-tip={
-              noEligibleModels
-                ? t("chat.send.noModel")
-                : loading
-                  ? t("chat.send.connecting")
-                  : t("chat.send.label")
-            }
-            aria-disabled={sendBlocked}
-            aria-describedby={sendDescribedBy}
-            aria-label={t("chat.send.label")}
-          >
-            <Icons.arrowUp size={16} />
-          </button>
-        )}
+        <ComposerSendButton
+          sending={sending}
+          cancelSend={cancelSend}
+          sendBlocked={sendBlocked}
+          noEligibleModels={noEligibleModels}
+          loading={loading}
+          sendDescribedBy={sendDescribedBy}
+        />
       </div>
       {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
       {sendDescribedBy === SEND_HINT_ID ? (
@@ -1971,6 +2170,375 @@ interface ComposerCoreProps {
   readonly barCompact?: boolean;
 }
 
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — attachment intake: adds each dropped or
+// picked file via the session API and reports only the first rejection encountered, matching the
+// original loop's behavior (later rejections in the same batch don't overwrite the first).
+async function collectFirstAttachmentRejection(
+  files: readonly File[],
+  addPendingAttachment: ChatSessionComposerApi["addPendingAttachment"],
+): Promise<{
+  readonly reason: AttachmentRejectionReason | undefined;
+  readonly mime: string | undefined;
+}> {
+  let reason: AttachmentRejectionReason | undefined;
+  let mime: string | undefined;
+  for (const file of files) {
+    const result = await addPendingAttachment(file);
+    if (!result.ok && reason === undefined) {
+      reason = result.reason;
+      mime = file.type;
+    }
+  }
+  return { reason, mime };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the realtime voice session's chat context
+// payload: undefined with no active chat, otherwise the chat id, memory settings, and (if the
+// chat has grounding enabled) the grounding context. Same conditional shape as the original.
+function composerRealtimeVoiceChatContext(
+  activeChat: Chat | undefined,
+  memoryEnabled: boolean,
+  memoryBudgetTokens: number,
+  grounding: VoiceSessionGroundingContext | undefined,
+): VoiceSessionChatContext | undefined {
+  if (activeChat === undefined) return undefined;
+  return {
+    chatId: activeChat.id,
+    memory: { enabled: memoryEnabled, budgetTokens: memoryBudgetTokens },
+    ...(grounding === undefined ? {} : { grounding }),
+  };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — when the active voice composer layer
+// (normal vs. voice dialogue) actually changes, move focus to the switch in the newly active
+// layer so a keyboard user is not dropped onto <body> (WCAG 2.4.3). Runs only for a user-driven
+// toggle — programmatic auto-leave never sets `restoreFocusRef`.
+function syncVoiceDialogLayerFocus(params: {
+  readonly active: boolean;
+  readonly previousActiveRef: CurrentRef<boolean>;
+  readonly restoreFocusRef: CurrentRef<boolean>;
+  readonly voiceDialogButton: HTMLButtonElement | null;
+  readonly normalVoiceDialogButton: HTMLButtonElement | null;
+}): void {
+  const { active, previousActiveRef, restoreFocusRef, voiceDialogButton, normalVoiceDialogButton } =
+    params;
+  if (previousActiveRef.current === active) return;
+  previousActiveRef.current = active;
+  if (!restoreFocusRef.current) return;
+  restoreFocusRef.current = false;
+  const target = active ? voiceDialogButton : normalVoiceDialogButton;
+  target?.focus();
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — two independent effects that keep Voice
+// Dialogue honest about its own preconditions: auto-leave when it becomes unavailable mid-session
+// (e.g. the active chat is cleared), and stop the realtime transport once the dialogue layer is no
+// longer active. Same two effects and dependency arrays as the original, just relocated.
+function useVoiceDialogAutoLeaveEffects(
+  voiceDialogActive: boolean,
+  voiceDialogAvailable: boolean,
+  realtimeVoice: RealtimeVoiceController,
+  leaveVoiceDialog: () => void,
+): void {
+  useEffect(() => {
+    if (voiceDialogActive && !voiceDialogAvailable) {
+      leaveVoiceDialog();
+    }
+  }, [leaveVoiceDialog, voiceDialogActive, voiceDialogAvailable]);
+  useEffect(() => {
+    if (!voiceDialogActive && realtimeVoice.phase !== "idle") {
+      realtimeVoice.stop();
+    }
+  }, [voiceDialogActive, realtimeVoice]);
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the @-mention repository picker's
+// keyboard navigation: Escape closes it, arrow keys move the highlight, and Enter/Tab accept
+// the highlighted (or first) result. Returns true when the key was handled so the caller skips
+// the default composer key-down flow, matching the original if-chain's fall-through behavior.
+function handleRepositoryPickerKeyDown(
+  event: KeyboardEvent<HTMLTextAreaElement>,
+  params: {
+    readonly results: readonly FilesSearchResult[];
+    readonly highlightedIndex: number;
+    readonly setHighlightedIndex: Dispatch<SetStateAction<number>>;
+    readonly closeMention: () => void;
+    readonly pickResult: (result: FilesSearchResult) => void;
+  },
+): boolean {
+  const { results, highlightedIndex, setHighlightedIndex, closeMention, pickResult } = params;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeMention();
+    return true;
+  }
+  if (event.key === "ArrowDown" && results.length > 0) {
+    event.preventDefault();
+    setHighlightedIndex((current) => Math.min(results.length - 1, current + 1));
+    return true;
+  }
+  if (event.key === "ArrowUp" && results.length > 0) {
+    event.preventDefault();
+    setHighlightedIndex((current) => Math.max(0, current - 1));
+    return true;
+  }
+  if ((event.key === "Enter" || event.key === "Tab") && results.length > 0) {
+    event.preventDefault();
+    const picked = results[highlightedIndex] ?? results[0];
+    if (picked !== undefined) pickResult(picked);
+    return true;
+  }
+  return false;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — resolves where an accepted repository
+// file result lands in the draft: appended at the end when there is no active @-mention, or
+// substituted into the mention range when there is one. Same two-branch shape as the original
+// inline ternary/IIFE.
+function resolveRepositoryMentionInsertion(
+  draft: string,
+  mention: RepositoryMentionRange | null,
+  path: string,
+): { readonly value: string; readonly cursor: number } {
+  if (mention === null) {
+    const value = appendRepositoryReference(draft, path);
+    return { value, cursor: value.length };
+  }
+  return replaceRepositoryMention(draft, mention, path);
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer box's outer className: the
+// base class plus the compact and voice-dialog-active modifiers, filtered and joined.
+function composerBoxClassNameFor(compact: boolean, voiceDialogActive: boolean): string {
+  return [
+    "cmp-box",
+    compact ? "cmp-box-compact" : "",
+    voiceDialogActive ? styles.voiceDialogBox : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+interface ComposerRepositoryComboboxAria {
+  readonly role: "combobox" | undefined;
+  readonly ariaLabel: string | undefined;
+  readonly ariaExpanded: true | undefined;
+  readonly ariaHaspopup: "listbox" | undefined;
+  readonly ariaControls: string | undefined;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the @-mention combobox wrapper's ARIA
+// attributes, active only while the repository file picker is open (aria-controls further
+// guarded on results existing, so the idref stays resolvable — aria-valid-attr-value).
+function composerRepositoryComboboxAria(
+  repositoryPickerOpen: boolean,
+  resultsCount: number,
+  t: I18nTranslate,
+): ComposerRepositoryComboboxAria {
+  return {
+    role: repositoryPickerOpen ? "combobox" : undefined,
+    ariaLabel: repositoryPickerOpen ? t("chat.messageLabel") : undefined,
+    ariaExpanded: repositoryPickerOpen ? true : undefined,
+    ariaHaspopup: repositoryPickerOpen ? "listbox" : undefined,
+    ariaControls:
+      repositoryPickerOpen && resultsCount > 0 ? REPO_FILE_PICKER_LISTBOX_ID : undefined,
+  };
+}
+
+interface ComposerTextareaAutocompleteAria {
+  readonly ariaAutocomplete: "list" | undefined;
+  readonly ariaActivedescendant: string | undefined;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the textarea's autocomplete ARIA pair:
+// only present while the repository picker is open, with the active-descendant further guarded
+// on results existing.
+function composerTextareaAutocompleteAria(
+  repositoryPickerOpen: boolean,
+  resultsCount: number,
+  highlightedIndex: number,
+): ComposerTextareaAutocompleteAria {
+  return {
+    ariaAutocomplete: repositoryPickerOpen ? "list" : undefined,
+    ariaActivedescendant:
+      repositoryPickerOpen && resultsCount > 0
+        ? repositoryFilePickerOptionId(highlightedIndex)
+        : undefined,
+  };
+}
+
+interface ComposerVoiceAuraDataAttributes {
+  readonly dataVoiceAura: "on" | undefined;
+  readonly dataVoiceAuraState: VoiceAuraState | undefined;
+  readonly dataVoiceAuraIntensity: VoiceAuraIntensity | undefined;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the voice-aura `data-*` attributes on the
+// composer box, present only while the aura is active.
+function composerVoiceAuraDataAttributes(
+  voiceAura: VoiceAuraStateSnapshot,
+): ComposerVoiceAuraDataAttributes {
+  if (!voiceAura.active) {
+    return {
+      dataVoiceAura: undefined,
+      dataVoiceAuraState: undefined,
+      dataVoiceAuraIntensity: undefined,
+    };
+  }
+  return {
+    dataVoiceAura: "on",
+    dataVoiceAuraState: voiceAura.state,
+    dataVoiceAuraIntensity: voiceAura.intensity,
+  };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the inline @-mention repository picker: a
+// status live-region plus the picker panel, rendered only while a mention is active.
+function ComposerRepositoryPickerInline(props: RepositoryFilePickerPanelProps): ReactNode {
+  return (
+    <div className="repo-focus repo-focus-inline">
+      <span className="sr-only" role="status" aria-live="polite">
+        {props.pickError ?? props.search.error ?? props.search.message}
+      </span>
+      <RepositoryFilePickerPanel {...props} />
+    </div>
+  );
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — whether the attachment drop zone /
+// picker is enabled: only once a model is selected and it supports at least one attachment kind.
+function composerAttachEnabled(selectedModelCapability: ModelCapability | undefined): boolean {
+  return (
+    selectedModelCapability !== undefined &&
+    (selectedModelCapability.supportsImageInput || selectedModelCapability.supportsDocumentInput)
+  );
+}
+
+interface ComposerDictationVisibility {
+  readonly voiceDictationVisible: boolean;
+  readonly liveDictationEnabled: boolean;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — Issue #495's capability gate: the mic
+// affordance appears once the deployment advertises speech-to-text AND the browser can capture
+// audio; live (realtime) dictation further requires realtime voice + transport support.
+function composerDictationVisibility(
+  voiceCapability: VoiceCapabilityResolution | undefined,
+): ComposerDictationVisibility {
+  const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  const liveDictationEnabled =
+    voiceDictationVisible &&
+    supportsRealtimeVoice(voiceCapability) &&
+    realtimeVoiceTransportSupported();
+  return { voiceDictationVisible, liveDictationEnabled };
+}
+
+interface ComposerVoiceToolAvailability {
+  readonly voiceGroundingToolAvailable: boolean;
+  readonly voiceMemoryToolAvailable: boolean;
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — whether the realtime voice session may
+// call the grounded-retrieval / memory tools, gated on the relevant feature being active plus the
+// deployment's realtime tool-calling support.
+function composerVoiceToolAvailability(
+  voiceGroundingActive: boolean,
+  memoryEnabled: boolean,
+  voiceCapability: VoiceCapabilityResolution | undefined,
+): ComposerVoiceToolAvailability {
+  return {
+    voiceGroundingToolAvailable:
+      voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability),
+    voiceMemoryToolAvailable: memoryEnabled && supportsRealtimeToolCalling(voiceCapability),
+  };
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the composer's post-textarea status row:
+// the send-lifecycle announcement (hidden during Voice Dialogue) and the dictation transcript
+// preview (hidden during Voice Dialogue or when dictation isn't available).
+function ComposerStatusRow({
+  voiceDialogActive,
+  sendStatus,
+  voiceDictationVisible,
+  dictation,
+  onAfterDictationDiscard,
+}: {
+  readonly voiceDialogActive: boolean;
+  readonly sendStatus: SendStatus;
+  readonly voiceDictationVisible: boolean;
+  readonly dictation: DictationController;
+  readonly onAfterDictationDiscard: () => void;
+}): ReactNode {
+  return (
+    <>
+      {voiceDialogActive ? null : <SendLifecycleStatus status={sendStatus} />}
+      {!voiceDialogActive && voiceDictationVisible ? (
+        <VoiceDictationPreviewFromController
+          controller={dictation}
+          onAfterDiscard={onAfterDictationDiscard}
+        />
+      ) : null}
+    </>
+  );
+}
+
+// Extracted from ComposerCoreImpl (SonarCloud S3776) — the voice-dialogue overlay: the announced
+// headline live region (only while the aura is active) and the Voice Dialogue control layer
+// (only while available), each independently gated.
+function ComposerVoiceOverlay({
+  voiceAuraActive,
+  announcedVoiceHeadline,
+  voiceDialogAvailable,
+  voiceLayerRef,
+  voiceDialogActive,
+  realtimeVoiceMuted,
+  onToggleVoiceMute,
+  playbackButtonRef,
+  onToggleVoiceDialog,
+  voiceDialogButtonRef,
+  compact,
+}: {
+  readonly voiceAuraActive: boolean;
+  readonly announcedVoiceHeadline: string;
+  readonly voiceDialogAvailable: boolean;
+  readonly voiceLayerRef: Ref<HTMLDivElement>;
+  readonly voiceDialogActive: boolean;
+  readonly realtimeVoiceMuted: boolean;
+  readonly onToggleVoiceMute: () => void;
+  readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  readonly onToggleVoiceDialog: () => void;
+  readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
+  readonly compact: boolean;
+}): ReactNode {
+  return (
+    <>
+      {voiceAuraActive ? (
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {announcedVoiceHeadline}
+        </span>
+      ) : null}
+      {voiceDialogAvailable ? (
+        <div
+          ref={voiceLayerRef}
+          className={`${styles.composerLayer} ${styles.voiceLayer}`}
+          data-composer-layer="voice"
+          aria-hidden={voiceDialogActive ? undefined : true}
+        >
+          <VoiceDialogComposerControls
+            voiceMuted={realtimeVoiceMuted}
+            onToggleVoiceMute={onToggleVoiceMute}
+            playbackButtonRef={playbackButtonRef}
+            voiceDialogActive={voiceDialogActive}
+            onToggleVoiceDialog={onToggleVoiceDialog}
+            voiceDialogButtonRef={voiceDialogButtonRef}
+            compact={compact}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function ComposerCoreImpl({
   ready,
   placeholder,
@@ -2023,24 +2591,13 @@ function ComposerCoreImpl({
   const selectedModelCapability = models.find((m) => m.id === selectedModel);
 
   // Derive whether any attachment kinds are supported by the selected model.
-  const attachEnabled =
-    selectedModelCapability !== undefined &&
-    (selectedModelCapability.supportsImageInput || selectedModelCapability.supportsDocumentInput);
+  const attachEnabled = composerAttachEnabled(selectedModelCapability);
 
   const handleFiles = useCallback(
     async (files: readonly File[]) => {
-      // Process each file; show the first rejection encountered.
-      let firstRejectionReason: AttachmentRejectionReason | undefined;
-      let firstRejectionMime: string | undefined;
-      for (const file of files) {
-        const result = await addPendingAttachment(file);
-        if (!result.ok && firstRejectionReason === undefined) {
-          firstRejectionReason = result.reason;
-          firstRejectionMime = file.type;
-        }
-      }
-      setRejectionReason(firstRejectionReason);
-      setRejectionMime(firstRejectionMime);
+      const { reason, mime } = await collectFirstAttachmentRejection(files, addPendingAttachment);
+      setRejectionReason(reason);
+      setRejectionMime(mime);
     },
     [addPendingAttachment],
   );
@@ -2050,11 +2607,8 @@ function ComposerCoreImpl({
   // deployment advertises speech-to-text AND the browser can capture audio. A no-voice / unsupported
   // environment shows no voice control at all, so the composer stays clean and fully text-capable.
   const voiceCapability = useVoiceCapability();
-  const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
-  const liveDictationEnabled =
-    voiceDictationVisible &&
-    supportsRealtimeVoice(voiceCapability) &&
-    realtimeVoiceTransportSupported();
+  const { voiceDictationVisible, liveDictationEnabled } =
+    composerDictationVisibility(voiceCapability);
   // Issue #501 — assistant speech-output gate: reuse the already-fetched voiceCapability probe (no
   // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
   // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
@@ -2089,23 +2643,19 @@ function ComposerCoreImpl({
   });
   const voiceGrounding = voiceSessionGroundingContext(activeChat);
   const voiceGroundingActive = voiceGrounding?.enabled === true;
-  const voiceGroundingToolAvailable =
-    voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability);
-  const voiceMemoryToolAvailable =
-    session.memoryEnabled && supportsRealtimeToolCalling(voiceCapability);
+  const { voiceGroundingToolAvailable, voiceMemoryToolAvailable } = composerVoiceToolAvailability(
+    voiceGroundingActive,
+    session.memoryEnabled,
+    voiceCapability,
+  );
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
-    chatContext:
-      activeChat === undefined
-        ? undefined
-        : {
-            chatId: activeChat.id,
-            memory: {
-              enabled: session.memoryEnabled,
-              budgetTokens: session.memoryBudgetTokens,
-            },
-            ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
-          },
+    chatContext: composerRealtimeVoiceChatContext(
+      activeChat,
+      session.memoryEnabled,
+      session.memoryBudgetTokens,
+      voiceGrounding,
+    ),
     groundingActive: voiceGroundingActive,
     groundingToolActive: voiceGroundingToolAvailable,
     memoryToolActive: voiceMemoryToolAvailable,
@@ -2173,32 +2723,23 @@ function ComposerCoreImpl({
       enterVoiceDialog();
     }
   }, [voiceDialog.active, enterVoiceDialog, leaveVoiceDialog]);
-  useEffect(() => {
-    if (voiceDialog.active && !voiceDialogAvailable) {
-      leaveVoiceDialog();
-    }
-  }, [leaveVoiceDialog, voiceDialog.active, voiceDialogAvailable]);
-  useEffect(() => {
-    if (!voiceDialog.active && realtimeVoice.phase !== "idle") {
-      realtimeVoice.stop();
-    }
-  }, [voiceDialog.active, realtimeVoice]);
+  useVoiceDialogAutoLeaveEffects(
+    voiceDialog.active,
+    voiceDialogAvailable,
+    realtimeVoice,
+    leaveVoiceDialog,
+  );
   const previousVoiceDialogActiveRef = useRef(voiceDialog.active);
   useEffect(() => {
-    if (previousVoiceDialogActiveRef.current === voiceDialog.active) {
-      return undefined;
-    }
-    previousVoiceDialogActiveRef.current = voiceDialog.active;
     // The previously active layer becomes inert; move focus to the switch in the newly active
     // layer so a keyboard user is not dropped onto <body>. Runs only for a user-driven toggle.
-    if (restoreVoiceDialogFocusRef.current) {
-      restoreVoiceDialogFocusRef.current = false;
-      const target = voiceDialog.active
-        ? voiceDialogButtonRef.current
-        : normalVoiceDialogButtonRef.current;
-      target?.focus();
-    }
-    return undefined;
+    syncVoiceDialogLayerFocus({
+      active: voiceDialog.active,
+      previousActiveRef: previousVoiceDialogActiveRef,
+      restoreFocusRef: restoreVoiceDialogFocusRef,
+      voiceDialogButton: voiceDialogButtonRef.current,
+      normalVoiceDialogButton: normalVoiceDialogButtonRef.current,
+    });
   }, [voiceDialog.active]);
 
   const repositoryRoots = useMemo(
@@ -2276,13 +2817,7 @@ function ComposerCoreImpl({
         }
         const fallbackCursor = taRef.current?.selectionStart ?? draft.length;
         const mention = repositoryMention ?? repositoryMentionAtCursor(draft, fallbackCursor);
-        const next =
-          mention === null
-            ? (() => {
-                const value = appendRepositoryReference(draft, result.path);
-                return { value, cursor: value.length };
-              })()
-            : replaceRepositoryMention(draft, mention, result.path);
+        const next = resolveRepositoryMentionInsertion(draft, mention, result.path);
         setRepositoryReferences((current) =>
           mergeComposerRepositoryReference(current, repositoryReferenceFromResult(result)),
         );
@@ -2338,30 +2873,16 @@ function ComposerCoreImpl({
   const handleDraftKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>): void => {
       if (repositoryPickerOpen) {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          setRepositoryMention(null);
-          return;
-        }
-        if (event.key === "ArrowDown" && repositorySearch.results.length > 0) {
-          event.preventDefault();
-          setRepositoryHighlightedIndex((current) =>
-            Math.min(repositorySearch.results.length - 1, current + 1),
-          );
-          return;
-        }
-        if (event.key === "ArrowUp" && repositorySearch.results.length > 0) {
-          event.preventDefault();
-          setRepositoryHighlightedIndex((current) => Math.max(0, current - 1));
-          return;
-        }
-        if ((event.key === "Enter" || event.key === "Tab") && repositorySearch.results.length > 0) {
-          event.preventDefault();
-          const picked =
-            repositorySearch.results[repositoryHighlightedIndex] ?? repositorySearch.results[0];
-          if (picked !== undefined) void insertRepositoryFileReference(picked);
-          return;
-        }
+        const handled = handleRepositoryPickerKeyDown(event, {
+          results: repositorySearch.results,
+          highlightedIndex: repositoryHighlightedIndex,
+          setHighlightedIndex: setRepositoryHighlightedIndex,
+          closeMention: () => setRepositoryMention(null),
+          pickResult: (picked) => {
+            void insertRepositoryFileReference(picked);
+          },
+        });
+        if (handled) return;
       }
       onComposerKeyDown(sendMessage)(event);
     },
@@ -2374,13 +2895,7 @@ function ComposerCoreImpl({
     ],
   );
 
-  const composerBoxClassName = [
-    "cmp-box",
-    compact ? "cmp-box-compact" : "",
-    voiceDialog.active ? styles.voiceDialogBox : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const composerBoxClassName = composerBoxClassNameFor(compact, voiceDialog.active);
   // React 18 treats `inert` as an unknown non-boolean attribute. Toggle the native attribute in
   // the commit ref so each fading layer becomes non-interactive synchronously, without rendering
   // duplicate accessibility targets or emitting a runtime warning.
@@ -2397,12 +2912,24 @@ function ComposerCoreImpl({
     [voiceDialog.active],
   );
 
+  const voiceAuraDataAttributes = composerVoiceAuraDataAttributes(voiceAura);
+  const comboboxAria = composerRepositoryComboboxAria(
+    repositoryPickerOpen,
+    repositorySearch.results.length,
+    t,
+  );
+  const textareaAutocompleteAria = composerTextareaAutocompleteAria(
+    repositoryPickerOpen,
+    repositorySearch.results.length,
+    repositoryHighlightedIndex,
+  );
+
   return (
     <div
       className={composerBoxClassName}
-      data-voice-aura={voiceAura.active ? "on" : undefined}
-      data-voice-aura-state={voiceAura.active ? voiceAura.state : undefined}
-      data-voice-aura-intensity={voiceAura.active ? voiceAura.intensity : undefined}
+      data-voice-aura={voiceAuraDataAttributes.dataVoiceAura}
+      data-voice-aura-state={voiceAuraDataAttributes.dataVoiceAuraState}
+      data-voice-aura-intensity={voiceAuraDataAttributes.dataVoiceAuraIntensity}
     >
       <div
         ref={normalLayerRef}
@@ -2423,17 +2950,13 @@ function ComposerCoreImpl({
             textarea is a plain textbox. */}
           <div
             className="cmp-input-combobox"
-            role={repositoryPickerOpen ? "combobox" : undefined}
-            aria-label={repositoryPickerOpen ? t("chat.messageLabel") : undefined}
-            aria-expanded={repositoryPickerOpen ? true : undefined}
-            aria-haspopup={repositoryPickerOpen ? "listbox" : undefined}
+            role={comboboxAria.role}
+            aria-label={comboboxAria.ariaLabel}
+            aria-expanded={comboboxAria.ariaExpanded}
+            aria-haspopup={comboboxAria.ariaHaspopup}
             // aria-controls references the listbox, which only exists once results
             // have loaded — guarding keeps the idref resolvable (aria-valid-attr-value).
-            aria-controls={
-              repositoryPickerOpen && repositorySearch.results.length > 0
-                ? REPO_FILE_PICKER_LISTBOX_ID
-                : undefined
-            }
+            aria-controls={comboboxAria.ariaControls}
           >
             <textarea
               className="cmp-input"
@@ -2445,12 +2968,8 @@ function ComposerCoreImpl({
               // aria-autocomplete + aria-activedescendant are valid on the textbox
               // and communicate the autocomplete behavior and highlighted option
               // without moving DOM focus off the textarea.
-              aria-autocomplete={repositoryPickerOpen ? "list" : undefined}
-              aria-activedescendant={
-                repositoryPickerOpen && repositorySearch.results.length > 0
-                  ? repositoryFilePickerOptionId(repositoryHighlightedIndex)
-                  : undefined
-              }
+              aria-autocomplete={textareaAutocompleteAria.ariaAutocomplete}
+              aria-activedescendant={textareaAutocompleteAria.ariaActivedescendant}
               onChange={handleDraftChange}
               onSelect={handleDraftSelect}
               onKeyDown={handleDraftKeyDown}
@@ -2461,27 +2980,22 @@ function ComposerCoreImpl({
             />
           </div>
           {repositoryPickerOpen ? (
-            <div className="repo-focus repo-focus-inline">
-              <span className="sr-only" role="status" aria-live="polite">
-                {repositoryPickError ?? repositorySearch.error ?? repositorySearch.message}
-              </span>
-              <RepositoryFilePickerPanel
-                roots={repositoryRoots}
-                selectedRoot={selectedRepositoryRoot}
-                onRootChange={(next) => {
-                  setSelectedRepositoryRoot(next);
-                  setRepositoryHighlightedIndex(0);
-                }}
-                search={repositorySearch}
-                pickingPath={repositoryPickingPath}
-                highlightedIndex={repositoryHighlightedIndex}
-                pickError={repositoryPickError}
-                onPick={(result) => {
-                  void insertRepositoryFileReference(result);
-                }}
-                onClose={() => setRepositoryMention(null)}
-              />
-            </div>
+            <ComposerRepositoryPickerInline
+              roots={repositoryRoots}
+              selectedRoot={selectedRepositoryRoot}
+              onRootChange={(next) => {
+                setSelectedRepositoryRoot(next);
+                setRepositoryHighlightedIndex(0);
+              }}
+              search={repositorySearch}
+              pickingPath={repositoryPickingPath}
+              highlightedIndex={repositoryHighlightedIndex}
+              pickError={repositoryPickError}
+              onPick={(result) => {
+                void insertRepositoryFileReference(result);
+              }}
+              onClose={() => setRepositoryMention(null)}
+            />
           ) : null}
           <RepositoryReferenceStrip
             references={repositoryReferences}
@@ -2493,17 +3007,17 @@ function ComposerCoreImpl({
           <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
           {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
             adjacent to the textarea so SR users hear the state without losing
-            composer focus. Hidden when there is nothing to announce. */}
-          {voiceDialog.active ? null : <SendLifecycleStatus status={sendStatus} />}
-          {/* Issue #495 — dictation transcript review / transcribing status / error. Lives in the input
-            stack so it is contextually adjacent to the textarea and announced to assistive tech. It
-            renders live capture feedback while recording and stays hidden only when idle. */}
-          {!voiceDialog.active && voiceDictationVisible ? (
-            <VoiceDictationPreviewFromController
-              controller={dictation}
-              onAfterDiscard={() => micButtonRef.current?.focus()}
-            />
-          ) : null}
+            composer focus. Hidden when there is nothing to announce.
+            Issue #495 — dictation transcript review / transcribing status / error. Lives in the
+            input stack so it is contextually adjacent to the textarea and announced to assistive
+            tech. It renders live capture feedback while recording and stays hidden only when idle. */}
+          <ComposerStatusRow
+            voiceDialogActive={voiceDialog.active}
+            sendStatus={sendStatus}
+            voiceDictationVisible={voiceDictationVisible}
+            dictation={dictation}
+            onAfterDictationDiscard={() => micButtonRef.current?.focus()}
+          />
         </div>
         <div className="cmp-footer-row">
           <ComposerBar
@@ -2527,29 +3041,19 @@ function ComposerCoreImpl({
           />
         </div>
       </div>
-      {voiceAura.active ? (
-        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {announcedVoiceHeadline}
-        </span>
-      ) : null}
-      {voiceDialogAvailable ? (
-        <div
-          ref={voiceLayerRef}
-          className={`${styles.composerLayer} ${styles.voiceLayer}`}
-          data-composer-layer="voice"
-          aria-hidden={voiceDialog.active ? undefined : true}
-        >
-          <VoiceDialogComposerControls
-            voiceMuted={realtimeVoice.muted}
-            onToggleVoiceMute={realtimeVoice.toggleMute}
-            playbackButtonRef={playbackButtonRef}
-            voiceDialogActive={voiceDialog.active}
-            onToggleVoiceDialog={toggleVoiceDialog}
-            voiceDialogButtonRef={voiceDialogButtonRef}
-            compact={controlsNarrow}
-          />
-        </div>
-      ) : null}
+      <ComposerVoiceOverlay
+        voiceAuraActive={voiceAura.active}
+        announcedVoiceHeadline={announcedVoiceHeadline}
+        voiceDialogAvailable={voiceDialogAvailable}
+        voiceLayerRef={voiceLayerRef}
+        voiceDialogActive={voiceDialog.active}
+        realtimeVoiceMuted={realtimeVoice.muted}
+        onToggleVoiceMute={realtimeVoice.toggleMute}
+        playbackButtonRef={playbackButtonRef}
+        onToggleVoiceDialog={toggleVoiceDialog}
+        voiceDialogButtonRef={voiceDialogButtonRef}
+        compact={controlsNarrow}
+      />
     </div>
   );
 }
@@ -2882,6 +3386,110 @@ function useKnowledgeCatalog(): KnowledgeCatalog {
   };
 }
 
+// Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Model only"
+// branch. #2 — permanently discards ALL active grounding sources (folder scopes + connectors);
+// when sources are present, asks for explicit confirmation. On cancel, returns without mutating
+// the chat (the caller's finally still releases the busy lock).
+async function disconnectAllGroundingScopes(
+  chat: Chat,
+  t: I18nTranslate,
+  onChatChanged: (chat: Chat) => void,
+): Promise<void> {
+  const sourceCount = activeGroundingSourceCount(chat);
+  if (sourceCount > 0) {
+    const confirmed = window.confirm(
+      t("chat.grounding.disconnectConfirm", {
+        count: sourceCount,
+        sourceLabel:
+          sourceCount === 1 ? t("chat.grounding.sourceSingular") : t("chat.grounding.sourcePlural"),
+      }),
+    );
+    if (!confirmed) return;
+  }
+  const response = await updateChat(chat.id, { connectedScopes: null, localKnowledgeScopes: null });
+  onChatChanged(response.chat);
+}
+
+// Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Live files"
+// branch.
+async function connectLiveFilesScope(
+  chat: Chat,
+  onChatChanged: (chat: Chat) => void,
+): Promise<void> {
+  const response = await updateChat(chat.id, { localKnowledgeScopes: null });
+  onChatChanged(response.chat);
+}
+
+// Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the
+// "capsule-set:" branch. GRD-009: additive + non-destructive. The server fully supports hybrid
+// grounding (folder scopes + connectors, RRF over both, 16-each cap), so connecting a connector
+// must NOT clear connected folders (no `connectedScopes: null`) or drop already-bound connectors.
+// Append to the existing list (deduped); the BFF enforces the cap.
+async function connectCapsuleSetScope(
+  chat: Chat,
+  capsuleSetId: string,
+  onChatChanged: (chat: Chat) => void,
+): Promise<void> {
+  const scope: ChatLocalKnowledgeScope = {
+    kind: "capsule-set",
+    capsuleSetId: capsuleSetId as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule-set" }
+    >["capsuleSetId"],
+    connectedAtMs: Date.now(),
+  };
+  const current = currentConnectorScopes(chat);
+  const next = current.some(
+    (s) => s.kind === "capsule-set" && s.capsuleSetId === scope.capsuleSetId,
+  )
+    ? current
+    : [...current, scope];
+  const response = await updateChat(chat.id, { localKnowledgeScopes: next });
+  onChatChanged(response.chat);
+}
+
+// Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "capsule:"
+// branch (see capsule-set branch above for the additive/non-destructive rationale).
+async function connectCapsuleScope(
+  chat: Chat,
+  capsuleId: string,
+  onChatChanged: (chat: Chat) => void,
+): Promise<void> {
+  const scope: ChatLocalKnowledgeScope = {
+    kind: "capsule",
+    capsuleId: capsuleId as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule" }
+    >["capsuleId"],
+    connectedAtMs: Date.now(),
+  };
+  const current = currentConnectorScopes(chat);
+  const next = current.some((s) => s.kind === "capsule" && s.capsuleId === scope.capsuleId)
+    ? current
+    : [...current, scope];
+  const response = await updateChat(chat.id, { localKnowledgeScopes: next });
+  onChatChanged(response.chat);
+}
+
+// Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the classifier
+// that dispatches the selected <select> value to its handler. Same value-space and behavior as
+// the original if-chain (unmatched values are a no-op, matching the original's fall-through).
+async function applyLocalKnowledgeScopeChange(
+  value: string,
+  chat: Chat,
+  t: I18nTranslate,
+  onChatChanged: (chat: Chat) => void,
+): Promise<void> {
+  if (value === "none") return disconnectAllGroundingScopes(chat, t, onChatChanged);
+  if (value === "files") return connectLiveFilesScope(chat, onChatChanged);
+  if (value.startsWith("capsule-set:")) {
+    return connectCapsuleSetScope(chat, value.slice("capsule-set:".length), onChatChanged);
+  }
+  if (value.startsWith("capsule:")) {
+    return connectCapsuleScope(chat, value.slice("capsule:".length), onChatChanged);
+  }
+}
+
 function LocalKnowledgeScopeControl({
   chat,
   onChatChanged,
@@ -2902,76 +3510,7 @@ function LocalKnowledgeScopeControl({
     setBusy(true);
     setError(null);
     try {
-      if (value === "none") {
-        // #2 — Selecting "Model only" permanently discards ALL active grounding
-        // sources (folder scopes + connectors). When sources are present, ask
-        // for explicit confirmation. On cancel, revert the <select> without
-        // mutating the chat and release the busy lock.
-        const sourceCount = activeGroundingSourceCount(chat);
-        if (sourceCount > 0) {
-          const confirmed = window.confirm(
-            t("chat.grounding.disconnectConfirm", {
-              count: sourceCount,
-              sourceLabel:
-                sourceCount === 1
-                  ? t("chat.grounding.sourceSingular")
-                  : t("chat.grounding.sourcePlural"),
-            }),
-          );
-          if (!confirmed) return;
-        }
-        const response = await updateChat(chat.id, {
-          connectedScopes: null,
-          localKnowledgeScopes: null,
-        });
-        onChatChanged(response.chat);
-        return;
-      }
-      if (value === "files") {
-        const response = await updateChat(chat.id, { localKnowledgeScopes: null });
-        onChatChanged(response.chat);
-        return;
-      }
-      if (value.startsWith("capsule-set:")) {
-        const scope: ChatLocalKnowledgeScope = {
-          kind: "capsule-set",
-          capsuleSetId: value.slice("capsule-set:".length) as Extract<
-            ChatLocalKnowledgeScope,
-            { readonly kind: "capsule-set" }
-          >["capsuleSetId"],
-          connectedAtMs: Date.now(),
-        };
-        // GRD-009: additive + non-destructive. The server fully supports hybrid grounding
-        // (folder scopes + connectors, RRF over both, 16-each cap), so connecting a connector
-        // must NOT clear connected folders (no `connectedScopes: null`) or drop already-bound
-        // connectors. Append to the existing list (deduped); the BFF enforces the cap.
-        const current = currentConnectorScopes(chat);
-        const next = current.some(
-          (s) => s.kind === "capsule-set" && s.capsuleSetId === scope.capsuleSetId,
-        )
-          ? current
-          : [...current, scope];
-        const response = await updateChat(chat.id, { localKnowledgeScopes: next });
-        onChatChanged(response.chat);
-        return;
-      }
-      if (value.startsWith("capsule:")) {
-        const scope: ChatLocalKnowledgeScope = {
-          kind: "capsule",
-          capsuleId: value.slice("capsule:".length) as Extract<
-            ChatLocalKnowledgeScope,
-            { readonly kind: "capsule" }
-          >["capsuleId"],
-          connectedAtMs: Date.now(),
-        };
-        // GRD-009: additive + non-destructive (see capsule-set branch above).
-        const current = currentConnectorScopes(chat);
-        const next = current.some((s) => s.kind === "capsule" && s.capsuleId === scope.capsuleId)
-          ? current
-          : [...current, scope];
-        const response = await updateChat(chat.id, { localKnowledgeScopes: next });
-        onChatChanged(response.chat);
-      }
+      await applyLocalKnowledgeScopeChange(value, chat, t, onChatChanged);
     } catch (caught) {
       setError(formatScopeUpdateError(caught, t));
     } finally {
@@ -3110,6 +3649,240 @@ function GroundedAnswerPanelImpl({
   );
 }
 
+// Shared shape of MemoryActionCard's async action runner, threaded into each per-kind card below.
+type MemoryActionRunner = (
+  actionCallback: () => Promise<void>,
+  successMessage: string,
+  errorMessage: string,
+) => void;
+
+// Extracted from MemoryActionCard (SonarCloud S3776) — the "candidate" kind's card.
+function MemoryActionCandidateCard({
+  action,
+  busy,
+  error,
+  runAction,
+  acceptCandidate,
+  rejectCandidate,
+  onDismissError,
+}: {
+  readonly action: Extract<ConversationMemoryActionWire, { readonly kind: "candidate" }>;
+  readonly busy: boolean;
+  readonly error: string | undefined;
+  readonly runAction: MemoryActionRunner;
+  readonly acceptCandidate: (proposalId: string) => Promise<void>;
+  readonly rejectCandidate: (proposalId: string) => Promise<void>;
+  readonly onDismissError: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <article className="chat-memory-action">
+      <div className="chat-memory-action-head">
+        <strong>{action.scopeLabel}</strong>
+        <span>
+          {action.requiresApproval
+            ? t("chat.memory.approvalRequired")
+            : t("chat.memory.proposedMemory")}
+        </span>
+      </div>
+      <p>{action.body}</p>
+      <div className="chat-memory-action-buttons">
+        <button
+          type="button"
+          aria-disabled={busy}
+          aria-busy={busy}
+          onClick={() => {
+            runAction(
+              () => acceptCandidate(action.proposalId),
+              t("chat.memory.accepted"),
+              t("chat.memory.acceptError"),
+            );
+          }}
+        >
+          {t("chat.memory.accept")}
+        </button>
+        <button
+          type="button"
+          aria-disabled={busy}
+          aria-busy={busy}
+          onClick={() => {
+            runAction(
+              () => rejectCandidate(action.proposalId),
+              t("chat.memory.rejected"),
+              t("chat.memory.rejectError"),
+            );
+          }}
+        >
+          {t("chat.memory.reject")}
+        </button>
+      </div>
+      {error !== undefined ? (
+        <ErrorNoticeFromError
+          error={error}
+          fallback={t("chat.error.memoryUpdate")}
+          onDismiss={onDismissError}
+        />
+      ) : null}
+    </article>
+  );
+}
+
+// Extracted from MemoryActionCard (SonarCloud S3776) — the "update" kind's card.
+function MemoryActionUpdateCard({
+  action,
+}: {
+  readonly action: Extract<ConversationMemoryActionWire, { readonly kind: "update" }>;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <article className="chat-memory-action">
+      <div className="chat-memory-action-head">
+        <strong>{t("chat.memory.updateDetected")}</strong>
+        <span>{action.memoryId}</span>
+      </div>
+      <p>
+        {action.bodyPatch !== undefined
+          ? t("chat.memory.suggestedUpdate", { body: action.bodyPatch })
+          : t("chat.memory.suggestedUpdateFallback")}
+      </p>
+    </article>
+  );
+}
+
+// Extracted from MemoryActionCard (SonarCloud S3776) — the "forget" kind's card. `confirmForget`
+// and `forgetConfirmText` were previously parent state used only by this branch; they move down
+// with it (each action instance keeps a stable React key, so this is not a behavior change — see
+// the render site's key expression).
+function MemoryActionForgetCard({
+  action,
+  busy,
+  error,
+  runAction,
+  forgetMemoryAction,
+  clearError,
+}: {
+  readonly action: Extract<ConversationMemoryActionWire, { readonly kind: "forget" }>;
+  readonly busy: boolean;
+  readonly error: string | undefined;
+  readonly runAction: MemoryActionRunner;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
+  readonly clearError: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const [confirmForget, setConfirmForget] = useState(false);
+  const [forgetConfirmText, setForgetConfirmText] = useState("");
+  const executeForget = (): void => {
+    if (action.requiresConfirmation && forgetConfirmText !== "FORGET") return;
+    runAction(
+      () =>
+        forgetMemoryAction(action.memoryId).then(() => {
+          setConfirmForget(false);
+          setForgetConfirmText("");
+        }),
+      t("chat.memory.forgetCompleted"),
+      t("chat.memory.forgetError"),
+    );
+  };
+  return (
+    <article className={`chat-memory-action${confirmForget ? " ai-danger" : ""}`}>
+      <div className={`chat-memory-action-head${confirmForget ? " ai-danger-h" : ""}`}>
+        {confirmForget ? (
+          <span className="ic" aria-hidden="true">
+            !
+          </span>
+        ) : null}
+        <strong>{t("chat.memory.forgetDetected")}</strong>
+        <span>
+          {action.requiresConfirmation ? t("chat.memory.confirmationRequired") : action.memoryId}
+        </span>
+      </div>
+      <p>{t("chat.memory.forgetMatched", { id: action.memoryId })}</p>
+      {confirmForget ? (
+        <label className="chat-memory-confirm">
+          <span>{`Type FORGET to remove ${action.memoryId}.`}</span>
+          <input
+            value={forgetConfirmText}
+            onChange={(event) => setForgetConfirmText(event.currentTarget.value)}
+            autoComplete="off"
+          />
+        </label>
+      ) : null}
+      <div className="chat-memory-action-buttons">
+        {!action.requiresConfirmation ? (
+          <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
+            {t("chat.memory.forget")}
+          </button>
+        ) : !confirmForget ? (
+          <button
+            type="button"
+            aria-disabled={busy}
+            aria-busy={busy}
+            onClick={() => {
+              if (busy) return;
+              clearError();
+              setConfirmForget(true);
+              setForgetConfirmText("");
+            }}
+          >
+            {t("chat.memory.reviewForget")}
+          </button>
+        ) : (
+          <>
+            <button
+              type="button"
+              aria-disabled={busy || forgetConfirmText !== "FORGET"}
+              aria-busy={busy}
+              onClick={executeForget}
+            >
+              {t("chat.memory.forgetPermanently")}
+            </button>
+            <button
+              type="button"
+              aria-disabled={busy}
+              aria-busy={busy}
+              onClick={() => {
+                if (busy) return;
+                clearError();
+                setConfirmForget(false);
+                setForgetConfirmText("");
+              }}
+            >
+              {t("common.cancel")}
+            </button>
+          </>
+        )}
+      </div>
+      {error !== undefined ? (
+        <ErrorNoticeFromError
+          error={error}
+          fallback={t("chat.error.memoryUpdate")}
+          onDismiss={clearError}
+        />
+      ) : null}
+    </article>
+  );
+}
+
+// Extracted from MemoryActionCard (SonarCloud S3776) — the "rejected" kind's card.
+// #28 — explicit case for kind "rejected" (memory proposal declined by the governed capture
+// pipeline). Previously fell through to the default with the misleading title "MemoriaViva
+// action not created".
+function MemoryActionRejectedCard({
+  action,
+}: {
+  readonly action: Extract<ConversationMemoryActionWire, { readonly kind: "rejected" }>;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <article className="chat-memory-action">
+      <div className="chat-memory-action-head">
+        <strong>{t("chat.memory.proposalDeclined")}</strong>
+      </div>
+      <p>{action.reason !== "" ? action.reason : t("chat.memory.noReason")}</p>
+    </article>
+  );
+}
+
 function MemoryActionCard({
   action,
   acceptCandidate,
@@ -3126,10 +3899,9 @@ function MemoryActionCard({
   const t = useTranslate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const [confirmForget, setConfirmForget] = useState(false);
-  const [forgetConfirmText, setForgetConfirmText] = useState("");
-  const runAction = useCallback(
-    (actionCallback: () => Promise<void>, successMessage: string, errorMessage: string): void => {
+  const clearError = useCallback(() => setError(undefined), []);
+  const runAction: MemoryActionRunner = useCallback(
+    (actionCallback, successMessage, errorMessage) => {
       if (busy) return;
       setBusy(true);
       setError(undefined);
@@ -3146,175 +3918,34 @@ function MemoryActionCard({
   );
   if (action.kind === "candidate") {
     return (
-      <article className="chat-memory-action">
-        <div className="chat-memory-action-head">
-          <strong>{action.scopeLabel}</strong>
-          <span>
-            {action.requiresApproval
-              ? t("chat.memory.approvalRequired")
-              : t("chat.memory.proposedMemory")}
-          </span>
-        </div>
-        <p>{action.body}</p>
-        <div className="chat-memory-action-buttons">
-          <button
-            type="button"
-            aria-disabled={busy}
-            aria-busy={busy}
-            onClick={() => {
-              runAction(
-                () => acceptCandidate(action.proposalId),
-                t("chat.memory.accepted"),
-                t("chat.memory.acceptError"),
-              );
-            }}
-          >
-            {t("chat.memory.accept")}
-          </button>
-          <button
-            type="button"
-            aria-disabled={busy}
-            aria-busy={busy}
-            onClick={() => {
-              runAction(
-                () => rejectCandidate(action.proposalId),
-                t("chat.memory.rejected"),
-                t("chat.memory.rejectError"),
-              );
-            }}
-          >
-            {t("chat.memory.reject")}
-          </button>
-        </div>
-        {error !== undefined ? (
-          <ErrorNoticeFromError
-            error={error}
-            fallback={t("chat.error.memoryUpdate")}
-            onDismiss={() => setError(undefined)}
-          />
-        ) : null}
-      </article>
+      <MemoryActionCandidateCard
+        action={action}
+        busy={busy}
+        error={error}
+        runAction={runAction}
+        acceptCandidate={acceptCandidate}
+        rejectCandidate={rejectCandidate}
+        onDismissError={clearError}
+      />
     );
   }
   if (action.kind === "update") {
-    return (
-      <article className="chat-memory-action">
-        <div className="chat-memory-action-head">
-          <strong>{t("chat.memory.updateDetected")}</strong>
-          <span>{action.memoryId}</span>
-        </div>
-        <p>
-          {action.bodyPatch !== undefined
-            ? t("chat.memory.suggestedUpdate", { body: action.bodyPatch })
-            : t("chat.memory.suggestedUpdateFallback")}
-        </p>
-      </article>
-    );
+    return <MemoryActionUpdateCard action={action} />;
   }
   if (action.kind === "forget") {
-    const executeForget = (): void => {
-      if (action.requiresConfirmation && forgetConfirmText !== "FORGET") return;
-      runAction(
-        () =>
-          forgetMemoryAction(action.memoryId).then(() => {
-            setConfirmForget(false);
-            setForgetConfirmText("");
-          }),
-        t("chat.memory.forgetCompleted"),
-        t("chat.memory.forgetError"),
-      );
-    };
     return (
-      <article className={`chat-memory-action${confirmForget ? " ai-danger" : ""}`}>
-        <div className={`chat-memory-action-head${confirmForget ? " ai-danger-h" : ""}`}>
-          {confirmForget ? (
-            <span className="ic" aria-hidden="true">
-              !
-            </span>
-          ) : null}
-          <strong>{t("chat.memory.forgetDetected")}</strong>
-          <span>
-            {action.requiresConfirmation ? t("chat.memory.confirmationRequired") : action.memoryId}
-          </span>
-        </div>
-        <p>{t("chat.memory.forgetMatched", { id: action.memoryId })}</p>
-        {confirmForget ? (
-          <label className="chat-memory-confirm">
-            <span>{`Type FORGET to remove ${action.memoryId}.`}</span>
-            <input
-              value={forgetConfirmText}
-              onChange={(event) => setForgetConfirmText(event.currentTarget.value)}
-              autoComplete="off"
-            />
-          </label>
-        ) : null}
-        <div className="chat-memory-action-buttons">
-          {!action.requiresConfirmation ? (
-            <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
-              {t("chat.memory.forget")}
-            </button>
-          ) : !confirmForget ? (
-            <button
-              type="button"
-              aria-disabled={busy}
-              aria-busy={busy}
-              onClick={() => {
-                if (busy) return;
-                setError(undefined);
-                setConfirmForget(true);
-                setForgetConfirmText("");
-              }}
-            >
-              {t("chat.memory.reviewForget")}
-            </button>
-          ) : (
-            <>
-              <button
-                type="button"
-                aria-disabled={busy || forgetConfirmText !== "FORGET"}
-                aria-busy={busy}
-                onClick={executeForget}
-              >
-                {t("chat.memory.forgetPermanently")}
-              </button>
-              <button
-                type="button"
-                aria-disabled={busy}
-                aria-busy={busy}
-                onClick={() => {
-                  if (busy) return;
-                  setError(undefined);
-                  setConfirmForget(false);
-                  setForgetConfirmText("");
-                }}
-              >
-                {t("common.cancel")}
-              </button>
-            </>
-          )}
-        </div>
-        {error !== undefined ? (
-          <ErrorNoticeFromError
-            error={error}
-            fallback={t("chat.error.memoryUpdate")}
-            onDismiss={() => setError(undefined)}
-          />
-        ) : null}
-      </article>
+      <MemoryActionForgetCard
+        action={action}
+        busy={busy}
+        error={error}
+        runAction={runAction}
+        forgetMemoryAction={forgetMemoryAction}
+        clearError={clearError}
+      />
     );
   }
-  // #28 — explicit case for kind "rejected" (memory proposal declined by the
-  // governed capture pipeline). Previously fell through to the default with the
-  // misleading title "MemoriaViva action not created".
   if (action.kind === "rejected") {
-    return (
-      <article className="chat-memory-action">
-        <div className="chat-memory-action-head">
-          <strong>{t("chat.memory.proposalDeclined")}</strong>
-        </div>
-        <p>{action.reason !== "" ? action.reason : t("chat.memory.noReason")}</p>
-      </article>
-    );
+    return <MemoryActionRejectedCard action={action} />;
   }
   return (
     <article className="chat-memory-action">
@@ -3525,6 +4156,343 @@ function assistantCodeBlockApplyOutcome(
   return { kind: outcome.kind };
 }
 
+// Extracted from ChatWindow (SonarCloud S3776) — the code-apply workspace root is only defined
+// when the active chat's project root matches the active project (same guard, now as ifs).
+function codeApplyWorkspaceRootFor(
+  activeChatRoot: string | undefined,
+  activeProjectRoot: string | undefined,
+): string | undefined {
+  if (activeChatRoot === undefined) return undefined;
+  if (activeChatRoot.trim().length === 0) return undefined;
+  if (activeChatRoot !== activeProjectRoot) return undefined;
+  return activeChatRoot;
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — AC #1: block ready when no model is available.
+function isComposerReadyToSend(
+  draft: string,
+  sending: boolean,
+  loading: boolean,
+  noEligibleModels: boolean,
+): boolean {
+  return draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
+}
+
+// Extracted from ChatWindow (SonarCloud S3776).
+function hasLiveStreamingAssistantContent(
+  streamingAssistantMessage: ChatMessage | undefined,
+): boolean {
+  return streamingAssistantMessage !== undefined && streamingAssistantMessage.content.length > 0;
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — the stick-to-bottom autoscroll's notion of "the
+// last message on screen", live-streaming turn first.
+function lastVisibleChatMessage(
+  hasLiveStreamingAssistant: boolean,
+  streamingAssistantMessage: ChatMessage | undefined,
+  visible: readonly ChatMessage[],
+): ChatMessage | undefined {
+  if (hasLiveStreamingAssistant) return streamingAssistantMessage;
+  if (visible.length > 0) return visible.at(-1);
+  return undefined;
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — the mini/compact/minimal/workflow-compact
+// prop combination collapsed into the three "effective" flags the render tree consumes.
+function composerFooterEffectiveFlags(
+  compact: boolean,
+  mini: boolean,
+  minimalChat: boolean,
+  controlsNarrow: boolean,
+  workflowCompact: boolean,
+  barCompact: boolean,
+): {
+  readonly effectiveCompact: boolean;
+  readonly effectiveControlsNarrow: boolean;
+  readonly effectiveBarCompact: boolean;
+} {
+  return {
+    effectiveCompact: compact || mini,
+    effectiveControlsNarrow: controlsNarrow || mini || minimalChat || workflowCompact,
+    effectiveBarCompact: barCompact || minimalChat,
+  };
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — uiux-fix F009 C090's onScroll handler body:
+// track whether the reader is near the bottom, and drop a stale pending question-jump once they
+// scroll back near it themselves.
+function handleChatWindowLogScroll(
+  el: HTMLDivElement,
+  stickRef: CurrentRef<boolean>,
+  pendingQuestionScrollRef: CurrentRef<string | null>,
+  focusedQuestionId: string | null,
+  setFocusedQuestionId: (id: string | null) => void,
+): void {
+  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+  stickRef.current = nearBottom;
+  if (nearBottom && focusedQuestionId !== null) {
+    pendingQuestionScrollRef.current = null;
+    setFocusedQuestionId(null);
+  }
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — the composer's placeholder text.
+function composerPlaceholder(visibleCount: number, loading: boolean, t: I18nTranslate): string {
+  if (visibleCount === 0 && loading) return t("chat.loadingGateway");
+  return t("chat.composer.placeholder");
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — the chat-scope header, memory panel, and
+// no-model/loading alerts that sit above the scrollable log.
+function ChatWindowStatusHeader({
+  activeChat,
+  replaceChat,
+  memoryControl,
+  latestMemory,
+  acceptMemoryCandidate,
+  rejectMemoryCandidate,
+  forgetMemoryAction,
+  memoryDisclosure,
+  noEligibleModels,
+  loading,
+}: {
+  readonly activeChat: Chat | undefined;
+  readonly replaceChat: (chat: Chat) => void;
+  readonly memoryControl: ReactNode;
+  readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
+  readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
+  readonly memoryDisclosure: MemoryDisclosureState;
+  readonly noEligibleModels: boolean;
+  readonly loading: boolean;
+}): ReactNode {
+  return (
+    <>
+      {activeChat !== undefined ? (
+        <ChatScopeHeader
+          chat={activeChat}
+          onChatChanged={replaceChat}
+          memoryControl={memoryControl}
+        />
+      ) : null}
+      {activeChat !== undefined ? (
+        <MemoryPanel
+          latestMemory={latestMemory}
+          acceptCandidate={acceptMemoryCandidate}
+          rejectCandidate={rejectMemoryCandidate}
+          forgetMemoryAction={forgetMemoryAction}
+          disclosure={memoryDisclosure}
+        />
+      ) : null}
+      {noEligibleModels ? (
+        <div className="chatw-foot">
+          <NoModelAlert />
+        </div>
+      ) : null}
+      {/* AC #3: loading status — polite live region, non-technical wording */}
+      {loading ? (
+        <div className="chatw-foot">
+          <LoadingStatus />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — the scrollable conversation log: empty state
+// (per whether a chat is open) vs. the question map + conversation thread + grounded panel +
+// sent-documents note.
+function ChatWindowLog({
+  scrollRef,
+  stickRef,
+  pendingQuestionScrollRef,
+  focusedQuestionId,
+  setFocusedQuestionId,
+  visible,
+  hasLiveStreamingAssistant,
+  activeChat,
+  effectiveMinimal,
+  showQuestionMap,
+  questionMapItems,
+  scrollToQuestion,
+  streamingAssistantMessage,
+  onOpenRunResult,
+  repositoryRoots,
+  openRepositoryReference,
+  onApplyCodeBlock,
+  previewWindows,
+  windowId,
+  sending,
+  sendStatus,
+  regeneratingMessageId,
+  cancelGrounded,
+  regenerateMessage,
+  cancelSend,
+  registerQuestionAnchor,
+  lastSentDocuments,
+}: {
+  readonly scrollRef: RefObject<HTMLDivElement | null>;
+  readonly stickRef: CurrentRef<boolean>;
+  readonly pendingQuestionScrollRef: CurrentRef<string | null>;
+  readonly focusedQuestionId: string | null;
+  readonly setFocusedQuestionId: (id: string | null) => void;
+  readonly visible: readonly ChatMessage[];
+  readonly hasLiveStreamingAssistant: boolean;
+  readonly activeChat: Chat | undefined;
+  readonly effectiveMinimal: boolean;
+  readonly showQuestionMap: boolean;
+  readonly questionMapItems: readonly ConversationQuestionMapItem[];
+  readonly scrollToQuestion: (messageId: string) => void;
+  readonly streamingAssistantMessage: ChatMessage | undefined;
+  readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
+  readonly repositoryRoots: readonly RepositoryReferenceRoot[];
+  readonly openRepositoryReference: OpenRepositoryReference | undefined;
+  readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
+  readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
+  readonly windowId: string | undefined;
+  readonly sending: boolean;
+  readonly sendStatus: SendStatus;
+  readonly regeneratingMessageId: string | undefined;
+  readonly cancelGrounded: () => void;
+  readonly regenerateMessage: (assistantMessageId: string) => Promise<void>;
+  readonly cancelSend: () => void;
+  readonly registerQuestionAnchor: (messageId: string, node: HTMLDivElement | null) => void;
+  readonly lastSentDocuments: readonly SentDocumentDisclosure[];
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <div
+      className="chatw-scroll"
+      ref={scrollRef}
+      role="log"
+      aria-label={t("chat.conversation")}
+      // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
+      tabIndex={0}
+      onScroll={(event) => {
+        handleChatWindowLogScroll(
+          event.currentTarget,
+          stickRef,
+          pendingQuestionScrollRef,
+          focusedQuestionId,
+          setFocusedQuestionId,
+        );
+      }}
+    >
+      {visible.length === 0 && !hasLiveStreamingAssistant ? (
+        activeChat !== undefined ? (
+          <EmptyComposerState minimal={effectiveMinimal} />
+        ) : (
+          <NoChatState />
+        )
+      ) : (
+        <div className={`chatw-log-shell${showQuestionMap ? " chatw-log-shell-with-map" : ""}`}>
+          {showQuestionMap ? (
+            <ConversationQuestionMap items={questionMapItems} onJump={scrollToQuestion} />
+          ) : null}
+          <div className="chatw-log">
+            <ConversationThread
+              messages={visible}
+              streamingAssistantMessage={streamingAssistantMessage}
+              onOpenRunResult={onOpenRunResult}
+              repositoryRoots={repositoryRoots}
+              openRepositoryReference={openRepositoryReference}
+              onApplyCodeBlock={onApplyCodeBlock}
+              previewWindows={previewWindows}
+              windowId={windowId}
+              sending={sending}
+              sendStatus={sendStatus}
+              regeneratingMessageId={regeneratingMessageId}
+              activeChat={activeChat}
+              onCancelGrounded={cancelGrounded}
+              onRegenerate={regenerateMessage}
+              onCancelRegenerate={cancelSend}
+              showRegenerateControls={!effectiveMinimal}
+              registerQuestionAnchor={registerQuestionAnchor}
+              focusedMessageId={focusedQuestionId}
+            />
+            <GroundedAnswerPanel chat={activeChat} busy={sending} />
+            {/* Issue #148 — disclose which attached documents contributed extracted context. */}
+            <SentDocumentsNote documents={lastSentDocuments} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Extracted from ChatWindow (SonarCloud S3776) — the composer form and its two error-notice
+// slots (Issue #1560's single stable composer render site, see the render-site comment kept at
+// the call site).
+function ChatWindowComposerFooter({
+  visible,
+  activeChat,
+  effectiveCompact,
+  effectiveMinimal,
+  effectiveControlsNarrow,
+  effectiveBarCompact,
+  ready,
+  loading,
+  sendMessage,
+  error,
+  clearError,
+}: {
+  readonly visible: readonly ChatMessage[];
+  readonly activeChat: Chat | undefined;
+  readonly effectiveCompact: boolean;
+  readonly effectiveMinimal: boolean;
+  readonly effectiveControlsNarrow: boolean;
+  readonly effectiveBarCompact: boolean;
+  readonly ready: boolean;
+  readonly loading: boolean;
+  readonly sendMessage: () => Promise<void>;
+  readonly error: string | undefined;
+  readonly clearError: (() => void) | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {visible.length > 0 || activeChat !== undefined ? (
+        <div className="chatw-foot">
+          <form
+            className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendMessage();
+            }}
+          >
+            <ComposerCore
+              ready={ready}
+              placeholder={composerPlaceholder(visible.length, loading, t)}
+              minimal={effectiveMinimal}
+              compact={effectiveCompact}
+              controlsNarrow={effectiveControlsNarrow}
+              barCompact={effectiveBarCompact}
+            />
+            {error !== undefined ? (
+              <ErrorNoticeFromError
+                error={error}
+                fallback={t("chat.error.send")}
+                onDismiss={clearError}
+              />
+            ) : null}
+          </form>
+        </div>
+      ) : null}
+
+      {visible.length === 0 && error !== undefined && activeChat === undefined ? (
+        <div className="chatw-foot">
+          <ErrorNoticeFromError
+            error={error}
+            fallback="Could not load chat."
+            onDismiss={clearError}
+          />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export function ChatWindow({
   windowId,
   mini = false,
@@ -3539,7 +4507,6 @@ export function ChatWindow({
   previewWindows,
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
-  const t = useTranslate();
   const session = useChatSessionContext();
   const {
     messages,
@@ -3566,12 +4533,7 @@ export function ChatWindow({
   } = session;
   const activeProjectRoot = activeProject?.path;
   const activeChatRoot = activeChat?.projectPath;
-  const codeApplyWorkspaceRoot =
-    activeChatRoot !== undefined &&
-    activeChatRoot.trim().length > 0 &&
-    activeChatRoot === activeProjectRoot
-      ? activeChatRoot
-      : undefined;
+  const codeApplyWorkspaceRoot = codeApplyWorkspaceRootFor(activeChatRoot, activeProjectRoot);
   const queueAssistantCodeBlockApply = useCallback<AssistantCodeBlockApply>(
     async ({ codeBlockText, language }) => {
       if (codeApplyWorkspaceRoot === undefined) {
@@ -3595,11 +4557,9 @@ export function ChatWindow({
   );
   const onApplyCodeBlock =
     codeApplyWorkspaceRoot === undefined ? undefined : queueAssistantCodeBlockApply;
-  // AC #1: block ready when no model is available — do not allow submission.
-  const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
+  const ready = isComposerReadyToSend(draft, sending, loading, noEligibleModels);
   const visible = useMemo(() => visibleOnly(messages), [messages]);
-  const hasLiveStreamingAssistant =
-    streamingAssistantMessage !== undefined && streamingAssistantMessage.content.length > 0;
+  const hasLiveStreamingAssistant = hasLiveStreamingAssistantContent(streamingAssistantMessage);
   const scrollRef = useRef<HTMLDivElement>(null);
   const repositoryRoots = useMemo(() => {
     return repositoryReferenceRoots(
@@ -3618,16 +4578,22 @@ export function ChatWindow({
   // history. Starting an own send (sending false→true) always jumps down.
   const stickRef = useRef(true);
   const prevSendingRef = useRef(false);
-  const lastVisible = hasLiveStreamingAssistant
-    ? streamingAssistantMessage
-    : visible.length > 0
-      ? visible[visible.length - 1]
-      : undefined;
+  const lastVisible = lastVisibleChatMessage(
+    hasLiveStreamingAssistant,
+    streamingAssistantMessage,
+    visible,
+  );
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
   const effectiveMinimal = minimalChat;
-  const effectiveCompact = compact || mini;
-  const effectiveControlsNarrow = controlsNarrow || mini || effectiveMinimal || workflowCompact;
-  const effectiveBarCompact = barCompact || effectiveMinimal;
+  const { effectiveCompact, effectiveControlsNarrow, effectiveBarCompact } =
+    composerFooterEffectiveFlags(
+      compact,
+      mini,
+      minimalChat,
+      controlsNarrow,
+      workflowCompact,
+      barCompact,
+    );
   const memoryDisclosure = useMemoryDisclosureState(latestMemory);
   // GEN-PERF-CHAT-014 — a JSX literal in the header prop would hand ChatScopeHeader a
   // fresh element identity every render and defeat its memo.
@@ -3715,94 +4681,52 @@ export function ChatWindow({
     <div
       className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
     >
-      {activeChat !== undefined ? (
-        <ChatScopeHeader
-          chat={activeChat}
-          onChatChanged={replaceChat}
-          memoryControl={memoryControl}
-        />
-      ) : null}
-      {activeChat !== undefined ? (
-        <MemoryPanel
-          latestMemory={latestMemory}
-          acceptCandidate={acceptMemoryCandidate}
-          rejectCandidate={rejectMemoryCandidate}
-          forgetMemoryAction={forgetMemoryAction}
-          disclosure={memoryDisclosure}
-        />
-      ) : null}
-      {noEligibleModels ? (
-        <div className="chatw-foot">
-          <NoModelAlert />
-        </div>
-      ) : null}
-      {/* AC #3: loading status — polite live region, non-technical wording */}
-      {loading ? (
-        <div className="chatw-foot">
-          <LoadingStatus />
-        </div>
-      ) : null}
+      <ChatWindowStatusHeader
+        activeChat={activeChat}
+        replaceChat={replaceChat}
+        memoryControl={memoryControl}
+        latestMemory={latestMemory}
+        acceptMemoryCandidate={acceptMemoryCandidate}
+        rejectMemoryCandidate={rejectMemoryCandidate}
+        forgetMemoryAction={forgetMemoryAction}
+        memoryDisclosure={memoryDisclosure}
+        noEligibleModels={noEligibleModels}
+        loading={loading}
+      />
       {/* uiux-fix F009 C078 — the log is a scrollable region with (often) no
           focusable children: tabIndex makes it keyboard-scrollable (axe
           scrollable-region-focusable); role="log" keeps the implicit polite
           live-region semantics the previous aria-live="polite" provided.
           C090 — onScroll tracks whether the reader is near the bottom. */}
-      <div
-        className="chatw-scroll"
-        ref={scrollRef}
-        role="log"
-        aria-label={t("chat.conversation")}
-        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
-        tabIndex={0}
-        onScroll={(event) => {
-          const el = event.currentTarget;
-          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
-          stickRef.current = nearBottom;
-          if (nearBottom && focusedQuestionId !== null) {
-            pendingQuestionScrollRef.current = null;
-            setFocusedQuestionId(null);
-          }
-        }}
-      >
-        {visible.length === 0 && !hasLiveStreamingAssistant ? (
-          activeChat !== undefined ? (
-            <EmptyComposerState minimal={effectiveMinimal} />
-          ) : (
-            <NoChatState />
-          )
-        ) : (
-          <div className={`chatw-log-shell${showQuestionMap ? " chatw-log-shell-with-map" : ""}`}>
-            {showQuestionMap ? (
-              <ConversationQuestionMap items={questionMapItems} onJump={scrollToQuestion} />
-            ) : null}
-            <div className="chatw-log">
-              <ConversationThread
-                messages={visible}
-                streamingAssistantMessage={streamingAssistantMessage}
-                onOpenRunResult={onOpenRunResult}
-                repositoryRoots={repositoryRoots}
-                openRepositoryReference={openRepositoryReference}
-                onApplyCodeBlock={onApplyCodeBlock}
-                previewWindows={previewWindows}
-                windowId={windowId}
-                sending={sending}
-                sendStatus={sendStatus}
-                regeneratingMessageId={regeneratingMessageId}
-                activeChat={activeChat}
-                onCancelGrounded={cancelGrounded}
-                onRegenerate={regenerateMessage}
-                onCancelRegenerate={cancelSend}
-                showRegenerateControls={!effectiveMinimal}
-                registerQuestionAnchor={registerQuestionAnchor}
-                focusedMessageId={focusedQuestionId}
-              />
-              <GroundedAnswerPanel chat={activeChat} busy={sending} />
-              {/* Issue #148 — disclose which attached documents contributed extracted context. */}
-              <SentDocumentsNote documents={lastSentDocuments} />
-            </div>
-          </div>
-        )}
-      </div>
+      <ChatWindowLog
+        scrollRef={scrollRef}
+        stickRef={stickRef}
+        pendingQuestionScrollRef={pendingQuestionScrollRef}
+        focusedQuestionId={focusedQuestionId}
+        setFocusedQuestionId={setFocusedQuestionId}
+        visible={visible}
+        hasLiveStreamingAssistant={hasLiveStreamingAssistant}
+        activeChat={activeChat}
+        effectiveMinimal={effectiveMinimal}
+        showQuestionMap={showQuestionMap}
+        questionMapItems={questionMapItems}
+        scrollToQuestion={scrollToQuestion}
+        streamingAssistantMessage={streamingAssistantMessage}
+        onOpenRunResult={onOpenRunResult}
+        repositoryRoots={repositoryRoots}
+        openRepositoryReference={openRepositoryReference}
+        onApplyCodeBlock={onApplyCodeBlock}
+        previewWindows={previewWindows}
+        windowId={windowId}
+        sending={sending}
+        sendStatus={sendStatus}
+        regeneratingMessageId={regeneratingMessageId}
+        cancelGrounded={cancelGrounded}
+        regenerateMessage={regenerateMessage}
+        cancelSend={cancelSend}
+        registerQuestionAnchor={registerQuestionAnchor}
+        lastSentDocuments={lastSentDocuments}
+      />
 
       {/* Issue #1560 — ONE composer render site across the empty→populated transition. The composer was
           previously rendered in two separate conditional slots (one for visible.length === 0, one for
@@ -3814,47 +4738,19 @@ export function ChatWindow({
           and its live dialogue session — across the empty→populated transition. The condition is the
           exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
           keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
-      {visible.length > 0 || activeChat !== undefined ? (
-        <div className="chatw-foot">
-          <form
-            className={`composer${effectiveCompact ? " composer-chat-compact" : ""}`}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendMessage();
-            }}
-          >
-            <ComposerCore
-              ready={ready}
-              placeholder={
-                visible.length === 0 && loading
-                  ? t("chat.loadingGateway")
-                  : t("chat.composer.placeholder")
-              }
-              minimal={effectiveMinimal}
-              compact={effectiveCompact}
-              controlsNarrow={effectiveControlsNarrow}
-              barCompact={effectiveBarCompact}
-            />
-            {error !== undefined ? (
-              <ErrorNoticeFromError
-                error={error}
-                fallback={t("chat.error.send")}
-                onDismiss={session.clearError}
-              />
-            ) : null}
-          </form>
-        </div>
-      ) : null}
-
-      {visible.length === 0 && error !== undefined && activeChat === undefined ? (
-        <div className="chatw-foot">
-          <ErrorNoticeFromError
-            error={error}
-            fallback="Could not load chat."
-            onDismiss={session.clearError}
-          />
-        </div>
-      ) : null}
+      <ChatWindowComposerFooter
+        visible={visible}
+        activeChat={activeChat}
+        effectiveCompact={effectiveCompact}
+        effectiveMinimal={effectiveMinimal}
+        effectiveControlsNarrow={effectiveControlsNarrow}
+        effectiveBarCompact={effectiveBarCompact}
+        ready={ready}
+        loading={loading}
+        sendMessage={sendMessage}
+        error={error}
+        clearError={session.clearError}
+      />
     </div>
   );
 }

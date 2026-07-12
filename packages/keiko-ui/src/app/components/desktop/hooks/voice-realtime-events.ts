@@ -210,6 +210,107 @@ function functionCallFromResponseDone(record: Record<string, unknown>):
   return undefined;
 }
 
+function parseUserTranscriptCommitted(
+  raw: Record<string, unknown>,
+): ParsedRealtimeVoiceEvent | undefined {
+  const text = stringField(raw, "transcript")?.trim();
+  return text === undefined || text.length === 0
+    ? undefined
+    : { kind: "user-transcript-committed", text, itemId: itemId(raw) };
+}
+
+function parseUserTranscriptDelta(
+  raw: Record<string, unknown>,
+): ParsedRealtimeVoiceEvent | undefined {
+  const delta = stringField(raw, "delta");
+  return delta === undefined
+    ? undefined
+    : { kind: "user-transcript-delta", delta, itemId: itemId(raw) };
+}
+
+function parseAssistantTranscriptDelta(
+  raw: Record<string, unknown>,
+): ParsedRealtimeVoiceEvent | undefined {
+  const delta = stringField(raw, "delta");
+  return delta === undefined
+    ? undefined
+    : {
+        kind: "assistant-transcript-delta",
+        delta,
+        responseId: responseId(raw),
+        itemId: itemId(raw),
+      };
+}
+
+function parseAssistantTranscriptDone(
+  raw: Record<string, unknown>,
+): ParsedRealtimeVoiceEvent | undefined {
+  const text = stringField(raw, "transcript")?.trim();
+  return text === undefined || text.length === 0
+    ? undefined
+    : {
+        kind: "assistant-transcript-committed",
+        text,
+        responseId: responseId(raw),
+        itemId: itemId(raw),
+      };
+}
+
+function parseFunctionCallArgumentsDelta(
+  raw: Record<string, unknown>,
+): ParsedRealtimeVoiceEvent | undefined {
+  const id = callId(raw);
+  const delta = stringField(raw, "delta");
+  return id === undefined || delta === undefined
+    ? undefined
+    : {
+        kind: "function-call-arguments-delta",
+        callId: id,
+        name: stringField(raw, "name"),
+        delta,
+        responseId: responseId(raw),
+        itemId: itemId(raw),
+      };
+}
+
+function parseOutputItemDone(raw: Record<string, unknown>): ParsedRealtimeVoiceEvent | undefined {
+  const call = functionCallFromOutputItem(raw);
+  if (call !== undefined) {
+    return {
+      kind: "function-call-committed",
+      callId: call.callId,
+      name: call.name,
+      argumentsText: call.argumentsText,
+      responseId: responseId(raw),
+      itemId: call.itemId,
+    };
+  }
+  const text = transcriptFromOutputItem(raw);
+  return text === undefined
+    ? undefined
+    : {
+        kind: "assistant-transcript-committed",
+        text,
+        responseId: responseId(raw),
+        itemId: itemId(raw),
+      };
+}
+
+function parseResponseDone(raw: Record<string, unknown>): ParsedRealtimeVoiceEvent | undefined {
+  const call = functionCallFromResponseDone(raw);
+  if (call !== undefined) {
+    return {
+      kind: "function-call-committed",
+      callId: call.callId,
+      name: call.name,
+      argumentsText: call.argumentsText,
+      responseId: responseId(raw),
+      itemId: call.itemId,
+    };
+  }
+  return { kind: "response-done", responseId: responseId(raw), status: responseStatus(raw) };
+}
+
 export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent | undefined {
   if (!isRecord(raw)) {
     return undefined;
@@ -224,80 +325,22 @@ export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent 
       return { kind: "user-speech-start", itemId: itemId(raw) };
     case "input_audio_buffer.speech_stopped":
       return { kind: "user-speech-stop", itemId: itemId(raw) };
-    case "conversation.item.input_audio_transcription.completed": {
-      const text = stringField(raw, "transcript")?.trim();
-      return text === undefined || text.length === 0
-        ? undefined
-        : { kind: "user-transcript-committed", text, itemId: itemId(raw) };
-    }
-    case "conversation.item.input_audio_transcription.delta": {
-      const delta = stringField(raw, "delta");
-      return delta === undefined
-        ? undefined
-        : { kind: "user-transcript-delta", delta, itemId: itemId(raw) };
-    }
+    case "conversation.item.input_audio_transcription.completed":
+      return parseUserTranscriptCommitted(raw);
+    case "conversation.item.input_audio_transcription.delta":
+      return parseUserTranscriptDelta(raw);
     case "conversation.item.input_audio_transcription.failed":
       return { kind: "user-transcript-failed", message: errorMessage(raw), itemId: itemId(raw) };
     case "response.audio_transcript.delta":
-    case "response.output_audio_transcript.delta": {
-      const delta = stringField(raw, "delta");
-      return delta === undefined
-        ? undefined
-        : {
-            kind: "assistant-transcript-delta",
-            delta,
-            responseId: responseId(raw),
-            itemId: itemId(raw),
-          };
-    }
+    case "response.output_audio_transcript.delta":
+      return parseAssistantTranscriptDelta(raw);
     case "response.audio_transcript.done":
-    case "response.output_audio_transcript.done": {
-      const text = stringField(raw, "transcript")?.trim();
-      return text === undefined || text.length === 0
-        ? undefined
-        : {
-            kind: "assistant-transcript-committed",
-            text,
-            responseId: responseId(raw),
-            itemId: itemId(raw),
-          };
-    }
-    case "response.function_call_arguments.delta": {
-      const id = callId(raw);
-      const delta = stringField(raw, "delta");
-      return id === undefined || delta === undefined
-        ? undefined
-        : {
-            kind: "function-call-arguments-delta",
-            callId: id,
-            name: stringField(raw, "name"),
-            delta,
-            responseId: responseId(raw),
-            itemId: itemId(raw),
-          };
-    }
-    case "response.output_item.done": {
-      const call = functionCallFromOutputItem(raw);
-      if (call !== undefined) {
-        return {
-          kind: "function-call-committed",
-          callId: call.callId,
-          name: call.name,
-          argumentsText: call.argumentsText,
-          responseId: responseId(raw),
-          itemId: call.itemId,
-        };
-      }
-      const text = transcriptFromOutputItem(raw);
-      return text === undefined
-        ? undefined
-        : {
-            kind: "assistant-transcript-committed",
-            text,
-            responseId: responseId(raw),
-            itemId: itemId(raw),
-          };
-    }
+    case "response.output_audio_transcript.done":
+      return parseAssistantTranscriptDone(raw);
+    case "response.function_call_arguments.delta":
+      return parseFunctionCallArgumentsDelta(raw);
+    case "response.output_item.done":
+      return parseOutputItemDone(raw);
     case "response.audio.delta":
     case "response.output_audio.delta":
     case "output_audio_buffer.started":
@@ -306,20 +349,8 @@ export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent 
       return { kind: "assistant-output-stop", responseId: responseId(raw), itemId: itemId(raw) };
     case "response.cancelled":
       return { kind: "response-cancelled", responseId: responseId(raw) };
-    case "response.done": {
-      const call = functionCallFromResponseDone(raw);
-      if (call !== undefined) {
-        return {
-          kind: "function-call-committed",
-          callId: call.callId,
-          name: call.name,
-          argumentsText: call.argumentsText,
-          responseId: responseId(raw),
-          itemId: call.itemId,
-        };
-      }
-      return { kind: "response-done", responseId: responseId(raw), status: responseStatus(raw) };
-    }
+    case "response.done":
+      return parseResponseDone(raw);
     case "error":
       return { kind: "error", message: errorMessage(raw) };
     default:

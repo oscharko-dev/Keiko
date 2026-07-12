@@ -31,7 +31,7 @@ app performance rewrite.
 | B7  | Completion request latency (request pacing)                   | inline debounce **75 ms**; p50/p95 recorded content-free                           | Owned by #1200; telemetry route                                                                  | In place (#1200); recorded by #1209                |
 | B8  | Large file → degraded mode                                    | **> 500 KB or > 10,000 lines**                                                     | Editor option degradation (`deriveLargeFileMode`)                                                | Enforced (#1207)                                   |
 | B9  | Large file → hard editable limit (too-large path, no Monaco)  | **> 1,000,000 bytes**                                                              | Server (`files.ts`, `413 FILE_TOO_LARGE`)                                                        | Enforced (pre-#1207, #1191–#1206)                  |
-| B10 | Editor package own-code footprint                             | **≤ 96 KiB gzip** (committed ceiling)                                              | `check:editor-bundle-size`                                                                       | Enforced (#1207)                                   |
+| B10 | Editor package own-code footprint                             | **≤ 100 KiB gzip** (committed ceiling)                                             | `check:editor-bundle-size`                                                                       | Enforced (#1207)                                   |
 | B11 | Monaco worker/model memory growth per open editor card        | **≤ 128 MiB** after warm start; **≤ 16 MiB** residual after card close + GC/settle | Browser memory smoke + deterministic disposal tests                                              | Ceiling owned here (#1207); browser evidence #1209 |
 | B12 | Workspace search query latency                                | **p50 ≤ 200 ms, p95 ≤ 500 ms**                                                     | `test:e2e:workspace-search-2090` route evidence                                                  | Release evidence (#2090)                           |
 | B13 | Workspace search result bounds                                | Response count stays within requested cap and reports truncation honestly          | `test:e2e:workspace-search-2090` large synthetic fixture                                         | Release evidence (#2090)                           |
@@ -101,12 +101,13 @@ available standalone via `npm run check:editor-bundle-size`.
 
 **Baselines (monaco-editor 0.55.1):**
 
-- Editor package own code (`keiko-editor/dist/**/*.js`): **~67 KiB gzip** (observed 68,633 B across 50
-  files). Committed ceiling **96 KiB** (`editorOwnCodeGzipBytesCeiling = 98304`) — ≈ 30 % headroom for
-  routine growth while still catching the headline regression (a heavy dependency, or Monaco itself,
-  accidentally bundled into the editor package's own code, which would balloon this by orders of
-  magnitude). Re-baseline by updating `editorOwnCodeGzipBytesObserved` and, if intentional, the
-  ceiling, with a rationale in the PR.
+- Editor package own code (`keiko-editor/dist/**/*.js`): **~98 KiB gzip** (observed 100,629 B
+  across 71 files after a clean `@oscharko-dev/keiko-editor` build). Committed ceiling **100 KiB**
+  (`editorOwnCodeGzipBytesCeiling = 102400`) — ≈ 1.7 KiB headroom, intentionally tight after the
+  multi-language editor dist growth while still catching the headline regression (a heavy dependency,
+  or Monaco itself, accidentally bundled into the editor package's own code, which would balloon this
+  by orders of magnitude). Re-baseline by updating `editorOwnCodeGzipBytesObserved` and, if
+  intentional, the ceiling, with a rationale in the PR.
 - Monaco runtime footprint (informational): the full installed `monaco-editor/esm` tree is ~26 MB raw
   / ~4.9 MB gzip across 1,227 files; the governed v1 production bundle ships only the tree-shaken
   editor runtime plus `editor.worker.js`. #1209 measures that shipped static export against B2

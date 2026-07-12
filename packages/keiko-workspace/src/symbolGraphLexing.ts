@@ -115,7 +115,9 @@ export function isSymbolSource(scopePath: string): boolean {
 export function unsupportedLanguages(
   languages: readonly WorkspaceLanguage[],
 ): readonly WorkspaceLanguage[] {
-  return [...new Set(languages.filter((language) => !SUPPORTED_LANGUAGES.has(language)))].sort();
+  return [...new Set(languages.filter((language) => !SUPPORTED_LANGUAGES.has(language)))].sort(
+    (a, b) => a.localeCompare(b),
+  );
 }
 
 export function collectDefinitions(text: string): readonly DefinitionHit[] {

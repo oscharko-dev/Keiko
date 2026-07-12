@@ -565,7 +565,7 @@ function packageDependencies(
     if (!isRecord(deps)) {
       continue;
     }
-    for (const name of Object.keys(deps).sort()) {
+    for (const name of Object.keys(deps).sort((a, b) => a.localeCompare(b))) {
       const key = `${kind}\0${name}`;
       if (seen.has(key)) {
         continue;

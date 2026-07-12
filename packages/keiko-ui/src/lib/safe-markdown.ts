@@ -76,21 +76,36 @@ const DANGEROUS_TAGS = [
 /** Whitespace-like chars that may precede an on* attribute. */
 const ON_ATTR_PREFIXES = [" ", "\n", "\t", "'", '"'] as const;
 
+/**
+ * From `start`, skips a run of lowercase-ASCII identifier chars and returns true if the
+ * next character (immediately after the run) is "=".
+ */
+function isAssignmentAfterIdentifier(lower: string, start: number): boolean {
+  let j = start;
+  while (j < lower.length) {
+    const code = lower.charCodeAt(j);
+    if (code < 97 || code > 122) break;
+    j++;
+  }
+  return j < lower.length && lower[j] === "=";
+}
+
+/** Returns true if `lower` has an "on<identifier>=" attribute starting right after index i. */
+function isEventHandlerAt(lower: string, i: number): boolean {
+  if (lower[i + 1] !== "o" || lower[i + 2] !== "n") return false;
+  return isAssignmentAfterIdentifier(lower, i + 3);
+}
+
 /** Returns true if the lowercase string contains a dangerous on*= attribute. */
 function containsEventHandler(lower: string): boolean {
   let i = 0;
   while (i < lower.length - 4) {
     const c = lower[i];
-    if (ON_ATTR_PREFIXES.includes(c as (typeof ON_ATTR_PREFIXES)[number])) {
-      if (lower[i + 1] === "o" && lower[i + 2] === "n") {
-        let j = i + 3;
-        while (j < lower.length) {
-          const code = lower.charCodeAt(j);
-          if (code < 97 || code > 122) break;
-          j++;
-        }
-        if (j < lower.length && lower[j] === "=") return true;
-      }
+    if (
+      ON_ATTR_PREFIXES.includes(c as (typeof ON_ATTR_PREFIXES)[number]) &&
+      isEventHandlerAt(lower, i)
+    ) {
+      return true;
     }
     i++;
   }

@@ -1020,7 +1020,7 @@ export function createTerminalExecutionManager(
 // Materialized once at module load so the GET handler is O(1) and the public surface is a
 // frozen list — a test that compares against this exact set locks the deny-by-default invariant.
 const ALLOWED_COMMAND_NAMES: readonly string[] = Object.freeze(
-  [...TERMINAL_COMMAND_RULES.map((r) => r.executable)].sort(),
+  [...TERMINAL_COMMAND_RULES.map((r) => r.executable)].sort((a, b) => a.localeCompare(b)),
 );
 
 export function buildTerminalPolicySummary(

@@ -208,7 +208,7 @@ async function readJson(path) {
 function workspaceDeps(manifest) {
   return Object.keys(manifest.dependencies ?? {})
     .filter((name) => name.startsWith("@oscharko-dev/keiko-"))
-    .sort();
+    .sort((a, b) => a.localeCompare(b));
 }
 
 function workspaceRefs(tsconfig) {

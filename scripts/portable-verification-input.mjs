@@ -13,7 +13,7 @@ function fail(message) {
 }
 
 function exactInputKeys(input) {
-  return Object.keys(input).sort();
+  return Object.keys(input).sort((a, b) => a.localeCompare(b));
 }
 
 function readReasonCodes(value) {

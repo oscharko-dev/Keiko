@@ -3,7 +3,7 @@
 // Seeds a temp evidenceDir with a run manifest carrying a coverage matrix, then exercises the
 // dedicated traceability route for CSV + Markdown, the missing-run path, and the no-coverage path.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -91,6 +91,7 @@ describe("handleQiTraceabilityExport", () => {
     expect(body.body).toContain("atom-1");
     expect(body.body).toContain("atom-2");
     expect(body.body).toContain("tc-1");
+    expect("warnings" in body).toBe(false);
   });
 
   it("exports Markdown when format: 'markdown' is requested", async () => {
@@ -123,6 +124,24 @@ describe("handleQiTraceabilityExport", () => {
   it("returns 500 when no evidence dir is configured", async () => {
     const result = await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(undefined));
     expect(result.status).toBe(500);
+  });
+
+  it("returns a sorted warning when export evidence cannot be appended", async () => {
+    recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
+    chmodSync(join(evidenceDir, "qi"), 0o500);
+    try {
+      const result = await handleQiTraceabilityExport(
+        ctx(RUN_ID, makeReq(null)),
+        deps(evidenceDir),
+      );
+
+      expect(result.status).toBe(200);
+      expect((result.body as { warnings?: readonly string[] }).warnings).toEqual([
+        "export:evidence-write-failed",
+      ]);
+    } finally {
+      chmodSync(join(evidenceDir, "qi"), 0o700);
+    }
   });
 });
 

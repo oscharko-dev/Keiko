@@ -36,13 +36,9 @@ export const MAC_NATIVE_FIELDS = Object.freeze([
   "timestampVerified",
 ]);
 const RESULT_KEYS = Object.freeze(
-  [
-    ...MAC_NATIVE_FIELDS,
-    "cleanupSucceeded",
-    "finalizerSucceeded",
-    "schemaVersion",
-    "target",
-  ].sort(),
+  [...MAC_NATIVE_FIELDS, "cleanupSucceeded", "finalizerSucceeded", "schemaVersion", "target"].sort(
+    (a, b) => a.localeCompare(b),
+  ),
 );
 
 export class MacNativePolicyError extends Error {}
@@ -56,7 +52,7 @@ function exactKeys(value, keys) {
     value !== null &&
     typeof value === "object" &&
     !Array.isArray(value) &&
-    JSON.stringify(Object.keys(value).sort()) === JSON.stringify(keys)
+    JSON.stringify(Object.keys(value).sort((a, b) => a.localeCompare(b))) === JSON.stringify(keys)
   );
 }
 

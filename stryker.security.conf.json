@@ -4,7 +4,7 @@
   "plugins": ["@stryker-mutator/vitest-runner"],
   "vitest": {
     "configFile": "vitest.config.ts",
-    "related": true
+    "related": false
   },
   "testFiles": [
     "packages/keiko-security/src/**/*.test.ts",
@@ -15,6 +15,7 @@
     "packages/keiko-sandbox/src/index.test.ts",
     "packages/keiko-sandbox/src/plan.test.ts",
     "packages/keiko-sandbox/src/probe.test.ts",
+    "packages/keiko-sandbox/src/select.test.ts",
     "packages/keiko-workflows/src/**/*.test.ts",
     "packages/keiko-server/src/coding-runtime/**/*.test.ts",
     "packages/keiko-server/src/qualityIntelligence/**/*.test.ts",
@@ -53,6 +54,6 @@
   "ignoreStatic": true,
   "timeoutMS": 30000,
   "timeoutFactor": 2.5,
-  "concurrency": 4,
+  "concurrency": 16,
   "tempDirName": ".stryker-tmp"
 }

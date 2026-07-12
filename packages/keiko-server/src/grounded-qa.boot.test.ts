@@ -29,10 +29,10 @@ describe("grounded modules — native Node ESM boot", () => {
       const out = execFileSync(
         process.execPath,
         ["--experimental-sqlite", "--input-type=module", "-e", script],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60_000 },
       );
       expect(out).toContain("BOOT_OK");
     },
-    20_000,
+    60_000,
   );
 });

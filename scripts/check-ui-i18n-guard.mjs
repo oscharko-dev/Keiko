@@ -14,7 +14,7 @@ const USER_FACING_ATTRIBUTE_PATTERN =
   /\b(?:aria-label|aria-description|aria-placeholder|alt|placeholder|title)\s*=\s*(?:"[^"]*[A-Za-z][^"]*"|'[^']*[A-Za-z][^']*'|`[^`]*[A-Za-z][^`]*`)/u;
 const USER_FACING_STRING_RETURN_PATTERN =
   /\breturn\s+(?:"[^"]*\s[A-Za-z][^"]*"|'[^']*\s[A-Za-z][^']*'|`[^`]*\s[A-Za-z][^`]*`)/u;
-const I18N_KEY_REFERENCE_PATTERN = /\bt\s*\(\s*(?:"[^"]+"|'[^']+')/u;
+const I18N_KEY_REFERENCE_PATTERN = /\bt\s*\(\s*(?:"[^"]+"|'[^']+'|`[^`]+`)/u;
 
 function normalizePath(file) {
   return file.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -75,7 +75,11 @@ export function hasUserFacingTextLine(line) {
 }
 
 export function hasI18nRelevantAddedLine(line) {
-  return hasUserFacingTextLine(line) || I18N_KEY_REFERENCE_PATTERN.test(line);
+  return (
+    hasUserFacingTextLine(line) ||
+    I18N_KEY_REFERENCE_PATTERN.test(line) ||
+    I18N_USAGE_PATTERNS.some((pattern) => pattern.test(line))
+  );
 }
 
 function addedLinesFromPatch(patch) {
@@ -259,7 +263,7 @@ function symmetricDifference(left, right) {
   return [
     ...Array.from(left).filter((key) => !right.has(key)),
     ...Array.from(right).filter((key) => !left.has(key)),
-  ].sort();
+  ].sort((a, b) => a.localeCompare(b));
 }
 
 export function checkUiI18nGuard({

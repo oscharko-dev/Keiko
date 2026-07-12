@@ -42,7 +42,7 @@ async function collectHtmlFiles(staticRoot: string): Promise<readonly string[]> 
 }
 
 function normalizeHashes(raw: readonly string[]): readonly string[] {
-  return [...raw].filter((value) => value !== "").sort();
+  return [...raw].filter((value) => value !== "").sort((a, b) => a.localeCompare(b));
 }
 
 function hashesMatch(left: readonly string[], right: readonly string[]): boolean {

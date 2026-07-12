@@ -218,6 +218,37 @@ function packageInfos(
     .sort((a, b) => b.name.length - a.name.length);
 }
 
+function matchAliasPattern(
+  alias: TsconfigAlias,
+  specifier: string,
+): { readonly capture: string } | undefined {
+  const star = alias.pattern.indexOf("*");
+  const prefix = star === -1 ? alias.pattern : alias.pattern.slice(0, star);
+  const suffix = star === -1 ? "" : alias.pattern.slice(star + 1);
+  const matches =
+    star === -1
+      ? specifier === alias.pattern
+      : specifier.startsWith(prefix) && specifier.endsWith(suffix);
+  if (!matches) return undefined;
+  const capture =
+    star === -1 ? "" : specifier.slice(prefix.length, specifier.length - suffix.length);
+  return { capture };
+}
+
+function resolveAliasTargets(
+  scope: SearchScope,
+  fs: WorkspaceFs,
+  alias: TsconfigAlias,
+  capture: string,
+): string | undefined {
+  for (const target of alias.targets) {
+    const candidate = path.join(alias.baseUrl, target.split("*").join(capture));
+    const resolved = resolveModuleCandidate(scope, fs, candidate);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
+}
+
 function resolveAlias(
   scope: SearchScope,
   fs: WorkspaceFs,
@@ -225,22 +256,10 @@ function resolveAlias(
   aliases: readonly TsconfigAlias[],
 ): string | undefined {
   for (const alias of aliases) {
-    const star = alias.pattern.indexOf("*");
-    const prefix = star === -1 ? alias.pattern : alias.pattern.slice(0, star);
-    const suffix = star === -1 ? "" : alias.pattern.slice(star + 1);
-    if (
-      star === -1
-        ? specifier !== alias.pattern
-        : !specifier.startsWith(prefix) || !specifier.endsWith(suffix)
-    )
-      continue;
-    const capture =
-      star === -1 ? "" : specifier.slice(prefix.length, specifier.length - suffix.length);
-    for (const target of alias.targets) {
-      const candidate = path.join(alias.baseUrl, target.split("*").join(capture));
-      const resolved = resolveModuleCandidate(scope, fs, candidate);
-      if (resolved !== undefined) return resolved;
-    }
+    const match = matchAliasPattern(alias, specifier);
+    if (match === undefined) continue;
+    const resolved = resolveAliasTargets(scope, fs, alias, match.capture);
+    if (resolved !== undefined) return resolved;
   }
   return undefined;
 }

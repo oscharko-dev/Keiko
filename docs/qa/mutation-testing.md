@@ -40,6 +40,14 @@ npm run test:mutation:security
 
 The HTML report is written to `reports/mutation/security/index.html`. Temporary worktrees and
 reports are ignored by Git and ESLint.
+The security mutation configuration runs with `concurrency: 16` by default so local reruns and CI
+start with the same bounded worker count instead of relying on ad-hoc CLI overrides.
+The focused Stryker test matrix keeps the hermetic `keiko-sandbox` unit tests but intentionally
+excludes `packages/keiko-sandbox/src/egress.test.ts`: that file is a live host-network proof for
+the regular sandbox CI job, and its nested isolation backend can fail closed before printing the
+expected `BLOCKED`/`TIMEOUT` marker inside Stryker worker sandboxes. Excluding it from mutation
+testing does not weaken the runtime gate; the normal `@oscharko-dev/keiko-sandbox` test job still
+executes the live proof.
 
 ## Thresholds
 
@@ -66,8 +74,12 @@ A PR that changes critical production code is stricter: the changed-file Stryker
 least 80 percent and have zero surviving and zero no-coverage mutants. A numerical aggregate never
 excuses a new mutant in a trust-boundary, redaction, secret, authority, integrity, or merge decision.
 
-`coverageAnalysis: "perTest"` limits each mutant to tests that cover it. Stryker emits machine-
-readable JSON; `scripts/check-mutation-quality.mjs` is the authoritative ratchet/scoped decision.
+`coverageAnalysis: "perTest"` limits each mutant to tests that cover it after the focused security
+test matrix has run. The Vitest runner's `related` discovery is intentionally disabled for this
+gate: these trust-boundary tests often exercise routes, stores, and gateways indirectly, and related
+test discovery can otherwise produce no covering tests for changed security code. Stryker emits
+machine-readable JSON; `scripts/check-mutation-quality.mjs` is the authoritative ratchet/scoped
+decision.
 Stryker's native break value is zero only so that this stricter repository-owned decision can
 evaluate both historical fingerprints and current results after the complete run.
 

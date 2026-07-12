@@ -2662,7 +2662,11 @@ function scopeIdentity(scope: KnowledgeSourceScope): string {
       canonical.excludeGlobs ?? null,
     ]);
   }
-  return JSON.stringify(["files", canonical.rootPath, [...canonical.files].sort()]);
+  return JSON.stringify([
+    "files",
+    canonical.rootPath,
+    [...canonical.files].sort((a, b) => a.localeCompare(b)),
+  ]);
 }
 
 export async function handleConnectLocalKnowledgeCapsule(
