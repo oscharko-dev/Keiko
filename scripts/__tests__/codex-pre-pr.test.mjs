@@ -27,6 +27,7 @@ const REQUIRED_LINUX_COMMANDS = [
   "npm run build:ui",
   "npm run check:editor-release-evidence",
   "npm run prune:package-build-artifacts",
+  "npm run prune:package-native-optionals",
   "npm run check:package-surface",
   "npm run check:editor-bundle-size -- --require-static-export",
   "npm run test:e2e:smoke",
@@ -138,7 +139,7 @@ describe("codex pre-PR gate", () => {
       const executed = (await readFile(logPath, "utf8")).trim().split("\n");
       const persisted = JSON.parse(await readFile(reportPath, "utf8"));
 
-      expect(report.summary).toEqual({ failed: 0, passed: 20, planned: 0, skipped: 1 });
+      expect(report.summary).toEqual({ failed: 0, passed: 21, planned: 0, skipped: 1 });
       expect(executed.at(0)).toBe("run typecheck");
       expect(executed.at(-1)).toBe("run test:e2e:smoke");
       expect(persisted.results).toHaveLength(createPrePrSteps({ platform: "darwin" }).length);
