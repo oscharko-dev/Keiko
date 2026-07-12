@@ -6,7 +6,10 @@ import type {
   CodingWorkbenchRuntimeDelegationUsage,
 } from "@oscharko-dev/keiko-contracts";
 
-import type { CodingToolAuthorityPort } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolAuthorityPort,
+  CodingToolProducerBinding,
+} from "./codingToolFacadePorts.js";
 import type { CodingToolFacade, CodingToolFacadeOptions } from "./codingToolFacadePorts.js";
 import { createCodingToolFacade } from "./codingToolFacade.js";
 import {
@@ -22,9 +25,16 @@ export interface CodingToolAuthorityContext {
   readonly workspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
   readonly nowIso: string;
+  readonly runId?: string | undefined;
+  readonly envelopeDigest?: string | undefined;
+  readonly authorityExpiresAt?: string | undefined;
 }
 
 export type CodingToolAuthorityContextProvider = () => CodingToolAuthorityContext;
+
+interface CodingToolAuthorityPortOptions {
+  readonly requireProducerBinding?: boolean | undefined;
+}
 
 export function createCodingToolAuthorityPort(
   authority: Pick<
@@ -32,42 +42,93 @@ export function createCodingToolAuthorityPort(
     "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
   >,
   context: CodingToolAuthorityContextProvider,
+  options: CodingToolAuthorityPortOptions = {},
 ): CodingToolAuthorityPort {
   return {
-    admit: (capability, request): ReturnType<CodingToolAuthorityPort["admit"]> => {
-      if (capability === undefined) return { ok: false, reason: "capability-missing" };
-      const trusted = context();
-      const preflight = authority.revalidateCapabilityForMutation({
-        capability,
-        adapterKind: trusted.adapterKind,
-        liveFacts: trusted.liveFacts,
-        workspaceRoot: trusted.workspaceRoot,
-        deploymentCeiling: trusted.deploymentCeiling,
-        nowIso: trusted.nowIso,
-      });
-      if (!preflight.ok || !actionAllowed(preflight.envelope, request)) {
-        return { ok: false, reason: preflight.ok ? "action-not-authorized" : preflight.reason };
-      }
-      const resolved = authority.resolveCapabilityForDelegation({
-        capability,
-        adapterKind: trusted.adapterKind,
-        liveFacts: trusted.liveFacts,
-        delegationId: request.actionId,
-        idempotencyKey: request.idempotencyKey,
-        usage: delegationUsage(request),
-        workspaceRoot: trusted.workspaceRoot,
-        deploymentCeiling: trusted.deploymentCeiling,
-        nowIso: trusted.nowIso,
-      });
-      return resolved.ok
-        ? {
-            ok: true,
-            mutationGuard: {
-              check: (): boolean => revalidate(authority, context, capability, request),
-            },
-          }
-        : { ok: false, reason: resolved.reason };
-    },
+    admit: (capability, request): ReturnType<CodingToolAuthorityPort["admit"]> =>
+      admit(authority, context, capability, request, options.requireProducerBinding === true),
+  };
+}
+
+function admit(
+  authority: Pick<
+    CodingRuntimeAuthorityService,
+    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+  >,
+  context: CodingToolAuthorityContextProvider,
+  capability: string | undefined,
+  request: CodingToolActionRequest,
+  requireProducerBinding: boolean,
+): ReturnType<CodingToolAuthorityPort["admit"]> {
+  if (capability === undefined) return { ok: false, reason: "capability-missing" };
+  const trusted = context();
+  const binding = producerBinding(trusted);
+  if (requireProducerBinding && binding === undefined) {
+    return { ok: false, reason: "producer-binding-missing" };
+  }
+  const preflight = authority.revalidateCapabilityForMutation({
+    capability,
+    adapterKind: trusted.adapterKind,
+    liveFacts: trusted.liveFacts,
+    workspaceRoot: trusted.workspaceRoot,
+    deploymentCeiling: trusted.deploymentCeiling,
+    nowIso: trusted.nowIso,
+  });
+  if (!preflight.ok || !actionAllowed(preflight.envelope, request))
+    return { ok: false, reason: preflight.ok ? "action-not-authorized" : preflight.reason };
+  if (request.action === "edit") return guarded(authority, context, capability, request, binding);
+  const resolved = authority.resolveCapabilityForDelegation({
+    capability,
+    adapterKind: trusted.adapterKind,
+    liveFacts: trusted.liveFacts,
+    delegationId: request.actionId,
+    idempotencyKey: request.idempotencyKey,
+    usage: delegationUsage(request),
+    workspaceRoot: trusted.workspaceRoot,
+    deploymentCeiling: trusted.deploymentCeiling,
+    nowIso: trusted.nowIso,
+  });
+  return resolved.ok
+    ? guarded(authority, context, capability, request, binding)
+    : { ok: false, reason: resolved.reason };
+}
+
+function guarded(
+  authority: Pick<CodingRuntimeAuthorityService, "revalidateCapabilityForMutation">,
+  context: CodingToolAuthorityContextProvider,
+  capability: string,
+  request: CodingToolActionRequest,
+  binding: CodingToolProducerBinding | undefined,
+): ReturnType<CodingToolAuthorityPort["admit"]> {
+  const mutationGuard = {
+    check: (): boolean => revalidate(authority, context, capability, request),
+    ...(binding === undefined ? {} : { binding }),
+  };
+  return {
+    ok: true,
+    mutationGuard,
+    ...(binding === undefined ? {} : { binding }),
+  };
+}
+
+function producerBinding(
+  context: CodingToolAuthorityContext,
+): CodingToolProducerBinding | undefined {
+  if (
+    context.runId === undefined ||
+    context.envelopeDigest === undefined ||
+    context.authorityExpiresAt === undefined ||
+    !/^[a-f0-9]{64}$/u.test(context.envelopeDigest) ||
+    !Number.isFinite(Date.parse(context.authorityExpiresAt))
+  ) {
+    return undefined;
+  }
+  return {
+    runId: context.runId,
+    envelopeDigest: context.envelopeDigest,
+    workspaceId: context.liveFacts.binding.workspaceId,
+    workspaceRootDigest: context.liveFacts.binding.workspaceRootDigest,
+    expiresAt: context.authorityExpiresAt,
   };
 }
 
@@ -82,10 +143,12 @@ export function createRuntimeCodingToolFacade(
 ): CodingToolFacade {
   return createCodingToolFacade(
     {
-      authority: createCodingToolAuthorityPort(authority, context),
+      authority: createCodingToolAuthorityPort(authority, context, {
+        requireProducerBinding: true,
+      }),
       delegate: createCodingToolGovernedDelegate(governedPorts),
     },
-    options,
+    { ...options, requireInvocationRegistryForEdits: true },
   );
 }
 
@@ -121,6 +184,8 @@ function requiredClasses(
   request: CodingToolActionRequest,
 ): readonly CodingWorkbenchRuntimeAuthorityEnvelope["authority"]["actionClasses"][number][] {
   switch (request.action) {
+    case "read":
+      return ["workspace-read"];
     case "edit":
       return ["workspace-write"];
     case "command":
@@ -143,6 +208,7 @@ function additionalPolicyAllowed(
   request: CodingToolActionRequest,
 ): boolean {
   switch (request.action) {
+    case "read":
     case "edit":
     case "verification":
       return true;
@@ -220,7 +286,7 @@ function hasScope(actual: readonly string[], required: string): boolean {
 function delegationUsage(request: CodingToolActionRequest): CodingWorkbenchRuntimeDelegationUsage {
   return {
     toolCalls: 1,
-    patchBytes: request.action === "edit" ? request.patchBytes : 0,
+    patchBytes: request.action === "edit" ? Buffer.byteLength(request.changeset.patch, "utf8") : 0,
     promptTokens: 0,
   };
 }

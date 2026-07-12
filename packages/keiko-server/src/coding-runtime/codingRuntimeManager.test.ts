@@ -1674,6 +1674,58 @@ describe("coding runtime manager", () => {
     ]);
   });
 
+  it.each(["stop", "takeover"] as const)(
+    "%s awaits the injected in-flight action abort before any process-tree signal",
+    async (operation) => {
+      const fixture = createManagedFixture();
+      const child = fakeChild();
+      const order: string[] = [];
+      let releaseAbort: (() => void) | undefined;
+      const manager = createTestCodingRuntimeManager({
+        processEnv: {},
+        supervisor: testSupervisor(() => ({
+          ...child.handle,
+          kill: (signal): void => {
+            order.push(`signal:${signal}`);
+            child.kills.push(signal);
+            child.exit(0);
+          },
+        })),
+        revokeRuntime: (runId): true => {
+          order.push(`revoke:${runId}`);
+          return true;
+        },
+        abortInFlightActions: async (runId): Promise<boolean> => {
+          order.push(`abort:${runId}`);
+          await new Promise<void>((resolve) => {
+            releaseAbort = resolve;
+          });
+          order.push(`aborted:${runId}`);
+          return true;
+        },
+      });
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      );
+
+      const stopping =
+        operation === "stop" ? manager.stop("run-1988") : manager.takeover("run-1988");
+      await vi.waitFor(() => {
+        expect(order).toEqual(["revoke:run-1988", "abort:run-1988"]);
+      });
+      expect(child.kills).toEqual([]);
+      if (releaseAbort !== undefined) releaseAbort();
+
+      await expect(stopping).resolves.toEqual({ ok: true, status: "stopped" });
+      expect(order).toEqual([
+        "revoke:run-1988",
+        "abort:run-1988",
+        "aborted:run-1988",
+        "signal:SIGTERM",
+      ]);
+    },
+  );
+
   it("keeps the slot in recovery when tree signalling fails", async () => {
     const fixture = createManagedFixture();
     const child = fakeChild();

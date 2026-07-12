@@ -116,8 +116,10 @@ import {
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
 import type { AutonomousDeliveryConfirmation } from "../coding-runtime/autonomousDeliveryPolicy.js";
+import type { CodingRuntimeEditorMutationLeaseRequest } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   editorAgentAuthorityRegistry,
+  editorAgentWorkspaceRootDigest,
   type EditorAgentAuthorityResolution,
 } from "./agentAuthorityRegistry.js";
 import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
@@ -129,7 +131,7 @@ import {
 
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
-  "autonomousDeliveryApprovalStore" | "autonomousDeliveryDeploymentCeiling"
+  "autonomousDeliveryApprovalStore" | "autonomousDeliveryDeploymentCeiling" | "runtimeMutationLease"
 >;
 
 type EditorAgentActionRouteDeps = UiHandlerDeps;
@@ -1440,6 +1442,7 @@ function auditAction(
   decision: EditorAgentActionPolicyDecision,
   result: EditorAgentActionResult,
   metadataRedactor?: EditorAgentActionRouteDeps["redactor"],
+  runtimeOrigin = false,
 ): void {
   const queryPath =
     action.type === "queryGit" && action.queryGit !== undefined
@@ -1454,14 +1457,30 @@ function auditAction(
     outcome: result.status,
     conflictCode: result.conflict?.code,
     failureCode: result.failure?.code,
-    targetPath:
-      queryPath === undefined ? governedActionTarget(action, snapshot).targetPath : undefined,
-    targetBasename:
-      queryPath === undefined ? undefined : redactedQueryGitBasename(queryPath, metadataRedactor),
-    targetPathHash: queryPath === undefined ? undefined : hashRequest(queryPath),
+    ...auditTargetFields(action, snapshot, queryPath, metadataRedactor, runtimeOrigin),
     editCount: action.type === "applyTextEdits" ? action.textEdits?.length : undefined,
     patchByteLength: actionPatchByteLength(action),
   });
+}
+
+function auditTargetFields(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  queryPath: string | undefined,
+  metadataRedactor: EditorAgentActionRouteDeps["redactor"] | undefined,
+  runtimeOrigin: boolean,
+):
+  | { readonly targetPath: string | null }
+  | { readonly targetBasename: string; readonly targetPathHash: string }
+  | Record<never, never> {
+  if (runtimeOrigin) return {};
+  if (queryPath !== undefined) {
+    return {
+      targetBasename: redactedQueryGitBasename(queryPath, metadataRedactor),
+      targetPathHash: hashRequest(queryPath),
+    };
+  }
+  return { targetPath: governedActionTarget(action, snapshot).targetPath };
 }
 
 function redactedQueryGitBasename(
@@ -1593,7 +1612,12 @@ function applyChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   projection: ChangesetProjection,
+  runtimeMutation: RuntimeMutationClassification,
+  deps?: EditorAgentRouteDeps,
 ): EditorAgentActionResult {
+  if (!claimRuntimeMutation(runtimeMutation, deps)) {
+    return runtimeMutationLeaseDeniedResult(action);
+  }
   try {
     applyPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), projection.diff, {
       applyEnabled: true,
@@ -1616,14 +1640,96 @@ function applyChangeset(
   }
 }
 
+function runtimeMutationLeaseDeniedResult(action: EditorAgentAction): EditorAgentActionResult {
+  return {
+    schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+    actionId: action.actionId,
+    sessionId: action.sessionId,
+    status: "failed",
+    message: "The runtime mutation authority is no longer valid.",
+  };
+}
+
+type RuntimeMutationClassification =
+  | { readonly kind: "local" }
+  | { readonly kind: "runtime"; readonly request: CodingRuntimeEditorMutationLeaseRequest }
+  | { readonly kind: "denied" };
+
+function classifyRuntimeMutation(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  deps: EditorAgentRouteDeps | undefined,
+): RuntimeMutationClassification {
+  if (editorAgentRegistry.isRuntimeOwnedAction(action)) {
+    return runtimeMutationRequest(action, snapshot);
+  }
+  if (deps?.runtimeMutationLease === undefined) return { kind: "local" };
+  const authorityRef = action.authorityRef;
+  if (authorityRef === undefined || snapshot === undefined) return { kind: "local" };
+  const resolution = editorAgentAuthorityRegistry.resolve(
+    authorityRef,
+    snapshot.workspaceRoot,
+    editorAgentDeploymentCeiling(deps),
+    new Date().toISOString(),
+  );
+  if (!resolution.ok) return { kind: "denied" };
+  const request = runtimeMutationRequest(action, snapshot);
+  if (request.kind !== "runtime") return request;
+  return matchesRuntimeMutationLease(deps.runtimeMutationLease, request);
+}
+
+function matchesRuntimeMutationLease(
+  lease: NonNullable<EditorAgentRouteDeps["runtimeMutationLease"]>,
+  request: Extract<RuntimeMutationClassification, { readonly kind: "runtime" }>,
+): RuntimeMutationClassification {
+  try {
+    return lease.matches(request.request) ? request : { kind: "local" };
+  } catch {
+    return { kind: "denied" };
+  }
+}
+
+function runtimeMutationRequest(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+): RuntimeMutationClassification {
+  const authorityRef = action.authorityRef;
+  if (authorityRef === undefined || snapshot === undefined) return { kind: "denied" };
+  return {
+    kind: "runtime",
+    request: {
+      authorityRef,
+      runId: authorityRef.runId,
+      envelopeDigest: authorityRef.envelopeDigest,
+      workspaceRootDigest: editorAgentWorkspaceRootDigest(snapshot.workspaceRoot),
+      actionId: action.actionId,
+      idempotencyKey: action.idempotencyKey,
+    },
+  };
+}
+
+function claimRuntimeMutation(
+  classification: RuntimeMutationClassification,
+  deps: EditorAgentRouteDeps | undefined,
+): boolean {
+  if (classification.kind === "local") return true;
+  if (classification.kind === "denied" || deps?.runtimeMutationLease === undefined) return false;
+  try {
+    return deps.runtimeMutationLease.claim(classification.request);
+  } catch {
+    return false;
+  }
+}
+
 function finishChangesetResult(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
   result: EditorAgentActionResult,
   deps: EditorAgentRouteDeps | undefined,
   decision = decideActionPolicy(action, snapshot, deps),
+  runtimeOrigin = false,
 ): RouteResult {
-  auditAction(action, snapshot, decision, result);
+  auditAction(action, snapshot, decision, result, undefined, runtimeOrigin);
   editorAgentRegistry.reportResult(result);
   return { status: 200, body: { result } };
 }
@@ -1634,6 +1740,7 @@ function handleChangesetResult(
   deps?: EditorAgentRouteDeps,
 ): RouteResult {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
+  const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
   if (reported.status !== "succeeded") {
     const failed = changesetTerminalResult(
       action,
@@ -1641,29 +1748,80 @@ function handleChangesetResult(
       "failed",
       "The browser rejected the changeset.",
     );
-    return finishChangesetResult(action, snapshot, failed, deps);
+    return finishRuntimeChangeset(action, snapshot, failed, deps, runtimeMutation);
   }
   if (snapshot === undefined) {
     const result = changesetConflict(action, [
       { code: "NO_ACTIVE_SESSION", message: "The browser session is no longer available." },
     ]);
-    return finishChangesetResult(action, snapshot, result, deps);
+    return finishRuntimeChangeset(action, snapshot, result, deps, runtimeMutation);
   }
+  return handleApprovedChangesetResult(action, snapshot, deps, runtimeMutation);
+}
+
+function handleApprovedChangesetResult(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentRouteDeps | undefined,
+  runtimeMutation: RuntimeMutationClassification,
+): RouteResult {
   const decision = decideActionPolicy(action, snapshot, deps);
   const policyConflict = policyAdmissionConflict(action, decision);
   if (policyConflict !== null) {
-    return finishChangesetResult(action, snapshot, policyConflict, deps, decision);
+    return finishRuntimeChangeset(
+      action,
+      snapshot,
+      policyConflict,
+      deps,
+      runtimeMutation,
+      decision,
+    );
+  }
+  if (runtimeMutation.kind === "denied") {
+    return finishRuntimeChangeset(
+      action,
+      snapshot,
+      runtimeMutationLeaseDeniedResult(action),
+      deps,
+      runtimeMutation,
+      decision,
+    );
   }
   const inspection = inspectChangeset(action, snapshot);
   if (inspection.result !== null) {
-    return finishChangesetResult(action, snapshot, inspection.result, deps, decision);
+    return finishRuntimeChangeset(
+      action,
+      snapshot,
+      inspection.result,
+      deps,
+      runtimeMutation,
+      decision,
+    );
   }
   const projection = projectChangeset(action, snapshot, inspection.validation);
   const result =
     projection.kind === "conflict"
       ? projection.result
-      : applyChangeset(action, snapshot, projection);
-  return finishChangesetResult(action, snapshot, result, deps, decision);
+      : applyChangeset(action, snapshot, projection, runtimeMutation, deps);
+  return finishRuntimeChangeset(action, snapshot, result, deps, runtimeMutation, decision);
+}
+
+function finishRuntimeChangeset(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  result: EditorAgentActionResult,
+  deps: EditorAgentRouteDeps | undefined,
+  runtimeMutation: RuntimeMutationClassification,
+  decision = decideActionPolicy(action, snapshot, deps),
+): RouteResult {
+  return finishChangesetResult(
+    action,
+    snapshot,
+    result,
+    deps,
+    decision,
+    runtimeMutation.kind !== "local",
+  );
 }
 
 type ResultLeaseValidation =
@@ -2743,12 +2901,12 @@ async function admitEditorAction(
     const result = conflict(action, "POLICY_DENIED", "The action authority budget is exhausted.");
     return rejectActionRequest(action, snapshot, reservationDenial, result, requestHash, 403);
   }
-  return queueAndEmitAction(action, requestHash, snapshot, decision, admission.inspection);
+  return queueAndEmitAction(action, requestHash, snapshot, decision, admission.inspection, deps);
 }
 
 export async function handleEditorAgentActions(
   ctx: RouteContext,
-  deps?: EditorAgentActionRouteDeps,
+  deps?: EditorAgentActionRouteDeps | EditorAgentRouteDeps,
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
   if (isRouteResult(body)) return body;
@@ -2773,12 +2931,18 @@ export async function handleEditorAgentActions(
     if (!authorization.ok) return authorization.response;
     action = authorization.action;
   }
-  const abortScope = queryGitAbortScope(action, deps, ctx);
+  const abortScope = queryGitAbortScope(action, fullEditorActionDeps(deps), ctx);
   try {
     return await admitEditorAction(action, preparation.request.requestHash, abortScope.deps);
   } finally {
     abortScope.dispose();
   }
+}
+
+function fullEditorActionDeps(
+  deps: EditorAgentActionRouteDeps | EditorAgentRouteDeps | undefined,
+): EditorAgentActionRouteDeps | undefined {
+  return deps !== undefined && "store" in deps ? deps : undefined;
 }
 
 interface QueryGitAbortScope {
@@ -2832,6 +2996,7 @@ function queueAndEmitAction(
   snapshot: EditorAgentSessionSnapshot | undefined,
   decision: EditorAgentActionPolicyDecision,
   inspection: AdmissionInspection,
+  deps: EditorAgentActionRouteDeps | undefined,
 ): RouteResult {
   const boundAction = snapshot === undefined ? action : bindActiveBufferTarget(action, snapshot);
   const requiresReview =
@@ -2846,9 +3011,11 @@ function queueAndEmitAction(
     auditAction(action, snapshot, decision, result);
     return { status: 409, body: { result } };
   }
-  const outcome = editorAgentRegistry.queueAction(boundAction, emitAction);
+  const runtimeMutation = classifyRuntimeMutation(boundAction, snapshot, deps);
+  const runtimeOwned = runtimeMutation.kind === "runtime";
+  const outcome = editorAgentRegistry.queueAction(boundAction, emitAction, { runtimeOwned });
   rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
-  auditAction(action, snapshot, decision, outcome.result);
+  auditAction(action, snapshot, decision, outcome.result, undefined, runtimeOwned);
   if (outcome.kind === "rejected") {
     // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
     const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;

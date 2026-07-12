@@ -9,6 +9,10 @@ import type {
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 
 const capability = "capability-1-opaque-runtime-secret";
+const changeset = {
+  patch: "--- a/src/file.ts\n+++ b/src/file.ts\n@@\n-old\n+new\n",
+  files: [{ file: "src/file.ts", expectedContentHash: "a".repeat(64) }],
+};
 
 function requestBody(value: Readonly<Record<string, unknown>>): string {
   return JSON.stringify({ actionId: "action-1", idempotencyKey: "idempotency-1", ...value });
@@ -38,7 +42,7 @@ describe("CodingToolFacade", () => {
     const subject = createCodingToolFacade(ports);
 
     const result = await subject.execute({
-      body: requestBody({ action: "edit", targetPath: "src/file.ts", patchBytes: 42 }),
+      body: requestBody({ action: "edit", changeset }),
       capability,
     });
 
@@ -187,7 +191,7 @@ describe("CodingToolFacade", () => {
     const ports = facade();
     const subject = createCodingToolFacade(ports);
     const bodies = [
-      { action: "edit", targetPath: "src/file.ts", patchBytes: 1 },
+      { action: "edit", changeset },
       { action: "command", commandId: "test" },
       { action: "verification", verifierId: "unit" },
       { action: "git", operation: "read" },
@@ -282,6 +286,124 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "failed" }],
     });
+  });
+
+  it("accepts only the exact bounded repository-read shape and never trusts a runtime root or authority", async () => {
+    const ports = facade();
+    const subject = createCodingToolFacade(ports);
+    const read = { action: "read", relativePath: "src/a.ts" };
+
+    await expect(subject.execute({ body: requestBody(read), capability })).resolves.toMatchObject({
+      status: "completed",
+    });
+    for (const forged of [
+      { ...read, relativePath: "../outside.ts" },
+      { ...read, relativePath: "/workspace/a.ts" },
+      { ...read, workspaceRoot: "/forged" },
+      { ...read, authorityRef: { runId: "forged" } },
+      { ...read, approvalRef: "forged" },
+      { ...read, byteCount: 1 },
+    ]) {
+      await expect(
+        subject.execute({ body: requestBody(forged), capability }),
+      ).resolves.toMatchObject({ status: "invalid" });
+    }
+    expect(ports.delegate.execute).toHaveBeenCalledTimes(1);
+    expect(ports.delegate.execute).toHaveBeenLastCalledWith(
+      expect.objectContaining({ action: "read", relativePath: "src/a.ts" }),
+      undefined,
+      expect.anything(),
+    );
+  });
+
+  it.each([".env", ".ENV", "services/.env", "secrets/.ENV"])(
+    "rejects canonical deny-listed repository reads for %s before authority admission",
+    async (relativePath) => {
+      const ports = facade();
+      const subject = createCodingToolFacade(ports);
+
+      await expect(
+        subject.execute({ body: requestBody({ action: "read", relativePath }), capability }),
+      ).resolves.toMatchObject({ status: "invalid" });
+
+      expect(ports.authority.admit).not.toHaveBeenCalled();
+      expect(ports.delegate.execute).not.toHaveBeenCalled();
+    },
+  );
+
+  it("aligns the raw invocation body cap with the 256 KiB registry entry cap while retaining changeset validation", async () => {
+    const ports = facade();
+    const subject = createCodingToolFacade(ports);
+    const largeButValidChangeset = {
+      action: "edit",
+      changeset: {
+        patch: "x".repeat(16_385),
+        files: [{ file: "src/a.ts", expectedContentHash: "a".repeat(64) }],
+      },
+    };
+
+    await expect(
+      subject.execute({ body: requestBody(largeButValidChangeset), capability }),
+    ).resolves.toMatchObject({ status: "completed" });
+    await expect(subject.execute({ body: "x".repeat(262_145), capability })).resolves.toMatchObject(
+      { status: "invalid" },
+    );
+    expect(ports.delegate.execute).toHaveBeenCalledOnce();
+  });
+
+  it("keeps no legacy targetPath/patchBytes request type or parser lane", async () => {
+    const legacy: CodingToolActionRequest = {
+      action: "edit",
+      actionId: "legacy-action",
+      idempotencyKey: "legacy-key",
+      // @ts-expect-error Issue #2332 removes the metadata-only edit request variant entirely.
+      targetPath: "src/a.ts",
+      patchBytes: 1,
+    };
+    const ports = facade();
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({ body: JSON.stringify(legacy), capability }),
+    ).resolves.toMatchObject({ status: "invalid" });
+    expect(ports.authority.admit).not.toHaveBeenCalled();
+    expect(ports.delegate.execute).not.toHaveBeenCalled();
+  });
+
+  it("accepts only an exact validated changeset edit and never projects its raw payload into facade results", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        patch: "SENTINEL_RAW_PATCH",
+        capability: "SENTINEL_RUNTIME_CAPABILITY",
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const edit = {
+      action: "edit",
+      changeset: {
+        patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+        files: [{ file: "src/a.ts", expectedContentHash: "a".repeat(64) }],
+      },
+    };
+
+    const result = await subject.execute({ body: requestBody(edit), capability });
+    await expect(
+      subject.execute({ body: requestBody({ ...edit, patchBytes: 1 }), capability }),
+    ).resolves.toMatchObject({ status: "invalid" });
+    await expect(
+      subject.execute({
+        body: requestBody({ ...edit, changeset: { patch: "x", files: [] } }),
+        capability,
+      }),
+    ).resolves.toMatchObject({ status: "invalid" });
+
+    expect(result).toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+    });
+    expect(JSON.stringify(result)).not.toContain("SENTINEL_");
   });
 
   it("fails closed for blocked, denied, and malformed delegate outcomes", async () => {

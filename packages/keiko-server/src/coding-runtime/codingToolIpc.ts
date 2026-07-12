@@ -1,8 +1,14 @@
-export const CODING_TOOL_MAX_BODY_BYTES = 16_384;
+import { isUtf8 } from "node:buffer";
+
+import { isEditorAgentChangeset, type EditorAgentChangeset } from "@oscharko-dev/keiko-contracts";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
+
+export const CODING_TOOL_MAX_BODY_BYTES = 262_144;
 export const CODING_TOOL_MAX_IN_FLIGHT = 8;
+export const CODING_TOOL_MAX_READ_BYTES = 65_536;
 
 export type CodingToolAction =
-  "edit" | "command" | "verification" | "git" | "delivery" | "connector" | "egress";
+  "read" | "edit" | "command" | "verification" | "git" | "delivery" | "connector" | "egress";
 
 export interface CodingToolRequestIdentity {
   readonly actionId: string;
@@ -10,16 +16,13 @@ export interface CodingToolRequestIdentity {
 }
 
 export type CodingToolActionRequest =
+  | (CodingToolRequestIdentity & { readonly action: "read"; readonly relativePath: string })
   | (CodingToolRequestIdentity & {
       readonly action: "edit";
-      readonly targetPath: string;
-      readonly patchBytes: number;
+      readonly changeset: EditorAgentChangeset;
     })
   | (CodingToolRequestIdentity & { readonly action: "command"; readonly commandId: string })
-  | (CodingToolRequestIdentity & {
-      readonly action: "verification";
-      readonly verifierId: string;
-    })
+  | (CodingToolRequestIdentity & { readonly action: "verification"; readonly verifierId: string })
   | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" | "write" })
   | (CodingToolRequestIdentity & {
       readonly action: "delivery";
@@ -29,11 +32,22 @@ export type CodingToolActionRequest =
   | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string });
 
 export type CodingToolResult =
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      readonly read: CodingToolReadResult;
+    }
   | { readonly status: "completed" | "failed"; readonly evidence: readonly CodingToolEvidence[] }
   | {
       readonly status: "denied" | "invalid" | "cancelled" | "busy" | "observed";
       readonly evidence: readonly [];
     };
+
+export interface CodingToolReadResult {
+  readonly text: string;
+  readonly byteCount: number;
+  readonly digest: string;
+}
 
 export interface CodingToolEvidence {
   readonly kind: string;
@@ -41,23 +55,37 @@ export interface CodingToolEvidence {
 }
 
 export function parseCodingToolRequest(
-  body: string,
+  body: string | Buffer,
   maxBodyBytes: number,
 ): CodingToolActionRequest | undefined {
-  if (Buffer.byteLength(body, "utf8") > maxBodyBytes) return undefined;
-  const value = parseJson(body);
+  const decoded = decodeBody(body, maxBodyBytes);
+  if (decoded === undefined) return undefined;
+  const value = parseJson(decoded);
   return isRecord(value) ? requestFromRecord(value) : undefined;
 }
 
-export function isPermissionObservation(body: string, maxBodyBytes: number): boolean {
-  if (Buffer.byteLength(body, "utf8") > maxBodyBytes) return false;
-  const value = parseJson(body);
+export function isPermissionObservation(body: string | Buffer, maxBodyBytes: number): boolean {
+  const decoded = decodeBody(body, maxBodyBytes);
+  if (decoded === undefined) return false;
+  const value = parseJson(decoded);
   return (
     isRecord(value) &&
     hasExactKeys(value, ["action", "requestId"]) &&
     value.action === "permission-event" &&
     nonEmpty(value.requestId)
   );
+}
+
+function decodeBody(body: string | Buffer, maxBodyBytes: number): string | undefined {
+  const bytes = typeof body === "string" ? Buffer.from(body, "utf8") : body;
+  if (
+    bytes.length > maxBodyBytes ||
+    !isUtf8(bytes) ||
+    (typeof body === "string" && bytes.toString("utf8") !== body)
+  ) {
+    return undefined;
+  }
+  return bytes.toString("utf8");
 }
 
 function parseJson(body: string): unknown {
@@ -70,6 +98,8 @@ function parseJson(body: string): unknown {
 
 function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   switch (value.action) {
+    case "read":
+      return readRequest(value);
     case "edit":
       return editRequest(value);
     case "command":
@@ -89,16 +119,81 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
   }
 }
 
+function readRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "relativePath"]) &&
+    normalizedRelativePath(value.relativePath) &&
+    !isDenied(value.relativePath)
+    ? { ...identity, action: "read", relativePath: value.relativePath }
+    : undefined;
+}
+
 function editRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  if (
-    identity === undefined ||
-    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "targetPath", "patchBytes"])
-  )
-    return undefined;
-  return nonEmpty(value.targetPath) && nonNegative(value.patchBytes)
-    ? { ...identity, action: "edit", targetPath: value.targetPath, patchBytes: value.patchBytes }
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "changeset"]) &&
+    isExactEditorAgentChangeset(value.changeset)
+    ? { ...identity, action: "edit", changeset: value.changeset }
     : undefined;
+}
+
+export function isExactEditorAgentChangeset(value: unknown): value is EditorAgentChangeset {
+  if (!isEditorAgentChangeset(value) || !isRecord(value)) return false;
+  if (!hasAllowedKeys(value, ["patch", "files", "selectedFiles", "prepared"])) return false;
+  return value.files.every(exactChangesetFile) && exactPreparedChangeset(value.prepared);
+}
+
+function exactChangesetFile(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !hasAllowedKeys(value, ["file", "expectedDocumentVersion", "expectedContentHash"])
+  )
+    return false;
+  return (
+    value.expectedDocumentVersion === undefined ||
+    exactDocumentVersion(value.expectedDocumentVersion)
+  );
+}
+
+function exactDocumentVersion(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ["sizeBytes", "modifiedAt", "contentHash"]);
+}
+
+function exactPreparedChangeset(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["files"]) &&
+    Array.isArray(value.files) &&
+    value.files.every(exactPreparedFile)
+  );
+}
+
+function exactPreparedFile(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["file", "kind", "textEdits"]) &&
+    Array.isArray(value.textEdits) &&
+    value.textEdits.every(exactTextEdit)
+  );
+}
+
+function exactTextEdit(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ["range", "newText"]) && exactRange(value.range);
+}
+
+function exactRange(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["start", "end"]) &&
+    exactPosition(value.start) &&
+    exactPosition(value.end)
+  );
+}
+
+function exactPosition(value: unknown): boolean {
+  return isRecord(value) && hasExactKeys(value, ["line", "character"]);
 }
 
 function namedRequest(
@@ -115,30 +210,25 @@ function namedRequest(
     return undefined;
   if (action === "command") return { ...identity, action, commandId: value[key] };
   if (action === "verification") return { ...identity, action, verifierId: value[key] };
-  if (action === "connector") return { ...identity, action, scope: value[key] };
-  return { ...identity, action, target: value[key] };
+  return action === "connector"
+    ? { ...identity, action, scope: value[key] }
+    : { ...identity, action, target: value[key] };
 }
 
 function gitRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  if (
-    identity === undefined ||
-    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"])
-  )
-    return undefined;
-  return value.operation === "read" || value.operation === "write"
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "operation"]) &&
+    (value.operation === "read" || value.operation === "write")
     ? { ...identity, action: "git", operation: value.operation }
     : undefined;
 }
 
 function deliveryRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const identity = requestIdentity(value);
-  if (
-    identity === undefined ||
-    !hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent"])
-  )
-    return undefined;
-  return deliveryIntent(value.intent)
+  return identity !== undefined &&
+    hasExactKeys(value, ["action", "actionId", "idempotencyKey", "intent"]) &&
+    deliveryIntent(value.intent)
     ? { ...identity, action: "delivery", intent: value.intent }
     : undefined;
 }
@@ -149,25 +239,31 @@ function requestIdentity(value: Record<string, unknown>): CodingToolRequestIdent
     : undefined;
 }
 
+function normalizedRelativePath(value: unknown): value is string {
+  return (
+    nonEmpty(value) &&
+    !value.includes("\0") &&
+    !value.startsWith("/") &&
+    !value.startsWith("\\") &&
+    value
+      .split("/")
+      .every((part) => part.length > 0 && part !== "." && part !== ".." && !part.includes("\\"))
+  );
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value);
   return actual.length === keys.length && actual.every((key) => keys.includes(key));
 }
-
+function hasAllowedKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
+}
 function nonEmpty(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 512;
+  return typeof value === "string" && value.length > 0 && Buffer.byteLength(value, "utf8") <= 512;
 }
-
-function nonNegative(value: unknown): value is number {
-  return (
-    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000
-  );
-}
-
 function deliveryIntent(value: unknown): value is "commit" | "push" | "pull-request" | "merge" {
   return value === "commit" || value === "push" || value === "pull-request" || value === "merge";
 }
