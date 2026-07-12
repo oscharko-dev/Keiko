@@ -12,6 +12,7 @@ import {
 const passingMeasures = {
   new_coverage: 86.5,
   new_duplicated_lines_density: 1.2,
+  new_lines: 120,
   new_lines_to_cover: 40,
   new_security_hotspots_reviewed: 100,
   new_violations: 0,
@@ -101,11 +102,15 @@ describe("SonarCloud PR quality gate", () => {
     ).toEqual([]);
   });
 
-  it("treats doc-only PRs (no coverable/analyzable new code) as trivially satisfied for duplication, hotspots, and coverage", () => {
+  it("treats doc-only PRs (Sonar reports new_lines but omits coverable/duplication/hotspot metrics) as trivially satisfied", () => {
+    // Real doc-only PR shape: Sonar analyzed and saw changed lines, but nothing
+    // that its language plugins treat as coverable source code. new_lines is
+    // reported (analysis-trusted signal), the other new-code metrics are absent.
     const failures = evaluate({
       measures: {
         new_coverage: undefined,
         new_duplicated_lines_density: undefined,
+        new_lines: 12,
         new_lines_to_cover: undefined,
         new_security_hotspots_reviewed: undefined,
         new_violations: 0,
@@ -114,18 +119,36 @@ describe("SonarCloud PR quality gate", () => {
     expect(failures).toEqual([]);
   });
 
-  it("still fails closed on missing violation metric or unresolved issue total regardless of analyzability", () => {
+  it("fails closed on a malformed measures response that omits new_lines even when other metrics are missing", () => {
+    // Distinguishes a partial/transient Sonar response (new_lines absent) from a
+    // legitimate doc-only PR (new_lines reported). Without new_lines we cannot
+    // trust the analysis, so missing duplication/hotspots also fail closed.
     const failures = evaluate({
       measures: {
         new_coverage: undefined,
         new_duplicated_lines_density: undefined,
+        new_lines: undefined,
         new_lines_to_cover: undefined,
         new_security_hotspots_reviewed: undefined,
-        new_violations: undefined,
+        new_violations: 0,
       },
     });
-    expect(failures).toEqual(["New-code violation metric is missing."]);
+    expect(failures).toEqual(
+      expect.arrayContaining([
+        "New-code line count metric is missing.",
+        "New-code duplication metric is missing.",
+        "New-code security-hotspot review metric is missing.",
+      ]),
+    );
     expect(failures).not.toContain(expect.stringContaining("undefined"));
+  });
+
+  it("still fails closed on missing violation metric or unresolved issue total regardless of analyzability", () => {
+    const violationFailure = evaluate({
+      measures: { ...passingMeasures, new_violations: undefined },
+    });
+    expect(violationFailure).toContain("New-code violation metric is missing.");
+    expect(violationFailure).not.toContain(expect.stringContaining("undefined"));
 
     const issuesFailure = evaluate({
       issuesTotal: undefined,

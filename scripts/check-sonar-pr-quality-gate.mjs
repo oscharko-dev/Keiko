@@ -39,14 +39,17 @@ function findingFailures(issuesTotal, measures) {
   if (measures.new_violations === undefined) failures.push("New-code violation metric is missing.");
   else if (measures.new_violations !== 0)
     failures.push(`SonarCloud reports ${String(measures.new_violations)} new violation(s).`);
+  if (measures.new_lines === undefined) failures.push("New-code line count metric is missing.");
   const analyzable = hasAnalyzableNewCode(measures);
+  const analysisTrusted = measures.new_lines !== undefined;
   if (measures.new_duplicated_lines_density === undefined) {
-    if (analyzable) failures.push("New-code duplication metric is missing.");
+    if (analyzable || !analysisTrusted) failures.push("New-code duplication metric is missing.");
   } else if (measures.new_duplicated_lines_density > 3) {
     failures.push("New-code duplication exceeds 3%.");
   }
   if (measures.new_security_hotspots_reviewed === undefined) {
-    if (analyzable) failures.push("New-code security-hotspot review metric is missing.");
+    if (analyzable || !analysisTrusted)
+      failures.push("New-code security-hotspot review metric is missing.");
   } else if (measures.new_security_hotspots_reviewed < 100) {
     failures.push("Not all new security hotspots are reviewed.");
   }
@@ -83,7 +86,7 @@ async function fetchEvidence(pullRequest, token, load = sonarJson) {
   const project = encodeURIComponent(projectKey);
   const pr = encodeURIComponent(pullRequest);
   const metrics =
-    "new_coverage,new_duplicated_lines_density,new_lines_to_cover,new_security_hotspots_reviewed,new_violations";
+    "new_coverage,new_duplicated_lines_density,new_lines,new_lines_to_cover,new_security_hotspots_reviewed,new_violations";
   const [pullRequests, issues, measures] = await Promise.all([
     load(`/api/project_pull_requests/list?project=${project}`, token),
     load(
