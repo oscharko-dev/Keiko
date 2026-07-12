@@ -775,6 +775,46 @@
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
         "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.14 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
       }
+    },
+    {
+      "id": "2026-07-12-keiko-0.2.15-governed-feedback-flow-verification",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.15",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.15",
+      "releaseNoteCategory": "update-notes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Documentation and verification evidence for the governed feedback flow.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Document and verify the governed feedback intake and maintainer-reviewed GitHub Issue flow."
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-12",
+        "humanApproved": true,
+        "approvalReference": "issue:#2077",
+        "rationale": "Issue #2077 defines the exact update impact for this governed feedback-flow documentation and verification entry; the operator explicitly authorized completing the whole epic on 2026-07-12. This records review authorization only and does not claim a GitHub PR review or publication approval."
+      }
     }
   ]
 }

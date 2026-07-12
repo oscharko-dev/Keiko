@@ -106,6 +106,8 @@ jobs:
           npm --workspace @oscharko-dev/keiko-editor run typecheck
           npm --workspace @oscharko-dev/keiko-editor test
       - run: npm run typecheck
+      - name: Verify complete governed feedback flow
+        run: npx vitest run tests/feedback-flow-2077.integration.test.ts
       - run: npm run check:version-consistency
       - run: npm run check:dependency-hygiene
       - run: npm run check:release-required-workflows

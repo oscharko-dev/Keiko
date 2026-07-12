@@ -5,11 +5,9 @@ local UI, CLI, and model-gateway surfaces. Each entry follows the same
 structure so operators and support engineers can move from symptom to
 resolution without reading source.
 
-Keiko is a local-only tool: the UI binds to loopback, credentials stay on
-the local machine, and verification is performed against the selected
-project path. The diagnostic commands below operate on a single user's
-local installation. They do not require server-side instrumentation or
-external observability tooling.
+Keiko's UI and CLI remain local, while governed feedback may use a separately
+hosted intake and maintainer service. The diagnostic commands below cover the
+local surfaces and the content-free status results exposed by that service.
 
 ## How to use this guide
 
@@ -33,6 +31,10 @@ Editor personalization and resilience issues are covered in the dedicated
 [Editor Personalization And Resilience Troubleshooting](editor-m7-personalization.md) entry. Use
 that page for M7 settings availability, watcher rescan/degraded states, safe snippet/keyboard
 rollback, and governed AI-assist activation status.
+
+Governed feedback intake and publication failures are covered in the dedicated
+[Feedback Flow Troubleshooting](feedback-flow.md) entries. Use that page for intake readiness,
+rate limiting, GitHub publication permission, and blocked unsafe payloads.
 
 ## Severity scale
 
